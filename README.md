@@ -34,7 +34,7 @@ K2 is **[Fair Source](https://fair.io)** software, licensed under the
   anyone host K2 servers for clients via the official K2 Connect
   service.
 
-The K2 name and logo are covered by the
+The **"K2 by Alakazam Labs"** name and logo are covered by the
 [trademark policy](./TRADEMARKS.md).
 
 > Versions of K2SO up to and including 0.39.x were released under the

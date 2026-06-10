@@ -1,8 +1,8 @@
 # K2 Commercial Hosting Grant
 
-> **Status: DRAFT — pending legal review. Not yet in effect.**
 > This grant takes effect alongside the first K2 release published in
-> this repository (0.40.0).
+> this repository (0.40.0). Versions 0.39.x and earlier were released
+> under the MIT license and are unaffected.
 
 This document is an **additional permission** granted by Alakazam Labs
 on top of the [Functional Source License](./LICENSE.md) (FSL-1.1-Apache-2.0)
@@ -16,8 +16,9 @@ You may host, operate, and commercially offer K2 servers **for third
 parties** (your clients, customers, or users), provided that:
 
 1. **All remote access to those K2 servers is provided exclusively
-   through the official K2 Connect service** operated by Alakazam Labs,
-   under a current service agreement and its then-current pricing;
+   through the official K2 Connect service** operated by or on behalf of
+   Alakazam Labs, under a current service agreement and its then-current
+   pricing;
 2. **The software has not been modified to circumvent, disable, or
    defeat the K2 Connect integration or its metering** in the hosted
    offering (this condition applies to hosting under this grant — it

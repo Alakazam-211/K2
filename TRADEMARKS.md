@@ -1,7 +1,5 @@
 # K2 Trademark Policy
 
-> **Status: DRAFT — pending legal review.**
-
 This policy covers the **K2** name as used for this software, the
 **"K2 by Alakazam Labs"** brand, the K2 logo, and related branding
 assets ("the Marks").

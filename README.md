@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="assets/brand/k2-lockup-stacked.png" alt="K2 by Alakazam Labs" width="360">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/k2-lockup-light-text.png">
+    <img src="assets/brand/k2-lockup-dark-text.png" alt="K2 by Alakazam Labs" width="380">
+  </picture>
 </p>
 
 <p align="center">AI workspace orchestration — one daemon, many viewers; every workspace is an agent.</p>

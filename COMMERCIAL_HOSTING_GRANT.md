@@ -17,8 +17,12 @@ parties** (your clients, customers, or users), provided that:
 
 1. **All remote access to those K2 servers is provided exclusively
    through the official K2 Connect service** operated by Alakazam Labs,
-   under a current service agreement and its then-current pricing; and
-2. You preserve all license, copyright, and trademark notices, and you
+   under a current service agreement and its then-current pricing;
+2. **The software has not been modified to circumvent, disable, or
+   defeat the K2 Connect integration or its metering** in the hosted
+   offering (this condition applies to hosting under this grant — it
+   does not restrict what you do on servers you run for yourself); and
+3. You preserve all license, copyright, and trademark notices, and you
    do not present K2 as your own product (see [TRADEMARKS.md](./TRADEMARKS.md)).
 
 That's it. No application, no approval step — the meter is the agreement.
@@ -33,6 +37,13 @@ That's it. No application, no approval step — the meter is the agreement.
 - Re-branding or re-selling K2 itself as a substitute product or
   service. That remains Competing Use under the FSL and is not
   permitted under any self-serve grant.
+
+## What you build with K2 is yours
+
+For the avoidance of doubt: the license and this grant cover **K2
+itself**, not your work product. Code, content, agent outputs, and
+anything else created in or with K2 workspaces belong to you, with no
+license obligations from us attached.
 
 ## Plain-language intent
 

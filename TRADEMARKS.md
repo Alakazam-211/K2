@@ -1,8 +1,10 @@
 # K2 Trademark Policy
 
-This policy covers the **"K2 by Alakazam Labs"** brand — including the
-K2 name as used for this software, the K2 logo and lockups, and related
-branding assets ("the Marks").
+This policy covers the **"K2 by Alakazam Labs"** brand — the composite
+name, the K2 logo and lockups, and related branding assets ("the
+Marks"). It covers "K2" as used within this brand and product context;
+Alakazam Labs does not claim the standalone word "K2" as its exclusive
+mark across the software field.
 
 The Marks are trademarks of Alakazam Labs, **whether registered or
 unregistered**. Trademark rights in the United States arise from use in

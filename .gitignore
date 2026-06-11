@@ -1,0 +1,64 @@
+node_modules/
+out/
+dist/
+# Cargo workspace output — the workspace root moved in 0.33.x, so target/
+# lives at the repo root now. Keep src-tauri/target/ ignored too for any
+# stale per-package builds from older checkouts.
+target/
+src-tauri/target/
+# Bundled frpc tunnel sidecar (Apache-2.0, fatedier/frp). Staged into the
+# build by scripts/fetch-frpc.sh; a ~14MB binary must not bloat the repo.
+src-tauri/binaries/
+*.dmg
+*.zip
+*.app
+.DS_Store
+*.db
+*.db-journal
+*.db-wal
+# drizzle-kit's snapshot metadata lives next to the emitted SQL now.
+crates/k2-core/drizzle_sql/meta/
+.claude/
+SKILL.md
+CLAUDE.md
+GEMINI.md
+/AGENT.md
+AGENTS.md
+.goosehints
+.cursor/rules/k2so.mdc
+.github/copilot-instructions.md
+.opencode/agent/k2so*.md
+.pi/skills/k2so/
+.env
+.env.*
+*.key
+*.key.pub
+.worktrees/
+
+# 0.37.12 — runtime workspace state K2SO writes at runtime; not source.
+# Heartbeats / sessions / agent-templates / scratch state regenerate
+# from DB + filesystem on launch.
+
+# 0.39.0 — work→inbox + skills consolidation migrations. The inbox/
+# directory holds runtime work items the daemon manages (replacing the
+# old .k2so/work/ tree); the *-v1-done sentinels mark migrations the
+# daemon has applied to this workspace.
+
+# Stub workspace dirs auto-created by some bridge experiments;
+# contain AGENT.md / CLAUDE.md / etc which are themselves gitignored.
+_broadcast/
+_orphan/
+src-tauri/_broadcast/
+src-tauri/_orphan/
+
+# Daemon scratch dirs (empty in practice, leftover from older flows).
+crates/k2-daemon/canonical-ws/
+crates/k2-daemon/k2so-ws/
+
+# Personal editor config (Aider CLI). Not project-wide.
+.aider.conf.yml
+
+# Per-workspace agent state (PRDs, inbox, skills, notes) — never public.
+.k2so/
+.k2/
+*.log

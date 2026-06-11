@@ -1,0 +1,110 @@
+[package]
+name = "k2-daemon"
+version = "0.39.48"
+edition = "2021"
+license = "MIT"
+description = "K2SO persistent-agents daemon: launchd-managed device-local process that runs the scheduler, companion tunnel, and agent orchestration so agents keep working while the Tauri app is quit and the laptop lid is closed."
+
+[[bin]]
+name = "k2-daemon"
+path = "src/main.rs"
+
+# Thin library surface so integration tests (crates/k2so-daemon/tests/*)
+# can reach modules like `sessions_ws` directly. The daemon has always
+# been a binary — this lib entry just re-exports the internal modules
+# for the test binaries. Production artifacts unchanged.
+[lib]
+name = "k2_daemon"
+path = "src/lib.rs"
+
+[dependencies]
+# Session Stream + Awareness Bus primitives are now always compiled
+# into k2so-core (the `session_stream` feature flag was retired in
+# 0.39.0e).
+k2-core = { path = "../k2-core" }
+
+# Cryptographic randomness for the per-boot hook auth token.
+getrandom = "0.2"
+
+# Home-directory lookup for ~/.k2so/{daemon.port,daemon.token,daemon.log}.
+dirs = "5"
+
+# Async runtime. The daemon is async-first by convention — scheduler ticks,
+# companion WS, the HTTP server, and the daemon->Tauri WS event channel all
+# live on the same multi-thread runtime.
+tokio = { version = "1", features = ["full"] }
+
+# Async WS server for the daemon->Tauri event channel (GET /events). The
+# existing tungstenite 0.24 dep in the workspace is the sync flavor used
+# by companion::websocket; tokio-tungstenite tracks the same protocol
+# version so frames interop if we ever bridge the two.
+tokio-tungstenite = "0.23"
+
+# JSON serialization for HookEvent frames going over /events.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# chrono — agent-reply event payload needs an RFC-3339 timestamp.
+chrono = { version = "0.4", features = ["serde"] }
+
+# rusqlite — the per-project heartbeat-schedule route in cli.rs pokes
+# the `projects` table directly (it's the only daemon code that touches
+# a column k2so-core doesn't already wrap). Bundled feature matches
+# what k2so-core uses so rusqlite resolves to a single crate version.
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Futures helpers (Stream trait / StreamExt / SinkExt) needed by
+# tokio-tungstenite's async message loop.
+futures-util = "0.3"
+
+# UUIDs — pre-allocated for `claude --session-id` pinning so each
+# heartbeat fire owns a deterministic, unique session id from spawn
+# time (closes the concurrent-fires-share-session race).
+uuid = { version = "1", features = ["v4"] }
+
+# rustls — installed at daemon boot so the companion ngrok tunnel
+# can build a TLS session. Rustls 0.23 compiles both aws-lc-rs (via
+# reqwest's rustls-tls) and ring (via ngrok) into the binary; it
+# refuses to auto-pick and panics on first TLS use unless a
+# CryptoProvider is explicitly installed. Same pattern as src-tauri.
+# Required by Phase 2 Unit 1's daemon-owned companion autostart.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+
+# reqwest blocking — Phase 2 Unit 5 Claude Auth OAuth refresh. Same
+# features the Tauri side used (and k2so-core's llm::download still
+# uses) so reqwest resolves to a single crate version.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
+# Phase 2 Unit 2 — `libc::_exit` (LLM worker process exit that skips
+# C++ static destructors so ggml_metal's cleanup doesn't race macOS
+# Metal teardown) and `proc_pidinfo` (RSS watchdog on the worker
+# subprocess). Same crate version that k2so-core already pulls in
+# transitively; declaring it directly so daemon binary code can call
+# these without going through a wrapper.
+libc = "0.2"
+
+# Phase 2 Unit 2 — parking_lot for the LLM host's Mutex. k2so-core
+# already pins this version; declaring directly so daemon code can
+# import it without a re-export hop.
+parking_lot = "0.12"
+
+# base64 — Phase 2 Unit 6 `/cli/fs/read-binary` encodes file bytes
+# into the JSON response so the existing `/cli/*` dispatcher (JSON
+# only) can carry them. ~33% wire overhead, but stays within the
+# 50 MB binary-read cap which is the renderer's worst case (PDFs,
+# DOCX, images). A streaming WS endpoint is Phase 3 work.
+base64 = "0.22"
+
+# P3 remote daemon self-update (binary-swap shape). `sha2` verifies the
+# downloaded artifact's SHA-256 against the manifest; `minisign-verify`
+# is the verify-ONLY pure-Rust minisign implementation used to check the
+# artifact signature against the embedded `plugins.updater.pubkey`. No
+# signing keys ever live in the daemon — verify only.
+sha2 = "0.10"
+minisign-verify = "0.2"
+
+[dev-dependencies]
+# Enable k2so-core's `test-util` feature for integration tests that
+# need the in-memory DB helper (`db::init_for_tests`). Production
+# binaries don't link this path — only `cargo test` does.
+k2-core = { path = "../k2-core", features = ["test-util"] }

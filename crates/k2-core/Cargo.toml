@@ -1,0 +1,163 @@
+[package]
+name = "k2-core"
+version = "0.39.48"
+edition = "2021"
+license = "MIT"
+description = "K2SO device-local core library: db, llm, terminal, companion, scheduler, agent_hooks, push_adapter. Linked by both src-tauri (Tauri app, thin client) and k2so-daemon (persistent-agent runtime)."
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# Enables db::shared()'s automatic in-memory-DB fallback for downstream
+# crates' test binaries. Without this, cfg(test) in k2so-core is only
+# active when k2so-core's own tests run — src-tauri's test binary would
+# panic with "db::init_database must run before db::shared()".
+# Enable in src-tauri's [dev-dependencies] entry; NOT a runtime feature.
+test-util = []
+
+# k2so-core's OWN integration tests (under `crates/k2so-core/tests/`) are
+# separate compilation units that don't see `cfg(test)` of the lib —
+# they only see features. Pull the lib back in as a dev-dependency with
+# `test-util` enabled so plain `cargo test -p k2so-core` (no manual
+# `--features test-util` flag) compiles integration tests that reach
+# for `init_for_tests` and the other test-util-gated helpers. Without
+# this, contributors and CI hit a confusing "no `init_for_tests` in
+# `db`" error and have to discover the `--features test-util` workaround.
+[dev-dependencies]
+k2-core = { path = ".", features = ["test-util"] }
+
+[dependencies]
+# Shared primitive deps.
+parking_lot = "0.12"
+
+# DB layer (migrations live in crates/k2so-core/drizzle_sql/, loaded via
+# include_str!). Bundled SQLite so every platform ships the same version.
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Serialization: used across db, push, eventually companion and scheduler.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# YAML parser for the nested `launch:` block in agent.md frontmatter
+# (see agents::launch_profile, phase 3.2 G3). The existing
+# parse_frontmatter helper stays for flat key:value callers; the
+# launch-profile loader uses serde_yaml for full nested support.
+serde_yaml = "0.9"
+
+# Time handling in the activity feed + heartbeat audit rows.
+chrono = { version = "0.4", features = ["serde"] }
+
+# 0.38.2 — cron expression parsing + next-occurrence computation for the
+# heartbeat scheduler. Replaces our hand-rolled `is_past_deadline` +
+# scheduled-time arithmetic (which got DST + long-pause cases wrong;
+# heartbeats sat dark for 22 days while reporting `enabled=yes`).
+# Battle-tested in the rust ecosystem; we own thin wrappers + persistence
+# + concurrency policy; croner owns the time math.
+croner = "3"
+
+# UUIDs for agent sessions, heartbeat fires, etc. `serde` enables
+# Serialize/Deserialize impls used by session::SessionId (0.34.0).
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Home-directory lookup for ~/.k2so/k2so.db.
+dirs = "5"
+
+# libgit2 bindings — worktree creation + branch management + diff/merge.
+# `vendored-openssl` matches the flag src-tauri had been using so the
+# build doesn't start linking against system libssl. Used by the
+# delegate path + the UI review queue.
+git2 = { version = "0.19", features = ["vendored-openssl"] }
+
+# Move-to-trash semantics used when removing worktrees — users can
+# recover a reject-then-reject-again worktree from the Finder trash.
+trash = "5"
+
+# Local LLM inference (llama.cpp bindings). The `metal` feature compiles
+# ggml-metal, which is macOS-only — keep it OFF in the base dependency so
+# the crate (and therefore k2so-daemon) can compile on Linux for headless
+# servers. macOS re-enables `metal` via the per-target block below, so the
+# desktop app + native daemon keep GPU acceleration. The `sampler` feature
+# is platform-neutral and stays here. The Rust API surface llm/mod.rs uses
+# is identical with or without `metal`; the only effect is whether GPU
+# offload layers (`with_n_gpu_layers`) actually engage at runtime.
+llama-cpp-2 = { version = "0.1", default-features = false, features = ["sampler"] }
+
+# Blocking HTTP client for llm::download (reqwest with rustls — same
+# stack src-tauri uses).
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
+# Parallel work-stealing directory walker respecting .gitignore /
+# .k2soignore — llm::file_index::search_walk uses it for fuzzy file find.
+ignore = "0.4"
+
+# Character-encoding detection for llm::file_index when files are mixed
+# UTF-8 / UTF-16 / Latin-1.
+encoding_rs = "0.8"
+
+# Clone-to bundle engine (clone/) — tar+gz the scrubbed workspace +
+# memory + session bundle for one-click migration to a remote K2 Connect
+# host. Pure archive primitives; the manifest is JSON via serde_json.
+tar = "0.4"
+flate2 = "1"
+
+# Terminal backend — VT-compliant parser + PTY management + reflow.
+alacritty_terminal = "0.26.0-rc1"
+portable-pty = "0.8"
+
+# ANSI tokenizer used by the line-mux producer (`term::line_mux`).
+# Pinned to "0.15" to match alacritty_terminal's transitive pin
+# — single `vte` entry in Cargo.lock. `ansi` feature unlocks
+# `vte::ansi::Processor` + `vte::ansi::Handler`, which alacritty's
+# `Term` implements so we can drive the grid ourselves from a custom
+# reader thread without going through alacritty's private
+# `EventLoop::spawn()`.
+vte = { version = "0.15", features = ["std", "ansi"] }
+
+# Glyph rendering (bitmap renderer path) + QOI image encoding for mobile
+# companion snapshots.
+fontdue = "0.9"
+qoi = "0.4"
+
+# Phase 2 Unit 4 — image decode + resize for `projects_ops::detect_project_icon`.
+# Loads PNG/JPG/ICO icons from user projects and resamples to 48×48 for
+# the data URL the renderer caches on Project.icon_url.
+image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg"] }
+
+# Low-level primitives used by the alacritty PTY event loop.
+libc = "0.2"
+polling = "3"
+rustix = { version = "1", features = ["termios", "process"] }
+mio = { version = "1", features = ["os-poll", "os-ext"] }
+signal-hook = "0.3"
+signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
+
+# Companion WS + auth + HTTP proxy — pulled over from src-tauri along
+# with crates/k2so-core/src/companion/. argon2 + subtle cover the
+# companion password hash + constant-time equality.
+argon2 = "0.5"
+base64 = "0.22"
+subtle = "2.6"
+tungstenite = "0.24"
+
+# Companion tunnel (ngrok) + its supporting async stack. Moved over
+# from src-tauri along with the orchestrator.
+ngrok = "0.18"
+tokio = { version = "1", features = ["full"] }
+url = "2"
+
+# macOS-only deps.
+#
+# - cocoa + objc: Cocoa + Objective-C runtime bindings used by
+#   `fs_commands::clipboard_read_file_paths` to read the
+#   `NSFilenamesPboardType` pasteboard entry (Finder Cmd+C file copy).
+#   Phase 2 Unit 6 — migrated from src-tauri so the daemon owns the
+#   pasteboard read alongside the rest of the filesystem surface.
+# - llama-cpp-2 `metal`: re-enables ggml-metal GPU acceleration on macOS
+#   only. The base [dependencies] entry above keeps `metal` OFF (so Linux
+#   headless builds compile); this turns it back on for the desktop app +
+#   native macOS daemon. cargo unions feature sets per crate, so the macOS
+#   build gets `["sampler", "metal"]`.
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"
+llama-cpp-2 = { version = "0.1", features = ["metal"] }

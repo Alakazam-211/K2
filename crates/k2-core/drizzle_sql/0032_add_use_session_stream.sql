@@ -1,0 +1,19 @@
+-- Per-project opt-in for the 0.34.0 Session Stream pipeline (Phase 2).
+--
+-- When 'on', TerminalManager routes session spawns through
+-- `create_session_stream()` (dual-emit PTY reader) instead of the
+-- default `create()` path (alacritty's EventLoop). Both populate
+-- alacritty's Term grid so desktop rendering is identical; the
+-- difference is that session_stream sessions ALSO publish Frames
+-- to the per-session broadcast channel in `session::registry`,
+-- which the daemon's /cli/sessions/subscribe WS endpoint fans out
+-- to subscribers.
+--
+-- Default 'off' — existing projects are unaffected until the user
+-- explicitly opts in via `k2so mode` (or future Settings UI) /
+-- `sqlite3 ... SET use_session_stream='on'`.
+--
+-- See .k2so/prds/session-stream-and-awareness-bus.md §"Reversible
+-- checkpoints" for the phased rollout rationale. Phase 4 flips the
+-- default to 'on'; Phase 5 removes this column entirely.
+ALTER TABLE projects ADD COLUMN use_session_stream TEXT DEFAULT 'off';

@@ -1,0 +1,151 @@
+[package]
+name = "k2"
+version = "0.39.48"
+edition = "2021"
+description = "Developer workspace with terminals, git worktrees, and agent presets"
+license = "MIT"
+
+[lib]
+name = "k2_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2"
+path = "src/main.rs"
+
+[dependencies]
+# Device-local core library — houses perf (and will host db, llm, terminal,
+# companion, scheduler, agent_hooks, push_adapter as modules migrate in).
+k2-core = { path = "../crates/k2-core" }
+
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "tray-icon", "image-png"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+# Cross-platform OS keychain for K2 Connect remote-host tokens. Backs
+# the `k2_secret_{set,get,delete}` Tauri commands. Keyed by ConnectHost
+# id so a remembered remote token persists across restarts without ever
+# touching plaintext (`connect-hosts.json` holds only non-secret fields).
+#
+# Backends: macOS Keychain · Linux Secret Service · Windows Credential
+# Manager — so this is Linux-ready out of the box. The `apple-native`,
+# `windows-native`, and `sync-secret-service` features select the
+# native store per platform.
+#
+# LINUX DEPENDENCY: `sync-secret-service` talks to libsecret over D-Bus,
+# which requires the system `libsecret` runtime (package `libsecret-1-0`
+# on Debian/Ubuntu, `libsecret` on Fedora/Arch) AND a running Secret
+# Service provider (gnome-keyring / KWallet). Document this in the Linux
+# build/runtime notes when Linux packaging lands.
+keyring = { version = "3", features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+cocoa = "0.26"
+portable-pty = "0.8"
+# Phase 2 close-out (2026-05-23): rusqlite removed as a direct
+# dependency. src-tauri no longer issues any SQL; every reader/writer
+# went through k2so-core helpers (which still depend on rusqlite
+# transitively) or hits the daemon's `/cli/*` HTTP surface. The crate
+# still appears in `cargo tree` via k2so-core, but k2so itself no
+# longer pulls it as a direct edge.
+git2 = { version = "0.19", features = ["vendored-openssl"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+glob = "0.3"
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg"] }
+url = "2"
+libc = "0.2"
+# Phase 2 Unit 2 — `llama-cpp-2` + `encoding_rs` direct deps removed.
+# LLM inference moved to k2so-daemon; src-tauri/src no longer imports
+# either crate. k2so-core still pulls in `llama-cpp-2` (with `metal`
+# + `sampler` features) for the LlmManager type, and `encoding_rs`
+# for token decoding — they're available transitively but Tauri's
+# own source tree doesn't need to compile them as direct deps.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+tauri-plugin-drag = "2.1.0"
+tauri-plugin-opener = "2"
+notify = { version = "7", features = ["macos_fsevent"] }
+notify-debouncer-mini = "0.5"
+trash = "5"
+getrandom = "0.2"
+
+# Companion API (ngrok tunnel + auth)
+futures = "0.3"
+ngrok = "0.18"
+argon2 = "0.5"
+subtle = "2.6"
+tungstenite = "0.24"
+# Async WebSocket client for Canvas Plan Phase 4 — Kessel panes
+# attach to the daemon's /cli/sessions/bytes endpoint and pipe
+# bytes into a local alacritty_terminal::Term. Same version we
+# use in the daemon for the server side.
+tokio-tungstenite = "0.23"
+vte = { version = "0.15", features = ["std", "ansi"] }
+futures-util = "0.3"
+
+# Non-cryptographic hash used on hot paths (terminal grid change detection
+# pre-seqno, future caching keys). Picked over FxHash for SIMD acceleration.
+ahash = "0.8"
+
+# Work-stealing parallel directory walker respecting .gitignore / .k2soignore.
+# Replaces the single-threaded recursion in llm::file_index::search_walk.
+ignore = "0.4"
+
+# Alacritty terminal backend
+alacritty_terminal = "0.26.0-rc1"
+parking_lot = "0.12"
+polling = "3"
+rustix = { version = "1", features = ["termios", "process"] }
+mio = { version = "1", features = ["os-poll", "os-ext"] }
+signal-hook = "0.3"
+signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
+fontdue = "0.9"
+qoi = "0.4"
+
+[features]
+default = []
+
+[dev-dependencies]
+# Benchmark framework for src-tauri/benches/*.rs. Dev-only; never ships in
+# release binaries. Provides baseline-vs-current comparison + statistical
+# significance reporting (mean, stddev, p99, outlier rejection).
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Enables k2so-core::db::shared()'s in-memory fallback during src-tauri's
+# test binary run. Only active for cargo test / cargo bench.
+k2-core = { path = "../crates/k2-core", features = ["test-util"] }
+
+# Sandbox dirs for the worktree command's path-safety unit tests.
+tempfile = "3"
+
+[[bench]]
+name = "perf"
+harness = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# The `objc` crate's `msg_send!` macro expands to `#[cfg(cargo-clippy)]`
+# gates that the newer Rust `unexpected_cfgs` lint doesn't recognize.
+# Declaring `cargo-clippy` as an expected cfg value silences the
+# warnings cleanly; upstream objc is frozen at a version that pre-dates
+# the stricter cfg check. Replace with objc2 migration as a follow-up.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }

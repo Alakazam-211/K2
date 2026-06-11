@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 0.37.9: codesign entitlements for the hardened-runtime build.
+	     Hardened runtime locks down a bunch of capabilities by default;
+	     we have to opt back into the ones we need. -->
+
+	<!-- Required by Tauri/wry's WKWebView (Chromium-style sandboxed
+	     WebContent processes execute JIT'd JS). -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+
+	<!-- Required because we load dynamic libraries (sqlite, openssl,
+	     etc.) that aren't all signed by the same team. Without this
+	     the daemon sidecar fails to launch under hardened runtime. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+
+	<!-- 0.37.9 — audio capture for Apple Dictation. Hardened runtime
+	     denies audio access by default; this entitlement plus the
+	     `NSMicrophoneUsageDescription` Info.plist key are BOTH
+	     required for macOS to even prompt the user, let alone let
+	     Dictation engage in our WebView text inputs. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

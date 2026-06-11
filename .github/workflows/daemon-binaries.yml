@@ -1,0 +1,138 @@
+# Remote-update P1 — Linux standalone daemon binaries.
+#
+# release.sh (run on the maintainer's macOS box) builds + signs the NATIVE
+# macos-aarch64 standalone daemon and emits daemon-latest.json. macOS is the
+# wrong tool for cross-compiling the daemon's C/C++ deps (ggml, sqlite,
+# libgit2) for Linux, so the Linux artifacts are produced HERE on native
+# ubuntu runners and uploaded to the SAME GitHub release.
+#
+# Trigger: a pushed release tag (v<x.y.z>). The matrix builds
+# x86_64-unknown-linux-gnu (native) and aarch64-unknown-linux-gnu (via the
+# gnu cross toolchain), minisign-signs each with the SAME updater key the
+# Tauri app uses (so P3 verifies against plugins.updater.pubkey), and
+# uploads k2-daemon-linux-<arch> + its .sig as release assets.
+#
+# Asset names MUST match what daemon-latest.json references:
+#   k2-daemon-linux-x86_64{,.sig}
+#   k2-daemon-linux-aarch64{,.sig}
+#
+# Secrets (repo Settings → Secrets and variables → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY           — the minisign private key STRING
+#                                         (same key as ~/.tauri/k2-updater.key)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  — its password
+
+name: daemon-binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual re-run for a tag that already exists (e.g. CI was added after the
+  # tag, or a transient failure). Provide the tag, e.g. v0.39.33.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build + attach Linux daemon binaries to (e.g. v0.39.33)"
+        required: true
+
+permissions:
+  contents: write # needed to upload assets to the GitHub release
+
+jobs:
+  build-linux-daemon:
+    name: Build k2-daemon (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            asset: k2-daemon-linux-x86_64
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            asset: k2-daemon-linux-aarch64
+            cross: true
+
+    steps:
+      - name: Checkout (at the release tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Native x86_64 build deps + (for aarch64) the gnu cross toolchain that
+      # provides the aarch64-linux-gnu-gcc linker cargo needs. cmake/clang
+      # cover the daemon's C/C++ deps (ggml/llama-cpp-2, libgit2, sqlite).
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake clang pkg-config libssl-dev
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            sudo apt-get install -y --no-install-recommends \
+              gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          fi
+
+      # Point cargo + the C/C++ build scripts at the cross compilers for the
+      # aarch64 target. No-op for the native x86_64 job.
+      - name: Configure aarch64 cross-compilers
+        if: matrix.cross == true
+        run: |
+          {
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
+            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc"
+            echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++"
+            echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
+          } >> "$GITHUB_ENV"
+
+      - name: Build k2-daemon (release, standalone bin)
+        run: |
+          cargo build --release \
+            --target ${{ matrix.target }} \
+            --bin k2-daemon
+          cp "target/${{ matrix.target }}/release/k2-daemon" \
+             "${{ matrix.asset }}"
+          file "${{ matrix.asset }}"
+
+      # Sign with the Tauri updater key via the tauri CLI signer (produces a
+      # base64-wrapped minisign signature identical in format to the macOS
+      # K2SO.app.tar.gz.sig and the macos-aarch64 daemon .sig). P3 verifies
+      # this against plugins.updater.pubkey.
+      - name: Install tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Sign binary (minisign via tauri signer)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          cargo tauri signer sign \
+            --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
+            --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
+            "${{ matrix.asset }}"
+          test -f "${{ matrix.asset }}.sig"
+
+      - name: Compute sha256 (for logs / manual manifest merge)
+        run: sha256sum "${{ matrix.asset }}" | tee "${{ matrix.asset }}.sha256"
+
+      # Attach the binary + .sig to the release for this tag. The daemon
+      # manifest (daemon-latest.json) is produced by release.sh; these assets
+      # use the exact names that manifest references.
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release upload "$TAG" \
+            "${{ matrix.asset }}" \
+            "${{ matrix.asset }}.sig" \
+            --clobber

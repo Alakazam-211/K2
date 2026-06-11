@@ -1,0 +1,6 @@
+#!/bin/bash
+# k2so → k2 transition shim (0.40.0). K2SO is now K2 by Alakazam Labs.
+# This alias keeps existing scripts working but will be REMOVED before
+# 1.0.0 — switch to `k2`.
+echo "note: 'k2so' is now 'k2' — please switch ('k2so' remains as an alias for now, removed before 1.0.0)" >&2
+exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/k2" "$@"

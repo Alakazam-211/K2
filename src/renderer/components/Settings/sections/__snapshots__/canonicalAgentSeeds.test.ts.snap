@@ -1,0 +1,21 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`canonical-agent seed prompts > K2 Agent role positional message 1`] = `"Run the K2 Agent skill for the workspace "AcmeWorkspace". First read .k2so/agent/AGENT.md, then weave the K2 Agent role guidance into it organically — preserving everything the user already wrote. Show me the merged result before the core persists it."`;
+
+exports[`canonical-agent seed prompts > K2 Agent role system prompt 1`] = `
+"Run the K2 Agent skill. READ the existing AGENT.md, weave the role guidance in organically with judgment, PRESERVE existing context, NEVER inject a templated block. The deterministic core backs up AGENT.md and writes your merged text atomically.
+
+The K2 Agent role knowledge lives in the skill under .k2so/skills/k2-agent/SKILL.md — load it, then integrate it into the user's AGENT.md (.k2so/agent/AGENT.md) without displacing the accumulated context the agent already relies on. If a section already covers the role, refine it in place rather than appending a duplicate block."
+`;
+
+exports[`canonical-agent seed prompts > Workspace Manager role positional message 1`] = `"Run the Workspace Manager skill for the workspace "AcmeWorkspace". First read .k2so/agent/AGENT.md, then weave the Workspace Manager role guidance into it organically — preserving everything the user already wrote. Show me the merged result before the core persists it."`;
+
+exports[`canonical-agent seed prompts > Workspace Manager role system prompt 1`] = `
+"Run the Workspace Manager skill. READ the existing AGENT.md, weave the role guidance in organically with judgment, PRESERVE existing context, NEVER inject a templated block. The deterministic core backs up AGENT.md and writes your merged text atomically.
+
+The Workspace Manager role knowledge lives in the skill under .k2so/skills/workspace-manager/SKILL.md — load it, then integrate it into the user's AGENT.md (.k2so/agent/AGENT.md) without displacing the accumulated context the agent already relies on. If a section already covers the role, refine it in place rather than appending a duplicate block."
+`;
+
+exports[`canonical-agent seed prompts > canonical manage/undo seed (verbatim PRD §9.2) 1`] = `"Run the K2 Canonical Agent skill in manage mode: show the current per-harness state and the exact undo. If I confirm, run the manifest-driven unwind for the harnesses I choose."`;
+
+exports[`canonical-agent seed prompts > canonical setup seed (verbatim PRD §9.2) 1`] = `"Run the K2 Canonical Agent skill. Detect per-harness canonical state, summarize it, ask which harnesses I want and what I want to do. Pull existing harness content INTO AGENT.md/PROJECT.md first (Model A), then mirror out. Produce a DRY-RUN plan to .k2so/.canonical-setup/plan.md and STOP for confirmation before writing."`;

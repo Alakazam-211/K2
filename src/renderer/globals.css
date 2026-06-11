@@ -1,0 +1,997 @@
+/* Layer order: tw (lowest) < cm-overrides < unlayered (highest).            */
+/* Tailwind preflight in @layer tw can't override anything above it.         */
+/* Our CM layout overrides in @layer cm-overrides beat Tailwind but lose to  */
+/* CodeMirror's unlayered runtime style-mod styles (syntax highlighting etc) */
+@layer tw, cm-overrides;
+@import "tailwindcss" layer(tw);
+
+/* ── Bundled coding fonts ─────────────────────────────────────────── */
+@font-face { font-family: 'MesloLGM Nerd Font'; src: url('./fonts/MesloLGMNerdFontMono-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MesloLGM Nerd Font'; src: url('./fonts/MesloLGMNerdFontMono-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MesloLGM Nerd Font'; src: url('./fonts/MesloLGMNerdFontMono-Italic.ttf') format('truetype'); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: 'JetBrains Mono'; src: url('./fonts/JetBrainsMono-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Fira Code'; src: url('./fonts/FiraCode-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Fira Code'; src: url('./fonts/FiraCode-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Lilex'; src: url('./fonts/Lilex-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Lilex'; src: url('./fonts/Lilex-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Lilex'; src: url('./fonts/Lilex-Italic.ttf') format('truetype'); font-weight: 400; font-style: italic; font-display: swap; }
+
+/* System font for modifier key symbols (⌘⇧⌥⌃↵) — renders crisp Apple glyphs */
+.key-symbol {
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+
+:root {
+  --color-bg: #0a0a0a;
+  --color-bg-surface: #141414;
+  --color-bg-elevated: #1e1e1e;
+  --color-border: #2a2a2a;
+  --color-text-primary: #e4e4e7;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted: #71717a;
+  --color-accent: #3b82f6;
+}
+
+html {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  font-family: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+/* macOS traffic light drag region — only the top bar is draggable */
+/* The .drag class is applied explicitly to draggable areas (TopBar) */
+/* Works for both Electron (-webkit-app-region) and Tauri (data-tauri-drag-region) */
+.drag {
+  -webkit-app-region: drag;
+}
+
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+
+/* Allow interaction with elements inside drag regions */
+button,
+input,
+textarea,
+select,
+a,
+[role="button"],
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ── CodeMirror overrides ─────────────────────────────────────────── */
+/* All CM styles in @layer cm-overrides so they beat Tailwind (@layer   */
+/* tw) but lose to CodeMirror's unlayered runtime style-mod styles.    */
+/* IMPORTANT: Do NOT set `color` on .cm-editor here — the theme sets   */
+/* it via style-mod and our layered color would compete with syntax     */
+/* highlighting tokens for unstyled elements.                          */
+@layer cm-overrides {
+  .cm-editor {
+    position: relative;
+  }
+  .cm-editor .cm-content {
+    white-space: pre-wrap;
+    word-break: break-word;
+    display: block;
+    min-height: 100%;
+  }
+  .cm-editor .cm-content[contenteditable] {
+    -webkit-user-modify: read-write-plaintext-only;
+  }
+  .cm-editor .cm-line {
+    padding: 0 2px 0 4px;
+    display: block;
+  }
+  .cm-editor .cm-scroller {
+    overflow: auto;
+    font-family: 'MesloLGM Nerd Font', Menlo, Monaco, 'Courier New', monospace;
+    line-height: 1.6;
+    display: flex;
+    position: relative;
+    align-items: flex-start;
+  }
+  .cm-editor .cm-gutters {
+    display: flex;
+    flex-shrink: 0;
+    position: sticky;
+    left: 0;
+    z-index: 200;
+  }
+  .cm-editor .cm-gutter {
+    display: flex;
+    flex-direction: column;
+  }
+  .cm-editor .cm-gutterElement {
+    display: block;
+  }
+  .cm-editor .cm-panels {
+    display: block;
+  }
+  .cm-editor .cm-panel {
+    display: block;
+  }
+
+  /* ── Scrollbar styling ──────────────────────────────────────────────── */
+  .cm-editor .cm-scroller::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .cm-editor .cm-scroller::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .cm-editor .cm-scroller::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 0;
+  }
+  .cm-editor .cm-scroller::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.4);
+  }
+  .cm-editor .cm-scroller::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* ── Search panel — match K2SO theme ────────────────────────────────── */
+  .cm-panel.cm-search {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .cm-panel.cm-search label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .cm-panel.cm-search input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    min-width: 14px;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+    transition: background-color 150ms, border-color 150ms;
+  }
+  .cm-panel.cm-search input[type="checkbox"]:checked {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .cm-panel.cm-search input[type="checkbox"]:checked::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 0px;
+    width: 5px;
+    height: 9px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+  .cm-panel.cm-search input[type="checkbox"]:focus {
+    outline: none;
+    border-color: var(--color-accent);
+  }
+  .cm-panel.cm-search button {
+    background: var(--color-bg-elevated) !important;
+    border: 1px solid var(--color-border) !important;
+    color: var(--color-text-secondary) !important;
+    padding: 3px 10px !important;
+    font-size: 11px !important;
+    border-radius: 0 !important;
+    cursor: pointer;
+    transition: background-color 150ms, color 150ms;
+  }
+  .cm-panel.cm-search button:hover {
+    background: var(--color-border) !important;
+    color: var(--color-text-primary) !important;
+  }
+  .cm-panel.cm-search button[name="close"] {
+    color: var(--color-text-muted) !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 4px !important;
+    font-size: 14px !important;
+    line-height: 1 !important;
+    width: 22px !important;
+    height: 22px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    transition: color 150ms !important;
+  }
+  .cm-panel.cm-search button[name="close"]:hover {
+    color: #f87171 !important;
+    background: transparent !important;
+  }
+  .cm-panel.cm-search input[type="text"],
+  .cm-panel.cm-search input:not([type]) {
+    background: var(--color-bg) !important;
+    border: 1px solid var(--color-border) !important;
+    color: var(--color-text-primary) !important;
+    padding: 3px 8px !important;
+    font-size: 11px !important;
+    font-family: 'MesloLGM Nerd Font', Menlo, Monaco, monospace !important;
+    outline: none;
+  }
+  .cm-panel.cm-search input[type="text"]:focus,
+  .cm-panel.cm-search input:not([type]):focus {
+    border-color: var(--color-accent) !important;
+  }
+
+  /* ── Vim mode ───────────────────────────────────────────────────────── */
+  .cm-vim-panel {
+    background: var(--color-bg-surface, #141414) !important;
+    border-top: 1px solid var(--color-border, #2a2a2a) !important;
+    color: var(--color-text-secondary, #a1a1aa) !important;
+    font-size: 11px !important;
+    padding: 2px 8px !important;
+    font-family: 'MesloLGM Nerd Font', Menlo, Monaco, monospace !important;
+  }
+  .cm-vim-panel input {
+    background: var(--color-bg, #0a0a0a) !important;
+    color: var(--color-text-primary, #e4e4e7) !important;
+    border: 1px solid var(--color-border, #2a2a2a) !important;
+    font-family: inherit !important;
+    font-size: inherit !important;
+    outline: none !important;
+  }
+
+  /* ── Minimap ────────────────────────────────────────────────────────── */
+  .cm-minimap {
+    background: var(--color-bg, #0a0a0a) !important;
+    border-left: 1px solid var(--color-border, #2a2a2a) !important;
+  }
+  .cm-minimap .cm-minimap-overlay {
+    background: rgba(255, 255, 255, 0.06) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  }
+
+  /* ── Git scrollbar annotations ──────────────────────────────────────── */
+  .cm-scroll-annotations {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 6px;
+    pointer-events: none;
+    z-index: 4;
+  }
+
+  /* ── Git diff line highlights — gutter mode ─────────────────────────── */
+  .cm-git-line-added {
+    background: rgba(34, 197, 94, 0.06) !important;
+  }
+  .cm-git-line-modified {
+    background: rgba(59, 130, 246, 0.06) !important;
+  }
+
+  /* ── Git diff line highlights — inline/PR mode ──────────────────────── */
+  .cm-diff-line-added {
+    background: rgba(34, 197, 94, 0.12) !important;
+    border-left: 3px solid #22c55e;
+  }
+  .cm-diff-line-modified {
+    background: rgba(34, 197, 94, 0.10) !important;
+    border-left: 3px solid #86efac;
+  }
+  .cm-diff-line-deleted {
+    background: rgba(239, 68, 68, 0.12) !important;
+    border-left: 3px solid #ef4444;
+  }
+
+  /* ── Git gutter ─────────────────────────────────────────────────────── */
+  .cm-git-gutter {
+    width: 7px !important;
+    min-width: 7px !important;
+    border: none;
+    background: transparent;
+  }
+  .cm-git-gutter .cm-gutterElement {
+    padding: 0 2px !important;
+    display: flex;
+    align-items: stretch;
+  }
+} /* end @layer cm-overrides */
+
+/* ── react-mosaic overrides ──────────────────────────────────────────── */
+/* Strip default chrome so panes are borderless and dark */
+.mosaic-dark .mosaic-root {
+  background: #0a0a0a;
+}
+
+.mosaic-dark .mosaic-tile {
+  margin: 1px;
+}
+
+.mosaic-dark .mosaic-window,
+.mosaic-dark .mosaic-preview {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.mosaic-dark .mosaic-window-toolbar {
+  display: none !important;
+}
+
+.mosaic-dark .mosaic-window-body {
+  flex: 1;
+  background: #0a0a0a;
+}
+
+.mosaic-dark .mosaic-split {
+  background: var(--color-border);
+}
+
+.mosaic-dark .mosaic-split:hover {
+  background: var(--color-accent);
+}
+
+.mosaic-dark .mosaic-split.-row {
+  width: 2px;
+  margin: 0 -1px;
+}
+
+.mosaic-dark .mosaic-split.-column {
+  height: 2px;
+  margin: -1px 0;
+}
+
+/* ── Markdown pane content ──────────────────────────────────────────── */
+
+.markdown-content {
+  font-family: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.markdown-content h1 {
+  font-size: 1.75em;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0 0 16px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.markdown-content h2 {
+  font-size: 1.4em;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 24px 0 12px 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.markdown-content h3 {
+  font-size: 1.15em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 20px 0 8px 0;
+}
+
+.markdown-content h4 {
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 16px 0 8px 0;
+}
+
+.markdown-content h5,
+.markdown-content h6 {
+  font-size: 0.9em;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin: 12px 0 6px 0;
+}
+
+.markdown-content p {
+  margin: 0 0 12px 0;
+  color: var(--color-text-secondary);
+}
+
+.markdown-content a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.markdown-content a:hover {
+  text-decoration: underline;
+}
+
+.markdown-content strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.markdown-content em {
+  font-style: italic;
+}
+
+.markdown-content pre {
+  background: #1a1a1a;
+  border: 1px solid var(--color-border);
+  border-radius: 0;
+  padding: 12px;
+  margin: 0 0 12px 0;
+  overflow-x: auto;
+}
+
+.markdown-content pre code {
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  border: none;
+}
+
+.markdown-content code {
+  background: #1e1e1e;
+  color: #d7ba7d;
+  padding: 2px 5px;
+  font-size: 0.9em;
+  font-family: 'MesloLGM Nerd Font', Menlo, Monaco, monospace;
+  border-radius: 0;
+}
+
+.markdown-content ul {
+  margin: 0 0 12px 0;
+  padding-left: 24px;
+  color: var(--color-text-secondary);
+  list-style-type: disc;
+}
+
+.markdown-content ol {
+  margin: 0 0 12px 0;
+  padding-left: 24px;
+  color: var(--color-text-secondary);
+  list-style-type: decimal;
+}
+
+.markdown-content ul ul { list-style-type: circle; }
+.markdown-content ul ul ul { list-style-type: square; }
+
+.markdown-content li {
+  margin: 4px 0;
+  display: list-item;
+}
+
+.markdown-content li > ul,
+.markdown-content li > ol {
+  margin-bottom: 0;
+}
+
+.markdown-content blockquote {
+  margin: 0 0 12px 0;
+  padding: 8px 16px;
+  border-left: 3px solid var(--color-accent);
+  background: #111111;
+  color: var(--color-text-muted);
+}
+
+.markdown-content blockquote p {
+  margin: 0;
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 12px 0;
+  font-size: 12px;
+}
+
+.markdown-content thead th {
+  background: #1a1a1a;
+  color: var(--color-text-primary);
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+}
+
+.markdown-content tbody td {
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.markdown-content tbody tr:nth-child(even) {
+  background: #111111;
+}
+
+.markdown-content tbody tr:nth-child(odd) {
+  background: #0a0a0a;
+}
+
+.markdown-content hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 20px 0;
+}
+
+.markdown-content img {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-content input[type="checkbox"] {
+  margin-right: 6px;
+  accent-color: var(--color-accent);
+}
+
+.markdown-content .contains-task-list {
+  list-style: none;
+  padding-left: 4px;
+}
+
+/* Markdown pane scrollbar */
+.markdown-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.markdown-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.markdown-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 0;
+}
+
+.markdown-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Shiki code highlighting ────────────────────────────────────────── */
+
+.code-highlighted pre {
+  margin: 0;
+  padding: 16px;
+  font-family: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow: auto;
+  tab-size: 4;
+}
+
+.code-highlighted code {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* Within markdown, Shiki blocks need to match markdown code block styling */
+.markdown-content .code-highlighted pre {
+  background: #1a1a1a !important;
+  border: 1px solid var(--color-border);
+  padding: 12px;
+  margin: 0 0 12px 0;
+}
+
+/* ── DOCX pane content ────────────────────────────────────────────── */
+
+.docx-body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+
+.docx-body h1 {
+  font-size: 1.75em;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0 0 16px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.docx-body h2 {
+  font-size: 1.4em;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 24px 0 12px 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.docx-body h3 {
+  font-size: 1.15em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 20px 0 8px 0;
+}
+
+.docx-body h4 {
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 16px 0 8px 0;
+}
+
+.docx-body h5,
+.docx-body h6 {
+  font-size: 0.9em;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin: 12px 0 6px 0;
+}
+
+.docx-body p {
+  margin: 0 0 12px 0;
+  color: var(--color-text-secondary);
+}
+
+.docx-body a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.docx-body a:hover {
+  text-decoration: underline;
+}
+
+.docx-body strong,
+.docx-body b {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.docx-body em,
+.docx-body i {
+  font-style: italic;
+}
+
+.docx-body ul,
+.docx-body ol {
+  margin: 0 0 12px 0;
+  padding-left: 24px;
+  color: var(--color-text-secondary);
+}
+
+.docx-body li {
+  margin: 4px 0;
+}
+
+.docx-body li > ul,
+.docx-body li > ol {
+  margin-bottom: 0;
+}
+
+.docx-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 16px 0;
+  font-size: 13px;
+}
+
+.docx-body th {
+  background: #1a1a1a;
+  color: var(--color-text-primary);
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+}
+
+.docx-body td {
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.docx-body tr:nth-child(even) {
+  background: #111111;
+}
+
+.docx-body tr:nth-child(odd) {
+  background: #0a0a0a;
+}
+
+.docx-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+.docx-body blockquote {
+  margin: 0 0 12px 0;
+  padding: 8px 16px;
+  border-left: 3px solid var(--color-accent);
+  background: #111111;
+  color: var(--color-text-muted);
+}
+
+.docx-body blockquote p {
+  margin: 0;
+}
+
+.docx-body hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 20px 0;
+}
+
+.docx-body sup {
+  font-size: 0.75em;
+  vertical-align: super;
+}
+
+.docx-body sub {
+  font-size: 0.75em;
+  vertical-align: sub;
+}
+
+/* DOCX scrollbar */
+.docx-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.docx-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.docx-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 0;
+}
+
+.docx-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Status dot pulse animation ───────────────────────────────────── */
+
+@keyframes status-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.status-dot-dirty {
+  animation: status-pulse 2s infinite;
+}
+
+/* ── Icon rail active indicator ───────────────────────────────────── */
+
+.icon-rail-active {
+  border-left: 2px solid var(--accent-color, var(--color-accent));
+}
+
+.icon-rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 4px;
+  height: 4px;
+  background: #f59e0b;
+}
+
+/* ── Terminal activity indicator ───────────────────────────────── */
+
+@keyframes terminal-active {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.terminal-active-indicator {
+  animation: terminal-active 1.5s ease-in-out infinite;
+}
+
+/* ── Context menu fade-in ─────────────────────────────────────── */
+
+@keyframes context-menu-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* xterm overrides */
+.xterm {
+  padding: 0;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 0;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Tab bar horizontal scroll — hidden scrollbar, scroll via trackpad/wheel */
+.tabbar-scroll::-webkit-scrollbar,
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Square range slider (matches K2SO toggle style) ─────────────── */
+
+.k2so-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3.5px;
+  background: var(--color-border, #2a2a2a);
+  outline: none;
+  cursor: pointer;
+}
+
+.k2so-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  background: white;
+  border: none;
+  cursor: pointer;
+}
+
+.k2so-slider::-webkit-slider-thumb:hover {
+  background: var(--color-accent, #3b82f6);
+}
+
+/* ── Active agent indicator ──────────────────────────────────────── */
+
+.agent-active-dot {
+  border-radius: 50%;
+  animation: agent-pulse 2s infinite;
+}
+
+@keyframes agent-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.4); }
+  50% { opacity: 0.7; box-shadow: 0 0 0 3px rgba(249, 115, 22, 0); }
+}
+
+/* Agent working dot (orange pulse) */
+.agent-dot-working {
+  border-radius: 50%;
+  background-color: #f97316;
+  animation: agent-pulse-working 1.5s infinite;
+}
+
+@keyframes agent-pulse-working {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.5); }
+  50% { opacity: 0.6; box-shadow: 0 0 0 3px rgba(249, 115, 22, 0); }
+}
+
+/* Agent permission dot (red pulse) */
+.agent-dot-permission {
+  border-radius: 50%;
+  background-color: #ef4444;
+  animation: agent-pulse-permission 1s infinite;
+}
+
+@keyframes agent-pulse-permission {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+  50% { opacity: 0.6; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0); }
+}
+
+/* Agent review dot (green static) */
+.agent-dot-review {
+  border-radius: 50%;
+  background-color: #22c55e;
+}
+
+/* Braille spinner */
+@keyframes braille-spin {
+  0%   { content: '⠋'; }
+  8%   { content: '⠙'; }
+  16%  { content: '⠹'; }
+  25%  { content: '⠸'; }
+  33%  { content: '⠼'; }
+  42%  { content: '⠴'; }
+  50%  { content: '⠦'; }
+  58%  { content: '⠧'; }
+  67%  { content: '⠇'; }
+  75%  { content: '⠏'; }
+  100% { content: '⠋'; }
+}
+
+.braille-spinner::after {
+  content: '⠋';
+  animation: braille-spin 0.8s steps(1) infinite;
+}
+
+/* ── Diff view ─────────────────────────────────────────────────────────── */
+
+.diff-line-add {
+  background: rgba(34, 197, 94, 0.08);
+  color: #a3e635;
+}
+
+.diff-line-remove {
+  background: rgba(239, 68, 68, 0.08);
+  color: #fca5a5;
+}
+
+.diff-line-context {
+  color: var(--color-text-secondary);
+}
+
+.diff-line-num {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.diff-hunk-header {
+  font-size: 11px;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.diff-hunk-separator {
+  border-top: 1px dashed var(--color-border);
+  border-bottom: 1px dashed var(--color-border);
+  background: var(--color-bg);
+}
+
+/* ── Heartbeat animation ─────────────────────────────────────────────── */
+/* Mimics a real heartbeat: quick double-pump then pause (lub-dub...rest) */
+
+@keyframes heartpulse {
+  0%   { transform: scale(1); }
+  14%  { transform: scale(1.4); }
+  20%  { transform: scale(1); }
+  28%  { transform: scale(1.25); }
+  34%  { transform: scale(1); }
+  100% { transform: scale(1); }
+}
+
+@keyframes heartwave {
+  0%   { transform: scale(0.5); opacity: 0.5; }
+  50%  { transform: scale(1.8); opacity: 0; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+/* ── Settings search — pulse the jumped-to row ────────────────────── */
+/* When the Settings search palette picks a row, we scroll it into view
+   and toggle this class for ~1.5s so the user's eye can catch it. */
+
+@keyframes settings-search-pulse {
+  0%, 100% { background-color: transparent; }
+  15%      { background-color: rgba(147, 197, 253, 0.25); }
+  50%      { background-color: rgba(147, 197, 253, 0.15); }
+}
+
+.settings-search-pulse {
+  animation: settings-search-pulse 1.5s ease-out;
+  border-radius: 2px;
+}

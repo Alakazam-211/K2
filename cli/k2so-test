@@ -1,0 +1,380 @@
+#!/bin/bash
+# K2SO CLI Test Suite — runs against a live K2SO instance
+# Can be called from inside OR outside a K2SO terminal.
+# Outside: reads port/token from ~/.k2so/heartbeat.{port,token}
+# Inside: uses K2SO_PORT and K2SO_HOOK_TOKEN env vars
+
+set -uo pipefail
+# Don't use -e since we check return codes manually
+
+# Color helpers
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+PASS=0
+FAIL=0
+
+# Connection
+PORT="${K2SO_PORT:-$(cat ~/.k2so/heartbeat.port 2>/dev/null)}"
+TOKEN="${K2SO_HOOK_TOKEN:-$(cat ~/.k2so/heartbeat.token 2>/dev/null)}"
+PROJECT="${K2SO_PROJECT_PATH:-/Users/z3thon/DevProjects/Alakazam Labs/Choose-the-Right-AI}"
+
+if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
+    echo -e "${RED}Cannot connect to K2SO. Need port and token.${NC}"
+    echo "Either run from a K2SO terminal or ensure ~/.k2so/heartbeat.{port,token} exist."
+    exit 1
+fi
+
+BASE="http://127.0.0.1:${PORT}"
+
+urlencode() {
+    python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1" 2>/dev/null || echo "$1"
+}
+
+req() {
+    local endpoint="$1"
+    shift
+    local args=("--connect-timeout" "3" "--max-time" "10")
+    args+=("--data-urlencode" "token=${TOKEN}")
+    args+=("--data-urlencode" "project=${PROJECT}")
+    for param in "$@"; do
+        args+=("--data-urlencode" "$param")
+    done
+    curl -sG "${BASE}${endpoint}" "${args[@]}" 2>/dev/null
+}
+
+check() {
+    local desc="$1"
+    local result="$2"
+    local expect="${3:-}"
+
+    if [ -n "$expect" ]; then
+        if echo "$result" | grep -q "$expect"; then
+            echo -e "  ${GREEN}✓${NC} $desc"
+            PASS=$((PASS + 1))
+        else
+            echo -e "  ${RED}✗${NC} $desc"
+            echo "    Expected to find: $expect"
+            echo "    Got: $(echo "$result" | head -3)"
+            FAIL=$((FAIL + 1))
+        fi
+    elif [ -n "$result" ] && [ "$result" != "null" ]; then
+        echo -e "  ${GREEN}✓${NC} $desc"
+        PASS=$((PASS + 1))
+    else
+        echo -e "  ${RED}✗${NC} $desc (empty result)"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+check_ok() {
+    local desc="$1"
+    local result="$2"
+    # Passes if result doesn't contain "error" or "Error"
+    if echo "$result" | grep -qi "error"; then
+        echo -e "  ${RED}✗${NC} $desc"
+        echo "    Error: $(echo "$result" | head -3)"
+        FAIL=$((FAIL + 1))
+    else
+        echo -e "  ${GREEN}✓${NC} $desc"
+        PASS=$((PASS + 1))
+    fi
+}
+
+echo "═══════════════════════════════════════════"
+echo " K2SO CLI Test Suite"
+echo " Port: $PORT | Project: $(basename "$PROJECT")"
+echo "═══════════════════════════════════════════"
+echo ""
+
+# ── Health Check ─────────────────────────────────────────────────
+echo -e "${YELLOW}[Health]${NC}"
+HEALTH=$(curl -s --connect-timeout 2 "${BASE}/health" 2>/dev/null)
+check "K2SO is alive" "$HEALTH" "ok"
+
+# ── Agent CRUD ───────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Agent CRUD]${NC}"
+
+# 1. Create agents
+R=$(req "/cli/agents/create" "name=backend-eng" "role=Backend engineer - APIs, databases, server logic")
+check_ok "Create backend-eng agent" "$R"
+
+R=$(req "/cli/agents/create" "name=frontend-eng" "role=Frontend engineer - React, UI, styling")
+check_ok "Create frontend-eng agent" "$R"
+
+R=$(req "/cli/agents/create" "name=qa-tester" "role=QA - testing, test automation, quality assurance")
+check_ok "Create qa-tester agent" "$R"
+
+# 2. List agents
+R=$(req "/cli/agents/list")
+check "List agents returns backend-eng" "$R" "backend-eng"
+check "List agents returns frontend-eng" "$R" "frontend-eng"
+check "List agents returns qa-tester" "$R" "qa-tester"
+
+# 3. Profile
+R=$(req "/cli/agents/profile" "agent=backend-eng")
+check "Agent profile returns role" "$R" "Backend engineer"
+
+# ── Work Items ───────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Work Items]${NC}"
+
+# 4. Create work for specific agent
+R=$(req "/cli/agents/work/create" "agent=backend-eng" "title=Add OAuth2 support" "body=Implement OAuth2 login flow with Google provider" "priority=high" "type=task")
+check_ok "Create work item for backend-eng" "$R"
+
+R=$(req "/cli/agents/work/create" "agent=backend-eng" "title=Add rate limiting" "body=Add rate limiting to API endpoints" "priority=normal" "type=task")
+check_ok "Create second work item for backend-eng" "$R"
+
+R=$(req "/cli/agents/work/create" "agent=frontend-eng" "title=Build login page" "body=Create a login page with OAuth buttons" "priority=high" "type=task")
+check_ok "Create work item for frontend-eng" "$R"
+
+# 5. List agent work
+R=$(req "/cli/agents/work" "agent=backend-eng")
+check "Backend-eng has work items" "$R" "add-oauth2-support"
+
+R=$(req "/cli/agents/work" "agent=backend-eng" "folder=inbox")
+check "Backend-eng inbox filter works" "$R" "inbox"
+
+# 6. Workspace inbox
+R=$(req "/cli/work/inbox/create" "title=Investigate performance regression" "body=Users reporting slow page loads" "priority=critical" "type=task")
+check_ok "Create workspace inbox item" "$R"
+
+R=$(req "/cli/work/inbox/create" "title=Update dependencies" "body=Run npm audit and update vulnerable packages" "priority=low" "type=task")
+check_ok "Create second workspace inbox item" "$R"
+
+R=$(req "/cli/work/inbox")
+check "Workspace inbox has items" "$R" "investigate-performance-regression"
+
+# ── Work Movement ────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Work Movement]${NC}"
+
+# 7. Move work item
+R=$(req "/cli/agents/work/move" "agent=backend-eng" "filename=add-rate-limiting.md" "from=inbox" "to=active")
+check_ok "Move work item inbox→active" "$R"
+
+R=$(req "/cli/agents/work" "agent=backend-eng" "folder=active")
+check "Active folder has moved item" "$R" "add-rate-limiting"
+
+R=$(req "/cli/agents/work/move" "agent=backend-eng" "filename=add-rate-limiting.md" "from=active" "to=done")
+check_ok "Move work item active→done" "$R"
+
+R=$(req "/cli/agents/work" "agent=backend-eng" "folder=done")
+check "Done folder has completed item" "$R" "add-rate-limiting"
+
+# ── Lock Files ───────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Lock Files]${NC}"
+
+R=$(req "/cli/agents/lock" "agent=backend-eng")
+check_ok "Lock agent" "$R"
+
+# Verify lock file exists on disk
+if [ -f "$PROJECT/.k2so/agents/backend-eng/work/.lock" ]; then
+    echo -e "  ${GREEN}✓${NC} Lock file exists on disk"
+    PASS=$((PASS + 1))
+else
+    echo -e "  ${RED}✗${NC} Lock file not found on disk"
+    FAIL=$((FAIL + 1))
+fi
+
+R=$(req "/cli/agents/unlock" "agent=backend-eng")
+check_ok "Unlock agent" "$R"
+
+if [ ! -f "$PROJECT/.k2so/agents/backend-eng/work/.lock" ]; then
+    echo -e "  ${GREEN}✓${NC} Lock file removed from disk"
+    PASS=$((PASS + 1))
+else
+    echo -e "  ${RED}✗${NC} Lock file still exists after unlock"
+    FAIL=$((FAIL + 1))
+fi
+
+# ── Delegation ───────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Delegation]${NC}"
+
+# Create a task in qa-tester's inbox, then delegate it to frontend-eng
+R=$(req "/cli/agents/work/create" "agent=qa-tester" "title=Write login tests" "body=E2E tests for login page" "priority=normal" "type=task")
+check_ok "Create task in qa-tester inbox" "$R"
+
+SOURCE_FILE="$PROJECT/.k2so/agents/qa-tester/work/inbox/write-login-tests.md"
+R=$(req "/cli/agents/delegate" "target=frontend-eng" "file=$SOURCE_FILE")
+check_ok "Delegate task to frontend-eng" "$R"
+
+# Delegate is now atomic: creates worktree + moves to active + launches agent
+# Check that the work item moved to frontend-eng's active/ folder
+if [ -f "$PROJECT/.k2so/agents/frontend-eng/work/active/write-login-tests.md" ]; then
+    echo -e "  ${GREEN}✓${NC} Delegated task in frontend-eng active folder"
+    PASS=$((PASS + 1))
+else
+    echo -e "  ${RED}✗${NC} Delegated task not found in frontend-eng active folder"
+    FAIL=$((FAIL + 1))
+fi
+
+if [ ! -f "$SOURCE_FILE" ]; then
+    echo -e "  ${GREEN}✓${NC} Source file removed from qa-tester inbox"
+    PASS=$((PASS + 1))
+else
+    echo -e "  ${RED}✗${NC} Source file still in qa-tester inbox"
+    FAIL=$((FAIL + 1))
+fi
+
+# Check that a worktree was created
+if ls "$PROJECT/.worktrees/agent-frontend-eng-"* >/dev/null 2>&1; then
+    echo -e "  ${GREEN}✓${NC} Worktree created for delegated task"
+    PASS=$((PASS + 1))
+else
+    echo -e "  ${RED}✗${NC} No worktree created for delegated task"
+    FAIL=$((FAIL + 1))
+fi
+
+# ── Triage ───────────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Triage]${NC}"
+
+R=$(req "/cli/agents/triage")
+check "Triage summary returns data" "$R"
+
+# ── Heartbeat ────────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Heartbeat]${NC}"
+
+R=$(req "/cli/heartbeat")
+check "Heartbeat returns results" "$R"
+# Should want to launch agents since we have inbox items
+echo "    Heartbeat response: $R"
+
+# ── CLAUDE.md Generation ────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[CLAUDE.md Generation]${NC}"
+
+R=$(req "/cli/agents/generate-claude-md" "agent=backend-eng")
+check "Generate CLAUDE.md for backend-eng" "$R" "success"
+
+if [ -f "$PROJECT/.k2so/agents/backend-eng/CLAUDE.md" ]; then
+    echo -e "  ${GREEN}✓${NC} CLAUDE.md file created on disk"
+    PASS=$((PASS + 1))
+else
+    echo -e "  ${RED}✗${NC} CLAUDE.md not found on disk"
+    FAIL=$((FAIL + 1))
+fi
+
+# ── Workspace Settings (CLI-driven setup) ────────────────────────
+echo ""
+echo -e "${YELLOW}[Workspace Settings]${NC}"
+
+# Get current settings
+R=$(req "/cli/settings")
+check "Get workspace settings" "$R" "mode"
+echo "    Settings: $R"
+
+# Enable worktrees
+R=$(req "/cli/worktree" "enable=on")
+check_ok "Enable worktrees" "$R"
+check "Worktree enabled response" "$R" "true"
+
+# Disable worktrees
+R=$(req "/cli/worktree" "enable=off")
+check_ok "Disable worktrees" "$R"
+
+# Re-enable for the test
+R=$(req "/cli/worktree" "enable=on")
+check_ok "Re-enable worktrees" "$R"
+
+# Set mode to pod
+R=$(req "/cli/mode" "set=pod")
+check_ok "Set mode to pod" "$R"
+
+# Verify mode changed
+R=$(req "/cli/settings")
+check "Mode is now pod" "$R" "pod"
+
+# Enable heartbeat
+R=$(req "/cli/heartbeat" "enable=on")
+check_ok "Enable heartbeat" "$R"
+check "Heartbeat enabled response" "$R" "true"
+
+# Verify heartbeat in settings
+R=$(req "/cli/settings")
+check "Heartbeat shows enabled" "$R" "heartbeatEnabled.*true"
+
+# Disable heartbeat
+R=$(req "/cli/heartbeat" "enable=off")
+check_ok "Disable heartbeat" "$R"
+
+# Set mode back to off for clean state
+R=$(req "/cli/mode" "set=pod")
+
+# ── Mode (read back) ────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Mode]${NC}"
+
+R=$(req "/cli/mode")
+check "Get current mode" "$R"
+echo "    Current mode: $R"
+
+# ── Reviews ──────────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Reviews]${NC}"
+
+R=$(req "/cli/reviews")
+# We may or may not have reviews depending on branches
+check "Reviews endpoint responds" "$R"
+echo "    Reviews: $(echo "$R" | head -1)"
+
+# ── Cross-Workspace Work ────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Cross-Workspace]${NC}"
+
+K2SO_PATH="/Users/z3thon/DevProjects/Alakazam Labs/K2SO"
+R=$(req "/cli/work/inbox/create" "title=Fix CI pipeline" "body=Tests failing on main branch" "priority=high" "workspace=$(urlencode "$K2SO_PATH")")
+check_ok "Send work to K2SO workspace inbox" "$R"
+
+if [ -d "$K2SO_PATH/.k2so/work/inbox" ]; then
+    CROSS_COUNT=$(ls -1 "$K2SO_PATH/.k2so/work/inbox/"*.md 2>/dev/null | wc -l)
+    if [ "$CROSS_COUNT" -gt 0 ]; then
+        echo -e "  ${GREEN}✓${NC} Cross-workspace item created in K2SO inbox ($CROSS_COUNT items)"
+        PASS=$((PASS + 1))
+    else
+        echo -e "  ${RED}✗${NC} No items found in K2SO workspace inbox"
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo -e "  ${YELLOW}?${NC} K2SO workspace inbox dir doesn't exist (might need agent mode enabled)"
+fi
+
+# ── Filesystem Verification ─────────────────────────────────────
+echo ""
+echo -e "${YELLOW}[Filesystem Structure]${NC}"
+
+for d in ".k2so" ".k2so/agents" ".k2so/agents/backend-eng" ".k2so/agents/backend-eng/work/inbox" ".k2so/agents/backend-eng/work/active" ".k2so/agents/backend-eng/work/done" ".k2so/agents/frontend-eng" ".k2so/agents/qa-tester" ".k2so/work/inbox"; do
+    if [ -d "$PROJECT/$d" ]; then
+        echo -e "  ${GREEN}✓${NC} $d exists"
+        PASS=$((PASS + 1))
+    else
+        echo -e "  ${RED}✗${NC} $d missing"
+        FAIL=$((FAIL + 1))
+    fi
+done
+
+# ── Summary ──────────────────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════"
+TOTAL=$((PASS + FAIL))
+echo -e " Results: ${GREEN}$PASS passed${NC}, ${RED}$FAIL failed${NC} out of $TOTAL tests"
+echo "═══════════════════════════════════════════"
+
+# Leave things set up for manual UI testing
+echo ""
+echo "Test data left in place for UI testing:"
+echo "  Project: $PROJECT"
+echo "  Agents: backend-eng, frontend-eng, qa-tester"
+echo "  Work items in various states (inbox/active/done)"
+echo "  Workspace inbox items"
+echo ""
+echo "To clean up: rm -rf $PROJECT/.k2so"
+
+exit $FAIL

@@ -1,0 +1,21 @@
+-- 0.37.8: per-heartbeat opt-in to deliver the WAKEUP.md prompt into
+-- the workspace's pinned chat session (the same session the chat tab
+-- attaches to) instead of the heartbeat's own saved session.
+--
+-- When `use_workspace_session = 1`, `heartbeat_launch::smart_launch`
+-- skips its own three-branch cascade (active_terminal_id → inject /
+-- saved session_id → resume_and_fire / nothing → fresh_fire keyed on
+-- workspace_heartbeats columns) and instead calls
+-- `workspace_msg::deliver_live(project_path, prompt)` — the same
+-- smart cascade `k2so msg <ws> --wake` uses, keyed on
+-- workspace_sessions columns.
+--
+-- The heartbeat's existing `last_session_id` and `active_terminal_id`
+-- stay in the DB untouched on flag-on fires. They are no longer
+-- TARGETED, but un-checking the flag restores the original behavior
+-- with the historical session intact.
+--
+-- Default 0 = legacy behavior, every existing heartbeat keeps its own
+-- saved session. Opt-in only.
+ALTER TABLE workspace_heartbeats
+ADD COLUMN use_workspace_session INTEGER NOT NULL DEFAULT 0;

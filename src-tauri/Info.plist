@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 0.37.9: Microphone access string. macOS REQUIRES this key for any
+	     hardened-runtime-signed app to capture audio, including Apple
+	     Dictation invoked from inside a focused text input. Without it,
+	     the OS silently denies all audio access — Fn-Fn does nothing,
+	     no permission prompt appears, no error surfaces. The string
+	     here is what shows up in the system permission dialog and in
+	     System Settings → Privacy & Security → Microphone. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>K2SO needs microphone access so macOS Dictation can transcribe speech into terminal panes.</string>
+</dict>
+</plist>

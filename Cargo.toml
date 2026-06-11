@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "crates/k2-core",
+    "crates/k2-daemon",
+]
+
+# Dev profile: lightly optimized so PTY reads + LLM inference don't crawl.
+# Hot-path crates below escalate to opt-level=3 in dev too.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package.qoi]
+opt-level = 3
+
+[profile.dev.package.fontdue]
+opt-level = 3
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

@@ -615,6 +615,30 @@ pub fn run() {
         .menu(|handle| menu::create_menu(handle))
         .on_menu_event(menu::handle_menu_event)
         .setup(|app| {
+            // 0.40.1 — CLI symlink heal: a pre-0.40 install symlinked
+            // only /usr/local/bin/k2so. The updated bundle's k2so is a
+            // shim that needs its `k2` sibling on disk, and users expect
+            // the `k2` command after the rename anyway. When we see the
+            // old-install shape (k2so present, k2 absent), run the same
+            // install flow as Settings → Install CLI — direct symlink if
+            // /usr/local/bin is user-writable, otherwise ONE admin
+            // password prompt. Spawned off-thread: osascript blocks on
+            // the dialog and setup must not. Re-asks at most once per
+            // launch until healed (cancelling leaves k2so scripts broken,
+            // so staying quiet would be worse).
+            {
+                let legacy = std::path::Path::new("/usr/local/bin/k2so");
+                let new_cli = std::path::Path::new("/usr/local/bin/k2");
+                if legacy.is_symlink() && !new_cli.exists() && !new_cli.is_symlink() {
+                    std::thread::spawn(|| {
+                        match crate::commands::settings::cli_install() {
+                            Ok(path) => eprintln!("[boot] CLI heal: k2 + k2so symlinks installed at {path}"),
+                            Err(e) => eprintln!("[boot] CLI heal skipped/declined: {e}"),
+                        }
+                    });
+                }
+            }
+
             // 0.40.0 — retire com.k2so.* LaunchAgents (the daemon plist
             // re-installs below under dev.k2.daemon; heartbeat +
             // claude-auth re-ensure from the daemon's own boot).

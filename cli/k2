@@ -4,7 +4,7 @@
 # Works inside K2 terminals (auto-configured) and external terminals
 # (auto-discovers connection from ~/.k2/heartbeat.{port,token}).
 
-K2_CLI_VERSION="0.40.0"
+K2_CLI_VERSION="0.40.1"
 
 set -euo pipefail
 
@@ -782,7 +782,7 @@ import json, sys
 data = json.loads(sys.stdin.read())
 inj = data.get('injections', {})
 script = inj.get('notify_script', {})
-print(f\"K2SO hook server port: {data.get('port')}\")
+print(f\"K2 hook server port: {data.get('port')}\")
 print(f\"Notify script: {script.get('path','?')}  exists={script.get('exists',False)}\")
 print()
 print('Config injections:')
@@ -843,8 +843,10 @@ cmd_daemon_status() {
     local print_output
     print_output=$(launchctl print "gui/${uid}/${_daemon_label}" 2>/dev/null || true)
     if [ -n "$print_output" ]; then
-        pid=$(printf '%s\n' "$print_output" | awk -F'=' '/^\s*pid\s*=/{gsub(/ /,"",$2); print $2; exit}')
-        last_exit_code=$(printf '%s\n' "$print_output" | awk -F'=' '/^\s*last exit code\s*=/{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2; exit}')
+        # POSIX classes, not \s — macOS ships BWK awk where \s never
+        # matches, which made "Running: no" while the daemon was up.
+        pid=$(printf '%s\n' "$print_output" | awk -F'=' '/^[[:space:]]*pid[[:space:]]*=/{gsub(/ /,"",$2); print $2; exit}')
+        last_exit_code=$(printf '%s\n' "$print_output" | awk -F'=' '/^[[:space:]]*last exit code[[:space:]]*=/{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2; exit}')
         [ -n "$pid" ] && [ "$pid" != "0" ] && running="yes"
     fi
 
@@ -858,7 +860,7 @@ cmd_daemon_status() {
         return 0
     fi
 
-    echo "K2SO Daemon"
+    echo "K2 Daemon"
     echo "  Installed:     $installed  ($_daemon_plist)"
     echo "  Running:       $running$([ "$running" = "yes" ] && echo "  (PID $pid)")"
     if [ "$running" = "yes" ]; then
@@ -871,7 +873,7 @@ cmd_daemon_status() {
     echo "  Log file:      $_daemon_stdout_log"
     if [ "$installed" = "no" ]; then
         echo ""
-        echo "  Daemon plist is not installed. Open K2SO → Settings → General → K2SO Daemon"
+        echo "  Daemon plist is not installed. Open K2 → Settings → General → K2 Daemon"
         echo "  to install the launch agent (dev builds require K2SO_INSTALL_DAEMON=1)."
     fi
 }
@@ -879,7 +881,7 @@ cmd_daemon_status() {
 cmd_daemon_start() {
     if [ ! -f "$_daemon_plist" ]; then
         echo "Daemon plist not installed at $_daemon_plist" >&2
-        echo "Open K2SO → Settings → General → K2SO Daemon → Install." >&2
+        echo "Open K2 → Settings → General → K2 Daemon → Install." >&2
         exit 1
     fi
     # `launchctl load -w` is persistent across reboots. On an already-
@@ -1062,7 +1064,7 @@ cmd_daemon_uninstall() {
     local force=0
     [ "${1:-}" = "--yes" ] || [ "${1:-}" = "-y" ] && force=1
     if [ "$force" != "1" ]; then
-        echo "This will remove the K2SO daemon launch agent and stop the daemon."
+        echo "This will remove the K2 daemon launch agent and stop the daemon."
         echo "Your workspace data (~/.k2/k2so.db, agent files) is preserved."
         printf "Proceed? [y/N] "
         read -r answer
@@ -3745,7 +3747,7 @@ cmd_update() {
 
     # Extract the version from the remote script
     local remote_version
-    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | sed 's/K2_CLI_VERSION="0.40.0"//')
+    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | sed 's/K2_CLI_VERSION="0.40.1"//')
     if [ -z "$remote_version" ]; then
         echo "Error: Could not parse remote version." >&2
         exit 1
@@ -4078,7 +4080,7 @@ cmd_glossary() {
     local term="${1:-}"
     if [[ -z "$term" ]]; then
         # List all terms.
-        echo "K2SO glossary — definitions of K2SO-specific terms"
+        echo "K2 glossary — definitions of K2-specific terms"
         echo ""
         cli_request "/cli/glossary/list" | python3 -c "
 import json, sys

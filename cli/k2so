@@ -2,5 +2,19 @@
 # k2so → k2 transition shim (0.40.0). K2SO is now K2 by Alakazam Labs.
 # This alias keeps existing scripts working but will be REMOVED before
 # 1.0.0 — switch to `k2`.
+#
+# Resolve THIS script's real location first: the common install is a
+# /usr/local/bin/k2so symlink into the app bundle, and naive dirname($0)
+# would look for a sibling `k2` in /usr/local/bin — which may not exist
+# (pre-0.40 installs only symlinked `k2so`). Chase symlinks to the
+# bundle's cli/ dir and exec the `k2` that ships next to this file.
 echo "note: 'k2so' is now 'k2' — please switch ('k2so' remains as an alias for now, removed before 1.0.0)" >&2
-exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/k2" "$@"
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+    TARGET="$(readlink "$SELF")"
+    case "$TARGET" in
+        /*) SELF="$TARGET" ;;
+        *)  SELF="$(dirname "$SELF")/$TARGET" ;;
+    esac
+done
+exec "$(cd "$(dirname "$SELF")" && pwd)/k2" "$@"

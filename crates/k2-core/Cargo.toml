@@ -1,6 +1,6 @@
 [package]
 name = "k2-core"
-version = "0.40.0"
+version = "0.40.1"
 edition = "2021"
 license = "MIT"
 description = "K2SO device-local core library: db, llm, terminal, companion, scheduler, agent_hooks, push_adapter. Linked by both src-tauri (Tauri app, thin client) and k2so-daemon (persistent-agent runtime)."

@@ -3,6 +3,25 @@
 User-facing highlights of recent updates. Full developer-facing release
 notes accompany each GitHub release.
 
+## 0.40.2 — Clearer permission prompts after the rename
+
+The K2SO → K2 rename means macOS sees a brand-new app, so a few system
+permission prompts can appear once after updating. This release makes
+them clearer and reduces how often you'll see them:
+
+- **The CLI-install password prompt now explains itself.** Instead of the
+  generic "osascript wants to make changes," it reads "K2 needs to
+  install the k2 command-line tool…" so you know exactly what you're
+  approving.
+- **Your K2 Connect sign-in carries over without opening Settings.** If
+  you had a tunnel running, K2 now moves your saved session to its new
+  home at startup — your tunnel keeps working without you having to visit
+  the K2 Connect page first.
+- **The keychain prompt is friendlier.** When macOS asks to unlock your
+  K2 Connect credentials, it now names them "K2 Connect sign-in" instead
+  of a cryptic identifier. (macOS controls the rest of that dialog's
+  wording — the lock icon and title are the system's, not ours.)
+
 ## 0.40.1 — CLI upgrade heals itself
 
 - **If you had the CLI installed, K2 now finishes the upgrade for you.**

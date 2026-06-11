@@ -188,6 +188,14 @@ async fn async_main() {
         let r = crate::claude_auth_host::handle_install_scheduler();
         k2_core::log_debug!("[daemon/boot] claude-auth scheduler re-ensured under dev.k2.claude-auth: {}", r.status);
     }
+    // 0.40.2 — proactively migrate a pre-rename K2 Connect session
+    // (com.k2so.connect.account → dev.k2.connect.account) at boot, so a
+    // signed-in user stays signed in without first opening the K2 Connect
+    // settings page (which used to be the only thing that triggered the
+    // lazy copy-on-read). Idempotent + best-effort.
+    if k2_core::tunnel::lease::migrate_account_keychain() {
+        k2_core::log_debug!("[daemon/boot] K2 Connect account session migrated forward to dev.k2.connect.account");
+    }
 
     // 0.37.9 — raise RLIMIT_NOFILE so the daemon can hold enough fds
     // for many concurrent PTYs / WS sockets / file watchers. launchd

@@ -155,7 +155,7 @@ pub fn cli_install() -> Result<String, String> {
         // Try to create /usr/local/bin via osascript (prompts for password)
         let output = std::process::Command::new("osascript")
             .args(["-e", &format!(
-                "do shell script \"mkdir -p {}\" with administrator privileges",
+                "do shell script \"mkdir -p {}\" with prompt \"K2 needs to create /usr/local/bin to install its command-line tool.\" with administrator privileges",
                 bin_dir.display()
             )])
             .output()
@@ -188,7 +188,7 @@ pub fn cli_install() -> Result<String, String> {
         .map(|shim| format!(" && ln -sf '{}' '{}'", shim.display(), CLI_LEGACY_SYMLINK_PATH))
         .unwrap_or_default();
     let script = format!(
-        "do shell script \"ln -sf '{}' '{}'{}\" with administrator privileges",
+        "do shell script \"ln -sf '{}' '{}'{}\" with prompt \"K2 needs to install the k2 command-line tool (and the k2so compatibility alias) in /usr/local/bin.\" with administrator privileges",
         cli_script.display(),
         CLI_SYMLINK_PATH,
         legacy_ln
@@ -220,7 +220,7 @@ pub fn cli_uninstall() -> Result<(), String> {
 
     // Fall back to osascript with admin privileges
     let script = format!(
-        "do shell script \"rm -f '{}'\" with administrator privileges",
+        "do shell script \"rm -f '{}'\" with prompt \"K2 needs to remove its command-line tool from /usr/local/bin.\" with administrator privileges",
         CLI_SYMLINK_PATH
     );
     let output = std::process::Command::new("osascript")

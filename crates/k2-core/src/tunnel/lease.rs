@@ -51,6 +51,13 @@ const SUPABASE_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOi
 const ACCOUNT_KEYCHAIN_SERVICE: &str = "dev.k2.connect.account";
 /// Pre-0.40 service name — read-only fallback, migrated on first read.
 const LEGACY_ACCOUNT_KEYCHAIN_SERVICE: &str = "com.k2so.connect.account";
+/// Human-facing item LABEL (kSecAttrLabel). The service above is the
+/// stable lookup KEY; the label is the only string macOS shows in the
+/// "K2 wants to use your confidential information stored in '<label>'"
+/// keychain dialog. macOS owns that dialog's body text entirely (no
+/// per-prompt reason string like osascript's `with prompt`), so a clear
+/// label is the only lever we have to explain what's being unlocked.
+const ACCOUNT_KEYCHAIN_LABEL: &str = "K2 Connect sign-in";
 const ACCOUNT_REFRESH_KEY: &str = "session-refresh-token";
 
 /// Server-side claim TTL: a claim with no heartbeat for this long expires
@@ -133,6 +140,36 @@ impl LeaseTarget {
 // mechanism `companion::keychain` already relies on for cross-process
 // access to a keyring-written secret.
 
+/// 0.40.0 rebrand — proactively copy a pre-rename K2 Connect session
+/// (`com.k2so.connect.account`) forward to `dev.k2.connect.account` at
+/// daemon boot, so a signed-in user stays signed in WITHOUT having to
+/// open the K2 Connect settings page (which is what used to trigger the
+/// lazy copy-on-read). Returns `true` if a migration happened. Idempotent
+/// + best-effort: a no-op when there's no legacy item, or the new item is
+/// already present. macOS-only.
+#[cfg(target_os = "macos")]
+pub fn migrate_account_keychain() -> bool {
+    // New item already present → nothing to do (don't even touch legacy).
+    if read_keychain_token(ACCOUNT_KEYCHAIN_SERVICE).is_some() {
+        return false;
+    }
+    match read_keychain_token(LEGACY_ACCOUNT_KEYCHAIN_SERVICE) {
+        Some(legacy) => {
+            crate::log_debug!(
+                "[tunnel/lease] boot keychain migration {LEGACY_ACCOUNT_KEYCHAIN_SERVICE} → {ACCOUNT_KEYCHAIN_SERVICE}"
+            );
+            write_account_refresh_token(&legacy);
+            true
+        }
+        None => false,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn migrate_account_keychain() -> bool {
+    false
+}
+
 /// Read the account refresh token the renderer stored at sign-in. Returns
 /// `None` when absent (never signed in / signed out) so the caller can
 /// skip renewal cleanly rather than erroring.
@@ -192,6 +229,10 @@ pub fn write_account_refresh_token(token: &str) {
             ACCOUNT_KEYCHAIN_SERVICE,
             "-a",
             ACCOUNT_REFRESH_KEY,
+            // Friendly label shown in the macOS keychain access dialog
+            // instead of the bare `dev.k2.connect.account` service id.
+            "-l",
+            ACCOUNT_KEYCHAIN_LABEL,
             "-w",
             token,
         ])

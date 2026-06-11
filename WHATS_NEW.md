@@ -3,6 +3,34 @@
 User-facing highlights of recent updates. Full developer-facing release
 notes accompany each GitHub release.
 
+## 0.40.0 — Welcome to K2 by Alakazam Labs
+
+K2SO is now **K2**. New name, new icon, new home — same product, and
+everything you had is exactly where you left it.
+
+**What this update did on your machine (automatically):**
+
+- Your app is now **K2.app** with the new K2 icon.
+- All workspaces, sessions, agents, schedules, settings, and your
+  K2 Connect sign-in carried over. The daemon, heartbeat, and credential
+  refresher re-registered themselves under their new names and
+  reconnected on their own — if you can read this, it worked.
+- The CLI is now **`k2`** (try `k2 activity`). Your existing `k2so`
+  commands and scripts still work — `k2so` stays as an alias through
+  the 0.x series, and prints a gentle reminder to switch.
+- Your data folder moved from `~/.k2so` to `~/.k2`, with a
+  compatibility link left behind so older scripts keep working.
+- Updates now come from K2's new home:
+  [github.com/Alakazam-211/K2](https://github.com/Alakazam-211/K2).
+
+**Licensing, as announced in 0.39.48:** K2 is now **Fair Source**
+(FSL-1.1-Apache-2.0). Free to use for individuals and businesses, source
+visible, each version converts to Apache 2.0 after two years. Details:
+LICENSE.md, COMMERCIAL_HOSTING_GRANT.md, and TRADEMARKS.md in the new
+repository.
+
+Thanks for riding along since the K2SO days. Onward.
+
 ## 0.39.48 — K2SO is becoming K2
 
 This is the last release under the K2SO name. The next update is **K2 by

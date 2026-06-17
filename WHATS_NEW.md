@@ -3,6 +3,29 @@
 User-facing highlights of recent updates. Full developer-facing release
 notes accompany each GitHub release.
 
+## 0.40.3 — Honest message-delivery status
+
+- **`k2 msg` stops crying wolf.** Live messages between agents sometimes
+  reported as failed (`no_submit`, exit code 2) even though they
+  delivered fine — a false alarm from the after-send screen check racing
+  the recipient's redraw, which could push agents into re-sending and
+  stacking duplicate text. Delivery itself was already solid (the paste
+  framing and insurance Enter from the comms-reliability release keep it
+  that way); now the *status* reflects reality: a message handed to a
+  live agent session with its submit keystroke is reported as sent.
+  Genuine failures — a crashed recipient session — still surface loudly.
+
+- **Updated from K2SO and want the app file itself named "K2"?** An
+  in-place update keeps the old `K2SO.app` filename on disk (its name and
+  icon already display as **K2**, so this is purely cosmetic — updates
+  keep flowing to it either way). For a clean `K2.app`, download the
+  latest from **[k2.dev](https://k2.dev)** and drag it into your
+  Applications folder, replacing the old one. Optional, not required.
+
+- **Remote access is "K2 Connect" in Settings again.** The remote-access
+  tab briefly carried an internal codename; it's back to the clear,
+  familiar **K2 Connect** label.
+
 ## 0.40.2 — Clearer permission prompts after the rename
 
 The K2SO → K2 rename means macOS sees a brand-new app, so a few system

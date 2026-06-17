@@ -1,6 +1,6 @@
 {
   "name": "k2",
-  "version": "0.40.2",
+  "version": "0.40.3",
   "description": "Developer workspace with terminal panes, git worktrees, and agent presets",
   "author": "Alakazam Labs",
   "license": "MIT",

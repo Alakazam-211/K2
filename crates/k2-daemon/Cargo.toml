@@ -1,6 +1,6 @@
 [package]
 name = "k2-daemon"
-version = "0.40.2"
+version = "0.40.3"
 edition = "2021"
 license = "MIT"
 description = "K2SO persistent-agents daemon: launchd-managed device-local process that runs the scheduler, companion tunnel, and agent orchestration so agents keep working while the Tauri app is quit and the laptop lid is closed."

@@ -2997,7 +2997,7 @@ dependencies = [
 
 [[package]]
 name = "k2"
-version = "0.40.2"
+version = "0.40.3"
 dependencies = [
  "ahash",
  "alacritty_terminal",
@@ -3058,7 +3058,7 @@ dependencies = [
 
 [[package]]
 name = "k2-core"
-version = "0.40.2"
+version = "0.40.3"
 dependencies = [
  "alacritty_terminal",
  "argon2",
@@ -3103,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "k2-daemon"
-version = "0.40.2"
+version = "0.40.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",

@@ -66,15 +66,6 @@ pub enum MsgReason {
     /// PTY existed but the child process exited during the write
     /// (race we used to mask as `injected_to_pty: true`). Transient.
     PtyDied,
-    /// 0.39.45 (GH #38/#36/#34/#30): the payload was injected into the
-    /// recipient's PTY, but submission could NOT be confirmed — the
-    /// text still sat in the recipient TUI's input box after the
-    /// submit CR (re-sent several times with backoff). Pre-0.39.45
-    /// this surfaced as `success: true` and the message silently never
-    /// delivered. PERMANENT for the retry loop: re-running the whole
-    /// cascade would re-inject the full text and duplicate it in the
-    /// recipient's input box.
-    NoSubmit,
 }
 
 impl MsgReason {
@@ -84,7 +75,6 @@ impl MsgReason {
             Self::NoAgentMode => "no_agent_mode",
             Self::SpawnFailed => "spawn_failed",
             Self::PtyDied => "pty_died",
-            Self::NoSubmit => "no_submit",
         }
     }
 
@@ -100,10 +90,7 @@ impl MsgReason {
                 "Spawn failed. Verify `claude` is on PATH for the daemon."
             }
             Self::PtyDied => {
-                "Target session crashed during delivery. Check `~/.k2so/daemon.stderr.log`."
-            }
-            Self::NoSubmit => {
-                "Message text was injected but Enter was not confirmed — it may sit un-submitted in the recipient's input box. Do NOT resend the full text; send a short follow-up ping or check the recipient session."
+                "Target session crashed during delivery. Check `~/.k2/daemon.stderr.log`."
             }
         }
     }
@@ -114,10 +101,7 @@ impl MsgReason {
     /// hot path inside [`deliver_live`] does its own string match.
     #[allow(dead_code)]
     fn is_permanent(self) -> bool {
-        matches!(
-            self,
-            Self::WorkspaceNotFound | Self::NoAgentMode | Self::NoSubmit
-        )
+        matches!(self, Self::WorkspaceNotFound | Self::NoAgentMode)
     }
 }
 
@@ -168,15 +152,6 @@ impl MsgResponse {
         }
     }
 
-    /// Failure that still identifies the target session — used by
-    /// `no_submit` (GH #38) so the sender can locate the session whose
-    /// input box may hold the stranded payload.
-    fn fail_with_target(reason: MsgReason, target_session_id: String) -> Self {
-        Self {
-            target_session_id: Some(target_session_id),
-            ..Self::fail(reason)
-        }
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -348,15 +323,8 @@ pub fn deliver_live(
         }
 
         // Permanent reasons short-circuit — waiting won't fix them.
-        // `no_submit` (0.39.45, GH #38) is permanent BY DESIGN: the
-        // payload is already sitting in the recipient's input box, so
-        // re-running the cascade would inject the full text a second
-        // time and duplicate it.
         if let Some(reason) = result.reason.as_deref() {
-            let permanent = matches!(
-                reason,
-                "workspace_not_found" | "no_agent_mode" | "no_submit"
-            );
+            let permanent = matches!(reason, "workspace_not_found" | "no_agent_mode");
             if permanent {
                 return result;
             }
@@ -450,94 +418,47 @@ fn attempt_delivery(project_path: &str, text: &str, from: &str, command: &str) -
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Verified submit (0.39.45, GH #38/#36/#34/#30)
+// Inject + submit (0.39.45 reliability fixes; 0.40.3 honest success-check)
 // ─────────────────────────────────────────────────────────────────────
 //
 // The pre-0.39.45 injection was `write(text)` → sleep 150ms → `write(\r)`
-// → return success, with ZERO verification. Under host CPU
-// oversubscription the recipient TUI reads text + CR in one coalesced
-// burst; without paste framing, its input widget absorbs the CR as a
-// literal newline instead of a submit keystroke — the message sits
-// un-submitted in the input box until a human presses Enter (GH #38's
-// root-cause writeup; surfaces as #36 submit stall / #34 receive-side
-// buffering / #30 stalled pings).
+// → return success. Under host CPU oversubscription the recipient TUI
+// reads text + CR in one coalesced burst; without paste framing, its
+// input widget absorbs the CR as a literal newline instead of a submit
+// keystroke — the message sat un-submitted until a human pressed Enter
+// (GH #38; surfaced as #36 submit stall / #34 receive buffering / #30
+// stalled pings).
 //
-// Two-layer fix:
-//   1. STRUCTURAL — when the recipient has bracketed-paste mode on
+// 0.39.45 fixed RELIABILITY with two changes, both kept here:
+//   1. PASTE FRAMING — when the recipient has bracketed-paste mode on
 //      (claude/cursor TUIs enable it at startup), wrap the payload in
 //      explicit `ESC[200~ … ESC[201~` markers. The trailing CR is then
-//      unambiguously a keystroke even when the child reads the whole
-//      burst in one `read()`.
-//   2. VERIFY-AND-RESUBMIT — after the CR, read the recipient's visible
-//      grid and check whether the payload tail still sits in the INPUT
-//      REGION (the rows from the LAST `"> "` prompt row to the bottom of
-//      the screen — claude's input box is the last prompt on screen;
-//      transcript echoes of submitted messages sit ABOVE it). While it
-//      does, re-send the CR with backoff. An extra Enter on an already-
-//      empty input box is a no-op, so a false re-send is harmless.
+//      unambiguously a submit keystroke even when the child reads the
+//      whole burst in one `read()`.
+//   2. EXTRA ENTER — under latency the first CR can land before the TUI
+//      has finished ingesting the paste; send a second CR after a short
+//      settle. An Enter on an already-empty input box is a no-op, so the
+//      insurance keystroke is harmless when the first already submitted.
 //
-// When the tail never clears, the caller reports `no_submit` (loud)
-// instead of the pre-0.39.45 `success: true` (silent loss).
+// 0.39.45 ALSO added a grid-scrape "did the input box clear?" oracle that
+// reported `no_submit` when it couldn't confirm. With paste framing in
+// place, sends now land reliably — but the oracle false-negatived: right
+// after a submit, Claude echoes the message into the transcript with the
+// SAME `"> "` prefix, and before the fresh empty input box repaints, that
+// echo is the LAST `"> "` row on screen, so the scraper reads the tail as
+// "still in the input box" and reports `no_submit` on a message that DID
+// deliver (GH Alakazam-211/K2 #1). 0.40.3 retires the oracle and returns
+// to the original, accurate success-check: a payload + submit CR written
+// into a still-alive child IS a successful send. PTY death is still a
+// loud `pty_died`.
 
-const SUBMIT_SETTLE_MS: [u64; 4] = [250, 450, 800, 1200];
-
-/// Strip everything but ASCII alphanumerics. Grid rows interleave the
-/// payload with box-drawing borders, wrap points, and padding; the
-/// payload may wrap anywhere. Comparing alnum-only streams makes the
-/// tail match immune to all of that.
-fn normalize_for_match(s: &str) -> String {
-    s.chars().filter(|c| c.is_ascii_alphanumeric()).collect()
-}
-
-/// The marker we search for: the last ≤32 alphanumeric chars of the
-/// payload. Empty when the payload has no alphanumerics (verification
-/// is skipped — nothing reliable to match on).
-fn payload_tail_marker(payload: &str) -> String {
-    let norm = normalize_for_match(payload);
-    // Safe byte slicing: `normalize_for_match` output is pure ASCII.
-    let start = norm.len().saturating_sub(32);
-    norm[start..].to_string()
-}
-
-/// True when the recipient's input region still shows `tail`.
-///
-/// Region = rows from the LAST row containing the `"> "` input prompt
-/// through the bottom of the screen. Claude Code renders submitted
-/// messages with the same `"> "` prefix in the transcript, but those
-/// sit ABOVE the input box — taking the LAST prompt row excludes them.
-/// When no prompt row exists (non-claude TUI, mid-redraw), falls back
-/// to the bottom 6 rows.
-fn input_region_contains(rows: &[String], tail: &str) -> bool {
-    if tail.is_empty() {
-        return false;
-    }
-    let start = rows
-        .iter()
-        .rposition(|r| r.contains("> "))
-        .unwrap_or_else(|| rows.len().saturating_sub(6));
-    let joined: String = rows[start..]
-        .iter()
-        .map(|s| normalize_for_match(s))
-        .collect();
-    joined.contains(tail)
-}
-
-/// Whether the verified injection confirmed submission.
-enum SubmitOutcome {
-    /// The payload tail left the input region after a CR — observed
-    /// submitted.
-    Confirmed,
-    /// All CR attempts exhausted with the tail still in the input
-    /// region, or the payload had nothing to verify against.
-    Unverified,
-}
-
-/// Inject `payload` + submit CR into `live`, with paste framing and
-/// verify-and-resubmit. `Err(())` = the child died mid-injection.
-fn inject_payload_verified(
+/// Inject `payload` + submit into `live`, with paste framing and an
+/// insurance Enter for latency. `Ok(())` = delivered to a live child;
+/// `Err(())` = the child died mid-injection (caller reports `pty_died`).
+fn inject_and_submit(
     live: &session_lookup::LiveSession,
     payload: &str,
-) -> Result<SubmitOutcome, ()> {
+) -> Result<(), ()> {
     let body: Vec<u8> = if live.bracketed_paste_active() {
         let mut b = Vec::with_capacity(payload.len() + 12);
         b.extend_from_slice(b"\x1b[200~");
@@ -553,36 +474,23 @@ fn inject_payload_verified(
     // Let the TUI ingest + render the body before the submit keystroke.
     std::thread::sleep(Duration::from_millis(150));
 
-    let tail = payload_tail_marker(payload);
-    for (i, settle) in SUBMIT_SETTLE_MS.iter().enumerate() {
-        if live.write(b"\r").is_err() {
-            return Err(());
-        }
-        std::thread::sleep(Duration::from_millis(*settle));
-        if !live.is_child_alive() {
-            return Err(());
-        }
-        if tail.is_empty() {
-            // Nothing to verify against — bytes are delivered, paste
-            // framing makes the CR unambiguous; report unverified.
-            return Ok(SubmitOutcome::Unverified);
-        }
-        let rows = live.visible_text_rows();
-        if !input_region_contains(&rows, &tail) {
-            if i > 0 {
-                log_debug!(
-                    "[msg/verify] submit confirmed after {} CR attempt(s)",
-                    i + 1
-                );
-            }
-            return Ok(SubmitOutcome::Confirmed);
-        }
-        log_debug!(
-            "[msg/verify] payload tail still in input region after CR #{} — re-sending Enter",
-            i + 1
-        );
+    // Submit. The second CR after a settle is the latency insurance: if
+    // the first landed before the paste finished ingesting, this one
+    // submits it; if the first already submitted, this hits an empty
+    // input box and no-ops.
+    if live.write(b"\r").is_err() {
+        return Err(());
     }
-    Ok(SubmitOutcome::Unverified)
+    std::thread::sleep(Duration::from_millis(250));
+    if !live.is_child_alive() {
+        return Err(());
+    }
+    let _ = live.write(b"\r");
+    std::thread::sleep(Duration::from_millis(120));
+    if !live.is_child_alive() {
+        return Err(());
+    }
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -599,35 +507,22 @@ fn inject_live(
     project_id: &str,
 ) -> MsgResponse {
     let payload = format_message(from, text, command);
-    let outcome = match inject_payload_verified(live, &payload) {
-        Ok(o) => o,
-        Err(()) => {
-            log_debug!("[msg/inject_live] PTY died during injection — pty_died");
-            return MsgResponse::fail(MsgReason::PtyDied);
-        }
-    };
+    if inject_and_submit(live, &payload).is_err() {
+        log_debug!("[msg/inject_live] PTY died during injection — pty_died");
+        return MsgResponse::fail(MsgReason::PtyDied);
+    }
 
     let target_id = live.session_id().to_string();
 
     // Re-stamp `active_terminal_id` so subsequent calls fast-path
     // through Branch 1 directly. Idempotent if it already pointed here.
-    // Stamped on BOTH outcomes — the session is live either way.
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = WorkspaceSession::save_active_terminal_id(&conn, project_id, &target_id);
     }
 
-    match outcome {
-        SubmitOutcome::Confirmed => MsgResponse::ok(target_id, branch),
-        SubmitOutcome::Unverified => {
-            log_debug!(
-                "[msg/inject_live] submission UNCONFIRMED for session={} — reporting no_submit",
-                target_id
-            );
-            MsgResponse::fail_with_target(MsgReason::NoSubmit, target_id)
-        }
-    }
+    MsgResponse::ok(target_id, branch)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -750,25 +645,19 @@ fn spawn_and_inject(
 
     // Two-phase write — wait for claude TUI to draw before sending the
     // body. Apply the `[from <name>] ` prefix to the bytes the
-    // recipient's PTY receives. 0.39.45 (GH #38): the body now goes
-    // through the same verified injector as live delivery — paste
-    // framing + verify-and-resubmit — instead of fire-and-forget.
+    // recipient's PTY receives. The body goes through the same injector
+    // as live delivery — paste framing + insurance Enter.
     let session = session_lookup::lookup_by_session_id(&outcome.session_id);
     if let Some(live) = session {
         let payload = format_message(from, text, command);
         let log_sid = target_id.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(1500));
-            match inject_payload_verified(&live, &payload) {
-                Ok(SubmitOutcome::Confirmed) => {}
-                Ok(SubmitOutcome::Unverified) => log_debug!(
-                    "[daemon/workspace-msg] post-spawn inject UNCONFIRMED for session={} — payload may sit in the input box",
-                    log_sid
-                ),
-                Err(()) => log_debug!(
+            if inject_and_submit(&live, &payload).is_err() {
+                log_debug!(
                     "[daemon/workspace-msg] PTY died during post-spawn inject for session={}",
                     log_sid
-                ),
+                );
             }
         });
     } else {
@@ -891,20 +780,12 @@ mod tests {
     }
 
     #[test]
-    fn no_submit_is_permanent_so_the_payload_is_never_duplicated() {
-        // GH #38: retrying the cascade after no_submit would re-inject
-        // the full text on top of the copy already in the input box.
-        assert!(MsgReason::NoSubmit.is_permanent());
-    }
-
-    #[test]
     fn every_reason_has_a_nonempty_hint() {
         for reason in [
             MsgReason::WorkspaceNotFound,
             MsgReason::NoAgentMode,
             MsgReason::SpawnFailed,
             MsgReason::PtyDied,
-            MsgReason::NoSubmit,
         ] {
             assert!(
                 !reason.hint().is_empty(),
@@ -923,95 +804,22 @@ mod tests {
         assert_eq!(MsgReason::NoAgentMode.code(), "no_agent_mode");
         assert_eq!(MsgReason::SpawnFailed.code(), "spawn_failed");
         assert_eq!(MsgReason::PtyDied.code(), "pty_died");
-        assert_eq!(MsgReason::NoSubmit.code(), "no_submit");
     }
 
-    // ── Verified submit helpers (0.39.45, GH #38) ────────────────────
-
+    /// 0.40.3: the live-inject success-check reverted to alive-based —
+    /// there is no `no_submit` reason anymore (the grid-scrape oracle
+    /// that false-negatived delivered messages was retired). Lock the
+    /// reason set so it can't silently creep back.
     #[test]
-    fn tail_marker_takes_last_32_alnum_chars() {
-        let payload = "[from scout_v3] the quick brown fox jumps over the lazy daemon";
-        let tail = payload_tail_marker(payload);
-        assert_eq!(tail.len(), 32);
-        assert!(tail.ends_with("lazydaemon"));
-        // Non-alnum (spaces, brackets, underscores) must be stripped.
-        assert!(tail.chars().all(|c| c.is_ascii_alphanumeric()));
-    }
-
-    #[test]
-    fn tail_marker_short_payload_uses_everything() {
-        assert_eq!(payload_tail_marker("[from x] hi"), "fromxhi");
-    }
-
-    #[test]
-    fn tail_marker_empty_for_non_alnum_payload() {
-        assert_eq!(payload_tail_marker("!!! ??? ..."), "");
-    }
-
-    /// Un-submitted state: the payload sits in the input box (the LAST
-    /// "> " row), wrapped across the box's rows with borders. Must be
-    /// detected so the CR gets re-sent.
-    #[test]
-    fn input_region_detects_unsubmitted_payload() {
-        let rows: Vec<String> = vec![
-            "● Earlier transcript content".into(),
-            "".into(),
-            "╭──────────────────────────────╮".into(),
-            "│ > [from scout_v3] the quick │".into(),
-            "│ brown fox jumps over the     │".into(),
-            "│ lazy daemon                  │".into(),
-            "╰──────────────────────────────╯".into(),
-            "  ⏵⏵ bypass permissions on".into(),
-        ];
-        let tail = payload_tail_marker("[from scout_v3] the quick brown fox jumps over the lazy daemon");
-        assert!(
-            input_region_contains(&rows, &tail),
-            "wrapped payload in the input box must be detected"
-        );
-    }
-
-    /// Submitted state: the transcript echoes the message with the SAME
-    /// "> " prefix ABOVE the (now empty) input box. The region must
-    /// start at the LAST prompt row, excluding the echo — otherwise
-    /// every successful submit would be misread as un-submitted.
-    #[test]
-    fn input_region_ignores_transcript_echo_after_submit() {
-        let rows: Vec<String> = vec![
-            "> [from scout_v3] the quick brown fox jumps over the lazy daemon".into(),
-            "".into(),
-            "● Working on it…".into(),
-            "╭──────────────────────────────╮".into(),
-            "│ >                            │".into(),
-            "╰──────────────────────────────╯".into(),
-            "  ⏵⏵ bypass permissions on".into(),
-        ];
-        let tail = payload_tail_marker("[from scout_v3] the quick brown fox jumps over the lazy daemon");
-        assert!(
-            !input_region_contains(&rows, &tail),
-            "transcript echo above the input box must NOT read as un-submitted"
-        );
-    }
-
-    /// No "> " prompt anywhere (non-claude TUI / mid-redraw): fall back
-    /// to the bottom 6 rows.
-    #[test]
-    fn input_region_falls_back_to_bottom_rows_without_prompt() {
-        let mut rows: Vec<String> = (0..20).map(|i| format!("row {i}")).collect();
-        rows.push("stranded payload tail here".into());
-        let tail = payload_tail_marker("stranded payload tail here");
-        assert!(input_region_contains(&rows, &tail));
-
-        // And when the tail is far ABOVE the bottom-6 window, it must
-        // not match (it scrolled into history — not the input line).
-        let mut rows2: Vec<String> = vec!["stranded payload tail here".into()];
-        rows2.extend((0..20).map(|i| format!("row {i}")));
-        assert!(!input_region_contains(&rows2, &tail));
-    }
-
-    #[test]
-    fn input_region_empty_tail_never_matches() {
-        let rows: Vec<String> = vec!["│ > anything".into()];
-        assert!(!input_region_contains(&rows, ""));
+    fn no_submit_reason_is_retired() {
+        for code in [
+            MsgReason::WorkspaceNotFound.code(),
+            MsgReason::NoAgentMode.code(),
+            MsgReason::SpawnFailed.code(),
+            MsgReason::PtyDied.code(),
+        ] {
+            assert_ne!(code, "no_submit", "no_submit must not return");
+        }
     }
 
     // ── MsgResponse serialization (the canonical JSON contract) ─────

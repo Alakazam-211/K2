@@ -958,7 +958,7 @@ export function K2ConnectSection(): React.JSX.Element {
   return (
     <div className="w-full">
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
-        K2 Toge
+        K2 Connect
         <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
           beta
         </span>

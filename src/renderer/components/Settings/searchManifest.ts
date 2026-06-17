@@ -105,7 +105,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   timer: 'Timer',
   companion: 'K2 Companion',
   connections: 'Connections',
-  'k2-connect': 'K2 Toge',
+  'k2-connect': 'K2 Connect',
 }
 
 /** Suppress unused-type warning since IndexedEntry is reserved for future optimization. */

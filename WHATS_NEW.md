@@ -1,7 +1,58 @@
-# K2 — What's New
+# K2SO — What's New
 
-User-facing highlights of recent updates. Full developer-facing release
-notes accompany each GitHub release.
+User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
+files in the repo root for the full developer-facing changelog.
+
+## 0.40.6 — Clearer tunnel setup + clone any-size workspaces
+
+- **Pick your subdomain — no more phantom default.** When you signed in to
+  K2 Connect, the subdomain menu *looked* like it had already picked one of
+  your purchased subdomains, but nothing was actually selected — so starting
+  the tunnel failed with a confusing "tunnel not configured" error. The menu
+  now stays empty ("Select a subdomain…") until you choose, choosing is what
+  arms the tunnel, and Start tells you plainly if you haven't picked yet.
+
+- **"Clone to" handles large workspaces.** Cloning a workspace to another of
+  your machines over K2 Connect used to fail once the bundle passed ~75 MB —
+  the whole thing was sent in a single chunk and rejected. Large bundles now
+  stream to the destination in small pieces, so multi-gigabyte workspaces
+  copy across without hitting a size ceiling or spiking memory. Smaller
+  workspaces are unchanged and still work with older machines on the other
+  end.
+
+## 0.40.5 — Menu bar icon refresh
+
+- The macOS menu bar icon now shows **K2** — it previously still read **K2SO**.
+
+## 0.40.4 — The `.k2/` workspace rename + access fixes
+
+- **Your workspace's `.k2so/` folder is now `.k2/`.** The K2 rebrand
+  finally reaches the per-workspace directory. The first time the updated
+  daemon starts, K2 renames each registered workspace's `.k2so/` to
+  `.k2/` automatically, re-points the harness symlinks (`CLAUDE.md`,
+  `GEMINI.md`, and the `.claude/`/`.opencode/`/`.pi/` files), and updates
+  `.gitignore` so the previously-ignored `inbox`/`sessions`/`logs` stay
+  ignored. Nothing is lost — git sees it as a clean set of renames, so
+  your history follows; just commit the rename in each repo when it's
+  convenient. Workspaces still on `.k2so/` keep working — K2 reads either
+  name. This is the last structural rename; everything from here is
+  additive.
+
+- **Disabling or removing a K2 Connect user now ends their live session
+  immediately.** Previously a revoked user's already-open terminal stream
+  kept flowing until they happened to disconnect. Now disabling,
+  removing, or changing a user's role drops their token and tears down
+  any live terminal/events socket within seconds.
+
+- **CLI version no longer shows "v?" after the rename.** If you updated
+  in place, the `k2` command-line tool could still point at the old
+  `K2SO.app` path and report its version as `v?`. K2 now self-heals the
+  `/usr/local/bin/k2` link on startup — whether your app is named
+  `K2.app` or the older `K2SO.app`.
+
+- **The "Canonical Agent" harness fan-out toggle stays checked.** Turning
+  it on no longer silently reverts — a leftover "skip harness management"
+  flag was overriding it, and that's now cleared when you enable fan-out.
 
 ## 0.40.3 — Honest message-delivery status
 

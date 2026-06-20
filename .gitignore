@@ -22,8 +22,8 @@ crates/k2so-core/drizzle_sql/meta/
 # Internal workspace dirs — agent data, internal PRDs/notes (licensing strategy,
 # monetization roadmap, tunnel decisions). NEVER published to the public K2 repo.
 # Kept on disk for the daemon; untracked in git. (Re-home publish-safety.)
-.k2so/
-.k2/
+/.k2so/
+/.k2/
 SKILL.md
 CLAUDE.md
 GEMINI.md

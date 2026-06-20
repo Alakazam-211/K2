@@ -86,7 +86,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   const commitRename = useCallback((tabId: string): void => {
     const value = renameInputRef.current?.value.trim() ?? ''
     // Empty → keep the old title (no-op rename), just exit edit mode.
-    if (value) useTabsStore.getState().setTabTitle(tabId, value)
+    // This is the USER rename path — mark it locked so the rename is sticky
+    // and program-generated PTY/OSC/session titles can't snap it back.
+    if (value) useTabsStore.getState().setTabTitle(tabId, value, { locked: true })
     setEditingTabId(null)
   }, [])
 

@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>K2SO — Final 0.39.X Creature Comforts · Design Review</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #2d333b;
+    --text: #e6edf3; --muted: #8b949e; --dim: #6e7681;
+    --accent: #58a6ff; --green: #3fb950; --amber: #d29922; --red: #f85149;
+    --purple: #bc8cff; --mono: "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.65 -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 0; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 48px 32px 96px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 56px 0 8px; padding-top: 24px; border-top: 1px solid var(--border); }
+  h2 .n { color: var(--dim); font-weight: 400; margin-right: 8px; }
+  h3 { font-size: 15px; color: var(--accent); margin: 24px 0 6px; }
+  p { margin: 10px 0; color: var(--text); }
+  .sub { color: var(--muted); font-size: 14px; margin-bottom: 28px; }
+  .meta { font-size: 12px; color: var(--dim); font-family: var(--mono); }
+  code { font-family: var(--mono); font-size: 12.5px; background: #1f2630; padding: 1.5px 6px; border-radius: 4px; color: #a5d6ff; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .4px; padding: 2px 9px; border-radius: 999px; vertical-align: middle; margin-left: 8px; }
+  .tag.s { background: #1f3d2b; color: var(--green); } .tag.m { background: #3d331f; color: var(--amber); } .tag.l { background: #3d1f24; color: var(--red); }
+  .tag.daemon { background: #1f2a3d; color: var(--accent); } .tag.client { background: #2e1f3d; color: var(--purple); }
+
+  .where { background: linear-gradient(0deg, rgba(88,166,255,.06), rgba(88,166,255,.06)); border: 1px solid #1f4068; border-left: 3px solid var(--accent); border-radius: 6px; padding: 12px 16px; margin: 16px 0; font-size: 14px; }
+  .where b { color: var(--accent); font-size: 12px; letter-spacing: .8px; }
+  .nuance { background: rgba(210,153,34,.06); border: 1px solid #4d3d14; border-left: 3px solid var(--amber); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14px; }
+  .nuance b.h { color: var(--amber); font-size: 12px; letter-spacing: .8px; display: block; margin-bottom: 4px; }
+  .decision { background: rgba(188,140,255,.06); border: 1px solid #3c2d54; border-left: 3px solid var(--purple); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14px; }
+  .decision b.h { color: var(--purple); font-size: 12px; letter-spacing: .8px; display: block; margin-bottom: 4px; }
+
+  .mock { background: #0a0d12; border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin: 18px 0; font-family: var(--mono); font-size: 12px; line-height: 1.7; color: var(--muted); white-space: pre; overflow-x: auto; }
+  .mock .hl { color: var(--text); } .mock .acc { color: var(--accent); } .mock .grn { color: var(--green); } .mock .amb { color: var(--amber); } .mock .dimm { color: #444c56; }
+
+  table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 13.5px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: .5px; }
+  th, td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  td:first-child { color: var(--dim); font-family: var(--mono); }
+  ul { margin: 8px 0; padding-left: 22px; } li { margin: 5px 0; }
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 18px 24px; margin: 28px 0; }
+  .toc a { color: var(--accent); text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  .toc ol { margin: 6px 0; padding-left: 20px; } .toc li { margin: 3px 0; }
+  .principle { display: flex; gap: 12px; margin: 10px 0; }
+  .principle .num { color: var(--accent); font-family: var(--mono); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Final 0.39.X Creature Comforts</h1>
+<p class="sub">Design review — presence, viewer role, follow mode, message composer, finish notifications.<br>
+<span class="meta">DRAFT 2026-06-10 · PRD: .k2so/prds/0.39.x-final-creature-comforts.md · builds on 0.39.45 verified injection</span></p>
+
+<div class="toc">
+  <b>Contents</b>
+  <ol>
+    <li><a href="#presence">Presence — who's viewing the server</a></li>
+    <li><a href="#viewer">Viewer role — attach without claiming</a></li>
+    <li><a href="#sizeclaim">Size claim &amp; auto-fit — multi-user sessions</a></li>
+    <li><a href="#follow">Follow mode (bonus)</a></li>
+    <li><a href="#composer">Message Composer / Queue</a></li>
+    <li><a href="#notify">Work-finish notifications — visual</a></li>
+    <li><a href="#audio">Work-finish notifications — audio</a></li>
+    <li><a href="#order">Build order + the #12 rider</a></li>
+  </ol>
+</div>
+
+<h2>Ground rules for everything below</h2>
+<div class="principle"><span class="num">1</span><span><b>Daemon-first.</b> Who's connected, what role they hold, what's queued — all canonical in the daemon. Clients render truth and send gestures.</span></div>
+<div class="principle"><span class="num">2</span><span><b>Events over polling.</b> Everything rides the existing session-events bus, same pattern as <code>projects_changed</code> / <code>agent_status_changed</code>.</span></div>
+<div class="principle"><span class="num">3</span><span><b>Identity comes from the daemon.</b> The login token resolves to a username server-side. Clients never self-report who they are.</span></div>
+<div class="principle"><span class="num">4</span><span><b>Restrictions are daemon-enforced.</b> A Viewer who "shouldn't type" gets their input <i>rejected by the server</i>, not just hidden by the UI.</span></div>
+
+<!-- ════════════════════ 1. PRESENCE ════════════════════ -->
+<h2 id="presence"><span class="n">1</span>Presence — who's viewing the server <span class="tag s">SMALL</span><span class="tag daemon">DAEMON</span><span class="tag client">CLIENT</span></h2>
+
+<p>The daemon keeps a registry of connected client instances, resolves each to a display
+user (connect-user name, or "owner" for the local token), and broadcasts a
+<code>presence_changed</code> event whenever it changes. The plumbing mostly exists —
+per-terminal attach counts already power the session reaper.</p>
+
+<div class="where"><b>WHERE IT LIVES</b><br>
+① <b>Top bar, right side</b>, next to the host indicator: an eye chip — <code>👁 3</code> — hover shows
+"rosson (owner) · baden ×2". Hidden when you're the only connection (no solo-mode noise).<br>
+② <b>Terminal pane header</b>: a small "2 watching" label, shown only when more than one
+client is attached to <i>that</i> terminal.</div>
+
+<div class="mock"><span class="dimm">┌──────────────────────────────────────────────────────────────┐</span>
+<span class="dimm">│</span>  K2SO   <span class="dimm">nsi-plan01 ▾</span>                  <span class="acc">👁 3</span>  <span class="dimm">⚡ k2.dev ●</span>  <span class="dimm">│</span>  <span class="dimm">← top bar</span>
+<span class="dimm">└──────────────────────────────────────────────────────────────┘</span>
+        <span class="dimm">hover ⤵</span>
+        <span class="hl">┌─ Viewing this server ─────────┐</span>
+        <span class="hl">│</span> <span class="grn">●</span> rosson <span class="dimm">(owner)</span>            <span class="hl">│</span>
+        <span class="hl">│</span> <span class="grn">●</span> baden <span class="dimm">(member) ×2</span>         <span class="hl">│</span>
+        <span class="hl">└───────────────────────────────┘</span></div>
+
+<div class="nuance"><b class="h">NUANCE</b>
+Presence is <i>connection</i> truth, not "actively looking" truth — no focus/idle detection
+this release. Two windows from one person show as one user with "×2".</div>
+
+<div class="decision"><b class="h">DECISION D1 — where do per-terminal counts ride?</b>
+Recommendation: the app-level event carries <i>user totals only</i>; per-terminal counts ride the
+per-terminal grid socket each pane already holds. Keeps the app-level event small and wire-stable.</div>
+
+<!-- ════════════════════ 2. VIEWER ROLE ════════════════════ -->
+<h2 id="viewer"><span class="n">2</span>Viewer role — attach without claiming <span class="tag m">MEDIUM</span><span class="tag daemon">DAEMON</span><span class="tag client">CLIENT</span></h2>
+
+<p>Since 0.39.43, "whoever interacts" claims the PTY and drives its size. A <b>Viewer</b> is a
+login that can see everything but never claims: the daemon drops their input and their
+size-claims at the socket, and rejects every mutating route for their token. The existing
+role system (Owner / Admin / Member) gains a fourth, lowest tier.</p>
+
+<div class="where"><b>WHERE IT LIVES</b><br>
+① <b>Settings → Users</b> (owner panel): the role dropdown gains <b>Viewer</b>.<br>
+② <b>Top bar</b> (when logged in <i>as</i> a Viewer): a persistent "👁 viewing" pill replaces the user chip.<br>
+③ <b>Terminal panes</b> (as Viewer): input disabled; first swallowed keystroke shows a one-time "view-only" toast; the composer (§4) is hidden.<br>
+④ <b>Local mode</b>: a "View only" toggle in the terminal pane's overflow (⋯) menu — same behavior without any login, for watching your own fleet without bumping PTY sizes.</div>
+
+<div class="nuance"><b class="h">NUANCE — enforcement is server-side on purpose</b>
+The UI hiding input is courtesy; the guarantee is the daemon rejecting Viewer input frames,
+size claims, and writes. A stale or misbehaving client can't accidentally take over a
+session or resize the operator's terminal.</div>
+
+<div class="decision"><b class="h">DECISION D2 — Viewers and layouts</b>
+A Viewer can rearrange their own ephemeral view (view state is per-client since 0.39.42), but
+layout <i>persistence</i> writes are rejected — their arrangement resets on reload. Per-user saved
+layouts are a separate future feature; this release doesn't attempt it.</div>
+
+<!-- ════════════════════ 2.5 SIZE CLAIM ════════════════════ -->
+<h2 id="sizeclaim"><span class="n">2.5</span>Size claim &amp; auto-fit — multi-user sessions <span class="tag m">MEDIUM</span><span class="tag daemon">DAEMON</span><span class="tag client">CLIENT</span></h2>
+
+<p><b>The reframe first:</b> once the composer (§4) exists, most collaboration never touches
+the PTY's size or input box — humans talk to the agent through serialized, identity-stamped
+composer sends. <i>Claiming</i> becomes a control handoff for the rare "I need the wheel"
+moments (menus, /commands, Ctrl+C), not the default mode of participation. That's why the
+composer builds first: it shrinks this problem before we solve it.</p>
+
+<h3>What counts as an interaction</h3>
+<ul>
+  <li><b>Raw keystrokes</b> into the terminal — already claim (since 0.39.43).</li>
+  <li><b>Explicit focus claims</b> with viewport dims — already tracked.</li>
+  <li><b>Composer sends never claim</b> — deliberate.</li>
+  <li><b>Scrolling never claims</b> — reading must not steal the size from whoever's typing.</li>
+</ul>
+<p>New daemon tracking (small): a per-viewer <code>last_interaction_at</code> timestamp, the
+username stamped on the claim, a <code>size_claim_changed</code> broadcast, and claim-clear
+when the owner disconnects (no ghost owners).</p>
+
+<h3>Reclaim rules</h3>
+<ul>
+  <li><b>Last-typist-wins stays</b>, with <b>~5s hysteresis</b>: a challenger's keystrokes go
+  through immediately, but the <i>resize</i> waits until the current owner pauses typing.
+  Kills resize ping-pong without ever blocking input.</li>
+  <li><b>Explicit handoff</b>: click the ownership chip to claim; the displaced owner gets a
+  quiet toast. No request/approve ceremony — trusted-team default.</li>
+  <li><b>"&lt;user&gt; is typing" hint</b> when another viewer's keystrokes are flowing — the
+  social signal that prevents two people grabbing the wheel.</li>
+</ul>
+
+<div class="where"><b>WHERE IT LIVES</b><br>
+① <b>Terminal pane header</b>: an ownership chip — <code>⌗ sized for rosson</code> — click to claim.<br>
+② <b>Terminal pane header</b> (transient): "baden is typing…" hint.<br>
+③ <b>Auto-fit indicator</b> in the pane's overflow (⋯) menu: auto-fit on/off + current scale.</div>
+
+<div class="mock"><span class="dimm">┌─ claude · nsi-plan01 ─────────</span> <span class="acc">⌗ sized for rosson</span> <span class="dimm">· baden is typing… ─┐</span>
+<span class="dimm">│</span> <span class="hl">(viewer at 90% auto-fit — full 190×52 grid visible, letterboxed)</span> <span class="dimm">│</span>
+<span class="dimm">└────────────────────────────────────────────────────────────────────┘</span></div>
+
+<h3>Auto-fit (the CMD+Shift+± mechanism, automated)</h3>
+<ul>
+  <li>Non-owners default to <b>auto-fit</b>: the per-terminal font steps down until the owner's
+  full grid fits the local pane; letterboxed centered when the pane is larger. The whole-app
+  zoom (CMD+±) stays personal and untouched.</li>
+  <li><b>Font floor ~9px</b> — below it, stop shrinking and clip+scroll instead (a laptop
+  watching an ultrawide shouldn't render 4px glyphs).</li>
+  <li>Manual CMD+Shift+± overrides auto-fit for that pane until reset; becoming the owner
+  restores native sizing.</li>
+</ul>
+
+<div class="nuance"><b class="h">NUANCE — auto-fit cannot re-wrap</b>
+A TUI renders for exactly ONE width (the kernel's TIOCSWINSZ truth) — viewers see the owner's
+reflow faithfully, just scaled. Correct-but-small beats wrong-but-comfortable. Per-viewer
+re-rendering would require tmux-style re-hosting of the app — explicitly out of scope.</div>
+
+<div class="decision"><b class="h">DECISION D7 — no request/approve handoff ceremony</b>
+Click-to-claim is instant (with the hysteresis guard). A polite "request control" flow is a
+later, hosted-tier option if customers want it — a two-person trusted team doesn't.</div>
+
+<!-- ════════════════════ 3. FOLLOW ════════════════════ -->
+<h2 id="follow"><span class="n">3</span>Follow mode (bonus) <span class="tag s">SMALL</span><span class="tag client">CLIENT</span></h2>
+
+<p><b>Scoped to follow-the-<i>activity</i></b>: when ON, your window auto-jumps to the workspace/tab
+whose agent just started working — and a <code>permission</code> event (agent blocked on a human)
+always outranks a start. Debounced 2s so a chatty fleet doesn't thrash your view. It never
+claims the session — following implies view-only while active.</p>
+
+<div class="where"><b>WHERE IT LIVES</b><br>
+<b>Top bar</b>, next to the presence chip: a "Follow ⤳" toggle (also <code>Cmd+Shift+F</code>).
+While active it shows the workspace it last jumped to.</div>
+
+<div class="nuance"><b class="h">NUANCE — why not follow a person?</b>
+Following another <i>user's</i> focus requires sharing per-client selected-tab state, which
+0.39.42 deliberately made private per-client (that's what stopped the tab-sync flicker loops).
+An opt-in "share my focus" presence field can revisit this later; it is explicitly out of scope now.</div>
+
+<!-- ════════════════════ 4. COMPOSER ════════════════════ -->
+<h2 id="composer"><span class="n">4</span>Message Composer / Queue <span class="tag l">MEDIUM-LARGE</span><span class="tag daemon">DAEMON</span><span class="tag client">CLIENT</span></h2>
+
+<p>The headline. Today, typing into a live terminal races the server's own message
+injections — your half-typed message gets spliced by AI traffic. The composer gives every
+user a private drafting area beneath the terminal; <b>send hands the whole message to the
+daemon</b>, which delivers it through the same verified-injection machinery 0.39.45 built:
+paste-framed (can't splice), serialized per session (strictly one injection at a time),
+and submit-verified (the UI can truthfully say "delivered ✓").</p>
+
+<div class="where"><b>WHERE IT LIVES</b><br>
+① <b>Beneath each terminal pane</b>: a collapsed "✎ Compose…" strip; expands to an auto-growing
+textarea (Enter = send, Shift+Enter = newline) with a per-message status lane.<br>
+② <b>No new top-level UI</b> — it's part of the terminal pane. Hidden for Viewer role.<br>
+③ Daemon: new session-scoped <code>terminal/send-message</code> route (the workspace-scoped
+<code>k2so msg</code> path is unchanged and gains the same per-session serialization).</div>
+
+<div class="mock"><span class="dimm">│</span> <span class="hl">╭─ claude ────────────────────────────────────────────╮</span>
+<span class="dimm">│</span> <span class="hl">│ > [from scout_v3] PR #41 is ready for review        │</span>
+<span class="dimm">│</span> <span class="hl">│ ● Looking at it now…                                │</span>
+<span class="dimm">│</span> <span class="hl">╰─────────────────────────────────────────────────────╯</span>
+<span class="dimm">├──────────────────────────────────────────────────────────</span>
+<span class="dimm">│</span> <span class="acc">✎ Compose</span> <span class="dimm">────────────────────────────────────────────</span>
+<span class="dimm">│</span> <span class="hl">Hold the merge until the migration test passes. Also</span>
+<span class="dimm">│</span> <span class="hl">check the rollback path before you approve.</span><span class="acc">▌</span>
+<span class="dimm">│</span>                       <span class="dimm">Shift+Enter = newline</span>   <span class="acc">[Send ⏎]</span>
+<span class="dimm">│</span> <span class="grn">✓ delivered</span> <span class="dimm">"double-check the API key handling…" 14:02</span></div>
+
+<div class="nuance"><b class="h">NUANCE — identity comes from the login, not the client</b>
+The daemon stamps <code>[from rosson]</code> by resolving the request token server-side. The client
+never sends a name, so it can't be spoofed and it works identically over K2 Connect.
+<b>Local mode: no name prefix for now</b> (owner-token sends deliver bare) — exactly as requested;
+we revisit local naming later if/when local multi-user matters.</div>
+
+<div class="nuance"><b class="h">NUANCE — the serialization is the real anti-splice fix</b>
+A per-session injection lock means a human send, a <code>k2so msg</code> from another agent, and a
+second human all deliver strictly one-at-a-time. Today even two concurrent <code>k2so msg</code> calls
+to one session could theoretically interleave — this closes that too.</div>
+
+<div class="decision"><b class="h">DECISION D3 — composer ≠ terminal input</b>
+The composer never writes raw keystrokes. Raw typing in the terminal stays available for TUI
+<i>control</i> (menus, shortcuts, Ctrl-C); the composer is for <i>messages</i>. Both coexist —
+the placeholder copy states this.</div>
+
+<div class="decision"><b class="h">DECISION D4 — multi-line messages become safe</b>
+Because delivery is paste-framed, newlines inside a composed message no longer submit early.
+Multi-paragraph instructions land as one message — something typing into the PTY could never do.</div>
+
+<div class="decision"><b class="h">DECISION D5 — "Queue" semantics ship in two phases</b>
+Phase 1 (this release): send-now through the serialized injector, with truthful per-message
+status. Phase 2 (can slip to 0.40): <code>queue=true</code> — the daemon holds messages while the
+recipient's input box is busy and drains when it reads empty (the 0.39.45 grid-read primitive
+makes "free" detectable), with queue depth broadcast to all clients.</div>
+
+<!-- ════════════════════ 5. VISUAL NOTIFY ════════════════════ -->
+<h2 id="notify"><span class="n">5</span>Work-finish notifications — visual <span class="tag s">SMALL-MED</span><span class="tag client">CLIENT</span></h2>
+
+<p>The daemon already broadcasts every agent's start / stop / permission transitions (it's
+what drives the spinners). Notifications are a new consumer of that same signal — no new
+daemon work.</p>
+
+<ul>
+  <li><b>permission</b> → notify <b>always</b>. An agent blocked on you is interrupt-worthy.</li>
+  <li><b>finish (stop)</b> → notify only when the run lasted ≥ 30s (configurable) <i>and</i> you weren't already looking (window unfocused, or other workspace active). A 12-agent fleet idling must not spam.</li>
+</ul>
+
+<div class="where"><b>WHERE IT LIVES</b><br>
+① <b>Native macOS notification</b> (with click-to-jump to the workspace/tab) — permission requested on first enable.<br>
+② <b>In-app</b>: amber (permission) / green (finished) dot on the workspace icon in the icon rail + sidebar row, extending the existing spinner machinery.<br>
+③ <b>Settings → Notifications</b> (new section): master toggle, per-event toggles, min-run-length slider.<br>
+④ <b>Per-workspace override</b> row on each workspace's settings page.</div>
+
+<div class="nuance"><b class="h">NUANCE — "finished" needs a definition</b>
+<code>stop</code> fires on every idle. The ≥30s-run + not-already-looking gate is what makes this
+a comfort rather than a nuisance. Run duration is computed client-side from the observed
+<code>start</code> timestamp — no wire change needed.</div>
+
+<!-- ════════════════════ 6. AUDIO ════════════════════ -->
+<h2 id="audio"><span class="n">6</span>Work-finish notifications — audio <span class="tag s">SMALL</span><span class="tag client">CLIENT</span></h2>
+
+<p>Same triggers as §5, separate toggles, two distinct short sounds (permission vs finish).
+Bundled assets, played renderer-side.</p>
+
+<div class="where"><b>WHERE IT LIVES</b><br>
+<b>Settings → Notifications</b>, beneath the visual toggles. Shares the per-workspace override row.</div>
+
+<div class="decision"><b class="h">DECISION D6 — defaults</b>
+Recommendation: <b>permission sound ON, finish sound OFF</b> by default. Finish chimes get old
+fast; a blocked agent is the thing genuinely worth a sound. Push back if you want finish ON.</div>
+
+<!-- ════════════════════ 7. ORDER ════════════════════ -->
+<h2 id="order"><span class="n">7</span>Build order + the #12 rider</h2>
+
+<table>
+  <tr><th>#</th><th>Feature</th><th>Size</th><th>Depends on</th></tr>
+  <tr><td>1</td><td>Presence registry + event + chip</td><td>S</td><td>—</td></tr>
+  <tr><td>2</td><td>Viewer role (daemon-enforced) + local view-only toggle</td><td>M</td><td>1</td></tr>
+  <tr><td>3</td><td>Composer + send-message route + per-session injection lock</td><td>M-L</td><td>0.39.45 injection</td></tr>
+  <tr><td>4</td><td>Visual notifications + Settings section</td><td>S-M</td><td>—</td></tr>
+  <tr><td>5</td><td>Audio notifications</td><td>S</td><td>4</td></tr>
+  <tr><td>6</td><td>Follow-the-activity</td><td>S</td><td>1, 2</td></tr>
+  <tr><td>7</td><td>Composer queue=true (drain-on-idle)</td><td>M</td><td>3 · can slip to 0.40</td></tr>
+  <tr><td>8</td><td>Size claim &amp; auto-fit (§2.5)</td><td>M</td><td>1, 2, 3</td></tr>
+</table>
+
+<div class="nuance"><b class="h">THE #12 RIDER</b>
+The public reply on GH #12 promised terminal perf "in the final 0.39.x". Minimum rider here:
+per-row memoization in the terminal renderer (high-leverage, low-risk). The remote-rendering
+bug under investigation (missing line on wrap over K2 Connect) may share a root cause with
+the delta pipeline — if so, that fix folds into this release too.</div>
+
+</div>
+</body>
+</html>

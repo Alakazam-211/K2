@@ -425,6 +425,109 @@ pub fn write_upload(dir: &str, filename: &str, bytes: &[u8]) -> Result<PathBuf, 
     Ok(target)
 }
 
+// ── chunked / streaming upload (large clone bundles, GH #3) ────────────
+
+/// Per-chunk decoded-byte ceiling for the streaming upload route. This bounds
+/// the daemon's per-request memory (the HTTP layer buffers each request body
+/// whole before the handler runs) INDEPENDENT of the total transfer size —
+/// which is exactly what lets a multi-GB clone bundle through without the
+/// single-shot [`MAX_UPLOAD_SIZE`] cap. The renderer sends well under this
+/// (8 MB chunks); the headroom tolerates a larger client chunk.
+pub const MAX_UPLOAD_CHUNK_SIZE: u64 = 16 * 1024 * 1024;
+
+/// Reduce an `upload_id` to filename-safe characters so it can never inject
+/// a path separator into — or escape — the `.part` temp name. Keeps ASCII
+/// alphanumerics, `-`, and `_`; drops everything else. Falls back to `anon`
+/// when the result is empty.
+fn sanitize_upload_id(id: &str) -> String {
+    let cleaned: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if cleaned.is_empty() {
+        "anon".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Streaming counterpart to [`write_upload`]: append ONE ordered chunk of a
+/// larger transfer to a temp `.part` file in `dir`, finalizing it — an atomic
+/// rename to a sanitized, collision-free name — on the `is_last` call. Returns
+/// `Some(final_path)` on that finalizing call and `None` for intermediate
+/// chunks.
+///
+/// This is the substrate for large "Clone to" bundles (GH #3): the single-shot
+/// [`write_upload`] buffers the whole payload in memory and is capped at
+/// [`MAX_UPLOAD_SIZE`] (100 MB); chunking streams each piece straight to disk,
+/// so memory stays flat at one chunk and the total transfer is bounded only by
+/// free disk.
+///
+/// Ordering is enforced LOUDLY (per `feedback_test_discipline` — no silent
+/// partial writes): `offset` MUST equal the current length of the in-progress
+/// `.part` file. `offset == 0` starts (or restarts) the transfer by truncating
+/// any stale part; any other gap, overlap, or a chunk for an `upload_id` whose
+/// part is the wrong length is an error — so a dropped/duplicated/reordered
+/// chunk surfaces instead of corrupting the assembled bundle.
+pub fn write_upload_chunk(
+    dir: &str,
+    filename: &str,
+    upload_id: &str,
+    offset: u64,
+    bytes: &[u8],
+    is_last: bool,
+) -> Result<Option<PathBuf>, String> {
+    use std::io::{Seek, SeekFrom, Write};
+    if bytes.len() as u64 > MAX_UPLOAD_CHUNK_SIZE {
+        return Err(format!(
+            "Upload chunk too large ({} bytes > {MAX_UPLOAD_CHUNK_SIZE} max)",
+            bytes.len()
+        ));
+    }
+    if dir.is_empty() {
+        return Err("Destination directory is empty".to_string());
+    }
+    // Create the destination BEFORE validate_path — its canonicalize() requires
+    // the path to exist (mirrors write_upload).
+    fs::create_dir_all(dir).map_err(|e| format!("Failed to create destination dir: {e}"))?;
+    let dir_path = validate_path(dir)?;
+    if !dir_path.is_dir() {
+        return Err(format!("Destination is not a directory: {dir}"));
+    }
+    let part_path = dir_path.join(format!(".k2-upload-{}.part", sanitize_upload_id(upload_id)));
+
+    // Enforce ordered, gap-free appends. A missing part counts as length 0.
+    let current_len = fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
+    if offset != 0 && current_len != offset {
+        return Err(format!(
+            "Upload chunk out of order for id {upload_id}: expected offset {current_len}, got {offset}"
+        ));
+    }
+
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&part_path)
+        .map_err(map_io_err)?;
+    // offset==0 is a fresh (or restarted) transfer — clear any stale bytes.
+    if offset == 0 {
+        f.set_len(0).map_err(map_io_err)?;
+    }
+    f.seek(SeekFrom::Start(offset)).map_err(map_io_err)?;
+    f.write_all(bytes).map_err(map_io_err)?;
+
+    if is_last {
+        f.flush().map_err(map_io_err)?;
+        drop(f);
+        let safe_name = sanitize_filename(filename);
+        let target = collision_free_path(&dir_path, &safe_name);
+        fs::rename(&part_path, &target).map_err(map_io_err)?;
+        Ok(Some(target))
+    } else {
+        Ok(None)
+    }
+}
+
 // ── move / copy / delete / rename / create / duplicate ────────────────
 
 fn disambiguate_path(target: &Path) -> PathBuf {
@@ -1116,7 +1219,7 @@ mod tests {
         let tmp = TempDir::new("downloads");
         let dir = ensure_downloads_dir(&tmp.s()).expect("ensure downloads");
         assert!(dir.exists() && dir.is_dir());
-        assert!(dir.ends_with(".k2so/downloads"), "got: {}", dir.display());
+        assert!(dir.ends_with(".k2/downloads"), "got: {}", dir.display());
         // Idempotent — second call must not error.
         let dir2 = ensure_downloads_dir(&tmp.s()).expect("ensure downloads idempotent");
         assert_eq!(dir, dir2);
@@ -1227,5 +1330,109 @@ mod tests {
         );
         // The intended upload file was never written.
         assert!(!tmp.path().join("g.txt").exists());
+    }
+
+    // ── write_upload_chunk (streaming upload substrate, GH #3) ──────────
+
+    #[test]
+    fn upload_chunk_assembles_ordered_chunks_into_one_file() {
+        let tmp = TempDir::new("chunk-assemble");
+        let canon = tmp.path().canonicalize().unwrap();
+        let id = "xfer-1";
+        // Three ordered chunks; only the last finalizes (returns the path).
+        assert_eq!(
+            write_upload_chunk(&tmp.s(), "bundle.tar.gz", id, 0, b"AAAA", false).expect("c0"),
+            None
+        );
+        assert_eq!(
+            write_upload_chunk(&tmp.s(), "bundle.tar.gz", id, 4, b"BBBB", false).expect("c1"),
+            None
+        );
+        let final_path =
+            write_upload_chunk(&tmp.s(), "bundle.tar.gz", id, 8, b"CC", true).expect("c2 final");
+        let final_path = final_path.expect("is_last returns the assembled path");
+        assert_eq!(final_path, canon.join("bundle.tar.gz"));
+        assert_eq!(fs::read(&final_path).unwrap(), b"AAAABBBBCC");
+        // The temp .part is consumed by the rename — no residue left behind.
+        assert!(!canon.join(".k2-upload-xfer-1.part").exists());
+    }
+
+    #[test]
+    fn upload_chunk_single_chunk_finalizes() {
+        let tmp = TempDir::new("chunk-single");
+        let canon = tmp.path().canonicalize().unwrap();
+        let path = write_upload_chunk(&tmp.s(), "one.bin", "solo", 0, b"only", true)
+            .expect("single chunk")
+            .expect("is_last path");
+        assert_eq!(path, canon.join("one.bin"));
+        assert_eq!(fs::read(&path).unwrap(), b"only");
+    }
+
+    #[test]
+    fn upload_chunk_rejects_out_of_order_offset() {
+        let tmp = TempDir::new("chunk-gap");
+        write_upload_chunk(&tmp.s(), "b.bin", "g", 0, b"AAAA", false).expect("c0");
+        // A gap (expected offset 4, got 7) must reject LOUDLY, not silently
+        // pad or overwrite — a dropped chunk can't corrupt the bundle.
+        let err = write_upload_chunk(&tmp.s(), "b.bin", "g", 7, b"X", false)
+            .expect_err("gap must reject");
+        assert!(err.contains("out of order"), "got: {err}");
+        assert!(err.contains("expected offset 4"), "got: {err}");
+    }
+
+    #[test]
+    fn upload_chunk_rejects_oversize_chunk() {
+        let tmp = TempDir::new("chunk-oversize");
+        let big = vec![0u8; (MAX_UPLOAD_CHUNK_SIZE + 1) as usize];
+        let err = write_upload_chunk(&tmp.s(), "b.bin", "o", 0, &big, false)
+            .expect_err("over per-chunk cap must reject");
+        assert!(err.contains("Upload chunk too large"), "got: {err}");
+        // Nothing was written — no stray .part.
+        assert!(!tmp.path().join(".k2-upload-o.part").exists());
+    }
+
+    #[test]
+    fn upload_chunk_offset_zero_restarts_stale_part() {
+        let tmp = TempDir::new("chunk-restart");
+        // A prior, abandoned transfer left a longer part under the same id.
+        write_upload_chunk(&tmp.s(), "b.bin", "r", 0, b"STALEXXXXXXXX", false).expect("stale");
+        // Restarting at offset 0 truncates it, so the final bytes are ONLY
+        // the new transfer — no leftover tail from the abandoned one.
+        write_upload_chunk(&tmp.s(), "b.bin", "r", 0, b"NEW", false).expect("restart c0");
+        let path = write_upload_chunk(&tmp.s(), "b.bin", "r", 3, b"!", true)
+            .expect("restart final")
+            .expect("path");
+        assert_eq!(fs::read(&path).unwrap(), b"NEW!");
+    }
+
+    #[test]
+    fn upload_chunk_finalize_is_collision_free() {
+        let tmp = TempDir::new("chunk-collide");
+        // An existing file with the target name must not be clobbered — the
+        // finalize uses the same numbered-suffix scheme as write_upload.
+        write_upload_chunk(&tmp.s(), "dup.bin", "a", 0, b"first", true).expect("first");
+        let p2 = write_upload_chunk(&tmp.s(), "dup.bin", "b", 0, b"second", true)
+            .expect("second")
+            .expect("path");
+        assert!(p2.ends_with("dup (1).bin"), "got: {}", p2.display());
+        assert_eq!(fs::read(tmp.path().join("dup.bin")).unwrap(), b"first");
+        assert_eq!(fs::read(&p2).unwrap(), b"second");
+    }
+
+    #[test]
+    fn upload_chunk_sanitizes_id_so_part_stays_in_dir() {
+        let tmp = TempDir::new("chunk-idsanitize");
+        // A malicious upload_id with separators must not escape `dir`; it's
+        // reduced to safe chars, so the .part lands inside the tempdir.
+        write_upload_chunk(&tmp.s(), "b.bin", "../../evil", 0, b"x", false).expect("sanitized id");
+        // No traversal happened: the parent dir got no stray .part file.
+        let parent = tmp.path().parent().unwrap();
+        let strays: Vec<_> = fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".k2-upload-"))
+            .filter(|e| e.path().parent() == Some(parent))
+            .collect();
+        assert!(strays.is_empty(), "an .part escaped into the parent dir");
     }
 }

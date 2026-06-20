@@ -10,28 +10,32 @@ import { type HarnessProbe, harnessStateLabel } from './canonicalState'
 // Renamed from "Agent Skills" → "Canonical Agent Flow" (canonical-agents
 // PRD §11). The section is no longer a four-tier "skills shipped to tiers of
 // agents" picker. Post-`agents/`-removal a workspace IS one agent: there is
-// a single agent under .k2so/agent/ + a flat skills list under .k2so/skills/.
-// This page is the explainer + control surface for how the workspace's
-// canonical setup works: .k2so/agent/AGENT.md is THE canonical source, and
-// the per-harness files (CLAUDE.md, GEMINI.md, …) are MIRRORS of it.
+// a single agent under .k2/agent/ + a flat skills list under .k2/skills/.
+// This page is the explainer + control surface for the AGENTS.md-canonical
+// flow: you author .k2/AGENT.md (persona) + .k2/PROJECT.md (project), K2
+// GENERATES the canonical .k2/AGENTS.md entrypoint from them, and the
+// per-harness files (CLAUDE.md, GEMINI.md, .cursor/rules) are read-only
+// symlink MIRRORS of that generated canon. AGENTS.md is the cross-tool
+// standard (Pi/Hermes/Codex/+28 read it natively); CLAUDE.md is the bridge
+// for Claude Code, which doesn't read AGENTS.md natively.
 
 export const AGENT_SKILLS_MANIFEST: SettingEntry[] = [
-  { id: 'agent-skills.canonical-flow', section: 'agent-skills', label: 'Canonical Agent Flow', description: 'How .k2so/agent/AGENT.md is mirrored out to the AI-harness files', keywords: ['canonical', 'agent', 'harness', 'mirror', 'fan-out', 'AGENT.md'] },
+  { id: 'agent-skills.canonical-flow', section: 'agent-skills', label: 'Canonical Agent Flow', description: 'How .k2/AGENT.md + PROJECT.md generate .k2/AGENTS.md and mirror out to the AI-harness files', keywords: ['canonical', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'AGENT.md'] },
   { id: 'agent-skills.workspace-manager', section: 'agent-skills', label: 'Workspace Manager skill', description: 'Opt-in role skill — weaves Workspace Manager guidance into AGENT.md', keywords: ['manager', 'skill', 'role', 'triage', 'delegate'] },
   { id: 'agent-skills.k2-agent', section: 'agent-skills', label: 'K2 Agent skill', description: 'Opt-in role skill — weaves K2 Agent (planner) guidance into AGENT.md', keywords: ['k2', 'agent', 'planner', 'prd', 'skill', 'role'] },
-  { id: 'agent-skills.k2-canonical-agent', section: 'agent-skills', label: 'K2 Canonical Agent skill', description: 'Opt-in skill — unify the workspace harness files safely (copies)', keywords: ['canonical', 'unify', 'harness', 'merge', 'mirror', 'skill'] },
+  { id: 'agent-skills.k2-canonical-agent', section: 'agent-skills', label: 'K2 Canonical Agent skill', description: 'Opt-in skill — unify the workspace harness files safely (merge + mirror)', keywords: ['canonical', 'unify', 'harness', 'merge', 'mirror', 'skill'] },
   { id: 'agent-skills.harness-fanout', section: 'agent-skills', label: 'Harness fan-out (symlinks)', description: 'Per-workspace permission to programmatically symlink harness files', keywords: ['fan-out', 'symlink', 'harness', 'permission', 'checkbox'] },
 ]
 
 // The three opt-in skills of this PRD (canonical-agents §2), surfaced as
-// first-class entries in the flat skills list. `dir` is the .k2so/skills/<dir>
+// first-class entries in the flat skills list. `dir` is the .k2/skills/<dir>
 // name (matches OptInSkill::dir_name in core).
 const OPT_IN_SKILLS: { dir: string; label: string; blurb: string }[] = [
   {
     dir: 'workspace-manager',
     label: 'Workspace Manager',
     blurb:
-      'Role knowledge for the manager — standing orders, the k2so CLI verb surface, delegation/review. The agent weaves it into AGENT.md organically. Enable + run it from a manager workspace’s Agent section.',
+      'Role knowledge for the manager — standing orders, the k2 CLI verb surface, delegation/review. The agent weaves it into AGENT.md organically. Enable + run it from a manager workspace’s Agent section.',
   },
   {
     dir: 'k2-agent',
@@ -43,7 +47,7 @@ const OPT_IN_SKILLS: { dir: string; label: string; blurb: string }[] = [
     dir: 'k2-canonical-agent',
     label: 'K2 Canonical Agent',
     blurb:
-      'Unifies the workspace’s AI-harness files safely: diagnose per-harness state, merge existing harness content into AGENT.md/PROJECT.md, then mirror out as backed-up, byte-reversible COPIES. Available to every workspace.',
+      'Unifies the workspace’s AI-harness files safely: diagnose per-harness state, merge existing harness content into AGENT.md/PROJECT.md, regenerate the canonical .k2/AGENTS.md, then mirror it out — backed up and byte-reversible. Available to every workspace.',
   },
 ]
 
@@ -84,9 +88,20 @@ export function AgentSkillsSection(): React.JSX.Element {
     refresh()
   }, [refresh])
 
+  // Plain-language warning shown at the decision point — enabling fan-out is
+  // a destructive-by-design act (it symlinks harness files onto K2's generated
+  // canon and can overwrite existing content). For an existing project the
+  // safe route is the K2 Canonical Agent skill, which merges content first.
+  const FANOUT_ENABLE_WARNING =
+    'Enabling this symlinks your harness files (CLAUDE.md, AGENTS.md, …) onto K2’s generated canon and can overwrite existing content.\n\n' +
+    'For an existing project, run the K2 Canonical Agent with an AI assistant instead — it merges your current files safely.\n\n' +
+    'The checkbox is best for new projects.\n\nEnable harness fan-out anyway?'
+
   const toggleFanout = useCallback(async () => {
     if (!projectPath || fanoutBusy) return
     const next = !fanoutEnabled
+    // Confirm before ENABLING — disabling is non-destructive so it skips this.
+    if (next && !window.confirm(FANOUT_ENABLE_WARNING)) return
     setFanoutBusy(true)
     // Optimistic — reflect immediately, reconcile on failure.
     setFanoutEnabled(next)
@@ -99,18 +114,23 @@ export function AgentSkillsSection(): React.JSX.Element {
     } finally {
       setFanoutBusy(false)
     }
-  }, [projectPath, fanoutEnabled, fanoutBusy, refresh])
+  }, [projectPath, fanoutEnabled, fanoutBusy, refresh, FANOUT_ENABLE_WARNING])
 
   return (
     <div className="max-w-3xl">
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Canonical Agent Flow</h2>
       <p className="text-xs text-[var(--color-text-muted)] mb-4">
-        Each AI coding tool reads its project notes from a different file. K2 keeps{' '}
-        <span className="font-mono text-[var(--color-text-secondary)]">.k2so/agent/AGENT.md</span> as
-        THE canonical source — the per-harness files (
-        <span className="font-mono">CLAUDE.md</span>, <span className="font-mono">GEMINI.md</span>,
-        …) are <span className="text-[var(--color-text-secondary)]">mirrors</span> of it. Write your
-        context once; every tool sees the same picture.
+        Each AI coding tool reads its project notes from a different file. You author{' '}
+        <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENT.md</span> (persona) and{' '}
+        <span className="font-mono text-[var(--color-text-secondary)]">.k2/PROJECT.md</span> (project);
+        K2 generates the canonical{' '}
+        <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENTS.md</span> entrypoint from
+        them — the cross-tool standard read natively by Pi, Hermes, Codex and 28+ others. The per-harness
+        files (<span className="font-mono">CLAUDE.md</span>, <span className="font-mono">GEMINI.md</span>,{' '}
+        <span className="font-mono">.cursor/rules</span>) are read-only{' '}
+        <span className="text-[var(--color-text-secondary)]">symlink mirrors</span> of it.{' '}
+        <span className="font-mono">CLAUDE.md</span> is the bridge for Claude Code, which doesn’t read
+        AGENTS.md natively. Write your context once; every tool sees the same picture.
       </p>
 
       {/* Canonical-source diagram: AGENT.md → harness mirrors. */}
@@ -120,15 +140,19 @@ export function AgentSkillsSection(): React.JSX.Element {
       <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/30 px-3 py-2.5 mb-4 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
         <div className="font-medium text-[var(--color-text-primary)] mb-1">Two opt-in routes to canonical</div>
         <p className="mb-1.5">
-          <span className="text-[var(--color-text-primary)]">Skill route (recommended).</span>{' '}
-          Run the <span className="text-[var(--color-text-primary)]">K2 Canonical Agent</span> from a
-          workspace’s Agent section. It writes safe <span className="text-[var(--color-text-primary)]">copies</span>{' '}
-          of AGENT.md into the harness files you choose — backed up first, byte-reversible.
+          <span className="text-[var(--color-text-primary)]">Skill route (recommended for existing projects).</span>{' '}
+          Run the <span className="text-[var(--color-text-primary)]">K2 Canonical Agent</span> with an AI
+          assistant from a workspace’s Agent section. It reads your current harness files, merges their
+          content into <span className="font-mono">AGENT.md</span>/<span className="font-mono">PROJECT.md</span>{' '}
+          safely, regenerates <span className="font-mono">.k2/AGENTS.md</span>, then mirrors it out — backed
+          up first, byte-reversible. Nothing is overwritten.
         </p>
         <p>
-          <span className="text-[var(--color-text-primary)]">Checkbox route.</span> Enable harness
-          fan-out below for ongoing <span className="text-[var(--color-text-primary)]">programmatic symlinks</span>{' '}
-          pointing back at the canonical AGENT.md. Hands-off, but always-on.
+          <span className="text-[var(--color-text-primary)]">Checkbox route (best for new projects).</span>{' '}
+          Enable harness fan-out below for ongoing <span className="text-[var(--color-text-primary)]">programmatic symlinks</span>{' '}
+          pointing back at the generated <span className="font-mono">.k2/AGENTS.md</span>. Hands-off, but it{' '}
+          <span className="text-amber-300">can overwrite existing harness content</span> — see the warning on
+          the checkbox.
         </p>
       </div>
 
@@ -157,12 +181,20 @@ export function AgentSkillsSection(): React.JSX.Element {
               Enable harness fan-out (programmatic symlinks)
             </div>
             <p className="text-[10px] text-[var(--color-text-muted)] leading-snug mt-0.5">
-              When checked, K2 continuously fans the canonical{' '}
-              <span className="font-mono">.k2so/agent/AGENT.md</span> out into this workspace’s harness
-              files as symlinks (on boot, agent-create, agent-launch, and regen). Off by default —
-              prefer the K2 Canonical Agent skill for safe copies. Scoped to{' '}
+              When checked, K2 continuously fans the generated canonical{' '}
+              <span className="font-mono">.k2/AGENTS.md</span> out into this workspace’s harness
+              files as symlinks (on boot, agent-create, agent-launch, and regen). Off by default. Scoped to{' '}
               {activeProject ? <span className="font-mono">{activeProject.name}</span> : 'the active workspace'}.
             </p>
+            {/* Decision-point warning — destructive-by-design (PRD §5–§6). */}
+            <div className="mt-2 border-l-2 border-amber-500/60 bg-amber-500/5 pl-2 py-1.5 text-[10px] leading-snug text-amber-200/90">
+              <span className="font-medium text-amber-200">Heads up:</span> enabling this symlinks your
+              harness files (<span className="font-mono">CLAUDE.md</span>,{' '}
+              <span className="font-mono">AGENTS.md</span>, …) onto K2’s generated canon and{' '}
+              <span className="font-medium">can overwrite existing content</span>. For an existing project,
+              run the <span className="font-medium">K2 Canonical Agent</span> with an AI assistant instead —
+              it merges your current files safely. The checkbox is best for new projects.
+            </div>
             {!projectPath ? (
               <p className="text-[10px] text-[var(--color-text-muted)] italic mt-1">
                 Select a workspace to manage its harness fan-out.
@@ -174,7 +206,7 @@ export function AgentSkillsSection(): React.JSX.Element {
 
       {/* The three opt-in skills as first-class entries (flat list). */}
       <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">
-        Opt-in skills under <span className="font-mono">.k2so/skills/</span>
+        Opt-in skills under <span className="font-mono">.k2/skills/</span>
       </div>
       <div className="border border-[var(--color-border)] mb-4">
         {OPT_IN_SKILLS.map((skill, i) => (
@@ -185,7 +217,7 @@ export function AgentSkillsSection(): React.JSX.Element {
             <div className="flex items-center gap-2">
               <span className="w-1 h-4 bg-[var(--color-accent)] rounded-sm flex-shrink-0" />
               <span className="text-xs font-medium text-[var(--color-text-primary)]">{skill.label}</span>
-              <span className="text-[9px] font-mono text-[var(--color-text-muted)]">.k2so/skills/{skill.dir}/</span>
+              <span className="text-[9px] font-mono text-[var(--color-text-muted)]">.k2/skills/{skill.dir}/</span>
             </div>
             <p className="text-[10px] text-[var(--color-text-muted)] leading-snug mt-1 pl-3">{skill.blurb}</p>
           </div>
@@ -199,7 +231,7 @@ export function AgentSkillsSection(): React.JSX.Element {
       <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/30">
         {!projectPath ? (
           <p className="px-3 py-2.5 text-[11px] text-[var(--color-text-muted)] italic">
-            Select a workspace to see how each harness file maps back to the canonical AGENT.md.
+            Select a workspace to see how each harness file maps back to the generated .k2/AGENTS.md.
           </p>
         ) : probes.length === 0 ? (
           <p className="px-3 py-2.5 text-[11px] text-[var(--color-text-muted)] italic">

@@ -1,8 +1,8 @@
 [package]
 name = "k2-daemon"
-version = "0.40.3"
+version = "0.40.5"
 edition = "2021"
-license = "MIT"
+license = "FSL-1.1-Apache-2.0"
 description = "K2SO persistent-agents daemon: launchd-managed device-local process that runs the scheduler, companion tunnel, and agent orchestration so agents keep working while the Tauri app is quit and the laptop lid is closed."
 
 [[bin]]
@@ -69,6 +69,21 @@ uuid = { version = "1", features = ["v4"] }
 # CryptoProvider is explicitly installed. Same pattern as src-tauri.
 # Required by Phase 2 Unit 1's daemon-owned companion autostart.
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+
+# K2 Connect E2E encryption (Option A) — the daemon's second listener
+# terminates TLS itself (rustls) for the user's <sub>.k2.dev subdomain and
+# splices the decrypted stream to the existing HTTP listener, so the relay
+# carries only ciphertext. tokio-rustls wraps accepted sockets with the
+# TlsAcceptor; rustls-pemfile parses the (self-signed in the spike) cert PEM
+# on the client side of the listener's own test. Gated on K2_E2E at runtime
+# (see tunnel_tls_listener.rs); compiled unconditionally. aws-lc-rs matches
+# the provider installed at boot (main.rs:223) so a single provider resolves.
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs"] }
+rustls-pemfile = "2"
+# Lock-free hot-swap of the live rustls ServerConfig: the cert auto-renewal
+# loop (PRD §6) swaps a freshly-issued chain in WITHOUT dropping the TLS
+# listener. Already in the tree via k2-core's cert_broker, so no new crate.
+arc-swap = "1"
 
 # reqwest blocking — Phase 2 Unit 5 Claude Auth OAuth refresh. Same
 # features the Tauri side used (and k2so-core's llm::download still

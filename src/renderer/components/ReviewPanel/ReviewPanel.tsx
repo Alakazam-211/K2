@@ -83,8 +83,13 @@ function extractAcceptanceCriteria(workItems: WorkItem[], projectPath: string): 
         const folders = ['done', 'active', 'inbox']
         for (const folder of folders) {
           try {
+            // NOTE: the `agents/<name>/work/<folder>/` layout was retired by the
+            // 0.37 unification — work items now live under `.k2/inbox/`. This
+            // read therefore silently degrades to [] (criteria not shown). Dot-dir
+            // updated to `.k2/` for cutover-consistency; the path STRUCTURE still
+            // needs a follow-up to target the unified inbox.
             const r = await daemonCliGet<{ content: string }>('fs/read-file', {
-              path: `${projectPath}/.k2so/agents/${item.assignedBy !== 'user' ? item.assignedBy : 'default'}/work/${folder}/${item.filename}`,
+              path: `${projectPath}/.k2/agents/${item.assignedBy !== 'user' ? item.assignedBy : 'default'}/work/${folder}/${item.filename}`,
             })
             return parseCriteria(r.content)
           } catch {

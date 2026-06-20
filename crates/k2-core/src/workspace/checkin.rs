@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::workspace::agent_identity::{agent_type_for, resolve_project_id};
 use crate::workspace::wake_prompts::{
@@ -200,7 +200,8 @@ pub fn checkin(project_path: &str, agent: &str) -> Result<String, String> {
     }
 
     // Reservations
-    let reservations_path = PathBuf::from(project_path).join(".k2so/reservations.json");
+    let reservations_path =
+        crate::workspace_dot_dir(project_path).join("reservations.json");
     let reservations: serde_json::Value = if reservations_path.exists() {
         fs::read_to_string(&reservations_path)
             .ok()

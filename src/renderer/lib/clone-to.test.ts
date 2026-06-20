@@ -3,13 +3,15 @@
 // We exercise `cloneWorkspaceTo` with a fully-mocked dep bag and assert the
 // STEP SEQUENCING — the load-bearing property (each daemon call targets the
 // then-active host, so order is correctness):
-//   1. happy path: bundle → read → switch → wait → picker → fs/info →
-//      upload → unpack, in order, with the right args.
+//   1. happy path: bundle → size-probe → switch → wait → picker → fs/info →
+//      read → upload → unpack, in order, with the right args.
 //   2. folder-picker cancel → abort: NO upload, NO unpack.
 //   3. sign-in cancel (waitForHostConnected rejects) → abort: bundle built
-//      + read, but NO picker / upload / unpack.
+//      + sized, but NO byte read / picker / upload / unpack.
 //   4. an error in a middle step (upload) surfaces + stops (no unpack).
-// Hooks (onStage/onBundled/onDone/onError) are asserted too.
+//   5. LARGE bundle → chunked streaming upload (GH #3): read-range loop +
+//      fs/upload-chunk, NOT the single-shot read + fs/upload-binary.
+// Hooks (onStage/onBundled/onDone/onError/onUploadProgress) are asserted too.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -17,6 +19,8 @@ import {
   cloneWorkspaceTo,
   CloneCancelledError,
   basename,
+  CLONE_SINGLE_SHOT_MAX_BYTES,
+  CLONE_UPLOAD_CHUNK_BYTES,
   type CloneDeps,
   type CloneBundleResult,
   type CloneUnpackResult,
@@ -54,7 +58,14 @@ function makeDeps(
   const daemonCliPost = vi.fn(async (route: string, _body?: unknown) => {
     order.push(`post:${route}`)
     if (route === 'clone/bundle') return BUNDLE as unknown
-    if (route === 'fs/upload-binary') return { path: '/home/rosson/.k2so/clone-tmp/myworkspace.tar.gz' } as unknown
+    if (route === 'fs/upload-binary') return { path: '/home/rosson/.k2/clone-tmp/myworkspace.tar.gz' } as unknown
+    if (route === 'fs/upload-chunk') {
+      // Mirror the daemon: only the final chunk returns the assembled path.
+      const b = (_body ?? {}) as { is_last?: boolean }
+      return (b.is_last
+        ? { path: '/home/rosson/.k2/clone-tmp/myworkspace.tar.gz', done: true }
+        : { done: false }) as unknown
+    }
     if (route === 'clone/unpack') return UNPACK as unknown
     return {} as unknown
   }) as CloneDeps['daemonCliPost'] & ReturnType<typeof vi.fn>
@@ -66,6 +77,16 @@ function makeDeps(
   const readLocalFileBase64 = vi.fn(async (_path: string) => {
     order.push('read-base64')
     return 'BASE64BYTES'
+  })
+  // Default: a small bundle → the single-shot path. Override in the chunked
+  // test to a size above CLONE_SINGLE_SHOT_MAX_BYTES.
+  const localFileSize = vi.fn(async (_path: string) => {
+    order.push('size-probe')
+    return 1234
+  })
+  const readLocalFileRange = vi.fn(async (_path: string, _offset: number, _len: number) => {
+    order.push('read-range')
+    return 'CHUNKB64'
   })
   const pickHost = vi.fn((_host: ConnectHost) => {
     order.push('pickHost')
@@ -82,6 +103,8 @@ function makeDeps(
     daemonCliPost,
     daemonCliGet,
     readLocalFileBase64,
+    localFileSize,
+    readLocalFileRange,
     pickHost,
     waitForHostConnected,
     pickRemoteFolder,
@@ -93,6 +116,8 @@ function makeDeps(
       daemonCliPost,
       daemonCliGet,
       readLocalFileBase64,
+      localFileSize,
+      readLocalFileRange,
       pickHost,
       waitForHostConnected,
       pickRemoteFolder,
@@ -134,11 +159,12 @@ describe('cloneWorkspaceTo — happy path', () => {
     expect(result).toEqual(UNPACK)
     expect(order).toEqual([
       'post:clone/bundle',
-      'read-base64',
+      'size-probe',
       'pickHost',
       'waitForHostConnected',
       'pickRemoteFolder',
       'get:fs/info',
+      'read-base64',
       'post:fs/upload-binary',
       'post:clone/unpack',
     ])
@@ -156,13 +182,13 @@ describe('cloneWorkspaceTo — happy path', () => {
     // Upload targets the host temp dir derived from fs/info home, carries the
     // bundle basename + the base64 read locally.
     expect(spies.daemonCliPost).toHaveBeenCalledWith('fs/upload-binary', {
-      dir: '/home/rosson/.k2so/clone-tmp',
+      dir: '/home/rosson/.k2/clone-tmp',
       filename: 'myworkspace.tar.gz',
       base64: 'BASE64BYTES',
     })
     // Unpack uses the UPLOADED remote path + the chosen parent.
     expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/unpack', {
-      bundle_path: '/home/rosson/.k2so/clone-tmp/myworkspace.tar.gz',
+      bundle_path: '/home/rosson/.k2/clone-tmp/myworkspace.tar.gz',
       dest_parent: '/home/rosson/work',
     })
 
@@ -180,14 +206,20 @@ describe('cloneWorkspaceTo — happy path', () => {
     ])
   })
 
-  it('builds the bundle while local is active (bundle + read precede pickHost)', async () => {
+  it('sizes the bundle while local is active, then reads bytes lazily after the switch', async () => {
     await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps)
     const bundleIdx = order.indexOf('post:clone/bundle')
-    const readIdx = order.indexOf('read-base64')
+    const sizeIdx = order.indexOf('size-probe')
     const switchIdx = order.indexOf('pickHost')
+    const readIdx = order.indexOf('read-base64')
+    // Bundle is BUILT + sized while local is active (both precede the switch).
     expect(bundleIdx).toBeGreaterThanOrEqual(0)
-    expect(readIdx).toBeGreaterThan(bundleIdx)
-    expect(switchIdx).toBeGreaterThan(readIdx)
+    expect(sizeIdx).toBeGreaterThan(bundleIdx)
+    expect(switchIdx).toBeGreaterThan(sizeIdx)
+    // The bytes are read LAZILY, AFTER the switch — read_local_file_* are local
+    // Tauri commands (host-independent), so this keeps memory flat (GH #3) and
+    // is safe despite the active host now being remote.
+    expect(readIdx).toBeGreaterThan(switchIdx)
   })
 
   it('falls back to dest_parent for the upload dir when fs/info fails', async () => {
@@ -313,9 +345,11 @@ describe('cloneWorkspaceTo — cancellation & errors', () => {
       cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, { onError }),
     ).rejects.toBeInstanceOf(CloneCancelledError)
 
-    // Bundle + read happened; picker / upload / unpack did NOT.
+    // Bundle + size-probe happened; byte read / picker / upload / unpack did
+    // NOT (the read moved to after the host switch, which we never reached).
     expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/bundle', expect.anything())
-    expect(spies.readLocalFileBase64).toHaveBeenCalled()
+    expect(spies.localFileSize).toHaveBeenCalled()
+    expect(spies.readLocalFileBase64).not.toHaveBeenCalled()
     expect(spies.pickRemoteFolder).not.toHaveBeenCalled()
     expect(spies.daemonCliPost).not.toHaveBeenCalledWith('fs/upload-binary', expect.anything())
     expect(spies.daemonCliPost).not.toHaveBeenCalledWith('clone/unpack', expect.anything())
@@ -364,5 +398,98 @@ describe('cloneWorkspaceTo — cancellation & errors', () => {
     expect(spies.pickHost).not.toHaveBeenCalled()
     expect(spies.readLocalFileBase64).not.toHaveBeenCalled()
     expect(onError).toHaveBeenCalledWith('no such project')
+  })
+})
+
+describe('cloneWorkspaceTo — large bundle (chunked streaming, GH #3)', () => {
+  // A size just over the single-shot threshold forces the chunked path, with a
+  // final 1-byte chunk so we also cover the partial-tail case.
+  const LARGE = CLONE_SINGLE_SHOT_MAX_BYTES + 1
+  const expectedChunks = Math.ceil(LARGE / CLONE_UPLOAD_CHUNK_BYTES)
+
+  it('streams via read-range + fs/upload-chunk and never the single-shot path', async () => {
+    const order: string[] = []
+    const { deps, spies } = makeDeps(order, {
+      localFileSize: vi.fn(async () => {
+        order.push('size-probe')
+        return LARGE
+      }),
+    })
+    const onUploadProgress = vi.fn()
+
+    const result = await cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, {
+      onUploadProgress,
+    })
+    expect(result).toEqual(UNPACK)
+
+    // The single-shot path was NOT used.
+    expect(spies.readLocalFileBase64).not.toHaveBeenCalled()
+    expect(spies.daemonCliPost).not.toHaveBeenCalledWith('fs/upload-binary', expect.anything())
+
+    // Chunked path: exactly one read-range + one upload-chunk per chunk.
+    expect(spies.readLocalFileRange).toHaveBeenCalledTimes(expectedChunks)
+    const chunkCalls = spies.daemonCliPost.mock.calls.filter((c) => c[0] === 'fs/upload-chunk')
+    expect(chunkCalls).toHaveLength(expectedChunks)
+
+    const bodies = chunkCalls.map(
+      (c) =>
+        c[1] as {
+          upload_id: string
+          dir: string
+          filename: string
+          offset: number
+          is_last: boolean
+        },
+    )
+    // First chunk starts at 0 and is not final; offsets are contiguous.
+    expect(bodies[0].offset).toBe(0)
+    expect(bodies[0].is_last).toBe(false)
+    for (let i = 0; i < bodies.length; i++) {
+      expect(bodies[i].offset).toBe(Math.min(i * CLONE_UPLOAD_CHUNK_BYTES, LARGE))
+    }
+    // All chunks share ONE upload_id (so the daemon appends to one .part).
+    const ids = new Set(bodies.map((b) => b.upload_id))
+    expect(ids.size).toBe(1)
+    expect([...ids][0]).toMatch(/^clone-/)
+    // Only the final chunk is flagged is_last; it carries the partial tail.
+    const last = bodies[bodies.length - 1]
+    expect(last.is_last).toBe(true)
+    expect(last.offset).toBe(LARGE - 1)
+    expect(bodies.slice(0, -1).every((b) => b.is_last === false)).toBe(true)
+    expect(bodies.every((b) => b.dir === '/home/rosson/.k2/clone-tmp')).toBe(true)
+    expect(bodies.every((b) => b.filename === 'myworkspace.tar.gz')).toBe(true)
+
+    // The finalized chunk path flows into unpack.
+    expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/unpack', {
+      bundle_path: '/home/rosson/.k2/clone-tmp/myworkspace.tar.gz',
+      dest_parent: '/home/rosson/work',
+    })
+
+    // Progress was reported and ends at 1.0 (last chunk completes the transfer).
+    expect(onUploadProgress).toHaveBeenCalled()
+    const lastFraction = onUploadProgress.mock.calls.at(-1)?.[0]
+    expect(lastFraction).toBeCloseTo(1, 5)
+  })
+
+  it('aborts the chunked upload if a chunk POST fails (no unpack)', async () => {
+    const order: string[] = []
+    const failingPost = vi.fn(async (route: string, _body?: unknown) => {
+      order.push(`post:${route}`)
+      if (route === 'clone/bundle') return BUNDLE as unknown
+      if (route === 'fs/upload-chunk') throw new Error('relay dropped the chunk')
+      if (route === 'clone/unpack') return UNPACK as unknown
+      return {} as unknown
+    }) as unknown as CloneDeps['daemonCliPost']
+    const { deps } = makeDeps(order, {
+      daemonCliPost: failingPost,
+      localFileSize: vi.fn(async () => LARGE),
+    })
+    const onError = vi.fn()
+
+    await expect(
+      cloneWorkspaceTo('/Users/rosson/myworkspace', DEST, deps, { onError }),
+    ).rejects.toThrow('relay dropped the chunk')
+    expect(order).not.toContain('post:clone/unpack')
+    expect(onError).toHaveBeenCalledWith('relay dropped the chunk')
   })
 })

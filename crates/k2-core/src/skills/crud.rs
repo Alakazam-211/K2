@@ -479,7 +479,7 @@ use crate::skills::writer::write_agent_skill_file;
 /// argument expected by [`write_agent_skill_file`]: `"manager"`,
 /// `"k2so"`, `"custom"`, or `"agent-template"` (the catch-all).
 ///
-/// Prefers the K2SO-managed `k2so_skill:` field when present (set by
+/// Prefers the K2-managed `k2_skill:` field when present (set by
 /// the writer when fanning skills out), falls back to legacy `type:`
 /// + `manager:` / `coordinator:` / `pod_leader:` booleans for
 /// pre-consolidator content. Returns `None` when neither file exists
@@ -498,11 +498,12 @@ fn classify_skill_dir(dir: &Path) -> Option<String> {
     let content = fs::read_to_string(source).unwrap_or_default();
     let fm = parse_frontmatter(&content);
 
-    // `k2so_skill:` is the canonical post-2.5b tag emitted by
-    // `wrap_managed_skill`. Map back to the `write_agent_skill_file`
-    // dispatch keys.
-    if let Some(k2so_skill) = fm.get("k2so_skill") {
-        return Some(match k2so_skill.as_str() {
+    // `k2_skill:` is the canonical tag emitted by `wrap_managed_skill`
+    // (post brand cutover; `k2so_skill` is the pre-cutover spelling still
+    // recognized here for not-yet-regenerated files). Map back to the
+    // `write_agent_skill_file` dispatch keys.
+    if let Some(k2_skill) = fm.get("k2_skill").or_else(|| fm.get("k2so_skill")) {
+        return Some(match k2_skill.as_str() {
             "manager" => "manager".to_string(),
             "k2so-agent" => "k2so".to_string(),
             "custom-agent" => "custom".to_string(),
@@ -750,7 +751,7 @@ mod regenerate_skills_tests {
         let regenerated = std::fs::read_to_string(cli_eng_dir.join("SKILL.md"))
             .expect("agent-dir SKILL.md exists post-regen");
         assert!(
-            regenerated.contains("k2so_skill:"),
+            regenerated.contains("k2_skill:"),
             "agent-dir SKILL.md should be upgraded to the managed shape; got:\n{}",
             &regenerated[..regenerated.len().min(400)],
         );
@@ -827,7 +828,7 @@ mod regenerate_skills_tests {
         std::fs::create_dir_all(&workspace_skill).unwrap();
         std::fs::write(
             workspace_skill.join("SKILL.md"),
-            "---\nk2so_skill: workspace\n---\n",
+            "---\nk2_skill: workspace\n---\n",
         )
         .unwrap();
 
@@ -835,7 +836,7 @@ mod regenerate_skills_tests {
         std::fs::create_dir_all(&mirror).unwrap();
         std::fs::write(
             mirror.join("SKILL.md"),
-            "---\nk2so_skill: agent-template\n---\n",
+            "---\nk2_skill: agent-template\n---\n",
         )
         .unwrap();
 
@@ -900,7 +901,7 @@ mod regenerate_skills_tests {
         let regenerated = std::fs::read_to_string(k2so_agent.join("SKILL.md"))
             .expect("k2so-agent SKILL.md exists post-regen");
         assert!(
-            regenerated.contains("k2so_skill: k2so-agent"),
+            regenerated.contains("k2_skill: k2so-agent"),
             "k2so-agent must be upgraded with the managed shape; got:\n{}",
             &regenerated[..regenerated.len().min(400)],
         );

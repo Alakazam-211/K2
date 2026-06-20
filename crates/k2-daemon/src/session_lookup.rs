@@ -69,6 +69,14 @@ impl LiveSession {
         self.0.program.clone()
     }
 
+    /// Live tab-name label — the user-visible name the desktop shows on
+    /// the session's tab. Sourced from the v2 PTY's label slot (OSC title
+    /// events / explicit set-label). Empty string when unset; companion
+    /// endpoints fall back to a cwd/agent-derived label in that case.
+    pub fn label(&self) -> String {
+        self.0.label()
+    }
+
     /// Args the child was spawned with — used by smart-launch to
     /// find a live PTY running `--resume <session_id>` for a given
     /// heartbeat.

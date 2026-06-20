@@ -78,7 +78,7 @@ pub fn teardown_workspace_harness_files(
     mode: TeardownMode,
 ) -> Vec<TeardownResult> {
     let root = PathBuf::from(project_path);
-    let canonical = root.join(".k2so/skills/k2so/SKILL.md");
+    let canonical = crate::workspace_dot_dir(project_path).join("AGENTS.md");
     let current_body = fs::read_to_string(&canonical).unwrap_or_default();
     let mut results: Vec<TeardownResult> = Vec::new();
 

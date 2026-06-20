@@ -36,9 +36,9 @@ export function RoleSkillEditor({
   const [content, setContent] = useState('')
   const [previewMode, setPreviewMode] = useState<'preview' | 'edit'>('preview')
 
-  const filePath = `${projectPath}/.k2so/agent/AGENT.md`
+  const filePath = `${projectPath}/.k2/agent/AGENT.md`
   // Watch the agent dir so AGENT.md edits surface live in the preview.
-  const watchDir = `${projectPath}/.k2so/agent`
+  const watchDir = `${projectPath}/.k2/agent`
   const label = roleSkillLabel(role)
 
   const defaultAgent = useSettingsStore((s) => s.defaultAgent)

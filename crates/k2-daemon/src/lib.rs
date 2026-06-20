@@ -69,6 +69,7 @@ pub mod terminal_lifecycle_routes;
 pub mod terminal_routes;
 pub mod themes_routes;
 pub mod triage;
+pub mod tunnel_tls_listener;
 pub mod update_routes;
 pub mod v2_session_map;
 pub mod v2_spawn;

@@ -17,8 +17,13 @@ src-tauri/binaries/
 *.db-journal
 *.db-wal
 # drizzle-kit's snapshot metadata lives next to the emitted SQL now.
-crates/k2-core/drizzle_sql/meta/
+crates/k2so-core/drizzle_sql/meta/
 .claude/
+# Internal workspace dirs — agent data, internal PRDs/notes (licensing strategy,
+# monetization roadmap, tunnel decisions). NEVER published to the public K2 repo.
+# Kept on disk for the daemon; untracked in git. (Re-home publish-safety.)
+.k2so/
+.k2/
 SKILL.md
 CLAUDE.md
 GEMINI.md
@@ -34,15 +39,29 @@ AGENTS.md
 *.key
 *.key.pub
 .worktrees/
+.k2/migration/
+.k2/logs/
+.k2/.last-skill-regen
 
 # 0.37.12 — runtime workspace state K2SO writes at runtime; not source.
 # Heartbeats / sessions / agent-templates / scratch state regenerate
 # from DB + filesystem on launch.
+.k2/heartbeats/
+.k2/sessions/
+.k2/agent/
+.k2/agent-templates/
+.k2/.archive/
+.k2/.harvest-*-done
+.k2/.unification-*-done
+.k2/agents/.archive/
 
 # 0.39.0 — work→inbox + skills consolidation migrations. The inbox/
 # directory holds runtime work items the daemon manages (replacing the
 # old .k2so/work/ tree); the *-v1-done sentinels mark migrations the
 # daemon has applied to this workspace.
+.k2/inbox/
+.k2/.work-to-inbox-migration-v1-done
+.k2/.skills-consolidation-v1-done
 
 # Stub workspace dirs auto-created by some bridge experiments;
 # contain AGENT.md / CLAUDE.md / etc which are themselves gitignored.
@@ -52,13 +71,8 @@ src-tauri/_broadcast/
 src-tauri/_orphan/
 
 # Daemon scratch dirs (empty in practice, leftover from older flows).
-crates/k2-daemon/canonical-ws/
-crates/k2-daemon/k2so-ws/
+crates/k2so-daemon/canonical-ws/
+crates/k2so-daemon/k2so-ws/
 
 # Personal editor config (Aider CLI). Not project-wide.
 .aider.conf.yml
-
-# Per-workspace agent state (PRDs, inbox, skills, notes) — never public.
-.k2so/
-.k2/
-*.log

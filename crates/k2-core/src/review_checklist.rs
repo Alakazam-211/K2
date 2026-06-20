@@ -8,12 +8,15 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-const CHECKLIST_FILENAME: &str = ".k2so/review-checklist.md";
+const CHECKLIST_FILENAME: &str = "review-checklist.md";
 
 fn checklist_path(workspace_path: &str) -> PathBuf {
-    Path::new(workspace_path).join(CHECKLIST_FILENAME)
+    // Anchor on the workspace dot-dir resolver so new 0.40.x+ workspaces
+    // keep the checklist under `.k2/` while existing `.k2so/` workspaces
+    // keep theirs — no stray sibling dot-dir.
+    crate::workspace_dot_dir(workspace_path).join(CHECKLIST_FILENAME)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,12 +276,14 @@ mod tests {
     }
 
     #[test]
-    fn write_creates_dot_k2so_subdirectory() {
+    fn write_creates_dot_dir_subdirectory() {
         let tmp = TempDir::new();
-        // .k2so does NOT exist yet — write must create it.
+        // Neither dot-dir exists yet — write resolves to `.k2/` (the
+        // 0.40.x+ default for a fresh workspace) and creates it.
+        assert!(!tmp.path.join(".k2").exists());
         assert!(!tmp.path.join(".k2so").exists());
         write(&tmp.s(), &sample_items(), "qa", "branch-x").expect("write");
-        assert!(tmp.path.join(".k2so/review-checklist.md").exists());
+        assert!(tmp.path.join(".k2/review-checklist.md").exists());
     }
 
     #[test]

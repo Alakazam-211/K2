@@ -1044,8 +1044,12 @@ fn daemon_port_hint() -> String {
 /// channel; P1 owns the canonical value, so this is a placeholder the
 /// parent reconciles.
 fn manifest_url() -> String {
-    std::env::var("K2SO_DAEMON_MANIFEST_URL")
-        .unwrap_or_else(|_| "https://github.com/Alakazam-211/K2SO/releases/latest/download/daemon-latest.json".to_string())
+    // Prefer the K2-named override; fall back to the legacy K2SO_ name so
+    // existing self-hosted setups keep working. Default points at the NEW
+    // repo (Alakazam-211/K2) where release.sh now publishes daemon-latest.json.
+    std::env::var("K2_DAEMON_MANIFEST_URL")
+        .or_else(|_| std::env::var("K2SO_DAEMON_MANIFEST_URL"))
+        .unwrap_or_else(|_| "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json".to_string())
 }
 
 /// Blocking HTTP GET returning the body bytes. Reuses the daemon's

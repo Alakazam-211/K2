@@ -365,7 +365,7 @@ export function WakeupEditor({ projectPath, agentName, heartbeat, otherHeartbeat
   const [agentMd, setAgentMd] = useState<string>('')
   useEffect(() => {
     daemonCliGet<{ content: string }>('fs/read-file', {
-      path: `${projectPath}/.k2so/agents/${agentName}/AGENT.md`,
+      path: `${projectPath}/.k2/agents/${agentName}/AGENT.md`,
     })
       .then((r) => setAgentMd(r.content))
       .catch(() => setAgentMd(''))

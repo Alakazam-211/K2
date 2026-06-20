@@ -592,6 +592,10 @@ export interface SerializedTab {
    *  via the same serialize/restore path as system tabs; closing one
    *  unpins (removes) it rather than hiding. */
   isPinnedFile?: boolean
+  /** Tab-rename stickiness — persists a USER rename across relaunch so a
+   *  locked tab stays locked (PTY/session titles still can't clobber it
+   *  after restore). Mirrors `Tab.locked`. */
+  locked?: boolean
 }
 
 export interface SerializedLayout {
@@ -634,6 +638,12 @@ export interface Tab {
    *  Inbox) tabs and before regular tabs. Carries a pinned file-viewer
    *  item (html mode). Closing it unpins rather than hides. */
   isPinnedFile?: boolean
+  /** Tab-rename stickiness — a USER rename sets this true (daemon-canonical
+   *  `tab_titles.locked`). Once locked, program-generated PTY/OSC/session
+   *  titles (the auto-sync paths in `setTabTitle`) must NOT overwrite the
+   *  user's chosen label. Hydrated from the daemon `tab-titles` snapshot /
+   *  `tab_title_changed` broadcast and preserved across layout restore. */
+  locked?: boolean
 }
 
 interface TabsState {
@@ -694,12 +704,20 @@ interface TabsState {
   unpinPane: (tabId: string, paneGroupId: string) => void
   openFileInNewTab: (filePath: string) => void
   openUntitledDocument: (cwd: string) => void
-  setTabTitle: (tabId: string, title: string) => void
+  /** Set a tab's bar title.
+   *  - USER renames (TabBar `commitRename`) pass `{ locked: true }` — that
+   *    marks the tab locked locally AND in the daemon `tab_titles` store so
+   *    the rename is sticky and program titles can't snap it back.
+   *  - AUTO paths (PTY/OSC title listeners, daemon `label_changed`) call it
+   *    WITHOUT `locked`; the action skips any tab already `locked` so the
+   *    user's rename wins. */
+  setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => void
   /** 0.39.39 (#676) — apply a daemon-canonical title to a tab WITHOUT
    *  re-POSTing (used by the `tab_title_changed` broadcast handler + the
    *  on-load `tab-titles` snapshot, so a rename in another client shows
-   *  here). No-op when the tab id isn't currently surfaced. */
-  applyDaemonTabTitle: (tabId: string, title: string) => void
+   *  here). Also carries the daemon's `locked` flag so a remote/restored
+   *  user-rename stays sticky here. No-op when the tab id isn't surfaced. */
+  applyDaemonTabTitle: (tabId: string, title: string, locked?: boolean) => void
   renameTabByTitle: (oldTitle: string, newTitle: string) => void
   setTabDirty: (tabId: string, dirty: boolean) => void
   setFileViewerState: (tabId: string, paneId: string, itemId: string, state: { scrollTop?: number; cursorPos?: number }) => void
@@ -1010,6 +1028,9 @@ function serializeTab(tab: Tab): SerializedTab {
     paneGroups: paneGroupsObj,
     ...(tab.isSystemAgent ? { isSystemAgent: true } : {}),
     ...(tab.isPinnedFile ? { isPinnedFile: true } : {}),
+    // Tab-rename stickiness — persist a USER rename's lock so the tab stays
+    // locked across relaunch (PTY/session titles still can't clobber it).
+    ...(tab.locked ? { locked: true } : {}),
   }
 }
 
@@ -2433,7 +2454,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     }))
   },
 
-  setTabTitle: (tabId: string, title: string) => {
+  setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => {
+    const locked = opts?.locked === true
     // 0.37.4 Phase B: pinned system agent tabs (Chat / Inbox) own
     // their bar titles — they're picked deliberately by
     // `ensureSystemAgentTabs` ("Chat", "Inbox", "Work Board") and
@@ -2451,8 +2473,22 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     if (target?.isSystemAgent) {
       return
     }
+    // Tab-rename stickiness — the user's rename wins. An AUTO path (PTY/OSC
+    // title listener, daemon `label_changed`) calls without `locked`; if the
+    // tab is already locked by a prior user rename, SKIP — a program-
+    // generated "✳ Claude Code" title must never snap back over the user's
+    // chosen label. A user rename (`locked: true`) always proceeds and (re)
+    // locks the tab.
+    if (!locked && target?.locked) {
+      return
+    }
     set((state) => {
-      const result = mapTabAcrossGroups(state, tabId, (tab) => ({ ...tab, title }))
+      const result = mapTabAcrossGroups(state, tabId, (tab) => ({
+        ...tab,
+        title,
+        // Only a user rename flips the lock on; auto paths leave it as-is.
+        ...(locked ? { locked: true } : {}),
+      }))
       return { tabs: result.tabs, extraGroups: result.extraGroups }
     })
     // 0.39.39 (#676) — tab titles are now daemon-canonical so a rename in
@@ -2462,17 +2498,19 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // auto-save debounce) stays as the fallback when the daemon doesn't
     // advertise the broadcast capability. The store is keyed by
     // (projectId, tabId), so we send the active workspace's projectId.
+    // `locked` rides the POST so the daemon marks a USER rename sticky (and
+    // stops the renderer's own auto-pushed PTY titles from clobbering it).
     if (serverSupports('daemon-broadcasts')) {
       const projectId = get().activeWorkspaceKey?.split(':')[0]
       if (projectId) {
-        daemonCliPost('workspace/set-tab-title', { projectId, tabId, title }).catch((err) => {
+        daemonCliPost('workspace/set-tab-title', { projectId, tabId, title, locked }).catch((err) => {
           console.error('[tabs] set-tab-title persist failed:', err)
         })
       }
     }
   },
 
-  applyDaemonTabTitle: (tabId: string, title: string) => {
+  applyDaemonTabTitle: (tabId: string, title: string, locked?: boolean) => {
     // Local-only apply (no re-POST) for the broadcast handler + on-load
     // snapshot. Same pinned-system-agent guard as setTabTitle: those tabs
     // own their functional bar labels and ignore canonical renames.
@@ -2482,9 +2520,19 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     })()
     const target = allTabs.find((t) => t.id === tabId)
     if (!target || target.isSystemAgent) return
-    if (target.title === title) return
+    // Mirror the daemon's `locked` flag onto the local tab so the auto-sync
+    // skip in `setTabTitle` knows a remote/restored rename is sticky. When
+    // the daemon doesn't report `locked` (undefined), preserve whatever's
+    // already on the tab rather than clearing it.
+    const nextLocked = typeof locked === 'boolean' ? locked : target.locked
+    // Nothing to change — same title AND same lock state.
+    if (target.title === title && target.locked === nextLocked) return
     set((state) => {
-      const result = mapTabAcrossGroups(state, tabId, (tab) => ({ ...tab, title }))
+      const result = mapTabAcrossGroups(state, tabId, (tab) => ({
+        ...tab,
+        title,
+        ...(typeof nextLocked === 'boolean' ? { locked: nextLocked } : {}),
+      }))
       return { tabs: result.tabs, extraGroups: result.extraGroups }
     })
   },
@@ -3024,6 +3072,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         paneGroups,
         ...(serializedTab.isSystemAgent ? { isSystemAgent: true } : {}),
         ...(serializedTab.isPinnedFile ? { isPinnedFile: true } : {}),
+        // Tab-rename stickiness — restore the locked flag so a user-renamed
+        // tab stays sticky after relaunch.
+        ...(serializedTab.locked ? { locked: true } : {}),
       }
     })
 
@@ -4187,7 +4238,7 @@ function subscribeForActiveWorkspace(
         // echoed, but the title store is keyed by tab id which is globally
         // unique within a workspace — apply to the surfaced tab directly).
         if (useTabsStore.getState().activeWorkspaceKey !== key) return
-        useTabsStore.getState().applyDaemonTabTitle(event.tabId, event.title)
+        useTabsStore.getState().applyDaemonTabTitle(event.tabId, event.title, event.locked)
       },
       onTabOrderChanged: (event: TabOrderChangedEvent) => {
         if (useTabsStore.getState().activeWorkspaceKey !== key) return
@@ -4344,6 +4395,11 @@ interface DaemonTabTitle {
   projectId: string
   tabId: string
   title: string
+  /** Tab-rename stickiness — true when the title is a USER rename the
+   *  daemon marked locked. Hydrated onto `Tab.locked` so the auto-sync
+   *  skip in `setTabTitle` keeps program titles off the locked tab.
+   *  Optional for daemons pre-dating the `tab_titles.locked` column. */
+  locked?: boolean
 }
 
 /** Fetch the daemon-canonical tab titles for a project and apply them to
@@ -4360,7 +4416,9 @@ async function applyTabTitlesSnapshot(projectId: string): Promise<void> {
     const store = useTabsStore.getState()
     for (const t of titles) {
       if (t && typeof t.tabId === 'string' && typeof t.title === 'string') {
-        store.applyDaemonTabTitle(t.tabId, t.title)
+        // Carry the daemon's `locked` flag so a sticky user-rename stays
+        // locked here (auto PTY/session titles won't overwrite it).
+        store.applyDaemonTabTitle(t.tabId, t.title, typeof t.locked === 'boolean' ? t.locked : undefined)
       }
     }
   } catch (err) {

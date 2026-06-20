@@ -129,7 +129,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
 
   const checkProjectContext = useCallback(async () => {
     try {
-      const r = await daemonCliGet<{ content: string }>('fs/read-file', { path: `${projectPath}/.k2so/PROJECT.md` })
+      const r = await daemonCliGet<{ content: string }>('fs/read-file', { path: `${projectPath}/.k2/PROJECT.md` })
       setHasProjectContext(!!r.content && r.content.trim().length > 0)
     } catch {
       setHasProjectContext(false)
@@ -180,11 +180,11 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
       key: 'ws-project-context',
       name: 'Project Context',
       kind: 'ws',
-      subtitle: '.k2so/PROJECT.md',
+      subtitle: '.k2/PROJECT.md',
       description: '**Workspace-scoped.** Shared codebase knowledge — tech stack, conventions, key directories. Injected into every agent launch via --append-system-prompt.',
       loadOnExpand: async () => {
         try {
-          const r = await daemonCliGet<{ content: string }>('fs/read-file', { path: `${projectPath}/.k2so/PROJECT.md` })
+          const r = await daemonCliGet<{ content: string }>('fs/read-file', { path: `${projectPath}/.k2/PROJECT.md` })
           return r.content || '*Empty file.*'
         } catch {
           return '*Failed to load PROJECT.md.*'

@@ -316,9 +316,14 @@ mod tests {
 
     #[test]
     fn agents_dir_and_agent_dir_are_consistent() {
-        let root = agents_dir("/tmp/proj");
-        assert_eq!(root, PathBuf::from("/tmp/proj/.k2so/agents"));
-        let agent = agent_dir("/tmp/proj", "foo");
+        // A fresh (non-existent) root resolves via workspace_dot_dir to the
+        // 0.40.x default `.k2/`. Use a unique temp path so the result never
+        // depends on a stray `/tmp/proj/.k2so` left by another run.
+        let base = std::env::temp_dir().join(format!("k2-agdir-{}", std::process::id()));
+        let root_str = base.to_string_lossy().into_owned();
+        let root = agents_dir(&root_str);
+        assert_eq!(root, base.join(".k2").join("agents"));
+        let agent = agent_dir(&root_str, "foo");
         assert_eq!(agent, root.join("foo"));
     }
 }

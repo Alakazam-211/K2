@@ -323,6 +323,11 @@ async fn handle_one_request(
             // `/cli/fs/` POST arm. Body carries the bytes so they're never
             // URL-logged.
             | "/cli/fs/upload-binary"
+            // K2 Connect "Clone to" — streaming upload for LARGE bundles
+            // (GH #3). Same isolated-arm gate as upload-binary; the body
+            // carries one ordered chunk so a multi-GB transfer never buffers
+            // whole and dodges the 100MB single-shot cap.
+            | "/cli/fs/upload-chunk"
             // K2 Connect "Clone to" P2 — workspace migration. `bundle`
             // runs on the SOURCE daemon (build the scrubbed tar.gz +
             // capture K2 settings); `unpack` runs on the DESTINATION daemon
@@ -674,7 +679,12 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
-            crate::sessions_grid_ws::serve_session_grid_connection(stream, params).await;
+            crate::sessions_grid_ws::serve_session_grid_connection(
+                stream,
+                params,
+                state.token.to_string(),
+            )
+            .await;
             return DispatchOutcome::Done;
         }
         // 0.38.0 Commit 4: daemon-authoritative session lifecycle
@@ -695,7 +705,12 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
-            crate::session_events_ws::serve_session_events_connection(stream, params).await;
+            crate::session_events_ws::serve_session_events_connection(
+                stream,
+                params,
+                state.token.to_string(),
+            )
+            .await;
             return DispatchOutcome::Done;
         }
         // Awareness Bus endpoints (0.34.0 Phase 3).
@@ -2118,6 +2133,28 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let result = crate::fs_routes::handle_upload_binary(&body_bytes);
+            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+                .await;
+        }
+        // K2 Connect "Clone to" — POST /cli/fs/upload-chunk. Streaming upload
+        // for LARGE bundles (GH #3): one ordered chunk per request, appended
+        // to a temp `.part` on the daemon's disk and finalized on is_last.
+        // Same isolated `token_ok` gate as upload-binary (one-line swap to
+        // tighten). Body carries the chunk bytes, never URL-logged.
+        p if is_post && post_allowed && p == "/cli/fs/upload-chunk" => {
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = crate::fs_routes::handle_upload_chunk(&body_bytes);
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }

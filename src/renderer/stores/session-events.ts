@@ -143,6 +143,12 @@ export interface TabTitleChangedEvent {
   project: string
   tabId: string
   title: string
+  /** Tab-rename stickiness — true when this title is a USER rename the
+   *  daemon marked locked. Auto-sync paths in the renderer must not
+   *  clobber a locked tab; the broadcast carries it so peers converge the
+   *  lock too. Optional for forward-compat with daemons that pre-date the
+   *  `tab_titles.locked` column. */
+  locked?: boolean
 }
 
 /** WORKSPACE-SCOPED — workspace tab-order/layout persistence advanced

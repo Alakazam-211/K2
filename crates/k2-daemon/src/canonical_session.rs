@@ -148,8 +148,13 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
     //    encoded the agent's name into the address.
     let canonical_key = canonical_key_for(&project_id);
     if let Some(live) = session_lookup::lookup_any(&canonical_key) {
+        let session_id = live.session_id().to_string();
+        // Keep workspace_sessions.active_terminal_id pointed at the live
+        // canonical PTY so the companion's isMainChat (and a later attach)
+        // resolve to it — parity with the fresh-spawn path below.
+        stamp_active_terminal_id(&project_id, &session_id);
         return Ok(EnsureOutcome {
-            session_id: live.session_id().to_string(),
+            session_id,
             agent_name,
             project_id,
             reused: true,
@@ -158,11 +163,54 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
     }
 
     // 3. Load launch profile (or default).
-    let profile = match load_launch_profile(project_path, &agent_name) {
+    let mut profile = match load_launch_profile(project_path, &agent_name) {
         Ok(Some(p)) => p,
         Ok(None) => default_launch_profile(),
         Err(e) => return Err(format!("launch profile parse failed: {e}")),
     };
+
+    // 3b. Resume-aware canonical claude chat. A bare
+    //     `claude --dangerously-skip-permissions` spawned here on a daemon
+    //     restart / boot-sweep starts a FRESH conversation; because this PTY
+    //     registers under the canonical key FIRST, a later
+    //     `ensure-pinned-chat` finds it live and reuses it (`reused=true`),
+    //     never reaching its own `--resume` resolver — so the workspace's
+    //     selected session only came back on a manual reload (force_respawn).
+    //     Resolve the resume args HERE, the SAME way the interactive
+    //     pinned-chat path does, so the boot/restart respawn restores the
+    //     selected session. We pass explicit_selection=TRUE to make this
+    //     NON-DESTRUCTIVE: a valid saved session is resumed, but a
+    //     saved-but-unresolvable one returns Err (we fall back to the bare
+    //     profile and spawn fresh) WITHOUT overwriting
+    //     workspace_sessions.session_id — so a proactive boot spawn can never
+    //     clobber the user's pinned-chat pick with a throwaway mint. (The
+    //     interactive reload force-respawns with explicit=false to converge to
+    //     the newest conversation for continuity when the user asks.) Cold
+    //     workspaces with no saved session still get a stable pinned id.
+    //     Claude chats only; custom launch commands keep their profile args.
+    let is_claude_chat = profile
+        .command
+        .as_deref()
+        .and_then(|c| c.rsplit('/').next())
+        .map(|name| name == "claude")
+        .unwrap_or(false);
+    if is_claude_chat {
+        match k2_core::workspace::resume_chat::resolve_resume_chat_args_ex(project_path, true) {
+            Ok(resolved) => {
+                log_debug!(
+                    "[daemon/canonical] resume-aware spawn for {project_path}: \
+                     session={} resumed_existing={}",
+                    resolved.resume_session,
+                    resolved.resumed_existing,
+                );
+                profile.args = Some(resolved.args);
+            }
+            Err(e) => log_debug!(
+                "[daemon/canonical] resume resolve failed for {project_path}, \
+                 using profile args as-is: {e}"
+            ),
+        }
+    }
 
     // 4. Spawn via the canonical-keyed v2 helper.
     let req = launch_request_for(&agent_name, &project_id, project_path, &profile);
@@ -178,6 +226,12 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
         Some(outcome.session_id.to_string()),
         Some("system".to_string()),
     );
+
+    // Point active_terminal_id at the freshly-spawned canonical PTY so the
+    // companion's isMainChat (and a later attach) resolve to THIS live PTY
+    // after a restart — the boot-sweep path previously skipped this, leaving a
+    // stale pointer to the dead pre-restart PTY (pinned chat lost its identity).
+    stamp_active_terminal_id(&project_id, &outcome.session_id.to_string());
 
     log_debug!(
         "[daemon/canonical] ensured session={} agent={} workspace={} \
@@ -250,6 +304,23 @@ pub fn lookup_project_id(project_path: &str) -> Option<String> {
     .ok()
 }
 
+/// Stamp `workspace_sessions.active_terminal_id` to the live canonical PTY.
+/// The companion derives `isMainChat` by matching a session's PTY uuid
+/// against this column; the boot-sweep spawn path historically skipped it
+/// (only `pinned_chat.rs` set it), so after a restart it pointed at the dead
+/// pre-restart PTY and the pinned chat lost its "main chat" identity.
+/// Best-effort: a missing row no-ops (the fresh-spawn path's
+/// `k2so_agents_lock` creates the row first).
+fn stamp_active_terminal_id(project_id: &str, terminal_id: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let _ = k2_core::db::schema::WorkspaceSession::save_active_terminal_id(
+        &conn,
+        project_id,
+        terminal_id,
+    );
+}
+
 /// Boot-time sweep: walk every workspace whose `agent_mode` is set
 /// to a bot mode (`custom`, `manager`, `k2so`) and AGENT.md exists,
 /// and ensure each has a canonical session. Recovers cleanly from
@@ -293,7 +364,7 @@ pub fn boot_sweep_ensure_canonical_sessions() {
         // Skip workspaces without an AGENT.md (mode set but agent
         // not yet authored). The boot sweep should not implicitly
         // synthesize an agent.
-        let agent_md = std::path::Path::new(path).join(".k2so/agent/AGENT.md");
+        let agent_md = k2_core::workspace_dot_dir(path).join("agent/AGENT.md");
         if !agent_md.exists() {
             continue;
         }

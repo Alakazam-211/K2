@@ -2058,8 +2058,8 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
   const [previewScale, setPreviewScale] = useState(100)
   const cssScale = Math.round(previewScale * 0.7)
 
-  const filePath = `${projectPath}/.k2so/PROJECT.md`
-  const watchDir = `${projectPath}/.k2so`
+  const filePath = `${projectPath}/.k2/PROJECT.md`
+  const watchDir = `${projectPath}/.k2`
 
   const defaultAgent = useSettingsStore((s) => s.defaultAgent)
   const presets = usePresetsStore((s) => s.presets)

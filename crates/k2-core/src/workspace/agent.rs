@@ -786,13 +786,12 @@ mod tests {
 
     #[test]
     fn create_writes_canonical_agent_dir_not_legacy() {
-        // 0.39.x: a fresh workspace (no `.k2so/agent/AGENT.md` yet) must
-        // get its new agent scaffolded at the CANONICAL `.k2so/agent/`,
-        // NOT the legacy plural `.k2so/agents/<name>/`. This is the
-        // regression fix: pre-0.39.x `create()` used the `agent_dir()`
-        // resolver (legacy fallback) as the creation target, so a user's
-        // agent docs landed in `.k2so/agents/` instead of
-        // `.k2so/agent/AGENT.md`.
+        // A fresh workspace (no `.k2/agent/AGENT.md` yet) must get its new
+        // agent scaffolded at the CANONICAL singular `.k2/agent/`, NOT the
+        // legacy plural `.k2/agents/<name>/`. (Pre-0.39.x `create()` used the
+        // `agent_dir()` resolver — the legacy plural fallback — as the
+        // creation target, so a user's agent docs landed in the plural tree
+        // instead of `.k2/agent/AGENT.md`. Post-0.40.4 the dot-dir is `.k2/`.)
         let dir = std::env::temp_dir().join(format!(
             "k2so-commands-create-canonical-{}-{}",
             std::process::id(),
@@ -805,7 +804,7 @@ mod tests {
         let path = dir.to_string_lossy().into_owned();
 
         // Sanity: no canonical path exists pre-call.
-        assert!(!dir.join(".k2so/agent/AGENT.md").exists());
+        assert!(!dir.join(".k2/agent/AGENT.md").exists());
 
         let result = create(
             path.clone(),
@@ -818,13 +817,13 @@ mod tests {
 
         // Canonical persona is written.
         assert!(
-            dir.join(".k2so/agent/AGENT.md").exists(),
-            "create() must write the canonical .k2so/agent/AGENT.md",
+            dir.join(".k2/agent/AGENT.md").exists(),
+            "create() must write the canonical .k2/agent/AGENT.md",
         );
         // And the legacy plural folder must NOT be created.
         assert!(
-            !dir.join(".k2so/agents").exists(),
-            "create() must NOT create the legacy .k2so/agents/ folder",
+            !dir.join(".k2/agents").exists(),
+            "create() must NOT create the legacy plural .k2/agents/ folder",
         );
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -53,8 +53,8 @@ function actionLabel(action: string): string {
  *
  * NOT a single-file editor — it is the agent terminal on one side + a
  * STRUCTURED plan/manifest renderer on the other (per-harness action table
- * + the backup manifest). The plan is read from `.k2so/.canonical-setup/
- * plan.md`; the manifest from the latest `.k2so/backups/<ts>/manifest.json`.
+ * + the backup manifest). The plan is read from `.k2/.canonical-setup/
+ * plan.md`; the manifest from the latest `.k2/backups/<ts>/manifest.json`.
  * `disableSessionResume` is set so the one-shot ceremony always launches a
  * fresh agent session.
  */
@@ -69,8 +69,8 @@ export function CanonicalAgentModal({
   mode: 'setup' | 'manage'
   onClose: () => void
 }): React.JSX.Element {
-  const planPath = `${projectPath}/.k2so/.canonical-setup/plan.md`
-  const watchDir = `${projectPath}/.k2so`
+  const planPath = `${projectPath}/.k2/.canonical-setup/plan.md`
+  const watchDir = `${projectPath}/.k2`
 
   const [planContent, setPlanContent] = useState('')
   const [probes, setProbes] = useState<HarnessProbe[]>([])
@@ -94,12 +94,12 @@ export function CanonicalAgentModal({
     }
   }, [projectPath])
 
-  // Read the latest manifest.json under .k2so/backups/<ts>/.
+  // Read the latest manifest.json under .k2/backups/<ts>/.
   const refreshManifest = useCallback(async () => {
     try {
       const entries = await invoke<{ name: string; path: string; isDirectory: boolean }[]>(
         'fs_read_dir',
-        { path: `${projectPath}/.k2so/backups` },
+        { path: `${projectPath}/.k2/backups` },
       )
       const dirs = entries.filter((e) => e.isDirectory).map((e) => e.name).sort()
       const latest = dirs[dirs.length - 1]
@@ -108,7 +108,7 @@ export function CanonicalAgentModal({
         return
       }
       const r = await daemonCliGet<{ content: string }>('fs/read-file', {
-        path: `${projectPath}/.k2so/backups/${latest}/manifest.json`,
+        path: `${projectPath}/.k2/backups/${latest}/manifest.json`,
       })
       setManifest(JSON.parse(r.content) as SetupManifest)
     } catch {
@@ -137,13 +137,13 @@ export function CanonicalAgentModal({
       [
         `You are the K2 Canonical Agent for the workspace "${projectName}".`,
         ``,
-        `Source of truth (Model A): .k2so/agent/AGENT.md + .k2so/PROJECT.md. The per-harness`,
+        `Source of truth (Model A): .k2/agent/AGENT.md + .k2/PROJECT.md. The per-harness`,
         `files (CLAUDE.md, GEMINI.md, …) are MIRRORS derived from them — never the reverse.`,
         ``,
         `All destructive file mutation goes through the deterministic core (backup + atomic`,
         `write + manifest). You author merged text; the core persists it. Default is dry-run;`,
         `writing requires explicit confirmation. Write the plan to`,
-        `.k2so/.canonical-setup/plan.md so the user sees it rendered alongside this terminal.`,
+        `.k2/.canonical-setup/plan.md so the user sees it rendered alongside this terminal.`,
         ``,
         mode === 'setup' ? CANONICAL_SETUP_SEED : CANONICAL_MANAGE_SEED,
       ].join('\n'),

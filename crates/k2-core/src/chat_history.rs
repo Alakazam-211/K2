@@ -128,7 +128,9 @@ pub fn detect_claude_session(project_path: &str) -> Option<String> {
     file.read_to_string(&mut buf).ok()?;
 
     let is_subpath =
-        project_path.contains("/.worktrees/") || project_path.contains("/.k2so/");
+        project_path.contains("/.worktrees/")
+            || project_path.contains("/.k2/")
+            || project_path.contains("/.k2so/");
     let root = resolve_root_project_path(project_path);
     let mut best_session: Option<(i64, String)> = None;
 
@@ -241,7 +243,9 @@ pub fn detect_claude_session_near(
     file.read_to_string(&mut buf).ok()?;
 
     let is_subpath =
-        project_path.contains("/.worktrees/") || project_path.contains("/.k2so/");
+        project_path.contains("/.worktrees/")
+            || project_path.contains("/.k2/")
+            || project_path.contains("/.k2so/");
     let root = resolve_root_project_path(project_path);
     const WINDOW_MS: i64 = 60_000;
     let mut best: Option<(i64, String)> = None; // (|distance|, id)

@@ -3,7 +3,7 @@
 //! K2 Connect backbone.
 //!
 //! **Filesystem-first / daemon-first.** Settings live in a dedicated
-//! `~/.k2so/tunnel.json` file (NOT the shared `settings.json`) so the
+//! `~/.k2/tunnel.json` file (NOT the shared `settings.json`) so the
 //! bearer token — a *secret* — has its own 0600 file outside any git
 //! tree and is never logged. The daemon is the sole reader/writer.
 //!
@@ -92,6 +92,47 @@ pub struct TunnelConfig {
     /// the client did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_label: Option<String>,
+
+    /// **K2 Connect E2E encryption opt-in (Phase 0/1, PRD
+    /// `k2-connect-e2e-encryption.md` §4 Option A).** When true the daemon
+    /// terminates TLS itself (a rustls listener presents a cert for
+    /// `<sub>.k2.dev`) and frpc forwards the *encrypted* stream
+    /// (`type = "https"`) so the relay carries only ciphertext. When false
+    /// (the default) behaviour is EXACTLY as today: frpc `type = "http"` and
+    /// Caddy terminates TLS at the relay. The env var `K2_E2E=1` forces this
+    /// on regardless of the stored value (see [`e2e_enabled`]); the field lets
+    /// it be persisted per-install once the broker ships. Default false so no
+    /// existing tunnel changes behaviour on upgrade.
+    #[serde(default)]
+    pub e2e: bool,
+}
+
+/// True when K2 Connect end-to-end encryption (Option A) is enabled for
+/// this daemon. The single gate every E2E code path consults.
+///
+/// Enabled when EITHER the env var `K2_E2E` is set to a truthy value
+/// (`1`/`true`/`yes`/`on`, case-insensitive) OR the passed config has
+/// `e2e: true`. The env var is the spike/Phase-0 switch (no config write
+/// needed, easy to flip in a smoke test); the config field is the
+/// persisted form the broker task will set once issuance is wired. Default
+/// (no env, `e2e:false`) is OFF → zero behaviour change.
+pub fn e2e_enabled(cfg: &TunnelConfig) -> bool {
+    if env_e2e_on() {
+        return true;
+    }
+    cfg.e2e
+}
+
+/// Truthiness of the `K2_E2E` env var, isolated so it's unit-testable and
+/// the parsing rule lives in exactly one place.
+fn env_e2e_on() -> bool {
+    match std::env::var("K2_E2E") {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
 }
 
 fn default_server_host() -> String {
@@ -113,6 +154,7 @@ impl Default for TunnelConfig {
             auto_start: false,
             device_id: None,
             device_label: None,
+            e2e: false,
         }
     }
 }
@@ -142,7 +184,7 @@ impl TunnelConfig {
     }
 }
 
-/// Directory holding `~/.k2so/tunnel.json`. Honors `$HOME` so tests can
+/// Directory holding `~/.k2/tunnel.json`. Honors `$HOME` so tests can
 /// redirect it to a tempdir.
 fn config_dir() -> PathBuf {
     dirs::home_dir()
@@ -184,7 +226,7 @@ pub fn load() -> Result<TunnelConfig, String> {
 }
 
 /// Persist the tunnel config via tmp+rename, then chmod 0600 so the
-/// token is owner-only. Creates `~/.k2so/` if absent.
+/// token is owner-only. Creates `~/.k2/` if absent.
 pub fn save(cfg: &TunnelConfig) -> Result<(), String> {
     let dir = config_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
@@ -279,6 +321,7 @@ mod tests {
                 auto_start: true,
                 device_id: Some("dev-abc".to_string()),
                 device_label: Some("MacIntel".to_string()),
+                e2e: true,
             };
             save(&cfg).expect("save");
             let back = load().expect("load");
@@ -304,6 +347,58 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o600, "secret store must be chmod 0600, got {mode:o}");
         });
+    }
+
+    #[test]
+    fn e2e_defaults_false_and_legacy_json_omitting_field_is_off() {
+        // Default-constructed config must be OFF.
+        assert!(!TunnelConfig::default().e2e, "e2e must default off");
+        // A pre-e2e tunnel.json (no field) must deserialize with e2e=false —
+        // never silently terminate TLS on the daemon after an upgrade.
+        let cfg: TunnelConfig =
+            serde_json::from_str(r#"{"token":"tok","subdomain":"rosson"}"#)
+                .expect("parse legacy config");
+        assert!(!cfg.e2e, "absent e2e field must deserialize false");
+    }
+
+    #[test]
+    fn e2e_enabled_honors_config_field_and_env_var() {
+        // Serialize with the HOME lock so the K2_E2E env mutation here can't
+        // race the other env/HOME-touching suites.
+        let _g = crate::themes::HOME_LOCK.lock();
+        let prev = std::env::var_os("K2_E2E");
+        std::env::remove_var("K2_E2E");
+
+        let mut cfg = TunnelConfig::default();
+        // Off by default: no env, e2e:false.
+        assert!(!e2e_enabled(&cfg), "default config + no env must be OFF");
+
+        // Config field flips it on.
+        cfg.e2e = true;
+        assert!(e2e_enabled(&cfg), "e2e:true config must enable");
+
+        // Env var forces it on even when the config field is false.
+        cfg.e2e = false;
+        for truthy in ["1", "true", "TRUE", "Yes", "on"] {
+            std::env::set_var("K2_E2E", truthy);
+            assert!(
+                e2e_enabled(&cfg),
+                "K2_E2E={truthy} must enable regardless of config"
+            );
+        }
+        // A falsey env value does not enable when the config is also false.
+        for falsey in ["0", "false", "no", "off", ""] {
+            std::env::set_var("K2_E2E", falsey);
+            assert!(
+                !e2e_enabled(&cfg),
+                "K2_E2E={falsey:?} must NOT enable a non-e2e config"
+            );
+        }
+
+        match prev {
+            Some(p) => std::env::set_var("K2_E2E", p),
+            None => std::env::remove_var("K2_E2E"),
+        }
     }
 
     #[test]

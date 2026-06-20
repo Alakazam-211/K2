@@ -481,7 +481,10 @@ pub fn set_disabled(username: &str, disabled: bool) -> Result<(), String> {
 
 /// Set a user's permission role (K2SO #629). Authorization (only an
 /// Owner may change roles) is enforced at the route layer; this is the
-/// raw store mutation. Errors when the user doesn't exist.
+/// raw store mutation. Revokes the user's live sessions so the new role
+/// takes effect immediately (forced re-login) rather than lingering for
+/// up to the token TTL on already-issued sessions. Errors when the user
+/// doesn't exist.
 pub fn set_role(username: &str, role: Role) -> Result<(), String> {
     let username = normalize_username(username)?;
     update_store(|store| {
@@ -492,7 +495,9 @@ pub fn set_role(username: &str, role: Role) -> Result<(), String> {
             .ok_or_else(|| format!("user '{username}' not found"))?;
         user.role = role;
         Ok(())
-    })
+    })?;
+    revoke_user_sessions(&username);
+    Ok(())
 }
 
 /// Look up the stored role for `username`. `None` when the user doesn't
@@ -899,6 +904,26 @@ mod tests {
             assert_eq!(validate_session(&tok), None, "disable must revoke session");
             set_disabled("eve", false).expect("re-enable");
             assert!(verify("eve", "password"), "re-enabled user verifies again");
+        });
+    }
+
+    #[test]
+    fn set_role_revokes_sessions() {
+        with_temp_home(|| {
+            add_user("mallory", "password").expect("add");
+            let tok = create_session("mallory");
+            assert_eq!(
+                validate_session(&tok),
+                Some("mallory".to_string()),
+                "fresh session is valid"
+            );
+            set_role("mallory", Role::Admin).expect("promote");
+            assert_eq!(role_for_user("mallory"), Some(Role::Admin));
+            assert_eq!(
+                validate_session(&tok),
+                None,
+                "role change must revoke the old session so the new role takes effect on re-login"
+            );
         });
     }
 

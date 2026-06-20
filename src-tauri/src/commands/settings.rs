@@ -69,6 +69,33 @@ const CLI_SYMLINK_PATH: &str = "/usr/local/bin/k2";
 /// Legacy alias — points at the cli/k2so deprecation shim.
 const CLI_LEGACY_SYMLINK_PATH: &str = "/usr/local/bin/k2so";
 
+/// True when `/usr/local/bin/k2` should be (re)installed at boot:
+/// missing, BROKEN (its target no longer exists), or pointing at a
+/// DIFFERENT bundle than the one currently running. The last case is the
+/// real-world one (0.40.x): a user who replaced `K2SO.app` with a fresh
+/// `K2.app` leaves the symlink pointing at the now-deleted `K2SO.app` —
+/// the CLI Version then reads `v?` because the target is gone.
+///
+/// Returns false when there's no bundled CLI to point at, or the running
+/// app is in a transient location (DMG mount / Gatekeeper translocation),
+/// where a symlink would just dangle again.
+pub(crate) fn cli_symlink_needs_heal() -> bool {
+    let Some(bundled) = find_cli_script() else {
+        return false;
+    };
+    if k2_core::daemon_lifecycle::is_transient_exe_location(&bundled) {
+        return false;
+    }
+    let new_cli = Path::new(CLI_SYMLINK_PATH);
+    match fs::read_link(new_cli) {
+        // It's a symlink: heal if it points elsewhere or its target is gone.
+        Ok(target) => target != bundled || !target.exists(),
+        // Not a symlink: heal if absent, or a legacy k2so symlink exists
+        // (pre-0.40 install that still needs its `k2` sibling).
+        Err(_) => !new_cli.exists() || Path::new(CLI_LEGACY_SYMLINK_PATH).is_symlink(),
+    }
+}
+
 /// Extract the CLI version from a k2/k2so CLI script. Accepts both the
 /// 0.40.0 `K2_CLI_VERSION` and the legacy `K2SO_CLI_VERSION` prefixes so
 /// the installed-version probe works across the rename boundary.

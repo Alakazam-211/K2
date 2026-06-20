@@ -1,8 +1,13 @@
 use serde::Serialize;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+// 0.40.x: releases publish to the new Alakazam-211/K2 repo (release.sh
+// RELEASE_REPO default). The old Alakazam-211/K2SO repo is archived — point
+// the desktop "Check for updates" path here so every update channel (this,
+// the Tauri auto-updater's latest.json, and the daemon's daemon-latest.json)
+// reads from the same K2 repo.
 const GITHUB_RELEASES_URL: &str =
-    "https://api.github.com/repos/Alakazam-211/K2SO/releases/latest";
+    "https://api.github.com/repos/Alakazam-211/K2/releases/latest";
 
 #[derive(Serialize)]
 pub struct UpdateInfo {

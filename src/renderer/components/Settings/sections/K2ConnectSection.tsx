@@ -55,8 +55,20 @@ const ACCOUNT_KEYCHAIN_SERVICE = 'dev.k2.connect.account'
 // Pre-0.40 service name — read fallback only; copied forward on first
 // read, never deleted (an un-updated daemon may still read it).
 const LEGACY_ACCOUNT_KEYCHAIN_SERVICE = 'com.k2so.connect.account'
+// Double-prompt fix: the session is now ONE keychain item — a JSON blob of
+// {refreshToken,email} under this single account key — instead of two
+// separate items. macOS prompts once per keychain ITEM on first access, so
+// one item = one prompt (was two). The OLD two-key layout is still READ as a
+// migration fallback (see readAccountSession).
+const SESSION_BLOB_KEY = 'session'
+// Legacy two-item layout (pre-double-prompt-fix). Read-only fallback.
 const SESSION_ACCOUNT_KEY = 'session-refresh-token'
 const EMAIL_ACCOUNT_KEY = 'session-email'
+
+interface AccountSession {
+  refreshToken: string
+  email: string
+}
 
 // A stable per-install device id used for the subdomain claim/lease. Created
 // once and persisted to localStorage so the same machine always presents the
@@ -229,42 +241,73 @@ async function errText(res: Response): Promise<string> {
 // ── Account keychain helpers (refresh token + email only) ───────────────
 // Best-effort + Tauri-only; they no-op (resolve) in the vitest/web env.
 
+// Double-prompt fix: persist the WHOLE session as ONE keychain item (a JSON
+// blob) under SESSION_BLOB_KEY. One item ⇒ macOS prompts once on first
+// access (was two — refresh-token + email — so two prompts). On a fresh
+// write we also clear any stale OLD two-item layout so a later read can't
+// resurrect a superseded refresh token.
 async function saveAccountSession(refreshToken: string, email: string): Promise<void> {
   try {
-    await invoke('k2_secret_set', { service: ACCOUNT_KEYCHAIN_SERVICE, account: SESSION_ACCOUNT_KEY, secret: refreshToken })
-    await invoke('k2_secret_set', { service: ACCOUNT_KEYCHAIN_SERVICE, account: EMAIL_ACCOUNT_KEY, secret: email })
+    const blob = JSON.stringify({ refreshToken, email } satisfies AccountSession)
+    await invoke('k2_secret_set', { service: ACCOUNT_KEYCHAIN_SERVICE, account: SESSION_BLOB_KEY, secret: blob })
+    // Best-effort cleanup of the superseded two-item layout (both services).
+    for (const service of [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE]) {
+      try { await invoke('k2_secret_delete', { service, account: SESSION_ACCOUNT_KEY }) } catch { /* idempotent */ }
+      try { await invoke('k2_secret_delete', { service, account: EMAIL_ACCOUNT_KEY }) } catch { /* idempotent */ }
+    }
   } catch {
     /* keychain unavailable — session stays in memory for this run */
   }
 }
 
-async function readAccountRefreshToken(): Promise<string | null> {
+// Read the persisted session. Order: new single-blob (current + legacy
+// service name) → OLD two-item layout (current + legacy service name). On a
+// successful fallback hit we migrate forward (write the blob, drop the old
+// items) so subsequent launches read ONE item and prompt once.
+async function readAccountSession(): Promise<AccountSession | null> {
   try {
-    const secret = await invoke<string | null>('k2_secret_get', { service: ACCOUNT_KEYCHAIN_SERVICE, account: SESSION_ACCOUNT_KEY })
-    if (secret) return secret
-    // 0.40.0 rebrand: migrate a pre-rename session forward on first read.
-    const legacy = await invoke<string | null>('k2_secret_get', { service: LEGACY_ACCOUNT_KEYCHAIN_SERVICE, account: SESSION_ACCOUNT_KEY })
-    if (legacy) {
-      await invoke('k2_secret_set', { service: ACCOUNT_KEYCHAIN_SERVICE, account: SESSION_ACCOUNT_KEY, secret: legacy })
-      const legacyEmail = await invoke<string | null>('k2_secret_get', { service: LEGACY_ACCOUNT_KEYCHAIN_SERVICE, account: EMAIL_ACCOUNT_KEY })
-      if (legacyEmail) await invoke('k2_secret_set', { service: ACCOUNT_KEYCHAIN_SERVICE, account: EMAIL_ACCOUNT_KEY, secret: legacyEmail })
+    // 1. New single-item blob, current service then legacy rebrand service.
+    for (const service of [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE]) {
+      const raw = await invoke<string | null>('k2_secret_get', { service, account: SESSION_BLOB_KEY })
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as Partial<AccountSession>
+          if (parsed && typeof parsed.refreshToken === 'string' && parsed.refreshToken) {
+            const sess: AccountSession = { refreshToken: parsed.refreshToken, email: parsed.email ?? '' }
+            // Migrate a legacy-service blob forward to the current service.
+            if (service === LEGACY_ACCOUNT_KEYCHAIN_SERVICE) await saveAccountSession(sess.refreshToken, sess.email)
+            return sess
+          }
+        } catch { /* corrupt blob — fall through to the two-item layout */ }
+      }
     }
-    return legacy ?? null
+    // 2. OLD two-item layout, current service then legacy rebrand service.
+    for (const service of [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE]) {
+      const refreshToken = await invoke<string | null>('k2_secret_get', { service, account: SESSION_ACCOUNT_KEY })
+      if (refreshToken) {
+        const email = (await invoke<string | null>('k2_secret_get', { service, account: EMAIL_ACCOUNT_KEY })) ?? ''
+        const sess: AccountSession = { refreshToken, email }
+        // Migrate forward: write the single blob + delete the old items.
+        await saveAccountSession(sess.refreshToken, sess.email)
+        return sess
+      }
+    }
+    return null
   } catch {
     return null
   }
 }
 
 async function clearAccountSession(): Promise<void> {
-  // Sign-out clears BOTH service names — leaving the legacy copy behind
-  // would silently re-sign-in via the migration fallback.
+  // Sign-out clears the single blob AND the legacy two-item layout under
+  // BOTH service names — leaving any copy behind would silently re-sign-in
+  // via the migration fallback above.
   for (const service of [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE]) {
-    try {
-      await invoke('k2_secret_delete', { service, account: SESSION_ACCOUNT_KEY })
-    } catch { /* idempotent */ }
-    try {
-      await invoke('k2_secret_delete', { service, account: EMAIL_ACCOUNT_KEY })
-    } catch { /* idempotent */ }
+    for (const account of [SESSION_BLOB_KEY, SESSION_ACCOUNT_KEY, EMAIL_ACCOUNT_KEY]) {
+      try {
+        await invoke('k2_secret_delete', { service, account })
+      } catch { /* idempotent */ }
+    }
   }
 }
 
@@ -386,13 +429,18 @@ export function K2ConnectSection(): React.JSX.Element {
     // Restore the account session from the keychain (independent of the
     // tunnel-config load above — must NOT block it).
     void (async () => {
-      const stored = await readAccountRefreshToken()
+      const stored = await readAccountSession()
       if (!stored) return
       try {
-        const fresh = await refreshSession(stored)
+        const fresh = await refreshSession(stored.refreshToken)
         setSession(fresh)
-        // The refresh token may have rotated — persist the new one.
-        await saveAccountSession(fresh.refreshToken, fresh.email)
+        // Double-prompt fix: ONLY re-persist when the refresh token actually
+        // rotated (or the email changed). Re-writing an UNCHANGED keychain
+        // item resets its ACL and drops the user's "Always Allow" grant, so
+        // an unchanged session must leave the item — and its grant — intact.
+        if (fresh.refreshToken !== stored.refreshToken || fresh.email !== stored.email) {
+          await saveAccountSession(fresh.refreshToken, fresh.email)
+        }
         const subs = await listSubdomains(fresh.accessToken)
         setSubdomains(subs)
       } catch {
@@ -688,6 +736,15 @@ export function K2ConnectSection(): React.JSX.Element {
     setError(null)
     try {
       const sub = subdomain.trim()
+      // Mirror the daemon's is_connectable() locally so an unconfigured Start
+      // fails with a clear, actionable message instead of a round-trip
+      // "tunnel not configured: no token". Picking a subdomain above is what
+      // binds its token — with neither a picked subdomain nor a manually-set
+      // token, there is nothing to start.
+      if (!sub && !tokenSet) {
+        setError('Select a subdomain first — pick one of your purchased subdomains above (or set one under Advanced), then Start.')
+        return
+      }
       // Claim the lease BEFORE starting (one-shot, explicit user action).
       // If a *different* device holds a fresh claim, refuse to start and
       // surface who holds it.
@@ -1073,6 +1130,11 @@ export function K2ConnectSection(): React.JSX.Element {
                   <SettingDropdown
                     value={selectedLabel ?? subdomain ?? ''}
                     options={subdomainOptions}
+                    // Start EMPTY after sign-in — never pre-fill a default the
+                    // user didn't choose. Picking is what binds the subdomain's
+                    // token into config; a phantom "selected" default let users
+                    // hit Start with no token bound ("tunnel not configured").
+                    placeholder="Select a subdomain…"
                     onChange={(v) => void handleSubdomainPick(v)}
                   />
                 )}

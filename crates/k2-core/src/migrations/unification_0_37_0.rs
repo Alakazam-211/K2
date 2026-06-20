@@ -58,9 +58,11 @@ pub struct UnificationOutcome {
 
 /// Path to the sentinel file for a given workspace.
 pub fn sentinel_path(project_path: &str) -> PathBuf {
-    PathBuf::from(project_path)
-        .join(".k2so")
-        .join(SENTINEL_FILENAME)
+    // Resolve via workspace_dot_dir so the gate finds the sentinel after the
+    // 0.40.4 `.k2so/` -> `.k2/` cutover moved it. Hardcoding `.k2so` here was
+    // the bug that made this migration re-fire on every post-cutover boot and
+    // rebuild a stray `.k2so/` scaffolding tree.
+    crate::workspace_dot_dir(project_path).join(SENTINEL_FILENAME)
 }
 
 /// Cheap stat — true if the unification migration has already run
@@ -89,7 +91,9 @@ pub fn run_unification(
     }
 
     let mut outcome = UnificationOutcome::default();
-    let dot_k2so = PathBuf::from(project_path).join(".k2so");
+    // Anchor on the resolver so a (rare) un-unified workspace that the cutover
+    // renamed to `.k2/` scaffolds there, never recreating a stray `.k2so/`.
+    let dot_k2so = crate::workspace_dot_dir(project_path);
 
     // Step 2: ensure the new top-level dirs exist before any moves.
     // create_dir_all is idempotent.

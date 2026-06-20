@@ -1,12 +1,15 @@
 // K2 Connect — "Clone to" orchestration (renderer half).
 //
-// PRD: .k2so/prds/k2-connect-clone-to.md (P2 — Clone to / high bar).
+// PRD: .k2/prds/k2-connect-clone-to.md (P2 — Clone to / high bar).
 //
 // The backend is DONE on main:
 //   - daemon `POST /cli/clone/bundle  { project_path } -> { bundle_path, manifest_summary }`
 //   - daemon `POST /cli/clone/unpack  { bundle_path, dest_parent } -> { project, dest_path }`
-//   - daemon `POST /cli/fs/upload-binary { dir, filename, base64 } -> { path }`
-//   - Tauri  `read_local_file_base64(path) -> base64`
+//   - daemon `POST /cli/fs/upload-binary { dir, filename, base64 } -> { path }`  (small bundles)
+//   - daemon `POST /cli/fs/upload-chunk  { upload_id, dir, filename, offset, base64, is_last }`
+//       -> { path, done } | { received, done } — streaming upload for LARGE bundles (GH #3)
+//   - Tauri  `read_local_file_base64(path) -> base64`        (whole file, ≤ single-shot cap)
+//   - Tauri  `local_file_size(path) -> u64` + `read_local_file_range(path, offset, len) -> base64`
 //   - daemon `GET  /cli/fs/info -> { home, separator, os }`  (host fs probe)
 //
 // This module sequences those calls so the user can clone a LOCAL workspace
@@ -86,6 +89,10 @@ export interface CloneHooks {
   onDone?: (result: CloneUnpackResult) => void
   /** Called on any failure with a human-readable message. */
   onError?: (message: string) => void
+  /** Called during a chunked (large-bundle) upload with a 0..1 fraction of
+   *  bytes sent. Never called for the single-shot path. Optional — the
+   *  progress modal can light up a byte-level bar later for free. */
+  onUploadProgress?: (fraction: number) => void
 }
 
 /**
@@ -102,6 +109,12 @@ export interface CloneDeps {
   ) => Promise<T>
   /** Read a LOCAL file's bytes as base64 (Tauri command). */
   readLocalFileBase64: (path: string) => Promise<string>
+  /** Size of a LOCAL file in bytes (Tauri command) — used to choose between
+   *  the single-shot and chunked upload paths without reading the file. */
+  localFileSize: (path: string) => Promise<number>
+  /** Read up to `len` bytes of a LOCAL file from `offset`, as base64 (Tauri
+   *  command). The chunked-upload primitive for large bundles (GH #3). */
+  readLocalFileRange: (path: string, offset: number, len: number) => Promise<string>
   /** Switch + authenticate to a host (connect-host store `pickHost`). */
   pickHost: (host: ConnectHost) => void
   /**
@@ -120,6 +133,22 @@ export function basename(p: string): string {
   const seg = p.split(/[/\\]/).pop()
   return seg && seg.length > 0 ? seg : p
 }
+
+/**
+ * Bundles at or under this size take the original single-shot
+ * `fs/upload-binary` path — one base64 JSON POST. It's universally supported
+ * (works against hosts older than 0.40.6 that lack the chunk route) and well
+ * under the daemon's 100 MB decoded cap. Larger bundles stream via
+ * `fs/upload-chunk` (GH #3). 64 MB leaves headroom under the cap.
+ */
+export const CLONE_SINGLE_SHOT_MAX_BYTES = 64 * 1024 * 1024
+/**
+ * Per-chunk decoded size for the streaming path. Kept small so each request
+ * body stays tiny (the daemon buffers each one whole, and it sails through the
+ * K2 Connect relay) — memory stays flat regardless of total bundle size. Well
+ * under the daemon's `MAX_UPLOAD_CHUNK_SIZE` (16 MB) guard.
+ */
+export const CLONE_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 
 /** Raised when the user cancels a step (sign-in or folder pick). Carries a
  *  flag so callers can treat cancellation as a non-error abort if desired;
@@ -193,9 +222,11 @@ export async function cloneWorkspaceTo(
     }
     onBundled?.(bundle.manifest_summary)
 
-    // 1b. Read the bundle bytes WHILE LOCAL IS STILL ACTIVE — it's a local
-    //     file, and the read must happen before the host switch.
-    const base64 = await deps.readLocalFileBase64(bundle.bundle_path)
+    // 1b. Probe the bundle's size to choose the upload strategy below. The
+    //     BYTES are read lazily during upload (step 4) — both reads are local
+    //     Tauri commands (host-independent), so they work after the host
+    //     switch and never hold the whole multi-GB bundle in memory (GH #3).
+    const bundleSize = await deps.localFileSize(bundle.bundle_path)
 
     // ── 2. Switch + authenticate to the destination ─────────────────────
     onStage?.('connecting')
@@ -210,36 +241,53 @@ export async function cloneWorkspaceTo(
     }
 
     // 3b. Pick a temp dir on the host for the bundle upload. Prefer
-    //     `~/.k2so/clone-tmp` (via fs/info home); fall back to dest_parent
+    //     `~/.k2/clone-tmp` (via fs/info home); fall back to dest_parent
     //     if fs/info isn't available, so the upload still lands somewhere
-    //     writable on the host.
+    //     writable on the host. The daemon create_dir_all's it on first write.
     let uploadDir = destParent
     try {
       const info = await deps.daemonCliGet<CloneFsInfo>('fs/info')
       if (info?.home) {
         const sep = info.separator || '/'
         const home = info.home.endsWith(sep) ? info.home.slice(0, -sep.length) : info.home
-        uploadDir = `${home}${sep}.k2so${sep}clone-tmp`
+        uploadDir = `${home}${sep}.k2${sep}clone-tmp`
       }
     } catch {
       // fs/info unavailable (old host) — upload alongside the dest parent.
     }
 
     // ── 4. Upload the bundle to the destination ─────────────────────────
+    //     Small bundles take the single-shot base64 POST (works against any
+    //     host, incl. pre-0.40.6). Large bundles stream in chunks so neither
+    //     side buffers the whole file and the 100 MB single-shot cap is moot
+    //     (GH #3). The bundle bytes are read here, lazily, via local Tauri
+    //     commands — host-independent, so reading after the switch is fine.
     onStage?.('uploading')
-    const uploaded = await deps.daemonCliPost<{ path: string }>('fs/upload-binary', {
-      dir: uploadDir,
-      filename: basename(bundle.bundle_path),
-      base64,
-    })
-    if (!uploaded?.path) {
-      throw new Error('Upload step returned no remote path.')
+    const filename = basename(bundle.bundle_path)
+    let remoteBundlePath: string
+    if (bundleSize <= CLONE_SINGLE_SHOT_MAX_BYTES) {
+      const base64 = await deps.readLocalFileBase64(bundle.bundle_path)
+      const uploaded = await deps.daemonCliPost<{ path: string }>('fs/upload-binary', {
+        dir: uploadDir,
+        filename,
+        base64,
+      })
+      if (!uploaded?.path) {
+        throw new Error('Upload step returned no remote path.')
+      }
+      remoteBundlePath = uploaded.path
+    } else {
+      remoteBundlePath = await uploadBundleChunked(deps, bundle.bundle_path, bundleSize, {
+        dir: uploadDir,
+        filename,
+        onProgress: hooks.onUploadProgress,
+      })
     }
 
     // ── 5. Unpack on the destination ────────────────────────────────────
     onStage?.('unpacking')
     const result = await deps.daemonCliPost<CloneUnpackResult>('clone/unpack', {
-      bundle_path: uploaded.path,
+      bundle_path: remoteBundlePath,
       dest_parent: destParent,
     })
     if (!result?.dest_path) {
@@ -255,6 +303,60 @@ export async function cloneWorkspaceTo(
     onError?.(message)
     throw err
   }
+}
+
+/**
+ * Stream a large local bundle to the destination host in ordered chunks via
+ * `fs/upload-chunk`, returning the finalized remote bundle path. Each chunk is
+ * read from local disk and POSTed in turn, so neither the client nor the
+ * daemon ever holds the whole (multi-GB) file in memory — the fix for GH #3.
+ * The daemon appends each chunk to a temp `.part` and atomically renames it
+ * into place on the final chunk.
+ *
+ * `offset` advances by the REQUESTED chunk length: the bundle is a freshly
+ * built, stable file of known `size`, so a non-final read always returns a
+ * full chunk. If reality ever diverges, the daemon's ordered-append check
+ * rejects the next chunk LOUDLY rather than silently corrupting the bundle.
+ */
+async function uploadBundleChunked(
+  deps: CloneDeps,
+  localPath: string,
+  size: number,
+  opts: { dir: string; filename: string; onProgress?: (fraction: number) => void },
+): Promise<string> {
+  // Unique per-transfer id so a stale/abandoned `.part` can never be appended
+  // to by a different clone (it only needs to be collision-free among recent
+  // uploads, not cryptographic).
+  const uploadId = `clone-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  let offset = 0
+  let finalPath: string | undefined
+  while (offset < size) {
+    const len = Math.min(CLONE_UPLOAD_CHUNK_BYTES, size - offset)
+    const isLast = offset + len >= size
+    const base64 = await deps.readLocalFileRange(localPath, offset, len)
+    const resp = await deps.daemonCliPost<{ path?: string; done?: boolean }>('fs/upload-chunk', {
+      upload_id: uploadId,
+      dir: opts.dir,
+      filename: opts.filename,
+      offset,
+      base64,
+      is_last: isLast,
+    })
+    offset += len
+    opts.onProgress?.(offset / size)
+    if (isLast) {
+      if (!resp?.path) {
+        throw new Error('Chunked upload returned no remote path.')
+      }
+      finalPath = resp.path
+    }
+  }
+  if (finalPath === undefined) {
+    // size === 0 → the loop never ran. A clone bundle is never empty, but
+    // guard loudly rather than hand back a bogus path.
+    throw new Error('Chunked upload sent no data (empty bundle).')
+  }
+  return finalPath
 }
 
 /**
@@ -280,6 +382,14 @@ export function defaultCloneDeps(): CloneDeps {
     readLocalFileBase64: async (path) => {
       const { invoke } = await import('@tauri-apps/api/core')
       return invoke<string>('read_local_file_base64', { path })
+    },
+    localFileSize: async (path) => {
+      const { invoke } = await import('@tauri-apps/api/core')
+      return invoke<number>('local_file_size', { path })
+    },
+    readLocalFileRange: async (path, offset, len) => {
+      const { invoke } = await import('@tauri-apps/api/core')
+      return invoke<string>('read_local_file_range', { path, offset, len })
     },
     pickHost: (host) => {
       void import('@/stores/connect-host').then(({ useConnectHostStore }) => {

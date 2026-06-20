@@ -9,7 +9,7 @@
 //! gives POSIX atomicity: a reader sees either the previous bytes in full
 //! or the new bytes in full, never a truncated intermediate.
 //!
-//! Naming: archive files live under `.k2so/migration/` and are produced
+//! Naming: archive files live under `.k2/migration/` and are produced
 //! during first-run harvest of pre-existing CLAUDE.md / GEMINI.md /
 //! .aider.conf.yml files. A tight first-run harvest can create 5+ archives
 //! in a single wall-clock second, so nanosecond timestamps plus a
@@ -132,9 +132,11 @@ pub fn log_if_err<T, E: std::fmt::Display>(op: &str, path: &Path, result: Result
 }
 
 /// Construct a tempfile path sitting next to `target`. Leading-dot +
-/// `k2so-tmp` segment + PID + nanos + seq makes collision essentially
+/// `k2-tmp` segment + PID + nanos + seq makes collision essentially
 /// impossible, and the dot-prefix hides the file from `ls` listings if a
-/// crash leaves it behind.
+/// crash leaves it behind. (A hard kill between create and rename orphans
+/// the temp by design; the daemon's per-boot dot-dir hygiene sweep reaps
+/// these — matching both this `.k2-tmp.` infix and the legacy `.k2so-tmp.`.)
 fn tempfile_path(target: &Path) -> PathBuf {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     let leaf = target
@@ -147,7 +149,7 @@ fn tempfile_path(target: &Path) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    parent.join(format!(".{}.k2so-tmp.{}.{}.{}", leaf, pid, ns, seq))
+    parent.join(format!(".{}.k2-tmp.{}.{}.{}", leaf, pid, ns, seq))
 }
 
 #[cfg(test)]
@@ -201,7 +203,7 @@ mod tests {
             .filter(|e| {
                 e.file_name()
                     .to_string_lossy()
-                    .starts_with(".t.md.k2so-tmp.")
+                    .starts_with(".t.md.k2-tmp.")
             })
             .collect();
         assert!(leftover.is_empty(), "tempfile should be removed on success");

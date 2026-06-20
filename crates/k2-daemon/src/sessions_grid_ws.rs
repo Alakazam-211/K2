@@ -275,7 +275,14 @@ fn apply_set_active(
 pub async fn serve_session_grid_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
+    owner_token: String,
 ) {
+    // The token that authorized this connection. Re-validated on a timer
+    // inside the loop so a revoked connect-user (disabled / removed /
+    // role-changed) is dropped from their LIVE socket within seconds —
+    // not left streaming until they happen to disconnect.
+    let token = params.get("token").cloned().unwrap_or_default();
+
     // 0.39.7: stream borrowed (was owned). See events.rs.
     let session_id = match params.get("session").and_then(|s| SessionId::parse(s)) {
         Some(id) => id,
@@ -422,6 +429,20 @@ pub async fn serve_session_grid_connection(
         pane_id
     );
 
+    // Re-auth heartbeat: every 5s, confirm the token that opened this
+    // socket is still valid. When an owner disables/removes/role-changes a
+    // connect-user, `revoke_user_sessions` drops their token from the
+    // in-memory session map — but an already-upgraded WebSocket would keep
+    // streaming this machine's live terminal until the client happened to
+    // disconnect. This timer closes that hole: a revoked token fails
+    // `token_still_valid` and we tear the socket down. The owner token is
+    // never revoked, so owner connections sail through the compare.
+    let mut auth_recheck =
+        tokio::time::interval(std::time::Duration::from_secs(5));
+    // Burn the immediate first tick so we don't re-validate the instant
+    // after the dispatcher already authorized us.
+    auth_recheck.tick().await;
+
     // Main loop: event-driven. Every Wakeup from alacritty is a
     // cue to build_emit + send. Inbound messages route to
     // session.write() / session.resize(). No coalescing for v1 —
@@ -429,6 +450,19 @@ pub async fn serve_session_grid_connection(
     // keeps the volume sane.
     loop {
         tokio::select! {
+            // Re-auth heartbeat — see `auth_recheck` above. Closes the
+            // socket the moment the connecting user is revoked.
+            _ = auth_recheck.tick() => {
+                if !crate::routes::http::token_still_valid(&token, &owner_token) {
+                    log_debug!(
+                        "[daemon/sessions_grid_ws] token revoked mid-session; \
+                         closing grid WS for session {}",
+                        session.session_id
+                    );
+                    let _ = write.send(Message::Close(None)).await;
+                    break;
+                }
+            }
             // 0.39.46 — pre-encoded Snapshot/Delta frames from the
             // session's shared emitter. The version floor drops frames
             // our attach snapshot already covers (see above).

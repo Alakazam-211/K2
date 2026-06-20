@@ -550,30 +550,52 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     [claudeSessionId, projectPath, ensure],
   )
 
+  // The shared header (agent name + session dropdown + refresh) is rendered
+  // in EVERY non-trivial phase — including the failure states — so a session
+  // that won't load never traps the user: the dropdown stays visible and
+  // clickable, so they can switch to a different past session. The failure
+  // message + Retry render in the content area BELOW the header, not over it.
+  const header = (
+    <ChatHeader
+      displayName={displayName}
+      projectPath={projectPath}
+      currentSessionId={claudeSessionId}
+      onRefresh={() => void handleRefresh()}
+      refreshing={refreshing}
+      onSwitchSession={(sid) => void handleSwitchSession(sid)}
+    />
+  )
+
   if (phase.kind === 'error') {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center">
-        <div className="text-xs font-semibold text-[var(--color-text-primary)]">
-          Chat session failed to start
+      <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+        {header}
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="text-xs font-semibold text-[var(--color-text-primary)]">
+            Chat session failed to start
+          </div>
+          <div className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch]">
+            {phase.message || 'The daemon could not start the chat session.'}
+          </div>
+          <RetryButton onClick={handleRefresh} refreshing={refreshing} />
         </div>
-        <div className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch]">
-          {phase.message || 'The daemon could not start the chat session.'}
-        </div>
-        <RetryButton onClick={handleRefresh} refreshing={refreshing} />
       </div>
     )
   }
 
   if (phase.kind === 'idle') {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center">
-        <div className="text-xs font-semibold text-[var(--color-text-primary)]">
-          Chat session ended
+      <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+        {header}
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="text-xs font-semibold text-[var(--color-text-primary)]">
+            Chat session ended
+          </div>
+          <div className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch]">
+            The chat process exited. Click Retry to start a fresh session.
+          </div>
+          <RetryButton onClick={handleRefresh} refreshing={refreshing} />
         </div>
-        <div className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch]">
-          The chat process exited. Click Retry to start a fresh session.
-        </div>
-        <RetryButton onClick={handleRefresh} refreshing={refreshing} />
       </div>
     )
   }
@@ -589,14 +611,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // phase.kind === 'ready'
   return (
     <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
-      <ChatHeader
-        displayName={displayName}
-        projectPath={projectPath}
-        currentSessionId={claudeSessionId}
-        onRefresh={() => void handleRefresh()}
-        refreshing={refreshing}
-        onSwitchSession={(sid) => void handleSwitchSession(sid)}
-      />
+      {header}
       <div className="flex-1 min-h-0">
         <TerminalPane
           // Remount on each daemon respawn so TerminalPane re-attaches to
@@ -686,14 +701,10 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   const lastResolvedRef = useRef<ResolveMemo | null>(null)
   const displayName = useDisplayName(projectPath, agentName)
 
-  // 0.37.12 — chat-history dropdown state.
-  const [historySessions, setHistorySessions] = useState<Array<{
-    sessionId: string
-    title: string
-    timestamp: number
-    messageCount: number
-  }>>([])
-  const [historyOpen, setHistoryOpen] = useState(false)
+  // 0.37.12 — chat-history dropdown is now owned by the shared <ChatHeader>
+  // (fetch + popover state + title). The legacy body only needs the CURRENT
+  // session id to highlight + to compute the no-op short-circuit on switch.
+  //
   // The Claude session id currently driving the live PTY — derived from
   // launchConfig.args (`--resume <X>` or `--session-id <X>`).
   const currentSessionId = useMemo<string | null>(() => {
@@ -754,43 +765,12 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     setRefreshing(false)
   }, [projectId, projectPath, agentName, refreshing])
 
-  // 0.37.12 — fetch chat history for the dropdown title + popover list.
-  useEffect(() => {
-    let cancelled = false
-    void daemonCliGet<Array<{
-      sessionId: string
-      title: string
-      timestamp: number
-      messageCount: number
-      provider: string
-    }>>('chat/list', { project_path: projectPath })
-      .then((rows) => {
-        if (cancelled) return
-        const claudeOnly = rows
-          .filter((r) => r.provider === 'claude' || !r.provider)
-          .sort((a, b) => b.timestamp - a.timestamp)
-        setHistorySessions(claudeOnly)
-      })
-      .catch((err) => {
-        console.warn('[AgentChatPane] chat/list failed:', err)
-      })
-    return () => { cancelled = true }
-  }, [projectPath, currentSessionId, historyOpen])
-
-  const currentChatTitle = useMemo<string>(() => {
-    if (!currentSessionId) return 'New chat'
-    const found = historySessions.find((s) => s.sessionId === currentSessionId)
-    if (found?.title) return found.title
-    return 'New chat'
-  }, [historySessions, currentSessionId])
-
-  // Switch the pinned chat tab to a different past session.
+  // Switch the pinned chat tab to a different past session. <ChatHeader>
+  // closes its own popover before invoking this, so no dropdown state here.
   const switchToSession = useCallback(async (newSessionId: string): Promise<void> => {
     if (!newSessionId || newSessionId === currentSessionId) {
-      setHistoryOpen(false)
       return
     }
-    setHistoryOpen(false)
     try {
       await daemonCliGet('workspace/set-chat-session', {
         project: projectPath,
@@ -991,17 +971,37 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     }
   }, [])
 
+  // Shared header (agent name + session dropdown + refresh). Rendered in the
+  // breaker-tripped failure state too — so a chat that keeps crashing on load
+  // never traps the user: the dropdown stays visible + clickable, letting them
+  // switch to a different past session. The failure message + Retry render in
+  // the content area BELOW the header, not over it. (Uses the same ChatHeader
+  // as the daemon-owned path; `switchToSession` is the legacy switch handler.)
+  const header = (
+    <ChatHeader
+      displayName={displayName}
+      projectPath={projectPath}
+      currentSessionId={currentSessionId}
+      onRefresh={() => void handleRefresh()}
+      refreshing={refreshing}
+      onSwitchSession={(sid) => void switchToSession(sid)}
+    />
+  )
+
   if (breakerTripped) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center">
-        <div className="text-xs font-semibold text-[var(--color-text-primary)]">
-          Chat session failed to start
+      <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+        {header}
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="text-xs font-semibold text-[var(--color-text-primary)]">
+            Chat session failed to start
+          </div>
+          <div className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch]">
+            The chat process exited repeatedly right after starting, so K2
+            stopped retrying to avoid a spawn loop. Click Retry to try again.
+          </div>
+          <RetryButton onClick={() => void handleRefresh()} refreshing={refreshing} />
         </div>
-        <div className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch]">
-          The chat process exited repeatedly right after starting, so K2
-          stopped retrying to avoid a spawn loop. Click Retry to try again.
-        </div>
-        <RetryButton onClick={() => void handleRefresh()} refreshing={refreshing} />
       </div>
     )
   }
@@ -1016,93 +1016,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
 
   return (
     <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
-      <div className="px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0 flex items-center gap-3 relative">
-        <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate flex-shrink-0">
-          {displayName}
-        </span>
-        <div className="flex-1" />
-        <button
-          type="button"
-          onClick={() => setHistoryOpen((v) => !v)}
-          title="Switch pinned chat to a different past Claude session"
-          aria-label="Switch pinned chat session"
-          aria-haspopup="listbox"
-          aria-expanded={historyOpen}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer min-w-0"
-        >
-          <span className="truncate max-w-[28ch]">{currentChatTitle}</span>
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0">
-            <path d={historyOpen ? 'M18 15l-6-6-6 6' : 'M6 9l6 6 6-6'} />
-          </svg>
-        </button>
-        {historyOpen && (
-          <div
-            role="listbox"
-            className="absolute right-12 top-full mt-1 z-20 w-[36ch] max-h-[60vh] overflow-y-auto bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl py-1"
-          >
-            {historySessions.length === 0 ? (
-              <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
-                No past sessions yet.
-              </div>
-            ) : (
-              historySessions.map((s) => {
-                const isCurrent = s.sessionId === currentSessionId
-                return (
-                  <button
-                    key={s.sessionId}
-                    type="button"
-                    role="option"
-                    aria-selected={isCurrent}
-                    onClick={() => void switchToSession(s.sessionId)}
-                    className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 transition-colors no-drag cursor-pointer ${
-                      isCurrent
-                        ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'
-                    }`}
-                  >
-                    <span className="flex-1 truncate">{s.title || 'Untitled chat'}</span>
-                    <span className="flex-shrink-0 text-[9px] text-[var(--color-text-muted)] opacity-70">
-                      {s.messageCount}
-                    </span>
-                    {isCurrent && (
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0 text-[var(--color-accent)]">
-                        <path d="M5 12l5 5 9-11" />
-                      </svg>
-                    )}
-                  </button>
-                )
-              })
-            )}
-          </div>
-        )}
-        <button
-          type="button"
-          onClick={() => void handleRefresh()}
-          disabled={refreshing}
-          title="Restart chat session — kills the current Claude process and spawns a fresh resume. Use after typing `exit` or when the session is unresponsive."
-          aria-label="Refresh chat session"
-          className="inline-flex items-center justify-center h-5 w-5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className={refreshing ? 'animate-spin' : ''}
-            aria-hidden="true"
-          >
-            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-            <path d="M3 3v5h5" />
-            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-            <path d="M16 16h5v5" />
-          </svg>
-        </button>
-      </div>
+      {header}
       <div className="flex-1 min-h-0">
         <TerminalPane
           key={refreshNonce}

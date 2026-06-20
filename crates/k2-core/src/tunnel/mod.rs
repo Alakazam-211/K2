@@ -16,7 +16,7 @@
 //! contract.
 //!
 //! Modules:
-//!   * [`config`]    — `~/.k2so/tunnel.json` (the secret token lives here).
+//!   * [`config`]    — `~/.k2/tunnel.json` (the secret token lives here).
 //!   * [`render`]    — frpc v0.61 TOML renderer.
 //!   * [`connector`] — spawn / supervise / stop the `frpc` child, and
 //!                     drive the daemon-owned subdomain lease renewal
@@ -25,18 +25,26 @@
 //!                     daemon re-POSTs the `claim_subdomain` RPC on its own
 //!                     timer so the lease never lapses with the UI closed
 //!                     or the daemon headless.
+//!   * [`tls`]       — E2E TLS material: ECDSA key, CSR, rustls ServerConfig
+//!                     (PRD `k2-connect-e2e-encryption.md` §4/§6).
+//!   * [`cert_broker`] — E2E cert-broker client: POST the CSR to
+//!                     `cert.k2.dev/cert`, install the issued chain, and
+//!                     report renewal timing (PRD §5/§6).
 //!
 //! Public facade ([`start_tunnel`] / [`stop_tunnel`] / [`tunnel_status`])
 //! is what the daemon's `/cli/tunnel/*` routes call.
 
 use serde::{Deserialize, Serialize};
 
+pub mod cert_broker;
 pub mod config;
 pub mod connector;
 pub mod lease;
 pub mod render;
+pub mod subdomains;
+pub mod tls;
 
-pub use config::TunnelConfig;
+pub use config::{e2e_enabled, TunnelConfig};
 pub use connector::{FrpcBinary, TunnelStatus};
 
 /// Redacted view of the tunnel config for the UI. NEVER carries the
@@ -157,16 +165,19 @@ pub fn tunnel_status() -> TunnelStatus {
 }
 
 /// Render the frpc TOML for the stored config + given local port, without
-/// spawning anything. Handy for diagnostics / `--dry-run`.
+/// spawning anything. Handy for diagnostics / `--dry-run`. Reflects the
+/// current E2E flag ([`config::e2e_enabled`]) so the dry-run output matches
+/// what `start_tunnel` would actually write.
 pub fn render_config(local_port: u16) -> Result<String, String> {
     let cfg = config::load()?;
-    Ok(render::render_frpc_toml(&cfg, local_port))
+    let e2e = config::e2e_enabled(&cfg);
+    Ok(render::render_frpc_toml(&cfg, local_port, e2e))
 }
 
 #[cfg(test)]
 pub(crate) mod test_support {
     //! Shared test scaffolding. Tunnel tests touch `$HOME` (config +
-    //! frpc.toml + log all live under `~/.k2so/`), so they must
+    //! frpc.toml + log all live under `~/.k2/`), so they must
     //! serialize and redirect HOME to a tempdir. We reuse the crate-wide
     //! `themes::HOME_LOCK` so we never race the other HOME-mutating test
     //! suites (app_settings, themes, companion).

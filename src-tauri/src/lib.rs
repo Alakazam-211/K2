@@ -615,28 +615,23 @@ pub fn run() {
         .menu(|handle| menu::create_menu(handle))
         .on_menu_event(menu::handle_menu_event)
         .setup(|app| {
-            // 0.40.1 — CLI symlink heal: a pre-0.40 install symlinked
-            // only /usr/local/bin/k2so. The updated bundle's k2so is a
-            // shim that needs its `k2` sibling on disk, and users expect
-            // the `k2` command after the rename anyway. When we see the
-            // old-install shape (k2so present, k2 absent), run the same
-            // install flow as Settings → Install CLI — direct symlink if
-            // /usr/local/bin is user-writable, otherwise ONE admin
-            // password prompt. Spawned off-thread: osascript blocks on
-            // the dialog and setup must not. Re-asks at most once per
-            // launch until healed (cancelling leaves k2so scripts broken,
-            // so staying quiet would be worse).
-            {
-                let legacy = std::path::Path::new("/usr/local/bin/k2so");
-                let new_cli = std::path::Path::new("/usr/local/bin/k2");
-                if legacy.is_symlink() && !new_cli.exists() && !new_cli.is_symlink() {
-                    std::thread::spawn(|| {
-                        match crate::commands::settings::cli_install() {
-                            Ok(path) => eprintln!("[boot] CLI heal: k2 + k2so symlinks installed at {path}"),
-                            Err(e) => eprintln!("[boot] CLI heal skipped/declined: {e}"),
-                        }
-                    });
-                }
+            // 0.40.1 — CLI symlink heal. Re-install `/usr/local/bin/k2`
+            // (+ the k2so shim) when the symlink is missing, OR broken, OR
+            // points at a different bundle than the one running. The
+            // last case is the common 0.40.x one: a user who replaced
+            // K2SO.app with a fresh K2.app leaves the symlink dangling at
+            // the deleted K2SO.app, which shows up as `CLI Version: v?`.
+            // Same install flow as Settings → Install CLI — direct symlink
+            // if /usr/local/bin is user-writable, else ONE admin prompt.
+            // Spawned off-thread (osascript blocks on the dialog; setup
+            // must not). Re-asks at most once per launch until healed.
+            if crate::commands::settings::cli_symlink_needs_heal() {
+                std::thread::spawn(|| {
+                    match crate::commands::settings::cli_install() {
+                        Ok(path) => eprintln!("[boot] CLI heal: k2 + k2so symlinks (re)installed at {path}"),
+                        Err(e) => eprintln!("[boot] CLI heal skipped/declined: {e}"),
+                    }
+                });
             }
 
             // 0.40.0 — retire com.k2so.* LaunchAgents (the daemon plist
@@ -1237,6 +1232,11 @@ pub fn run() {
             // K2 Connect remote-files Phase 2 — read a LOCAL dropped
             // file's bytes (base64) for upload to the remote daemon.
             commands::local_upload::read_local_file_base64,
+            // GH #3 — streaming "Clone to" for large bundles: size probe +
+            // ranged read so the renderer can chunk a multi-GB bundle to
+            // `/cli/fs/upload-chunk` without holding it in memory.
+            commands::local_upload::local_file_size,
+            commands::local_upload::read_local_file_range,
             // 0.37.9 — macOS permissions surface for Settings UI
             commands::permissions::permissions_get_status,
             commands::permissions::permissions_request_full_disk_access,

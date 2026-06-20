@@ -1,7 +1,7 @@
 //! Skill upgrade protocol (universal).
 //!
 //! Every generated SKILL.md is wrapped with frontmatter
-//! (`k2so_skill`, `skill_version`, `skill_checksum`) and MANAGED
+//! (`k2_skill`, `skill_version`, `skill_checksum`) and MANAGED
 //! markers. On startup, [`ensure_skill_up_to_date`] compares the
 //! stamped version + checksum to the current generator output; if
 //! the managed region is unmodified we rewrite it in place when the
@@ -21,11 +21,8 @@
 //! - [`SKILL_VERSION_CUSTOM_AGENT`] — Custom mode single-agent.
 //! - [`SKILL_VERSION_TEMPLATE`] — Sub-agent template delegated to by
 //!   a manager.
-//! - [`SKILL_VERSION_WORKSPACE`] — Workspace-root SKILL.md (./CLAUDE.md
-//!   symlink target). Splits K2SO-managed content (inside BEGIN/END
-//!   markers) from user-editable PROJECT.md / AGENT.md bodies (inside
-//!   SOURCE sub-regions below END). Drift inside SOURCE regions is
-//!   adopted back to the source file on each regen.
+//! - [`SKILL_VERSION_WORKSPACE`] — version tier for the loadable
+//!   `k2-cli` skill that ships with every workspace.
 
 use std::fs;
 use std::path::Path;
@@ -35,25 +32,8 @@ use crate::log_debug;
 
 // ── Managed region markers ────────────────────────────────────────────
 
-pub const SKILL_BEGIN_MARKER: &str = "<!-- K2SO:MANAGED:BEGIN -->";
-pub const SKILL_END_MARKER: &str = "<!-- K2SO:MANAGED:END -->";
-
-/// Sub-region markers for the area BELOW the MANAGED:END marker.
-/// Content inside SOURCE regions is sourced from user-editable files
-/// (PROJECT.md, AGENT.md) and adopted back into those files on each
-/// regen when drift is detected. Anything below END but outside a
-/// SOURCE region is "freeform tail" — preserved across regens but not
-/// adopted anywhere.
-pub const SKILL_SOURCE_PROJECT_MD_BEGIN: &str = "<!-- K2SO:SOURCE:PROJECT_MD:BEGIN -->";
-pub const SKILL_SOURCE_PROJECT_MD_END: &str = "<!-- K2SO:SOURCE:PROJECT_MD:END -->";
-
-pub fn skill_source_agent_md_begin(name: &str) -> String {
-    format!("<!-- K2SO:SOURCE:AGENT_MD name={}:BEGIN -->", name)
-}
-
-pub fn skill_source_agent_md_end(name: &str) -> String {
-    format!("<!-- K2SO:SOURCE:AGENT_MD name={}:END -->", name)
-}
+pub const SKILL_BEGIN_MARKER: &str = "<!-- K2:MANAGED:BEGIN -->";
+pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 
 // ── Version constants ────────────────────────────────────────────────
 
@@ -110,14 +90,14 @@ pub fn wrap_managed_skill(
         .map(|s| format!("\n{}", s.trim_end()))
         .unwrap_or_default();
     format!(
-        "---\nk2so_skill: {skill_type}\nskill_version: {version}\nskill_checksum: {checksum}{extras}\n---\n\n{begin}\n{trimmed}\n{end}\n\n<!-- Content below this line is yours — K2SO will never modify it. -->\n",
+        "---\nk2_skill: {skill_type}\nskill_version: {version}\nskill_checksum: {checksum}{extras}\n---\n\n{begin}\n{trimmed}\n{end}\n\n<!-- Content below this line is yours — K2 will never modify it. -->\n",
         begin = SKILL_BEGIN_MARKER,
         end = SKILL_END_MARKER,
     )
 }
 
 pub struct ParsedSkill {
-    pub k2so_skill: Option<String>,
+    pub k2_skill: Option<String>,
     pub skill_version: Option<u32>,
     pub skill_checksum: Option<String>,
     /// Frontmatter lines OTHER than our upgrade keys — preserved on
@@ -135,7 +115,7 @@ pub struct ParsedSkill {
 
 pub fn parse_skill(content: &str) -> ParsedSkill {
     let mut parsed = ParsedSkill {
-        k2so_skill: None,
+        k2_skill: None,
         skill_version: None,
         skill_checksum: None,
         extra_frontmatter: String::new(),
@@ -154,7 +134,7 @@ pub fn parse_skill(content: &str) -> ParsedSkill {
                     let k = key.trim();
                     let v = value.trim();
                     match k {
-                        "k2so_skill" => parsed.k2so_skill = Some(v.to_string()),
+                        "k2_skill" => parsed.k2_skill = Some(v.to_string()),
                         "skill_version" => parsed.skill_version = v.parse().ok(),
                         "skill_checksum" => parsed.skill_checksum = Some(v.to_string()),
                         _ if !k.is_empty() && !v.is_empty() => {
@@ -237,7 +217,7 @@ pub fn ensure_skill_up_to_date(
 
     // Fast path: already on the current contract.
     if parsed.has_markers
-        && parsed.k2so_skill.as_deref() == Some(skill_type)
+        && parsed.k2_skill.as_deref() == Some(skill_type)
         && parsed.skill_version == Some(current_version)
     {
         return SkillUpgradeOutcome::UpToDate;
@@ -247,10 +227,10 @@ pub fn ensure_skill_up_to_date(
     //   (a) our own pre-0.32.4 generator output (replace entirely —
     //       keeping it would duplicate the content we're about to
     //       write), or
-    //   (b) user-custom content with no K2SO signature (preserve as
+    //   (b) user-custom content with no K2 signature (preserve as
     //       tail so nothing is lost).
     // Distinguish by the first H1 after any legacy frontmatter:
-    // starts with "# K2SO " → ours, otherwise user content.
+    // starts with "# K2 " → ours, otherwise user content.
     if !parsed.has_markers {
         let after_fm: &str = if existing.starts_with("---") {
             existing[3..]
@@ -264,7 +244,7 @@ pub fn ensure_skill_up_to_date(
             existing.trim_start_matches(|c: char| c.is_whitespace())
         };
         let first_h1 = after_fm.lines().find(|l| l.starts_with("# ")).unwrap_or("");
-        let is_our_legacy_output = first_h1.starts_with("# K2SO ");
+        let is_our_legacy_output = first_h1.starts_with("# K2 ");
 
         let wrapped =
             wrap_managed_skill(skill_type, current_version, fresh_body, extra_frontmatter);
@@ -341,10 +321,10 @@ mod tests {
 
     #[test]
     fn wrap_roundtrips_through_parse() {
-        let body = "# K2SO Agent: foo\n\nBody content.";
+        let body = "# K2 Agent: foo\n\nBody content.";
         let wrapped = wrap_managed_skill("custom_agent", 7, body, None);
         let parsed = parse_skill(&wrapped);
-        assert_eq!(parsed.k2so_skill.as_deref(), Some("custom_agent"));
+        assert_eq!(parsed.k2_skill.as_deref(), Some("custom_agent"));
         assert_eq!(parsed.skill_version, Some(7));
         assert!(parsed.has_markers);
         assert_eq!(parsed.managed_region.as_deref(), Some(body));
@@ -363,7 +343,7 @@ mod tests {
         assert!(parsed.extra_frontmatter.contains("description: react + ts"));
         // Upgrade keys should NOT appear in extras.
         assert!(!parsed.extra_frontmatter.contains("skill_version"));
-        assert!(!parsed.extra_frontmatter.contains("k2so_skill"));
+        assert!(!parsed.extra_frontmatter.contains("k2_skill"));
     }
 
     #[test]
@@ -374,13 +354,18 @@ mod tests {
     }
 
     #[test]
-    fn source_agent_md_markers_roundtrip() {
-        let begin = skill_source_agent_md_begin("frontend-eng");
-        let end = skill_source_agent_md_end("frontend-eng");
-        assert!(begin.contains("name=frontend-eng"));
-        assert!(begin.contains("BEGIN"));
-        assert!(end.contains("name=frontend-eng"));
-        assert!(end.contains("END"));
+    fn managed_markers_use_k2_brand() {
+        // Brand cutover: markers carry the `K2:` prefix, not `K2SO:`.
+        assert_eq!(SKILL_BEGIN_MARKER, "<!-- K2:MANAGED:BEGIN -->");
+        assert_eq!(SKILL_END_MARKER, "<!-- K2:MANAGED:END -->");
+    }
+
+    #[test]
+    fn frontmatter_key_is_k2_skill() {
+        // The upgrade-tracking frontmatter key is `k2_skill` on write.
+        let wrapped = wrap_managed_skill("workspace", 1, "# K2 body", None);
+        assert!(wrapped.contains("k2_skill: workspace"));
+        assert!(!wrapped.contains("k2so_skill"));
     }
 
     #[test]

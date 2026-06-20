@@ -3,7 +3,7 @@
 //! Covers:
 //!   - Spawn → publish N frames → exit → N lines in archive.ndjson
 //!     each deserializes back to the original frame
-//!   - File path shape: `<project>/.k2so/sessions/<id>/archive.ndjson`
+//!   - File path shape: `<project>/.k2/sessions/<id>/archive.ndjson`
 //!   - Writer exits naturally when SessionEntry's sender drops
 //!   - File appended, not truncated (two runs on the same path
 //!     coexist)
@@ -77,7 +77,7 @@ async fn spawn_and_publish_creates_ndjson_with_one_line_per_frame() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 
     let archive_path = project
-        .join(".k2so/sessions")
+        .join(".k2/sessions")
         .join(session_id.to_string())
         .join("archive.ndjson");
     assert!(archive_path.exists(), "archive not created: {archive_path:?}");
@@ -125,10 +125,10 @@ async fn archive_survives_across_multiple_writer_lifetimes() {
     let _ = tokio::time::timeout(Duration::from_secs(2), hb).await;
 
     let a_lines = read_archive_lines(
-        &project.join(".k2so/sessions").join(id_a.to_string()).join("archive.ndjson"),
+        &project.join(".k2/sessions").join(id_a.to_string()).join("archive.ndjson"),
     );
     let b_lines = read_archive_lines(
-        &project.join(".k2so/sessions").join(id_b.to_string()).join("archive.ndjson"),
+        &project.join(".k2/sessions").join(id_b.to_string()).join("archive.ndjson"),
     );
     assert_eq!(a_lines.len(), 2);
     assert_eq!(b_lines.len(), 1);
@@ -167,7 +167,7 @@ async fn archive_appends_across_two_runs_on_same_session_id() {
     }
 
     let archive_path = project
-        .join(".k2so/sessions")
+        .join(".k2/sessions")
         .join(session_id.to_string())
         .join("archive.ndjson");
     let lines = read_archive_lines(&archive_path);
@@ -199,7 +199,7 @@ async fn semantic_event_frames_round_trip_through_archive() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 
     let path = project
-        .join(".k2so/sessions")
+        .join(".k2/sessions")
         .join(session_id.to_string())
         .join("archive.ndjson");
     let lines = read_archive_lines(&path);
@@ -227,7 +227,7 @@ async fn empty_session_produces_empty_archive_file() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 
     let path = project
-        .join(".k2so/sessions")
+        .join(".k2/sessions")
         .join(session_id.to_string())
         .join("archive.ndjson");
     assert!(path.exists(), "even empty sessions should create the file");
@@ -262,7 +262,7 @@ async fn active_segment_rotates_past_boundary() {
     let project = tmp_project("rotate");
     let session_id = SessionId::new();
     let archive_dir = project
-        .join(".k2so/sessions")
+        .join(".k2/sessions")
         .join(session_id.to_string());
     std::fs::create_dir_all(&archive_dir).unwrap();
     let active = archive_dir.join("archive.ndjson");
@@ -316,7 +316,7 @@ async fn rotation_index_increments_across_multiple_rotations() {
     let project = tmp_project("rotate-multi");
     let session_id = SessionId::new();
     let archive_dir = project
-        .join(".k2so/sessions")
+        .join(".k2/sessions")
         .join(session_id.to_string());
     std::fs::create_dir_all(&archive_dir).unwrap();
     std::fs::write(archive_dir.join("archive.000.ndjson"), b"old-0\n").unwrap();
@@ -356,7 +356,7 @@ async fn aggregate_hard_limit_freezes_writes_but_keeps_session_alive() {
     let project = tmp_project("aggregate-freeze");
     let session_id = SessionId::new();
     let archive_dir = project
-        .join(".k2so/sessions")
+        .join(".k2/sessions")
         .join(session_id.to_string());
     std::fs::create_dir_all(&archive_dir).unwrap();
 
@@ -410,7 +410,7 @@ fn rotated_uncompressed_segments_skips_active_and_gzipped() {
     let project = tmp_project("compact-enumeration");
     let session_id = SessionId::new();
     let dir = project
-        .join(".k2so/sessions")
+        .join(".k2/sessions")
         .join(session_id.to_string());
     std::fs::create_dir_all(&dir).unwrap();
 

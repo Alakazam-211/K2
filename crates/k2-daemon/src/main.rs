@@ -80,6 +80,7 @@ mod terminal_lifecycle_routes;
 mod terminal_routes;
 mod themes_routes;
 mod triage;
+mod tunnel_tls_listener;
 mod update_routes;
 mod v2_session_map;
 mod v2_spawn;
@@ -504,6 +505,14 @@ async fn async_main() {
     // hook in `src-tauri/src/lib.rs`; relocating to the daemon means
     // they fire on `launchctl bootstrap` boots even when Tauri is
     // closed, and on remote daemons that have no Tauri at all.
+
+    // 0.40.4 cutover — rename every registered workspace's legacy `.k2so/`
+    // dot-dir to `.k2/` and re-point its harness fan-out symlinks. Runs
+    // FIRST so every subsequent boot sweep (unification, slug repair, skill
+    // regen) sees the `.k2/` layout. Idempotent; skips workspaces that
+    // already have `.k2/`.
+    run_migrate_k2so_dot_dirs();
+
     run_workspace_legacy_migrations_sweep();
 
     // GH#25 (0.39.44) self-heal — migrate session dirs an EARLIER K2SO
@@ -690,6 +699,25 @@ async fn async_main() {
     // (#663 boot-survivor gap, daemon-side). Spawned after the
     // readiness gate opens so it operates against fully-migrated state.
     let _active_reaper_handle = active_reaper::spawn();
+
+    // K2 Connect E2E (PRD `k2-connect-e2e-encryption.md` §4 Option A) —
+    // when `K2_E2E` is on, stand up a SECOND listener that terminates TLS
+    // itself for `<sub>.k2.dev` and splices the decrypted stream to the
+    // cleartext HTTP listener above, so the relay carries only ciphertext.
+    // MUST run BEFORE `maybe_autostart_tunnel` so the HTTPS port is
+    // published when the connector renders frpc's `localPort`. A no-op when
+    // E2E is off (the default) → zero behaviour change. Fully fault-
+    // isolated: any failure is logged and swallowed so it can never take
+    // the daemon down.
+    match tunnel_tls_listener::maybe_spawn(port).await {
+        Ok(Some(https_port)) => {
+            log_debug!("[daemon/e2e] E2E HTTPS listener active on port {https_port}")
+        }
+        Ok(None) => { /* E2E off — the common case, no log noise */ }
+        Err(e) => log_debug!(
+            "[daemon/e2e] E2E listener did not start (tunnel falls back to HTTP path; daemon unaffected): {e}"
+        ),
+    }
 
     // K2 Connect — re-launch the frpc tunnel on boot when the user opted
     // in (tunnel.json `auto_start: true`) AND the config is connectable.
@@ -1142,6 +1170,76 @@ fn run_enable_fanout_for_enabled_agents_migration() {
 /// legacy slug, only for paths whose two encodings diverge). Runs every
 /// boot, immediately BEFORE the #23 embedded-cwd repair so migrated files
 /// are also cwd-rewritten in the same boot.
+/// 0.40.4 cutover — rename every registered workspace's legacy `.k2so/`
+/// dot-dir to `.k2/` and re-point the harness fan-out symlinks that
+/// targeted it (see [`k2_core::workspace::dot_dir_migration`]). Idempotent:
+/// a workspace that already has `.k2/` is skipped untouched, so this is
+/// safe to run every boot and also converts any `.k2so/` workspace a user
+/// clones/adds after this release.
+fn run_migrate_k2so_dot_dirs() {
+    let project_paths: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match k2_core::db::schema::Project::list(&conn) {
+            Ok(rows) => rows.into_iter().map(|p| p.path).collect(),
+            Err(e) => {
+                log_debug!(
+                    "[daemon/dotdir] WARN: list projects: {e}; skipping .k2so->.k2 cutover"
+                );
+                return;
+            }
+        }
+    };
+
+    let mut renamed = 0usize;
+    let mut symlinks = 0usize;
+    let mut temps_swept = 0usize;
+    for path in &project_paths {
+        let root = std::path::Path::new(path);
+        // Skip the daemon's RELATIVE pseudo-projects (`_broadcast`,
+        // `_orphan`) — they're not real on-disk workspaces, and resolving a
+        // relative path against the daemon's cwd could touch an unrelated dir.
+        if !root.is_absolute() || !root.exists() {
+            continue;
+        }
+        let outcome =
+            k2_core::workspace::dot_dir_migration::migrate_workspace_dot_dir(root);
+        if outcome.renamed {
+            renamed += 1;
+            symlinks += outcome.symlinks_repointed;
+            log_debug!(
+                "[daemon/dotdir] {} : .k2so -> .k2 ({} symlink(s) re-pointed)",
+                path,
+                outcome.symlinks_repointed,
+            );
+        } else if let Some(reason) = outcome.skipped {
+            // Only the conflict case is worth a warning; "no legacy" is the
+            // common already-migrated path and stays quiet.
+            if reason.starts_with("both") {
+                log_debug!("[daemon/dotdir] WARN: {} : {}", path, reason);
+            }
+        }
+        // Tempfile hygiene runs for EVERY workspace every boot (idempotent),
+        // not just freshly-renamed ones: reap atomic-write tempfiles a prior
+        // hard-kill orphaned under `.k2/`. Git-ignore state is intentionally
+        // left to the behavior-preserving twin (`rewrite_gitignore_dot_dir`) —
+        // `.k2/` is ignored only where `.k2so/` already was.
+        temps_swept +=
+            k2_core::workspace::dot_dir_migration::ensure_dot_dir_hygiene(root);
+    }
+    if renamed > 0 {
+        log_debug!(
+            "[daemon/dotdir] 0.40.4 cutover: renamed {renamed} workspace(s) \
+             .k2so -> .k2 ({symlinks} symlink(s) re-pointed)"
+        );
+    }
+    if temps_swept > 0 {
+        log_debug!(
+            "[daemon/dotdir] hygiene: swept {temps_swept} orphaned tempfile(s)"
+        );
+    }
+}
+
 fn run_migrate_legacy_slug_dirs() {
     let home = match dirs::home_dir() {
         Some(h) => h,
@@ -1486,12 +1584,14 @@ fn migrate_orphaned_agent_heartbeats() {
         if !std::path::Path::new(&project.path).exists() {
             continue;
         }
-        let project_root = std::path::Path::new(&project.path);
-        let orphan_root = project_root.join(".k2so/agent/heartbeats");
+        // Resolver-anchored so a post-cutover `.k2/` workspace is inspected at
+        // `.k2/agent/heartbeats` (and never has a stray `.k2so/` rebuilt here).
+        let dot_dir = k2_core::workspace_dot_dir(&project.path);
+        let orphan_root = dot_dir.join("agent/heartbeats");
         if !orphan_root.exists() {
             continue;
         }
-        let workspace_hb_root = project_root.join(".k2so/heartbeats");
+        let workspace_hb_root = dot_dir.join("heartbeats");
         if let Err(e) = fs::create_dir_all(&workspace_hb_root) {
             log_debug!(
                 "[daemon/unification] WARN: create {workspace_hb_root:?}: {e}"

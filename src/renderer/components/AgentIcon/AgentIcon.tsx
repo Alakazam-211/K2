@@ -23,6 +23,7 @@ import gooseSvg from '@/assets/llm-icons/goose.svg?raw'
 import ollamaSvg from '@/assets/llm-icons/ollama.svg?raw'
 import opencodeSvg from '@/assets/llm-icons/opencode.svg?raw'
 import piSvg from '@/assets/llm-icons/pi.svg?raw'
+import hermesSvg from '@/assets/llm-icons/hermes.svg?raw'
 import interpreterSvg from '@/assets/llm-icons/interpreter.svg?raw'
 
 interface AgentIconProps {
@@ -47,6 +48,7 @@ const LOBE_ICON_RULES: Array<{ match: string | RegExp; svg: string }> = [
   { match: 'ollama', svg: ollamaSvg },
   { match: 'opencode', svg: opencodeSvg },
   { match: 'interpreter', svg: interpreterSvg },
+  { match: 'hermes', svg: hermesSvg },
   { match: /\bpi\b/, svg: piSvg },
 ]
 

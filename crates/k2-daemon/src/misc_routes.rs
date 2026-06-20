@@ -57,8 +57,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                             // (or boot sweep) handle it.
                             let bot_mode = matches!(mode.as_str(),
                                 "custom" | "manager" | "k2so");
-                            let agent_md = std::path::PathBuf::from(&p)
-                                .join(".k2so/agent/AGENT.md");
+                            let agent_md =
+                                k2_core::workspace_dot_dir(&p).join("agent/AGENT.md");
                             let mut ensure_summary = serde_json::Value::Null;
                             if bot_mode && agent_md.exists() {
                                 match crate::canonical_session::ensure_canonical_session(&p) {

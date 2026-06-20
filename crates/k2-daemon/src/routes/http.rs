@@ -64,6 +64,23 @@ pub(crate) fn token_ok(query: &str, owner_token: &str) -> bool {
     k2_core::connect_users::validate_session(tok).is_some()
 }
 
+/// Re-validate an ALREADY-EXTRACTED token mid-connection — the long-lived
+/// WS loops (`/cli/sessions/grid`, `/cli/sessions/events`) call this on a
+/// timer so a connect-user who is disabled/removed/role-changed (which
+/// `revoke_user_sessions` drops from the in-memory session map) is kicked
+/// off their LIVE socket, not just blocked on the next new request. The
+/// owner token is never revoked, so it always re-validates. Empty never
+/// authorizes (mirrors [`token_ok`]).
+pub(crate) fn token_still_valid(token: &str, owner_token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    if token == owner_token {
+        return true;
+    }
+    k2_core::connect_users::validate_session(token).is_some()
+}
+
 /// Resolve the effective permission [`Role`](k2_core::connect_users::Role)
 /// for a request's `?token=` (K2SO #629).
 ///

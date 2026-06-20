@@ -49,7 +49,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.model-status', section: 'general', label: 'Model Status', description: 'Current local LLM load state', keywords: ['model', 'llm', 'loaded', 'download'] },
   { id: 'general.download-model', section: 'general', label: 'Download Default Model', description: 'Fetch Qwen2.5-1.5B locally (~1.1GB)', keywords: ['download', 'model', 'qwen', 'local llm'] },
   { id: 'general.custom-model', section: 'general', label: 'Custom Model', description: 'Point at any GGUF model file', keywords: ['model', 'gguf', 'custom', 'load'] },
-  { id: 'general.config-location', section: 'general', label: 'Config Location', description: '~/.k2so/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
+  { id: 'general.config-location', section: 'general', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
   { id: 'general.reset-all', section: 'general', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
 ]
 
@@ -220,7 +220,7 @@ export function GeneralSection(): React.JSX.Element {
 
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
           <span className="text-xs text-[var(--color-text-secondary)]">Config Location</span>
-          <span className="text-xs text-[var(--color-text-muted)]">~/.k2so/settings.json</span>
+          <span className="text-xs text-[var(--color-text-muted)]">~/.k2/settings.json</span>
         </div>
 
         <div className="pt-4">

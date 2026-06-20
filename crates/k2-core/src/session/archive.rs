@@ -11,7 +11,7 @@
 //! on this task's subscription, which the writer logs and continues
 //! past.
 //!
-//! **File layout** (`<project>/.k2so/sessions/<session-id>/`):
+//! **File layout** (`<project>/.k2/sessions/<session-id>/`):
 //!
 //! ```text
 //! archive.ndjson           ← active segment; new frames append here
@@ -100,7 +100,7 @@ pub fn spawn(
 
 /// Spawn a byte-archive writer task for `session_id`. Parallel to
 /// `spawn` but subscribes to the Session's raw byte broadcast and
-/// appends each chunk to `<project>/.k2so/sessions/<id>/archive.bytes`.
+/// appends each chunk to `<project>/.k2/sessions/<id>/archive.bytes`.
 ///
 /// **No rotation, no framing.** The file is an append-only recording
 /// of the PTY's output, byte-identical to what the child process
@@ -136,8 +136,8 @@ pub async fn run_bytes(
     mut rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
     project_root: PathBuf,
 ) -> std::io::Result<()> {
-    let archive_dir = project_root
-        .join(".k2so/sessions")
+    let archive_dir = crate::workspace_dot_dir(&project_root)
+        .join("sessions")
         .join(session_id.to_string());
     tokio::fs::create_dir_all(&archive_dir).await?;
     let bytes_path = archive_dir.join("archive.bytes");
@@ -208,8 +208,8 @@ pub async fn run(
     mut rx: tokio::sync::broadcast::Receiver<Frame>,
     project_root: PathBuf,
 ) -> std::io::Result<()> {
-    let archive_dir = project_root
-        .join(".k2so/sessions")
+    let archive_dir = crate::workspace_dot_dir(&project_root)
+        .join("sessions")
         .join(session_id.to_string());
     tokio::fs::create_dir_all(&archive_dir).await?;
     let active_path = archive_dir.join("archive.ndjson");

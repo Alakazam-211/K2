@@ -1,9 +1,9 @@
 {
   "name": "k2",
-  "version": "0.40.3",
+  "version": "0.40.5",
   "description": "Developer workspace with terminal panes, git worktrees, and agent presets",
   "author": "Alakazam Labs",
-  "license": "MIT",
+  "license": "FSL-1.1-Apache-2.0",
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",

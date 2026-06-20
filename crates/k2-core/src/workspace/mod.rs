@@ -29,6 +29,7 @@ pub mod lifecycle;
 // Phase 2.5d: boot-time idempotent migration helpers, extracted from
 // the monolithic `agents/workspace.rs`.
 pub mod migrations;
+pub mod dot_dir_migration;
 pub mod onboarding;
 // Phase 2.5e: `claude --resume` / `--session-id` arg resolver for the
 // workspace's canonical chat session. Relocated from

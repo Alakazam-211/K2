@@ -36,12 +36,13 @@ const BUILT_IN_PRESETS: &[(&str, &str, &str, &str, i64)] = &[
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 2),
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 3),
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", "", 4),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 5),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 6),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 7),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 8),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 9),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 10),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", "", 5),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 6),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 7),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 8),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 9),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 10),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 11),
 ];
 
 // ── States (workspace states) ──────────────────────────────────────────
@@ -650,21 +651,30 @@ pub struct TabTitle {
     pub project_id: String,
     pub tab_id: String,
     pub title: String,
+    /// When true, the user explicitly renamed this tab — program-
+    /// generated PTY titles must NOT overwrite it. Stored as INTEGER
+    /// 0/1 (0053).
+    pub locked: bool,
 }
 
 /// Upsert a daemon-canonical tab title keyed by (project_id, tab_id).
 /// Replaces the renderer-local-only `setTabTitle`. The route layer
 /// broadcasts `TabTitleChanged` after this returns so other clients
 /// converge.
-pub fn tab_title_set(project_id: &str, tab_id: &str, title: &str) -> Result<(), String> {
+pub fn tab_title_set(
+    project_id: &str,
+    tab_id: &str,
+    title: &str,
+    locked: bool,
+) -> Result<(), String> {
     let db = db::shared();
     let conn = db.lock();
     conn.execute(
-        "INSERT INTO tab_titles (project_id, tab_id, title, updated_at)
-         VALUES (?1, ?2, ?3, unixepoch())
+        "INSERT INTO tab_titles (project_id, tab_id, title, locked, updated_at)
+         VALUES (?1, ?2, ?3, ?4, unixepoch())
          ON CONFLICT(project_id, tab_id)
-         DO UPDATE SET title = excluded.title, updated_at = unixepoch()",
-        rusqlite::params![project_id, tab_id, title],
+         DO UPDATE SET title = excluded.title, locked = excluded.locked, updated_at = unixepoch()",
+        rusqlite::params![project_id, tab_id, title, if locked { 1_i64 } else { 0_i64 }],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -677,7 +687,7 @@ pub fn tab_titles_for_project(project_id: &str) -> Result<Vec<TabTitle>, String>
     let conn = db.lock();
     let mut stmt = conn
         .prepare(
-            "SELECT project_id, tab_id, title FROM tab_titles WHERE project_id = ?1 \
+            "SELECT project_id, tab_id, title, locked FROM tab_titles WHERE project_id = ?1 \
              ORDER BY tab_id",
         )
         .map_err(|e| e.to_string())?;
@@ -687,6 +697,7 @@ pub fn tab_titles_for_project(project_id: &str) -> Result<Vec<TabTitle>, String>
                 project_id: row.get(0)?,
                 tab_id: row.get(1)?,
                 title: row.get(2)?,
+                locked: row.get::<_, i64>(3)? != 0,
             })
         })
         .map_err(|e| e.to_string())?
@@ -1053,22 +1064,42 @@ mod tab_title_and_revision_tests {
         seed_project(&project_id);
 
         // Insert.
-        tab_title_set(&project_id, "tab-a", "First").expect("set");
+        tab_title_set(&project_id, "tab-a", "First", false).expect("set");
         let titles = tab_titles_for_project(&project_id).expect("list");
         assert_eq!(titles.len(), 1);
         assert_eq!(titles[0].tab_id, "tab-a");
         assert_eq!(titles[0].title, "First");
 
         // Upsert same key — title replaced, still one row.
-        tab_title_set(&project_id, "tab-a", "Renamed").expect("upsert");
+        tab_title_set(&project_id, "tab-a", "Renamed", false).expect("upsert");
         let titles = tab_titles_for_project(&project_id).expect("list2");
         assert_eq!(titles.len(), 1, "upsert must not add a row");
         assert_eq!(titles[0].title, "Renamed");
 
         // Second tab — two rows now.
-        tab_title_set(&project_id, "tab-b", "Second").expect("set b");
+        tab_title_set(&project_id, "tab-b", "Second", false).expect("set b");
         let titles = tab_titles_for_project(&project_id).expect("list3");
         assert_eq!(titles.len(), 2);
+    }
+
+    #[test]
+    fn tab_title_locked_flag_round_trips() {
+        let _g = TEST_LOCK.lock();
+        let project_id = unique("p");
+        seed_project(&project_id);
+
+        // Default insert is unlocked.
+        tab_title_set(&project_id, "tab-a", "Auto", false).expect("set unlocked");
+        let titles = tab_titles_for_project(&project_id).expect("list");
+        assert_eq!(titles.len(), 1);
+        assert!(!titles[0].locked, "default insert must be unlocked");
+
+        // A user rename locks the tab — sticky against PTY titles.
+        tab_title_set(&project_id, "tab-a", "Mine", true).expect("set locked");
+        let titles = tab_titles_for_project(&project_id).expect("list2");
+        assert_eq!(titles.len(), 1, "upsert must not add a row");
+        assert_eq!(titles[0].title, "Mine");
+        assert!(titles[0].locked, "user rename must persist locked=true");
     }
 
     #[test]

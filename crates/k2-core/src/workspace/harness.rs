@@ -35,28 +35,36 @@ pub use crate::workspace::canonical::{
 };
 
 use crate::skills::writer::force_symlink;
+use crate::workspace::canonical::K2_GENERATED_SIGNATURE;
 use crate::workspace::wake_prompts::strip_frontmatter;
 use crate::fs_atomic::{atomic_write_str, log_if_err};
 use crate::workspace::migrations::{
     archive_claude_md_file, harvest_per_agent_claude_md_files,
     inject_first_migration_banner,
 };
-use crate::workspace::skill_regen::{import_claude_md_into_user_notes, write_workspace_skill_file};
+use crate::workspace::skill_regen::write_workspace_skill_file;
 
 // ══════════════════════════════════════════════════════════════════════
 // Constants
 // ══════════════════════════════════════════════════════════════════════
 
-/// The six workspace-root files K2SO can take over via symlink / scaffold.
-/// On teardown we walk this list and either freeze the current SKILL.md
-/// body into each as a real file (keep_current mode), or restore the
-/// archive from `.k2so/migration/` (restore_original mode).
+/// The workspace-root files K2 can take over via symlink / scaffold in the
+/// AGENTS.md-canonical shape. On teardown we walk this list and either
+/// freeze the current canonical `.k2/AGENTS.md` body into each as a real
+/// file (keep_current mode), or restore the archive from `.k2/migration/`
+/// (restore_original mode).
+///
+/// `AGENTS.md` is the cross-tool entrypoint (the mirror every tool reads);
+/// `CLAUDE.md` is the Claude Code bridge; `GEMINI.md`, `AGENT.md`,
+/// `.goosehints`, and the Cursor MDC are the remaining harness mirrors.
+/// The old root `SKILL.md` is NO LONGER a managed mirror — the reap
+/// removes that symlink.
 pub const HARNESS_WORKSPACE_FILES: &[&str] = &[
+    "AGENTS.md",
     "CLAUDE.md",
     "GEMINI.md",
     "AGENT.md",
     ".goosehints",
-    "SKILL.md",
     ".cursor/rules/k2so.mdc",
     // NOT .aider.conf.yml — that's a config file with merged entries,
     // handled separately below.
@@ -80,19 +88,19 @@ pub struct WorkspacePreviewEntry {
 // Extended harness file-discovery coverage
 // ══════════════════════════════════════════════════════════════════════
 
-/// Create a symlink for a workspace-root harness file with the contract:
-///   1. Archive the original to `.k2so/migration/` (never destroy).
-///   2. Import its body into SKILL.md's USER_NOTES so the new symlinked
-///      SKILL.md still surfaces the user's accumulated context.
-///   3. Replace the target with the symlink.
+/// Repoint a workspace-root harness file at the canonical `.k2/AGENTS.md`:
+///   1. Archive any pre-existing real file to `.k2/migration/` (never
+///      destroy — recoverable, and the `k2-canonical-agents` AI skill is
+///      the recommended path to fold it into AGENT.md).
+///   2. Replace the target with a symlink to the canonical AGENTS.md.
 ///
-/// Phase 2.5d: `pub(crate)` so the migration-safety tests can exercise
-/// the safe-link contract through Tier A.
+/// `pub(crate)` so the migration-safety tests can exercise the safe-link
+/// contract.
 pub(crate) fn safe_symlink_harness_file(
     canonical: &Path,
     target: &Path,
     project_path: &str,
-    harness_display: &str,
+    _harness_display: &str,
 ) {
     match fs::symlink_metadata(target) {
         Ok(meta) if meta.file_type().is_symlink() => {
@@ -103,21 +111,13 @@ pub(crate) fn safe_symlink_harness_file(
             let filename = target
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or(harness_display)
+                .unwrap_or(_harness_display)
                 .to_string();
-            let archived = archive_claude_md_file(project_path, target, &filename);
-            if !content.trim().is_empty() {
-                let archive_display = archived
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "(archive unavailable)".to_string());
-                import_claude_md_into_user_notes(
-                    project_path,
-                    &content,
-                    &format!("pre-existing {}", harness_display),
-                    &archive_display,
-                );
-            }
+            let archived = if content.trim().is_empty() {
+                None
+            } else {
+                archive_claude_md_file(project_path, target, &filename)
+            };
             force_symlink(canonical, target);
             if let Some(p) = archived {
                 inject_first_migration_banner(project_path, &[p]);
@@ -147,9 +147,9 @@ pub(crate) fn write_workspace_harness_discovery_targets(project_path: &str, cano
     scaffold_aider_conf(project_path);
 }
 
-/// Generate `./.cursor/rules/k2so.mdc` with MDC frontmatter + the
-
-/// canonical SKILL.md body.
+/// Generate `./.cursor/rules/k2so.mdc` with MDC frontmatter + the canonical
+/// `.k2/AGENTS.md` body. A pre-existing user-authored file is archived
+/// (recoverable) before being overwritten.
 fn write_cursor_rules_mdc(project_path: &str, canonical: &Path) {
     let Ok(raw) = fs::read_to_string(canonical) else { return };
     let body = strip_frontmatter(&raw).trim().to_string();
@@ -163,28 +163,16 @@ fn write_cursor_rules_mdc(project_path: &str, canonical: &Path) {
     }
     let target = dir.join("k2so.mdc");
 
-    const K2SO_MDC_SIGNATURE: &str = "k2so_generated: true";
-
     if target.exists() {
         if let Ok(existing) = fs::read_to_string(&target) {
-            let is_our_output = existing.contains(K2SO_MDC_SIGNATURE);
+            let is_our_output = existing.contains(K2_GENERATED_SIGNATURE);
             if !is_our_output {
                 let existing_body = strip_frontmatter(&existing).trim().to_string();
                 if !existing_body.is_empty() {
-                    let archived = archive_claude_md_file(
+                    let _ = archive_claude_md_file(
                         project_path,
                         &target,
                         "cursor/rules/k2so.mdc",
-                    );
-                    let archive_display = archived
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| "(archive unavailable)".to_string());
-                    import_claude_md_into_user_notes(
-                        project_path,
-                        &existing_body,
-                        "pre-existing .cursor/rules/k2so.mdc",
-                        &archive_display,
                     );
                 }
             }
@@ -192,8 +180,8 @@ fn write_cursor_rules_mdc(project_path: &str, canonical: &Path) {
     }
 
     let mdc = format!(
-        "---\n{signature}\ndescription: K2SO workspace context — CLI reference + project context + primary agent persona\nalwaysApply: true\n---\n\n{body}\n",
-        signature = K2SO_MDC_SIGNATURE,
+        "---\n{signature}\ndescription: K2 workspace context — generated from .k2/AGENTS.md (AGENT.md persona + PROJECT.md)\nalwaysApply: true\n---\n\n{body}\n",
+        signature = K2_GENERATED_SIGNATURE,
         body = body,
     );
     log_if_err(
@@ -216,13 +204,13 @@ pub(crate) fn scaffold_aider_conf(project_path: &str) {
             &path,
             atomic_write_str(
                 &path,
-                "# K2SO: ship workspace context to Aider on every session.\nread:\n  - SKILL.md\n",
+                "# K2: ship workspace context to Aider on every session.\nread:\n  - AGENTS.md\n",
             ),
         );
         return;
     }
     let Ok(existing) = fs::read_to_string(&path) else { return };
-    if existing.contains("SKILL.md") {
+    if existing.contains("AGENTS.md") {
         return;
     }
 
@@ -238,8 +226,8 @@ pub(crate) fn scaffold_aider_conf(project_path: &str) {
         if !injected && (trimmed == "read:" || trimmed.starts_with("read:")) {
             out.push(line.to_string());
             let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-            out.push(format!("{}  - SKILL.md", indent));
-            out.push(format!("{}  # ^ added by K2SO — workspace context", indent));
+            out.push(format!("{}  - AGENTS.md", indent));
+            out.push(format!("{}  # ^ added by K2 — workspace context", indent));
             injected = true;
             i += 1;
             continue;
@@ -251,9 +239,9 @@ pub(crate) fn scaffold_aider_conf(project_path: &str) {
         if !out.last().map(|l| l.trim().is_empty()).unwrap_or(true) {
             out.push(String::new());
         }
-        out.push("# K2SO: ship workspace context on every session.".to_string());
+        out.push("# K2: ship workspace context on every session.".to_string());
         out.push("read:".to_string());
-        out.push("  - SKILL.md".to_string());
+        out.push("  - AGENTS.md".to_string());
     }
     let mut final_out = out.join("\n");
     if !final_out.ends_with('\n') {
@@ -300,7 +288,7 @@ pub fn k2so_agents_preview_workspace_ingest(
             }
             Ok(meta) if meta.file_type().is_file() => {
                 let is_ours = fs::read_to_string(&path)
-                    .map(|s| s.contains("k2so_generated: true"))
+                    .map(|s| s.contains(K2_GENERATED_SIGNATURE))
                     .unwrap_or(false);
                 if is_ours {
                     entries.push(WorkspacePreviewEntry {
@@ -512,13 +500,13 @@ mod tests {
         let proj = scratch_project();
         let path = proj.to_str().unwrap().to_string();
 
-        // Seed a K2SO-authored cursor mdc — the signature `k2so_generated: true`
+        // Seed a K2-authored cursor mdc — the `k2_generated: true` signature
         // is the discriminator vs user-authored.
         let cursor_dir = proj.join(".cursor").join("rules");
         fs::create_dir_all(&cursor_dir).unwrap();
         fs::write(
             cursor_dir.join("k2so.mdc"),
-            "---\nk2so_generated: true\n---\n\n# managed\n",
+            format!("---\n{}\n---\n\n# managed\n", K2_GENERATED_SIGNATURE),
         )
         .unwrap();
 

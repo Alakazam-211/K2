@@ -264,7 +264,7 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "heartbeat",
         summary: "Workspace-scoped scheduled wake (cron-like)",
-        definition: "A workspace-scoped scheduled wake (cron-like) that fires the workspace's agent at defined intervals. Used for: periodic triage, scheduled syncs, \"wake me at 9am every weekday and check the inbox\" patterns.\n\nA workspace can have multiple heartbeats with different names + schedules. Manage via `k2so heartbeat schedule add|list|remove|edit|enable|disable`. Fire one immediately via `k2so heartbeat signal fire <name>`.\n\nStorage: `.k2so/heartbeats/<name>/` per heartbeat. The daemon owns the launchd plist that fires them (`dev.k2.heartbeat.<workspace>.plist`).",
+        definition: "A workspace-scoped scheduled wake (cron-like) that fires the workspace's agent at defined intervals. Used for: periodic triage, scheduled syncs, \"wake me at 9am every weekday and check the inbox\" patterns.\n\nA workspace can have multiple heartbeats with different names + schedules. Manage via `k2so heartbeat schedule add|list|remove|edit|enable|disable`. Fire one immediately via `k2so heartbeat signal fire <name>`.\n\nStorage: `.k2/heartbeats/<name>/` per heartbeat. The daemon owns the launchd plist that fires them (`dev.k2.heartbeat.<workspace>.plist`).",
     },
     GlossaryEntry {
         term: "hooks",
@@ -274,7 +274,7 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "inbox",
         summary: "Workspace's email-like communication channel",
-        definition: "The workspace's email-like communication channel. Items arrive here from other workspaces (via `k2so msg --inbox`) or are composed by the workspace's own agent (via `k2so inbox compose`).\n\nInbox items are non-urgent, non-aggro — the agent reads and triages on its own schedule. Triage = move items into folders the agent creates. There's no system-imposed folder taxonomy; the agent organizes its inbox the way a person organizes email (Projects, Reference, Issues, FYI, etc.).\n\nStorage: `.k2so/inbox/<id>.md` (top-level) and `.k2so/inbox/<folder>/<id>.md` (after `inbox move`).\n\nMigration from pre-Phase-2.1 K2SO: the daemon runs a one-shot migration on its first boot after upgrade. Old `.k2so/work/{inbox,active,done}/*.md` files are atomic-renamed into `.k2so/inbox/{,active,done}/`, then the empty `.k2so/work/` folder is sent to the macOS Recycle Bin (recoverable if anything was missed). After migration there's no `.k2so/work/`; everything lives under `.k2so/inbox/`.\n\nSee also: `k2so inbox --help` for the full verb surface, `k2so msg --help` for sending into someone else's inbox.",
+        definition: "The workspace's email-like communication channel. Items arrive here from other workspaces (via `k2so msg --inbox`) or are composed by the workspace's own agent (via `k2so inbox compose`).\n\nInbox items are non-urgent, non-aggro — the agent reads and triages on its own schedule. Triage = move items into folders the agent creates. There's no system-imposed folder taxonomy; the agent organizes its inbox the way a person organizes email (Projects, Reference, Issues, FYI, etc.).\n\nStorage: `.k2/inbox/<id>.md` (top-level) and `.k2/inbox/<folder>/<id>.md` (after `inbox move`).\n\nMigration from pre-Phase-2.1 K2SO: the daemon runs a one-shot migration on its first boot after upgrade. Old `.k2so/work/{inbox,active,done}/*.md` files are atomic-renamed into `.k2/inbox/{,active,done}/`, then the empty `.k2so/work/` folder is sent to the macOS Recycle Bin (recoverable if anything was missed). After migration there's no `.k2so/work/`; everything lives under `.k2/inbox/`.\n\nSee also: `k2so inbox --help` for the full verb surface, `k2so msg --help` for sending into someone else's inbox.",
     },
     GlossaryEntry {
         term: "onboarding",
@@ -289,12 +289,12 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "skill",
         summary: "Documentation profile for a role/capability",
-        definition: "A documentation profile describing a role, persona, and instructions. Skills are *not* spawnable entities — they're markdown files (SKILL.md) that your harness (Claude Code, Cursor) loads when you want to apply that role to specific work.\n\nK2SO manages skill files (list, create, remove, profile, regenerate). Spawning a session pre-loaded with a skill is your harness's job (sub-agent spawning in Claude Code, etc.) — K2SO no longer provides a `delegate` verb for this.\n\nFilesystem: skills live at `.k2so/skills/<name>/SKILL.md` (unified home as of Phase 2.5b). The legacy `.k2so/agents/` and `.k2so/agent-templates/` folders are consolidated into here at first daemon boot per upgraded workspace; originals go to the macOS Recycle Bin.\n\nSee also: `k2so skills --help`, `k2so glossary agent`.",
+        definition: "A documentation profile describing a role, persona, and instructions. Skills are *not* spawnable entities — they're markdown files (SKILL.md) that your harness (Claude Code, Cursor) loads when you want to apply that role to specific work.\n\nK2SO manages skill files (list, create, remove, profile, regenerate). Spawning a session pre-loaded with a skill is your harness's job (sub-agent spawning in Claude Code, etc.) — K2SO no longer provides a `delegate` verb for this.\n\nFilesystem: skills live at `.k2/skills/<name>/SKILL.md` (unified home as of Phase 2.5b). The legacy `.k2so/agents/` and `.k2so/agent-templates/` folders are consolidated into here at first daemon boot per upgraded workspace; originals go to the macOS Recycle Bin.\n\nSee also: `k2so skills --help`, `k2so glossary agent`.",
     },
     GlossaryEntry {
         term: "skill-template",
         summary: "Master skill definition that can be instantiated",
-        definition: "Post-Phase-2.5b: any existing skill at `.k2so/skills/<name>/` can serve as a template for a new one. The former `.k2so/agent-templates/<role>/` namespace was consolidated into the unified `.k2so/skills/` home at first daemon boot. Create new skills from a seed via `k2so skills create <name> --template <existing-skill>`.",
+        definition: "Post-Phase-2.5b: any existing skill at `.k2/skills/<name>/` can serve as a template for a new one. The former `.k2/agent-templates/<role>/` namespace was consolidated into the unified `.k2/skills/` home at first daemon boot. Create new skills from a seed via `k2so skills create <name> --template <existing-skill>`.",
     },
     GlossaryEntry {
         term: "state",

@@ -172,14 +172,116 @@ fn derive_agent_and_label(
     ("shell".to_string(), folder)
 }
 
+/// Find the first object key named `tabs` whose value is an array,
+/// searching the top-level object and one level of nesting
+/// (`extraGroups[*].tabs`). Layout JSON shape varies across versions —
+/// walk it defensively rather than deserializing into a fixed struct.
+fn find_tabs_array(layout: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    if let Some(tabs) = layout.get("tabs").and_then(|v| v.as_array()) {
+        return Some(tabs);
+    }
+    // Nested form: { extraGroups: [ { tabs: [...] }, ... ] }.
+    if let Some(groups) = layout.get("extraGroups").and_then(|v| v.as_array()) {
+        for g in groups {
+            if let Some(tabs) = g.get("tabs").and_then(|v| v.as_array()) {
+                return Some(tabs);
+            }
+        }
+    }
+    None
+}
+
+/// Canonical resolution for a tab-driven session's display title.
+/// Built once per request from `workspace_layouts.layout_json`:
+/// `project_id -> (pane_group_id -> (tab_id, tab_title))`.
+///
+/// A tab-driven session's `agent_name` is `tab-<pane_group_id>`, so
+/// the mobile companion can map its live session back to the SAME
+/// canonical tab the desktop renders (and rename it via
+/// `(projectId, tabId)`).
+type TabIndex = HashMap<String, HashMap<String, (String, String)>>;
+
+/// `project_id -> tab_id -> canonical title` from the authoritative
+/// `tab_titles` table (what `set-tab-title` writes). Overlaid on the layout
+/// tab.title so a rename shows up immediately: the layout blob lags until the
+/// renderer re-saves it, and a mobile-only rename never touches the blob.
+fn build_tab_titles_index() -> HashMap<String, HashMap<String, String>> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Ok(mut stmt) = conn.prepare("SELECT project_id, tab_id, title FROM tab_titles") else {
+        return HashMap::new();
+    };
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .ok();
+    let Some(rows) = rows else { return HashMap::new() };
+    let mut idx: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for (pid, tid, title) in rows.filter_map(Result::ok) {
+        idx.entry(pid).or_default().insert(tid, title);
+    }
+    idx
+}
+
+fn build_tab_index() -> TabIndex {
+    let mut index: TabIndex = HashMap::new();
+    let Ok(layouts) = k2_core::db_ops::workspace_layout_load_all() else {
+        return index;
+    };
+    for layout in layouts {
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&layout.layout_json) else {
+            continue;
+        };
+        let Some(tabs) = find_tabs_array(&parsed) else {
+            continue;
+        };
+        let per_project = index.entry(layout.project_id.clone()).or_default();
+        for tab in tabs {
+            let tab_id = tab.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            if tab_id.is_empty() {
+                continue;
+            }
+            let tab_title = tab
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let Some(pane_groups) = tab.get("paneGroups").and_then(|v| v.as_object()) else {
+                continue;
+            };
+            for pane_group_id in pane_groups.keys() {
+                per_project.insert(
+                    pane_group_id.clone(),
+                    (tab_id.to_string(), tab_title.clone()),
+                );
+            }
+        }
+    }
+    index
+}
+
 /// Handler for `GET /cli/companion/sessions`.
 ///
 /// Global session enumeration — every live session in the
 /// daemon, joined against `projects` by longest cwd-prefix.
 /// Sessions whose cwd doesn't match any registered project are
 /// dropped (same behavior as the legacy Tauri endpoint).
+///
+/// Tab-driven sessions (`agent_name == "tab-<paneGroupId>"`) resolve
+/// their `label` to the CANONICAL tab title from
+/// `workspace_layouts` — the same value the desktop shows — and carry
+/// `tabId` + `projectId` so the mobile companion can rename the same
+/// canonical tab. Non-tab sessions (e.g. pinned chat) keep the
+/// derived label and omit `tabId`.
 pub fn handle_companion_sessions(_params: &HashMap<String, String>) -> CliResponse {
     let projects = list_projects();
+    let tab_index = build_tab_index();
+    let tab_titles_index = build_tab_titles_index();
     let live = session_lookup::snapshot_all();
     let mut out: Vec<serde_json::Value> = Vec::with_capacity(live.len());
     for (agent_name, session) in live {
@@ -187,14 +289,46 @@ pub fn handle_companion_sessions(_params: &HashMap<String, String>) -> CliRespon
         let Some(ws) = match_workspace(&cwd, &projects) else {
             continue;
         };
-        let (agent, label) =
+        let (agent, derived_label) =
             derive_agent_and_label(&agent_name, &cwd, &ws.path, &ws.name);
+
+        // The pinned/main chat session is keyed by `agent_name ==
+        // project_id` (v2_spawn `is_pinned`). `ws.id` is that project_id.
+        let is_main_chat = agent_name == ws.id;
+
+        // Canonical tab-title resolution for tab-driven sessions.
+        let mut label = derived_label;
+        let mut tab_id: Option<String> = None;
+        if let Some(pgid) = agent_name.strip_prefix("tab-") {
+            if let Some((resolved_tab_id, resolved_title)) =
+                tab_index.get(&ws.id).and_then(|m| m.get(pgid))
+            {
+                tab_id = Some(resolved_tab_id.clone());
+                // Canonical title = the authoritative `tab_titles` row (what
+                // set-tab-title writes — fresh after a rename from EITHER
+                // client) overlaid on the layout's tab.title (which lags and
+                // never updates from a mobile-only rename).
+                let canonical = tab_titles_index
+                    .get(&ws.id)
+                    .and_then(|m| m.get(resolved_tab_id))
+                    .filter(|t| !t.is_empty());
+                if let Some(t) = canonical {
+                    label = t.clone();
+                } else if !resolved_title.is_empty() {
+                    label = resolved_title.clone();
+                }
+            }
+        }
+
         out.push(serde_json::json!({
             "workspaceName": ws.name,
             "workspaceId": ws.id,
             "workspaceColor": ws.color,
             "agentName": agent,
             "label": label,
+            "isMainChat": is_main_chat,
+            "tabId": tab_id,
+            "projectId": ws.id,
             "terminalId": session.session_id().to_string(),
             "command": session.command(),
             "cwd": cwd,

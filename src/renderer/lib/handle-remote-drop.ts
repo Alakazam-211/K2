@@ -59,10 +59,10 @@ export interface DropDestination {
   inject: boolean
 }
 
-/** Trailing-separator-tolerant join of `<workspace>/.k2so/downloads`. */
+/** Trailing-separator-tolerant join of `<workspace>/.k2/downloads`. */
 function downloadsDir(workspacePath: string): string {
   const base = workspacePath.replace(/[/\\]+$/, '')
-  return `${base}/.k2so/downloads`
+  return `${base}/.k2/downloads`
 }
 
 /**

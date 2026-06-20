@@ -26,5 +26,18 @@
 	     Dictation engage in our WebView text inputs. -->
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
+
+	<!-- K2 Connect double-prompt fix: pin a stable keychain-access-group so
+	     macOS's "Always Allow" grant on our k2.dev account keychain item
+	     persists across launches. Without a declared access group the grant
+	     is bound to the exact code-signature instance and re-prompts.
+	     release.sh signs MANUALLY via `codesign --entitlements` (NOT Xcode),
+	     so `$(AppIdentifierPrefix)` does NOT expand here — the LITERAL team
+	     prefix is required. Team `36B8R93HXV` = "Developer ID Application:
+	     LZTEK, LLC (36B8R93HXV)" (scripts/release.sh). -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>36B8R93HXV.dev.k2.connect</string>
+	</array>
 </dict>
 </plist>

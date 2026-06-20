@@ -785,8 +785,8 @@ mod migration_safety_tests {
     use crate::skills::version::{SKILL_BEGIN_MARKER, SKILL_END_MARKER};
     use crate::workspace::harness::{safe_symlink_harness_file, scaffold_aider_conf, HARNESS_WORKSPACE_FILES};
     use crate::workspace::skill_regen::{
-        append_workspace_source_regions, content_hash_of, import_claude_md_into_user_notes,
-        mtime_secs, read_regen_hashes, strip_workspace_skill_tail, write_workspace_skill_file_with_body,
+        content_hash_of, mtime_secs, read_regen_hashes, reap_old_workspace_skill_shape,
+        write_workspace_skill_file_with_body, MIGRATED_NOTES_BEGIN, MIGRATED_NOTES_END,
         SKILL_USER_NOTES_SENTINEL, USER_NOTES_PLACEHOLDER,
     };
     use crate::workspace::teardown::{teardown_workspace_harness_files, TeardownMode};
@@ -796,7 +796,7 @@ mod migration_safety_tests {
         let dir = std::env::temp_dir()
             .join("k2so-migration-test")
             .join(Uuid::new_v4().to_string());
-        fs::create_dir_all(dir.join(".k2so/skills/k2so")).unwrap();
+        fs::create_dir_all(dir.join(".k2so/skills")).unwrap();
         fs::create_dir_all(dir.join(".k2so/agents")).unwrap();
         dir
     }
@@ -871,9 +871,18 @@ mod migration_safety_tests {
     }
 
     #[test]
-    fn strip_tail_preserves_user_freeform_but_discards_placeholders() {
+    fn reap_preserves_user_freeform_into_agent_md_and_discards_placeholders() {
         let proj = scratch_project();
-        let canonical = proj.join(".k2so/skills/k2so/SKILL.md");
+        // Primary agent so the carried notes have a home.
+        fs::create_dir_all(proj.join(".k2so/agent")).unwrap();
+        fs::write(
+            proj.join(".k2so/agent/AGENT.md"),
+            "---\nname: agent\ntype: custom\n---\n\nPersona.\n",
+        )
+        .unwrap();
+
+        let old_dir = proj.join(".k2so/skills/k2so");
+        fs::create_dir_all(&old_dir).unwrap();
         let corrupted = format!(
             "---\nk2so_skill: workspace\n---\n\n{begin}\nManaged body\n{end}\n\n{sentinel}\n{placeholder}\n\n{sentinel}\n{placeholder}\n\nMy real user note line 1.\nMy real user note line 2.\n",
             begin = SKILL_BEGIN_MARKER,
@@ -881,37 +890,38 @@ mod migration_safety_tests {
             sentinel = SKILL_USER_NOTES_SENTINEL,
             placeholder = USER_NOTES_PLACEHOLDER,
         );
-        fs::write(&canonical, &corrupted).unwrap();
+        fs::write(old_dir.join("SKILL.md"), &corrupted).unwrap();
 
-        let preserved = strip_workspace_skill_tail(proj.to_str().unwrap());
+        reap_old_workspace_skill_shape(proj.to_str().unwrap());
 
-        let preserved = preserved.expect("user freeform should be preserved");
+        let agent_md = fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap();
         assert!(
-            preserved.contains("My real user note line 1"),
-            "user line 1 should survive, got: {:?}",
-            preserved
+            agent_md.contains("My real user note line 1.") && agent_md.contains("My real user note line 2."),
+            "both user lines must survive into AGENT.md, got:\n{agent_md}"
         );
         assert!(
-            preserved.contains("My real user note line 2"),
-            "user line 2 should survive, got: {:?}",
-            preserved
+            !agent_md.contains(USER_NOTES_PLACEHOLDER),
+            "placeholder comments must be stripped from the migrated content"
         );
         assert!(
-            !preserved.contains(USER_NOTES_PLACEHOLDER),
-            "placeholder comments must be stripped from preserved content"
-        );
-        let post = fs::read_to_string(&canonical).unwrap();
-        assert!(
-            post.ends_with(&format!("{}\n", SKILL_END_MARKER)),
-            "file must end at the managed END marker after strip"
+            !proj.join(".k2so/skills/k2so").exists(),
+            "old composed skill must be reaped"
         );
         fs::remove_dir_all(&proj).ok();
     }
 
     #[test]
-    fn strip_tail_returns_none_when_tail_is_empty_or_placeholder_only() {
+    fn reap_carries_no_notes_when_tail_is_placeholder_only() {
         let proj = scratch_project();
-        let canonical = proj.join(".k2so/skills/k2so/SKILL.md");
+        fs::create_dir_all(proj.join(".k2so/agent")).unwrap();
+        fs::write(
+            proj.join(".k2so/agent/AGENT.md"),
+            "---\nname: agent\ntype: custom\n---\n\nPersona.\n",
+        )
+        .unwrap();
+
+        let old_dir = proj.join(".k2so/skills/k2so");
+        fs::create_dir_all(&old_dir).unwrap();
         let noise = format!(
             "{begin}\nManaged\n{end}\n\n{sentinel}\n{placeholder}\n",
             begin = SKILL_BEGIN_MARKER,
@@ -919,13 +929,16 @@ mod migration_safety_tests {
             sentinel = SKILL_USER_NOTES_SENTINEL,
             placeholder = USER_NOTES_PLACEHOLDER,
         );
-        fs::write(&canonical, &noise).unwrap();
+        fs::write(old_dir.join("SKILL.md"), &noise).unwrap();
 
-        let preserved = strip_workspace_skill_tail(proj.to_str().unwrap());
+        reap_old_workspace_skill_shape(proj.to_str().unwrap());
+
+        let agent_md = fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap();
         assert!(
-            preserved.is_none(),
-            "pure K2SO noise must not be preserved as user content"
+            !agent_md.contains(MIGRATED_NOTES_BEGIN),
+            "pure K2 noise must NOT produce a migrated-notes block in AGENT.md"
         );
+        assert!(!proj.join(".k2so/skills/k2so").exists(), "old skill still reaped");
         fs::remove_dir_all(&proj).ok();
     }
 
@@ -959,15 +972,10 @@ mod migration_safety_tests {
     #[test]
     fn safe_symlink_archives_existing_regular_file() {
         let proj = scratch_project();
-        let canonical = proj.join(".k2so/skills/k2so/SKILL.md");
-        let canonical_body = format!(
-            "---\nk2so_skill: workspace\n---\n\n{begin}\nManaged body\n{end}\n\n{sentinel}\n{placeholder}\n",
-            begin = SKILL_BEGIN_MARKER,
-            end = SKILL_END_MARKER,
-            sentinel = SKILL_USER_NOTES_SENTINEL,
-            placeholder = USER_NOTES_PLACEHOLDER,
-        );
-        fs::write(&canonical, &canonical_body).unwrap();
+        // New shape: the canonical is `.k2/AGENTS.md`.
+        let canonical = proj.join(".k2so/AGENTS.md");
+        let canonical_body = "# proj\n\nGenerated AGENTS.md body.\n";
+        fs::write(&canonical, canonical_body).unwrap();
         let target = proj.join("GEMINI.md");
         fs::write(&target, "user authored Gemini instructions").unwrap();
 
@@ -981,11 +989,12 @@ mod migration_safety_tests {
         let meta = fs::symlink_metadata(&target).unwrap();
         assert!(meta.file_type().is_symlink(), "target must be a symlink after safe-link");
         let linked_body = fs::read_to_string(&target).unwrap();
-        assert!(linked_body.contains("Managed body"), "managed region must survive import");
         assert!(
-            linked_body.contains("user authored Gemini instructions"),
-            "user's pre-existing body must be imported into canonical so the symlink still surfaces it"
+            linked_body.contains("Generated AGENTS.md body."),
+            "the symlink must resolve to the canonical AGENTS.md body"
         );
+        // The user's pre-existing file is archived (recoverable), NOT
+        // merged into a defunct USER_NOTES region.
         let migration_dir = proj.join(".k2so/migration");
         let entries: Vec<_> = std::fs::read_dir(&migration_dir).unwrap().flatten().collect();
         let has_archive = entries.iter().any(|e| {
@@ -1001,59 +1010,40 @@ mod migration_safety_tests {
     }
 
     #[test]
-    fn import_claude_md_lands_in_user_notes_and_is_idempotent() {
+    fn reap_migrates_claude_md_import_block_into_agent_md() {
+        // The OLD shape imported a pre-existing CLAUDE.md into the composed
+        // skill's USER_NOTES via a `K2SO:IMPORT:CLAUDE_MD` block. The reap
+        // must carry THAT content into AGENT.md too (it lived only there).
         let proj = scratch_project();
-        let canonical = proj.join(".k2so/skills/k2so/SKILL.md");
-        let seeded = format!(
-            "---\nk2so_skill: workspace\n---\n\n{begin}\nManaged body\n{end}\n\n{sentinel}\n{placeholder}\n",
+        fs::create_dir_all(proj.join(".k2so/agent")).unwrap();
+        fs::write(
+            proj.join(".k2so/agent/AGENT.md"),
+            "---\nname: agent\ntype: custom\n---\n\nPersona.\n",
+        )
+        .unwrap();
+
+        let old_dir = proj.join(".k2so/skills/k2so");
+        fs::create_dir_all(&old_dir).unwrap();
+        let with_import = format!(
+            "---\nk2so_skill: workspace\n---\n\n{begin}\nManaged body\n{end}\n\n{sentinel}\n{placeholder}\n\n\
+             <!-- K2SO:IMPORT:CLAUDE_MD archive=/tmp/fake/archive.md -->\n## Imported: CLAUDE.md\n\nIMPORTED-CLAUDE-MARKER from a pre-existing memory.\n",
             begin = SKILL_BEGIN_MARKER,
             end = SKILL_END_MARKER,
             sentinel = SKILL_USER_NOTES_SENTINEL,
             placeholder = USER_NOTES_PLACEHOLDER,
         );
-        fs::write(&canonical, &seeded).unwrap();
+        fs::write(old_dir.join("SKILL.md"), &with_import).unwrap();
 
-        let user_body = "# My Claude memory\n\nA useful note about my codebase.";
-        import_claude_md_into_user_notes(
-            proj.to_str().unwrap(),
-            user_body,
-            "pre-existing user-authored CLAUDE.md",
-            "/tmp/fake/archive.md",
-        );
+        reap_old_workspace_skill_shape(proj.to_str().unwrap());
 
-        let after_first = fs::read_to_string(&canonical).unwrap();
+        let agent_md = fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap();
         assert!(
-            after_first.contains("A useful note about my codebase."),
-            "imported body must land in SKILL.md"
+            agent_md.contains("IMPORTED-CLAUDE-MARKER from a pre-existing memory."),
+            "the imported CLAUDE.md content must be carried into AGENT.md, got:\n{agent_md}"
         );
         assert!(
-            after_first.contains("<!-- K2SO:IMPORT:CLAUDE_MD archive=/tmp/fake/archive.md -->"),
-            "import sentinel must be written"
-        );
-        let user_notes_pos = after_first.find(SKILL_USER_NOTES_SENTINEL).unwrap();
-        let import_pos = after_first.find("A useful note").unwrap();
-        assert!(import_pos > user_notes_pos, "import must be below USER_NOTES sentinel");
-
-        import_claude_md_into_user_notes(
-            proj.to_str().unwrap(),
-            user_body,
-            "pre-existing user-authored CLAUDE.md",
-            "/tmp/fake/archive.md",
-        );
-        let after_second = fs::read_to_string(&canonical).unwrap();
-        assert_eq!(after_first, after_second, "re-import with same archive must be idempotent");
-
-        import_claude_md_into_user_notes(
-            proj.to_str().unwrap(),
-            "another body",
-            "upgrade-era CLAUDE.md",
-            "/tmp/fake/archive-2.md",
-        );
-        let after_third = fs::read_to_string(&canonical).unwrap();
-        assert!(after_third.contains("another body"), "second archive must be imported");
-        assert!(
-            after_third.contains("<!-- K2SO:IMPORT:CLAUDE_MD archive=/tmp/fake/archive-2.md -->"),
-            "second import sentinel must be present"
+            agent_md.contains(MIGRATED_NOTES_BEGIN) && agent_md.contains(MIGRATED_NOTES_END),
+            "carried content must be wrapped in the migrated-notes markers"
         );
         fs::remove_dir_all(&proj).ok();
     }
@@ -1135,33 +1125,57 @@ mod migration_safety_tests {
     }
 
     #[test]
-    fn add_workspace_ingests_all_harness_files_into_skill_and_archives() {
+    fn add_workspace_points_harness_mirrors_at_agents_md_and_archives_user_files() {
         let proj = mock_multi_harness_workspace();
         let project_path = proj.to_str().unwrap();
 
         write_workspace_skill_file_with_body(project_path, None);
 
-        let canonical = proj.join(".k2so/skills/k2so/SKILL.md");
-        assert!(canonical.exists(), "canonical SKILL.md must be written");
-        let skill_body = fs::read_to_string(&canonical).unwrap();
+        // New shape: the canonical entrypoint is `.k2/AGENTS.md`, composed
+        // from PROJECT.md (no primary agent in this scratch workspace).
+        let canonical = proj.join(".k2so/AGENTS.md");
+        assert!(canonical.exists(), "canonical AGENTS.md must be written");
+        let agents_body = fs::read_to_string(&canonical).unwrap();
+        assert!(
+            agents_body.contains("Tauri workspace manager"),
+            "AGENTS.md must merge in the PROJECT.md body"
+        );
+        // The two loadable skills ship.
+        assert!(proj.join(".k2so/skills/k2-cli/SKILL.md").exists(), "k2-cli skill must ship");
+        assert!(
+            proj.join(".k2so/skills/k2-canonical-agents/SKILL.md").exists(),
+            "k2-canonical-agents skill must ship"
+        );
+        // The OLD composed skill must NOT be written.
+        assert!(
+            !proj.join(".k2so/skills/k2so/SKILL.md").exists(),
+            "old composed skill must never be written by the new shape"
+        );
 
-        for name in ["CLAUDE.md", "GEMINI.md", "AGENT.md", ".goosehints", "SKILL.md"] {
+        // Every harness mirror points at the canonical AGENTS.md.
+        for name in ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "AGENT.md", ".goosehints"] {
             let path = proj.join(name);
             let meta = fs::symlink_metadata(&path).unwrap();
             assert!(
                 meta.file_type().is_symlink(),
-                "{} should be a symlink after ingest, got {:?}",
+                "{} should be a symlink after fan-out, got {:?}",
                 name,
                 meta.file_type(),
             );
+            let resolved = fs::read_to_string(&path).unwrap();
+            assert!(
+                resolved.contains("Tauri workspace manager"),
+                "{} must resolve to the canonical AGENTS.md body",
+                name
+            );
         }
 
+        // Pre-existing user files were archived (recoverable), not lost.
         let migration_root = proj.join(".k2so/migration");
         let mut found_archives = 0;
         if let Ok(entries) = fs::read_dir(&migration_root) {
             for e in entries.flatten() {
-                let path = e.path();
-                if path.is_file() {
+                if e.path().is_file() {
                     found_archives += 1;
                 }
             }
@@ -1171,40 +1185,38 @@ mod migration_safety_tests {
             "expected archives for CLAUDE.md/GEMINI.md/AGENT.md/.goosehints at least, got {}",
             found_archives,
         );
-
+        // The archived bodies preserve the user's original content.
+        let archived_bodies: Vec<String> = fs::read_dir(&migration_root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .map(|e| fs::read_to_string(e.path()).unwrap_or_default())
+            .collect();
         assert!(
-            skill_body.contains("My codebase notes from # memory writes"),
-            "CLAUDE.md body not imported into SKILL.md USER_NOTES"
+            archived_bodies.iter().any(|b| b.contains("My codebase notes from # memory writes")),
+            "the original CLAUDE.md body must be archived"
         );
         assert!(
-            skill_body.contains("Custom Gemini behavior for this repo"),
-            "GEMINI.md body not imported into SKILL.md USER_NOTES"
-        );
-        assert!(
-            skill_body.contains("Agent persona customizations"),
-            "root AGENT.md body not imported into SKILL.md USER_NOTES"
-        );
-        assert!(
-            skill_body.contains("Goose hints"),
-            ".goosehints body not imported into SKILL.md USER_NOTES"
+            archived_bodies.iter().any(|b| b.contains("Custom Gemini behavior for this repo")),
+            "the original GEMINI.md body must be archived"
         );
 
+        // User's own non-managed harness files are left untouched.
         assert!(
             proj.join(".opencode/agent/my-refactor-helper.md").exists(),
             "user's OpenCode agent files must be preserved untouched"
         );
-
         assert!(
             proj.join(".cursor/rules/my-codebase.mdc").exists(),
             "user's Cursor rule files must be preserved"
         );
         assert!(
             proj.join(".cursor/rules/k2so.mdc").exists(),
-            "K2SO's Cursor MDC must be added"
+            "K2's Cursor MDC must be added"
         );
 
         let aider = fs::read_to_string(proj.join(".aider.conf.yml")).unwrap();
-        assert!(aider.contains("SKILL.md"), "SKILL.md must be injected into Aider read: list");
+        assert!(aider.contains("AGENTS.md"), "AGENTS.md must be injected into Aider read: list");
         assert!(aider.contains("CONVENTIONS.md"), "existing Aider reads must be preserved");
         assert!(aider.contains("ARCHITECTURE.md"), "existing Aider reads must be preserved");
         assert!(aider.contains("model: gpt-4o"), "non-read keys must be preserved");
@@ -1213,21 +1225,30 @@ mod migration_safety_tests {
     }
 
     #[test]
-    fn add_workspace_is_idempotent_second_launch_imports_nothing_new() {
+    fn add_workspace_is_idempotent_second_launch_changes_nothing() {
         let proj = mock_multi_harness_workspace();
         let project_path = proj.to_str().unwrap();
 
         write_workspace_skill_file_with_body(project_path, None);
-        let first_body = fs::read_to_string(proj.join(".k2so/skills/k2so/SKILL.md")).unwrap();
+        let first_body = fs::read_to_string(proj.join(".k2so/AGENTS.md")).unwrap();
+        let first_archives = fs::read_dir(proj.join(".k2so/migration"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .count();
 
         write_workspace_skill_file_with_body(project_path, None);
-        let second_body = fs::read_to_string(proj.join(".k2so/skills/k2so/SKILL.md")).unwrap();
+        let second_body = fs::read_to_string(proj.join(".k2so/AGENTS.md")).unwrap();
+        let second_archives = fs::read_dir(proj.join(".k2so/migration"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .count();
 
-        let first_imports = first_body.matches("<!-- K2SO:IMPORT:CLAUDE_MD archive=").count();
-        let second_imports = second_body.matches("<!-- K2SO:IMPORT:CLAUDE_MD archive=").count();
+        assert_eq!(first_body, second_body, "second regen must not change AGENTS.md");
         assert_eq!(
-            first_imports, second_imports,
-            "second launch must not re-import (sentinel should block duplicate adds)"
+            first_archives, second_archives,
+            "second regen must not re-archive (mirrors are already symlinks)"
         );
 
         fs::remove_dir_all(&proj).ok();
@@ -1238,7 +1259,8 @@ mod migration_safety_tests {
         let proj = mock_multi_harness_workspace();
         let project_path = proj.to_str().unwrap();
         write_workspace_skill_file_with_body(project_path, None);
-        let canonical_body = fs::read_to_string(proj.join(".k2so/skills/k2so/SKILL.md")).unwrap();
+        // New shape: the frozen body is the canonical AGENTS.md.
+        let canonical_body = fs::read_to_string(proj.join(".k2so/AGENTS.md")).unwrap();
 
         let results = teardown_workspace_harness_files(project_path, TeardownMode::KeepCurrent);
         assert!(!results.is_empty(), "teardown should report at least one action");
@@ -1248,7 +1270,7 @@ mod migration_safety_tests {
             results
         );
 
-        for name in ["CLAUDE.md", "GEMINI.md", "AGENT.md", ".goosehints", "SKILL.md"] {
+        for name in ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "AGENT.md", ".goosehints"] {
             let path = proj.join(name);
             let meta = fs::symlink_metadata(&path).expect(name);
             assert!(
@@ -1258,10 +1280,10 @@ mod migration_safety_tests {
             );
             assert!(meta.file_type().is_file(), "{} must be a regular file", name);
             let body = fs::read_to_string(&path).unwrap();
-            assert_eq!(body, canonical_body, "{} must contain the frozen SKILL.md body", name);
+            assert_eq!(body, canonical_body, "{} must contain the frozen AGENTS.md body", name);
         }
 
-        assert!(proj.join(".k2so/skills/k2so/SKILL.md").exists());
+        assert!(proj.join(".k2so/AGENTS.md").exists());
         assert!(proj.join(".k2so/migration").is_dir());
         fs::remove_dir_all(&proj).ok();
     }
@@ -1286,9 +1308,14 @@ mod migration_safety_tests {
         assert_eq!(fs::read_to_string(proj.join(".goosehints")).unwrap(), pre_goose);
         assert_eq!(fs::read_to_string(proj.join(".aider.conf.yml")).unwrap(), pre_aider);
 
-        assert!(!proj.join("SKILL.md").exists(), "SKILL.md should be removed on restore (no prior original)");
+        // AGENTS.md had no prior original (K2 created the symlink fresh) —
+        // restore sends the K2-created mirror to the trash.
+        assert!(
+            !proj.join("AGENTS.md").exists(),
+            "AGENTS.md should be removed on restore (no prior original)"
+        );
 
-        assert!(proj.join(".k2so/skills/k2so/SKILL.md").exists());
+        assert!(proj.join(".k2so/AGENTS.md").exists());
         assert!(proj.join(".k2so/migration").is_dir());
         fs::remove_dir_all(&proj).ok();
     }
@@ -1305,9 +1332,13 @@ mod migration_safety_tests {
         assert!(fs::symlink_metadata(proj.join("CLAUDE.md")).unwrap().file_type().is_symlink());
         assert!(fs::symlink_metadata(proj.join("GEMINI.md")).unwrap().file_type().is_symlink());
 
-        let skill_body = fs::read_to_string(proj.join(".k2so/skills/k2so/SKILL.md")).unwrap();
-        assert!(skill_body.contains("My codebase notes from # memory writes"));
-        assert!(skill_body.contains("Custom Gemini behavior for this repo"));
+        // The canonical AGENTS.md still merges the PROJECT.md body after a
+        // restore + reconnect cycle.
+        let agents_body = fs::read_to_string(proj.join(".k2so/AGENTS.md")).unwrap();
+        assert!(agents_body.contains("Tauri workspace manager"));
+        // And the mirror resolves to it.
+        let claude = fs::read_to_string(proj.join("CLAUDE.md")).unwrap();
+        assert!(claude.contains("Tauri workspace manager"));
 
         fs::remove_dir_all(&proj).ok();
     }
@@ -1365,7 +1396,7 @@ mod migration_safety_tests {
         scaffold_aider_conf(project_path);
 
         let merged = fs::read_to_string(&aider_path).unwrap();
-        assert!(merged.contains("SKILL.md"), "SKILL.md must be injected");
+        assert!(merged.contains("AGENTS.md"), "AGENTS.md must be injected");
         assert!(merged.contains("CONVENTIONS.md"), "original read entries preserved");
         assert!(merged.contains("ARCHITECTURE.md"), "original read entries preserved");
         assert!(merged.contains("model: gpt-4o"), "non-read top-level keys preserved");
@@ -1394,7 +1425,7 @@ mod migration_safety_tests {
     #[test]
     fn safe_symlink_is_idempotent_when_target_is_already_symlink() {
         let proj = scratch_project();
-        let canonical = proj.join(".k2so/skills/k2so/SKILL.md");
+        let canonical = proj.join(".k2so/AGENTS.md");
         fs::write(&canonical, "canonical").unwrap();
         let target = proj.join(".goosehints");
 

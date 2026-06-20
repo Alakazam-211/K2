@@ -37,12 +37,11 @@ use crate::skills::version::{
 use crate::workspace::agent_identity::{agent_dir, agents_dir, parse_frontmatter};
 use crate::fs_atomic::{atomic_symlink, atomic_write_str, log_if_err};
 
-/// Markers that delimit the K2SO-managed section inside
-/// marker-injected files (AGENTS.md, copilot-instructions.md).
-/// Content between the markers is considered K2SO's; user edits
-/// outside the pair are preserved.
-pub const K2SO_SECTION_BEGIN: &str = "<!-- K2SO:BEGIN -->";
-pub const K2SO_SECTION_END: &str = "<!-- K2SO:END -->";
+/// Markers that delimit the K2-managed section inside marker-injected
+/// files (copilot-instructions.md). Content between the markers is
+/// considered K2's; user edits outside the pair are preserved.
+pub const K2SO_SECTION_BEGIN: &str = "<!-- K2:BEGIN -->";
+pub const K2SO_SECTION_END: &str = "<!-- K2:END -->";
 
 /// Render the "How to update this skill" footer that gets appended to
 /// every generated SKILL body. Tells the AI that the SKILL is compiled
@@ -70,7 +69,7 @@ pub fn skill_update_footer(project_path: &str, agent_name: Option<&str>) -> Stri
             )
         }
         None => format!(
-            "- **A skill's role / persona / standing orders** — edit `{}/.k2so/skills/<skill-name>/SKILL.md`",
+            "- **A skill's role / persona / standing orders** — edit `{}/.k2/skills/<skill-name>/SKILL.md`",
             project_path
         ),
     };
@@ -166,7 +165,13 @@ pub fn write_skill_to_all_harnesses(
     // edits below the managed region or the closing marker survive
     // future regenerations, and version bumps auto-upgrade unmodified
     // files.
-    let canonical_dir = root.join(".k2so/skills").join(skill_name);
+    //
+    // Anchor on the workspace dot-dir resolver (NOT a literal `.k2so/`) so
+    // new 0.40.x+ workspaces write `.k2/skills/...` while existing `.k2so/`
+    // workspaces keep theirs — same SSOT as the inbox/prds dirs.
+    let canonical_dir = crate::workspace_dot_dir(&root)
+        .join("skills")
+        .join(skill_name);
     let canonical_path = canonical_dir.join("SKILL.md");
     let extras = format!("name: {}\ndescription: {}", skill_name, description);
     ensure_skill_up_to_date(
@@ -487,7 +492,7 @@ pub fn generate_default_agent_body(agent_type: &str, name: &str, role: &str, pro
                                 String::new()
                             };
                             team_lines.push_str(&format!(
-                                "- **{}**: `.k2so/skills/{}/SKILL.md` — {}\n",
+                                "- **{}**: `.k2/skills/{}/SKILL.md` — {}\n",
                                 member_name, member_name, member_role
                             ));
                         }
@@ -506,13 +511,13 @@ r#"You are the Workspace Manager for the {project_name} workspace.
 ## Work Sources
 
 Primary (always checked by local LLM triage — near-zero cost):
-- Workspace inbox: `.k2so/inbox/` (unassigned work items)
-- Your inbox: `.k2so/skills/{name}/work/inbox/` (delegated to you)
+- Workspace inbox: `.k2/inbox/` (unassigned work items)
+- Your inbox: `.k2/skills/{name}/work/inbox/` (delegated to you)
 
 External (scan these proactively when woken — customize for your project):
 - GitHub Issues: `gh issue list --repo OWNER/REPO --label bug,feature --state open`
 - Open PRs needing review: `gh pr list --repo OWNER/REPO --review-requested`
-- Local PRDs: `.k2so/prds/*.md`
+- Local PRDs: `.k2/prds/*.md`
 
 ## Your Team
 
@@ -535,7 +540,7 @@ External (scan these proactively when woken — customize for your project):
 <!-- Examples: -->
 <!-- - Check CI status on main branch every wake and report failures -->
 <!-- - Review open PRs older than 24 hours -->
-<!-- - Monitor .k2so/inbox/ for unassigned items and delegate immediately -->
+<!-- - Monitor .k2/inbox/ for unassigned items and delegate immediately -->
 
 ## Operational Notes
 
@@ -634,8 +639,8 @@ r#"You are the K2SO Agent for the {project_name} workspace — the top-level pla
 ## Work Sources
 
 Primary (checked automatically by the heartbeat system at near-zero cost):
-- Workspace inbox: `.k2so/inbox/` (unassigned work items)
-- Your inbox: `.k2so/skills/{name}/work/inbox/` (items delegated to you)
+- Workspace inbox: `.k2/inbox/` (unassigned work items)
+- Your inbox: `.k2/skills/{name}/work/inbox/` (items delegated to you)
 
 External (add your project-specific sources below — CLI tools only, no MCP):
 - GitHub Issues: `gh issue list --repo OWNER/REPO --label bug,feature --state open`
@@ -665,7 +670,7 @@ External (add your project-specific sources below — CLI tools only, no MCP):
 <!-- - Scan GitHub issues for new bugs every wake -->
 <!-- - Check CI pipeline status on main and report failures -->
 <!-- - Review PRs older than 48 hours -->
-<!-- - Monitor .k2so/inbox/ and delegate unassigned items immediately -->
+<!-- - Monitor .k2/inbox/ and delegate unassigned items immediately -->
 
 ## Operational Notes
 

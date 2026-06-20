@@ -1,8 +1,8 @@
 [package]
 name = "k2-core"
-version = "0.40.3"
+version = "0.40.5"
 edition = "2021"
-license = "MIT"
+license = "FSL-1.1-Apache-2.0"
 description = "K2SO device-local core library: db, llm, terminal, companion, scheduler, agent_hooks, push_adapter. Linked by both src-tauri (Tauri app, thin client) and k2so-daemon (persistent-agent runtime)."
 
 [lib]
@@ -26,6 +26,11 @@ test-util = []
 # `db`" error and have to discover the `--features test-util` workaround.
 [dev-dependencies]
 k2-core = { path = ".", features = ["test-util"] }
+# Cert-broker tests mint a real-shaped leaf-first chain with rcgen and set an
+# explicit validity window to drive the renewal-window logic; rcgen's
+# `CertificateParams::not_after` is a `time::OffsetDateTime`. `time` is already
+# in the tree transitively (x509-parser / rcgen), so this adds no new crate.
+time = { version = "0.3", features = ["std"] }
 
 [dependencies]
 # Shared primitive deps.
@@ -144,6 +149,24 @@ tungstenite = "0.24"
 ngrok = "0.18"
 tokio = { version = "1", features = ["full"] }
 url = "2"
+
+# K2 Connect E2E encryption (Option A) — daemon-side TLS material.
+# `tunnel::tls` generates the ECDSA P-256 keypair + CSR (+ spike
+# self-signed cert) and builds the rustls ServerConfig the daemon's HTTPS
+# listener serves. rustls 0.23 / aws-lc-rs matches the provider the daemon
+# installs at boot (k2-daemon/main.rs:223), so a single provider resolves.
+# Gated behind the `K2_E2E` flag at runtime; the crates compile always.
+rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
+rustls-pemfile = "2"
+# K2 Connect E2E cert broker (PRD §6): parse the installed leaf cert's
+# `notAfter` so the daemon knows when to renew (~30d pre-expiry). rcgen can
+# build/sign certs but not read an already-issued chain's validity, so we
+# pull a focused X.509 parser. `time` + `nom` are already in the tree.
+x509-parser = { version = "0.18", default-features = false }
+# Lock-free hot-swap of the rustls ServerConfig: the cert-renewal loop
+# swaps in a freshly-issued chain WITHOUT dropping the live TLS listener.
+arc-swap = "1"
 
 # macOS-only deps.
 #

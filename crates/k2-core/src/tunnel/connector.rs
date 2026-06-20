@@ -3,7 +3,7 @@
 //!
 //! Lifecycle:
 //!   * `start()` resolves the `frpc` binary, renders the config TOML to a
-//!     0600 file under `~/.k2so/`, spawns `frpc -c <file>`, and starts a
+//!     0600 file under `~/.k2/`, spawns `frpc -c <file>`, and starts a
 //!     supervisor thread that captures stdout/stderr to a log and
 //!     restarts the child on unexpected exit with exponential backoff.
 //!   * `stop()` flips the desired-state flag and signals the child to
@@ -51,6 +51,9 @@ fn common_frpc_locations() -> Vec<PathBuf> {
     ];
     if let Some(home) = dirs::home_dir() {
         v.push(home.join(".local/bin/frpc"));
+        v.push(home.join(".k2/bin/frpc"));
+        // Legacy location pre-`.k2so`→`.k2` cutover (still a valid candidate
+        // via the ~/.k2so→~/.k2 compat symlink, but listed explicitly).
         v.push(home.join(".k2so/bin/frpc"));
     }
     v
@@ -217,12 +220,13 @@ pub fn start(
     }
     if !cfg.is_connectable() {
         return Err(
-            "tunnel not configured: set a K2SO bearer token first \
-             (no token in ~/.k2so/tunnel.json)"
+            "tunnel not configured: select one of your purchased subdomains in \
+             Settings → K2 Connect first (picking it binds its access token; \
+             no token in ~/.k2/tunnel.json)"
                 .to_string(),
         );
     }
-    // The K2SO tunnel ALWAYS exposes the live daemon, whose HTTP port is
+    // The K2 Connect tunnel ALWAYS exposes the live daemon, whose HTTP port is
     // ephemeral and ROTATES on every daemon restart (app update, reboot).
     // So we MUST forward to the live `default_local_port` and must NEVER
     // persist a pinned `local_port`: a pinned snapshot goes stale the moment
@@ -230,14 +234,38 @@ pub fn start(
     // socket and the host silently unreachable — i.e. **every software
     // update would lose the user's remote access**. Always resolve live and
     // keep the stored config port-less so future starts re-resolve.
-    let resolved_local_port = default_local_port;
+    // E2E (PRD §4 Option A): when end-to-end encryption is on, frpc must
+    // forward the ENCRYPTED stream to the daemon's rustls HTTPS listener,
+    // NOT to its cleartext HTTP port. The daemon publishes that listener's
+    // port to `~/.k2/tunnel-https.port`; we read it here. If E2E is on but
+    // the HTTPS port isn't published yet (listener not up), fail loud
+    // rather than silently forwarding cleartext to the HTTP port — a silent
+    // fallback would defeat the entire "relay sees only ciphertext" claim.
+    let e2e = config::e2e_enabled(&cfg);
+    let resolved_local_port = if e2e {
+        match super::tls::read_https_port() {
+            Some(p) => p,
+            None => {
+                return Err(
+                    "K2_E2E is enabled but the daemon's HTTPS listener port is not \
+                     published (~/.k2/tunnel-https.port missing) — refusing to start \
+                     the tunnel against the cleartext HTTP port (would leak plaintext \
+                     to the relay). Ensure the E2E TLS listener started."
+                        .to_string(),
+                );
+            }
+        }
+    } else {
+        default_local_port
+    };
     let mut to_save = cfg.clone();
     to_save.local_port = None;
     config::save(&to_save)?;
 
-    // Resolve frpc + render config to disk (0600).
+    // Resolve frpc + render config to disk (0600). `e2e` selects the proxy
+    // type (https vs http) and was used above to pick `resolved_local_port`.
     let frpc = resolve_frpc(bin)?;
-    let toml = render_frpc_toml(&cfg, resolved_local_port);
+    let toml = render_frpc_toml(&cfg, resolved_local_port, e2e);
     write_config_file(&toml)?;
 
     // Reap any STRAY frpc bound to our config before spawning a fresh one.
@@ -266,6 +294,13 @@ pub fn start(
     // renewal thread watches the SAME `running` flag the supervisor does
     // and self-exits the moment `stop()` flips it false.
     spawn_lease_renewal(&cfg, running.clone());
+
+    // K2 Connect Pro multi-subdomain (PRD §7): when E2E is on, the daemon
+    // also learns the account's nested `<label>.<sub>.k2.dev → internal
+    // endpoint` map from the control plane on the same cadence, so the TLS
+    // listener can route inbound by Host. No-op when E2E is off (default) or
+    // the config can't drive a fetch — see `spawn_subdomain_refresh`.
+    spawn_subdomain_refresh(&cfg, running.clone());
 
     let st = ConnectorState {
         cfg,
@@ -347,7 +382,7 @@ fn reap_stray_frpc(cfg_path: &Path) {
 #[cfg(not(unix))]
 fn reap_stray_frpc(_cfg_path: &Path) {}
 
-/// Write the rendered TOML to `~/.k2so/frpc.toml` (0600) via tmp+rename.
+/// Write the rendered TOML to `~/.k2/frpc.toml` (0600) via tmp+rename.
 fn write_config_file(toml: &str) -> Result<(), String> {
     let path = frpc_config_path();
     let dir = path
@@ -519,6 +554,78 @@ fn spawn_lease_renewal(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
         // — the tunnel still works, it just won't be lease-renewed by the
         // daemon. Log loudly so the regression is visible.
         crate::log_debug!("[tunnel/lease] WARN: failed to spawn lease renewal thread: {e}");
+    }
+}
+
+/// K2 Connect Pro multi-subdomain (PRD §7) — spawn the daemon-owned loop
+/// that learns the account's nested `<label>.<sub>.k2.dev → internal
+/// endpoint` map from the control plane and caches it for the E2E TLS
+/// listener's Host routing.
+///
+/// **Gated on E2E** ([`super::config::e2e_enabled`]): the nested-subdomain
+/// routing only exists on the daemon-terminated-TLS path, so when E2E is OFF
+/// (the default) this is a no-op and nothing is fetched — byte-for-byte the
+/// existing behaviour. Also a no-op when the config carries no subdomain
+/// label or no bearer token (nothing to fetch / no auth).
+///
+/// Lifecycle mirrors the lease loop: watches the same `running` flag and
+/// self-exits on [`stop`]. A fetch failure is logged + retried next tick; the
+/// previously-cached map keeps serving meanwhile (never drops routing on a
+/// transient blip). Refreshes on [`super::lease::RENEW_INTERVAL`] — the same
+/// cadence the lease loop uses.
+fn spawn_subdomain_refresh(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
+    if !super::config::e2e_enabled(cfg) {
+        return; // OFF (default) → no nested routing, no fetch. Unchanged.
+    }
+    let primary = cfg.subdomain.trim().to_string();
+    let token = cfg.token.trim().to_string();
+    if primary.is_empty() || token.is_empty() {
+        crate::log_debug!(
+            "[tunnel/subdomains] E2E on but no subdomain/token in config — \
+             skipping daemon-side subdomain-map refresh"
+        );
+        return;
+    }
+
+    let spawned = std::thread::Builder::new()
+        .name("k2so-tunnel-subdomains".to_string())
+        .spawn(move || {
+            crate::log_debug!(
+                "[tunnel/subdomains] daemon-owned subdomain-map refresh started for {} (every {:?})",
+                primary,
+                super::lease::RENEW_INTERVAL
+            );
+            loop {
+                if !running.load(Ordering::SeqCst) {
+                    break;
+                }
+                match super::subdomains::refresh_once(&primary, &token) {
+                    Ok(n) => crate::log_debug!(
+                        "[tunnel/subdomains] refreshed {n} nested target(s) for {primary}"
+                    ),
+                    Err(e) => crate::log_debug!(
+                        "[tunnel/subdomains] refresh tick failed (keeping cached map, \
+                         will retry next interval): {e}"
+                    ),
+                }
+                // Sleep in short slices so `stop()` is observed within ~1s.
+                let mut remaining = super::lease::RENEW_INTERVAL;
+                let slice = Duration::from_secs(1);
+                while remaining > Duration::ZERO {
+                    if !running.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let nap = remaining.min(slice);
+                    std::thread::sleep(nap);
+                    remaining = remaining.saturating_sub(nap);
+                }
+            }
+            crate::log_debug!("[tunnel/subdomains] subdomain-map refresh stopped for {primary}");
+        });
+    if let Err(e) = spawned {
+        crate::log_debug!(
+            "[tunnel/subdomains] WARN: failed to spawn subdomain-map refresh thread: {e}"
+        );
     }
 }
 
@@ -723,13 +830,13 @@ mod tests {
             local_port: Some(57839),
             ..Default::default()
         };
-        println!("{}", render_frpc_toml(&cfg, 57839));
+        println!("{}", render_frpc_toml(&cfg, 57839, false));
     }
 
     /// REAL-PROCESS, REAL-NETWORK test — gated `#[ignore]` so `cargo
     /// test` never spawns a live frpc against the production frps box
     /// (which would collide with the parent's live validation). Run
-    /// manually only, with a real token in ~/.k2so/tunnel.json and frpc
+    /// manually only, with a real token in ~/.k2/tunnel.json and frpc
     /// installed.
     #[test]
     #[ignore = "spawns a real frpc against the live K2 Connect server"]

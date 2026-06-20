@@ -90,7 +90,7 @@ function KanbanColumn({ title, items, color, projectPath, onOpenFile }: {
   onOpenFile: (path: string) => void
 }): React.JSX.Element {
   const resolvePath = (item: InboxItem): string => {
-    const base = `${projectPath}/.k2so/inbox`
+    const base = `${projectPath}/.k2/inbox`
     return item.folder ? `${base}/${item.folder}/${item.filename}` : `${base}/${item.filename}`
   }
 

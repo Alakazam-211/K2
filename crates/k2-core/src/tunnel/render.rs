@@ -24,10 +24,20 @@ use super::config::TunnelConfig;
 /// caller (the connector fills in the live daemon port when the config
 /// leaves it `None`); pass the concrete port here.
 ///
+/// `e2e` selects the proxy `type` (PRD `k2-connect-e2e-encryption.md` §4
+/// Option A):
+///   * `false` (today's behaviour) — `type = "http"`; the relay's Caddy
+///     terminates TLS and forwards cleartext to `localPort` (the daemon's
+///     HTTP port).
+///   * `true` — `type = "https"`; frps does SNI passthrough on
+///     `vhostHTTPSPort` (443) and forwards the **encrypted** stream to
+///     `localPort` (the daemon's rustls HTTPS listener port), which
+///     terminates TLS itself. The relay never sees plaintext.
+///
 /// The `proxy_name` is the frp proxy identifier — deterministic per
 /// subdomain so a restart reuses the same name. Defaults to
 /// `k2so-<subdomain>` (or `k2so-daemon` when no subdomain is set).
-pub fn render_frpc_toml(cfg: &TunnelConfig, local_port: u16) -> String {
+pub fn render_frpc_toml(cfg: &TunnelConfig, local_port: u16, e2e: bool) -> String {
     let sub = cfg.subdomain.trim();
     let proxy_name = if sub.is_empty() {
         "k2so-daemon".to_string()
@@ -57,9 +67,17 @@ pub fn render_frpc_toml(cfg: &TunnelConfig, local_port: u16) -> String {
     out.push('\n');
 
     // ── Proxy section (array of tables) ───────────────────────────────
+    // E2E flips the proxy type: `https` makes frps route by SNI on the
+    // vhostHTTPSPort and forward ciphertext to the daemon's rustls
+    // listener (TLS terminates on the daemon); `http` is the legacy path
+    // where the relay's Caddy terminates TLS. Same subdomain either way.
     out.push_str("[[proxies]]\n");
     out.push_str(&format!("name = {}\n", toml_str(&proxy_name)));
-    out.push_str("type = \"http\"\n");
+    if e2e {
+        out.push_str("type = \"https\"\n");
+    } else {
+        out.push_str("type = \"http\"\n");
+    }
     out.push_str("localIP = \"127.0.0.1\"\n");
     out.push_str(&format!("localPort = {local_port}\n"));
     if !sub.is_empty() {
@@ -108,7 +126,7 @@ mod tests {
 
     #[test]
     fn renders_server_addr_and_port() {
-        let toml = render_frpc_toml(&sample(), 57839);
+        let toml = render_frpc_toml(&sample(), 57839, false);
         assert!(
             toml.contains("serverAddr = \"178.156.232.105\""),
             "missing serverAddr\n{toml}"
@@ -118,7 +136,7 @@ mod tests {
 
     #[test]
     fn renders_token_in_login_metadatas() {
-        let toml = render_frpc_toml(&sample(), 57839);
+        let toml = render_frpc_toml(&sample(), 57839, false);
         assert!(
             toml.contains("[metadatas]"),
             "token must live in the client-level [metadatas] table\n{toml}"
@@ -131,7 +149,7 @@ mod tests {
 
     #[test]
     fn renders_http_proxy_with_subdomain_and_local_port() {
-        let toml = render_frpc_toml(&sample(), 57839);
+        let toml = render_frpc_toml(&sample(), 57839, false);
         assert!(toml.contains("[[proxies]]"), "no proxy table\n{toml}");
         assert!(toml.contains("type = \"http\""), "proxy must be http\n{toml}");
         assert!(
@@ -155,7 +173,7 @@ mod tests {
         // (possibly stale/None) config field.
         let mut cfg = sample();
         cfg.local_port = None;
-        let toml = render_frpc_toml(&cfg, 8123);
+        let toml = render_frpc_toml(&cfg, 8123, false);
         assert!(toml.contains("localPort = 8123"), "{toml}");
     }
 
@@ -163,7 +181,7 @@ mod tests {
     fn empty_subdomain_omits_subdomain_key_and_names_daemon() {
         let mut cfg = sample();
         cfg.subdomain = String::new();
-        let toml = render_frpc_toml(&cfg, 57839);
+        let toml = render_frpc_toml(&cfg, 57839, false);
         assert!(
             !toml.contains("subdomain ="),
             "blank subdomain must not emit a subdomain key (server derives it)\n{toml}"
@@ -172,10 +190,40 @@ mod tests {
     }
 
     #[test]
+    fn e2e_flag_flips_proxy_type_http_to_https() {
+        // OFF (legacy / zero-regression): http, never https.
+        let off = render_frpc_toml(&sample(), 57839, false);
+        assert!(
+            off.contains("type = \"http\""),
+            "e2e=false must render an http proxy\n{off}"
+        );
+        assert!(
+            !off.contains("type = \"https\""),
+            "e2e=false must NOT render https\n{off}"
+        );
+
+        // ON (Option A): https, never the plain http type.
+        let on = render_frpc_toml(&sample(), 57839, true);
+        assert!(
+            on.contains("type = \"https\""),
+            "e2e=true must render an https proxy\n{on}"
+        );
+        assert!(
+            !on.contains("type = \"http\"\n"),
+            "e2e=true must NOT render the plain http type\n{on}"
+        );
+        // Everything else is unchanged on the flip: same subdomain, same
+        // localPort, same proxy name — only the type differs.
+        assert!(on.contains("subdomain = \"rosson\""), "{on}");
+        assert!(on.contains("localPort = 57839"), "{on}");
+        assert!(on.contains("name = \"k2so-rosson\""), "{on}");
+    }
+
+    #[test]
     fn token_with_quotes_is_escaped_not_injected() {
         let mut cfg = sample();
         cfg.token = "ab\"c\nname = \"evil".to_string();
-        let toml = render_frpc_toml(&cfg, 1);
+        let toml = render_frpc_toml(&cfg, 1, false);
         // The malicious newline + key must be escaped inside the string,
         // never emitted as a real second key.
         assert!(

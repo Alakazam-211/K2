@@ -186,9 +186,9 @@ fn organic_role_integration_section(role: &str) -> String {
 
 This skill is **role knowledge** — how to operate as a {role}. When asked
 to apply it to this workspace, integrate it **organically** into your
-canonical persona at `.k2so/agent/AGENT.md`:
+canonical persona at `.k2/agent/AGENT.md`:
 
-1. **Read** the existing `.k2so/agent/AGENT.md` (and the surrounding
+1. **Read** the existing `.k2/agent/AGENT.md` (and the surrounding
    workspace context) first.
 2. **Weave** the {role} guidance in **with judgment** — preserve the
    user's accumulated context, reconcile overlaps, keep what still
@@ -326,7 +326,7 @@ On each wake, run through this in order:
     // ── 5. Skills Protocol ──
     skill.push_str(r#"## Skill Profiles
 
-Skill profiles are markdown documents at `.k2so/skills/<name>/SKILL.md` describing a role, persona, or capability set. The harness loads them; K2SO does not spawn them.
+Skill profiles are markdown documents at `.k2/skills/<name>/SKILL.md` describing a role, persona, or capability set. The harness loads them; K2SO does not spawn them.
 
 ```
 k2so skills list                              # what skill profiles exist here
@@ -563,15 +563,15 @@ You don't write code. You write the plan. Engineering personas are skill profile
 
 ### PRDs (product requirement documents)
 
-Long-form docs that capture the *why* and *what*. Keep them under `.k2so/prds/`. When a PRD is ready for triage, register it as an inbox item so it shows up in your queue:
+Long-form docs that capture the *why* and *what*. Keep them under `.k2/prds/`. When a PRD is ready for triage, register it as an inbox item so it shows up in your queue:
 
 ```
-k2so inbox compose --title "Auth V2: session rotation" --body "See .k2so/prds/auth-v2.md" --priority high --type prd
+k2so inbox compose --title "Auth V2: session rotation" --body "See .k2/prds/auth-v2.md" --priority high --type prd
 ```
 
 ### Milestones
 
-Break a PRD into ship-sized slices, each with its own acceptance criteria. Store them under `.k2so/milestones/` and register the noteworthy ones via inbox:
+Break a PRD into ship-sized slices, each with its own acceptance criteria. Store them under `.k2/milestones/` and register the noteworthy ones via inbox:
 
 ```
 k2so inbox compose --title "M1: Rotate on login" --body "Rotate session token on every successful login..." --priority high --type milestone
@@ -579,7 +579,7 @@ k2so inbox compose --title "M1: Rotate on login" --body "Rotate session token on
 
 ### Specs
 
-Technical specifications live at `.k2so/specs/`. Same pattern — write the file, register via `inbox compose` if it needs visibility.
+Technical specifications live at `.k2/specs/`. Same pattern — write the file, register via `inbox compose` if it needs visibility.
 
 ## Heartbeats — schedule your own wakes
 
@@ -692,8 +692,8 @@ overwrite the user's content.
 Each AI coding tool reads its project notes from a different file
 (`CLAUDE.md`, `GEMINI.md`, `.goosehints`, `.cursor/rules`, `AGENTS.md`,
 …). The point of canonicalization is: the user writes their context
-**once** and every tool sees the same picture. **`.k2so/agent/AGENT.md`
-+ `.k2so/PROJECT.md` are the canonical source of truth (Model A);** the
+**once** and every tool sees the same picture. **`.k2/agent/AGENT.md`
++ `.k2/PROJECT.md` are the canonical source of truth (Model A);** the
 per-harness files are **generated mirrors** of them.
 
 ## The flow (every run)
@@ -711,29 +711,29 @@ per-harness files are **generated mirrors** of them.
    untouched, independently.
 4. **Merge into Model A first** — read the existing harness files,
    judge valuable user context vs boilerplate/stale, and **weave the
-   substance into `.k2so/agent/AGENT.md` / `.k2so/PROJECT.md`** so
+   substance into `.k2/agent/AGENT.md` / `.k2/PROJECT.md`** so
    nothing is lost. Canonical is a target STRUCTURE the user's content
    is poured into, never a template that bulldozes it.
 5. **Mirror out** — derive the chosen per-harness files FROM Model A.
    These mirrors are K2SO-generated copies (real files, stamped, with an
-   "edit `.k2so/...` instead" header) — NOT symlinks.
+   "edit `.k2/...` instead" header) — NOT symlinks.
 6. **Dry-run + confirm** — produce a DRY-RUN plan first (per-harness
    action table + the backup manifest) and **STOP for confirmation
    before any write**. Writes happen only on explicit confirm.
 7. **Apply** — the deterministic safety net does the destructive work:
-   it backs up every original to `.k2so/backups/<ts>/` BEFORE writing,
+   it backs up every original to `.k2/backups/<ts>/` BEFORE writing,
    writes atomically, and records `manifest.json`. You never mutate
    files raw — you hand merged text to the core.
 8. **Report** — tell the user exactly what changed and where the
    backups + manifest live.
 9. **Unwind** — the SAME skill undoes it. Manifest-driven exact restore:
    put each backed-up original back, trash anything K2SO created fresh,
-   leave `.k2so/` intact.
+   leave `.k2/` intact.
 
 ## Safety contract (non-negotiable)
 
 - **Default is dry-run.** No file is touched until the user confirms.
-- **Every original is backed up** to `.k2so/backups/<ISO-ts>/<relpath>`
+- **Every original is backed up** to `.k2/backups/<ISO-ts>/<relpath>`
   BEFORE it is overwritten, with a `manifest.json` that makes the change
   byte-reversible.
 - **Copies, not symlinks** — real files the user can read and (if they
@@ -1066,9 +1066,10 @@ pub fn compose_agent_wake_context(
             md.push_str("## Your Team\n\n");
             md.push_str("These are your agent templates. Read their `agent.md` profiles to understand their strengths before delegating:\n\n");
             for (name, their_role) in &other_agents {
+                let their_profile = agents_root.join(name).join("AGENT.md");
                 md.push_str(&format!(
-                    "- **{}** — {} (profile: `.k2so/agents/{}/agent.md`)\n",
-                    name, their_role, name
+                    "- **{}** — {} (profile: `{}`)\n",
+                    name, their_role, their_profile.to_string_lossy()
                 ));
             }
             md.push_str("\nYou can create new agents (`k2so agents create <name> --role \"...\"`) or update existing ones (`k2so agent update --name <name> --field role --value \"...\"`).\n\n");
@@ -1761,8 +1762,8 @@ mod tests {
                 "{name} role skill must explicitly forbid injecting a templated/marked block",
             );
             assert!(
-                lc.contains(".k2so/agent/agent.md"),
-                "{name} role skill must point integration at .k2so/agent/AGENT.md (Model A)",
+                lc.contains(".k2/agent/agent.md"),
+                "{name} role skill must point integration at .k2/agent/AGENT.md (Model A)",
             );
             assert_no_programmatic_injection(body, name);
             assert_no_deprecated_verbs(body, name);

@@ -257,6 +257,55 @@ pub fn handle_upload_binary(body: &[u8]) -> CliResponse {
 }
 
 #[derive(Deserialize)]
+struct UploadChunkBody {
+    /// Client-generated unique id for this transfer (keys the temp `.part`).
+    upload_id: String,
+    dir: String,
+    filename: String,
+    /// Decoded-byte offset this chunk starts at; MUST match the part's current
+    /// length (0 starts/restarts). Enforced in `fsc::write_upload_chunk`.
+    offset: u64,
+    base64: String,
+    /// `true` on the final chunk → finalize (atomic rename into place).
+    is_last: bool,
+}
+
+/// Streaming counterpart to [`handle_upload_binary`]: decode ONE chunk and
+/// append it to the in-progress `.part` file (see `fsc::write_upload_chunk`).
+/// Memory stays bounded at a single chunk regardless of the total transfer
+/// size, so large "Clone to" bundles (GH #3) move without the 100 MB
+/// single-shot cap. The per-chunk size guard + ordered-append enforcement live
+/// in core so they're unit-testable without HTTP. Returns `{ path, done:true }`
+/// on the finalizing chunk, `{ received, done:false }` for intermediate ones.
+pub fn handle_upload_chunk(body: &[u8]) -> CliResponse {
+    let parsed: UploadChunkBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let bytes = match B64.decode(parsed.base64.as_bytes()) {
+        Ok(b) => b,
+        Err(e) => return CliResponse::bad_request(format!("invalid base64: {e}")),
+    };
+    match fsc::write_upload_chunk(
+        &parsed.dir,
+        &parsed.filename,
+        &parsed.upload_id,
+        parsed.offset,
+        &bytes,
+        parsed.is_last,
+    ) {
+        Ok(Some(path)) => CliResponse::ok_json(
+            serde_json::json!({ "path": path.to_string_lossy(), "done": true }).to_string(),
+        ),
+        Ok(None) => CliResponse::ok_json(
+            serde_json::json!({ "received": parsed.offset + bytes.len() as u64, "done": false })
+                .to_string(),
+        ),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+#[derive(Deserialize)]
 struct DuplicateBody {
     path: String,
 }

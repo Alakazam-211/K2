@@ -3,8 +3,13 @@
 # This script communicates with the K2 daemon via HTTP.
 # Works inside K2 terminals (auto-configured) and external terminals
 # (auto-discovers connection from ~/.k2/heartbeat.{port,token}).
+#
+# NOTE (0.40.4+): each workspace's dot-dir was renamed `.k2so/` -> `.k2/`.
+# Inbox/skills/prds/agent now live under `<workspace>/.k2/`. This CLI resolves
+# either layout (`.k2/` preferred, `.k2so/` fallback) via `_ws_dot_dir()`, so
+# agents should read/write `<workspace>/.k2/...` going forward.
 
-K2_CLI_VERSION="0.40.3"
+K2_CLI_VERSION="0.40.5"
 
 set -euo pipefail
 
@@ -56,6 +61,20 @@ if [ -z "${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}" ]; then
     unset _dir _found _main_root
 fi
 
+# 0.40.4 cutover heads-up — git-derived + self-clearing. While the
+# `.k2so/` -> `.k2/` rename is uncommitted, `git ls-files .k2so` still lists
+# the (now-deleted-on-disk) tracked files; once the user commits the rename it
+# returns nothing and this goes silent. `|| true` guards the git call from
+# aborting the script in a non-git CWD (GH#16). stderr only — never pollutes
+# command stdout / JSON.
+if [ -d "$PROJECT/.k2" ] && [ ! -d "$PROJECT/.k2so" ]; then
+    _k2so_pending=$(git -C "$PROJECT" ls-files .k2so 2>/dev/null | head -1 || true)
+    if [ -n "$_k2so_pending" ]; then
+        echo "i  K2 0.40.4 renamed this workspace's .k2so/ -> .k2/ (harness symlinks + .gitignore updated). Commit the rename when ready — git tracks it as renames." >&2
+    fi
+    unset _k2so_pending
+fi
+
 # Auto-discover connection from the daemon home if not in a K2 terminal
 if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
     K2SO_HOME="$K2_HOME"
@@ -73,6 +92,10 @@ fi
 # cmd_daemon_install (which is defined before the router runs).
 _skip_conn_gate=0
 [ "${1:-}" = "daemon" ] && [ "${2:-}" = "install" ] && _skip_conn_gate=1
+# `k2 connect ...` (Pro-subdomain mgmt) talks ONLY to the hosted control
+# plane + reads ~/.k2/tunnel.json — never the local daemon — so it must not
+# be blocked by the no-daemon gate.
+[ "${1:-}" = "connect" ] && _skip_conn_gate=1
 
 if [ "$_skip_conn_gate" != "1" ] && { [ -z "$PORT" ] || [ -z "$TOKEN" ]; }; then
     echo "Error: Cannot connect to K2SO." >&2
@@ -1098,8 +1121,8 @@ cmd_daemon_uninstall() {
 # the updater key, rotate this too (and scripts/install-daemon.sh).
 _DAEMON_MINISIGN_PUBKEY="dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU5MTExNDQ2RjY1RUJCMDUKUldRRnUxNzJSaFFSNlFCcXptaWoyRTlidERHaERXbXBkSCthaDEvTTRQbXVIUElOVVd2S0xmNm8K"
 
-_DAEMON_DEFAULT_LATEST_URL="https://github.com/Alakazam-211/K2SO/releases/latest/download/daemon-latest.json"
-_DAEMON_VERSION_URL_TMPL="https://github.com/Alakazam-211/K2SO/releases/download/v%s/daemon-latest.json"
+_DAEMON_DEFAULT_LATEST_URL="https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
+_DAEMON_VERSION_URL_TMPL="https://github.com/Alakazam-211/K2/releases/download/v%s/daemon-latest.json"
 
 # Map uname → manifest artifact key (e.g. "macos-aarch64"). Echoes the
 # key on stdout; on an unknown platform prints an error and returns 1.
@@ -1724,7 +1747,7 @@ try:
         cwd = t.get('cwd', '')
         tid = t.get('terminalId', '')
         agent = agent_from_tid(tid)
-        if '.k2so/agents/manager' in cwd or '.k2so/agents/coordinator' in cwd or agent in ('manager', 'coordinator'):
+        if '.k2/agents/manager' in cwd or '.k2so/agents/manager' in cwd or '.k2/agents/coordinator' in cwd or '.k2so/agents/coordinator' in cwd or agent in ('manager', 'coordinator'):
             print(tid)
             break
 except: pass
@@ -1755,7 +1778,7 @@ try:
     for t in data:
         cwd = t.get('cwd', '')
         tid = t.get('terminalId', '')
-        if '.k2so/agents/manager' in cwd or '.k2so/agents/coordinator' in cwd or tid.startswith('agent-chat-manager') or tid.startswith('agent-chat-coordinator'):
+        if '.k2/agents/manager' in cwd or '.k2so/agents/manager' in cwd or '.k2/agents/coordinator' in cwd or '.k2so/agents/coordinator' in cwd or tid.startswith('agent-chat-manager') or tid.startswith('agent-chat-coordinator'):
             print(tid)
             break
 except: pass
@@ -2956,6 +2979,397 @@ if d.get("running"):
     esac
 }
 
+# ── K2 Connect — Pro multi-subdomain (PRD k2-connect-e2e-encryption.md §7) ──
+#
+# `k2 connect subdomain <create|list|point|rm>` manages the nested
+# `<label>.<sub>.k2.dev` routing entries for a Pro account. Unlike the rest
+# of this CLI (which calls the LOCAL daemon), these talk DIRECTLY to the
+# hosted control plane — the daemon doesn't proxy account management. The
+# bearer token is the SAME tunnel token the cert broker uses, read from
+# `~/.k2/tunnel.json` (0600). The control-plane base defaults to
+# https://connect.k2.dev and is overridable via $K2_CONNECT_BASE for
+# staging / integration tests.
+K2_CONNECT_BASE="${K2_CONNECT_BASE:-https://connect.k2.dev}"
+
+# Read the tunnel bearer token from ~/.k2/tunnel.json. Returns empty when
+# missing so the caller can fail loud with guidance.
+_connect_bearer_token() {
+    python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        tok = (json.load(fh).get("token") or "").strip()
+except Exception:
+    tok = ""
+sys.stdout.write(tok)
+' "${K2_HOME}/tunnel.json" 2>/dev/null
+}
+
+# Read the connected subdomain LABEL from ~/.k2/tunnel.json (e.g. "rosson").
+# This is the primary subdomain this machine's tunnel is bound to; we use it
+# to pick the connected row out of GET /subdomains for the plan display.
+# (The server-side gate matches on the tunnel TOKEN, not this label — this is
+# UX-only row selection. Returns empty when missing.)
+_connect_self_subdomain() {
+    python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        sub = (json.load(fh).get("subdomain") or "").strip()
+except Exception:
+    sub = ""
+sys.stdout.write(sub)
+' "${K2_HOME}/tunnel.json" 2>/dev/null
+}
+
+# Render a control-plane response. Reads "<http_status>\n<body>" on stdin
+# (status first so we can branch before parsing). On 2xx, runs the supplied
+# python `pretty` snippet (which sees the parsed dict as `d`). On error,
+# maps the documented control-plane error codes to clear messages and exits
+# non-zero — fail loud, never swallow.
+_connect_subdomain_render() {
+    local pretty="$1"
+    python3 -c '
+import json, sys
+pretty = sys.argv[1]
+raw = sys.stdin.read()
+nl = raw.find("\n")
+if nl < 0:
+    sys.stderr.write("Error: no response from the control plane (network down?)\n")
+    sys.exit(1)
+status, body = raw[:nl].strip(), raw[nl+1:]
+try:
+    code = int(status)
+except ValueError:
+    sys.stderr.write("Error: bad status line %r\n" % status); sys.exit(1)
+try:
+    d = json.loads(body) if body.strip() else {}
+except Exception:
+    d = {}
+if 200 <= code < 300:
+    exec(pretty, {"d": d}); sys.exit(0)
+err = (d.get("error") or "").strip() if isinstance(d, dict) else ""
+detail = (d.get("detail") or "").strip() if isinstance(d, dict) else ""
+# 403 pro_required is a friendly UPSELL, not a raw error. The server may
+# put the gated subdomain label in `detail`; render the PRD form
+# "<sub> needs the Pro plan — upgrade: k2 connect upgrade". This is UX
+# only — enforcement is server-side; we are just dressing the 403 it sent.
+if err == "pro_required":
+    sub = detail if detail else "This subdomain"
+    sys.stderr.write(
+        "%s needs the Pro plan to create nested subdomains.\n"
+        "  Upgrade: k2 connect upgrade%s\n"
+        % (sub, (" " + detail) if detail else "")
+    )
+    sys.exit(1)
+msgs = {
+    "bad_label": "Invalid label (use lowercase letters, digits, and dashes).",
+    "bad_target": "Invalid target endpoint (e.g. localhost:3000).",
+    "label_taken": "That label is already taken.",
+    "label_is_primary": "That label is your primary subdomain — it cannot be reassigned here.",
+    "primary_undeletable": "Your primary subdomain cannot be removed.",
+    "not_found": "No such subdomain.",
+    "invalid_token": "Tunnel token rejected — re-select your subdomain in Settings -> K2 Connect to refresh it.",
+}
+m = msgs.get(err)
+if m is None:
+    if code == 401:
+        m = "Unauthorized — your tunnel token is missing or expired."
+    elif err:
+        m = "Control plane error (%s)%s" % (err, (": " + detail) if detail else "")
+    else:
+        m = "Control plane returned HTTP %d%s" % (code, (": " + body[:200]) if body.strip() else "")
+elif detail:
+    m = m + " (" + detail + ")"
+sys.stderr.write("Error: %s\n" % m); sys.exit(1)
+' "$pretty"
+}
+
+# Issue a control-plane request, echoing "<http_status>\n<body>" for the
+# renderer. Usage: _connect_curl METHOD ENDPOINT [json-body].
+_connect_curl() {
+    local method="$1" endpoint="$2" body="${3:-}"
+    local token
+    token="$(_connect_bearer_token)"
+    if [ -z "$token" ]; then
+        echo "Error: no K2 Connect tunnel token found in ${K2_HOME}/tunnel.json." >&2
+        echo "Select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first." >&2
+        exit 1
+    fi
+    local args=(-sS -X "$method" "${K2_CONNECT_BASE}${endpoint}"
+        --connect-timeout 5 --max-time 30
+        -H "Authorization: Bearer ${token}"
+        -w $'\n%{http_code}')
+    if [ -n "$body" ]; then
+        args+=(-H "Content-Type: application/json" --data-raw "$body")
+    fi
+    local out
+    out="$(curl "${args[@]}" 2>/dev/null)" || {
+        echo "Error: could not reach the K2 Connect control plane at ${K2_CONNECT_BASE}." >&2
+        exit 1
+    }
+    # curl appended "\n<status>" (from -w) after the body; pull the status
+    # off the tail and emit it FIRST so the renderer can branch on it.
+    local code="${out##*$'\n'}"
+    local resp="${out%$'\n'*}"
+    printf '%s\n%s' "$code" "$resp"
+}
+
+_connect_usage() {
+    echo "Usage: k2 connect <status|subdomain|upgrade> ..." >&2
+    echo "  status                                Connected subdomain + its plan" >&2
+    echo "  subdomain <create|list|point|rm> ...  Manage Pro nested subdomains" >&2
+    echo "  upgrade [<subdomain>]                 Open Pro checkout for a subdomain" >&2
+}
+
+cmd_connect() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        status)
+            cmd_connect_status "$@"
+            ;;
+        subdomain)
+            cmd_connect_subdomain "$@"
+            ;;
+        upgrade)
+            cmd_connect_upgrade "$@"
+            ;;
+        ""|help|--help|-h)
+            _connect_usage
+            exit 1
+            ;;
+        *)
+            echo "Unknown 'k2 connect' subcommand: $sub" >&2
+            _connect_usage
+            exit 1
+            ;;
+    esac
+}
+
+# `k2 connect status` — show the CONNECTED subdomain and its plan.
+#
+# Resolves the local tunnel (token + subdomain label from ~/.k2/tunnel.json),
+# calls GET /subdomains (authenticated by the token), and picks the row for
+# THIS tunnel: preferring a server-set `connected`/`current` flag (the row
+# whose tunnel_token matched), else falling back to the local subdomain
+# label. Displays the per-row `tier` (free|single|pro) as a friendly plan.
+# Display is UX only — the create/point gate is enforced server-side.
+cmd_connect_status() {
+    if [ -z "$(_connect_bearer_token)" ]; then
+        echo "Error: no K2 Connect tunnel token found in ${K2_HOME}/tunnel.json." >&2
+        echo "Select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first." >&2
+        exit 1
+    fi
+    local self
+    self="$(_connect_self_subdomain)"
+    _connect_curl GET "/subdomains" | SELF="$self" _connect_subdomain_render '
+import os
+self_label = (os.environ.get("SELF") or "").strip().lower()
+subs = d.get("subdomains", []) if isinstance(d, dict) else []
+
+def host_of(s):
+    return s.get("host") or (str(s.get("label","?")) + ".k2.dev")
+
+def label_of(s):
+    lbl = s.get("label")
+    if lbl:
+        return str(lbl).strip().lower()
+    return host_of(s).split(".")[0].strip().lower()
+
+# Prefer the server-marked connected row (token match); else match the
+# local tunnel subdomain label.
+row = None
+for s in subs:
+    if s.get("connected") or s.get("current") or s.get("is_current"):
+        row = s; break
+if row is None and self_label:
+    for s in subs:
+        if label_of(s) == self_label:
+            row = s; break
+
+if row is None:
+    if self_label:
+        print("Connected: %s.k2.dev" % self_label)
+        print("  Plan: unknown (subdomain not found in your account list)")
+    else:
+        print("Not connected to a K2 Connect subdomain.")
+        print("  Select a subdomain in Settings -> K2 Connect (or run k2 tunnel start).")
+    sys.exit(0)
+
+host = host_of(row)
+tier = (row.get("tier") or "").strip().lower()
+if tier == "pro":
+    plan = "Pro ✓ (nested subdomains enabled)"
+elif tier == "single":
+    plan = "Single — upgrade to Pro to create nested subdomains"
+elif tier == "free":
+    plan = "Free"
+elif tier:
+    plan = tier.capitalize()
+else:
+    plan = "unknown"
+print("Connected: %s · Plan: %s" % (host, plan))
+if tier in ("single", "free"):
+    print("  Upgrade: k2 connect upgrade")
+'
+}
+
+# `k2 connect upgrade [<subdomain>]` — open Pro checkout for the connected
+# (or named) subdomain. Calls POST /billing/checkout {subdomain, plan} on the
+# control plane (authenticated by the tunnel token) and prints the returned
+# Stripe Checkout URL. Enforcement/entitlement is server-side; this only
+# requests a checkout session.
+cmd_connect_upgrade() {
+    if [ -z "$(_connect_bearer_token)" ]; then
+        echo "Error: no K2 Connect tunnel token found in ${K2_HOME}/tunnel.json." >&2
+        echo "Select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first." >&2
+        exit 1
+    fi
+    local target="${1:-}"
+    [ -z "$target" ] && target="$(_connect_self_subdomain)"
+    if [ -z "$target" ]; then
+        echo "Usage: k2 connect upgrade [<subdomain>]" >&2
+        echo "  No connected subdomain found in ${K2_HOME}/tunnel.json — name one explicitly." >&2
+        exit 1
+    fi
+    local body
+    body="$(python3 -c 'import json,sys; print(json.dumps({"subdomain": sys.argv[1], "plan": "pro"}))' "$target")"
+    TARGET="$target" _connect_curl POST "/billing/checkout" "$body" | TARGET="$target" _connect_subdomain_render '
+import os
+target = os.environ.get("TARGET") or "your subdomain"
+url = d.get("url") or d.get("checkout_url") or d.get("checkoutUrl") or ""
+if not url:
+    sys.stderr.write("Error: control plane did not return a checkout URL.\n")
+    sys.exit(1)
+print("Upgrade %s to Pro:" % target)
+print("  %s" % url)
+print("Open this URL in your browser to complete checkout.")
+'
+}
+
+cmd_connect_subdomain() {
+    local action="${1:-list}"
+    shift 2>/dev/null || true
+    # Token gate up front (NOT inside the pipeline below, where a subshell
+    # `exit` wouldn't stop the renderer half of the pipe).
+    if [ -z "$(_connect_bearer_token)" ]; then
+        echo "Error: no K2 Connect tunnel token found in ${K2_HOME}/tunnel.json." >&2
+        echo "Select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first." >&2
+        exit 1
+    fi
+    case "$action" in
+        create)
+            local label="" target=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --target) target="${2:-}"; shift 2 ;;
+                    --*) shift ;;
+                    *) [ -z "$label" ] && label="$1"; shift ;;
+                esac
+            done
+            if [ -z "$label" ] || [ -z "$target" ]; then
+                echo "Usage: k2 connect subdomain create <label> --target <endpoint>" >&2
+                echo "  e.g. k2 connect subdomain create staging --target localhost:3000" >&2
+                exit 1
+            fi
+            local body
+            body="$(python3 -c 'import json,sys; print(json.dumps({"label": sys.argv[1], "target": sys.argv[2]}))' "$label" "$target")"
+            _connect_curl POST "/subdomains" "$body" | _connect_subdomain_render '
+host = d.get("host") or (str(d.get("label","?")) + ".k2.dev")
+print("Created %s" % host)
+print("  target:    %s" % d.get("target","?"))
+print("  status:    %s" % d.get("status","?"))
+print("  cert:      %s" % d.get("cert_status","?"))
+print("  effective: %s" % d.get("effective","?"))
+'
+            ;;
+        list)
+            local self
+            self="$(_connect_self_subdomain)"
+            _connect_curl GET "/subdomains" | SELF="$self" _connect_subdomain_render '
+import os
+self_label = (os.environ.get("SELF") or "").strip().lower()
+subs = d.get("subdomains", []) if isinstance(d, dict) else []
+def label_of(s):
+    lbl = s.get("label")
+    if lbl:
+        return str(lbl).strip().lower()
+    return (s.get("host") or "").split(".")[0].strip().lower()
+def plan_of(s):
+    t = (s.get("tier") or "").strip().lower()
+    return {"pro": "Pro", "single": "Single", "free": "Free"}.get(t, t or "-")
+if not subs:
+    print("No subdomains.")
+else:
+    rows = []
+    for s in subs:
+        flags = []
+        if s.get("primary"):
+            flags.append("primary")
+        if s.get("connected") or s.get("current") or s.get("is_current") \
+           or (self_label and label_of(s) == self_label):
+            flags.append("connected")
+        rows.append((
+            s.get("host") or (str(s.get("label","?")) + ".k2.dev"),
+            str(s.get("target","")),
+            plan_of(s),
+            str(s.get("effective") or s.get("status","")),
+            " ".join(flags),
+        ))
+    hw = max([len(r[0]) for r in rows] + [len("HOST")])
+    tw = max([len(r[1]) for r in rows] + [len("TARGET")])
+    pw = max([len(r[2]) for r in rows] + [len("PLAN")])
+    sw = max([len(r[3]) for r in rows] + [len("STATUS")])
+    print("  %-*s  %-*s  %-*s  %-*s  %s" % (hw,"HOST",tw,"TARGET",pw,"PLAN",sw,"STATUS","FLAGS"))
+    for h,t,pl,st,fl in rows:
+        print("  %-*s  %-*s  %-*s  %-*s  %s" % (hw,h,tw,t,pw,pl,sw,st,fl))
+'
+            ;;
+        point)
+            local label="" target=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --target) target="${2:-}"; shift 2 ;;
+                    --*) shift ;;
+                    *) [ -z "$label" ] && label="$1"; shift ;;
+                esac
+            done
+            if [ -z "$label" ] || [ -z "$target" ]; then
+                echo "Usage: k2 connect subdomain point <label> --target <endpoint>" >&2
+                exit 1
+            fi
+            local body
+            body="$(python3 -c 'import json,sys; print(json.dumps({"target": sys.argv[1]}))' "$target")"
+            _connect_curl PUT "/subdomains/$(urlencode "$label")" "$body" | _connect_subdomain_render '
+host = d.get("host") or (str(d.get("label","?")) + ".k2.dev")
+print("Repointed %s -> %s" % (host, d.get("target","?")))
+print("  status:    %s" % d.get("status","?"))
+print("  effective: %s" % d.get("effective","?"))
+'
+            ;;
+        rm|remove|delete)
+            local label="${1:-}"
+            shift 2>/dev/null || true
+            if [ -z "$label" ]; then
+                echo "Usage: k2 connect subdomain rm <label>" >&2
+                exit 1
+            fi
+            _connect_curl DELETE "/subdomains/$(urlencode "$label")" | _connect_subdomain_render '
+print("Removed %s" % (d.get("removed") or "(subdomain)"))
+'
+            ;;
+        *)
+            echo "Usage: k2 connect subdomain <create|list|point|rm> ..." >&2
+            echo "  create <label> --target <endpoint>   Claim a nested subdomain" >&2
+            echo "  list                                 List your subdomains" >&2
+            echo "  point  <label> --target <endpoint>   Repoint to a new endpoint" >&2
+            echo "  rm     <label>                       Remove a subdomain" >&2
+            exit 1
+            ;;
+    esac
+}
+
 cmd_skills() {
     local subcmd="${1:-list}"
     shift || true
@@ -3016,7 +3430,7 @@ try:
         sys.stderr.write('Error: %s\n' % d['error']); sys.exit(1)
     nm = d.get('name','?')
     print(f'Created skill: {nm}')
-    print(f'  Edit: .k2so/skills/{nm}/SKILL.md')
+    print(f'  Edit: .k2/skills/{nm}/SKILL.md')
 except Exception as e:
     sys.stderr.write('Error: %s\n' % e); sys.exit(1)
 " 2>/dev/null
@@ -3181,7 +3595,7 @@ cmd_workspace_preview() {
         fi
     done
     echo ""
-    echo "Nothing is destroyed — archives land in .k2so/migration/ and can be restored via"
+    echo "Nothing is destroyed — archives land in .k2/migration/ and can be restored via"
     echo "  k2 workspace remove $target_path --mode restore-original"
 }
 
@@ -3200,8 +3614,8 @@ cmd_workspace_remove() {
         echo "" >&2
         echo "  --mode keep-current      Freeze the current SKILL.md body into each harness file so" >&2
         echo "                           every CLI LLM keeps working after K2SO disconnects." >&2
-        echo "  --mode restore-original  Restore pre-K2SO files from .k2so/migration/; files K2SO" >&2
-        echo "                           created fresh are removed. .k2so/ stays intact for reconnect." >&2
+        echo "  --mode restore-original  Restore pre-K2SO files from .k2/migration/; files K2SO" >&2
+        echo "                           created fresh are removed. .k2/ stays intact for reconnect." >&2
         echo "  (no mode)                DB-only deregister; filesystem untouched (symlinks remain)." >&2
         exit 1
     fi
@@ -3668,15 +4082,15 @@ EOF
 
 # ── Self-Update ──────────────────────────────────────────────────────
 
-K2SO_CLI_RAW_URL="https://raw.githubusercontent.com/Alakazam-211/K2SO/main/cli/k2so"
+K2SO_CLI_RAW_URL="https://raw.githubusercontent.com/Alakazam-211/K2/main/cli/k2"
 
 cmd_app_update() {
     local version="${1:-}"
     if [ "$version" = "--list" ] || [ "$version" = "-l" ]; then
         # List available versions from GitHub
-        echo "Available K2SO releases:"
+        echo "Available K2 releases:"
         curl -sH "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/Alakazam-211/K2SO/releases?per_page=10" 2>/dev/null | \
+            "https://api.github.com/repos/Alakazam-211/K2/releases?per_page=10" 2>/dev/null | \
             python3 -c "
 import json, sys
 data = json.loads(sys.stdin.read())
@@ -3694,14 +4108,14 @@ for r in data:
         echo "Checking for app updates..."
         local latest
         latest=$(curl -sH "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/Alakazam-211/K2SO/releases/latest" 2>/dev/null)
+            "https://api.github.com/repos/Alakazam-211/K2/releases/latest" 2>/dev/null)
         local tag
         tag=$(echo "$latest" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('tag_name','unknown'))" 2>/dev/null)
         echo "  Current: v$K2_CLI_VERSION"
         echo "  Latest:  $tag"
         echo ""
         echo "To update the app, download from:"
-        echo "  https://github.com/Alakazam-211/K2SO/releases/tag/$tag"
+        echo "  https://github.com/Alakazam-211/K2/releases/tag/$tag"
         echo ""
         echo "Or use: k2 app-update --list  to see all versions"
         return
@@ -3711,10 +4125,10 @@ for r in data:
     local tag="$version"
     # Add 'v' prefix if not present
     [[ "$tag" != v* ]] && tag="v$tag"
-    local dmg_url="https://github.com/Alakazam-211/K2SO/releases/download/${tag}/K2SO_${tag#v}_aarch64.dmg"
-    echo "Downloading K2SO $tag..."
+    local dmg_url="https://github.com/Alakazam-211/K2/releases/download/${tag}/K2_${tag#v}_aarch64.dmg"
+    echo "Downloading K2 $tag..."
     echo "  URL: $dmg_url"
-    local tmpfile="/tmp/K2SO_${tag}.dmg"
+    local tmpfile="/tmp/K2_${tag}.dmg"
     if curl -L --progress-bar -o "$tmpfile" "$dmg_url" 2>&1; then
         echo ""
         echo "Downloaded to: $tmpfile"
@@ -3747,7 +4161,7 @@ cmd_update() {
 
     # Extract the version from the remote script
     local remote_version
-    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | sed 's/K2_CLI_VERSION="0.40.3"//')
+    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | sed 's/K2_CLI_VERSION="0.40.5"//')
     if [ -z "$remote_version" ]; then
         echo "Error: Could not parse remote version." >&2
         exit 1
@@ -4186,7 +4600,7 @@ RECEIVING FROM OTHER WORKSPACES
 
 LEGACY ITEMS
   Pre-Phase-2.1 work items at .k2so/work/{inbox,active,done}/ have
-  been migrated to .k2so/inbox/{,active,done}/. If migration didn't
+  been migrated to .k2/inbox/{,active,done}/. If migration didn't
   run yet, trigger it manually: `k2 inbox` will reveal nothing
   until the daemon has converted the layout.
 EOF
@@ -4246,7 +4660,7 @@ SKILLS vs AGENT
   (Claude Code's sub-agent spawning, Cursor's worktree management).
   K2SO no longer provides a `delegate` verb — see `k2 help-deprecated`.
 
-  Skills live at `.k2so/skills/<name>/SKILL.md` (consolidated home as of
+  Skills live at `.k2/skills/<name>/SKILL.md` (consolidated home as of
   Phase 2.5b). The legacy `.k2so/agents/` and `.k2so/agent-templates/`
   folders are migrated into here on first daemon boot per upgraded
   workspace. Originals go to the macOS Recycle Bin (recoverable).
@@ -4700,6 +5114,14 @@ TUNNEL (K2 Connect — expose this daemon at https://<user>.k2.dev)
   tunnel start [--subdomain <s>]                Start the frpc tunnel
   tunnel stop                                   Stop the tunnel
   tunnel status [--json]                        Running? + public URL
+
+CONNECT (K2 Connect — Pro subdomains + plan; talks to the control plane)
+  connect status                                Connected subdomain + its plan
+  connect subdomain list                        Your subdomains + plan/status
+  connect subdomain create <label> --target <e> Claim a nested subdomain (Pro)
+  connect subdomain point <label> --target <e>  Repoint a subdomain (Pro)
+  connect subdomain rm <label>                  Remove a subdomain (Pro)
+  connect upgrade [<subdomain>]                 Open Pro checkout for a subdomain
 
 SETTINGS
   settings                                      Show current settings
@@ -5249,6 +5671,11 @@ EOF
         ;;
     connections)
         shift; cmd_connections "$@"
+        ;;
+    connect)
+        # K2 Connect account/Pro-subdomain management (calls the hosted
+        # control plane directly, not the local daemon).
+        shift; cmd_connect "$@"
         ;;
     companion)
         # Phase 2.1: hard-deprecated. Companion is daemon-owned.

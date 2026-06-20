@@ -362,14 +362,14 @@ fn strip_frontmatter(content: &str) -> &str {
     content
 }
 
-/// Remove the K2SO-managed block (`<!-- K2SO:BEGIN -->` …
-/// `<!-- K2SO:END -->`) from a string. Used so files containing
-/// *only* K2SO-injected content read as empty during scan, and so
-/// adopting a file's body doesn't carry K2SO's own markers into
-/// the new PROJECT.md.
+/// Remove the K2-managed block (`<!-- K2:BEGIN -->` … `<!-- K2:END -->`)
+/// from a string. Used so files containing *only* K2-injected content read
+/// as empty during scan, and so adopting a file's body doesn't carry K2's
+/// own markers into the new PROJECT.md. Anchored on the writer's
+/// [`crate::skills::writer::K2SO_SECTION_BEGIN`] / `…_END` constants so the
+/// strip stays in lockstep with the inject.
 pub fn strip_k2so_managed_block(content: &str) -> String {
-    const BEGIN: &str = "<!-- K2SO:BEGIN -->";
-    const END: &str = "<!-- K2SO:END -->";
+    use crate::skills::writer::{K2SO_SECTION_BEGIN as BEGIN, K2SO_SECTION_END as END};
     if let (Some(b), Some(e)) = (content.find(BEGIN), content.find(END)) {
         if e > b {
             let mut out = String::with_capacity(content.len());
@@ -510,7 +510,7 @@ mod tests {
         let path = p.to_string_lossy().to_string();
         fs::write(
             p.join("AGENTS.md"),
-            "<!-- K2SO:BEGIN -->\nfoo\n<!-- K2SO:END -->\n",
+            "<!-- K2:BEGIN -->\nfoo\n<!-- K2:END -->\n",
         )
         .unwrap();
         let found = scan_harness_files(&path);

@@ -141,6 +141,11 @@ struct SetTabTitleBody {
     project_id: Option<String>,
     tab_id: String,
     title: String,
+    /// Sticky-rename flag (0053). A user's explicit rename sends
+    /// `locked: true` so program-generated PTY titles can't overwrite
+    /// it. Defaults to false for callers that don't set it.
+    #[serde(default)]
+    locked: bool,
 }
 
 /// `POST /cli/workspace/set-tab-title { project, tabId, title }` (#676).
@@ -182,7 +187,7 @@ pub fn handle_set_tab_title(body: &[u8]) -> CliResponse {
         }
     };
 
-    match dops::tab_title_set(&project_id, &b.tab_id, &b.title) {
+    match dops::tab_title_set(&project_id, &b.tab_id, &b.title, b.locked) {
         Ok(()) => {
             let _ = crate::session_events::emit(
                 crate::session_events::SessionEvent::TabTitleChanged {

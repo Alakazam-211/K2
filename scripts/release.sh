@@ -255,10 +255,20 @@ echo "  Update bundle signed."
 echo ""
 echo "Step 6: Creating DMG..."
 rm -f "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
+# Stage the notarized app NEXT TO an /Applications symlink so the mounted
+# DMG shows the standard "drag K2 → Applications" drop target. A bare
+# `-srcfolder K2.app` packs only the app, so users see no Applications
+# folder to drag into (the symlink tauri's own DMG ships gets dropped when
+# we recreate the DMG here from the stapled app). `ditto` preserves the
+# app's signature + stapled notarization ticket.
+DMG_STAGE="$(mktemp -d)"
+ditto "target/release/bundle/macos/K2.app" "$DMG_STAGE/K2.app"
+ln -s /Applications "$DMG_STAGE/Applications"
 hdiutil create -volname "K2" \
-    -srcfolder "target/release/bundle/macos/K2.app" \
+    -srcfolder "$DMG_STAGE" \
     -ov -format UDZO \
     "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
+rm -rf "$DMG_STAGE"
 codesign --force --timestamp \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"

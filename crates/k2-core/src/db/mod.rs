@@ -395,6 +395,10 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // 0052 (added in 0.39.39): #676 daemon-canonical tab_titles table +
         // #677.3 workspace_layouts.revision (monotonic LWW tab-order).
         ("0052_tab_titles_and_layout_revision", include_str!("../../drizzle_sql/0052_tab_titles_and_layout_revision.sql")),
+        // 0053 (added in 0.39.46): #676 follow-up — a `locked` flag on
+        // tab_titles so a user's explicit rename is STICKY and never
+        // overwritten by a program-generated PTY title.
+        ("0053_tab_title_locked", include_str!("../../drizzle_sql/0053_tab_title_locked.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -518,12 +522,13 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 2),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 3),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", "", 4),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 5),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 6),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 7),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 8),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 9),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 10),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", "", 5),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 6),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 7),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 8),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 9),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 10),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 11),
     ];
 
     for (id, label, command, icon, sort_order) in presets {
@@ -701,7 +706,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 11, "expected 11 built-in presets");
+        assert_eq!(n, 12, "expected 12 built-in presets");
     }
 
     #[test]
@@ -718,7 +723,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 11, "reseeding must not duplicate rows");
+        assert_eq!(n, 12, "reseeding must not duplicate rows");
     }
 
     // ── purge_orphan_project_children self-heal ───────────────────
@@ -922,7 +927,7 @@ mod tests {
         let preset_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM agent_presets WHERE is_built_in=1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(preset_count, 11);
+        assert_eq!(preset_count, 12);
         drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
@@ -939,7 +944,7 @@ mod tests {
         let presets: i64 = conn
             .query_row("SELECT COUNT(*) FROM agent_presets WHERE is_built_in=1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(presets, 11, "re-bootstrap must not duplicate presets");
+        assert_eq!(presets, 12, "re-bootstrap must not duplicate presets");
         drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }

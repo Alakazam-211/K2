@@ -65,7 +65,13 @@ struct ErrorEvent {
 pub async fn serve_session_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
+    owner_token: String,
 ) {
+    // The token that authorized this connection. Re-validated on a timer
+    // below so a revoked connect-user is dropped from this live event
+    // stream within seconds (mirrors the grid-WS re-auth heartbeat).
+    let token = params.get("token").cloned().unwrap_or_default();
+
     // 0.39.7: stream borrowed (was owned). See events.rs.
     let workspace_path = match params.get("path").map(String::as_str) {
         Some(p) if !p.is_empty() => p.to_string(),
@@ -104,8 +110,26 @@ pub async fn serve_session_events_connection(
         return;
     }
 
+    // Re-auth heartbeat (see grid-WS). Every 5s, confirm the connecting
+    // token is still valid; a revoked connect-user is kicked off this live
+    // event stream rather than left subscribed until they disconnect.
+    let mut auth_recheck =
+        tokio::time::interval(std::time::Duration::from_secs(5));
+    auth_recheck.tick().await; // burn the immediate first tick
+
     loop {
         tokio::select! {
+            _ = auth_recheck.tick() => {
+                if !crate::routes::http::token_still_valid(&token, &owner_token) {
+                    log_debug!(
+                        "[daemon/session_events_ws] token revoked mid-session; \
+                         closing events WS for subscriber {}",
+                        subscriber_id,
+                    );
+                    let _ = write.send(Message::Close(None)).await;
+                    break;
+                }
+            }
             recv = rx.recv() => {
                 match recv {
                     Ok(event) => {

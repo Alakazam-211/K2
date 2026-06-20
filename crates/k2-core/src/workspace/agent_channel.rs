@@ -132,7 +132,7 @@ pub fn done(
 }
 
 fn reservations_path(project_path: &str) -> PathBuf {
-    PathBuf::from(project_path).join(".k2so/reservations.json")
+    crate::workspace_dot_dir(project_path).join("reservations.json")
 }
 
 fn read_reservations(

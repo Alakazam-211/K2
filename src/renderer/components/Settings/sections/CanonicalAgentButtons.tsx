@@ -11,6 +11,15 @@ import { type HarnessProbe, anyHarnessUnified } from './canonicalState'
 export const CANONICAL_PITCH_SUBTITLE =
   'Tell K2 once, every AI tool listens. Each AI coding tool reads its project notes from a different file; write your context once and every tool sees the same picture.'
 
+// Plain-language warning shown at the fan-out checkbox decision point.
+// Enabling fan-out symlinks harness files onto K2's generated canon and can
+// overwrite existing content — the safe route for an existing project is the
+// K2 Canonical Agent skill (it merges content first). Best for new projects.
+export const FANOUT_ENABLE_WARNING =
+  'Enabling this symlinks your harness files (CLAUDE.md, AGENTS.md, …) onto K2’s generated canon and can overwrite existing content.\n\n' +
+  'For an existing project, run the K2 Canonical Agent with an AI assistant instead — it merges your current files safely.\n\n' +
+  'The checkbox is best for new projects.\n\nEnable harness fan-out anyway?'
+
 /**
  * Role-skill button (Workspace Manager / K2 Agent). Opens the normal
  * AIFileEditor on AGENT.md (PRD §9.1). Label gates on skill-present state:
@@ -31,7 +40,7 @@ export function RoleSkillButton({
   useEffect(() => {
     let cancelled = false
     daemonCliGet<{ content: string }>('fs/read-file', {
-      path: `${projectPath}/.k2so/skills/${role}/SKILL.md`,
+      path: `${projectPath}/.k2/skills/${role}/SKILL.md`,
     })
       .then(() => { if (!cancelled) setSkillPresent(true) })
       .catch(() => { if (!cancelled) setSkillPresent(false) })
@@ -44,7 +53,7 @@ export function RoleSkillButton({
         <span className="text-xs text-[var(--color-text-secondary)]">{label} skill</span>
         <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
           Weaves the {label} role guidance into{' '}
-          <span className="font-mono">.k2so/agent/AGENT.md</span> organically — your existing
+          <span className="font-mono">.k2/agent/AGENT.md</span> organically — your existing
           context is preserved, never overwritten with a templated block.
         </p>
       </div>
@@ -88,6 +97,9 @@ export function CanonicalAgentButton({
   async function toggleFanout(): Promise<void> {
     if (fanoutBusy) return
     const next = !fanoutEnabled
+    // Confirm before ENABLING — symlinking onto K2's generated canon can
+    // overwrite existing harness content. Disabling is non-destructive.
+    if (next && !window.confirm(FANOUT_ENABLE_WARNING)) return
     setFanoutBusy(true)
     setFanoutEnabled(next) // optimistic
     try {
@@ -115,7 +127,7 @@ export function CanonicalAgentButton({
         </button>
       </div>
       {/* Permission checkbox lives WITH the button (PRD §4). Reads/writes the
-          same `.k2so/.harness-fanout-enabled` marker the Canonical Agent Flow
+          same `.k2/.harness-fanout-enabled` marker the Canonical Agent Flow
           settings page does, so the two stay in sync. */}
       <label className="flex items-start gap-2 cursor-pointer no-drag select-none">
         <input
@@ -138,8 +150,10 @@ export function CanonicalAgentButton({
         <span className="text-[9px] text-[var(--color-text-muted)] leading-snug">
           Allow programmatic harness fan-out (symlinks). When on, K2 keeps the harness files
           (<span className="font-mono">CLAUDE.md</span>, <span className="font-mono">GEMINI.md</span>, …)
-          symlinked to <span className="font-mono">.k2so/agent/AGENT.md</span> automatically. Off by default — the
-          skill route (button above) is the safe, copy-based alternative.
+          symlinked to the generated <span className="font-mono">.k2/AGENTS.md</span> automatically. Off by
+          default. <span className="text-amber-300">Can overwrite existing harness content</span> — for an
+          existing project, run the K2 Canonical Agent (button above) instead; it merges safely. Best for new
+          projects.
         </span>
       </label>
     </div>

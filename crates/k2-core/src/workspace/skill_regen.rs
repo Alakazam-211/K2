@@ -19,31 +19,32 @@
 //! canonical generators instead of inline templates (fixes A25-verb
 //! drift), then renamed for clarity.
 //!
+//! 0.40.x (AGENTS.md-canonical, `.k2/prds/k2-agents-md-canonical.md`):
+//! the workspace entrypoint is now the GENERATED `.k2/AGENTS.md`
+//! (persona + project + a pointer to the loadable `k2-cli` skill); the
+//! harness mirrors (CLAUDE.md, GEMINI.md, root AGENTS.md, .cursor)
+//! symlink to it. The OLD composed `.k2/skills/k2so/SKILL.md` + the
+//! MANAGED/SOURCE-region machinery are GONE; the one-time reap
+//! ([`reap_old_workspace_skill_shape`]) carries any user USER_NOTES into
+//! AGENT.md, then deletes the old artifacts.
+//!
 //! Sibling [`crate::workspace::harness`] owns the harness file-discovery
 //! fan-out (symlink scaffolding, cursor MDC, aider conf merge), and
 //! [`crate::workspace::teardown`] owns the disconnect/restore flow.
-//! [`crate::workspace::migrations`] hosts the three archive-utility
-//! helpers (`archive_claude_md_file`, `inject_first_migration_banner`,
-//! `log_adoption_event`) all three modules share.
+//! [`crate::workspace::migrations`] hosts the archive-utility helper
+//! `log_adoption_event` these modules share.
 
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::skills::version::{
-    skill_checksum_hex, skill_source_agent_md_begin, skill_source_agent_md_end,
-    SKILL_END_MARKER, SKILL_SOURCE_PROJECT_MD_BEGIN, SKILL_SOURCE_PROJECT_MD_END,
-    SKILL_VERSION_WORKSPACE,
-};
-use crate::skills::writer::{
-    force_symlink, skill_update_footer, upsert_k2so_section, write_skill_to_all_harnesses,
-};
+use crate::skills::version::{skill_checksum_hex, SKILL_VERSION_WORKSPACE};
+use crate::skills::writer::{force_symlink, upsert_k2so_section};
 use crate::workspace::agent_identity::{
-    agent_dir, agent_type_for, agents_dir, find_primary_agent, parse_frontmatter,
+    agent_dir, agents_dir, find_primary_agent, parse_frontmatter,
 };
 use crate::workspace::onboarding::harness_fanout_enabled;
-use crate::workspace::wake_prompts::strip_frontmatter;
-use crate::fs_atomic::{self, atomic_symlink, atomic_write_str, log_if_err};
+use crate::fs_atomic::{self, atomic_write_str, log_if_err};
 use crate::log_debug;
 use crate::workspace::migrations::{
     archive_claude_md_file, inject_first_migration_banner, log_adoption_event,
@@ -53,112 +54,344 @@ use crate::workspace::migrations::{
 // Constants
 // ══════════════════════════════════════════════════════════════════════
 
-/// Sentinel marker users can place in the below-END tail to claim freeform
-/// content that should survive regeneration. Anything BETWEEN this marker
-/// and EOF is preserved verbatim. Useful for notes the user wants to keep
-/// but doesn't want routed into PROJECT.md / AGENT.md.
+/// LEGACY sentinel marking the user free-form region in the OLD composed
+/// `.k2/skills/k2so/SKILL.md`. The new AGENTS.md shape no longer writes
+/// this; it survives ONLY so the one-time reap (`reap_old_workspace_skill_shape`)
+/// can recognize and carry forward any user content before deleting the
+/// old artifact. See `.k2/prds/k2-agents-md-canonical.md` §2a/§4.
 pub const SKILL_USER_NOTES_SENTINEL: &str = "<!-- K2SO:USER_NOTES -->";
 
-/// The placeholder comment emitted alongside the USER_NOTES sentinel on
-/// every regen. Tracked as a constant so `strip_workspace_skill_tail` can
-/// discard any existing copies from the preserved freeform — otherwise
-/// each regen would stack another placeholder copy onto the tail.
+/// LEGACY placeholder comment that the OLD shape emitted right under the
+/// USER_NOTES sentinel. The reap strips these lines so a workspace that
+/// accumulated several placeholder copies doesn't carry boilerplate into
+/// AGENT.md.
 pub const USER_NOTES_PLACEHOLDER: &str =
     "<!-- Content below the K2SO:USER_NOTES sentinel is yours — K2SO preserves it verbatim across regenerations. -->";
+
+/// Markers wrapping the carried-forward USER_NOTES inside the primary
+/// agent's `AGENT.md`. Idempotent: the reap replaces (never appends a
+/// second copy of) any content between these markers on every run.
+pub const MIGRATED_NOTES_BEGIN: &str = "<!-- K2:MIGRATED_NOTES:BEGIN -->";
+pub const MIGRATED_NOTES_END: &str = "<!-- K2:MIGRATED_NOTES:END -->";
 
 // ══════════════════════════════════════════════════════════════════════
 // SKILL scaffolding helpers (private to this module)
 // ══════════════════════════════════════════════════════════════════════
 
-/// Generate the workspace-level skill for users working directly with an LLM.
-/// Lightweight — just the commands a human user would need when working
-/// alongside K2SO agents. All verbs here are pinned to the A25 canonical
-/// taxonomy (Phase 2.1); the deprecated-verb snapshot test in
-/// `skills/content.rs::tests::DEPRECATED_VERBS` guards against
-/// regressions.
-fn generate_workspace_skill_content(project_name: &str) -> String {
-    format!(
-r#"# K2SO Skill
+// ── New shape: AGENTS.md canonical ────────────────────────────────────
+//
+// AGENT.md (persona) + PROJECT.md (project) are the AUTHORED sources. K2
+// GENERATES the canonical `.k2/AGENTS.md` from them; the harness mirrors
+// (CLAUDE.md, GEMINI.md, .cursor/rules) symlink to it. The K2 CLI reference
+// and the canonical-agents operator are LOADABLE skills, not baked into the
+// always-on entrypoint. See `.k2/prds/k2-agents-md-canonical.md`.
 
-This workspace ({project_name}) is managed by K2SO. You can use these commands to interact with the agent system.
+/// Compose the canonical `AGENTS.md` body from the authored sources: the
+/// primary agent's persona (`AGENT.md`) + the project context (`PROJECT.md`)
+/// + a one-line pointer to the loadable `k2-cli` skill. Fully generated —
+/// edits belong in AGENT.md / PROJECT.md, never here.
+fn compose_agents_md(project_path: &str) -> String {
+    use crate::workspace::wake_prompts::strip_frontmatter;
+    let project_name = Path::new(project_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "workspace".to_string());
 
-## Send Work to a Workspace
+    let mut out = format!(
+        "# {project_name}\n\n\
+         <!-- GENERATED by K2 from .k2/agent/AGENT.md (persona) + .k2/PROJECT.md (project). \
+         Edit THOSE files, not this one — K2 regenerates AGENTS.md and the harness mirrors \
+         (CLAUDE.md, GEMINI.md, .cursor/rules) symlink to it. -->\n\n"
+    );
 
-Send a task to a workspace's manager for triage and execution:
+    if let Some(primary) = find_primary_agent(project_path) {
+        let agent_md = agent_dir(project_path, &primary).join("AGENT.md");
+        if let Ok(raw) = fs::read_to_string(&agent_md) {
+            let body = strip_frontmatter(&raw);
+            let body = body.trim();
+            if !body.is_empty() {
+                out.push_str("## Agent\n\n");
+                out.push_str(body);
+                out.push_str("\n\n");
+            }
+        }
+    }
+
+    let project_md = crate::workspace_dot_dir(project_path).join("PROJECT.md");
+    if let Ok(raw) = fs::read_to_string(&project_md) {
+        let body = strip_frontmatter(&raw);
+        let body = body.trim();
+        if !body.is_empty() {
+            out.push_str("## Project\n\n");
+            out.push_str(body);
+            out.push_str("\n\n");
+        }
+    }
+
+    out.push_str(
+        "## Tooling\n\n\
+         This workspace is managed by **K2**. You have the `k2` CLI — load the **k2-cli** \
+         skill (`.k2/skills/k2-cli/SKILL.md`) for the full command reference \
+         (`msg`, `inbox`, `activity`, `connections`, `heartbeat`).\n",
+    );
+    out
+}
+
+/// The K2 CLI reference, shipped as a LOADABLE skill (`.k2/skills/k2-cli/`)
+/// rather than baked into the always-on entrypoint.
+fn generate_k2_cli_skill() -> String {
+    r#"# K2 CLI
+
+How to drive the K2 agent system from a workspace via the `k2` CLI.
+
+## Send work to a workspace
 ```
-k2so msg <workspace-name> "live chat — appears in the running session"
-k2so msg <workspace-name> --inbox --title "..." --body "..."   # queue (email-style)
+k2 msg <workspace-name> "live chat — appears in the running session"
+k2 msg <workspace-name> --inbox --title "..." --body "..."   # queue (email-style)
+```
+`msg` (live form) fails loudly when the recipient isn't running — use `--inbox`
+to queue a task the recipient reads on its own schedule.
+
+## View activity
+```
+k2 activity [--limit N] [--workspace <path>]
 ```
 
-`msg` (live form) fails loudly when the recipient isn't running — use
-`--inbox` to queue a task the recipient reads on their own schedule.
-
-## View Activity Feed
-
-See recent agent activity in this workspace:
+## View connections
 ```
-k2so activity [--limit N] [--workspace <path>]
+k2 connections list
 ```
 
-## View Connections
-
-See which workspaces are connected:
+## Compose a work item
 ```
-k2so connections list
-```
-
-## Compose a Work Item
-
-Add work to this workspace's inbox for the manager to triage:
-```
-k2so inbox compose --title "Fix login bug" --body "Users can't log in after password reset"
+k2 inbox compose --title "Fix login bug" --body "Users can't log in after reset"
 ```
 
 ## Heartbeats
-
-The agent in this workspace can have one or more scheduled wakeups. Manage them with:
 ```
-k2so heartbeat                                       # default: list active schedules
-k2so heartbeat schedule list [--archived]            # full schedule listing
-k2so heartbeat show <name> [--json]                  # schedule + last fire details
-k2so heartbeat schedule add --name <n> --daily --time HH:MM
-k2so heartbeat signal wakeup <name>                  # print/edit the WAKEUP.md
-k2so heartbeat signal fire <name>                    # fire now (skip schedule window)
-k2so heartbeat signal wake                           # auto-wake (no name needed)
+k2 heartbeat                                   # list active schedules
+k2 heartbeat schedule list [--archived]
+k2 heartbeat show <name> [--json]
+k2 heartbeat schedule add --name <n> --daily --time HH:MM
+k2 heartbeat signal wakeup <name>              # print/edit the WAKEUP.md
+k2 heartbeat signal fire <name>                # fire now (skip schedule window)
+k2 heartbeat signal wake                       # auto-wake (no name needed)
 ```
-
-Run `k2so heartbeat --help` for the full surface.
-"#,
-        project_name = project_name,
-    )
+Run `k2 heartbeat --help` for the full surface.
+"#
+    .to_string()
 }
 
-/// Extract the body between a BEGIN/END marker pair, if both are present.
-fn extract_source_region(content: &str, begin: &str, end: &str) -> Option<String> {
-    let b_idx = content.find(begin)?;
-    let after_begin = b_idx + begin.len();
-    let e_rel = content[after_begin..].find(end)?;
-    let e_idx = after_begin + e_rel;
-    Some(content[after_begin..e_idx].trim().to_string())
+/// The canonical-agents operator — loaded WITH an AI assistant to set up or
+/// refresh the canonical `AGENTS.md` from a workspace's existing harness files
+/// (merging, not clobbering). Internal-only; never fanned out.
+fn generate_k2_canonical_agents_skill() -> String {
+    r#"# K2 Canonical Agents
+
+Operator for the canonical workspace-context shape. Run this WITH an AI
+assistant so it merges existing content with judgment rather than overwriting.
+
+## The shape
+- `.k2/agent/AGENT.md` — persona (authored).
+- `.k2/PROJECT.md` — project context (authored).
+- `.k2/AGENTS.md` — canonical, GENERATED from the two above.
+- `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursor/rules` — read-only mirrors that
+  symlink to `.k2/AGENTS.md`. (AGENTS.md is the cross-tool standard; CLAUDE.md is
+  the bridge for Claude Code, which doesn't read AGENTS.md natively.)
+- Skills (`.k2/skills/<name>/SKILL.md`) are loadable capabilities, not the entrypoint.
+
+## Set up an EXISTING project (merge, don't clobber)
+1. Read any existing `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` in the workspace.
+2. Fold persona-ish guidance into `.k2/agent/AGENT.md` and project facts into
+   `.k2/PROJECT.md`, preserving the user's wording.
+3. Regenerate: the daemon composes `.k2/AGENTS.md` and lays the symlinks.
+4. Confirm each harness entrypoint now resolves to `.k2/AGENTS.md`.
+
+## A NEW project
+No existing files to preserve — enabling fan-out generates `.k2/AGENTS.md` and
+lays the symlinks directly.
+"#
+    .to_string()
 }
 
-/// Strip an optional leading heading (`## Something\n\n`) from a SOURCE
-/// region body so the comparison / commit targets the raw file content.
-fn strip_leading_heading(body: &str) -> String {
-    let trimmed = body.trim_start();
-    if trimmed.starts_with("## ") {
-        if let Some(nl) = trimmed.find('\n') {
-            return trimmed[nl + 1..].trim_start().to_string();
+/// Write the canonical `.k2/AGENTS.md` + the two loadable skills (`k2-cli`,
+/// `k2-canonical-agents`). Returns the canonical AGENTS.md path so callers can
+/// point the harness mirrors at it. Additive + idempotent.
+fn publish_canonical_agents_md(project_path: &str) -> PathBuf {
+    use crate::skills::version::{ensure_skill_up_to_date, SKILL_VERSION_CANONICAL_AGENT};
+    let dot = crate::workspace_dot_dir(project_path);
+
+    let canonical = dot.join("AGENTS.md");
+    log_if_err(
+        "write canonical AGENTS.md",
+        &canonical,
+        atomic_write_str(&canonical, &compose_agents_md(project_path)),
+    );
+
+    let cli = dot.join("skills/k2-cli/SKILL.md");
+    let _ = ensure_skill_up_to_date(
+        &cli,
+        "k2-cli",
+        SKILL_VERSION_WORKSPACE,
+        &generate_k2_cli_skill(),
+        Some("name: k2-cli\ndescription: K2 CLI reference — msg, inbox, activity, connections, heartbeat"),
+    );
+
+    let canon_skill = dot.join("skills/k2-canonical-agents/SKILL.md");
+    let _ = ensure_skill_up_to_date(
+        &canon_skill,
+        "k2-canonical-agents",
+        SKILL_VERSION_CANONICAL_AGENT,
+        &generate_k2_canonical_agents_skill(),
+        Some("name: k2-canonical-agents\ndescription: Set up or refresh the canonical AGENTS.md from existing harness files (run with an AI assistant)"),
+    );
+
+    canonical
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Old-shape reap (one-time, idempotent) — §2a / §4 of the canonical PRD
+// ══════════════════════════════════════════════════════════════════════
+
+/// Extract the user free-form region from the OLD composed
+/// `.k2/skills/k2so/SKILL.md` body: everything AFTER the LAST
+/// `<!-- K2SO:USER_NOTES -->` sentinel (which includes any content the old
+/// flow imported from a pre-existing CLAUDE.md via the
+/// `K2SO:IMPORT:CLAUDE_MD` block). The placeholder boilerplate the old
+/// shape stamped under the sentinel is stripped. Returns `None` when there
+/// is no real user content to carry forward.
+fn extract_legacy_user_notes(skill_body: &str) -> Option<String> {
+    let idx = skill_body.rfind(SKILL_USER_NOTES_SENTINEL)?;
+    let after = &skill_body[idx + SKILL_USER_NOTES_SENTINEL.len()..];
+    let cleaned = after
+        .lines()
+        .filter(|l| l.trim() != USER_NOTES_PLACEHOLDER.trim())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+/// Carry `notes` into the primary agent's `AGENT.md` between the
+/// `K2:MIGRATED_NOTES` markers. Idempotent: an existing block is replaced
+/// in place (never double-appended), so re-running the reap is a no-op
+/// once the notes have already been migrated.
+fn carry_notes_into_agent_md(project_path: &str, notes: &str) {
+    let Some(primary) = find_primary_agent(project_path) else {
+        return;
+    };
+    let agent_md = agent_dir(project_path, &primary).join("AGENT.md");
+    let existing = fs::read_to_string(&agent_md).unwrap_or_default();
+
+    let block = format!(
+        "{begin}\n## Migrated notes (from the pre-AGENTS.md workspace skill)\n\n{notes}\n{end}",
+        begin = MIGRATED_NOTES_BEGIN,
+        notes = notes.trim(),
+        end = MIGRATED_NOTES_END,
+    );
+
+    let new_contents = if let (Some(b), Some(e)) =
+        (existing.find(MIGRATED_NOTES_BEGIN), existing.find(MIGRATED_NOTES_END))
+    {
+        // Replace the existing migrated-notes block verbatim — preserves
+        // everything before/after, never stacks a second copy.
+        let before = &existing[..b];
+        let after = &existing[e + MIGRATED_NOTES_END.len()..];
+        format!("{}{}{}", before, block, after)
+    } else if existing.trim().is_empty() {
+        format!("{}\n", block)
+    } else {
+        format!("{}\n\n{}\n", existing.trim_end(), block)
+    };
+
+    if new_contents == existing {
+        return;
+    }
+    if let Some(parent) = agent_md.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    match atomic_write_str(&agent_md, &new_contents) {
+        Ok(()) => log_adoption_event(
+            project_path,
+            &format!(
+                "MIGRATED USER_NOTES from old workspace skill into AGENT.md ({})",
+                primary
+            ),
+        ),
+        Err(e) => log_if_err::<(), _>("carry_notes_into_agent_md", &agent_md, Err::<(), _>(e)),
+    }
+}
+
+/// One-time, idempotent reap of the OLD composed-skill shape (§2a / §4).
+///
+/// Before deleting the old composed `.k2/skills/k2so/SKILL.md`, its
+/// `K2SO:USER_NOTES` region (the ONLY place that free-form / imported
+/// CLAUDE.md content lived) is carried into the primary agent's AGENT.md.
+/// Then the old on-disk artifacts are removed: the `skills/k2so/` dir, the
+/// root `SKILL.md` symlink, and the stale per-harness skill mirrors of the
+/// old skill (`.claude/skills/k2so`, `.pi/skills/k2so`,
+/// `.opencode/agent/k2so.md`). No-op when the old shape is already gone.
+///
+/// `pub(crate)` so the migration-safety tests can exercise it directly.
+pub(crate) fn reap_old_workspace_skill_shape(project_path: &str) {
+    let dot = crate::workspace_dot_dir(project_path);
+    let old_skill_dir = dot.join("skills").join("k2so");
+    let old_skill = old_skill_dir.join("SKILL.md");
+
+    // 1. Preserve USER_NOTES before deleting anything.
+    if let Ok(body) = fs::read_to_string(&old_skill) {
+        if let Some(notes) = extract_legacy_user_notes(&body) {
+            carry_notes_into_agent_md(project_path, &notes);
         }
     }
-    trimmed.to_string()
+
+    // 2. Reap the old composed skill dir.
+    if old_skill_dir.exists() {
+        log_if_err(
+            "reap old skills/k2so dir",
+            &old_skill_dir,
+            fs::remove_dir_all(&old_skill_dir),
+        );
+    }
+
+    // 3. Reap the root SKILL.md symlink (old harness mirror). Only remove
+    //    it when it's a symlink — a real user file at the root is left
+    //    alone (the canonical-agents operator handles those).
+    let root_skill = Path::new(project_path).join("SKILL.md");
+    if let Ok(meta) = fs::symlink_metadata(&root_skill) {
+        if meta.file_type().is_symlink() {
+            log_if_err("reap root SKILL.md symlink", &root_skill, fs::remove_file(&root_skill));
+        }
+    }
+
+    // 4. Reap the stale per-harness mirrors of the OLD skill.
+    let root = Path::new(project_path);
+    for stale in [
+        root.join(".claude/skills/k2so"),
+        root.join(".pi/skills/k2so"),
+    ] {
+        if stale.exists() {
+            log_if_err("reap stale harness skill mirror", &stale, fs::remove_dir_all(&stale));
+        }
+    }
+    let opencode_mirror = root.join(".opencode/agent/k2so.md");
+    if fs::symlink_metadata(&opencode_mirror).is_ok() {
+        log_if_err(
+            "reap stale opencode k2so mirror",
+            &opencode_mirror,
+            fs::remove_file(&opencode_mirror),
+        );
+    }
 }
 
 /// Return the mtime of a file as seconds since epoch, or 0 if unknown.
 ///
-/// Phase 2.5d: `pub(crate)` so the migration-safety tests in
-/// `agents/workspace.rs` (which still reference this helper for
-/// drift-detection assertions) keep compiling through Tier A.
+/// Used by the drift-detection migration-safety tests.
 pub(crate) fn mtime_secs(path: &Path) -> u64 {
     fs::metadata(path)
         .and_then(|m| m.modified())
@@ -224,20 +457,32 @@ fn write_regen_hashes(
 // SKILL scaffolding — public entry points
 // ══════════════════════════════════════════════════════════════════════
 
-/// Write the workspace-level K2SO skill to all harness locations.
+/// Regenerate the canonical `.k2/AGENTS.md` + loadable skills for a
+/// workspace, reaping any old composed-skill shape on the way through.
 pub fn write_workspace_skill_file(project_path: &str) {
     write_workspace_skill_file_with_body(project_path, None);
 }
 
-/// Variant that lets callers pass a pre-composed body so that content
-/// lands in the canonical SKILL.md rather than being lost when CLAUDE.md
-/// collapsed to a symlink.
-pub fn write_workspace_skill_file_with_body(project_path: &str, base_body: Option<&str>) {
-    let project_name = std::path::Path::new(project_path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "workspace".to_string());
-
+/// AGENTS.md-canonical regen (see `.k2/prds/k2-agents-md-canonical.md`).
+///
+/// 1. Reap the OLD composed `.k2/skills/k2so/SKILL.md` shape, carrying any
+///    `K2SO:USER_NOTES` into the primary agent's AGENT.md first (no data
+///    loss), then deleting the stale artifacts. Idempotent.
+/// 2. Compose the canonical `.k2/AGENTS.md` from AGENT.md (persona) +
+///    PROJECT.md (project) + a pointer to the loadable `k2-cli` skill, and
+///    ship the two loadable skills (`k2-cli`, `k2-canonical-agents`).
+/// 3. When the per-workspace harness fan-out opt-in marker is present,
+///    point every harness mirror (root AGENTS.md, GEMINI.md, CLAUDE.md,
+///    .cursor, copilot) at the canonical AGENTS.md — the cross-tool
+///    standard read by Pi/Hermes/Codex/+28. CLAUDE.md is the bridge for
+///    Claude Code (no native AGENTS.md read). Legacy
+///    `.skip-harness-management` still forces fan-out off (inside
+///    `harness_fanout_enabled`).
+///
+/// `base_body` is accepted for API compatibility with the regen
+/// orchestrator but is no longer the entrypoint body — AGENTS.md is
+/// composed from the authored sources, never from a passed body.
+pub fn write_workspace_skill_file_with_body(project_path: &str, _base_body: Option<&str>) {
     let regen_marker = crate::workspace_dot_dir(project_path).join(".regen-in-flight");
     log_if_err(
         "regen-in-flight stamp",
@@ -245,67 +490,41 @@ pub fn write_workspace_skill_file_with_body(project_path: &str, base_body: Optio
         fs_atomic::atomic_write(&regen_marker, b""),
     );
 
-    // Step 1: Adoption sweep
-    adopt_workspace_skill_drift(project_path);
+    // Step 1: Reap the OLD composed-skill shape (USER_NOTES → AGENT.md,
+    // then delete old artifacts). Runs BEFORE composition so any migrated
+    // notes flow into the freshly-composed AGENTS.md on this same pass.
+    reap_old_workspace_skill_shape(project_path);
 
-    // Step 2: Clear stale tail
-    let preserved_freeform = strip_workspace_skill_tail(project_path);
-
-    // Step 3: Compose K2SO-managed body
-    let mut managed_body = match base_body {
-        Some(body) => body.to_string(),
-        None => generate_workspace_skill_content(&project_name),
-    };
-
-    let primary_agent = find_primary_agent(project_path);
-    if !managed_body.ends_with('\n') {
-        managed_body.push('\n');
-    }
-    managed_body.push('\n');
-    managed_body.push_str(&skill_update_footer(project_path, primary_agent.as_deref()));
-
-    // Step 4: Write managed body
-    write_skill_to_all_harnesses(
-        project_path,
-        "k2so",
-        "workspace",
-        SKILL_VERSION_WORKSPACE,
-        "K2SO workspace context — CLI reference + project context + primary agent persona",
-        &managed_body,
-        false,
-    );
-
-    // Step 5: Append fresh SOURCE regions
-    append_workspace_source_regions(project_path, preserved_freeform.as_deref());
-
-    // Steps 6 + 7: fan out — gated OFF BY DEFAULT (canonical-agents
-    // feature). The root SKILL/CLAUDE.md symlinks, AGENTS.md /
-    // copilot-instructions.md marker injection, and the harness
-    // discovery-target fan-out only run when the per-workspace opt-in
-    // marker is present. The canonical `.k2so/skills/k2so/SKILL.md`
-    // (written in Step 4 above) always generates regardless — only the
-    // user-visible fan-out below is gated. Legacy
-    // `.skip-harness-management` still forces this off (inside
-    // `harness_fanout_enabled`).
-    let canonical = PathBuf::from(project_path).join(".k2so/skills/k2so/SKILL.md");
+    // Step 2: Compose the canonical `.k2/AGENTS.md` + the two loadable
+    // skills. Always runs (heartbeats + agent launches depend on the
+    // canonical artifact); only the user-visible fan-out below is gated.
+    let canonical = publish_canonical_agents_md(project_path);
     if harness_fanout_enabled(project_path) {
-        if let Ok(full) = fs::read_to_string(&canonical) {
-            let injection_body = strip_frontmatter(&full).trim().to_string();
-            let root = PathBuf::from(project_path);
-            upsert_k2so_section(&root.join("AGENTS.md"), &injection_body);
-            let github_dir = root.join(".github");
-            let _ = fs::create_dir_all(&github_dir);
-            upsert_k2so_section(&github_dir.join("copilot-instructions.md"), &injection_body);
-        }
-
-        let root_skill = PathBuf::from(project_path).join("SKILL.md");
-        force_symlink(&canonical, &root_skill);
-        let root_claude = PathBuf::from(project_path).join("CLAUDE.md");
+        let root = PathBuf::from(project_path);
+        // Root AGENTS.md is the cross-tool entrypoint mirror. A pre-existing
+        // user-authored AGENTS.md is archived (recoverable) before the
+        // symlink replaces it. CLAUDE.md is the Claude Code bridge; the
+        // remaining mirrors (GEMINI.md / AGENT.md / .goosehints / cursor)
+        // are handled by write_workspace_harness_discovery_targets — also
+        // archive-then-symlink, so no force_symlink data loss here.
+        crate::workspace::harness::safe_symlink_harness_file(
+            &canonical,
+            &root.join("AGENTS.md"),
+            project_path,
+            "AGENTS.md",
+        );
+        let root_claude = root.join("CLAUDE.md");
         migrate_and_symlink_root_claude_md(&canonical, &root_claude, project_path);
         crate::workspace::harness::write_workspace_harness_discovery_targets(project_path, &canonical);
+        // GitHub Copilot keeps its own marker-injected file (not a symlink).
+        if let Ok(full) = fs::read_to_string(&canonical) {
+            let github_dir = root.join(".github");
+            let _ = fs::create_dir_all(&github_dir);
+            upsert_k2so_section(&github_dir.join("copilot-instructions.md"), full.trim());
+        }
     }
 
-    // Step 8: Stamp last-regen hashes
+    // Step 3: Stamp last-regen hashes (drift baseline for the next regen).
     let mut hashes: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let project_md_path = crate::workspace_dot_dir(project_path).join("PROJECT.md");
@@ -329,246 +548,14 @@ pub fn write_workspace_skill_file_with_body(project_path: &str, base_body: Optio
     );
 }
 
-/// Walk the existing canonical SKILL.md and adopt any SOURCE-region drift
-/// back into its canonical source file (PROJECT.md or the primary agent's
-/// AGENT.md).
-fn adopt_workspace_skill_drift(project_path: &str) {
-    let canonical = PathBuf::from(project_path).join(".k2so/skills/k2so/SKILL.md");
-    let Ok(skill_content) = fs::read_to_string(&canonical) else {
-        return;
-    };
-    let stamp_path = crate::workspace_dot_dir(project_path).join(".last-skill-regen");
-    let last_regen = mtime_secs(&stamp_path);
-    let stored_hashes = read_regen_hashes(project_path);
-
-    let source_touched_since_regen = |source_path: &Path, key: &str| -> bool {
-        if let Some(stored) = stored_hashes.get(key) {
-            let current = content_hash_of(source_path);
-            !current.is_empty() && current.as_str() != stored.as_str()
-        } else {
-            mtime_secs(source_path) > last_regen
-        }
-    };
-
-    // PROJECT.md adoption
-    if let Some(region_body) = extract_source_region(
-        &skill_content,
-        SKILL_SOURCE_PROJECT_MD_BEGIN,
-        SKILL_SOURCE_PROJECT_MD_END,
-    ) {
-        let project_md = crate::workspace_dot_dir(project_path).join("PROJECT.md");
-        let region_stripped = strip_leading_heading(&region_body);
-        let file_body = fs::read_to_string(&project_md)
-            .map(|raw| strip_frontmatter(&raw).trim().to_string())
-            .unwrap_or_default();
-        if region_stripped.trim() != file_body.trim() {
-            if source_touched_since_regen(&project_md, "project_md") {
-                log_adoption_event(
-                    project_path,
-                    "PROJECT.md: user edit detected — downstream SKILL.md + harness files will pick up the new content on this regen",
-                );
-            } else if !region_stripped.trim().is_empty() {
-                let frontmatter = if let Ok(raw) = fs::read_to_string(&project_md) {
-                    if raw.starts_with("---") {
-                        if let Some(end) = raw[3..].find("---") {
-                            Some(raw[..3 + end + 3].to_string())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let new_contents = match frontmatter {
-                    Some(fm) => format!("{}\n\n{}\n", fm.trim_end(), region_stripped.trim()),
-                    None => format!("{}\n", region_stripped.trim()),
-                };
-                match atomic_write_str(&project_md, &new_contents) {
-                    Ok(()) => log_adoption_event(
-                        project_path,
-                        "ADOPTED PROJECT.md: SKILL.md SOURCE region committed back to .k2so/PROJECT.md",
-                    ),
-                    Err(e) => log_if_err::<(), _>("adopt PROJECT.md", &project_md, Err::<(), _>(e)),
-                }
-            }
-        }
-    }
-
-    // Primary agent's AGENT.md adoption
-    if let Some(primary_agent) = find_primary_agent(project_path) {
-        let agent_type = agent_type_for(project_path, &primary_agent);
-        let include_primary = matches!(
-            agent_type.as_str(),
-            "custom" | "k2so" | "manager" | "coordinator" | "pod-leader"
-        );
-        if include_primary {
-            let begin = skill_source_agent_md_begin(&primary_agent);
-            let end = skill_source_agent_md_end(&primary_agent);
-            if let Some(region_body) = extract_source_region(&skill_content, &begin, &end) {
-                let agent_md = agent_dir(project_path, &primary_agent).join("AGENT.md");
-                let region_stripped = strip_leading_heading(&region_body);
-                let file_body = fs::read_to_string(&agent_md)
-                    .map(|raw| strip_frontmatter(&raw).trim().to_string())
-                    .unwrap_or_default();
-                if region_stripped.trim() != file_body.trim() {
-                    let key = format!("agent_md::{}", primary_agent);
-                    if source_touched_since_regen(&agent_md, &key) {
-                        log_adoption_event(
-                            project_path,
-                            &format!(
-                                "AGENT.md ({}): user edit detected — downstream SKILL.md + harness files will pick up the new content on this regen",
-                                primary_agent
-                            ),
-                        );
-                    } else if !region_stripped.trim().is_empty() {
-                        let frontmatter = if let Ok(raw) = fs::read_to_string(&agent_md) {
-                            if raw.starts_with("---") {
-                                if let Some(end) = raw[3..].find("---") {
-                                    Some(raw[..3 + end + 3].to_string())
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-                        let new_contents = match frontmatter {
-                            Some(fm) => format!("{}\n\n{}\n", fm.trim_end(), region_stripped.trim()),
-                            None => format!("{}\n", region_stripped.trim()),
-                        };
-                        match atomic_write_str(&agent_md, &new_contents) {
-                            Ok(()) => log_adoption_event(
-                                project_path,
-                                &format!(
-                                    "ADOPTED AGENT.md ({}): SKILL.md SOURCE region committed back to agent file",
-                                    primary_agent
-                                ),
-                            ),
-                            Err(e) => log_if_err::<(), _>(
-                                "adopt AGENT.md",
-                                &agent_md,
-                                Err::<(), _>(e),
-                            ),
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Remove everything after the MANAGED:END marker in the canonical SKILL.md.
-/// Returns any truly user-authored content found after the LAST
-/// `<!-- K2SO:USER_NOTES -->` sentinel so it can be re-appended after
-/// regeneration.
-pub fn strip_workspace_skill_tail(project_path: &str) -> Option<String> {
-    let canonical = PathBuf::from(project_path).join(".k2so/skills/k2so/SKILL.md");
-    let Ok(content) = fs::read_to_string(&canonical) else { return None };
-    let end_idx = content.find(SKILL_END_MARKER)?;
-    let after_end_start = end_idx + SKILL_END_MARKER.len();
-    let tail = &content[after_end_start..];
-
-    let preserved = tail.rfind(SKILL_USER_NOTES_SENTINEL).map(|idx| {
-        let after = idx + SKILL_USER_NOTES_SENTINEL.len();
-        tail[after..].to_string()
-    });
-
-    let truncated = format!("{}\n", &content[..after_end_start]);
-    log_if_err(
-        "strip_workspace_skill_tail write",
-        &canonical,
-        atomic_write_str(&canonical, &truncated),
-    );
-
-    let preserved = preserved.map(|raw| {
-        raw.lines()
-            .filter(|l| l.trim() != USER_NOTES_PLACEHOLDER.trim())
-            .collect::<Vec<_>>()
-            .join("\n")
-            .trim()
-            .to_string()
-    });
-    preserved.filter(|s| !s.is_empty())
-}
-
-/// After the managed region has been re-written, append fresh SOURCE
-/// sub-regions below the END marker in the canonical file.
-pub fn append_workspace_source_regions(project_path: &str, preserved_freeform: Option<&str>) {
-    let canonical = PathBuf::from(project_path).join(".k2so/skills/k2so/SKILL.md");
-    let Ok(mut content) = fs::read_to_string(&canonical) else { return };
-    if !content.ends_with('\n') {
-        content.push('\n');
-    }
-
-    let project_md = crate::workspace_dot_dir(project_path).join("PROJECT.md");
-    if let Ok(raw) = fs::read_to_string(&project_md) {
-        let stripped = strip_frontmatter(&raw);
-        let has_content = stripped.lines().any(|line| {
-            let t = line.trim();
-            !t.is_empty() && !t.starts_with('#') && !t.starts_with("<!--")
-        });
-        if has_content {
-            content.push_str(&format!(
-                "\n{begin}\n## Project Context\n\n{body}\n{end}\n",
-                begin = SKILL_SOURCE_PROJECT_MD_BEGIN,
-                body = stripped.trim(),
-                end = SKILL_SOURCE_PROJECT_MD_END,
-            ));
-        }
-    }
-
-    if let Some(primary_agent) = find_primary_agent(project_path) {
-        let agent_type = agent_type_for(project_path, &primary_agent);
-        let include_primary = matches!(
-            agent_type.as_str(),
-            "custom" | "k2so" | "manager" | "coordinator" | "pod-leader"
-        );
-        if include_primary {
-            let agent_md = agent_dir(project_path, &primary_agent).join("AGENT.md");
-            if let Ok(raw) = fs::read_to_string(&agent_md) {
-                let stripped = strip_frontmatter(&raw).trim().to_string();
-                if !stripped.is_empty() {
-                    content.push_str(&format!(
-                        "\n{begin}\n## Primary Agent: {name}\n\n{body}\n{end}\n",
-                        begin = skill_source_agent_md_begin(&primary_agent),
-                        name = primary_agent,
-                        body = stripped,
-                        end = skill_source_agent_md_end(&primary_agent),
-                    ));
-                }
-            }
-        }
-    }
-
-    content.push_str(&format!(
-        "\n{sentinel}\n{placeholder}\n",
-        sentinel = SKILL_USER_NOTES_SENTINEL,
-        placeholder = USER_NOTES_PLACEHOLDER,
-    ));
-    if let Some(freeform) = preserved_freeform {
-        let cleaned = freeform.trim();
-        if !cleaned.is_empty() {
-            content.push('\n');
-            content.push_str(cleaned);
-            content.push('\n');
-        }
-    }
-
-    log_if_err(
-        "append_workspace_source_regions",
-        &canonical,
-        atomic_write_str(&canonical, &content),
-    );
-}
-
-/// CLAUDE.md migration helper for the 0.32.7 transition.
+/// Repoint the root `CLAUDE.md` at the canonical `.k2/AGENTS.md`.
 ///
-/// Phase 2.5d: `pub(crate)` so the sibling [`crate::workspace::harness`]
-/// module (and the agents/workspace.rs shim during Tier A) can call it.
+/// - Already a symlink → just refresh it.
+/// - A real (user-authored) file → back it up to `.k2/migration/` and the
+///   trash via `archive_claude_md_file`, drop a one-time migration banner,
+///   then replace it with a symlink to AGENTS.md. (The `k2-canonical-agents`
+///   AI skill is the recommended path to merge that backup into AGENT.md.)
+/// - Missing → create the symlink.
 pub(crate) fn migrate_and_symlink_root_claude_md(canonical: &Path, root_claude: &Path, project_path: &str) {
     match fs::symlink_metadata(root_claude) {
         Ok(meta) if meta.file_type().is_symlink() => {
@@ -576,119 +563,23 @@ pub(crate) fn migrate_and_symlink_root_claude_md(canonical: &Path, root_claude: 
         }
         Ok(meta) if meta.file_type().is_file() => {
             let content = fs::read_to_string(root_claude).unwrap_or_default();
-            let is_k2so_generated = content.starts_with("# K2SO ");
-            let archived = archive_claude_md_file(project_path, root_claude, "CLAUDE.md");
-            let source_label = if is_k2so_generated {
-                "pre-0.32.7 K2SO-generated CLAUDE.md"
+            let archived = if content.trim().is_empty() {
+                None
             } else {
-                "pre-existing user-authored CLAUDE.md"
+                archive_claude_md_file(project_path, root_claude, "CLAUDE.md")
             };
-            let archive_display = archived
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "(archive unavailable)".to_string());
-            if !content.trim().is_empty() {
-                import_claude_md_into_user_notes(
-                    project_path,
-                    &content,
-                    source_label,
-                    &archive_display,
-                );
-            }
-            log_if_err(
-                "migrate_and_symlink_root_claude_md",
-                root_claude,
-                atomic_symlink(canonical, root_claude),
-            );
+            force_symlink(canonical, root_claude);
             if let Some(archive_path) = archived {
                 inject_first_migration_banner(project_path, &[archive_path]);
             }
             log_debug!(
-                "[workspace-skill] Migrated {}./CLAUDE.md → archived + imported body into SKILL.md USER_NOTES; root CLAUDE.md now symlinks to canonical SKILL.md",
-                if is_k2so_generated {
-                    "K2SO-generated "
-                } else {
-                    "user-authored "
-                },
+                "[workspace-skill] root CLAUDE.md → backed up + repointed to canonical .k2/AGENTS.md",
             );
         }
         _ => {
             force_symlink(canonical, root_claude);
         }
     }
-}
-
-/// Append the body of a pre-existing CLAUDE.md into the canonical
-/// SKILL.md's USER_NOTES region so the migrated content stays visible
-/// to Claude Code (via the symlink) without requiring the user to hand-
-/// merge from `.k2so/migration/`.
-///
-/// Phase 2.5d: `pub(crate)` so the sibling [`crate::workspace::harness`]
-/// module can call it when it scaffolds harness discovery targets.
-pub(crate) fn import_claude_md_into_user_notes(
-    project_path: &str,
-    body: &str,
-    source_label: &str,
-    archive_display: &str,
-) {
-    let canonical = PathBuf::from(project_path).join(".k2so/skills/k2so/SKILL.md");
-    if !canonical.exists() {
-        return;
-    }
-    let Ok(existing) = fs::read_to_string(&canonical) else { return };
-
-    let import_sentinel = format!(
-        "<!-- K2SO:IMPORT:CLAUDE_MD archive={} -->",
-        archive_display
-    );
-    if existing.contains(&import_sentinel) {
-        return;
-    }
-
-    let Some(sentinel_idx) = existing.find(SKILL_USER_NOTES_SENTINEL) else {
-        let import_block = format!(
-            "\n\n{sentinel}\n## Imported: {label}\n\n> Archived at `{archive}`. You can prune this section once reviewed; K2SO preserves anything below the `K2SO:USER_NOTES` sentinel verbatim.\n\n{body}\n",
-            sentinel = import_sentinel,
-            label = source_label,
-            archive = archive_display,
-            body = body.trim(),
-        );
-        let mut out = existing;
-        out.push_str(&import_block);
-        log_if_err(
-            "import_claude_md fallback append",
-            &canonical,
-            atomic_write_str(&canonical, &out),
-        );
-        return;
-    };
-    let insertion_anchor = existing[sentinel_idx..]
-        .find(USER_NOTES_PLACEHOLDER)
-        .map(|rel| sentinel_idx + rel + USER_NOTES_PLACEHOLDER.len())
-        .unwrap_or(sentinel_idx + SKILL_USER_NOTES_SENTINEL.len());
-    let import_block = format!(
-        "\n\n{sentinel}\n## Imported: {label}\n\n> Archived at `{archive}`. You can prune this section once reviewed; K2SO preserves anything below the `K2SO:USER_NOTES` sentinel verbatim across regenerations.\n\n{body}\n",
-        sentinel = import_sentinel,
-        label = source_label,
-        archive = archive_display,
-        body = body.trim(),
-    );
-    let mut out = String::with_capacity(existing.len() + import_block.len());
-    out.push_str(&existing[..insertion_anchor]);
-    out.push_str(&import_block);
-    out.push_str(&existing[insertion_anchor..]);
-    log_if_err(
-        "import_claude_md_into_user_notes",
-        &canonical,
-        atomic_write_str(&canonical, &out),
-    );
-    log_adoption_event(
-        project_path,
-        &format!(
-            "IMPORTED {} body into SKILL.md USER_NOTES (archive: {})",
-            source_label, archive_display
-        ),
-    );
 }
 
 /// Universal skill refresh. Walks every agent folder + the workspace
@@ -1051,20 +942,14 @@ r#"# {project_name}
         canonical_body = canonical_body,
     );
 
-    // As of 0.32.7: the rich workspace-level content (manager brief or AI
-    // planner brief + agent list + inbox summary + CLI tools docs) now
-    // flows into the canonical SKILL.md instead of a separate ./CLAUDE.md
-    // file. `write_workspace_skill_file_with_body` takes the composed `md`
-    // as the base body, appends `.k2so/PROJECT.md` body + primary agent's
-    // `agent.md` body, writes the canonical at `.k2so/skills/k2so/SKILL.md`,
-    // and fans it out via symlinks to every harness discovery path
-    // (`./CLAUDE.md`, `./SKILL.md`, `./GEMINI.md`, `./AGENT.md`,
-    // `./.goosehints`, `./.claude/skills/k2so/SKILL.md`, etc.).
-    //
-    // Existing `./CLAUDE.md` files: migrated to `.k2so/CLAUDE.md.migrated` if
-    // K2SO-generated, preserved as-is if user-authored (see
-    // migrate_and_symlink_root_claude_md).
-    write_workspace_skill_file_with_body(&project_path, Some(&md));
+    // AGENTS.md-canonical (0.40.x): the workspace entrypoint is the
+    // generated `.k2/AGENTS.md` (AGENT.md persona + PROJECT.md project + a
+    // pointer to the loadable `k2-cli` skill). The composed `md` above is
+    // returned to the renderer's regen preview only — it is no longer the
+    // canonical body. `write_workspace_skill_file` reaps any old composed
+    // skill, composes AGENTS.md, ships the two loadable skills, and (when
+    // fan-out is opted in) points the harness mirrors at AGENTS.md.
+    write_workspace_skill_file(&project_path);
 
     // Clean up the stale `.k2so/CLAUDE.md.disabled` artifact from the
     // pre-symlink era — the disable flow is now "symlink goes away when the
@@ -1083,16 +968,14 @@ mod tests {
     //! migrations.rs::migration_safety_tests block doesn't already
     //! exercise. The migration tests cover the safe-symlink contract,
     //! the import-into-user-notes flow, and strip_workspace_skill_tail
-    //! happy paths; here we add a few gap-fillers:
+    //! happy paths; here we add a few gap-fillers for the AGENTS.md-
+    //! canonical shape:
     //!
-    //! - strip_workspace_skill_tail returns None when no SKILL.md exists
-    //!   at all (vs the existing tests which assume the file exists)
+    //! - the reap carries old-shape USER_NOTES into AGENT.md, idempotently
     //! - ensure_all_skills_up_to_date is a no-op for workspaces with no
-    //!   agents dir
+    //!   agents dir but still composes AGENTS.md + the loadable skills
     //! - regenerate_workspace_skill scaffolds .k2so/inbox + .k2so/prds
-    //!   and returns the composed CLAUDE.md body
-    //! - append_workspace_source_regions writes the USER_NOTES sentinel
-    //!   + placeholder even when no preserved content is passed
+    //!   and returns the composed preview body
     use super::*;
     use std::fs;
     use uuid::Uuid;
@@ -1103,86 +986,125 @@ mod tests {
             std::process::id(),
             Uuid::new_v4(),
         ));
-        fs::create_dir_all(dir.join(".k2so/skills/k2so")).unwrap();
+        fs::create_dir_all(dir.join(".k2so/skills")).unwrap();
         dir
     }
 
-    #[test]
-    fn strip_workspace_skill_tail_returns_none_when_canonical_missing() {
-        let proj = scratch_project();
-        // Don't write a SKILL.md — the canonical doesn't exist.
-        let preserved = strip_workspace_skill_tail(proj.to_str().unwrap());
-        assert!(
-            preserved.is_none(),
-            "no canonical SKILL.md → no preserved freeform, got {preserved:?}",
+    /// Seed an OLD composed `.k2so/skills/k2so/SKILL.md` with a USER_NOTES
+    /// region carrying free-form content (and an old import block), the
+    /// exact artifact the reap must convert + delete.
+    fn seed_old_composed_skill(proj: &Path, user_note: &str) {
+        let old_dir = proj.join(".k2so/skills/k2so");
+        fs::create_dir_all(&old_dir).unwrap();
+        let body = format!(
+            "---\nk2so_skill: workspace\n---\n\n{begin}\nManaged body\n{end}\n\n{sentinel}\n{placeholder}\n\n{note}\n",
+            begin = crate::skills::version::SKILL_BEGIN_MARKER,
+            end = crate::skills::version::SKILL_END_MARKER,
+            sentinel = SKILL_USER_NOTES_SENTINEL,
+            placeholder = USER_NOTES_PLACEHOLDER,
+            note = user_note,
         );
+        fs::write(old_dir.join("SKILL.md"), body).unwrap();
+    }
+
+    #[test]
+    fn reap_carries_user_notes_into_agent_md_then_deletes_old_skill() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        // A primary agent must exist for the notes to land somewhere.
+        let agent_dir = proj.join(".k2so/agent");
+        fs::create_dir_all(&agent_dir).unwrap();
+        fs::write(
+            agent_dir.join("AGENT.md"),
+            "---\nname: agent\ntype: custom\n---\n\nYou are the agent.\n",
+        )
+        .unwrap();
+
+        let note = "My private workspace note — do NOT lose this.";
+        seed_old_composed_skill(&proj, note);
+
+        reap_old_workspace_skill_shape(path);
+
+        // 1. USER_NOTES carried into AGENT.md between the migrated markers.
+        let agent_md = fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap();
+        assert!(
+            agent_md.contains(note),
+            "user note must be carried into AGENT.md, got:\n{agent_md}"
+        );
+        assert!(
+            agent_md.contains(MIGRATED_NOTES_BEGIN) && agent_md.contains(MIGRATED_NOTES_END),
+            "migrated notes must be wrapped in the K2:MIGRATED_NOTES markers"
+        );
+
+        // 2. The old composed skill dir is deleted.
+        assert!(
+            !proj.join(".k2so/skills/k2so").exists(),
+            "old .k2so/skills/k2so/ must be reaped"
+        );
+    }
+
+    #[test]
+    fn reap_is_idempotent_and_never_double_appends_notes() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        let agent_dir = proj.join(".k2so/agent");
+        fs::create_dir_all(&agent_dir).unwrap();
+        fs::write(
+            agent_dir.join("AGENT.md"),
+            "---\nname: agent\ntype: custom\n---\n\nYou are the agent.\n",
+        )
+        .unwrap();
+
+        let note = "Carry me forward exactly once.";
+        seed_old_composed_skill(&proj, note);
+        reap_old_workspace_skill_shape(path);
+        let first = fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap();
+
+        // Re-seed + re-run: the second reap must NOT stack a second copy.
+        seed_old_composed_skill(&proj, note);
+        reap_old_workspace_skill_shape(path);
+        let second = fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap();
+
+        assert_eq!(
+            second.matches(note).count(),
+            1,
+            "note must appear exactly once after a second reap; got:\n{second}"
+        );
+        assert_eq!(first, second, "re-running the reap must be a no-op on AGENT.md");
+    }
+
+    #[test]
+    fn reap_is_noop_when_no_old_shape_present() {
+        let proj = scratch_project();
+        // No old composed skill, no agent — reap must not panic or create.
+        reap_old_workspace_skill_shape(proj.to_str().unwrap());
+        assert!(!proj.join(".k2so/skills/k2so").exists());
         fs::remove_dir_all(&proj).ok();
     }
 
     #[test]
-    fn append_workspace_source_regions_writes_user_notes_sentinel_for_clean_workspace() {
+    fn ensure_all_skills_up_to_date_composes_agents_md_and_loadable_skills() {
         let proj = scratch_project();
-        let canonical = proj.join(".k2so/skills/k2so/SKILL.md");
-
-        // Seed a minimal canonical body (no SOURCE regions yet).
-        let seed = format!(
-            "---\nk2so_skill: workspace\n---\n\n{}\nManaged\n{}\n",
-            crate::skills::version::SKILL_BEGIN_MARKER,
-            crate::skills::version::SKILL_END_MARKER,
-        );
-        fs::write(&canonical, &seed).unwrap();
-
-        append_workspace_source_regions(proj.to_str().unwrap(), None);
-
-        let after = fs::read_to_string(&canonical).unwrap();
-        assert!(
-            after.contains(SKILL_USER_NOTES_SENTINEL),
-            "append must write the USER_NOTES sentinel; got: {after:?}",
-        );
-        assert!(
-            after.contains(USER_NOTES_PLACEHOLDER),
-            "append must write the placeholder comment under the sentinel",
-        );
-        fs::remove_dir_all(&proj).ok();
-    }
-
-    #[test]
-    fn append_workspace_source_regions_preserves_passed_freeform_below_sentinel() {
-        let proj = scratch_project();
-        let canonical = proj.join(".k2so/skills/k2so/SKILL.md");
-        let seed = format!(
-            "---\nk2so_skill: workspace\n---\n\n{}\nManaged\n{}\n",
-            crate::skills::version::SKILL_BEGIN_MARKER,
-            crate::skills::version::SKILL_END_MARKER,
-        );
-        fs::write(&canonical, &seed).unwrap();
-
-        append_workspace_source_regions(
-            proj.to_str().unwrap(),
-            Some("# my custom note\n\nThis is a private thought."),
-        );
-
-        let after = fs::read_to_string(&canonical).unwrap();
-        let sentinel_pos = after.find(SKILL_USER_NOTES_SENTINEL).unwrap();
-        let user_pos = after.find("This is a private thought.").unwrap();
-        assert!(
-            user_pos > sentinel_pos,
-            "user freeform must appear BELOW the USER_NOTES sentinel (sentinel at {sentinel_pos}, user at {user_pos})",
-        );
-        fs::remove_dir_all(&proj).ok();
-    }
-
-    #[test]
-    fn ensure_all_skills_up_to_date_handles_workspace_with_no_agents_dir() {
-        let proj = scratch_project();
-        // Don't create .k2so/agents/ — the function should write the
-        // workspace skill and return without panicking.
+        // Don't create .k2so/agents/ — the function should compose AGENTS.md
+        // + the two loadable skills and return without panicking.
         ensure_all_skills_up_to_date(proj.to_str().unwrap());
 
-        // Sanity: canonical SKILL.md exists post-call (write_workspace_skill_file ran).
         assert!(
-            proj.join(".k2so/skills/k2so/SKILL.md").exists(),
-            "ensure_all_skills_up_to_date should still write the workspace skill",
+            proj.join(".k2so/AGENTS.md").exists(),
+            "ensure_all_skills_up_to_date should compose the canonical AGENTS.md",
+        );
+        assert!(
+            proj.join(".k2so/skills/k2-cli/SKILL.md").exists(),
+            "the loadable k2-cli skill must ship",
+        );
+        assert!(
+            proj.join(".k2so/skills/k2-canonical-agents/SKILL.md").exists(),
+            "the loadable k2-canonical-agents skill must ship",
+        );
+        // The OLD composed skill must NOT be (re)created.
+        assert!(
+            !proj.join(".k2so/skills/k2so/SKILL.md").exists(),
+            "the old composed skill must never be written by the new shape",
         );
         fs::remove_dir_all(&proj).ok();
     }
@@ -1202,10 +1124,10 @@ mod tests {
         assert!(proj.join(".k2so/inbox").is_dir(), ".k2so/inbox/ should be scaffolded");
         assert!(proj.join(".k2so/prds").is_dir(), ".k2so/prds/ should be scaffolded");
 
-        // Canonical SKILL.md must have landed.
+        // Canonical AGENTS.md must have landed (the new entrypoint).
         assert!(
-            proj.join(".k2so/skills/k2so/SKILL.md").exists(),
-            "canonical SKILL.md should exist after regen",
+            proj.join(".k2so/AGENTS.md").exists(),
+            "canonical AGENTS.md should exist after regen",
         );
 
         fs::remove_dir_all(&proj).ok();
@@ -1383,14 +1305,45 @@ mod tests {
     }
 
     #[test]
-    fn workspace_skill_generate_content_emits_no_deprecated_verbs() {
-        // `generate_workspace_skill_content` is the lightweight user-
-        // facing template invoked when `write_workspace_skill_file` is
-        // called without a body override (e.g. from
-        // `workspace::agent_launch::launch_agent` when there is no
-        // current task). Pin its verb set too.
-        let body = generate_workspace_skill_content("TestWorkspace");
-        assert_regen_body_has_no_deprecated_verbs(&body, "generate_workspace_skill_content");
-        assert!(body.contains("TestWorkspace"), "project name must appear");
+    fn k2_cli_loadable_skill_uses_new_brand_and_no_deprecated_verbs() {
+        // The loadable `k2-cli` skill replaces the old composed
+        // workspace skill body. Pin its verb set + brand: it must use the
+        // `k2` CLI form (not `k2so`) and carry no hard-deprecated verbs.
+        let body = generate_k2_cli_skill();
+        assert_regen_body_has_no_deprecated_verbs(&body, "generate_k2_cli_skill");
+        assert!(body.contains("k2 msg"), "k2-cli skill must document `k2 msg`");
+        assert!(
+            !body.contains("k2so msg"),
+            "k2-cli skill must not use the legacy `k2so` CLI prefix",
+        );
+    }
+
+    #[test]
+    fn compose_agents_md_merges_agent_and_project_and_points_at_k2_cli() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        let agent_dir = proj.join(".k2so/agent");
+        fs::create_dir_all(&agent_dir).unwrap();
+        fs::write(
+            agent_dir.join("AGENT.md"),
+            "---\nname: agent\ntype: custom\n---\n\nPERSONA-MARKER body.\n",
+        )
+        .unwrap();
+        fs::write(
+            proj.join(".k2so/PROJECT.md"),
+            "# proj\n\nPROJECT-MARKER body.\n",
+        )
+        .unwrap();
+
+        let agents_md = compose_agents_md(path);
+        assert!(agents_md.contains("PERSONA-MARKER body."), "AGENT.md must be merged in");
+        assert!(agents_md.contains("PROJECT-MARKER body."), "PROJECT.md must be merged in");
+        assert!(
+            agents_md.contains("k2-cli"),
+            "AGENTS.md must point at the loadable k2-cli skill",
+        );
+        // GENERATED banner — never hand-edited.
+        assert!(agents_md.contains("GENERATED by K2"), "AGENTS.md must carry the generated banner");
+        fs::remove_dir_all(&proj).ok();
     }
 }

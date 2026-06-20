@@ -432,21 +432,26 @@ pub fn k2so_heartbeat_fires_list(
 // ── Frontmatter parsing ────────────────────────────────────────────────
 
 // ── Skill upgrade protocol (universal) ───────────────────────────────
-// The full skill lifecycle (markers, versions, wrap/parse, the
-// ensure_skill_up_to_date writer) moved to k2_core::skills::version.
-// src-tauri re-exports the surface at its historical names so the 30+
+// The skill lifecycle (markers, versions, parse, the
+// ensure_skill_up_to_date writer) lives in k2_core::skills::version.
+// src-tauri re-exports the surface at its historical names so the
 // call sites in this file resolve unchanged.
+//
+// AGENTS.md-canonical cutover (k2-agents-md-canonical PRD §2a): the
+// composed-SKILL SOURCE-region scheme was reaped from k2-core. Its
+// markers (`SKILL_SOURCE_PROJECT_MD_*`, `skill_source_agent_md_*`) no
+// longer exist; the entrypoint is now the generated `.k2/AGENTS.md`
+// (harness files symlink to it) with no MANAGED/SOURCE regions. The
+// re-export below drops those deleted symbols.
 pub use k2_core::skills::version::{
     ensure_skill_up_to_date, parse_skill, skill_checksum_hex,
-    skill_source_agent_md_begin, skill_source_agent_md_end, wrap_managed_skill,
     ParsedSkill, SkillUpgradeOutcome, SKILL_BEGIN_MARKER, SKILL_END_MARKER,
-    SKILL_SOURCE_PROJECT_MD_BEGIN, SKILL_SOURCE_PROJECT_MD_END,
     SKILL_VERSION_CUSTOM_AGENT, SKILL_VERSION_K2SO_AGENT, SKILL_VERSION_MANAGER,
     SKILL_VERSION_TEMPLATE, SKILL_VERSION_WORKSPACE,
 };
 
 // Legacy shim — fn definitions below deleted. Original ParsedSkill
-// impl block used `struct ParsedSkill { k2so_skill: ... }` with a
+// impl block used `struct ParsedSkill { k2_skill: ... }` with a
 // private constructor; the core version makes all fields pub so the
 // in-file call sites that directly destructure it still work.
 
@@ -1125,58 +1130,15 @@ pub fn k2so_agents_regenerate_skills(
     k2_core::skills::crud::regenerate_skills(project_path)
 }
 
-/// Write the canonical SKILL.md and symlink from all harness discovery paths.
-/// One source of truth — symlinks mean updates propagate instantly.
-///
-/// Canonical location: .k2so/skills/{name}/SKILL.md
-/// Symlinked to: Claude Code, OpenCode, Pi, Cursor (project root)
-/// Marker-injected into: AGENTS.md, .github/copilot-instructions.md
-// `write_shared_markers`: only the workspace-level skill should set this
-// true — per-agent skills would otherwise clobber each other in the
-// single K2SO marker block inside AGENTS.md / copilot-instructions.md.
-
-/// Write the workspace-level K2SO skill to all harness locations.
-/// Composes the full workspace context into a single canonical file
-/// that every CLI LLM discovers via its harness-specific path:
-///
-///   - Base body (rich workspace manager / AI planner brief if the
-///     CLAUDE.md generator passes one; otherwise the lightweight
-///     `generate_workspace_skill_content` — user-facing CLI commands)
-///   - `.k2so/PROJECT.md` body (if the user has populated it)
-///   - Primary agent's `agent.md` body (for single-agent and manager modes)
-///
-/// The canonical file at `.k2so/skills/k2so/SKILL.md` is then symlinked
-/// into every harness discovery path. `./CLAUDE.md` joins that list as
-/// of 0.32.7, replacing the separately-generated workspace CLAUDE.md.
-pub fn write_workspace_skill_file(project_path: &str) {
-    k2_core::workspace::skill_regen::write_workspace_skill_file(project_path)
-}
-
-/// Variant that lets callers pass a pre-composed body (typically the
-/// rich workspace CLAUDE.md content from `k2so_agents_generate_workspace_claude_md`)
-/// so that content lands in the canonical SKILL.md rather than being
-/// lost when CLAUDE.md collapsed to a symlink.
-///
-/// Sequence (Phase 7c):
-///   1. Adoption sweep — parse existing canonical SKILL.md SOURCE sub-regions;
-///      commit drift back to PROJECT.md / primary agent AGENT.md (mtime-guarded).
-///   2. Clear stale SOURCE regions from the canonical's below-END tail so the
-///      fresh composition below can lay them down cleanly.
-///   3. Compose K2SO-managed body only (no PROJECT.md / AGENT.md appended).
-///   4. Write managed body via write_skill_to_all_harnesses with
-///      write_shared_markers=false — canonical + Claude/OpenCode/Pi symlinks
-///      get just the managed region.
-///   5. Append fresh SOURCE regions (PROJECT.md + primary agent AGENT.md)
-///      below the canonical's END marker.
-///   6. Inject the FULL canonical body (managed + SOURCE regions) into
-///      AGENTS.md and .github/copilot-instructions.md — those are plain
-///      files, not canonical sources, so they get the full context.
-///   7. Symlink project root SKILL.md + CLAUDE.md to canonical.
-///   8. Stamp .k2so/.last-skill-regen so subsequent drift-adoption mtime
-///      comparisons have a reference point.
-pub fn write_workspace_skill_file_with_body(project_path: &str, base_body: Option<&str>) {
-    k2_core::workspace::skill_regen::write_workspace_skill_file_with_body(project_path, base_body)
-}
+// The `write_workspace_skill_file` / `write_workspace_skill_file_with_body`
+// src-tauri forwards were deleted in the AGENTS.md-canonical cutover
+// (`.k2/prds/k2-agents-md-canonical.md` §2a — prefer deleting dead code).
+// They had zero real callers in src-tauri: `agent_launch` (in k2-core)
+// calls `k2_core::workspace::skill_regen::write_workspace_skill_file`
+// directly, so both the daemon-side and Tauri-side regen paths already
+// hit the same body without going through this crate. The old per-`SOURCE`-
+// region composition the doc comments described was reaped from k2-core;
+// the live entrypoint is now the generated `.k2/AGENTS.md`.
 
 // SKILL scaffolding cluster (write_workspace_skill_file_with_body,
 // adopt_workspace_skill_drift, strip_workspace_skill_tail,
@@ -1196,6 +1158,12 @@ pub fn write_workspace_skill_file_with_body(project_path: &str, base_body: Optio
 // `k2_core::workspace::{harness, migrations, skill_writer, teardown}`).
 // Re-export each symbol from its post-split location; the external
 // names at this `commands::k2so_agents::*` boundary stay the same.
+// (AGENTS.md-canonical cutover note: the SOURCE-region drift helpers
+// in the list above — `adopt_workspace_skill_drift`,
+// `strip_workspace_skill_tail`, `append_workspace_source_regions` — were
+// since REAPED inside k2-core when the composed `.k2/skills/k2so/SKILL.md`
+// entrypoint was retired for the generated `.k2/AGENTS.md`. They are not
+// re-exported below because they no longer exist anywhere.)
 pub use k2_core::workspace::harness::{
     HARNESS_WORKSPACE_FILES, WorkspacePreviewEntry,
 };

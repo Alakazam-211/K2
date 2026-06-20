@@ -176,10 +176,37 @@ pub fn handle_set_harness_fanout_enabled(body: &[u8]) -> CliResponse {
     if b.project_path.is_empty() {
         return CliResponse::bad_request("missing project_path");
     }
-    match k2_core::workspace::onboarding::set_harness_fanout_enabled(&b.project_path, b.enabled) {
-        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
-        Err(e) => CliResponse::bad_request(e),
+    // Enabling fan-out must also clear the legacy `.skip-harness-management`
+    // flag. That flag is the HARDER "never touch my files" override, and
+    // `harness_fanout_enabled()` returns false whenever it's present — so
+    // without this, checking the box writes the marker but the immediate
+    // read-back still reports false and the checkbox snaps back unchecked.
+    if b.enabled {
+        if let Err(e) = k2_core::workspace::onboarding::unskip_harness_management(&b.project_path) {
+            return CliResponse::bad_request(format!("clear skip-harness flag: {e}"));
+        }
     }
+    if let Err(e) =
+        k2_core::workspace::onboarding::set_harness_fanout_enabled(&b.project_path, b.enabled)
+    {
+        return CliResponse::bad_request(e);
+    }
+    // GAP 1: enabling the fan-out must materialize the symlink/copy
+    // mirrors IMMEDIATELY, not on the next daemon boot. The fan-out
+    // funnels through `regenerate_workspace_skill`, which is gated by
+    // `harness_fanout_enabled()` — now that the marker is set above, this
+    // call lays down CLAUDE.md / GEMINI.md / .cursor (etc.) mirrors of the
+    // canonical `.k2/AGENTS.md`. Daemon-first: the regen runs here, not in
+    // any client. A regen failure is surfaced (the marker write already
+    // succeeded, so the box stays checked and the next boot retries).
+    if b.enabled {
+        if let Err(e) =
+            k2_core::workspace::skill_regen::regenerate_workspace_skill(b.project_path.clone())
+        {
+            return CliResponse::bad_request(format!("regen after enable: {e}"));
+        }
+    }
+    CliResponse::ok_json(r#"{"success":true}"#.to_string())
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -235,7 +262,7 @@ mod tests {
     #[test]
     fn create_and_write_opt_in_round_trip_on_tempdir() {
         // Real filesystem round-trip: create a skill, then write an
-        // opt-in skill, asserting both land on disk under .k2so/skills/.
+        // opt-in skill, asserting both land on disk under .k2/skills/.
         let tmp = std::env::temp_dir().join(format!(
             "k2so-skills-routes-{}-{}",
             std::process::id(),
@@ -250,13 +277,13 @@ mod tests {
         let body = serde_json::json!({ "project_path": pp, "name": "my-skill" }).to_string();
         let r = handle_create(body.as_bytes());
         assert_eq!(r.status, "200 OK", "create body={}", r.body);
-        assert!(tmp.join(".k2so/skills/my-skill/SKILL.md").exists());
+        assert!(tmp.join(".k2/skills/my-skill/SKILL.md").exists());
 
         let body =
             serde_json::json!({ "project_path": pp, "skill": "k2-agent" }).to_string();
         let r = handle_write_opt_in(body.as_bytes());
         assert_eq!(r.status, "200 OK", "write-opt-in body={}", r.body);
-        assert!(tmp.join(".k2so/skills/k2-agent/SKILL.md").exists());
+        assert!(tmp.join(".k2/skills/k2-agent/SKILL.md").exists());
 
         // NOTE: we deliberately do NOT exercise handle_remove here — it
         // trashes via the OS recycle bin, which triggers a macOS Finder
@@ -286,6 +313,22 @@ mod tests {
         assert!(
             k2_core::workspace::onboarding::harness_fanout_enabled(&pp),
             "marker should report enabled after the write"
+        );
+
+        // GAP 1: enabling must ALSO regen immediately so the harness
+        // mirrors materialize without waiting for the next boot. With the
+        // fan-out marker set, `regenerate_workspace_skill` GENERATES the
+        // canonical `.k2/AGENTS.md` AND symlinks the harness mirrors at it —
+        // the root `AGENTS.md` (the cross-tool standard) proves the fan-out
+        // ran, not just the canonical write. (New AGENTS.md-canonical shape;
+        // the old composed `.k2/skills/k2so/SKILL.md` was reaped.)
+        assert!(
+            tmp.join(".k2/AGENTS.md").exists(),
+            "canonical .k2/AGENTS.md should exist after enable+regen"
+        );
+        assert!(
+            tmp.join("AGENTS.md").exists(),
+            "root AGENTS.md mirror should materialize immediately on enable"
         );
 
         let body = serde_json::json!({ "project_path": pp, "enabled": false }).to_string();

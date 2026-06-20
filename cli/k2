@@ -3052,14 +3052,15 @@ err = (d.get("error") or "").strip() if isinstance(d, dict) else ""
 detail = (d.get("detail") or "").strip() if isinstance(d, dict) else ""
 # 403 pro_required is a friendly UPSELL, not a raw error. The server may
 # put the gated subdomain label in `detail`; render the PRD form
-# "<sub> needs the Pro plan — upgrade: k2 connect upgrade". This is UX
+# "<sub> needs the Pro plan — manage your plan on the dashboard". This is UX
 # only — enforcement is server-side; we are just dressing the 403 it sent.
+# Plan/billing changes are dashboard-only; the CLI never touches the subscription.
 if err == "pro_required":
     sub = detail if detail else "This subdomain"
     sys.stderr.write(
         "%s needs the Pro plan to create nested subdomains.\n"
-        "  Upgrade: k2 connect upgrade%s\n"
-        % (sub, (" " + detail) if detail else "")
+        "  Upgrade your plan on the dashboard: https://k2.dev/dashboard\n"
+        % (sub,)
     )
     sys.exit(1)
 msgs = {
@@ -3116,10 +3117,10 @@ _connect_curl() {
 }
 
 _connect_usage() {
-    echo "Usage: k2 connect <status|subdomain|upgrade> ..." >&2
+    echo "Usage: k2 connect <status|subdomain> ..." >&2
     echo "  status                                Connected subdomain + its plan" >&2
     echo "  subdomain <create|list|point|rm> ...  Manage Pro nested subdomains" >&2
-    echo "  upgrade [<subdomain>]                 Open Pro checkout for a subdomain" >&2
+    echo "  (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)" >&2
 }
 
 cmd_connect() {
@@ -3131,9 +3132,6 @@ cmd_connect() {
             ;;
         subdomain)
             cmd_connect_subdomain "$@"
-            ;;
-        upgrade)
-            cmd_connect_upgrade "$@"
             ;;
         ""|help|--help|-h)
             _connect_usage
@@ -3211,42 +3209,14 @@ else:
     plan = "unknown"
 print("Connected: %s · Plan: %s" % (host, plan))
 if tier in ("single", "free"):
-    print("  Upgrade: k2 connect upgrade")
+    print("  Manage your plan on the dashboard: https://k2.dev/dashboard")
 '
 }
 
-# `k2 connect upgrade [<subdomain>]` — open Pro checkout for the connected
-# (or named) subdomain. Calls POST /billing/checkout {subdomain, plan} on the
-# control plane (authenticated by the tunnel token) and prints the returned
-# Stripe Checkout URL. Enforcement/entitlement is server-side; this only
-# requests a checkout session.
-cmd_connect_upgrade() {
-    if [ -z "$(_connect_bearer_token)" ]; then
-        echo "Error: no K2 Connect tunnel token found in ${K2_HOME}/tunnel.json." >&2
-        echo "Select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first." >&2
-        exit 1
-    fi
-    local target="${1:-}"
-    [ -z "$target" ] && target="$(_connect_self_subdomain)"
-    if [ -z "$target" ]; then
-        echo "Usage: k2 connect upgrade [<subdomain>]" >&2
-        echo "  No connected subdomain found in ${K2_HOME}/tunnel.json — name one explicitly." >&2
-        exit 1
-    fi
-    local body
-    body="$(python3 -c 'import json,sys; print(json.dumps({"subdomain": sys.argv[1], "plan": "pro"}))' "$target")"
-    TARGET="$target" _connect_curl POST "/billing/checkout" "$body" | TARGET="$target" _connect_subdomain_render '
-import os
-target = os.environ.get("TARGET") or "your subdomain"
-url = d.get("url") or d.get("checkout_url") or d.get("checkoutUrl") or ""
-if not url:
-    sys.stderr.write("Error: control plane did not return a checkout URL.\n")
-    sys.exit(1)
-print("Upgrade %s to Pro:" % target)
-print("  %s" % url)
-print("Open this URL in your browser to complete checkout.")
-'
-}
+# NOTE: subscription/billing is intentionally NOT in the CLI. Upgrading,
+# downgrading, cancelling, and any tier change happen ONLY on the website
+# dashboard (https://k2.dev/dashboard). The CLI exists to MAKE/MANAGE
+# subdomains, not to manage the subscription.
 
 cmd_connect_subdomain() {
     local action="${1:-list}"
@@ -5121,7 +5091,7 @@ CONNECT (K2 Connect — Pro subdomains + plan; talks to the control plane)
   connect subdomain create <label> --target <e> Claim a nested subdomain (Pro)
   connect subdomain point <label> --target <e>  Repoint a subdomain (Pro)
   connect subdomain rm <label>                  Remove a subdomain (Pro)
-  connect upgrade [<subdomain>]                 Open Pro checkout for a subdomain
+  (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)
 
 SETTINGS
   settings                                      Show current settings

@@ -77,7 +77,16 @@ pub struct HandlerResult {
 /// bus, and fan every signal out to the connected client as a JSON
 /// text message. Exits when the bus closes (daemon shutdown) or
 /// the client disconnects.
-pub async fn serve_awareness_subscribe_connection(stream: &mut TcpStream) {
+pub async fn serve_awareness_subscribe_connection(
+    stream: &mut TcpStream,
+    token: String,
+    owner_token: String,
+) {
+    // `token` is the credential that authorized this connection (the
+    // dispatcher already validated it at upgrade). Re-validated on a
+    // timer below so a revoked connect-user is dropped from their LIVE
+    // awareness socket within ~5s — see `sessions_grid_ws.rs`.
+    //
     // 0.39.7: stream borrowed (was owned). See `events.rs` for
     // rationale — dispatcher keeps stream ownership across its
     // keep-alive loop iterations.
@@ -95,8 +104,31 @@ pub async fn serve_awareness_subscribe_connection(stream: &mut TcpStream) {
         awareness::subscriber_count()
     );
 
+    // Re-auth heartbeat: every 5s, confirm the token that opened this
+    // socket is still valid. Mirrors the grid WS (`sessions_grid_ws.rs`):
+    // a revoked connect-user would otherwise keep receiving live bus
+    // signals until they happened to disconnect. The owner token is never
+    // revoked, so owner connections sail through the compare.
+    let mut auth_recheck =
+        tokio::time::interval(std::time::Duration::from_secs(5));
+    // Burn the immediate first tick so we don't re-validate the instant
+    // after the dispatcher already authorized us.
+    auth_recheck.tick().await;
+
     loop {
         tokio::select! {
+            // Re-auth heartbeat — see `auth_recheck` above. Closes the
+            // socket the moment the connecting user is revoked.
+            _ = auth_recheck.tick() => {
+                if !crate::routes::http::token_still_valid(&token, &owner_token) {
+                    log_debug!(
+                        "[daemon/awareness_ws] token revoked mid-session; \
+                         closing awareness subscribe WS"
+                    );
+                    let _ = write.send(Message::Close(None)).await;
+                    break;
+                }
+            }
             recv = rx.recv() => {
                 match recv {
                     Ok(signal) => {

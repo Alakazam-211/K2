@@ -1,4 +1,4 @@
-<!-- DEFAULT TEMPLATE — K2SO scaffolded this for a custom agent.
+<!-- DEFAULT TEMPLATE — K2 scaffolded this for a custom agent.
      Edit below to customize what this agent does when the heartbeat wakes it.
      Delete this comment once you've made it your own. -->
 

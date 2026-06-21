@@ -272,9 +272,12 @@ pub fn handle_login(body: &[u8]) -> CliResponse {
     let username = connect_users::normalize_username(&req.username)
         .unwrap_or_else(|_| req.username.to_ascii_lowercase());
     let token = connect_users::create_session(&username);
-    // Mirror the 30-day TTL the core applies (kept in sync by contract;
-    // the authoritative expiry lives in the in-memory session).
-    let expires_at = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+    // Read the canonical TTL from core (not a duplicated route constant)
+    // so the wire `expiresAt` can't drift from the persisted record's
+    // `expires_at`.
+    let expires_at = (chrono::Utc::now()
+        + chrono::Duration::days(connect_users::session_ttl_days()))
+    .to_rfc3339();
     CliResponse::ok_json(
         serde_json::json!({
             "token": token,
@@ -595,6 +598,24 @@ pub fn handle_change_password(username: Option<String>, body: &[u8]) -> CliRespo
     }
 }
 
+/// `POST /cli/auth/logout` (authorized by the caller's OWN session token).
+///
+/// Deletes the caller's persisted session record — a per-device logout.
+/// The token is the caller's `?token=` (passed in as `token`); the OWNER
+/// token has no session record so logout is a no-op `{"success":true}` for
+/// it (idempotent). "Log out EVERYWHERE" is a different gesture (an epoch
+/// bump via change-password / disable), not this route.
+///
+/// Always returns `{"success":true}` — whether or not a record was found —
+/// so a logged-out/expired token can't be probed for existence. (K2 Connect
+/// #4.)
+pub fn handle_logout(token: &str) -> CliResponse {
+    // Deleting an unknown/expired token returns None; we still report
+    // success so the route is idempotent + non-enumerable.
+    let _ = connect_users::logout_session(token);
+    CliResponse::ok_json(r#"{"success":true}"#.to_string())
+}
+
 /// `GET /cli/auth/whoami` (authorized — owner OR connect-user) →
 /// `{username, owner, role}`.
 ///
@@ -634,6 +655,50 @@ mod tests {
         let r = handle_login(b"not json");
         assert_eq!(r.status, "401 Unauthorized");
         assert!(r.body.contains("invalid username or password"));
+    }
+
+    #[test]
+    fn logout_unknown_token_is_idempotent_success() {
+        // An unknown/expired token logs out to a generic success (no
+        // enumeration); no temp HOME needed — it can't match any record.
+        let r = handle_logout("not-a-real-session-token");
+        assert_eq!(r.status, "200 OK");
+        assert!(r.body.contains("\"success\":true"), "got: {}", r.body);
+    }
+
+    #[test]
+    fn logout_deletes_the_callers_persisted_session() {
+        // Seed a session in a throwaway HOME, then confirm handle_logout
+        // deletes it (validate_session goes None afterward).
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp =
+            std::env::temp_dir().join(format!("k2-logout-route-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", &tmp);
+
+        connect_users::add_user("logoutu", "password1").expect("add");
+        let tok = connect_users::create_session("logoutu");
+        assert_eq!(
+            connect_users::validate_session(&tok),
+            Some("logoutu".to_string())
+        );
+        let r = handle_logout(&tok);
+        assert_eq!(r.status, "200 OK");
+        assert_eq!(
+            connect_users::validate_session(&tok),
+            None,
+            "logout must delete the caller's session"
+        );
+
+        match prev {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

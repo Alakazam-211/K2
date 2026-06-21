@@ -139,6 +139,95 @@ impl LeaseTarget {
 // item. The daemon reads it back with the `security` CLI — the same
 // mechanism `companion::keychain` already relies on for cross-process
 // access to a keyring-written secret.
+//
+// ## Why this item prompts, and the ACL fix (0.40.7)
+//
+// On macOS the `keyring` crate (and the `security` CLI) operate on the
+// LEGACY file-based **login keychain** via `SecKeychainAddGenericPassword`
+// / `find_generic_password`. Access to an item in that keychain is gated by
+// the item's **ACL** — a per-item list of *trusted applications* — NOT by
+// the modern `keychain-access-groups` entitlement (that entitlement only
+// governs the iOS-style data-protection keychain, which neither keyring nor
+// the `security` CLI use on macOS). So the entitlement added in 0.40.6
+// makes "Always Allow" survive relaunches for the *creating app's* own
+// signature, but it does nothing for a DIFFERENT binary touching the item.
+//
+// When the renderer (`keyring`) creates the item, its default ACL trusts
+// only the creating app (`K2.app/Contents/MacOS/k2`). Every OTHER process
+// that touches it then provokes the login-keychain password prompt:
+//
+//   * the daemon READ shells `/usr/bin/security find-generic-password`, so
+//     the keychain sees `/usr/bin/security` as the requester — not on the
+//     ACL → prompt, and "Always Allow" can't persist a grant for a tool
+//     that re-launches as a fresh process each time;
+//   * even reading via the Security framework from the daemon would make
+//     `k2-daemon` the requester — still a different app than the writer
+//     (`k2`), still not on the ACL → still a prompt — and the `keyring`
+//     crate exposes NO API to add trusted apps to an item's ACL.
+//
+// The only lever on the login keychain is the `security` CLI's `-T <path>`
+// flag (set the item's trusted-application list at write time). So we keep
+// the `security` CLI and, whenever the daemon (re)writes the item, we stamp
+// it with an explicit ACL that trusts every binary that legitimately reads
+// it. See [`acl_trusted_apps`] for the exact `-T` set and the per-entry
+// rationale tied to which process performs each access.
+//
+// `-U` updates the VALUE of an existing item but does NOT reset its ACL, so
+// to (re)apply the ACL we DELETE + re-ADD (a plain add — no `-U` — installs
+// a fresh ACL). The token value is preserved across the delete/re-add. This
+// also self-heals a legacy item the renderer created without our ACL: the
+// first daemon write after updating to 0.40.7 upgrades it in place.
+
+/// The `-T` trusted-application set stamped onto the account keychain item
+/// so every binary that reads it does so WITHOUT a login-keychain prompt.
+///
+/// Returns absolute paths to pass as `-T <path>`. Each entry is justified by
+/// the process that actually performs a keychain access against this item:
+///
+/// 1. `/usr/bin/security` — the daemon's READ path
+///    ([`read_keychain_token`]) shells `security find-generic-password`, so
+///    the keychain sees `/usr/bin/security` as the requesting application on
+///    every daemon read. This is the load-bearing entry.
+/// 2. the running daemon executable (`std::env::current_exe()`, i.e.
+///    `K2.app/Contents/MacOS/k2-daemon`) — covers any future direct
+///    Security-framework read from the daemon and the daemon's own
+///    rotation/migration re-writes, so they never re-prompt.
+/// 3. the app/renderer binary (`…/Contents/MacOS/k2`, the daemon exe's
+///    sibling) — the renderer ORIGINALLY created the item (via `keyring`)
+///    and reads it back through `k2_secret_get`. Once the daemon re-writes
+///    the item with an explicit ACL, that ACL REPLACES the keyring default
+///    that trusted `k2`; without re-adding `k2` here the daemon's own ACL
+///    rewrite would lock the renderer OUT and re-introduce a prompt on the
+///    app side. We derive its path as the daemon exe's sibling (both live in
+///    `K2.app/Contents/MacOS/`) so it stays correct across versions and
+///    install locations without hard-coding `/Applications`.
+///
+/// The CLI (`@alakazamlabs/k2`, an npm-installed bash script) does NOT read
+/// this item — it has no account-session code path — so it is intentionally
+/// omitted; adding a `-T` for a binary that never touches the item would be
+/// dead ACL surface.
+#[cfg(target_os = "macos")]
+fn acl_trusted_apps() -> Vec<String> {
+    let mut apps = vec!["/usr/bin/security".to_string()];
+    if let Ok(exe) = std::env::current_exe() {
+        // Resolve symlinks so the ACL records the real bundle path (launchd
+        // may exec the daemon through a symlink).
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        // (2) the daemon itself.
+        apps.push(exe.to_string_lossy().to_string());
+        // (3) the app binary `k2`, the daemon exe's sibling in
+        // Contents/MacOS/. Only add it when it actually exists on disk
+        // (e.g. inside the .app bundle) — in a bare dev/CI build the daemon
+        // has no `k2` sibling and a phantom path would just be inert.
+        if let Some(dir) = exe.parent() {
+            let app_bin = dir.join("k2");
+            if app_bin != exe && app_bin.exists() {
+                apps.push(app_bin.to_string_lossy().to_string());
+            }
+        }
+    }
+    apps
+}
 
 /// 0.40.0 rebrand — proactively copy a pre-rename K2 Connect session
 /// (`com.k2so.connect.account`) forward to `dev.k2.connect.account` at
@@ -147,10 +236,27 @@ impl LeaseTarget {
 /// lazy copy-on-read). Returns `true` if a migration happened. Idempotent
 /// + best-effort: a no-op when there's no legacy item, or the new item is
 /// already present. macOS-only.
+///
+/// 0.40.7 — this boot pass ALSO upgrades the trusted-application ACL on the
+/// current-service item when it already exists. The renderer creates the
+/// item via `keyring`, whose default ACL trusts only the app binary, so
+/// every daemon `security` read prompts. Re-stamping the ACL once at boot
+/// (with the same token value, see [`write_token_with_acl`]) converts an
+/// every-read prompt into — at most — a single boot prompt that "Always
+/// Allow" then satisfies; once stamped, subsequent boots are prompt-free
+/// because the daemon is already on the ACL. The boot probe read below is
+/// the read that may prompt the one time; everything after is silent.
 #[cfg(target_os = "macos")]
 pub fn migrate_account_keychain() -> bool {
-    // New item already present → nothing to do (don't even touch legacy).
-    if read_keychain_token(ACCOUNT_KEYCHAIN_SERVICE).is_some() {
+    // New item already present → no migration needed, but UPGRADE its ACL
+    // once so the renewal loop's reads stop prompting.
+    if let Some(existing) = read_keychain_token(ACCOUNT_KEYCHAIN_SERVICE) {
+        crate::log_debug!(
+            "[tunnel/lease] boot ACL upgrade on {ACCOUNT_KEYCHAIN_SERVICE} (re-stamp trusted-app list)"
+        );
+        // Re-write the SAME value to (re)install our ACL. Idempotent: once
+        // the daemon is on the ACL, this re-write needs no prompt.
+        write_account_refresh_token(&existing);
         return false;
     }
     match read_keychain_token(LEGACY_ACCOUNT_KEYCHAIN_SERVICE) {
@@ -158,6 +264,8 @@ pub fn migrate_account_keychain() -> bool {
             crate::log_debug!(
                 "[tunnel/lease] boot keychain migration {LEGACY_ACCOUNT_KEYCHAIN_SERVICE} → {ACCOUNT_KEYCHAIN_SERVICE}"
             );
+            // write_account_refresh_token stamps the ACL on the NEW item, so
+            // the migrated session is prompt-free from its first daemon read.
             write_account_refresh_token(&legacy);
             true
         }
@@ -219,29 +327,73 @@ fn read_keychain_token(service: &str) -> Option<String> {
 /// the NEXT daemon refresh (and the renderer's next mount) would present a
 /// spent token. Best-effort — a keychain write failure is logged and
 /// swallowed (the in-memory token is still good for this run).
+///
+/// Every write goes through [`write_token_with_acl`], which stamps the
+/// trusted-application ACL ([`acl_trusted_apps`]) so the daemon's `security`
+/// reads — and the renderer's reads — never provoke a login-keychain
+/// prompt. A write also UPGRADES the ACL on a legacy item the renderer
+/// created without one (delete + re-add installs the fresh ACL).
 #[cfg(target_os = "macos")]
 pub fn write_account_refresh_token(token: &str) {
-    let output = std::process::Command::new("security")
-        .args([
-            "add-generic-password",
-            "-U",
-            "-s",
-            ACCOUNT_KEYCHAIN_SERVICE,
-            "-a",
-            ACCOUNT_REFRESH_KEY,
-            // Friendly label shown in the macOS keychain access dialog
-            // instead of the bare `dev.k2.connect.account` service id.
-            "-l",
-            ACCOUNT_KEYCHAIN_LABEL,
-            "-w",
-            token,
-        ])
+    write_token_with_acl(ACCOUNT_KEYCHAIN_SERVICE, ACCOUNT_REFRESH_KEY, token);
+}
+
+/// Write `token` under `(service, account)` with our trusted-application
+/// ACL applied, idempotently and migration-safely.
+///
+/// `security`'s `-U` updates an existing item's VALUE but does NOT reset its
+/// ACL, so we cannot rely on `-U` to upgrade a legacy item that the renderer
+/// created with a default (creator-only) ACL. Instead we DELETE any existing
+/// item first, then a plain ADD (no `-U`) installs a fresh item carrying the
+/// `-T` ACL. Deleting then adding the SAME value preserves the token across
+/// the operation; the only observable change is the (now correct) ACL.
+///
+/// Best-effort throughout: a delete of a missing item is fine (we ignore its
+/// status), and an add failure is logged + swallowed (the in-memory token is
+/// still good for this run).
+#[cfg(target_os = "macos")]
+fn write_token_with_acl(service: &str, account: &str, token: &str) {
+    // Drop any existing item so the subsequent ADD installs our ACL rather
+    // than leaving a legacy creator-only ACL in place. Ignore the status:
+    // "not found" is the expected first-write case.
+    let _ = std::process::Command::new("security")
+        .args(["delete-generic-password", "-s", service, "-a", account])
         .output();
-    if let Ok(out) = output {
-        if !out.status.success() {
+
+    let mut cmd = std::process::Command::new("security");
+    cmd.args([
+        "add-generic-password",
+        // NOTE: no `-U` — we deleted above, and a plain add is what installs
+        // a fresh ACL. `-U` would update-in-place and skip the ACL.
+        "-s",
+        service,
+        "-a",
+        account,
+        // Friendly label shown in the macOS keychain access dialog instead
+        // of the bare service id.
+        "-l",
+        ACCOUNT_KEYCHAIN_LABEL,
+    ]);
+    // One `-T <path>` per trusted binary (see acl_trusted_apps for the
+    // rationale tied to which process performs each access).
+    for app in acl_trusted_apps() {
+        cmd.arg("-T").arg(app);
+    }
+    // `-w <token>` LAST so the secret is the final arg (never shell-parsed;
+    // args are passed directly to exec, not through a shell).
+    cmd.arg("-w").arg(token);
+
+    match cmd.output() {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
             crate::log_debug!(
-                "[tunnel/lease] WARN: failed to persist rotated refresh token (keychain write rc={:?})",
+                "[tunnel/lease] WARN: failed to persist refresh token with ACL (service={service} rc={:?})",
                 out.status.code()
+            );
+        }
+        Err(e) => {
+            crate::log_debug!(
+                "[tunnel/lease] WARN: keychain write spawn failed (service={service}): {e}"
             );
         }
     }

@@ -58,11 +58,22 @@ export async function validateHost(
 ): Promise<ValidateResult> {
   const base = candidateBase(c)
   const url = `${base}/boot-status${c.token ? `?token=${encodeURIComponent(c.token)}` : ''}`
-  let resp: Response
-  try {
-    resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
-  } catch {
-    return { ok: false, reason: `Couldn't reach ${c.hostname}. Check the address and your network.` }
+  // Issue #5: a stale pooled connection to the shared relay IP can throw; the
+  // throw evicts the dead socket, so retry once before reporting unreachable.
+  let resp: Response | undefined
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+      break
+    } catch {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 400))
+        continue
+      }
+    }
+  }
+  if (!resp) {
+    return { ok: false, reason: `Couldn't reach ${c.hostname} — the connection failed. Try again, or relaunch K2 if it persists.` }
   }
   if (resp.status === 401 || resp.status === 403) {
     return { ok: false, reason: 'The server rejected this password.' }

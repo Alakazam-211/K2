@@ -540,6 +540,31 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // One-time ordering repair: on upgrade the `WHERE NOT EXISTS` insert placed
+    // Hermes at sort_order 5, but existing installs still had OpenCode at 5 — a
+    // tie that renders Hermes AFTER OpenCode. If Hermes and OpenCode still share
+    // a slot, open a gap by bumping OpenCode (and everything at/after Hermes's
+    // slot, except Hermes) down by one, so Hermes lands between Pi (4) and
+    // OpenCode. Idempotent: once the collision is resolved this is a no-op, and
+    // it never fires on fresh installs (the seed already spaces them 4/5/6).
+    let hermes_opencode_collision: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM agent_presets h, agent_presets o \
+         WHERE h.label = 'Hermes' AND o.label = 'OpenCode' \
+           AND h.is_built_in = 1 AND o.is_built_in = 1 \
+           AND h.sort_order = o.sort_order",
+        [],
+        |r| r.get(0),
+    )?;
+    if hermes_opencode_collision > 0 {
+        conn.execute(
+            "UPDATE agent_presets SET sort_order = sort_order + 1 \
+             WHERE is_built_in = 1 AND label != 'Hermes' \
+               AND sort_order >= (SELECT sort_order FROM agent_presets \
+                                  WHERE label = 'Hermes' AND is_built_in = 1)",
+            [],
+        )?;
+    }
+
     Ok(())
 }
 

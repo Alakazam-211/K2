@@ -93,45 +93,76 @@ pub struct TunnelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_label: Option<String>,
 
-    /// **K2 Connect E2E encryption opt-in (Phase 0/1, PRD
-    /// `k2-connect-e2e-encryption.md` §4 Option A).** When true the daemon
-    /// terminates TLS itself (a rustls listener presents a cert for
-    /// `<sub>.k2.dev`) and frpc forwards the *encrypted* stream
-    /// (`type = "https"`) so the relay carries only ciphertext. When false
-    /// (the default) behaviour is EXACTLY as today: frpc `type = "http"` and
-    /// Caddy terminates TLS at the relay. The env var `K2_E2E=1` forces this
-    /// on regardless of the stored value (see [`e2e_enabled`]); the field lets
-    /// it be persisted per-install once the broker ships. Default false so no
-    /// existing tunnel changes behaviour on upgrade.
-    #[serde(default)]
+    /// **K2 Connect E2E encryption (PRD `k2-connect-e2e-encryption.md` §4
+    /// Option A) — ON BY DEFAULT, user-opt-out, effective 0.40.6+.** When
+    /// true the daemon terminates TLS itself (a rustls listener presents a
+    /// broker-issued cert for `<sub>.k2.dev`) and frpc forwards the
+    /// *encrypted* stream (`type = "https"`) so the relay carries only
+    /// ciphertext. When false — the user's explicit **opt-out** — behaviour
+    /// is the legacy terminating path: frpc `type = "http"` and Caddy
+    /// terminates TLS at the relay.
+    ///
+    /// **Default is `true`** (see [`default_e2e`]): a config that omits the
+    /// field — including an existing 0.40.5 `tunnel.json` upgraded in place —
+    /// deserializes with `e2e: true`, so E2E is on without the user ever
+    /// turning it on. A user who *explicitly* writes `e2e: false` keeps the
+    /// plaintext path; that opt-out is honoured and must keep working.
+    ///
+    /// The env var `K2_E2E` overrides the stored value at runtime (see
+    /// [`e2e_enabled`]): a falsey value forces OFF (an env-level opt-out), a
+    /// truthy value forces ON, and unset → follow this field.
+    #[serde(default = "default_e2e")]
     pub e2e: bool,
 }
 
 /// True when K2 Connect end-to-end encryption (Option A) is enabled for
 /// this daemon. The single gate every E2E code path consults.
 ///
-/// Enabled when EITHER the env var `K2_E2E` is set to a truthy value
-/// (`1`/`true`/`yes`/`on`, case-insensitive) OR the passed config has
-/// `e2e: true`. The env var is the spike/Phase-0 switch (no config write
-/// needed, easy to flip in a smoke test); the config field is the
-/// persisted form the broker task will set once issuance is wired. Default
-/// (no env, `e2e:false`) is OFF → zero behaviour change.
+/// **Precedence (0.40.6+, default-ON + opt-out):**
+///   1. An *explicit* env opt-out wins → OFF. `K2_E2E` in
+///      `{0,false,no,off}` (case-insensitive) forces E2E off regardless of
+///      the stored config — an operator-level kill switch / opt-out.
+///   2. An *explicit* env opt-in → ON. `K2_E2E` in `{1,true,yes,on}` forces
+///      E2E on regardless of the stored config.
+///   3. Otherwise (env unset or unrecognised) → follow the config field,
+///      which **defaults to `true`** ([`default_e2e`]). So a user who never
+///      expressed a preference gets E2E ON; a user who explicitly persisted
+///      `e2e: false` gets the plaintext opt-out path.
+///
+/// Net effect: E2E is the default for everyone; turning it OFF requires an
+/// explicit `e2e: false` in `tunnel.json` OR a falsey `K2_E2E` — you never
+/// have to turn it ON.
 pub fn e2e_enabled(cfg: &TunnelConfig) -> bool {
-    if env_e2e_on() {
-        return true;
+    match env_e2e_override() {
+        Some(forced) => forced, // explicit env opt-in/opt-out wins
+        None => cfg.e2e,        // no env preference → config (defaults true)
     }
-    cfg.e2e
 }
 
-/// Truthiness of the `K2_E2E` env var, isolated so it's unit-testable and
-/// the parsing rule lives in exactly one place.
-fn env_e2e_on() -> bool {
-    match std::env::var("K2_E2E") {
-        Ok(v) => matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
-        Err(_) => false,
+/// Default for the `e2e` config field when it's absent from `tunnel.json`:
+/// **true** (E2E ON by default, 0.40.6+). A custom serde default fn (rather
+/// than `#[serde(default)]`, which would give `false`) so an existing config
+/// that predates this field upgrades to E2E-on automatically.
+fn default_e2e() -> bool {
+    true
+}
+
+/// Parse the `K2_E2E` env var as an explicit override, if present and
+/// recognised:
+///   * `Some(true)`  for `1`/`true`/`yes`/`on`  (force ON / opt-in)
+///   * `Some(false)` for `0`/`false`/`no`/`off`/`` (force OFF / opt-out)
+///   * `None` when the var is unset or holds an unrecognised value (defer to
+///     the config). The empty string is treated as an explicit OFF so
+///     `K2_E2E=` reads as "off" rather than silently deferring to a now
+///     default-on config.
+///
+/// Isolated so the parsing rule lives in exactly one place and is unit-tested.
+fn env_e2e_override() -> Option<bool> {
+    let raw = std::env::var("K2_E2E").ok()?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" | "" => Some(false),
+        _ => None, // unrecognised → no override, follow config
     }
 }
 
@@ -154,7 +185,8 @@ impl Default for TunnelConfig {
             auto_start: false,
             device_id: None,
             device_label: None,
-            e2e: false,
+            // E2E ON by default (0.40.6+); user opts out via `e2e: false`.
+            e2e: default_e2e(),
         }
     }
 }
@@ -350,19 +382,31 @@ mod tests {
     }
 
     #[test]
-    fn e2e_defaults_false_and_legacy_json_omitting_field_is_off() {
-        // Default-constructed config must be OFF.
-        assert!(!TunnelConfig::default().e2e, "e2e must default off");
-        // A pre-e2e tunnel.json (no field) must deserialize with e2e=false —
-        // never silently terminate TLS on the daemon after an upgrade.
+    fn e2e_defaults_on_and_legacy_json_omitting_field_is_on() {
+        // 0.40.6+: E2E is ON by default. Default-constructed config is ON.
+        assert!(TunnelConfig::default().e2e, "e2e must default ON (0.40.6+)");
+        // A pre-e2e / 0.40.5 tunnel.json (no field) must deserialize with
+        // e2e=true — an existing user upgrades into E2E without touching
+        // anything (default-on; they never have to turn it on).
         let cfg: TunnelConfig =
             serde_json::from_str(r#"{"token":"tok","subdomain":"rosson"}"#)
                 .expect("parse legacy config");
-        assert!(!cfg.e2e, "absent e2e field must deserialize false");
+        assert!(cfg.e2e, "absent e2e field must deserialize true (default-on)");
     }
 
     #[test]
-    fn e2e_enabled_honors_config_field_and_env_var() {
+    fn e2e_explicit_false_in_json_is_the_opt_out() {
+        // The opt-out: a user who EXPLICITLY sets e2e:false keeps the
+        // plaintext/terminating path. The explicit false must survive
+        // deserialization (not be coerced back to the default).
+        let cfg: TunnelConfig =
+            serde_json::from_str(r#"{"token":"tok","subdomain":"rosson","e2e":false}"#)
+                .expect("parse opt-out config");
+        assert!(!cfg.e2e, "explicit e2e:false must deserialize false (opt-out)");
+    }
+
+    #[test]
+    fn e2e_enabled_default_on_config_field_and_env_precedence() {
         // Serialize with the HOME lock so the K2_E2E env mutation here can't
         // race the other env/HOME-touching suites.
         let _g = crate::themes::HOME_LOCK.lock();
@@ -370,30 +414,45 @@ mod tests {
         std::env::remove_var("K2_E2E");
 
         let mut cfg = TunnelConfig::default();
-        // Off by default: no env, e2e:false.
-        assert!(!e2e_enabled(&cfg), "default config + no env must be OFF");
+        // ON by default: no env, e2e defaults true.
+        assert!(e2e_enabled(&cfg), "default config + no env must be ON (0.40.6+)");
 
-        // Config field flips it on.
-        cfg.e2e = true;
-        assert!(e2e_enabled(&cfg), "e2e:true config must enable");
-
-        // Env var forces it on even when the config field is false.
+        // The opt-out: explicit e2e:false with no env → OFF.
         cfg.e2e = false;
+        assert!(
+            !e2e_enabled(&cfg),
+            "explicit e2e:false + no env must be OFF (the opt-out)"
+        );
+
+        // A truthy env var forces ON even over the opt-out config.
         for truthy in ["1", "true", "TRUE", "Yes", "on"] {
             std::env::set_var("K2_E2E", truthy);
             assert!(
                 e2e_enabled(&cfg),
-                "K2_E2E={truthy} must enable regardless of config"
+                "K2_E2E={truthy} must force ON regardless of config"
             );
         }
-        // A falsey env value does not enable when the config is also false.
+        // A falsey env var forces OFF even when the config field is true
+        // (env-level opt-out wins over a default-on / explicit-on config).
+        cfg.e2e = true;
         for falsey in ["0", "false", "no", "off", ""] {
             std::env::set_var("K2_E2E", falsey);
             assert!(
                 !e2e_enabled(&cfg),
-                "K2_E2E={falsey:?} must NOT enable a non-e2e config"
+                "K2_E2E={falsey:?} must force OFF even over an e2e:true config"
             );
         }
+        // An unrecognised env value is no override → follows the config.
+        std::env::set_var("K2_E2E", "maybe");
+        assert!(
+            e2e_enabled(&cfg),
+            "unrecognised K2_E2E must defer to the (true) config"
+        );
+        cfg.e2e = false;
+        assert!(
+            !e2e_enabled(&cfg),
+            "unrecognised K2_E2E must defer to the (false) config"
+        );
 
         match prev {
             Some(p) => std::env::set_var("K2_E2E", p),

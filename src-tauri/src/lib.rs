@@ -615,21 +615,27 @@ pub fn run() {
         .menu(|handle| menu::create_menu(handle))
         .on_menu_event(menu::handle_menu_event)
         .setup(|app| {
-            // 0.40.1 — CLI symlink heal. Re-install `/usr/local/bin/k2`
-            // (+ the k2so shim) when the symlink is missing, OR broken, OR
-            // points at a different bundle than the one running. The
-            // last case is the common 0.40.x one: a user who replaced
-            // K2SO.app with a fresh K2.app leaves the symlink dangling at
-            // the deleted K2SO.app, which shows up as `CLI Version: v?`.
-            // Same install flow as Settings → Install CLI — direct symlink
-            // if /usr/local/bin is user-writable, else ONE admin prompt.
-            // Spawned off-thread (osascript blocks on the dialog; setup
-            // must not). Re-asks at most once per launch until healed.
+            // 0.40.1 — CLI symlink heal. Re-link `/usr/local/bin/k2`
+            // (+ the k2so shim) when the symlink is missing, broken, or points
+            // at a different bundle than the one running (e.g. a user replaced
+            // K2SO.app with a fresh K2.app, leaving a dangling link → `CLI
+            // Version: v?`).
+            //
+            // 0.40.10 (#56) — this boot heal is now SILENT: it only attempts
+            // the direct (non-admin) symlink. It must NEVER fire the osascript
+            // admin password dialog, because a background heal that prompts on
+            // every launch/update was the "K2 needs your password" nag. The
+            // admin prompt now happens ONLY from an explicit Settings → Install
+            // CLI click. If the heal needs admin (root-owned /usr/local/bin),
+            // it defers silently and the user installs from Settings once.
+            // Combined with the canonicalized needs-heal check, a correctly
+            // installed CLI reports no heal needed and stays quiet.
             if crate::commands::settings::cli_symlink_needs_heal() {
                 std::thread::spawn(|| {
-                    match crate::commands::settings::cli_install() {
-                        Ok(path) => eprintln!("[boot] CLI heal: k2 + k2so symlinks (re)installed at {path}"),
-                        Err(e) => eprintln!("[boot] CLI heal skipped/declined: {e}"),
+                    match crate::commands::settings::cli_heal_silent() {
+                        Ok(true) => eprintln!("[boot] CLI heal: k2 + k2so symlinks (re)linked silently"),
+                        Ok(false) => eprintln!("[boot] CLI heal deferred: /usr/local/bin needs admin — install from Settings → Install CLI"),
+                        Err(e) => eprintln!("[boot] CLI heal skipped: {e}"),
                     }
                 });
             }

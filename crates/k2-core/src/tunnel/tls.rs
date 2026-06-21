@@ -80,6 +80,56 @@ pub fn read_https_port() -> Option<u16> {
     raw.trim().parse::<u16>().ok().filter(|p| *p != 0)
 }
 
+/// Signature of the daemon-registered "ensure the E2E HTTPS listener is up"
+/// hook. Given the daemon's cleartext HTTP port, it must (idempotently)
+/// obtain/install the per-subdomain cert, bind + spawn the rustls listener if
+/// it isn't already running, publish the HTTPS port, and return it — or a
+/// loud error string if issuance/bind failed. Blocking is fine; the connector
+/// calls it from a `spawn_blocking` worker.
+pub type EnsureHttpsListener = dyn Fn(u16) -> Result<u16, String> + Send + Sync + 'static;
+
+/// Process-wide hook the daemon installs at boot so the (k2-core) tunnel
+/// connector can demand the (k2-daemon) E2E HTTPS listener on first connect
+/// without a layering inversion. `None` in a headless/library context with no
+/// daemon — callers then fall back to reading the published port.
+static ENSURE_HTTPS_LISTENER: std::sync::OnceLock<Box<EnsureHttpsListener>> =
+    std::sync::OnceLock::new();
+
+/// Register the daemon's "ensure HTTPS listener" hook. Idempotent-by-first-
+/// write (a second registration is ignored) — the daemon calls this once at
+/// boot. See [`ensure_https_port`].
+pub fn register_ensure_https_listener(hook: Box<EnsureHttpsListener>) {
+    let _ = ENSURE_HTTPS_LISTENER.set(hook);
+}
+
+/// Ensure the daemon's E2E HTTPS listener is up and return its port, so a
+/// tunnel start on the E2E (now-default) path can obtain-then-serve rather
+/// than erroring when the port was never published.
+///
+/// Resolution order:
+///   1. If the daemon registered an ensure-hook ([`register_ensure_https_listener`]),
+///      call it — it (idempotently) provisions the cert + spawns the listener
+///      if needed and returns the live port. This is the robust first-connect
+///      path: a brand-new subdomain configured AFTER boot still gets a cert +
+///      listener on demand instead of failing.
+///   2. Otherwise (no hook — e.g. a library/test context), fall back to the
+///      already-published port from [`read_https_port`].
+///
+/// `Err` (issuance/bind failure, or no hook AND no published port) is returned
+/// loud — the caller must NOT silently forward cleartext to the HTTP port.
+pub fn ensure_https_port(http_port: u16) -> Result<u16, String> {
+    if let Some(hook) = ENSURE_HTTPS_LISTENER.get() {
+        return hook(http_port);
+    }
+    read_https_port().ok_or_else(|| {
+        "E2E is enabled but the daemon's HTTPS listener is not running and no \
+         on-demand listener hook is registered (~/.k2/tunnel-https.port missing) \
+         — refusing to start the tunnel against the cleartext HTTP port (would \
+         leak plaintext to the relay)."
+            .to_string()
+    })
+}
+
 /// The two SANs every K2 Connect cert covers for a subdomain `sub`:
 /// the apex `<sub>.k2.dev` and the per-user wildcard `*.<sub>.k2.dev`
 /// (so one cert covers all of the user's nested Pro subdomains).
@@ -344,11 +394,15 @@ pub fn server_config(
         .with_single_cert(cert_chain, key_der)
         .map_err(|e| format!("build rustls ServerConfig: {e}"))?;
 
-    // Advertise ALPN so passthrough clients negotiate HTTP/2 directly with THIS
-    // daemon's TLS terminator. On the E2E path the relay only forwards ciphertext
-    // and never sees ALPN, so if we don't offer h2 here, clients silently fall
-    // back to HTTP/1.1. Offer h2 first, then http/1.1. (PRD §9 / red-team GAP 7.)
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    // Advertise ALPN. On the E2E path the relay forwards only ciphertext and
+    // never sees ALPN, so THIS daemon's TLS terminator negotiates it. We
+    // terminate TLS and then RAW-SPLICE the decrypted stream to a backend (the
+    // daemon's HTTP server, or an arbitrary nested target like a user's
+    // localhost:3000) — we do NOT translate protocols. HTTP/2 frames spliced
+    // into an HTTP/1.1 backend break the connection: browsers negotiate h2 and
+    // hit ERR_HTTP2_PROTOCOL_ERROR. So offer ONLY http/1.1, which every backend
+    // speaks. (Revisit only if the splice ever becomes a real HTTP/2 proxy.)
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
     Ok(config)
 }
 
@@ -475,12 +529,14 @@ mod tests {
             );
             let cfg = server_config(&cert_pem, &key_pem)
                 .expect("self-signed cert+key must build a rustls ServerConfig");
-            // The config MUST advertise ALPN h2 + http/1.1 so passthrough clients
-            // negotiate HTTP/2 directly with the daemon (PRD §9 / red-team GAP 7).
+            // The config MUST advertise ONLY http/1.1. The E2E listener
+            // raw-splices the decrypted stream to an HTTP/1.1 backend (the
+            // daemon HTTP server or an arbitrary nested target); advertising h2
+            // made browsers negotiate HTTP/2 and break (ERR_HTTP2_PROTOCOL_ERROR).
             assert_eq!(
                 cfg.alpn_protocols,
-                vec![b"h2".to_vec(), b"http/1.1".to_vec()],
-                "server_config must advertise ALPN h2 then http/1.1"
+                vec![b"http/1.1".to_vec()],
+                "server_config must advertise only http/1.1 (raw-splice backend)"
             );
         });
     }

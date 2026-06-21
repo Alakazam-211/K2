@@ -3,7 +3,92 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
-## 0.40.6 — Clearer tunnel setup + clone any-size workspaces
+## 0.40.10 — No more "enter your password" prompt on every update
+
+- **Updating K2 no longer pops the "K2 needs to install the command-line tool —
+  enter your password" dialog every time.** That admin prompt was firing on each
+  launch/update because the background check that keeps the `k2` command healthy
+  mis-detected a perfectly good install as needing repair (a macOS path quirk)
+  and then asked for your password to "fix" it. Now the check is exact, and the
+  background heal never asks for a password — it only does the work it can do
+  silently. The one place that can ask for your password is the deliberate
+  **Settings → Install CLI** button, exactly once.
+
+## 0.40.9 — Remote updates no longer log you out + login reliability
+
+- **Updating a remote server no longer signs everyone out.** Your K2 Connect
+  login now survives a server restart (including a remote self-update), so a
+  routine update doesn't kick you — or any connected teammate — back to the
+  sign-in screen. Sessions are stored securely on the server (only a hash of
+  your token is ever written to disk, never the token itself).
+- **Revoking access is still instant — even across restarts.** Disabling,
+  removing, or changing the role/password of a user cuts off all of their live
+  connections within a few seconds and stays revoked through any restart. A
+  user disabled while the server was briefly down is rejected the moment it
+  comes back.
+- **Log out everywhere.** A new sign-out path cleanly ends a session on the
+  server, and brute-force lockout counters now survive a restart too.
+- **More reliable sign-in.** A stale connection to the relay no longer makes the
+  first login attempt fail with a confusing error — K2 retries transparently.
+- **Hardened the encrypted tunnel.** Added connection timeouts and a concurrency
+  cap so a stalled or flooded connection can't tie up the server, plus a
+  constant-time check on the owner credential. (Security hardening; no action
+  needed.)
+
+## 0.40.8 — No more black screen + reliable reconnect after a remote update
+
+- **Leaving Settings can no longer black-screen the app.** If a view ever hits
+  an unexpected error, K2 now shows a small recoverable panel with a **Reload**
+  button instead of going to a blank screen that needed a right-click → Reload
+  or a relaunch.
+- **Updating a remote server no longer strands you on "Connecting…".** After you
+  remotely update a server you had saved, the app reliably drops to the
+  **sign-in screen** so you can re-authenticate, instead of getting stuck
+  forever trying to connect with a session the server's restart had cleared.
+
+## 0.40.7 — Clearer remote-host version + update info
+
+- **When you're connected to a remote host, the General settings now always
+  show what version that host is running** — previously the host's version
+  only appeared when an update happened to be available, so an up-to-date
+  host showed nothing.
+- **The "App Version" line is now labeled "This Mac"** while you're connected
+  to a remote, so it's not mistaken for the host's version.
+- **Update checks compare versions correctly**, including pre-release builds
+  (e.g. an `-rc` build now sorts before its final release instead of being
+  treated as equal).
+- **If a newer version exists but there's no build for the host's platform,**
+  K2 now says exactly that instead of misreporting the host as up to date.
+
+## 0.40.6 — End-to-end encryption on by default
+
+- **Your K2 Connect tunnel is now end-to-end encrypted, on by default.**
+  Traffic between your machine and whoever connects is encrypted the whole
+  way — the relay that forwards it only ever sees scrambled ciphertext, never
+  your terminals, files, or keystrokes. It just works with no setup; the
+  daemon provisions its own certificate automatically. (Advanced users can
+  opt out by setting `K2_E2E=0`.)
+
+- **Turning on the Canonical Agent never overwrites your files.** When you
+  enable harness fan-out, any AI-tool files you already have (`CLAUDE.md`,
+  `AGENTS.md`, `.cursor/rules`, …) are **moved** into a `.k2/migration/`
+  folder inside your workspace before K2 replaces them with links to its
+  generated context — nothing is deleted and you can restore anything from
+  that folder. If a file can't be moved for any reason, K2 leaves it exactly
+  where it is rather than touch it. No recycle bin, no countdown clock.
+
+- **Simpler Canonical Agent Flow settings.** Removed a duplicate "enable
+  fan-out" toggle and a workspace-state list that couldn't be acted on from
+  there — the checkbox on each workspace is now the one place you turn this
+  on. The confirmation pop-up is wider and clearer.
+
+- **K2 Connect stops re-asking for keychain access.** Click **Always Allow**
+  once on the keychain prompt and it stays allowed — K2 now records itself as
+  a trusted app for its own K2 Connect and companion keychain items, so the
+  prompt no longer reappears every time you open the K2 Connect settings.
+
+- **Hermes is a built-in agent preset.** It now appears in the agent list
+  (after Pi), with the Nous Research mark sized to match the other icons.
 
 - **Pick your subdomain — no more phantom default.** When you signed in to
   K2 Connect, the subdomain menu *looked* like it had already picked one of
@@ -160,17 +245,14 @@ daemon, new name and new home.
 
 **A note on licensing — please read:**
 
-Versions through 0.39.x are MIT-licensed, and that doesn't change
-retroactively. Starting with 0.40.0, K2 is released under the
-**Functional Source License (FSL-1.1-Apache-2.0)** — a Fair Source
-license. For you, nothing changes: K2 stays free to use, for individuals
-and businesses, source visible as always, and each version automatically
-converts to Apache 2.0 after two years. The license restricts one thing:
-selling K2 itself (or a hosted version of it) as a competing product.
-Hosting K2 for clients stays permitted under a standing grant when remote
-access runs through the official K2 Connect tunnel. Full details ship
-with 0.40.0 (LICENSE.md, COMMERCIAL_HOSTING_GRANT.md, TRADEMARKS.md) and
-at the new repository.
+K2 is released under the **Functional Source License (FSL-1.1-Apache-2.0)**
+— a Fair Source license. For you, nothing changes: K2 stays free to use,
+for individuals and businesses, source visible as always, and each version
+automatically converts to Apache 2.0 after two years. The license restricts
+one thing: selling K2 itself (or a hosted version of it) as a competing
+product. Hosting K2 for clients stays permitted under a standing grant when
+remote access runs through the official K2 Connect tunnel. Full details ship
+in LICENSE, COMMERCIAL_HOSTING_GRANT.md, and TRADEMARKS.md.
 
 If you have questions about the change, open an issue — we read them all.
 

@@ -26,6 +26,7 @@ vi.stubGlobal('localStorage', {
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import {
   gte,
+  compareVersions,
   serverSupports,
   featureMinVersion,
   FEATURES,
@@ -82,6 +83,39 @@ describe('gte (semver)', () => {
     expect(gte('0.39.24+build7', '0.39.24')).toBe(true)
     expect(gte('v0.39.24', '0.39.24')).toBe(true)
     expect(gte('0.39.23-rc.9', '0.39.24')).toBe(false)
+  })
+})
+
+describe('compareVersions (prerelease-aware ordering)', () => {
+  // The renderer twin of the daemon's compare_versions — a prerelease
+  // sorts BEFORE its release: 0.40.0-rc1 < 0.40.0 < 0.40.1.
+  it('orders a prerelease before its release before the next patch', () => {
+    expect(compareVersions('0.40.0-rc1', '0.40.0')).toBe(-1)
+    expect(compareVersions('0.40.0', '0.40.0-rc1')).toBe(1)
+    expect(compareVersions('0.40.0', '0.40.1')).toBe(-1)
+    expect(compareVersions('0.40.0-rc1', '0.40.1')).toBe(-1)
+    expect(compareVersions('0.40.1', '0.40.0-rc1')).toBe(1)
+  })
+
+  it('orders successive prereleases of the same release', () => {
+    expect(compareVersions('0.40.0-rc1', '0.40.0-rc2')).toBe(-1)
+    expect(compareVersions('0.40.0-rc2', '0.40.0-rc1')).toBe(1)
+  })
+
+  it('compares the release core numerically, not lexically', () => {
+    expect(compareVersions('0.39.9', '0.39.10')).toBe(-1)
+    expect(compareVersions('1.0.0', '0.99.99')).toBe(1)
+  })
+
+  it('treats equal versions as equal and ignores build metadata + leading v', () => {
+    expect(compareVersions('0.40.0', '0.40.0')).toBe(0)
+    expect(compareVersions('0.40.0-rc1', '0.40.0-rc1')).toBe(0)
+    expect(compareVersions('0.40.0+build7', '0.40.0')).toBe(0)
+    expect(compareVersions('v0.40.0', '0.40.0')).toBe(0)
+  })
+
+  it('a prerelease of a higher release still beats a lower bare release', () => {
+    expect(compareVersions('0.41.0-rc1', '0.40.0')).toBe(1)
   })
 })
 

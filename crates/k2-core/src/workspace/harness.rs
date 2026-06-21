@@ -39,7 +39,7 @@ use crate::workspace::canonical::K2_GENERATED_SIGNATURE;
 use crate::workspace::wake_prompts::strip_frontmatter;
 use crate::fs_atomic::{atomic_write_str, log_if_err};
 use crate::workspace::migrations::{
-    archive_claude_md_file, harvest_per_agent_claude_md_files,
+    archive_claude_md_file, harvest_per_agent_claude_md_files, move_to_migration,
     inject_first_migration_banner,
 };
 use crate::workspace::skill_regen::write_workspace_skill_file;
@@ -91,8 +91,16 @@ pub struct WorkspacePreviewEntry {
 /// Repoint a workspace-root harness file at the canonical `.k2/AGENTS.md`:
 ///   1. Archive any pre-existing real file to `.k2/migration/` (never
 ///      destroy — recoverable, and the `k2-canonical-agents` AI skill is
-///      the recommended path to fold it into AGENT.md).
-///   2. Replace the target with a symlink to the canonical AGENTS.md.
+///      the recommended path to fold it into AGENT.md). EVERY displaced
+///      user file is archived, including empty ones — nothing is silently
+///      dropped.
+///   2. Send the displaced user file to the macOS recycle bin (never
+///      `fs::remove_file` — user data only ever goes to the Trash) BEFORE
+///      symlinking, so `force_symlink` just creates the link rather than
+///      atomically clobbering the original. We don't touch
+///      `force_symlink`'s global behavior because it's shared with the
+///      managed-mirror writers (`.claude/`, `.opencode/`, `.pi/`).
+///   3. Replace the target with a symlink to the canonical AGENTS.md.
 ///
 /// `pub(crate)` so the migration-safety tests can exercise the safe-link
 /// contract.
@@ -104,23 +112,29 @@ pub(crate) fn safe_symlink_harness_file(
 ) {
     match fs::symlink_metadata(target) {
         Ok(meta) if meta.file_type().is_symlink() => {
+            // Refreshing OUR own symlink — a managed artifact, not user
+            // data. Direct in-place replace (R5: idempotent re-run).
             force_symlink(canonical, target);
         }
         Ok(meta) if meta.file_type().is_file() => {
-            let content = fs::read_to_string(target).unwrap_or_default();
+            // Real user-authored file. MOVE it into `.k2/migration/` (one step,
+            // recoverable) and ONLY symlink over the path once that move
+            // succeeds. If the move fails we leave the user's file untouched —
+            // so a fan-out can never permanently delete a file.
             let filename = target
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(_harness_display)
                 .to_string();
-            let archived = if content.trim().is_empty() {
-                None
-            } else {
-                archive_claude_md_file(project_path, target, &filename)
-            };
-            force_symlink(canonical, target);
-            if let Some(p) = archived {
-                inject_first_migration_banner(project_path, &[p]);
+            match move_to_migration(project_path, target, &filename) {
+                Some(p) => {
+                    force_symlink(canonical, target);
+                    inject_first_migration_banner(project_path, &[p]);
+                }
+                None => crate::log_debug!(
+                    "[workspace-skill] fan-out: could not move {} into .k2/migration — left in place, NOT symlinked (no data loss)",
+                    target.display()
+                ),
             }
         }
         _ => {
@@ -163,18 +177,25 @@ fn write_cursor_rules_mdc(project_path: &str, canonical: &Path) {
     }
     let target = dir.join("k2so.mdc");
 
-    if target.exists() {
-        if let Ok(existing) = fs::read_to_string(&target) {
+    // Distinguish OUR managed output (signature present → overwrite in
+    // place, R5 idempotent) from a real user-authored file. A user file is
+    // MOVED into .k2/migration/ before the atomic_write below writes our
+    // version — never a delete; if the move fails we bail rather than
+    // overwrite, so user data can't be lost.
+    if let Ok(meta) = fs::symlink_metadata(&target) {
+        if meta.file_type().is_symlink() {
+            // A stale symlink we (or the user) left — atomic_write below
+            // replaces it; nothing to recover. Managed-artifact / link.
+        } else if let Ok(existing) = fs::read_to_string(&target) {
             let is_our_output = existing.contains(K2_GENERATED_SIGNATURE);
-            if !is_our_output {
-                let existing_body = strip_frontmatter(&existing).trim().to_string();
-                if !existing_body.is_empty() {
-                    let _ = archive_claude_md_file(
-                        project_path,
-                        &target,
-                        "cursor/rules/k2so.mdc",
-                    );
-                }
+            if !is_our_output
+                && move_to_migration(project_path, &target, "cursor/rules/k2so.mdc").is_none()
+            {
+                crate::log_debug!(
+                    "[workspace-skill] fan-out: could not move {} into .k2/migration — left in place, NOT overwritten",
+                    target.display()
+                );
+                return;
             }
         }
     }
@@ -214,6 +235,11 @@ pub(crate) fn scaffold_aider_conf(project_path: &str) {
         return;
     }
 
+    // In-place MERGE (not a displacement): the rewritten file is a
+    // superset of the user's content with our `read:` entry inserted, so
+    // no user content is lost. We archive the pre-edit state for
+    // recoverability but do NOT trash — there's nothing displaced to
+    // recycle (cf. the copilot-instructions upsert, also non-destructive).
     let _ = archive_claude_md_file(project_path, &path, ".aider.conf.yml");
 
     let lines: Vec<&str> = existing.lines().collect();

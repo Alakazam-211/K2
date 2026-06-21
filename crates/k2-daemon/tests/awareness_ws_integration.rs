@@ -38,7 +38,18 @@ async fn start_awareness_subscribe_server() -> u16 {
         // 0.39.7: WS handlers now borrow the stream (so the daemon's
         // keep-alive dispatcher can own it across HTTP iterations).
         // Test owns its own stream and passes a mutable borrow.
-        k2_daemon::awareness_ws::serve_awareness_subscribe_connection(&mut stream).await;
+        //
+        // Part 1a: the handler now takes (token, owner_token) for the 5s
+        // re-auth heartbeat. Passing the SAME value for both makes the
+        // owner-token short-circuit in `token_still_valid` return true,
+        // so the recheck never tears the socket down — these tests
+        // exercise signal delivery, not revocation.
+        k2_daemon::awareness_ws::serve_awareness_subscribe_connection(
+            &mut stream,
+            "owner".to_string(),
+            "owner".to_string(),
+        )
+        .await;
     });
     port
 }

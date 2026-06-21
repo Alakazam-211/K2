@@ -225,6 +225,39 @@ codesign --force --options runtime --timestamp \
     "target/release/bundle/macos/K2.app"
 echo "  Signed (main + daemon + frpc + bundle) with entitlements."
 
+# ── Step 3.5: Launch smoke-test — catch AMFI exec rejections (0.40.6 regression) ──
+# A signed Developer-ID app carrying a RESTRICTED entitlement (e.g.
+# keychain-access-groups) with NO embedded provisioning profile is SIGKILL'd by
+# AMFI at exec — it notarizes fine but users get the Finder "K2 can't be opened"
+# dialog. `tauri dev` never enforces this, so it slips past dev testing. Exec the
+# freshly-signed binary here and FAIL the release if AMFI kills it (rc 137),
+# BEFORE wasting a notarization round-trip or publishing an un-launchable build.
+echo ""
+echo "Step 3.5: Launch smoke-test (AMFI exec check)..."
+SMOKE_BIN="target/release/bundle/macos/K2.app/Contents/MacOS/k2"
+"$SMOKE_BIN" --version >/tmp/k2-smoke.out 2>&1 &
+SMOKE_PID=$!
+sleep 2
+if kill -0 "$SMOKE_PID" 2>/dev/null; then
+    # Alive past the AMFI exec check = launchable. A GUI app ignores SIGTERM and
+    # never exits on its own, so SIGKILL it + its children and do NOT `wait` —
+    # waiting on a SIGTERM-ignoring GUI hangs the release until the harness
+    # timeout (the 0.40.6 re-release failure). kill -9 is uncatchable.
+    pkill -9 -P "$SMOKE_PID" 2>/dev/null || true
+    kill -9 "$SMOKE_PID" 2>/dev/null || true
+    echo "  ✓ App survived exec (not AMFI-killed) — launchable."
+else
+    SMOKE_RC=0; wait "$SMOKE_PID" 2>/dev/null || SMOKE_RC=$?
+    if [ "$SMOKE_RC" -eq 137 ]; then
+        echo "  FATAL: signed app was SIGKILL'd at launch (137 = AMFI) — almost certainly a" >&2
+        echo "  restricted entitlement without a provisioning profile. NOT releasing." >&2
+        echo "  Check src-tauri/entitlements.plist. smoke output:" >&2
+        head -c 400 /tmp/k2-smoke.out >&2; echo "" >&2
+        exit 1
+    fi
+    echo "  ✓ App exec exited rc=$SMOKE_RC (not SIGKILL) — launchable past AMFI."
+fi
+
 # ── Step 4: Notarize app via ZIP ──
 echo ""
 echo "Step 4: Notarizing app..."

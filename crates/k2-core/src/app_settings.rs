@@ -383,7 +383,7 @@ impl Default for AppSettings {
             default_agent: "claude".to_string(),
             ai_assistant_enabled: false,
             timer: TimerSettings::default(),
-            agentic_systems_enabled: false,
+            agentic_systems_enabled: true,
             keep_daemon_on_quit: true,
             claude_auth_auto_refresh: false,
             last_active_project_id: None,

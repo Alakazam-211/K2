@@ -1,4 +1,4 @@
-<!-- DEFAULT TEMPLATE — K2SO scaffolded this for the workspace's primary agent in manager mode.
+<!-- DEFAULT TEMPLATE — K2 scaffolded this for the workspace's primary agent in manager mode.
      Edit below to customize what the agent does when the heartbeat wakes it.
      Delete this comment once you've made it your own. -->
 

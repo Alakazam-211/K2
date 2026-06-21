@@ -1,9 +1,9 @@
 [package]
 name = "k2-daemon"
-version = "0.40.5"
+version = "0.40.10"
 edition = "2021"
 license = "FSL-1.1-Apache-2.0"
-description = "K2SO persistent-agents daemon: launchd-managed device-local process that runs the scheduler, companion tunnel, and agent orchestration so agents keep working while the Tauri app is quit and the laptop lid is closed."
+description = "K2 persistent-agent daemon: launchd-managed device-local process that runs the scheduler, companion tunnel, and agent orchestration so agents keep working while the Tauri app is quit and the laptop lid is closed."
 
 [[bin]]
 name = "k2-daemon"
@@ -25,6 +25,11 @@ k2-core = { path = "../k2-core" }
 
 # Cryptographic randomness for the per-boot hook auth token.
 getrandom = "0.2"
+
+# Constant-time equality for the owner-token compare (the crown-jewel
+# credential). `==` on &str/&[u8] short-circuits on first mismatch, leaking
+# a byte-by-byte timing side-channel; subtle::ConstantTimeEq does not.
+subtle = "2.6"
 
 # Home-directory lookup for ~/.k2so/{daemon.port,daemon.token,daemon.log}.
 dirs = "5"

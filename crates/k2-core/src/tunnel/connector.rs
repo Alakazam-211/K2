@@ -234,27 +234,22 @@ pub fn start(
     // socket and the host silently unreachable — i.e. **every software
     // update would lose the user's remote access**. Always resolve live and
     // keep the stored config port-less so future starts re-resolve.
-    // E2E (PRD §4 Option A): when end-to-end encryption is on, frpc must
-    // forward the ENCRYPTED stream to the daemon's rustls HTTPS listener,
-    // NOT to its cleartext HTTP port. The daemon publishes that listener's
-    // port to `~/.k2/tunnel-https.port`; we read it here. If E2E is on but
-    // the HTTPS port isn't published yet (listener not up), fail loud
-    // rather than silently forwarding cleartext to the HTTP port — a silent
-    // fallback would defeat the entire "relay sees only ciphertext" claim.
+    // E2E (PRD §4 Option A) — the DEFAULT path for ~everyone as of 0.40.6+:
+    // frpc must forward the ENCRYPTED stream to the daemon's rustls HTTPS
+    // listener, NOT to its cleartext HTTP port. Because E2E is now on by
+    // default, a tunnel start MUST be able to bring the listener up on
+    // demand — obtain/install the per-subdomain cert and bind the listener
+    // BEFORE serving — rather than erroring when the port wasn't published
+    // at boot (e.g. a brand-new subdomain configured after the daemon
+    // started, when boot's `maybe_spawn` had no subdomain yet).
+    // `ensure_https_port` does exactly that via the daemon-registered hook
+    // (idempotent: returns the live port if the listener is already up).
+    // It still fails LOUD on issuance/bind failure — we never silently
+    // forward cleartext to the HTTP port, which would defeat the entire
+    // "relay sees only ciphertext" guarantee.
     let e2e = config::e2e_enabled(&cfg);
     let resolved_local_port = if e2e {
-        match super::tls::read_https_port() {
-            Some(p) => p,
-            None => {
-                return Err(
-                    "K2_E2E is enabled but the daemon's HTTPS listener port is not \
-                     published (~/.k2/tunnel-https.port missing) — refusing to start \
-                     the tunnel against the cleartext HTTP port (would leak plaintext \
-                     to the relay). Ensure the E2E TLS listener started."
-                        .to_string(),
-                );
-            }
-        }
+        super::tls::ensure_https_port(default_local_port)?
     } else {
         default_local_port
     };
@@ -690,6 +685,19 @@ mod tests {
     use super::*;
     use crate::tunnel::test_support::with_temp_home;
 
+    /// A real, always-present no-op executable to stand in for `frpc` when a
+    /// test needs to get PAST frpc resolution (and possibly spawn a harmless
+    /// child). `/usr/bin/true` on macOS; `/bin/true` on Linux.
+    fn true_bin() -> PathBuf {
+        for cand in ["/usr/bin/true", "/bin/true"] {
+            let p = PathBuf::from(cand);
+            if p.exists() {
+                return p;
+            }
+        }
+        panic!("no `true` binary found at /usr/bin/true or /bin/true");
+    }
+
     #[test]
     fn stray_frpc_pattern_matches_only_our_config() {
         // The reap must target frpc launched with OUR config path and
@@ -783,9 +791,14 @@ mod tests {
     #[test]
     fn start_with_missing_frpc_surfaces_install_error() {
         with_temp_home(|| {
+            // Opt out of E2E (e2e:false) so this test exercises the frpc
+            // resolution path directly — with E2E on (the default) the start
+            // would first try to ensure the HTTPS listener (no daemon hook in
+            // this unit context) and surface that error instead.
             config::save(&TunnelConfig {
                 token: "tok".to_string(),
                 subdomain: "rosson".to_string(),
+                e2e: false,
                 ..Default::default()
             })
             .expect("seed config");
@@ -797,6 +810,83 @@ mod tests {
             .expect_err("missing frpc must fail start");
             assert!(err.contains("frpc not found"), "got: {err}");
             assert!(!status().running);
+        });
+    }
+
+    /// E2E default-on path: with no daemon ensure-hook registered (a pure
+    /// k2-core unit context) and no published HTTPS port, a start on an
+    /// E2E config must FAIL LOUD rather than forwarding cleartext to the
+    /// HTTP port. Proves the connector consults `ensure_https_port` and
+    /// propagates its error.
+    #[test]
+    fn e2e_start_without_https_listener_fails_loud_not_cleartext() {
+        with_temp_home(|| {
+            // Default config → e2e is ON. A real frpc path (/bin/true) so we
+            // get PAST frpc resolution and reach the HTTPS-port resolution.
+            let prev = std::env::var_os("K2_E2E");
+            std::env::remove_var("K2_E2E"); // follow config (default-on)
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                ..Default::default() // e2e defaults true
+            })
+            .expect("seed config");
+
+            let err = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect_err("E2E start with no HTTPS listener must fail loud");
+            assert!(
+                err.contains("HTTPS listener") || err.contains("leak plaintext"),
+                "expected an HTTPS-listener/anti-cleartext error, got: {err}"
+            );
+            assert!(!status().running, "no child should be running after the loud failure");
+
+            match prev {
+                Some(p) => std::env::set_var("K2_E2E", p),
+                None => std::env::remove_var("K2_E2E"),
+            }
+        });
+    }
+
+    /// E2E default-on + a published HTTPS port (simulating the daemon's
+    /// listener being up): the connector resolves frpc's localPort to the
+    /// HTTPS port, not the cleartext HTTP `default_local_port`. We force frpc
+    /// resolution to fail right AFTER port resolution so we don't actually
+    /// spawn, and assert the rendered config targeted the HTTPS port.
+    #[test]
+    fn e2e_start_resolves_https_port_when_published() {
+        with_temp_home(|| {
+            let prev = std::env::var_os("K2_E2E");
+            std::env::remove_var("K2_E2E");
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                ..Default::default()
+            })
+            .expect("seed config");
+            // Simulate the daemon having published its HTTPS listener port.
+            super::super::tls::publish_https_port(48217).expect("publish https port");
+
+            // frpc missing → start fails AFTER resolving the HTTPS port, but
+            // it must have written frpc.toml targeting the HTTPS port first?
+            // No: render happens after frpc resolves. So instead use a real
+            // binary so we reach render, then inspect the written config.
+            let _ = start(None, 57839, &FrpcBinary::Explicit(true_bin()));
+            let toml = std::fs::read_to_string(frpc_config_path())
+                .expect("frpc.toml must have been rendered");
+            assert!(
+                toml.contains("localPort = 48217"),
+                "E2E start must target the published HTTPS port, not the HTTP port\n{toml}"
+            );
+            assert!(
+                toml.contains("type = \"https\""),
+                "E2E start must render an https proxy\n{toml}"
+            );
+
+            let _ = stop();
+            match prev {
+                Some(p) => std::env::set_var("K2_E2E", p),
+                None => std::env::remove_var("K2_E2E"),
+            }
         });
     }
 

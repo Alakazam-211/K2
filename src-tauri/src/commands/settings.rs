@@ -88,11 +88,31 @@ pub(crate) fn cli_symlink_needs_heal() -> bool {
     }
     let new_cli = Path::new(CLI_SYMLINK_PATH);
     match fs::read_link(new_cli) {
-        // It's a symlink: heal if it points elsewhere or its target is gone.
-        Ok(target) => target != bundled || !target.exists(),
+        // It's a symlink. Heal only if its target is gone, or it points at a
+        // GENUINELY different bundle. Compare CANONICALIZED paths: macOS
+        // firmlinks (`/Applications` ↔ `/System/Volumes/Data/Applications`)
+        // and realpath resolution make two equivalent paths compare unequal,
+        // which used to re-trigger a (false) heal — and an admin prompt —
+        // on every single launch. Canonicalizing both sides makes the check
+        // idempotent: a correctly-installed symlink reports no heal needed.
+        Ok(target) => symlink_target_needs_heal(&target, &bundled),
         // Not a symlink: heal if absent, or a legacy k2so symlink exists
         // (pre-0.40 install that still needs its `k2` sibling).
         Err(_) => !new_cli.exists() || Path::new(CLI_LEGACY_SYMLINK_PATH).is_symlink(),
+    }
+}
+
+/// Decide whether an existing `/usr/local/bin/k2` symlink (pointing at
+/// `target`) needs healing given the currently-running app's `bundled` CLI
+/// path. Pure + testable. Canonicalizes BOTH sides so macOS firmlink /
+/// realpath-equivalent paths (`/Applications` vs
+/// `/System/Volumes/Data/Applications`) don't compare unequal and loop a false
+/// heal every launch (#56). A target that fails to canonicalize is broken
+/// (its file is gone) → heal.
+fn symlink_target_needs_heal(target: &Path, bundled: &Path) -> bool {
+    match (fs::canonicalize(target), fs::canonicalize(bundled)) {
+        (Ok(t), Ok(b)) => t != b,
+        _ => true,
     }
 }
 
@@ -156,6 +176,59 @@ pub fn cli_install_status() -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Make the bundled CLI scripts executable (best-effort).
+fn ensure_cli_executable(cli_script: &Path, legacy_shim: &Option<PathBuf>) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(cli_script, fs::Permissions::from_mode(0o755));
+        if let Some(shim) = legacy_shim {
+            let _ = fs::set_permissions(shim, fs::Permissions::from_mode(0o755));
+        }
+    }
+}
+
+/// Try to (re)create the `k2` (+ `k2so` alias) symlinks in /usr/local/bin
+/// WITHOUT any admin prompt. Works only when /usr/local/bin already exists and
+/// is user-writable (Intel Homebrew, or a chowned prefix). Returns true iff the
+/// `k2` symlink was created. NEVER spawns osascript — callers that run at boot
+/// (the auto-heal) must not throw a password dialog.
+fn try_direct_cli_symlink(cli_script: &Path, legacy_shim: &Option<PathBuf>) -> bool {
+    let symlink_path = Path::new(CLI_SYMLINK_PATH);
+    // Can't create the parent dir without admin — defer silently.
+    match symlink_path.parent() {
+        Some(bin_dir) if bin_dir.exists() => {}
+        _ => return false,
+    }
+    let _ = fs::remove_file(symlink_path);
+    #[cfg(unix)]
+    {
+        if std::os::unix::fs::symlink(cli_script, symlink_path).is_ok() {
+            if let Some(shim) = legacy_shim {
+                let legacy_path = Path::new(CLI_LEGACY_SYMLINK_PATH);
+                let _ = fs::remove_file(legacy_path);
+                let _ = std::os::unix::fs::symlink(shim, legacy_path);
+            }
+            return true;
+        }
+    }
+    false
+}
+
+/// Boot-time CLI heal — SILENT, never prompts. Tries the direct (non-admin)
+/// symlink; if /usr/local/bin needs admin to write, returns `Ok(false)` and
+/// leaves the user to install from Settings → Install CLI (the ONE place an
+/// admin prompt is allowed). This is why a routine app update no longer fires
+/// a surprise "enter your password" dialog on every launch (#56 / 0.40.10):
+/// the only password prompt is now a deliberate user click in Settings.
+pub(crate) fn cli_heal_silent() -> Result<bool, String> {
+    let cli_script = find_cli_script()
+        .ok_or_else(|| "CLI script not found in app bundle".to_string())?;
+    let legacy_shim = find_cli_script_named("k2so");
+    ensure_cli_executable(&cli_script, &legacy_shim);
+    Ok(try_direct_cli_symlink(&cli_script, &legacy_shim))
+}
+
 #[tauri::command]
 pub fn cli_install() -> Result<String, String> {
     let cli_script = find_cli_script()
@@ -163,16 +236,7 @@ pub fn cli_install() -> Result<String, String> {
     // The k2so deprecation shim ships alongside; best-effort (an old
     // bundle without it just skips the legacy alias).
     let legacy_shim = find_cli_script_named("k2so");
-
-    // Ensure the scripts are executable
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&cli_script, fs::Permissions::from_mode(0o755));
-        if let Some(ref shim) = legacy_shim {
-            let _ = fs::set_permissions(shim, fs::Permissions::from_mode(0o755));
-        }
-    }
+    ensure_cli_executable(&cli_script, &legacy_shim);
 
     let symlink_path = Path::new(CLI_SYMLINK_PATH);
 
@@ -193,23 +257,15 @@ pub fn cli_install() -> Result<String, String> {
         }
     }
 
-    // Try direct symlinks first (works if user owns /usr/local/bin).
+    // Try direct symlinks first (works if user owns /usr/local/bin) — no prompt.
     // 0.40.0: install BOTH `k2` (the CLI) and `k2so` (deprecation shim).
-    let _ = fs::remove_file(symlink_path);
-    let legacy_path = Path::new(CLI_LEGACY_SYMLINK_PATH);
-    #[cfg(unix)]
-    {
-        if std::os::unix::fs::symlink(&cli_script, symlink_path).is_ok() {
-            if let Some(ref shim) = legacy_shim {
-                let _ = fs::remove_file(legacy_path);
-                let _ = std::os::unix::fs::symlink(shim, legacy_path);
-            }
-            return Ok(CLI_SYMLINK_PATH.to_string());
-        }
+    if try_direct_cli_symlink(&cli_script, &legacy_shim) {
+        return Ok(CLI_SYMLINK_PATH.to_string());
     }
 
     // Fall back to osascript with admin privileges — both links in ONE
-    // prompt.
+    // prompt. This is the ONLY admin prompt path; it only runs from an
+    // explicit Settings → Install CLI click, never the boot auto-heal.
     let legacy_ln = legacy_shim
         .as_ref()
         .map(|shim| format!(" && ln -sf '{}' '{}'", shim.display(), CLI_LEGACY_SYMLINK_PATH))
@@ -336,4 +392,72 @@ pub fn set_document_edited(app: AppHandle, edited: bool) -> Result<(), String> {
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_heal_tests {
+    use super::symlink_target_needs_heal;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    // Unique scratch dir per test (real FS — we exercise fs::canonicalize).
+    fn scratch() -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("k2-cliheal-{}-{}", std::process::id(), n));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn no_heal_when_target_equals_bundled() {
+        let d = scratch();
+        let cli = d.join("k2");
+        fs::write(&cli, "#!/bin/sh\n").unwrap();
+        // Symlink points at exactly the bundled path → no heal.
+        assert!(!symlink_target_needs_heal(&cli, &cli));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn no_heal_when_paths_are_symlink_equivalent() {
+        // The macOS firmlink case: target reaches the SAME real file by a
+        // different (symlinked) path. canonicalize() must collapse them so we
+        // don't loop a false heal (+ admin prompt) every launch.
+        let d = scratch();
+        let real = d.join("real");
+        fs::create_dir_all(&real).unwrap();
+        let cli = real.join("k2");
+        fs::write(&cli, "#!/bin/sh\n").unwrap();
+        let link = d.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        // target via the symlinked dir; bundled via the real dir.
+        let target = link.join("k2");
+        assert!(!symlink_target_needs_heal(&target, &cli));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn heal_when_target_is_broken() {
+        let d = scratch();
+        let bundled = d.join("k2");
+        fs::write(&bundled, "#!/bin/sh\n").unwrap();
+        let gone = d.join("deleted-app-k2"); // never created
+        assert!(symlink_target_needs_heal(&gone, &bundled));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn heal_when_target_points_at_different_file() {
+        let d = scratch();
+        let bundled = d.join("new-k2");
+        fs::write(&bundled, "new\n").unwrap();
+        let other = d.join("old-k2");
+        fs::write(&other, "old\n").unwrap();
+        assert!(symlink_target_needs_heal(&other, &bundled));
+        let _ = fs::remove_dir_all(&d);
+    }
 }

@@ -63,6 +63,17 @@ pub fn update_project_setting(
         );
     }
 
+    // Drop the DB lock before returning. Turning a workspace into an
+    // agent does NOTHING to its harness fan-out marker — there is no
+    // auto-apply, ever. Fan-out is enabled ONLY by the explicit
+    // per-workspace "Canonical Agent" checkbox (with its confirmation
+    // modal), which writes the marker via the
+    // `POST /cli/onboarding/set-harness-fanout-enabled` route. The former
+    // global "default for new agents" flag has been removed entirely
+    // because auto-applying symlink fan-out to a workspace that already
+    // has data could overwrite the user's harness files.
+    drop(conn);
+
     Ok(())
 }
 
@@ -348,11 +359,11 @@ mod tests {
         let _g = HOME_TEST_LOCK.lock();
         let _home = HomeGuard::new();
 
-        // Default when the JSON file is absent is `false` — the
+        // Default when the JSON file is absent is `true` — the
         // `AppSettings::default()` value for `agentic_systems_enabled`.
         assert!(
-            !get_agentic_enabled(),
-            "fresh ~/.k2so/settings.json → agentic_systems_enabled defaults to false",
+            get_agentic_enabled(),
+            "fresh ~/.k2so/settings.json → agentic_systems_enabled defaults to true",
         );
 
         // Set true → read true.
@@ -398,6 +409,52 @@ mod tests {
 
         // Fresh load sees the persisted value.
         assert!(crate::app_settings::load().keep_daemon_on_quit);
+    }
+
+    // ── Canonical-agents: turning into an agent NEVER touches fan-out ──
+    //
+    // The global "default for new agents" flag was removed entirely. The
+    // only surface that ever writes the per-workspace
+    // `.k2/.harness-fanout-enabled` marker is the explicit, user-confirmed
+    // per-workspace checkbox (route `POST /cli/onboarding/set-harness-fanout-enabled`).
+    // This test pins the load-bearing guarantee: an off→on `agent_mode`
+    // transition must NOT auto-apply fan-out to the workspace's marker.
+
+    /// Insert a project row whose path is a REAL temp directory, so the
+    /// per-workspace `.k2*/` marker writes (if any were attempted) would
+    /// land on disk. Returns the path.
+    fn insert_project_with_real_dir(label: &str) -> (String, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "k2so-fanout-default-{}-{}-{}",
+            label,
+            std::process::id(),
+            Uuid::new_v4(),
+        ));
+        std::fs::create_dir_all(&dir).expect("create workspace dir");
+        let path = dir.to_string_lossy().to_string();
+        insert_project(&path);
+        (path, dir)
+    }
+
+    #[test]
+    fn turning_workspace_into_agent_never_applies_fanout() {
+        let _g = HOME_TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        let (path, dir) = insert_project_with_real_dir("become-agent");
+        // Starts off (insert default) with no marker.
+        update_project_setting(&path, "agent_mode", "off").expect("seed off");
+        assert!(!crate::workspace::onboarding::harness_fanout_enabled(&path));
+
+        // off→on transition: turning into an agent must NOT touch the
+        // per-workspace fan-out marker — there is no auto-apply, ever.
+        update_project_setting(&path, "agent_mode", "manager").expect("turn into agent");
+        assert!(
+            !crate::workspace::onboarding::harness_fanout_enabled(&path),
+            "turning a workspace into an agent must NEVER auto-apply fan-out",
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

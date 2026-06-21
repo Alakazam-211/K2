@@ -210,6 +210,29 @@ async fn handle_one_request(
         }
     };
 
+    // H5 (E2E splice hardening): reject `Transfer-Encoding: chunked`.
+    // `read_post_body` is Content-Length-driven ONLY — it never decodes
+    // chunked framing. A chunked POST would therefore leave the chunk
+    // size-lines + trailers unconsumed in the stream, and the keep-alive
+    // loop would parse those leftover bytes as the NEXT request → request
+    // smuggling / keep-alive desync. The daemon's own clients never send
+    // chunked, so refuse it LOUDLY (400) and close the connection rather
+    // than half-read a body we can't frame. The check runs on every
+    // request (the head is already peeked), keeping the relay strictly L4.
+    if super::http::request_is_chunked(&req) {
+        let _ = stream.read(&mut buf).await;
+        super::http::send_response(
+            &mut *stream,
+            "400 Bad Request",
+            "application/json",
+            r#"{"error":"Transfer-Encoding: chunked is not supported; send a Content-Length-framed body"}"#,
+        )
+        .await;
+        // Force-close: we cannot safely find the next request boundary in
+        // a chunked stream we don't decode, so keep-alive is unsafe here.
+        return DispatchOutcome::Done;
+    }
+
     // Phase 4.5: handle CORS preflight before the method allowlist.
     // The Tauri WebView origin (tauri://localhost or http://localhost:5173
     // in dev) is cross-origin relative to http://127.0.0.1:<port>, so
@@ -290,6 +313,10 @@ async fn handle_one_request(
             // portal — connect-user session in the body/query, POST so it's
             // never URL-logged. (Was missing here → 405'd before its arm.)
             | "/cli/auth/change-password"
+            // K2 Connect #4 — log out (delete the caller's persisted
+            // session record). POST so the session token in `?token=` is
+            // never confused with a GET/refresh + so it can't be cached.
+            | "/cli/auth/logout"
             // Phase 2 Unit 5 — Claude Auth mutating routes. POST
             // (not GET) so they're not idempotent-cached by any
             // future proxy and so they parallel Unit 1's pattern
@@ -608,7 +635,7 @@ async fn handle_one_request(
             let _ = stream.read(&mut buf).await;
             let params = super::http::parse_params(&path, &query);
             let req_token = params.get("token").cloned().unwrap_or_default();
-            if req_token != *state.token {
+            if !super::http::ct_eq_token(&req_token, &state.token) {
                 super::http::send_response(
                     &mut *stream,
                     "403 Forbidden",
@@ -639,7 +666,12 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
-            crate::sessions_ws::serve_session_subscribe_connection(stream, params).await;
+            crate::sessions_ws::serve_session_subscribe_connection(
+                stream,
+                params,
+                state.token.to_string(),
+            )
+            .await;
             // WS handler took read/write semantics for the upgraded
             // connection's lifetime. Don't loop — close the dispatch.
             return DispatchOutcome::Done;
@@ -660,7 +692,12 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
-            crate::sessions_bytes_ws::serve_session_bytes_connection(stream, params).await;
+            crate::sessions_bytes_ws::serve_session_bytes_connection(
+                stream,
+                params,
+                state.token.to_string(),
+            )
+            .await;
             return DispatchOutcome::Done;
         }
         // Alacritty_v2 (A3): grid snapshot + delta WS endpoint.
@@ -745,7 +782,18 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            crate::awareness_ws::serve_awareness_subscribe_connection(stream).await;
+            // Token already validated above; pass it through for the
+            // 5s re-auth heartbeat (Part 1a). `extract_token` returns the
+            // raw `?token=` value the upgrade was authorized with.
+            let token = super::http::extract_token(&query)
+                .unwrap_or_default()
+                .to_string();
+            crate::awareness_ws::serve_awareness_subscribe_connection(
+                stream,
+                token,
+                state.token.to_string(),
+            )
+            .await;
             return DispatchOutcome::Done;
         }
         // POST /cli/sessions/v2/spawn — Alacritty_v2 find-or-spawn
@@ -1431,7 +1479,8 @@ async fn handle_one_request(
                 // AUTHORIZED read (owner OR connect-user session).
                 let _ = stream.read(&mut buf).await;
                 let tok = super::http::extract_token(&query).unwrap_or("");
-                let authorized = (!tok.is_empty() && tok == state.token.as_str())
+                let authorized = (!tok.is_empty()
+                    && super::http::ct_eq_token(tok, state.token.as_str()))
                     || k2_core::connect_users::validate_session(tok).is_some();
                 if !authorized {
                     super::http::send_response(
@@ -1495,7 +1544,7 @@ async fn handle_one_request(
             // K2SO #629: also return the caller's resolved role so the
             // client can gate the Users/Access UI + the role selector. The
             // owner token → Owner; a session → its stored role.
-            let r = if !tok.is_empty() && tok == state.token.as_str() {
+            let r = if !tok.is_empty() && super::http::ct_eq_token(tok, state.token.as_str()) {
                 crate::connect_users_routes::handle_whoami(
                     None,
                     true,
@@ -1526,7 +1575,7 @@ async fn handle_one_request(
             let tok = super::http::extract_token(&query).unwrap_or("").to_string();
             // Owner token does NOT resolve to a connect-user; only a live
             // session does. Resolve before the blocking hop.
-            let username = if !tok.is_empty() && tok == state.token.as_str() {
+            let username = if !tok.is_empty() && super::http::ct_eq_token(&tok, state.token.as_str()) {
                 None
             } else {
                 k2_core::connect_users::validate_session(&tok)
@@ -1542,6 +1591,23 @@ async fn handle_one_request(
             if r.status.starts_with("401") {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // POST /cli/auth/logout — K2 Connect #4. Deletes the CALLER's own
+        // persisted session record (per-device logout). Authorized by the
+        // caller's own session token in `?token=`; the OWNER token has no
+        // session so it's a harmless idempotent no-op. POST-gated (mutating
+        // /cli/* route → the `if !is_post { 405 }` guard, per the contract).
+        "/cli/auth/logout" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            // Drain the (ignored) body so a half-read socket isn't left.
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let tok = super::http::extract_token(&query).unwrap_or("").to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::connect_users_routes::handle_logout(&tok)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // POST /cli/claude-auth/refresh-now — Phase 2 Unit 5.
@@ -2342,8 +2408,20 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             // Hand off to tokio-tungstenite; the handshake is still
-            // unread in the stream buffer.
-            crate::events::serve_events_connection(stream, state.event_tx.clone()).await;
+            // unread in the stream buffer. Plumb the authorizing token
+            // (already validated above) + owner token through for the 5s
+            // re-auth heartbeat (Part 1a). `extract_token` returns the
+            // raw `?token=` value the upgrade was authorized with.
+            let token = super::http::extract_token(&query)
+                .unwrap_or_default()
+                .to_string();
+            crate::events::serve_events_connection(
+                stream,
+                state.event_tx.clone(),
+                token,
+                state.token.to_string(),
+            )
+            .await;
             return DispatchOutcome::Done;
         }
         _ => {

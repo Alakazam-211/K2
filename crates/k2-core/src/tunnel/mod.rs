@@ -1,7 +1,7 @@
-//! K2 Connect tunnel connector (CLIENT / open side).
+//! K2 Connect tunnel connector (CLIENT / source-available side).
 //!
-//! This is the **open-core, MIT** half: the daemon-side machinery that
-//! exposes the local K2SO daemon to the internet at
+//! This is the **open-core** half: the daemon-side machinery that
+//! exposes the local K2 daemon to the internet at
 //! `https://<user>.k2.dev` by running an `frpc` client that dials the
 //! hosted (proprietary) K2 Connect frps server.
 //!
@@ -60,6 +60,17 @@ pub struct TunnelConfigView {
     pub public_url: Option<String>,
     /// Re-launch this tunnel on daemon boot (camelCase `autoStart`).
     pub auto_start: bool,
+    /// End-to-end encryption preference as STORED in the config (camelCase
+    /// `e2e`). ON by default (0.40.6+); a user opts out by setting it false.
+    /// This is the persisted field — not the env-override-resolved effective
+    /// state; see `e2eEffective` for what the daemon will actually do.
+    pub e2e: bool,
+    /// The EFFECTIVE E2E state the daemon will use, after applying the
+    /// `K2_E2E` env override on top of the stored field (camelCase
+    /// `e2eEffective`). The renderer should render the toggle from `e2e`
+    /// but can surface this to explain when an env var is overriding the
+    /// stored preference.
+    pub e2e_effective: bool,
 }
 
 impl From<&TunnelConfig> for TunnelConfigView {
@@ -71,6 +82,8 @@ impl From<&TunnelConfig> for TunnelConfigView {
             token_set: !c.token.trim().is_empty(),
             public_url: c.public_url(),
             auto_start: c.auto_start,
+            e2e: c.e2e,
+            e2e_effective: config::e2e_enabled(c),
         }
     }
 }
@@ -86,6 +99,10 @@ pub struct TunnelConfigUpdate {
     pub subdomain: Option<String>,
     pub token: Option<String>,
     pub auto_start: Option<bool>,
+    /// End-to-end encryption opt-out (0.40.6+). Absent → leave the stored
+    /// value untouched (default-on). `Some(false)` is the explicit user
+    /// opt-out (legacy terminating path); `Some(true)` re-enables E2E.
+    pub e2e: Option<bool>,
     /// Stable per-install device id for the subdomain lease (K2SO #674).
     /// The renderer persists its claim identity here so the daemon renews
     /// under the same device.
@@ -124,6 +141,12 @@ pub fn set_config(upd: TunnelConfigUpdate) -> Result<TunnelConfigView, String> {
         }
         if let Some(a) = upd.auto_start {
             c.auto_start = a;
+        }
+        // E2E opt-out (0.40.6+). An explicit value (true to keep/restore the
+        // default-on E2E path, false to opt out to the legacy terminating
+        // path) is persisted; absent leaves the stored preference untouched.
+        if let Some(e) = upd.e2e {
+            c.e2e = e;
         }
         // Device identity for the lease (K2SO #674). A blank value is
         // ignored so re-saving other fields can't wipe a stored id; an

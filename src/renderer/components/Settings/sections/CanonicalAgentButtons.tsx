@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { type RoleSkill, roleSkillLabel } from './canonicalAgentSeeds'
 import { type HarnessProbe, anyHarnessUnified } from './canonicalState'
+import { FanoutConfirmModal } from './FanoutConfirmModal'
 
 // The value-pitch WHY copy relocated VERBATIM from the removed consent page
 // (AddWorkspaceDialog:147-164) into the canonical button subtitle + the skill
@@ -16,9 +17,7 @@ export const CANONICAL_PITCH_SUBTITLE =
 // overwrite existing content — the safe route for an existing project is the
 // K2 Canonical Agent skill (it merges content first). Best for new projects.
 export const FANOUT_ENABLE_WARNING =
-  'Enabling this symlinks your harness files (CLAUDE.md, AGENTS.md, …) onto K2’s generated canon and can overwrite existing content.\n\n' +
-  'For an existing project, run the K2 Canonical Agent with an AI assistant instead — it merges your current files safely.\n\n' +
-  'The checkbox is best for new projects.\n\nEnable harness fan-out anyway?'
+  'Your existing harness files (CLAUDE.md, AGENTS.md, …) are moved into .k2/migration/ before they’re replaced with symlinks to K2’s canon — nothing is deleted, and you can restore them straight from that folder if you change your mind.'
 
 /**
  * Role-skill button (Workspace Manager / K2 Agent). Opens the normal
@@ -85,6 +84,10 @@ export function CanonicalAgentButton({
   const unified = anyHarnessUnified(probes)
   const [fanoutEnabled, setFanoutEnabled] = useState(false)
   const [fanoutBusy, setFanoutBusy] = useState(false)
+  // CHECKING the box opens the confirmation modal (replaces the bare
+  // window.confirm); the modal owns the two apply routes.
+  const [showFanoutModal, setShowFanoutModal] = useState(false)
+  const [skillHint, setSkillHint] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -97,16 +100,20 @@ export function CanonicalAgentButton({
   async function toggleFanout(): Promise<void> {
     if (fanoutBusy) return
     const next = !fanoutEnabled
-    // Confirm before ENABLING — symlinking onto K2's generated canon can
-    // overwrite existing harness content. Disabling is non-destructive.
-    if (next && !window.confirm(FANOUT_ENABLE_WARNING)) return
+    // ENABLING is destructive-by-design — open the confirmation modal
+    // instead of toggling directly. DISABLING is non-destructive, apply now.
+    if (next) {
+      setSkillHint(false)
+      setShowFanoutModal(true)
+      return
+    }
     setFanoutBusy(true)
-    setFanoutEnabled(next) // optimistic
+    setFanoutEnabled(false) // optimistic
     try {
-      await daemonCliPost('onboarding/set-harness-fanout-enabled', { project_path: projectPath, enabled: next })
+      await daemonCliPost('onboarding/set-harness-fanout-enabled', { project_path: projectPath, enabled: false })
     } catch (err) {
       console.error('[canonical] set_harness_fanout_enabled failed:', err)
-      setFanoutEnabled(!next) // reconcile on failure
+      setFanoutEnabled(true) // reconcile on failure
     } finally {
       setFanoutBusy(false)
     }
@@ -156,6 +163,33 @@ export function CanonicalAgentButton({
           projects.
         </span>
       </label>
+
+      {skillHint ? (
+        <div className="border-l-2 border-[var(--color-accent)]/60 bg-[var(--color-accent)]/5 pl-2 py-1.5 text-[9px] leading-snug text-[var(--color-text-secondary)]">
+          <span className="font-medium text-[var(--color-accent)]">K2 Canonical Agent enabled.</span>{' '}
+          Run it from this workspace&rsquo;s Agent chat to merge your harness files. Programmatic fan-out
+          was <span className="font-medium">not</span> turned on.
+        </div>
+      ) : null}
+
+      {showFanoutModal ? (
+        <FanoutConfirmModal
+          projectPath={projectPath}
+          onCancel={() => {
+            setShowFanoutModal(false)
+            setFanoutEnabled(false)
+          }}
+          onProgrammaticEnabled={() => {
+            setShowFanoutModal(false)
+            setFanoutEnabled(true)
+          }}
+          onSkillRouteTaken={() => {
+            setShowFanoutModal(false)
+            setFanoutEnabled(false)
+            setSkillHint(true)
+          }}
+        />
+      ) : null}
     </div>
   )
 }

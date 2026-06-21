@@ -35,6 +35,7 @@
 //!   any running consumer needing to be restarted itself.
 
 mod active_reaper;
+mod session_reaper;
 mod agents_routes;
 mod awareness_ws;
 mod boot_status;
@@ -558,13 +559,15 @@ async fn async_main() {
     // agent + custom from the start).
     run_correct_auto_pin_filter_migration();
 
-    // Canonical-agents feature — harness fan-out is now OFF by default.
-    // One-shot opt-in: write the `.k2so/.harness-fanout-enabled` marker
-    // for every existing workspace that has an enabled agent, so
-    // upgraders who relied on the old always-on fan-out keep it. New /
-    // no-enabled-agent workspaces stay false. Gated by code_migrations;
-    // no-op for fresh installs (the gentle off-by-default posture is
-    // already correct there). No auto-revert.
+    // Canonical-agents feature — harness fan-out is OFF by default and is
+    // applied ONLY by the per-workspace, user-confirmed checkbox. This
+    // migration is now NEUTERED (no-op): it used to bulk-opt every
+    // existing agent-mode workspace into fan-out, a retroactive fleet-wide
+    // application the product owner forbids. We still call it so the
+    // `code_migrations` sentinel is recorded (and never re-runs), but it
+    // applies nothing. There is NO auto-apply on new agents either — the
+    // former global "default for new agents" flag was removed entirely;
+    // turning a workspace into an agent does nothing to its fan-out marker.
     run_enable_fanout_for_enabled_agents_migration();
 
     // Phase 2 Unit 4 — workspace_layouts one-shot migration moved
@@ -700,15 +703,27 @@ async fn async_main() {
     // readiness gate opens so it operates against fully-migrated state.
     let _active_reaper_handle = active_reaper::spawn();
 
+    // K2 Connect #4 — daemon-canonical connect-session reaper. A single
+    // long-lived task that evicts EXPIRED persisted login sessions from
+    // `connect-sessions.json`, independent of any client (GH#22 lesson: a
+    // headless daemon must still reap; never key expiry on a renderer).
+    // `validate_session` already rejects+deletes expired/revoked records on
+    // every call — this is the hygiene backstop for sessions never
+    // presented again after expiry. First pass runs at boot.
+    let _session_reaper_handle = session_reaper::spawn();
+
     // K2 Connect E2E (PRD `k2-connect-e2e-encryption.md` §4 Option A) —
     // when `K2_E2E` is on, stand up a SECOND listener that terminates TLS
     // itself for `<sub>.k2.dev` and splices the decrypted stream to the
     // cleartext HTTP listener above, so the relay carries only ciphertext.
     // MUST run BEFORE `maybe_autostart_tunnel` so the HTTPS port is
-    // published when the connector renders frpc's `localPort`. A no-op when
-    // E2E is off (the default) → zero behaviour change. Fully fault-
-    // isolated: any failure is logged and swallowed so it can never take
-    // the daemon down.
+    // published when the connector renders frpc's `localPort`. As of 0.40.6+
+    // E2E is ON by default, so this is the common path. Fully fault-isolated:
+    // any failure is logged and swallowed so it can never take the daemon
+    // down. First register the on-demand bring-up hook so a tunnel started
+    // AFTER boot (e.g. once the user picks a subdomain) can stand the HTTPS
+    // listener up on connect rather than erroring on a never-published port.
+    tunnel_tls_listener::register_ensure_hook();
     match tunnel_tls_listener::maybe_spawn(port).await {
         Ok(Some(https_port)) => {
             log_debug!("[daemon/e2e] E2E HTTPS listener active on port {https_port}")
@@ -1102,17 +1117,12 @@ fn run_correct_auto_pin_filter_migration() {
 /// Canonical-agents feature — daemon-side runner for
 /// `enable_fanout_for_enabled_agents_v1`.
 ///
-/// Harness fan-out is now OFF by default. This one-shot migration writes
-/// the `.k2so/.harness-fanout-enabled` opt-in marker for every existing
-/// workspace that has an ENABLED agent (manager / agent / custom), so
-/// upgraders who relied on the old always-on behavior keep it. New
-/// workspaces and any without an enabled agent stay false (the gentle
-/// opt-in default). No auto-revert. Keyed on `projects.agent_mode`.
-///
-/// Reads the DB for `(path, agent_mode)` rows, then writes the FS marker
-/// per qualifying workspace. Gated by the `code_migrations` table so it
-/// runs once per DB. Errors are best-effort (logged) — boot must not
-/// fail.
+/// **Neutered.** `mig::run` is now a no-op (see its module docs): harness
+/// fan-out is never applied retroactively in bulk. This runner still
+/// records the `code_migrations` sentinel so the (now empty) migration
+/// won't be reconsidered on every boot, but it writes no markers. The
+/// DB rows are still snapshotted only to keep the call shape identical;
+/// the no-op `run` ignores them.
 fn run_enable_fanout_for_enabled_agents_migration() {
     use k2_core::migrations::enable_fanout_for_enabled_agents_v1 as mig;
 
@@ -1146,14 +1156,11 @@ fn run_enable_fanout_for_enabled_agents_migration() {
         k2_core::db::mark_code_migration_applied(
             &conn,
             mig::MIGRATION_ID,
-            Some(&format!(
-                "opted {} enabled-agent workspaces into harness fan-out",
-                outcome.enabled_count
-            )),
+            Some("neutered no-op: harness fan-out is never applied retroactively in bulk"),
         );
     }
     log_debug!(
-        "[daemon/migrations] enable_fanout_for_enabled_agents_v1: opted {} enabled-agent workspaces in; future boots will skip",
+        "[daemon/migrations] enable_fanout_for_enabled_agents_v1: neutered (applied {} — always 0); sentinel recorded, future boots will skip",
         outcome.enabled_count
     );
 }

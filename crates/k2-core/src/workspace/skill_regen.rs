@@ -351,6 +351,8 @@ pub(crate) fn reap_old_workspace_skill_shape(project_path: &str) {
     }
 
     // 2. Reap the old composed skill dir.
+    //    MANAGED ARTIFACT: the `.k2/skills/k2so` dir is K2-composed output
+    //    (not user-authored) — direct remove is safe.
     if old_skill_dir.exists() {
         log_if_err(
             "reap old skills/k2so dir",
@@ -365,11 +367,17 @@ pub(crate) fn reap_old_workspace_skill_shape(project_path: &str) {
     let root_skill = Path::new(project_path).join("SKILL.md");
     if let Ok(meta) = fs::symlink_metadata(&root_skill) {
         if meta.file_type().is_symlink() {
+            // MANAGED ARTIFACT: a K2-created symlink (the old root harness
+            // mirror), not user data. Symlink-only guard above ensures a
+            // real user file is never touched here — direct remove is safe.
             log_if_err("reap root SKILL.md symlink", &root_skill, fs::remove_file(&root_skill));
         }
     }
 
     // 4. Reap the stale per-harness mirrors of the OLD skill.
+    //    MANAGED ARTIFACT: `.claude/skills/k2so` + `.pi/skills/k2so` are
+    //    K2-created skill-mirror dirs (our fan-out targets), not user data —
+    //    direct remove is safe.
     let root = Path::new(project_path);
     for stale in [
         root.join(".claude/skills/k2so"),
@@ -379,6 +387,8 @@ pub(crate) fn reap_old_workspace_skill_shape(project_path: &str) {
             log_if_err("reap stale harness skill mirror", &stale, fs::remove_dir_all(&stale));
         }
     }
+    // MANAGED ARTIFACT: K2-created mirror under `.opencode/` (our skill
+    // fan-out target), not user-authored — direct remove is safe.
     let opencode_mirror = root.join(".opencode/agent/k2so.md");
     if fs::symlink_metadata(&opencode_mirror).is_ok() {
         log_if_err(
@@ -541,6 +551,8 @@ pub fn write_workspace_skill_file_with_body(project_path: &str, _base_body: Opti
     }
     write_regen_hashes(project_path, &hashes);
 
+    // MANAGED ARTIFACT: the `.regen-in-flight` stamp is K2-owned scratch
+    // state we write at the top of this fn — not user data. Direct remove.
     log_if_err(
         "regen-in-flight clear",
         &regen_marker,
@@ -559,22 +571,29 @@ pub fn write_workspace_skill_file_with_body(project_path: &str, _base_body: Opti
 pub(crate) fn migrate_and_symlink_root_claude_md(canonical: &Path, root_claude: &Path, project_path: &str) {
     match fs::symlink_metadata(root_claude) {
         Ok(meta) if meta.file_type().is_symlink() => {
+            // Refreshing OUR own symlink — managed artifact, not user data.
+            // Direct in-place replace (R5: idempotent re-run).
             force_symlink(canonical, root_claude);
         }
         Ok(meta) if meta.file_type().is_file() => {
-            let content = fs::read_to_string(root_claude).unwrap_or_default();
-            let archived = if content.trim().is_empty() {
-                None
-            } else {
-                archive_claude_md_file(project_path, root_claude, "CLAUDE.md")
-            };
-            force_symlink(canonical, root_claude);
-            if let Some(archive_path) = archived {
-                inject_first_migration_banner(project_path, &[archive_path]);
+            // Real user-authored CLAUDE.md. MOVE it into .k2/migration/ and
+            // only symlink once the move succeeds — never delete user data.
+            match crate::workspace::migrations::move_to_migration(
+                project_path,
+                root_claude,
+                "CLAUDE.md",
+            ) {
+                Some(archive_path) => {
+                    force_symlink(canonical, root_claude);
+                    inject_first_migration_banner(project_path, &[archive_path]);
+                    log_debug!(
+                        "[workspace-skill] root CLAUDE.md → moved to .k2/migration + repointed to canonical .k2/AGENTS.md",
+                    );
+                }
+                None => log_debug!(
+                    "[workspace-skill] could not move root CLAUDE.md into .k2/migration — left in place, NOT symlinked (no data loss)",
+                ),
             }
-            log_debug!(
-                "[workspace-skill] root CLAUDE.md → backed up + repointed to canonical .k2/AGENTS.md",
-            );
         }
         _ => {
             force_symlink(canonical, root_claude);
@@ -951,12 +970,17 @@ r#"# {project_name}
     // fan-out is opted in) points the harness mirrors at AGENTS.md.
     write_workspace_skill_file(&project_path);
 
-    // Clean up the stale `.k2so/CLAUDE.md.disabled` artifact from the
-    // pre-symlink era — the disable flow is now "symlink goes away when the
-    // workspace is off", not a file rename.
+    // Clean up the stale `.k2/CLAUDE.md.disabled` artifact from the
+    // pre-symlink era. It holds a moved-aside user CLAUDE.md body, so per the
+    // "never delete user data" rule we MOVE it into .k2/migration/ — the
+    // single in-workspace backup — never fs::remove_file, never the recycle bin.
     let disabled_path = crate::workspace_dot_dir(&project_path).join("CLAUDE.md.disabled");
     if disabled_path.exists() {
-        let _ = fs::remove_file(&disabled_path);
+        let _ = crate::workspace::migrations::move_to_migration(
+            &project_path,
+            &disabled_path,
+            "CLAUDE.md.disabled",
+        );
     }
 
     Ok(md)

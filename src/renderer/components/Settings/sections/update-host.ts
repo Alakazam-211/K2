@@ -41,6 +41,15 @@ export interface UpdateCheckResult {
    *  the in-daemon binary swap (Shape B). Used only to vary copy; the daemon
    *  routes on it server-side. May be absent on older hosts. */
   installKind?: 'standalone' | 'bundled-app' | 'unknown'
+  /** B4: TRUE when a strictly-newer version exists but there's no published
+   *  artifact for this host's platform (a standalone host whose `os-arch`
+   *  wasn't built). DISTINCT from "up to date" — `available` is false, but
+   *  the host is NOT current. Absent (treated as false) on older hosts. */
+  newerNoArtifact?: boolean
+  /** B4: this host's platform key (`os-arch`, e.g. `linux-aarch64`) — names
+   *  the missing build in the `newerNoArtifact` message. May be absent on
+   *  older hosts. */
+  platform?: string
 }
 
 /** The status route's response shape (P3). */
@@ -142,6 +151,26 @@ export function updateAvailableCopy(
   latest: string,
 ): string {
   return `Update available for ${hostLabel} — ${current} → ${latest}`
+}
+
+/** B1: The persistent host-version line shown after ANY successful check —
+ *  for BOTH the up-to-date and update-available states — so the remote
+ *  host's CURRENT version is always visible (never just inside a transient
+ *  toast or the update-available banner). NAMES the host. */
+export function hostVersionCopy(hostLabel: string, current: string): string {
+  return `${hostLabel} is on v${current}`
+}
+
+/** B4: a strictly-newer version exists but there's no build for this host's
+ *  platform — DISTINCT from "up to date". NAMES the host, the newer version,
+ *  and the platform whose build is missing. */
+export function newerNoArtifactCopy(
+  hostLabel: string,
+  latest: string,
+  platform: string | undefined,
+): string {
+  const plat = platform && platform.trim() ? platform : 'this platform'
+  return `A newer version (v${latest}) exists, but there's no build for ${hostLabel}'s platform (${plat}). Nothing to install yet.`
 }
 
 /** The confirm-dialog copy for the install-&-restart step — it NAMES the

@@ -1,7 +1,7 @@
 {
   "name": "k2so-events",
   "version": "1.0.0",
-  "description": "K2SO MCP channel server for Claude Code --channels integration",
+  "description": "K2 MCP channel server for Claude Code --channels integration",
   "type": "module",
   "main": "index.ts",
   "scripts": {

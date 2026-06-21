@@ -713,6 +713,56 @@ pub(crate) fn archive_claude_md_file(
     Some(archive_path)
 }
 
+/// MOVE (rename) a displaced user file into `.k2/migration/<relative>` — one
+/// step, no copy and no leftover original to clean up afterwards. The
+/// `.k2/migration/` folder is the single, in-workspace backup the user can
+/// browse + restore from (we deliberately do NOT use the system recycle bin,
+/// which alarms people and implies a 30-day clock). Returns the destination.
+///
+/// Falls back to copy-then-remove only if the rename crosses a filesystem
+/// boundary (`.k2/migration/` is normally on the same FS as the workspace, so
+/// the rename fast-path wins). Best-effort: on total failure it logs and
+/// returns `None`, leaving the original in place rather than destroying it.
+pub(crate) fn move_to_migration(
+    project_path: &str,
+    source: &Path,
+    relative_id: &str,
+) -> Option<PathBuf> {
+    let (subdir, leaf) = match relative_id.rsplit_once('/') {
+        Some((parent, leaf)) => (Some(parent), leaf),
+        None => (None, relative_id),
+    };
+    let mut target_dir = crate::workspace_dot_dir(project_path).join("migration");
+    if let Some(sub) = subdir {
+        target_dir = target_dir.join(sub);
+    }
+    if let Err(e) = fs::create_dir_all(&target_dir) {
+        log_if_err::<(), _>("move_to_migration create_dir", &target_dir, Err::<(), _>(e));
+        return None;
+    }
+    let (leaf_stem, leaf_ext) = match leaf.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{}", ext)),
+        _ => (leaf.to_string(), String::new()),
+    };
+    let dest = unique_archive_path(&target_dir, &leaf_stem, &leaf_ext);
+    if fs::rename(source, &dest).is_err() {
+        // Cross-filesystem (or other) rename failure → copy then remove.
+        let content = fs::read_to_string(source).ok()?;
+        if let Err(e) = fs_atomic::atomic_write(&dest, content.as_bytes()) {
+            log_if_err::<(), _>("move_to_migration copy-fallback", &dest, Err::<(), _>(e));
+            return None;
+        }
+        if let Err(e) = fs::remove_file(source) {
+            log_if_err::<(), _>("move_to_migration remove-original", source, Err::<(), _>(e));
+        }
+    }
+    log_adoption_event(
+        project_path,
+        &format!("MOVED {} → {}", source.display(), dest.display()),
+    );
+    Some(dest)
+}
+
 /// On first migration, write a standalone notice at
 /// `.k2so/MIGRATION-0.32.7.md` listing the archive paths.
 pub(crate) fn inject_first_migration_banner(project_path: &str, archived_paths: &[PathBuf]) {
@@ -783,11 +833,15 @@ mod migration_safety_tests {
     use std::path::PathBuf;
     use uuid::Uuid;
     use crate::skills::version::{SKILL_BEGIN_MARKER, SKILL_END_MARKER};
-    use crate::workspace::harness::{safe_symlink_harness_file, scaffold_aider_conf, HARNESS_WORKSPACE_FILES};
+    use crate::workspace::harness::{
+        safe_symlink_harness_file, scaffold_aider_conf,
+        write_workspace_harness_discovery_targets, HARNESS_WORKSPACE_FILES,
+    };
     use crate::workspace::skill_regen::{
-        content_hash_of, mtime_secs, read_regen_hashes, reap_old_workspace_skill_shape,
-        write_workspace_skill_file_with_body, MIGRATED_NOTES_BEGIN, MIGRATED_NOTES_END,
-        SKILL_USER_NOTES_SENTINEL, USER_NOTES_PLACEHOLDER,
+        content_hash_of, migrate_and_symlink_root_claude_md, mtime_secs, read_regen_hashes,
+        reap_old_workspace_skill_shape, write_workspace_skill_file_with_body,
+        MIGRATED_NOTES_BEGIN, MIGRATED_NOTES_END, SKILL_USER_NOTES_SENTINEL,
+        USER_NOTES_PLACEHOLDER,
     };
     use crate::workspace::teardown::{teardown_workspace_harness_files, TeardownMode};
 
@@ -1005,6 +1059,112 @@ mod migration_safety_tests {
         assert!(
             has_archive,
             "pre-existing user file must be archived before symlink replaces it"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    // ---- MOVE-not-delete fan-out safety (0.40.6) -----------------------
+    // The displaced-file path was converted from copy-then-recycle to a single
+    // gated MOVE into `.k2/migration/`. These lock in the invariant the user
+    // asked for: a fan-out can relocate a user file but can NEVER permanently
+    // delete one — if the relocation can't happen, the file is left in place.
+
+    #[test]
+    fn move_to_migration_relocates_source_and_preserves_content() {
+        let proj = scratch_project();
+        let project_path = proj.to_str().unwrap();
+        let source = proj.join("CLAUDE.md");
+        let body = "# user CLAUDE.md\n\nIrreplaceable user context.\n";
+        fs::write(&source, body).unwrap();
+
+        let dest = move_to_migration(project_path, &source, "CLAUDE.md")
+            .expect("move_to_migration must succeed on a writable workspace");
+
+        assert!(!source.exists(), "MOVE must remove the file from its original path");
+        assert!(
+            dest.starts_with(proj.join(".k2so").join("migration")),
+            "dest must land under .k2/migration/, got {}",
+            dest.display(),
+        );
+        assert_eq!(
+            fs::read_to_string(&dest).unwrap(),
+            body,
+            "moved file must preserve content byte-for-byte"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn move_to_migration_dedups_colliding_leaf_names() {
+        let proj = scratch_project();
+        let project_path = proj.to_str().unwrap();
+
+        let first = proj.join("CLAUDE.md");
+        fs::write(&first, "first").unwrap();
+        let dest1 = move_to_migration(project_path, &first, "CLAUDE.md").expect("first move");
+
+        // A second displaced file with the SAME leaf name must NOT clobber the
+        // first archive — unique_archive_path gives it a distinct destination.
+        let second = proj.join("CLAUDE.md");
+        fs::write(&second, "second").unwrap();
+        let dest2 = move_to_migration(project_path, &second, "CLAUDE.md").expect("second move");
+
+        assert_ne!(dest1, dest2, "colliding leaf names must get distinct archive paths");
+        assert_eq!(fs::read_to_string(&dest1).unwrap(), "first", "first archive intact");
+        assert_eq!(fs::read_to_string(&dest2).unwrap(), "second", "second archive intact");
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn move_to_migration_preserves_nested_relative_path() {
+        let proj = scratch_project();
+        let project_path = proj.to_str().unwrap();
+        let dir = proj.join(".cursor/rules");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("k2so.mdc");
+        fs::write(&source, "user cursor rule").unwrap();
+
+        let dest = move_to_migration(project_path, &source, "cursor/rules/k2so.mdc")
+            .expect("nested move must succeed");
+
+        assert!(
+            dest.starts_with(proj.join(".k2so/migration/cursor/rules")),
+            "a nested relative_id must nest under .k2/migration/, got {}",
+            dest.display(),
+        );
+        assert!(!source.exists(), "source must be gone after the move");
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "user cursor rule");
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn fanout_leaves_user_file_untouched_when_migration_cannot_be_written() {
+        // The whole point of MOVE-not-delete: if the file can't be relocated,
+        // the fan-out must NOT symlink over (and thus never destroy) the user's
+        // file. Force the move to fail by occupying `.k2/migration` with a
+        // regular file so `create_dir_all()` errors out.
+        let proj = scratch_project();
+        let project_path = proj.to_str().unwrap();
+        // workspace_dot_dir() resolves to `.k2so/` for this scratch project.
+        let migration_blocker = proj.join(".k2so/migration");
+        fs::write(&migration_blocker, "not a directory").unwrap();
+
+        let canonical = proj.join(".k2so/AGENTS.md");
+        fs::write(&canonical, "# generated canon\n").unwrap();
+        let target = proj.join("GEMINI.md");
+        fs::write(&target, "PRECIOUS user instructions").unwrap();
+
+        safe_symlink_harness_file(&canonical, &target, project_path, "GEMINI.md");
+
+        let meta = fs::symlink_metadata(&target).unwrap();
+        assert!(
+            meta.file_type().is_file() && !meta.file_type().is_symlink(),
+            "when the move fails the user file must stay a real file, NOT be replaced by a symlink"
+        );
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "PRECIOUS user instructions",
+            "user content must be byte-for-byte intact when migration is blocked"
         );
         fs::remove_dir_all(&proj).ok();
     }
@@ -1582,6 +1742,190 @@ mod migration_safety_tests {
         let current = content_hash_of(&project_md);
         assert_ne!(stored, current, "hash-based drift detection must flag modified content");
 
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // 0.40.6 data-safety hardening: every displaced USER harness file is
+    // archived to `.k2/migration/` (incl. empty files), then recycled —
+    // never hard-deleted. We assert the ARCHIVE invariant directly (the
+    // recycle-bin move is bypassed for temp-dir scratch by
+    // `scratch_safe_trash`, so `cargo test` never hangs on a Touch-ID
+    // prompt and we never assert real Trash contents — per
+    // `feedback_recycle_bin_tests`).
+    // ──────────────────────────────────────────────────────────────────
+
+    /// Count regular files anywhere under `.k2so/migration/`.
+    fn migration_archive_count(proj: &Path) -> usize {
+        fn walk(dir: &Path, acc: &mut usize) {
+            let Ok(rd) = fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, acc);
+                } else {
+                    *acc += 1;
+                }
+            }
+        }
+        let mut n = 0;
+        walk(&proj.join(".k2so").join("migration"), &mut n);
+        n
+    }
+
+    /// Return true if SOME archive anywhere under `.k2/migration/` holds
+    /// exactly `needle` as its content.
+    fn archive_holds_content(proj: &Path, needle: &str) -> bool {
+        fn walk(dir: &Path, needle: &str) -> bool {
+            let Ok(rd) = fs::read_dir(dir) else { return false };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    if walk(&p, needle) {
+                        return true;
+                    }
+                } else if fs::read_to_string(&p).map(|b| b == needle).unwrap_or(false) {
+                    return true;
+                }
+            }
+            false
+        }
+        walk(&proj.join(".k2so").join("migration"), needle)
+    }
+
+    #[test]
+    fn fanout_archives_nonempty_claude_md_then_symlinks_to_canon() {
+        let proj = scratch_project();
+        let canonical = proj.join(".k2so/AGENTS.md");
+        fs::write(&canonical, "# canon\n\nGenerated AGENTS.md body.\n").unwrap();
+        let root_claude = proj.join("CLAUDE.md");
+        let original = "# my own claude memory\n\nDo X then Y.\n";
+        fs::write(&root_claude, original).unwrap();
+
+        migrate_and_symlink_root_claude_md(&canonical, &root_claude, proj.to_str().unwrap());
+
+        // (a) the original content is archived under .k2/migration/.
+        assert!(
+            archive_holds_content(&proj, original),
+            "user CLAUDE.md must be archived with original content before displacement"
+        );
+        // (b) the live path is now a symlink resolving to the canon body.
+        let meta = fs::symlink_metadata(&root_claude).unwrap();
+        assert!(meta.file_type().is_symlink(), "CLAUDE.md must be a symlink after fan-out");
+        assert!(
+            fs::read_to_string(&root_claude)
+                .unwrap()
+                .contains("Generated AGENTS.md body."),
+            "symlink must resolve to the canonical AGENTS.md body"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn fanout_archives_nonempty_agents_md_via_safe_symlink() {
+        let proj = scratch_project();
+        let canonical = proj.join(".k2so/AGENTS.md");
+        fs::write(&canonical, "# canon\n\nCanonical body here.\n").unwrap();
+        let target = proj.join("AGENTS.md");
+        let original = "user-authored AGENTS.md content\n";
+        fs::write(&target, original).unwrap();
+
+        safe_symlink_harness_file(&canonical, &target, proj.to_str().unwrap(), "AGENTS.md");
+
+        assert!(
+            archive_holds_content(&proj, original),
+            "user AGENTS.md must be archived before the symlink replaces it"
+        );
+        let meta = fs::symlink_metadata(&target).unwrap();
+        assert!(meta.file_type().is_symlink(), "AGENTS.md must be a symlink after fan-out");
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn fanout_archives_user_cursor_mdc_before_overwrite() {
+        let proj = scratch_project();
+        let canonical = proj.join(".k2so/AGENTS.md");
+        fs::write(&canonical, "# canon\n\nCanonical cursor body.\n").unwrap();
+        // A user-authored cursor rule (NO K2 signature) at the managed path.
+        let cursor_dir = proj.join(".cursor").join("rules");
+        fs::create_dir_all(&cursor_dir).unwrap();
+        let cursor_file = cursor_dir.join("k2so.mdc");
+        let original = "---\ndescription: my own rule\n---\n\nUser cursor body.\n";
+        fs::write(&cursor_file, original).unwrap();
+
+        write_workspace_harness_discovery_targets(proj.to_str().unwrap(), &canonical);
+
+        assert!(
+            archive_holds_content(&proj, original),
+            "user-authored cursor mdc must be archived before K2 overwrites it"
+        );
+        // The live file is now OUR generated output, not the user's.
+        let after = fs::read_to_string(&cursor_file).unwrap();
+        assert!(
+            after.contains("Canonical cursor body."),
+            "cursor mdc must now carry the canonical body"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn fanout_archives_empty_user_file_not_silently_dropped() {
+        // The pre-0.40.6 code skipped archiving when content.trim() was
+        // empty — silently dropping the user's (empty) file on displacement.
+        // It must now be archived like any other displaced user file.
+        let proj = scratch_project();
+        let canonical = proj.join(".k2so/AGENTS.md");
+        fs::write(&canonical, "# canon\n\nbody\n").unwrap();
+        let target = proj.join("GEMINI.md");
+        fs::write(&target, "").unwrap(); // empty user file
+
+        let before = migration_archive_count(&proj);
+        safe_symlink_harness_file(&canonical, &target, proj.to_str().unwrap(), "GEMINI.md");
+        let after = migration_archive_count(&proj);
+
+        assert_eq!(
+            after,
+            before + 1,
+            "an EMPTY displaced user file must still be archived (not silently dropped)"
+        );
+        let meta = fs::symlink_metadata(&target).unwrap();
+        assert!(meta.file_type().is_symlink(), "GEMINI.md must be a symlink after fan-out");
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn fanout_is_idempotent_already_symlinked_archives_nothing_new() {
+        // R5: re-running fan-out on an already-symlinked workspace must
+        // archive (and recycle) NOTHING new — symlinks refresh in place.
+        let proj = scratch_project();
+        let canonical = proj.join(".k2so/AGENTS.md");
+        fs::write(&canonical, "# canon\n\nbody\n").unwrap();
+
+        // First pass: displace a real user file (one archive expected).
+        let claude = proj.join("CLAUDE.md");
+        fs::write(&claude, "user claude\n").unwrap();
+        migrate_and_symlink_root_claude_md(&canonical, &claude, proj.to_str().unwrap());
+
+        // Also seed a discovery target so the second pass exercises both.
+        let gemini = proj.join("GEMINI.md");
+        fs::write(&gemini, "user gemini\n").unwrap();
+        safe_symlink_harness_file(&canonical, &gemini, proj.to_str().unwrap(), "GEMINI.md");
+
+        let count_after_first = migration_archive_count(&proj);
+        assert!(count_after_first >= 2, "first pass should have archived the two user files");
+
+        // Second pass over the now-symlinked paths: nothing new.
+        migrate_and_symlink_root_claude_md(&canonical, &claude, proj.to_str().unwrap());
+        safe_symlink_harness_file(&canonical, &gemini, proj.to_str().unwrap(), "GEMINI.md");
+
+        let count_after_second = migration_archive_count(&proj);
+        assert_eq!(
+            count_after_second, count_after_first,
+            "re-running fan-out on already-symlinked paths must archive nothing new (R5)"
+        );
+        // Both still symlinks.
+        assert!(fs::symlink_metadata(&claude).unwrap().file_type().is_symlink());
+        assert!(fs::symlink_metadata(&gemini).unwrap().file_type().is_symlink());
         fs::remove_dir_all(&proj).ok();
     }
 }

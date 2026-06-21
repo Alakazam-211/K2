@@ -1,4 +1,4 @@
-<!-- DEFAULT TEMPLATE — K2SO scaffolded this for the K2SO planner agent.
+<!-- DEFAULT TEMPLATE — K2 scaffolded this for the K2SO planner agent.
      Edit below to customize what the planner does when the heartbeat wakes it.
      Delete this comment once you've made it your own. -->
 

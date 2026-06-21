@@ -45,6 +45,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore, activeHostKey } from '@/stores/connect-host'
 import { RemoteSignIn } from './RemoteSignIn'
+import { AppErrorBoundary } from './AppErrorBoundary'
 
 /** Shape of the daemon's GET /boot-status response. `detail` is free-text
  *  for the UI only — never branch on it. */
@@ -85,6 +86,17 @@ const REMOTE_BOOT_STATUS_TIMEOUT_MS = 4000
  *  transport error we treat the session as 'unknown' (a blip, not dead)
  *  and proceed to mount rather than nuking a good session. */
 const REMOTE_WHOAMI_TIMEOUT_MS = 4000
+
+/** Issue #4 (never-strand): on the FIRST connect with a remembered token we
+ *  must POSITIVELY confirm the session is alive before mounting. A remote
+ *  update restarts the daemon and wipes its in-memory connect sessions, so a
+ *  remembered token can be DEAD even though /boot-status accepts. We retry the
+ *  whoami probe a few times so a real network blip resolves to 'alive'; if it
+ *  never confirms ('dead' or persistent 'unknown' — e.g. an authenticated probe
+ *  timing out through the E2E TLS splice), we drop to RemoteSignIn instead of
+ *  mounting a dead token, which otherwise hangs forever on "Connecting…". */
+const FIRST_CONNECT_PROBE_RETRIES = 3
+const FIRST_CONNECT_PROBE_RETRY_DELAY_MS = 1000
 
 /** Debounce rule for a connected-remote drop: given the running count of
  *  CONSECUTIVE failed health-polls, should we surface the reconnect banner
@@ -447,18 +459,35 @@ export function ConnectionGate(): React.ReactElement {
         const hasToken =
           active !== 'local' && !!active.token && active.token.length > 0
         if (hasToken) {
-          const probe = await probeRemoteSession()
+          // Retry on 'unknown' so a real network blip resolves to 'alive'; a
+          // token confirmed dead ('dead') short-circuits the loop immediately.
+          let probe = await probeRemoteSession()
+          for (
+            let i = 0;
+            probe === 'unknown' && i < FIRST_CONNECT_PROBE_RETRIES;
+            i++
+          ) {
+            await new Promise((r) =>
+              setTimeout(r, FIRST_CONNECT_PROBE_RETRY_DELAY_MS),
+            )
+            if (cancelled) return
+            probe = await probeRemoteSession()
+          }
           if (cancelled) return
-          if (probe === 'dead') {
-            // Session was wiped (host restart/update/crash). Drop the dead
-            // token + raise RemoteSignIn for a one-time re-auth. Re-key as
-            // a wait so we don't fall through to the mount path below; the
-            // effect re-runs on the resulting token change. `hasToken`
-            // already narrowed `active` to a ConnectHost.
+          if (probe !== 'alive') {
+            // 'dead' (401/403) OR persistent 'unknown' (the session could not
+            // be confirmed after retries — a dead remembered token wiped by a
+            // remote update/restart, or an auth probe that never completes
+            // through the E2E splice). Issue #4: NEVER strand the client by
+            // mounting an unverified token — it sits on "Connecting…" forever
+            // and never reaches sign-in. Drop the token + raise RemoteSignIn
+            // for a one-time re-auth. This stricter rule is FIRST-CONNECT only
+            // (acceptedOnce false); a mounted session still tolerates a blip.
+            // `hasToken` already narrowed `active` to a ConnectHost.
             useConnectHostStore.getState().expireSession(active.id)
             next = { kind: 'wait', reason: 'remote-session-expired' }
           }
-          // 'alive' / 'unknown' → keep the accept and mount as normal.
+          // 'alive' → keep the accept and mount as normal.
         }
       }
       // Debounced-drop path: a REMOTE host that has already connected this
@@ -597,7 +626,7 @@ export function ConnectionGate(): React.ReactElement {
     const label = activeHost.label
     return (
       <>
-        <App key={hostKey} />
+        <AppErrorBoundary><App key={hostKey} /></AppErrorBoundary>
         {reconnecting && <ReconnectBanner label={label} />}
         {signInOverlay}
       </>
@@ -619,7 +648,7 @@ export function ConnectionGate(): React.ReactElement {
   // the new host's creds rather than clinging to the old socket.
   return (
     <>
-      <App key={hostKey} />
+      <AppErrorBoundary><App key={hostKey} /></AppErrorBoundary>
       {signInOverlay}
     </>
   )

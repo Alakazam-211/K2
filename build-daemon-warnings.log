@@ -1,0 +1,686 @@
+   Compiling k2so-core v0.39.37 (/Users/z3thon/DevProjects/Alakazam Labs/K2SO/crates/k2so-core)
+warning: unexpected `cfg` condition value: `cargo-clippy`
+   --> crates/k2so-core/src/fs_commands.rs:726:24
+    |
+726 |         let list: id = msg_send![pb, propertyListForType: NSFilenamesPboardType];
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expected values for `feature` are: `test-util`
+    = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+    = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+    = help: the macro `sel_impl` may come from an old version of the `objc` crate, try updating your dependency with `cargo update -p objc`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+    = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/app_settings.rs:34:5
+   |
+34 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `resolve_project_id`
+  --> crates/k2so-core/src/deprecated/delegate.rs:30:51
+   |
+30 | use crate::workspace::agent_identity::{agent_dir, resolve_project_id};
+   |                                                   ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/deprecated/delegate.rs:33:5
+   |
+33 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `agent_dir`
+  --> crates/k2so-core/src/heartbeats/mod.rs:22:40
+   |
+22 | use crate::workspace::agent_identity::{agent_dir, find_primary_agent, resolve_project_id};
+   |                                        ^^^^^^^^^
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/heartbeats/mod.rs:24:5
+   |
+24 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/workspace/migrations.rs:22:5
+   |
+22 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/workspace/skill_regen.rs:47:5
+   |
+47 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `PathBuf`
+  --> crates/k2so-core/src/port_claim.rs:32:23
+   |
+32 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+
+warning: unused import: `SKILL_VERSION_TEMPLATE`
+  --> crates/k2so-core/src/skills/content.rs:25:55
+   |
+25 | use crate::skills::version::{ensure_skill_up_to_date, SKILL_VERSION_TEMPLATE};
+   |                                                       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `agent_type_for`
+  --> crates/k2so-core/src/skills/content.rs:27:16
+   |
+27 |     agent_dir, agent_type_for, agents_dir, parse_frontmatter, resolve_project_id,
+   |                ^^^^^^^^^^^^^^
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/skills/version.rs:34:5
+   |
+34 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/terminal/daemon_pty.rs:49:5
+   |
+49 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/awareness/egress.rs:41:5
+   |
+41 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `load_coordination_level`
+   --> crates/k2so-core/src/awareness/egress.rs:195:44
+    |
+195 |     use crate::workspace::launch_profile::{load_coordination_level, CoordinationLevel};
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/awareness/inbox.rs:36:5
+   |
+36 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/session/archive.rs:54:5
+   |
+54 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::log_debug`
+  --> crates/k2so-core/src/term/line_mux.rs:33:5
+   |
+33 | use crate::log_debug;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated associated function `cocoa::appkit::NSPasteboard::generalPasteboard`: use the objc2-app-kit crate instead
+   --> crates/k2so-core/src/fs_commands.rs:725:36
+    |
+725 |         let pb: id = NSPasteboard::generalPasteboard(nil);
+    |                                    ^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated constant `cocoa::base::nil`: use the objc2 crate instead
+   --> crates/k2so-core/src/fs_commands.rs:725:54
+    |
+725 |         let pb: id = NSPasteboard::generalPasteboard(nil);
+    |                                                      ^^^
+
+warning: use of deprecated type alias `cocoa::base::id`: use the objc2 crate instead
+   --> crates/k2so-core/src/fs_commands.rs:725:17
+    |
+725 |         let pb: id = NSPasteboard::generalPasteboard(nil);
+    |                 ^^
+
+warning: use of deprecated static `cocoa::appkit::NSFilenamesPboardType`: use the objc2-app-kit crate instead
+   --> crates/k2so-core/src/fs_commands.rs:726:59
+    |
+726 |         let list: id = msg_send![pb, propertyListForType: NSFilenamesPboardType];
+    |                                                           ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated type alias `cocoa::base::id`: use the objc2 crate instead
+   --> crates/k2so-core/src/fs_commands.rs:726:19
+    |
+726 |         let list: id = msg_send![pb, propertyListForType: NSFilenamesPboardType];
+    |                   ^^
+
+warning: use of deprecated constant `cocoa::base::nil`: use the objc2 crate instead
+   --> crates/k2so-core/src/fs_commands.rs:727:20
+    |
+727 |         if list == nil {
+    |                    ^^^
+
+warning: use of deprecated method `cocoa::foundation::NSArray::count`: use the objc2-foundation crate instead
+   --> crates/k2so-core/src/fs_commands.rs:730:30
+    |
+730 |         let count = NSArray::count(list);
+    |                              ^^^^^
+
+warning: use of deprecated method `cocoa::foundation::NSArray::objectAtIndex`: use the objc2-foundation crate instead
+   --> crates/k2so-core/src/fs_commands.rs:733:39
+    |
+733 |             let ns_str: id = NSArray::objectAtIndex(list, i);
+    |                                       ^^^^^^^^^^^^^
+
+warning: use of deprecated type alias `cocoa::base::id`: use the objc2 crate instead
+   --> crates/k2so-core/src/fs_commands.rs:733:25
+    |
+733 |             let ns_str: id = NSArray::objectAtIndex(list, i);
+    |                         ^^
+
+warning: use of deprecated method `cocoa::foundation::NSString::UTF8String`: use the objc2-foundation crate instead
+   --> crates/k2so-core/src/fs_commands.rs:734:35
+    |
+734 |             let c_str = NSString::UTF8String(ns_str);
+    |                                   ^^^^^^^^^^
+
+warning: use of deprecated static `cocoa::appkit::NSFilenamesPboardType`: use the objc2-app-kit crate instead
+   --> crates/k2so-core/src/fs_commands.rs:718:25
+    |
+718 |     use cocoa::appkit::{NSFilenamesPboardType, NSPasteboard};
+    |                         ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated trait `cocoa::appkit::NSPasteboard`: use the objc2-app-kit crate instead
+   --> crates/k2so-core/src/fs_commands.rs:718:48
+    |
+718 |     use cocoa::appkit::{NSFilenamesPboardType, NSPasteboard};
+    |                                                ^^^^^^^^^^^^
+
+warning: use of deprecated type alias `cocoa::base::id`: use the objc2 crate instead
+   --> crates/k2so-core/src/fs_commands.rs:719:23
+    |
+719 |     use cocoa::base::{id, nil};
+    |                       ^^
+
+warning: use of deprecated constant `cocoa::base::nil`: use the objc2 crate instead
+   --> crates/k2so-core/src/fs_commands.rs:719:27
+    |
+719 |     use cocoa::base::{id, nil};
+    |                           ^^^
+
+warning: use of deprecated trait `cocoa::foundation::NSArray`: use the objc2-foundation crate instead
+   --> crates/k2so-core/src/fs_commands.rs:720:29
+    |
+720 |     use cocoa::foundation::{NSArray, NSString};
+    |                             ^^^^^^^
+
+warning: use of deprecated trait `cocoa::foundation::NSString`: use the objc2-foundation crate instead
+   --> crates/k2so-core/src/fs_commands.rs:720:38
+    |
+720 |     use cocoa::foundation::{NSArray, NSString};
+    |                                      ^^^^^^^^
+
+warning: use of deprecated function `workspace::scheduler::read_heartbeat_config`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+  --> crates/k2so-core/src/heartbeats/control.rs:18:5
+   |
+18 |     read_heartbeat_config, write_heartbeat_config, AgentHeartbeatConfig,
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `workspace::scheduler::write_heartbeat_config`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+  --> crates/k2so-core/src/heartbeats/control.rs:18:28
+   |
+18 |     read_heartbeat_config, write_heartbeat_config, AgentHeartbeatConfig,
+   |                            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `workspace::scheduler::AgentHeartbeatConfig`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+  --> crates/k2so-core/src/heartbeats/control.rs:18:52
+   |
+18 |     read_heartbeat_config, write_heartbeat_config, AgentHeartbeatConfig,
+   |                                                    ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `workspace::scheduler::AgentHeartbeatConfig`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+  --> crates/k2so-core/src/heartbeats/control.rs:68:13
+   |
+68 | ) -> Result<AgentHeartbeatConfig, String> {
+   |             ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `workspace::scheduler::read_heartbeat_config`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+  --> crates/k2so-core/src/heartbeats/control.rs:73:8
+   |
+73 |     Ok(read_heartbeat_config(&project_path, &agent_name))
+   |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `workspace::scheduler::AgentHeartbeatConfig`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+  --> crates/k2so-core/src/heartbeats/control.rs:89:13
+   |
+89 | ) -> Result<AgentHeartbeatConfig, String> {
+   |             ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `workspace::scheduler::read_heartbeat_config`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+  --> crates/k2so-core/src/heartbeats/control.rs:95:22
+   |
+95 |     let mut config = read_heartbeat_config(&project_path, &agent_name);
+   |                      ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `workspace::scheduler::write_heartbeat_config`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:123:5
+    |
+123 |     write_heartbeat_config(&project_path, &agent_name, &config)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `workspace::scheduler::AgentHeartbeatConfig`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:135:13
+    |
+135 | ) -> Result<AgentHeartbeatConfig, String> {
+    |             ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `workspace::scheduler::read_heartbeat_config`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:136:22
+    |
+136 |     let mut config = read_heartbeat_config(&project_path, &agent_name);
+    |                      ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `workspace::scheduler::write_heartbeat_config`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:167:5
+    |
+167 |     write_heartbeat_config(&project_path, &agent_name, &config)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `workspace::scheduler::AgentHeartbeatConfig`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:186:13
+    |
+186 | ) -> Result<AgentHeartbeatConfig, String> {
+    |             ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `workspace::scheduler::read_heartbeat_config`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:187:22
+    |
+187 |     let mut config = read_heartbeat_config(&project_path, &agent_name);
+    |                      ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `workspace::scheduler::write_heartbeat_config`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:189:5
+    |
+189 |     write_heartbeat_config(&project_path, &agent_name, &config)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `deprecated::delegate::k2so_agents_delegate`: Harness owns spawn lifecycle post-Phase-2.1; see Phase 2.1 PRD A23
+   --> crates/k2so-core/src/workspace/agent_launch.rs:136:49
+    |
+136 |             return crate::deprecated::delegate::k2so_agents_delegate(
+    |                                                 ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `deprecated::delegate::strip_worktree_from_frontmatter`: Harness owns spawn lifecycle post-Phase-2.1; see Phase 2.1 PRD A23
+  --> crates/k2so-core/src/workspace/reviews.rs:24:34
+   |
+24 | use crate::deprecated::delegate::strip_worktree_from_frontmatter;
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `deprecated::delegate::strip_worktree_from_frontmatter`: Harness owns spawn lifecycle post-Phase-2.1; see Phase 2.1 PRD A23
+   --> crates/k2so-core/src/workspace/reviews.rs:298:35
+    |
+298 |                     let cleaned = strip_worktree_from_frontmatter(&content);
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `workspace::scheduler::AgentHeartbeatConfig`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:171:18
+    |
+171 | impl Default for AgentHeartbeatConfig {
+    |                  ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+  --> crates/k2so-core/src/heartbeats/control.rs:98:9
+   |
+98 |         config.interval_seconds = interval
+   |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::min_interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+  --> crates/k2so-core/src/heartbeats/control.rs:99:18
+   |
+99 |             .max(config.min_interval_seconds)
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::max_interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:100:18
+    |
+100 |             .min(config.max_interval_seconds);
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::phase`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:103:9
+    |
+103 |         config.phase = phase;
+    |         ^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::mode`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:106:9
+    |
+106 |         config.mode = mode;
+    |         ^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::cost_budget`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:109:9
+    |
+109 |         config.cost_budget = budget;
+    |         ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::updated_by`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:111:5
+    |
+111 |     config.updated_by = "agent".to_string();
+    |     ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::next_wake`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:115:9
+    |
+115 |         config.next_wake = Some(now.to_rfc3339());
+    |         ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::updated_by`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:116:9
+    |
+116 |         config.updated_by = "user".to_string();
+    |         ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::next_wake`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:118:9
+    |
+118 |         config.next_wake = Some(
+    |         ^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:119:46
+    |
+119 |             (now + chrono::Duration::seconds(config.interval_seconds as i64)).to_rfc3339(),
+    |                                              ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::consecutive_no_ops`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:137:5
+    |
+137 |     config.consecutive_no_ops += 1;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::auto_backoff`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:141:8
+    |
+141 |     if config.auto_backoff && config.consecutive_no_ops >= 3 {
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::consecutive_no_ops`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:141:31
+    |
+141 |     if config.auto_backoff && config.consecutive_no_ops >= 3 {
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:142:28
+    |
+142 |         let new_interval = config.interval_seconds.saturating_mul(3) / 2;
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:143:9
+    |
+143 |         config.interval_seconds = new_interval
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::min_interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:144:18
+    |
+144 |             .max(config.min_interval_seconds)
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::max_interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:145:18
+    |
+145 |             .min(config.max_interval_seconds);
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::consecutive_no_ops`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:151:17
+    |
+151 |                 config.consecutive_no_ops, config.interval_seconds
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:151:44
+    |
+151 |                 config.consecutive_no_ops, config.interval_seconds
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::consecutive_no_ops`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/heartbeats/control.rs:188:5
+    |
+188 |     config.consecutive_no_ops = 0;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::mode`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:174:13
+    |
+174 |             mode: default_heartbeat_mode(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:175:13
+    |
+175 |             interval_seconds: default_interval(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::phase`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:176:13
+    |
+176 |             phase: default_phase(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::active_hours`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:177:13
+    |
+177 |             active_hours: None,
+    |             ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::max_interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:178:13
+    |
+178 |             max_interval_seconds: default_max_interval(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::min_interval_seconds`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:179:13
+    |
+179 |             min_interval_seconds: default_min_interval(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::cost_budget`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:180:13
+    |
+180 |             cost_budget: default_cost_budget(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::consecutive_no_ops`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:181:13
+    |
+181 |             consecutive_no_ops: 0,
+    |             ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::auto_backoff`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:182:13
+    |
+182 |             auto_backoff: true,
+    |             ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::last_wake`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:183:13
+    |
+183 |             last_wake: None,
+    |             ^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::next_wake`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:184:13
+    |
+184 |             next_wake: None,
+    |             ^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `workspace::scheduler::AgentHeartbeatConfig::updated_by`: Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag.
+   --> crates/k2so-core/src/workspace/scheduler.rs:185:13
+    |
+185 |             updated_by: default_updated_by(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `agent_name`
+   --> crates/k2so-core/src/workspace/session.rs:108:5
+    |
+108 |     agent_name: String,
+    |     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_agent_name`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `spawn_ms`
+   --> crates/k2so-core/src/workspace/wake_prompts.rs:405:13
+    |
+405 |         let spawn_ms = chrono::Utc::now().timestamp_millis();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_spawn_ms`
+
+warning: unused variable: `cell_width`
+   --> crates/k2so-core/src/terminal/font_renderer.rs:166:9
+    |
+166 |         cell_width: u32,
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cell_width`
+
+warning: constant `STYLE_REGULAR` is never used
+  --> crates/k2so-core/src/terminal/font_renderer.rs:13:11
+   |
+13 | pub const STYLE_REGULAR: u8 = 0;
+   |           ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `STYLE_BOLD` is never used
+  --> crates/k2so-core/src/terminal/font_renderer.rs:14:11
+   |
+14 | pub const STYLE_BOLD: u8 = 1;
+   |           ^^^^^^^^^^
+
+warning: constant `STYLE_ITALIC` is never used
+  --> crates/k2so-core/src/terminal/font_renderer.rs:15:11
+   |
+15 | pub const STYLE_ITALIC: u8 = 2;
+   |           ^^^^^^^^^^^^
+
+warning: constant `STYLE_BOLD_ITALIC` is never used
+  --> crates/k2so-core/src/terminal/font_renderer.rs:16:11
+   |
+16 | pub const STYLE_BOLD_ITALIC: u8 = 3; // uses bold font (no separate bold-italic TTF)
+   |           ^^^^^^^^^^^^^^^^^
+
+warning: fields `bitmap`, `width`, `height`, `x_offset`, and `y_offset` are never read
+  --> crates/k2so-core/src/terminal/font_renderer.rs:32:9
+   |
+30 | pub struct RasterizedGlyph {
+   |            --------------- fields in this struct
+31 |     /// Alpha-only bitmap (one byte per pixel).
+32 |     pub bitmap: Vec<u8>,
+   |         ^^^^^^
+33 |     pub width: u32,
+   |         ^^^^^
+34 |     pub height: u32,
+   |         ^^^^^^
+35 |     /// Horizontal offset from cell left edge to glyph origin.
+36 |     pub x_offset: i32,
+   |         ^^^^^^^^
+37 |     /// Vertical offset from cell top edge to glyph top.
+38 |     pub y_offset: i32,
+   |         ^^^^^^^^
+
+warning: associated items `rasterize` and `rasterize_glyph` are never used
+   --> crates/k2so-core/src/terminal/font_renderer.rs:116:12
+    |
+ 61 | impl GlyphCache {
+    | --------------- associated items in this implementation
+...
+116 |     pub fn rasterize(&mut self, ch: char, style: u8) -> &RasterizedGlyph {
+    |            ^^^^^^^^^
+...
+161 |     fn rasterize_glyph(
+    |        ^^^^^^^^^^^^^^^
+
+   Compiling k2so-daemon v0.39.37 (/Users/z3thon/DevProjects/Alakazam Labs/K2SO/crates/k2so-daemon)
+warning: unused import: `settings`
+  --> crates/k2so-daemon/src/triage.rs:41:39
+   |
+41 | use k2so_core::workspace::{scheduler, settings, triage as triage_summary, wake_prompts as wake};
+   |                                       ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of deprecated function `k2so_core::deprecated::delegate::k2so_agents_delegate`: Harness owns spawn lifecycle post-Phase-2.1; see Phase 2.1 PRD A23
+   --> crates/k2so-daemon/src/agents_routes.rs:272:62
+    |
+272 |     let launch_info = match k2so_core::deprecated::delegate::k2so_agents_delegate(
+    |                                                              ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: unused variable: `project_path`
+   --> crates/k2so-daemon/src/heartbeat_launch.rs:523:5
+    |
+523 |     project_path: &str,
+    |     ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_project_path`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `command`
+   --> crates/k2so-daemon/src/wake_headless.rs:114:10
+    |
+114 |     let (command, args) = match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
+    |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_command`
+
+warning: `k2so-daemon` (lib) generated 4 warnings (run `cargo fix --lib -p k2so-daemon` to apply 3 suggestions)
+warning: `k2so-core` (lib) generated 94 warnings (run `cargo fix --lib -p k2so-core` to apply 20 suggestions)
+warning: function `handle_states_list` is never used
+  --> crates/k2so-daemon/src/db_routes.rs:73:8
+   |
+73 | pub fn handle_states_list() -> CliResponse {
+   |        ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `handle_projects_refresh_editors` is never used
+   --> crates/k2so-daemon/src/db_routes.rs:180:8
+    |
+180 | pub fn handle_projects_refresh_editors() -> CliResponse {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `SkippedArchived`, `SkippedNotFound`, `SkippedNoAgent`, and `SkippedWakeupMissing` are never constructed
+  --> crates/k2so-daemon/src/heartbeat_launch.rs:53:5
+   |
+44 | pub enum LaunchDecision {
+   |          -------------- variants in this enum
+...
+53 |     SkippedArchived,
+   |     ^^^^^^^^^^^^^^^
+54 |     SkippedNotFound,
+   |     ^^^^^^^^^^^^^^^
+55 |     SkippedNoAgent,
+   |     ^^^^^^^^^^^^^^
+56 |     SkippedWakeupMissing,
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `LaunchDecision` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `agent_name` and `reused` are never read
+  --> crates/k2so-daemon/src/spawn.rs:84:9
+   |
+82 | pub struct SpawnWorkspaceSessionOutcome {
+   |            ---------------------------- fields in this struct
+83 |     pub session_id: SessionId,
+84 |     pub agent_name: String,
+   |         ^^^^^^^^^^
+85 |     pub pending_drained: usize,
+86 |     pub reused: bool,
+   |         ^^^^^^
+   |
+   = note: `SpawnWorkspaceSessionOutcome` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `clear_for_tests` is never used
+   --> crates/k2so-daemon/src/v2_session_map.rs:264:8
+    |
+264 | pub fn clear_for_tests() {
+    |        ^^^^^^^^^^^^^^^
+
+warning: `k2so-daemon` (bin "k2so-daemon") generated 9 warnings (4 duplicates)
+    Finished `release` profile [optimized] target(s) in 2m 16s

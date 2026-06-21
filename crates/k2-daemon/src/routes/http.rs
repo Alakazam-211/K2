@@ -10,8 +10,25 @@
 //! moving them under `routes/` keeps `main.rs` focused on boot +
 //! migrations + watchdog.
 
+use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+/// Constant-time equality for the OWNER token compare — the crown-jewel
+/// credential. A plain `==` on `&str` short-circuits on the first byte that
+/// differs, so an attacker measuring response time could recover the token
+/// one byte at a time. `subtle::ConstantTimeEq` compares every byte
+/// regardless. Unequal lengths can't be equal (and length is not secret —
+/// the owner token is a fixed-width hex string), so we short-circuit only
+/// on length, then do the data compare in constant time.
+///
+/// Every owner-token check in the daemon (`token_is_owner`, the owner arm of
+/// `token_ok`/`token_still_valid`/`actor_role`, and the `state.token`
+/// compares in the dispatcher) routes through here.
+pub(crate) fn ct_eq_token(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    a.len() == b.len() && a.ct_eq(b).into()
+}
 
 /// Extract the raw `token=<value>` from a URL-encoded query string. No
 /// full urlencoded decoding — the token is always hex so there's nothing
@@ -33,7 +50,7 @@ pub(crate) fn extract_token(query: &str) -> Option<&str> {
 ///
 /// K2SO #617: connect-user sessions deliberately do NOT satisfy this.
 pub(crate) fn token_is_owner(query: &str, owner_token: &str) -> bool {
-    extract_token(query) == Some(owner_token)
+    extract_token(query).is_some_and(|tok| ct_eq_token(tok, owner_token))
 }
 
 /// The shared authorization gate for the bulk of `/cli/*` routes.
@@ -58,7 +75,7 @@ pub(crate) fn token_ok(query: &str, owner_token: &str) -> bool {
     if tok.is_empty() {
         return false;
     }
-    if tok == owner_token {
+    if ct_eq_token(tok, owner_token) {
         return true;
     }
     k2_core::connect_users::validate_session(tok).is_some()
@@ -75,7 +92,7 @@ pub(crate) fn token_still_valid(token: &str, owner_token: &str) -> bool {
     if token.is_empty() {
         return false;
     }
-    if token == owner_token {
+    if ct_eq_token(token, owner_token) {
         return true;
     }
     k2_core::connect_users::validate_session(token).is_some()
@@ -97,7 +114,7 @@ pub(crate) fn actor_role(
     if tok.is_empty() {
         return None;
     }
-    if tok == owner_token {
+    if ct_eq_token(tok, owner_token) {
         return Some(k2_core::connect_users::Role::Owner);
     }
     k2_core::connect_users::role_for_session(tok)
@@ -263,6 +280,41 @@ pub(crate) fn request_wants_close(headers_blob: &str) -> bool {
         // `keep-alive, Upgrade`). Match `close` token-wise.
         for tok in value.split(',') {
             if tok.trim().eq_ignore_ascii_case("close") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Return `true` iff the request advertises a `Transfer-Encoding` whose
+/// final coding is `chunked` (RFC 9112 §6.1).
+///
+/// H5 (E2E splice hardening): the daemon's body reader
+/// ([`read_post_body`]) is **Content-Length-driven only** — it does not
+/// decode chunked framing. Accepting a chunked POST would leave the
+/// chunk size-lines + trailers unconsumed in the keep-alive stream, and
+/// the dispatcher would mis-parse those bytes as the next request
+/// (request smuggling / keep-alive desync). The dispatcher rejects any
+/// request for which this returns `true` with a 400 + connection close.
+///
+/// Per RFC 9112 a `Transfer-Encoding` header makes the message chunked
+/// when `chunked` is the final encoding; in practice clients only ever
+/// send the bare `chunked` token, but we match it token-wise to be safe
+/// and case-insensitively per RFC 9110 §5.6.
+pub(crate) fn request_is_chunked(headers_blob: &str) -> bool {
+    for line in headers_blob.lines() {
+        let Some(colon) = line.find(':') else { continue };
+        let name = &line[..colon];
+        if !name.eq_ignore_ascii_case("transfer-encoding") {
+            continue;
+        }
+        let value = line[colon + 1..].trim();
+        // `Transfer-Encoding` is a comma-separated list; chunked, when
+        // present, is the data-framing coding. Treat ANY `chunked` token
+        // as "we can't frame this" — we refuse rather than try to decode.
+        for tok in value.split(',') {
+            if tok.trim().eq_ignore_ascii_case("chunked") {
                 return true;
             }
         }
@@ -459,6 +511,38 @@ pub(crate) async fn read_post_body(stream: &mut TcpStream, buf: &mut [u8]) -> Ve
 mod tests {
     use super::*;
 
+    // ── ct_eq_token: constant-time owner-token compare ──────────────
+
+    #[test]
+    fn ct_eq_token_matches_identical() {
+        assert!(ct_eq_token("abc123", "abc123"));
+    }
+
+    #[test]
+    fn ct_eq_token_rejects_differing_same_length() {
+        assert!(!ct_eq_token("abc123", "abc124"));
+    }
+
+    #[test]
+    fn ct_eq_token_rejects_differing_length() {
+        // Length mismatch can never be equal (length is not secret).
+        assert!(!ct_eq_token("abc", "abc123"));
+        assert!(!ct_eq_token("abc123", "abc"));
+    }
+
+    #[test]
+    fn ct_eq_token_rejects_empty_vs_nonempty() {
+        assert!(!ct_eq_token("", "abc123"));
+        assert!(!ct_eq_token("abc123", ""));
+        // Two empties ARE equal — callers gate empties separately before this.
+        assert!(ct_eq_token("", ""));
+    }
+
+    #[test]
+    fn ct_eq_token_is_case_sensitive() {
+        assert!(!ct_eq_token("ABC123", "abc123"));
+    }
+
     // ── token_ok: auth gate ─────────────────────────────────────────
 
     #[test]
@@ -632,5 +716,151 @@ mod tests {
         // `Connection:` with no value should not match.
         let headers = "GET / HTTP/1.1\r\nConnection:\r\n";
         assert!(!request_wants_close(headers));
+    }
+
+    // ── request_is_chunked: H5 chunked-desync guard ─────────────────
+
+    #[test]
+    fn request_is_chunked_false_when_header_absent() {
+        let headers = "POST /cli/x HTTP/1.1\r\nContent-Length: 12\r\n\r\n";
+        assert!(!request_is_chunked(headers));
+    }
+
+    #[test]
+    fn request_is_chunked_true_for_bare_chunked() {
+        let headers = "POST /cli/x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+        assert!(request_is_chunked(headers));
+    }
+
+    #[test]
+    fn request_is_chunked_is_case_insensitive() {
+        assert!(request_is_chunked(
+            "POST / HTTP/1.1\r\nTRANSFER-ENCODING: CHUNKED\r\n"
+        ));
+        assert!(request_is_chunked(
+            "POST / HTTP/1.1\r\ntransfer-encoding: Chunked\r\n"
+        ));
+    }
+
+    #[test]
+    fn request_is_chunked_matches_token_in_multi_value_list() {
+        // e.g. `gzip, chunked` — chunked is the final framing coding.
+        assert!(request_is_chunked(
+            "POST / HTTP/1.1\r\nTransfer-Encoding: gzip, chunked\r\n"
+        ));
+    }
+
+    #[test]
+    fn request_is_chunked_false_for_unrelated_te_value() {
+        // A non-chunked transfer-coding (rare but legal) must not trip it.
+        let headers = "POST / HTTP/1.1\r\nTransfer-Encoding: gzip\r\n";
+        assert!(!request_is_chunked(headers));
+    }
+
+    #[test]
+    fn request_is_chunked_ignores_content_length_only() {
+        // The normal daemon-client shape must pass through untouched.
+        let headers =
+            "POST /cli/awareness/publish HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 3\r\n\r\n{}";
+        assert!(!request_is_chunked(headers));
+    }
+
+    // ── token_still_valid: the 5s WS re-auth heartbeat boolean ──────
+    //
+    // This is the single predicate every long-lived WS loop acts on each
+    // tick (grid/session-events already; Part 1a adds bytes/subscribe/
+    // awareness/events). A revoked connect-user MUST flip it false within
+    // one tick so the socket tears down within ~5s.
+
+    #[test]
+    fn token_still_valid_accepts_owner_token() {
+        // The owner (local daemon) token is never revoked, so an
+        // owner-opened socket must always re-validate.
+        assert!(token_still_valid("owner-secret", "owner-secret"));
+    }
+
+    #[test]
+    fn token_still_valid_rejects_empty_token() {
+        // An empty token never authorizes — must fail closed even when
+        // the expected owner token is empty (degenerate boot state).
+        assert!(!token_still_valid("", "owner-secret"));
+        assert!(!token_still_valid("", ""));
+    }
+
+    #[test]
+    fn token_still_valid_rejects_unknown_non_owner_token() {
+        // A non-empty token that is neither the owner token nor a live
+        // session must fail (no session map entry → `validate_session`
+        // returns None). No temp HOME needed: an unknown token can't
+        // match any session regardless of store state.
+        assert!(!token_still_valid("not-a-real-session", "owner-secret"));
+    }
+
+    /// Redirect `$HOME` to a fresh tempdir so the `connect-users.json`
+    /// store + session lifecycle are isolated from the real machine and
+    /// other tests, run `f`, then restore `$HOME`. Mirrors the helper in
+    /// `tests/auth_routes_integration.rs`. Serialized via `SESSION_LOCK`
+    /// because the session map + `$HOME` are process-wide singletons.
+    fn with_temp_home<F: FnOnce()>(f: F) {
+        use std::sync::Mutex;
+        static SESSION_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let prev = std::env::var_os("HOME");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = std::env::temp_dir().join(format!(
+            "k2-reauth-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).expect("create temp HOME");
+        std::env::set_var("HOME", &tmp);
+
+        f();
+
+        match prev {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn token_still_valid_follows_session_lifecycle_create_then_revoke() {
+        // The end-to-end predicate the heartbeat depends on: a freshly
+        // minted connect-user session re-validates true; after the owner
+        // revokes (disable / remove / role-change → `revoke_user_sessions`)
+        // the SAME token flips false on the very next recheck — which is
+        // what tears the live WS down within ~5s.
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            k2_core::connect_users::add_user("reauth_user", "password123")
+                .expect("add_user");
+            let session = k2_core::connect_users::create_session("reauth_user");
+
+            // Sanity: a session token is not the owner token, yet still
+            // authorizes through the session-map path.
+            assert_ne!(session.as_str(), owner);
+            assert!(
+                token_still_valid(&session, owner),
+                "fresh session must re-validate",
+            );
+
+            // Owner revokes every session for this user (the in-memory
+            // map drop performed by disable/remove/role-change).
+            k2_core::connect_users::revoke_user_sessions("reauth_user");
+
+            assert!(
+                !token_still_valid(&session, owner),
+                "revoked session must fail the next recheck (tears the WS down)",
+            );
+            // Owner token is independent of any user — never revoked.
+            assert!(
+                token_still_valid(owner, owner),
+                "owner token survives a user revoke",
+            );
+        });
     }
 }

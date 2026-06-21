@@ -96,7 +96,13 @@ export function gte(a: string, b: string): boolean {
 }
 
 /** Parse `major.minor.patch` into a [number, number, number] tuple,
- *  stripping any `-pre`/`+build` suffix and coercing non-numerics to 0. */
+ *  stripping any `-pre`/`+build` suffix and coercing non-numerics to 0.
+ *
+ *  Used ONLY by `gte` for FEATURE GATING, where a prerelease build of the
+ *  minimum version DOES carry the feature, so suffix-stripping is correct
+ *  (`0.39.24-rc.1` gates as `0.39.24`). For ordering two product versions
+ *  (the update-display path) use {@link compareVersions}, which treats a
+ *  prerelease as sorting BEFORE its release. */
 function parseVersion(v: string): [number, number, number] {
   // Drop a leading 'v' and any pre-release/build suffix.
   const core = v.trim().replace(/^v/i, '').split(/[-+]/)[0] ?? ''
@@ -106,6 +112,59 @@ function parseVersion(v: string): [number, number, number] {
     return Number.isFinite(n) ? n : 0
   }
   return [num(parts[0]), num(parts[1]), num(parts[2])]
+}
+
+/**
+ * Order two version strings — the renderer twin of the daemon's
+ * `compare_versions` (`crates/k2-daemon/src/update_routes.rs`). KEEP THE
+ * TWO IN LOCKSTEP. THE ONE CANONICAL RULE:
+ *
+ *   1. A leading `v`/`V` is dropped.
+ *   2. Build metadata (`+...`) is ignored.
+ *   3. The release core (`major.minor.patch[.…]`) compares numerically,
+ *      longest-wins on a prefix tie (`1.2.0` < `1.2.0.1`); non-numeric core
+ *      components count as 0.
+ *   4. A version WITH a prerelease suffix (`-rc1`) sorts BEFORE the same
+ *      release WITHOUT one — `0.40.0-rc1 < 0.40.0 < 0.40.1`. Two prereleases
+ *      of the same release compare by their identifier ASCII-lexically
+ *      (`-rc1 < -rc2`).
+ *
+ * Returns -1 if `a < b`, 0 if equal, 1 if `a > b`.
+ *
+ * NOTE: this is the version-ORDERING rule (used for displaying / comparing
+ * product versions). Feature gating uses {@link gte}, which deliberately
+ * strips prerelease suffixes (an rc of the min version has the feature).
+ */
+export function compareVersions(a: string, b: string): -1 | 0 | 1 {
+  const split = (v: string): { core: number[]; pre: string | null } => {
+    const noV = v.trim().replace(/^v/i, '')
+    const noBuild = noV.split('+')[0] ?? '' // drop build metadata
+    const dash = noBuild.indexOf('-')
+    const coreStr = dash === -1 ? noBuild : noBuild.slice(0, dash)
+    const pre = dash === -1 ? null : noBuild.slice(dash + 1)
+    const core = coreStr.split('.').map((c) => {
+      const n = Number.parseInt(c, 10)
+      return Number.isFinite(n) ? n : 0
+    })
+    return { core, pre }
+  }
+  const pa = split(a)
+  const pb = split(b)
+  const n = Math.max(pa.core.length, pb.core.length)
+  for (let i = 0; i < n; i++) {
+    const x = pa.core[i] ?? 0
+    const y = pb.core[i] ?? 0
+    if (x < y) return -1
+    if (x > y) return 1
+  }
+  // Equal release core → a prerelease sorts BEFORE the bare release.
+  if (pa.pre === null && pb.pre === null) return 0
+  if (pa.pre !== null && pb.pre === null) return -1
+  if (pa.pre === null && pb.pre !== null) return 1
+  // both prereleases → ASCII-lexical on the identifier
+  if (pa.pre! < pb.pre!) return -1
+  if (pa.pre! > pb.pre!) return 1
+  return 0
 }
 
 /** The minimum daemon version that supports `feature` — for hint copy. */

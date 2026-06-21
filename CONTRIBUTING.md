@@ -29,17 +29,17 @@ npm run vite:dev       # Frontend only (no Tauri)
 npm run typecheck      # TypeScript type checking
 cargo fmt              # Format Rust code
 cargo clippy           # Lint Rust code
-cargo test -p k2-core -p k2-daemon   # Run Rust tests
+cargo test -p k2-core  # Run Rust tests
 ```
 
 ## Project Structure
 
 ```
-K2/
+K2SO/
 ├── src/
 │   └── renderer/              # React frontend
 │       ├── components/        # UI components
-│       │   ├── Terminal/      # Terminal pane (Alacritty-backed custom renderer)
+│       │   ├── Terminal/      # xterm.js terminal wrapper
 │       │   ├── FileViewerPane/  # .md / .pdf / .docx viewer
 │       │   ├── WorkspaceAssistant/  # LLM chat panel
 │       │   ├── PaneLayout/    # Mosaic-based pane tiling
@@ -166,21 +166,3 @@ Example existing primitives: `workspace_split_pane`, `workspace_close_pane`, `wo
 3. Run `cargo fmt`, `cargo clippy`, and `npm run typecheck` before pushing.
 4. Open a PR against `main` with a clear description of what changed and why.
 5. Keep PRs focused -- one feature or fix per PR.
-
-## Developer Certificate of Origin (DCO)
-
-Contributions are accepted under the
-[Developer Certificate of Origin v1.1](https://developercertificate.org/).
-By signing off your commits you certify that you wrote the contribution
-(or otherwise have the right to submit it) and that it may be distributed
-under this repository's license (FSL-1.1-Apache-2.0 — see
-[LICENSE.md](LICENSE.md)).
-
-Sign off every commit with the `-s` flag:
-
-```bash
-git commit -s -m "fix: short description"
-```
-
-This appends a `Signed-off-by: Your Name <you@example.com>` line matching
-your commit author. PRs with unsigned commits will be asked to rebase.

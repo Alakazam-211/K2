@@ -24,6 +24,7 @@
 // Declared `pub` so the route dispatcher's `crate::*` references all
 // resolve when `routes` is compiled into the lib for the #630 harness.
 pub mod active_reaper;
+pub mod session_reaper;
 pub mod agents_routes;
 pub mod awareness_ws;
 pub mod boot_status;

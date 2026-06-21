@@ -33,6 +33,8 @@ use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 /// Default session lifetime. A connect-user's session token is valid
 /// for 30 days from issue; after that they re-login. In-memory store
@@ -141,6 +143,16 @@ pub struct ConnectUser {
     /// pre-#629 stored rows (no `role` field) deserialize as Member.
     #[serde(default)]
     pub role: Role,
+    /// Monotonic per-user session epoch (K2 Connect #4). A persisted
+    /// session record stamps the user's epoch at issue; `validate_session`
+    /// rejects any record whose stamped epoch != the user's CURRENT epoch.
+    /// Bumping this in the five revoke sites (disable / remove / set-password
+    /// / set-role / change-password) is the durable, restart-surviving
+    /// "log out everywhere" — it invalidates every already-minted session
+    /// for the user even across a daemon restart, without trusting any RAM
+    /// map. `#[serde(default)]` → `0` so pre-#4 stored rows load unchanged.
+    #[serde(default)]
+    pub token_epoch: u64,
 }
 
 /// Redacted projection of a [`ConnectUser`] safe to return over the
@@ -411,6 +423,9 @@ pub fn add_user(username: &str, password: &str) -> Result<(), String> {
             // New users default to Member (K2SO #629); an Owner promotes
             // via set_role.
             role: Role::Member,
+            // Fresh users start at epoch 0 (K2 Connect #4). The first
+            // revoke event bumps it to 1.
+            token_epoch: 0,
         });
         Ok(())
     })
@@ -448,6 +463,10 @@ pub fn set_password(username: &str, password: &str) -> Result<(), String> {
             .find(|u| u.username == username)
             .ok_or_else(|| format!("user '{username}' not found"))?;
         user.password_hash = hash;
+        // K2 Connect #4: bump the durable epoch so every already-minted
+        // session is invalidated even across a restart, not just dropped
+        // from the (best-effort) persistent record set below.
+        user.token_epoch = user.token_epoch.wrapping_add(1);
         Ok(())
     })?;
     revoke_user_sessions(&username);
@@ -471,6 +490,14 @@ pub fn set_disabled(username: &str, disabled: bool) -> Result<(), String> {
             .find(|u| u.username == username)
             .ok_or_else(|| format!("user '{username}' not found"))?;
         user.disabled = disabled;
+        // K2 Connect #4: bump the durable epoch ONLY when disabling so an
+        // already-minted session is invalidated across a restart. (Even if
+        // the epoch matched, `validate_session` also re-asserts `!disabled`,
+        // so disabling is doubly covered; bumping keeps the semantics —
+        // disable is a revoke — explicit.)
+        if disabled {
+            user.token_epoch = user.token_epoch.wrapping_add(1);
+        }
         Ok(())
     })?;
     if disabled {
@@ -494,6 +521,9 @@ pub fn set_role(username: &str, role: Role) -> Result<(), String> {
             .find(|u| u.username == username)
             .ok_or_else(|| format!("user '{username}' not found"))?;
         user.role = role;
+        // K2 Connect #4: bump the durable epoch so a session minted under
+        // the OLD role can't keep that baked-in role across a restart.
+        user.token_epoch = user.token_epoch.wrapping_add(1);
         Ok(())
     })?;
     revoke_user_sessions(&username);
@@ -511,6 +541,20 @@ pub fn role_for_user(username: &str) -> Option<Role> {
         .iter()
         .find(|u| u.username == normalized)
         .map(|u| u.role)
+}
+
+/// The current account-state needed to re-assert a persisted session on
+/// EVERY validate (K2 Connect #4): `(disabled, token_epoch)`. `None` when
+/// the user doesn't exist (removed) or the store can't be read — both of
+/// which `validate_session` treats as "reject, fail closed".
+fn user_auth_state(username: &str) -> Option<(bool, u64)> {
+    let normalized = normalize_username(username).ok()?;
+    let store = load_store().ok()?;
+    store
+        .users
+        .iter()
+        .find(|u| u.username == normalized)
+        .map(|u| (u.disabled, u.token_epoch))
 }
 
 /// Resolve the effective role for a session `token` (K2SO #629). Returns
@@ -578,31 +622,180 @@ fn build_dummy_hash() -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Brute-force lockout (in-memory, per-username)
+// Persisted session + lockout store (K2 Connect #4)
 // ─────────────────────────────────────────────────────────────────────
+//
+// Sessions + the brute-force lockout counter live in a SEPARATE 0600
+// store, `~/.k2/connect-sessions.json`, written via the same tmp+rename +
+// restrict_mode pattern as the credential store. Persisting them is what
+// lets a remote-daemon update NOT log everyone out (Fix #1) while a
+// disabled/removed/role-changed/password-changed user is STILL cut within
+// ~5s — and survives a restart — via the per-user `token_epoch` that
+// `validate_session` re-asserts on every call.
+//
+// **On disk the session holds `SHA-256(token)`, never the live token.** A
+// stolen store yields only non-replayable digests. Every record is
+// versioned; an unknown version (or a legacy raw-token row) fails CLOSED.
 
-/// Per-username failed-attempt + lockout state. In-memory only (resets
-/// on daemon restart, which is acceptable — a restart is rare and the
-/// worst case is an attacker getting their counter reset, still bounded
-/// by the slow argon2 verify + the route-layer fixed delay).
-#[derive(Debug, Clone, Default)]
+/// Current on-disk session-record version. Bump when the record shape
+/// changes incompatibly; older/unknown versions fail closed on load.
+const SESSION_RECORD_VERSION: u32 = 1;
+
+/// A persisted login session for a connect-user. The token itself NEVER
+/// touches disk — only its SHA-256 digest (hex) does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecord {
+    /// On-disk record version. A record whose `version` !=
+    /// [`SESSION_RECORD_VERSION`] is dropped on load (fail closed).
+    version: u32,
+    /// Owning connect-user (normalized username).
+    username: String,
+    /// Hex-encoded `SHA-256(token)`. The presented token is hashed and
+    /// constant-time-compared against this; the raw token is never stored.
+    token_digest: String,
+    /// RFC3339 issue time.
+    created_at: DateTime<Utc>,
+    /// RFC3339 hard expiry. After this the record is invalid + reaped.
+    expires_at: DateTime<Utc>,
+    /// The user's `token_epoch` captured at issue. `validate_session`
+    /// rejects the record if it != the user's CURRENT epoch — the durable,
+    /// restart-surviving revocation cross-check.
+    token_epoch: u64,
+    /// Best-effort source IP at issue (device/sessions view + per-device
+    /// revoke, future). Optional; absent on older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_ip: Option<String>,
+    /// Best-effort User-Agent at issue. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    user_agent: Option<String>,
+}
+
+/// Per-username failed-attempt + lockout state. Persisted (K2 Connect #4)
+/// so an attacker-induced (or self-update) restart does NOT reset
+/// brute-force protection while sessions survive.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct LockEntry {
     /// Consecutive failed password attempts since the last success/clear.
+    #[serde(default)]
     failed_count: u32,
     /// If `Some`, the username is locked until this instant. While locked,
     /// attempts are rejected WITHOUT checking the password and do NOT
     /// extend the lock.
+    #[serde(default)]
     locked_until: Option<DateTime<Utc>>,
 }
 
-fn locks() -> &'static Mutex<HashMap<String, LockEntry>> {
-    static LOCKS: OnceLock<Mutex<HashMap<String, LockEntry>>> = OnceLock::new();
-    LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+/// On-disk shape of `~/.k2/connect-sessions.json`: versioned envelope
+/// holding the live session records + the per-username lockout map.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionStore {
+    /// Envelope version. An unknown version fails CLOSED (treated as an
+    /// empty store → everyone is forced to re-login, the safe default).
+    version: u32,
+    #[serde(default)]
+    sessions: Vec<SessionRecord>,
+    #[serde(default)]
+    locks: HashMap<String, LockEntry>,
 }
 
-fn lock_locks() -> std::sync::MutexGuard<'static, HashMap<String, LockEntry>> {
-    locks().lock().unwrap_or_else(|p| p.into_inner())
+impl Default for SessionStore {
+    fn default() -> Self {
+        Self {
+            version: SESSION_RECORD_VERSION,
+            sessions: Vec::new(),
+            locks: HashMap::new(),
+        }
+    }
 }
+
+/// Path to `~/.k2/connect-sessions.json`.
+pub fn sessions_store_path() -> PathBuf {
+    config_dir().join("connect-sessions.json")
+}
+
+/// Compute the hex SHA-256 digest of a session token.
+fn token_digest(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let out = hasher.finalize();
+    let mut s = String::with_capacity(64);
+    for b in out {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// Load the session store. A missing/empty file yields an empty (default)
+/// store. A malformed file is an error (fail loud). An envelope whose
+/// `version` is unknown fails CLOSED: we return an EMPTY store (every
+/// session invalid → forced re-login) rather than trusting records we
+/// can't interpret. Any individual record with the wrong version, an
+/// empty digest, or a raw-token shape is dropped on load (fail closed).
+fn load_sessions() -> Result<SessionStore, String> {
+    let file = sessions_store_path();
+    if !file.exists() {
+        return Ok(SessionStore::default());
+    }
+    let raw = fs::read_to_string(&file).map_err(|e| format!("read {}: {e}", file.display()))?;
+    if raw.trim().is_empty() {
+        return Ok(SessionStore::default());
+    }
+    let mut store: SessionStore =
+        serde_json::from_str(&raw).map_err(|e| format!("parse {}: {e}", file.display()))?;
+    // FAIL CLOSED on an unknown envelope version — don't trust records we
+    // can't interpret; force a clean re-login instead.
+    if store.version != SESSION_RECORD_VERSION {
+        crate::log_debug!(
+            "[connect_users] WARN unknown session-store version {} (expected {}); failing closed (empty)",
+            store.version,
+            SESSION_RECORD_VERSION
+        );
+        return Ok(SessionStore::default());
+    }
+    // FAIL CLOSED per-record: drop any record with the wrong version or an
+    // empty/missing digest (e.g. a hand-rolled legacy raw-token row, which
+    // has no `token_digest`, deserializes to empty → dropped).
+    store
+        .sessions
+        .retain(|r| r.version == SESSION_RECORD_VERSION && !r.token_digest.is_empty());
+    Ok(store)
+}
+
+/// Persist the session store via tmp+rename then chmod 0600.
+fn save_sessions(store: &SessionStore) -> Result<(), String> {
+    let dir = config_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    let file = sessions_store_path();
+    let tmp = dir.join(format!("connect-sessions.json.tmp.{}", std::process::id()));
+    let body = serde_json::to_string_pretty(store).map_err(|e| format!("serialize store: {e}"))?;
+    fs::write(&tmp, body.as_bytes()).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    restrict_mode(&tmp);
+    fs::rename(&tmp, &file).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("rename into place {}: {e}", file.display())
+    })?;
+    restrict_mode(&file);
+    Ok(())
+}
+
+/// Load-modify-save the session store under a process lock so concurrent
+/// session mutations + lockout updates don't clobber each other. Separate
+/// from `update_store`'s lock (different file) but the same discipline.
+fn update_sessions<R>(f: impl FnOnce(&mut SessionStore) -> Result<R, String>) -> Result<R, String> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _g = LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let mut store = load_sessions()?;
+    let r = f(&mut store)?;
+    save_sessions(&store)?;
+    Ok(r)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Brute-force lockout (persisted, per-username)
+// ─────────────────────────────────────────────────────────────────────
 
 /// The outcome of a credential check routed through the lockout gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -637,38 +830,55 @@ pub enum LoginOutcome {
 pub fn check_and_record(username: &str, password: &str) -> LoginOutcome {
     let key = normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
 
-    // First: are we currently locked? Hold the lock only long enough to
-    // read; release before the (slow) argon2 verify.
-    {
-        let mut map = lock_locks();
-        if let Some(entry) = map.get_mut(&key) {
+    // First: are we currently locked? Read the persisted lockout state and
+    // clear an expired lock, but do it as a quick load-modify-save before
+    // the (slow) argon2 verify so we don't hold the store lock across it.
+    let locked = update_sessions(|store| {
+        if let Some(entry) = store.locks.get_mut(&key) {
             match entry.locked_until {
-                Some(until) if Utc::now() < until => return LoginOutcome::LockedOut,
+                Some(until) if Utc::now() < until => return Ok(true),
                 Some(_) => {
-                    // Lock expired — clear it and let this attempt proceed
-                    // with a fresh counter.
+                    // Lock expired — clear it; this attempt proceeds fresh.
                     entry.locked_until = None;
                     entry.failed_count = 0;
                 }
                 None => {}
             }
         }
+        Ok(false)
+    })
+    // Fail closed: an unreadable store is treated as "not locked" only so a
+    // legitimate user isn't permanently barred by a transient IO error;
+    // the slow verify + route delay still bound brute force.
+    .unwrap_or(false);
+    if locked {
+        return LoginOutcome::LockedOut;
     }
 
-    // Not locked: do the real (slow) verify outside the lock.
+    // Not locked: do the real (slow) verify outside the store lock.
     let ok = verify(username, password);
 
-    let mut map = lock_locks();
+    update_sessions(|store| {
+        if ok {
+            store.locks.remove(&key);
+        } else {
+            let entry = store.locks.entry(key.clone()).or_default();
+            entry.failed_count += 1;
+            if entry.failed_count >= LOCKOUT_THRESHOLD {
+                entry.locked_until =
+                    Some(Utc::now() + Duration::minutes(LOCKOUT_DURATION_MINUTES));
+                entry.failed_count = 0;
+            }
+        }
+        Ok(())
+    })
+    // A persistence failure here is logged but does not change the auth
+    // outcome — the credential decision stands.
+    .unwrap_or(());
+
     if ok {
-        map.remove(&key);
         LoginOutcome::Ok
     } else {
-        let entry = map.entry(key).or_default();
-        entry.failed_count += 1;
-        if entry.failed_count >= LOCKOUT_THRESHOLD {
-            entry.locked_until = Some(Utc::now() + Duration::minutes(LOCKOUT_DURATION_MINUTES));
-            entry.failed_count = 0;
-        }
         LoginOutcome::BadCreds
     }
 }
@@ -721,38 +931,29 @@ pub fn change_password(username: &str, current: &str, new: &str) -> ChangePasswo
 /// path so a password reset immediately unlocks a stuck user.
 pub fn clear_lockout(username: &str) {
     let key = normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
-    lock_locks().remove(&key);
+    let _ = update_sessions(|store| {
+        store.locks.remove(&key);
+        Ok(())
+    });
 }
 
 /// Whether `username` is currently locked out. Read-only; used by callers
 /// that want to surface a hint without attempting a verify.
 pub fn is_locked(username: &str) -> bool {
     let key = normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
-    match lock_locks().get(&key).and_then(|e| e.locked_until) {
+    let store = match load_sessions() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    match store.locks.get(&key).and_then(|e| e.locked_until) {
         Some(until) => Utc::now() < until,
         None => false,
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Sessions (in-memory singleton)
+// Sessions (persisted, digest-only — K2 Connect #4)
 // ─────────────────────────────────────────────────────────────────────
-
-/// A live login session for a connect-user.
-#[derive(Debug, Clone)]
-pub struct Session {
-    pub username: String,
-    pub expires_at: DateTime<Utc>,
-}
-
-fn sessions() -> &'static Mutex<HashMap<String, Session>> {
-    static SESSIONS: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
-    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn lock_sessions() -> std::sync::MutexGuard<'static, HashMap<String, Session>> {
-    sessions().lock().unwrap_or_else(|p| p.into_inner())
-}
 
 /// Generate a 32-byte (256-bit) random token, hex-encoded.
 fn new_token() -> String {
@@ -767,37 +968,171 @@ fn new_token() -> String {
 
 /// Issue a new session token for an authenticated `username`. Default
 /// 30-day expiry. The caller is responsible for having already verified
-/// credentials.
+/// credentials. The token is returned to the caller (the ONLY place the
+/// raw token exists); only `SHA-256(token)` plus the user's CURRENT
+/// `token_epoch` is persisted to `connect-sessions.json` (0600).
 pub fn create_session(username: &str) -> String {
     let token = new_token();
-    let session = Session {
+    let digest = token_digest(&token);
+    // Stamp the record with the user's CURRENT epoch so a later revoke
+    // (epoch bump) invalidates it. A missing user (shouldn't happen — the
+    // caller just authenticated) stamps epoch 0; `validate_session` will
+    // re-resolve the live epoch and reject a mismatch.
+    let epoch = user_auth_state(username).map(|(_, e)| e).unwrap_or(0);
+    let now = Utc::now();
+    let record = SessionRecord {
+        version: SESSION_RECORD_VERSION,
         username: username.to_string(),
-        expires_at: Utc::now() + Duration::days(SESSION_TTL_DAYS),
+        token_digest: digest,
+        created_at: now,
+        expires_at: now + Duration::days(SESSION_TTL_DAYS),
+        token_epoch: epoch,
+        created_ip: None,
+        user_agent: None,
     };
-    lock_sessions().insert(token.clone(), session);
+    // Persist. A write failure is logged but we STILL return the token so
+    // the just-authenticated user isn't dead in the water; the worst case
+    // is the session not surviving a restart (the pre-#4 behavior).
+    let _ = update_sessions(|store| {
+        store.sessions.push(record);
+        Ok(())
+    });
     token
 }
 
-/// Validate a session token. Returns the owning username if the session
-/// exists and hasn't expired; lazily drops an expired session.
+/// Validate a session token. Returns the owning username iff the session:
+///   1. exists (its `SHA-256(token)` digest matches a stored record, via a
+///      constant-time compare), AND
+///   2. hasn't expired, AND
+///   3. its owning user still EXISTS and is `!disabled`, AND
+///   4. the record's `token_epoch` == the user's CURRENT `token_epoch`.
+///
+/// Any failure of (3) or (4) — a disabled/removed/role-changed/
+/// password-changed user, including one whose account changed while the
+/// daemon was DOWN — rejects the token AND deletes the now-invalid record
+/// from disk (the boot-race fix, #4/#47). Expired records are reaped too.
+///
+/// The digest compare is constant-time (`subtle::ConstantTimeEq`) so a
+/// timing side-channel can't be used to recover a valid digest byte by
+/// byte. We can't index records by the presented token (we only store
+/// digests), so we scan + compare each digest in constant time.
 pub fn validate_session(token: &str) -> Option<String> {
-    let mut map = lock_sessions();
-    let expired = match map.get(token) {
-        Some(s) if s.expires_at > Utc::now() => return Some(s.username.clone()),
-        Some(_) => true,
-        None => false,
-    };
-    if expired {
-        map.remove(token);
+    if token.is_empty() {
+        return None;
     }
-    None
+    let presented = token_digest(token);
+    let presented_bytes = presented.as_bytes();
+
+    // Load current account state lazily (only for the matched record's
+    // user) so a missing/disabled/epoch-bumped user is rejected. Done
+    // inside the update so the disk delete of an invalid record is atomic
+    // with the validity decision.
+    let result = update_sessions(|store| {
+        let now = Utc::now();
+        // Find the record whose digest matches, in constant time across
+        // ALL records (don't early-return on the first mismatch — that
+        // would leak a timing signal; the record count is small).
+        let mut matched_idx: Option<usize> = None;
+        for (i, rec) in store.sessions.iter().enumerate() {
+            let eq: bool = rec
+                .token_digest
+                .as_bytes()
+                .ct_eq(presented_bytes)
+                .into();
+            if eq {
+                matched_idx = Some(i);
+            }
+        }
+        let Some(idx) = matched_idx else {
+            return Ok(None);
+        };
+
+        // Expired? Reap + reject.
+        if store.sessions[idx].expires_at <= now {
+            store.sessions.remove(idx);
+            return Ok(None);
+        }
+
+        let username = store.sessions[idx].username.clone();
+        let record_epoch = store.sessions[idx].token_epoch;
+
+        // Re-assert account state on EVERY call. A user who was removed
+        // (None), disabled, or whose epoch advanced (password/role/disable
+        // change, or an explicit logout-everywhere) — EVEN while the daemon
+        // was down — is rejected and the stale record deleted.
+        match user_auth_state(&username) {
+            Some((disabled, current_epoch)) if !disabled && current_epoch == record_epoch => {
+                Ok(Some(username))
+            }
+            _ => {
+                store.sessions.remove(idx);
+                Ok(None)
+            }
+        }
+    });
+    result.unwrap_or(None)
 }
 
-/// Revoke every live session belonging to `username`. Called on remove,
-/// disable, and password rotation so a stale token can't outlive the
-/// account change.
+/// Revoke every persisted session belonging to `username`. Called on
+/// remove, disable, password rotation, and role change so a stale token
+/// can't outlive the account change. Deletes from the PERSISTENT store
+/// atomically (the durable half of revocation; the `token_epoch` bump is
+/// the restart-surviving backstop in case this delete is ever raced).
 pub fn revoke_user_sessions(username: &str) {
-    lock_sessions().retain(|_, s| s.username != username);
+    let target = normalize_username(username).unwrap_or_else(|_| username.to_string());
+    let _ = update_sessions(|store| {
+        store.sessions.retain(|s| s.username != target);
+        Ok(())
+    });
+}
+
+/// Log out the single session identified by `token`: delete ITS persisted
+/// record (a per-device logout). Returns the owning username when a record
+/// was actually removed, else `None` (unknown/expired token). Does NOT bump
+/// the epoch — "log out everywhere" is `revoke_user_sessions`/an epoch bump.
+pub fn logout_session(token: &str) -> Option<String> {
+    if token.is_empty() {
+        return None;
+    }
+    let presented = token_digest(token);
+    let presented_bytes = presented.as_bytes();
+    update_sessions(|store| {
+        let mut found: Option<(usize, String)> = None;
+        for (i, rec) in store.sessions.iter().enumerate() {
+            let eq: bool = rec.token_digest.as_bytes().ct_eq(presented_bytes).into();
+            if eq {
+                found = Some((i, rec.username.clone()));
+            }
+        }
+        match found {
+            Some((idx, username)) => {
+                store.sessions.remove(idx);
+                Ok(Some(username))
+            }
+            None => Ok(None),
+        }
+    })
+    .unwrap_or(None)
+}
+
+/// Daemon-canonical reaper step: delete every persisted session whose hard
+/// `expires_at` has passed. Returns the number reaped. Called by the
+/// daemon's background session-reaper loop (independent of any client —
+/// GH#22) so a headless daemon still evicts expired sessions. Idempotent.
+pub fn reap_expired_sessions() -> usize {
+    let now = Utc::now();
+    update_sessions(|store| {
+        let before = store.sessions.len();
+        store.sessions.retain(|s| s.expires_at > now);
+        Ok(before - store.sessions.len())
+    })
+    .unwrap_or(0)
+}
+
+/// The default session lifetime in days — exposed so the route layer reads
+/// the canonical TTL from core instead of duplicating the constant.
+pub fn session_ttl_days() -> i64 {
+    SESSION_TTL_DAYS
 }
 
 #[cfg(test)]
@@ -930,23 +1265,37 @@ mod tests {
     #[test]
     fn session_create_validate_expire() {
         with_temp_home(|| {
+            // The epoch cross-check requires the user to EXIST, so provision
+            // it before issuing a session.
+            add_user("frank", "password").expect("add");
             let tok = create_session("frank");
             assert_eq!(validate_session(&tok), Some("frank".to_string()));
 
-            // Construct an already-expired session directly and confirm
-            // validate drops it.
+            // Inject an already-expired record directly into the persisted
+            // store and confirm validate drops it.
             let expired_tok = new_token();
-            lock_sessions().insert(
-                expired_tok.clone(),
-                Session {
+            update_sessions(|store| {
+                store.sessions.push(SessionRecord {
+                    version: SESSION_RECORD_VERSION,
                     username: "frank".to_string(),
+                    token_digest: token_digest(&expired_tok),
+                    created_at: Utc::now() - Duration::days(31),
                     expires_at: Utc::now() - Duration::seconds(1),
-                },
-            );
+                    token_epoch: 0,
+                    created_ip: None,
+                    user_agent: None,
+                });
+                Ok(())
+            })
+            .expect("inject expired session");
             assert_eq!(validate_session(&expired_tok), None, "expired -> None");
-            // Lazily dropped.
+            // Lazily dropped from disk on validate.
+            let store = load_sessions().expect("load sessions");
             assert!(
-                !lock_sessions().contains_key(&expired_tok),
+                !store
+                    .sessions
+                    .iter()
+                    .any(|s| s.token_digest == token_digest(&expired_tok)),
                 "expired session must be evicted on validate"
             );
         });
@@ -1018,11 +1367,12 @@ mod tests {
             assert!(is_locked("lock3"));
             // Manually force the lock to have already expired, simulating
             // the 15-minute window elapsing.
-            {
-                let mut map = lock_locks();
-                let e = map.get_mut("lock3").expect("entry");
+            update_sessions(|store| {
+                let e = store.locks.get_mut("lock3").expect("entry");
                 e.locked_until = Some(Utc::now() - Duration::seconds(1));
-            }
+                Ok(())
+            })
+            .expect("force-expire lock");
             assert!(!is_locked("lock3"), "expired lock reads as unlocked");
             // After expiry the correct password works again and clears
             // the entry.
@@ -1518,6 +1868,283 @@ mod tests {
             assert_eq!(views[0].username, "oldtimer");
             add_user("newcomer", "password").expect("add under default policy");
             assert_eq!(list_users().unwrap().len(), 2);
+        });
+    }
+
+    // ── K2 Connect #4 — secure persistent sessions ──────────────────────
+
+    /// MUST #1: the on-disk session value is the SHA-256 DIGEST of the
+    /// token, never the live token itself. A stolen store yields only
+    /// non-replayable digests.
+    #[test]
+    fn stored_session_value_is_digest_not_raw_token() {
+        with_temp_home(|| {
+            add_user("digestu", "password").expect("add");
+            let tok = create_session("digestu");
+            let raw = fs::read_to_string(sessions_store_path()).expect("read sessions store");
+            assert!(
+                !raw.contains(&tok),
+                "raw token must NOT appear in the on-disk session store"
+            );
+            assert!(
+                raw.contains(&token_digest(&tok)),
+                "the SHA-256 digest of the token MUST be persisted"
+            );
+            // And the digest is the 64-hex SHA-256, not the token.
+            assert_eq!(token_digest(&tok).len(), 64);
+            assert_ne!(token_digest(&tok), tok);
+        });
+    }
+
+    /// MUST #2 (each of the 5 revoke sites bumps the epoch → old token
+    /// rejected). disable / set_password / set_role / change_password all
+    /// bump the durable epoch; remove deletes the user (epoch moot, the
+    /// record is gone). Each must reject a previously-valid token.
+    #[test]
+    fn each_revoke_site_invalidates_old_token() {
+        with_temp_home(|| {
+            // set_disabled
+            add_user("rv_dis", "password").expect("add");
+            let t = create_session("rv_dis");
+            assert_eq!(validate_session(&t), Some("rv_dis".to_string()));
+            set_disabled("rv_dis", true).expect("disable");
+            assert_eq!(validate_session(&t), None, "disable must reject old token");
+
+            // set_password
+            add_user("rv_pw", "password").expect("add");
+            let t = create_session("rv_pw");
+            assert_eq!(validate_session(&t), Some("rv_pw".to_string()));
+            set_password("rv_pw", "newpassword").expect("set-password");
+            assert_eq!(validate_session(&t), None, "set_password must reject old token");
+
+            // set_role
+            add_user("rv_role", "password").expect("add");
+            let t = create_session("rv_role");
+            assert_eq!(validate_session(&t), Some("rv_role".to_string()));
+            set_role("rv_role", Role::Admin).expect("set-role");
+            assert_eq!(validate_session(&t), None, "set_role must reject old token");
+
+            // change_password
+            add_user("rv_chp", "oldpassword").expect("add");
+            let t = create_session("rv_chp");
+            assert_eq!(validate_session(&t), Some("rv_chp".to_string()));
+            assert_eq!(
+                change_password("rv_chp", "oldpassword", "newpassword"),
+                ChangePasswordOutcome::Ok
+            );
+            assert_eq!(validate_session(&t), None, "change_password must reject old token");
+
+            // remove_user
+            add_user("rv_rm", "password").expect("add");
+            let t = create_session("rv_rm");
+            assert_eq!(validate_session(&t), Some("rv_rm".to_string()));
+            remove_user("rv_rm").expect("remove");
+            assert_eq!(validate_session(&t), None, "remove must reject old token");
+        });
+    }
+
+    /// Direct epoch-bump assertion: the durable per-user epoch advances on
+    /// each of the four mutate-in-place revoke sites.
+    #[test]
+    fn revoke_sites_bump_token_epoch() {
+        with_temp_home(|| {
+            add_user("epu", "password").expect("add");
+            assert_eq!(user_auth_state("epu"), Some((false, 0)));
+            set_disabled("epu", true).expect("disable");
+            assert_eq!(user_auth_state("epu"), Some((true, 1)));
+            set_disabled("epu", false).expect("re-enable"); // no bump on enable
+            assert_eq!(user_auth_state("epu"), Some((false, 1)));
+            set_password("epu", "newpassword").expect("set-pw");
+            assert_eq!(user_auth_state("epu"), Some((false, 2)));
+            set_role("epu", Role::Admin).expect("set-role");
+            assert_eq!(user_auth_state("epu"), Some((false, 3)));
+        });
+    }
+
+    /// MUST #2 / the BOOT-RACE: a persisted session SURVIVES a simulated
+    /// restart (reload from disk), BUT a session whose user was disabled
+    /// while the daemon was "down" is rejected on the very first validate.
+    #[test]
+    fn session_survives_restart_but_disabled_while_down_is_rejected() {
+        with_temp_home(|| {
+            add_user("survivor", "password").expect("add");
+            let live = create_session("survivor");
+            add_user("victim", "password").expect("add");
+            let stale = create_session("victim");
+
+            // Simulate a restart: the persisted store is the ONLY state
+            // (there is no in-memory map anymore). Reload from disk and
+            // confirm the live session is still valid.
+            let reloaded = load_sessions().expect("reload from disk");
+            assert_eq!(reloaded.sessions.len(), 2, "both records persisted");
+            assert_eq!(
+                validate_session(&live),
+                Some("survivor".to_string()),
+                "a persisted session must survive a restart"
+            );
+
+            // Now disable the victim's account DIRECTLY in the user store —
+            // simulating a change made while the daemon was down (e.g. an
+            // owner edit synced in, #47). The first validate after "boot"
+            // must reject the stale session (epoch bump + !disabled check).
+            set_disabled("victim", true).expect("disable while down");
+            assert_eq!(
+                validate_session(&stale),
+                None,
+                "boot-race: a user disabled while down must be rejected on validate"
+            );
+            // And the stale record was deleted from disk by that validate.
+            let after = load_sessions().expect("reload after reject");
+            assert!(
+                after.sessions.iter().all(|s| s.username != "victim"),
+                "rejected stale record must be deleted from disk"
+            );
+            // The survivor is untouched.
+            assert_eq!(validate_session(&live), Some("survivor".to_string()));
+        });
+    }
+
+    /// MUST: logout deletes ONLY the caller's record (per-device), leaving
+    /// the user's other sessions intact.
+    #[test]
+    fn logout_deletes_only_the_callers_record() {
+        with_temp_home(|| {
+            add_user("multi", "password").expect("add");
+            let device_a = create_session("multi");
+            let device_b = create_session("multi");
+            assert_eq!(validate_session(&device_a), Some("multi".to_string()));
+            assert_eq!(validate_session(&device_b), Some("multi".to_string()));
+
+            assert_eq!(logout_session(&device_a), Some("multi".to_string()));
+            assert_eq!(validate_session(&device_a), None, "logged-out session rejected");
+            assert_eq!(
+                validate_session(&device_b),
+                Some("multi".to_string()),
+                "the other device stays logged in"
+            );
+            // Logging out an unknown token is a no-op None.
+            assert_eq!(logout_session("not-a-token"), None);
+        });
+    }
+
+    /// MUST: the daemon-canonical reaper evicts an expired record.
+    #[test]
+    fn reaper_evicts_expired_record() {
+        with_temp_home(|| {
+            add_user("reapu", "password").expect("add");
+            let live = create_session("reapu");
+            // Inject an expired record for the same user.
+            let expired_tok = new_token();
+            update_sessions(|store| {
+                store.sessions.push(SessionRecord {
+                    version: SESSION_RECORD_VERSION,
+                    username: "reapu".to_string(),
+                    token_digest: token_digest(&expired_tok),
+                    created_at: Utc::now() - Duration::days(40),
+                    expires_at: Utc::now() - Duration::seconds(5),
+                    token_epoch: 0,
+                    created_ip: None,
+                    user_agent: None,
+                });
+                Ok(())
+            })
+            .expect("inject expired");
+            assert_eq!(load_sessions().unwrap().sessions.len(), 2);
+            let reaped = reap_expired_sessions();
+            assert_eq!(reaped, 1, "exactly the expired record is reaped");
+            let after = load_sessions().unwrap();
+            assert_eq!(after.sessions.len(), 1, "only the live record remains");
+            // The live session still validates after a reap.
+            assert_eq!(validate_session(&live), Some("reapu".to_string()));
+        });
+    }
+
+    /// MUST: a record/envelope with an UNKNOWN version fails CLOSED (the
+    /// store is treated as empty → forced re-login), and a hand-rolled
+    /// legacy RAW-TOKEN row (no `token_digest`) is dropped on load.
+    #[test]
+    fn unknown_version_and_raw_token_row_fail_closed() {
+        with_temp_home(|| {
+            let dir = config_dir();
+            fs::create_dir_all(&dir).unwrap();
+
+            // (a) Unknown ENVELOPE version → empty store.
+            let future = r#"{ "version": 9999, "sessions": [
+                { "version": 9999, "username": "u", "token_digest": "abc",
+                  "created_at": "2024-01-01T00:00:00Z",
+                  "expires_at": "2999-01-01T00:00:00Z", "token_epoch": 0 } ] }"#;
+            fs::write(sessions_store_path(), future).unwrap();
+            let s = load_sessions().expect("loads (fail closed) on unknown envelope version");
+            assert!(s.sessions.is_empty(), "unknown envelope version fails closed (empty)");
+
+            // (b) Current envelope, but a record with a WRONG record version
+            // and a legacy RAW-TOKEN row (no token_digest field). Both must
+            // be dropped on load (fail closed).
+            let mixed = r#"{ "version": 1, "sessions": [
+                { "version": 2, "username": "wrongver", "token_digest": "deadbeef",
+                  "created_at": "2024-01-01T00:00:00Z",
+                  "expires_at": "2999-01-01T00:00:00Z", "token_epoch": 0 },
+                { "version": 1, "username": "rawtok", "token": "PLAINTEXTTOKEN",
+                  "token_digest": "",
+                  "created_at": "2024-01-01T00:00:00Z",
+                  "expires_at": "2999-01-01T00:00:00Z", "token_epoch": 0 } ] }"#;
+            fs::write(sessions_store_path(), mixed).unwrap();
+            let s = load_sessions().expect("loads, dropping bad rows");
+            assert!(
+                s.sessions.is_empty(),
+                "wrong-version + raw-token rows must both be dropped (fail closed)"
+            );
+        });
+    }
+
+    /// MUST #1 (perms): the session store lands on disk owner-only (0600),
+    /// on the initial write AND a subsequent rewrite (tmp+rename re-chmods).
+    #[cfg(unix)]
+    #[test]
+    fn session_store_file_is_written_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        with_temp_home(|| {
+            add_user("permsess", "password").expect("add");
+            create_session("permsess"); // first write
+            let mode = fs::metadata(sessions_store_path())
+                .expect("stat sessions store")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "session store must be 0600, got {mode:o}");
+            // A second write (a logout) re-chmods the new inode to 0600.
+            create_session("permsess");
+            let mode2 = fs::metadata(sessions_store_path())
+                .expect("stat after rewrite")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode2, 0o600, "session store stays 0600 after rewrite, got {mode2:o}");
+        });
+    }
+
+    /// The brute-force lockout counter is PERSISTED — it survives a
+    /// simulated restart so a self-update reboot can't reset it.
+    #[test]
+    fn lockout_counter_persists_across_restart() {
+        with_temp_home(|| {
+            add_user("plock", "rightpass").expect("add");
+            for _ in 0..LOCKOUT_THRESHOLD {
+                assert_eq!(check_and_record("plock", "x"), LoginOutcome::BadCreds);
+            }
+            assert!(is_locked("plock"), "locked after the threshold");
+            // Simulate a restart: state is on disk only. Reload + confirm
+            // the lock is still in force (correct password rejected).
+            let reloaded = load_sessions().expect("reload locks from disk");
+            assert!(
+                reloaded.locks.get("plock").and_then(|e| e.locked_until).is_some(),
+                "lockout must be persisted"
+            );
+            assert_eq!(
+                check_and_record("plock", "rightpass"),
+                LoginOutcome::LockedOut,
+                "persisted lockout must survive a restart"
+            );
         });
     }
 }

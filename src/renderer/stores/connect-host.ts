@@ -473,7 +473,9 @@ export type LoginResult =
 interface LoginResponse {
   token: string
   username: string
-  expiresAt: number
+  // ISO-8601 string from the daemon (e.g. "2026-07-20T20:38:56+00:00"),
+  // NOT an epoch number — parse with Date.parse() if you ever do date math.
+  expiresAt: string
 }
 
 /**
@@ -498,16 +500,36 @@ export async function loginToHost(
     return { ok: false, reason: 'This server has no username configured.' }
   }
   const url = `${hostBaseUrl(host)}/cli/auth/login`
-  let resp: Response
-  try {
-    resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-  } catch {
-    return { ok: false, reason: `Couldn't reach ${host.hostname}. Check the address and your network.` }
+  // Issue #5: every *.k2.dev host shares ONE relay IP, so the webview pools a
+  // single connection per origin. After relay churn (a remote update / E2E
+  // cert re-provision) that pooled socket can go stale — cached GETs limp
+  // through, but a fresh login POST reuses the dead socket and throws at the
+  // network layer. The throw evicts the bad connection from the pool, so a
+  // brief pause + retry opens a FRESH socket — recovering without the full app
+  // relaunch that was previously the only fix. Only surface an error if the
+  // retry also fails (then it's likely a real connectivity/server problem).
+  let resp: Response | undefined
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      break
+    } catch {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 400))
+        continue
+      }
+    }
+  }
+  if (!resp) {
+    return {
+      ok: false,
+      reason: `Couldn't establish a connection to ${host.hostname}. The server may be reachable — try again, and if it keeps failing, quit and relaunch K2.`,
+    }
   }
   if (resp.status === 401) {
     return { ok: false, reason: 'Invalid username or password.' }

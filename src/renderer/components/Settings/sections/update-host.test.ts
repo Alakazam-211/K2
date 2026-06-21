@@ -19,6 +19,8 @@ import {
   updateHostVisibility,
   updateHostConfirmCopy,
   updateAvailableCopy,
+  hostVersionCopy,
+  newerNoArtifactCopy,
   updatePhaseCopy,
   updateForbiddenCopy,
   isForbiddenError,
@@ -133,6 +135,29 @@ describe('updateAvailableCopy — current → latest banner', () => {
     expect(copy).toContain('Hetzner box')
     expect(copy).toContain('0.39.30')
     expect(copy).toContain('0.39.33')
+  })
+})
+
+describe('hostVersionCopy — B1 persistent host-version line', () => {
+  it('NAMES the host and shows its current version with a v prefix', () => {
+    const copy = hostVersionCopy('Hetzner box', '0.40.6')
+    expect(copy).toContain('Hetzner box')
+    expect(copy).toContain('v0.40.6')
+  })
+})
+
+describe('newerNoArtifactCopy — B4 missing-platform-build state', () => {
+  it('NAMES the host, the newer version, and the platform — never "up to date"', () => {
+    const copy = newerNoArtifactCopy('Hetzner box', '0.40.7', 'linux-aarch64')
+    expect(copy).toContain('Hetzner box')
+    expect(copy).toContain('v0.40.7')
+    expect(copy).toContain('linux-aarch64')
+    expect(copy.toLowerCase()).not.toContain('up to date')
+  })
+
+  it('falls back to a generic platform phrase when the platform is unknown', () => {
+    const copy = newerNoArtifactCopy('Hetzner box', '0.40.7', undefined)
+    expect(copy).toContain('this platform')
   })
 })
 

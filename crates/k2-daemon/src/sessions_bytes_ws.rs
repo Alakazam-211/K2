@@ -59,7 +59,14 @@ use k2_core::session::{registry, SessionId};
 pub async fn serve_session_bytes_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
+    owner_token: String,
 ) {
+    // The token that authorized this connection. Re-validated on a timer
+    // inside the loop so a revoked connect-user (disabled / removed /
+    // role-changed) is dropped from their LIVE socket within ~5s — not
+    // left streaming raw PTY bytes until they happen to disconnect.
+    let token = params.get("token").cloned().unwrap_or_default();
+
     // 0.39.7: stream borrowed (was owned). See events.rs.
     let session_id = match params.get("session").and_then(|s| SessionId::parse(s)) {
         Some(id) => id,
@@ -175,9 +182,35 @@ pub async fn serve_session_bytes_connection(
         entry.bytes_subscriber_count()
     );
 
+    // Re-auth heartbeat: every 5s, confirm the token that opened this
+    // socket is still valid. Mirrors the grid WS (`sessions_grid_ws.rs`):
+    // when an owner disables/removes/role-changes a connect-user,
+    // `revoke_user_sessions` drops their token from the in-memory session
+    // map — but an already-upgraded socket would keep streaming raw PTY
+    // bytes until the client happened to disconnect. This timer closes
+    // that hole. The owner token is never revoked, so owner connections
+    // sail through the compare.
+    let mut auth_recheck =
+        tokio::time::interval(std::time::Duration::from_secs(5));
+    // Burn the immediate first tick so we don't re-validate the instant
+    // after the dispatcher already authorized us.
+    auth_recheck.tick().await;
+
     // Live forwarding loop.
     loop {
         tokio::select! {
+            // Re-auth heartbeat — see `auth_recheck` above. Closes the
+            // socket the moment the connecting user is revoked.
+            _ = auth_recheck.tick() => {
+                if !crate::routes::http::token_still_valid(&token, &owner_token) {
+                    log_debug!(
+                        "[daemon/sessions_bytes_ws] token revoked mid-session; \
+                         closing bytes WS for session {session_id}"
+                    );
+                    let _ = write.send(Message::Close(None)).await;
+                    break;
+                }
+            }
             recv = rx.recv() => {
                 match recv {
                     Ok(chunk) => {

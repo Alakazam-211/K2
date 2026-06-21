@@ -149,6 +149,10 @@ interface TunnelConfigView {
   tokenSet: boolean
   publicUrl: string | null
   autoStart: boolean
+  /** Stored opt-out preference (true = E2E on, the default). */
+  e2e: boolean
+  /** Effective state after any K2_E2E env override (may differ from `e2e`). */
+  e2eEffective: boolean
 }
 
 // The daemon rotates ~/.k2so/daemon.token on every restart; getDaemonWs()

@@ -147,26 +147,85 @@ pub struct CheckResult {
     /// `update/start` routes on it server-side. PRD §3.1. Always present.
     #[serde(rename = "installKind")]
     pub install_kind: String,
+    /// B4: TRUE when a strictly-newer version exists in the manifest but
+    /// there is no downloadable artifact for THIS host's platform key (a
+    /// Shape-B / standalone host whose `os-arch` wasn't published). This is
+    /// DISTINCT from "up to date" — `available` is false (nothing to apply)
+    /// but the host is NOT current. The renderer surfaces a "newer exists,
+    /// no build for {platform}" message rather than folding it into "up to
+    /// date". Bundled-app hosts never set this (their Tauri updater owns the
+    /// download, so a missing daemon artifact is irrelevant). Default false;
+    /// omitted from the wire when false so older clients ignore it cleanly.
+    #[serde(rename = "newerNoArtifact", skip_serializing_if = "is_false")]
+    pub newer_no_artifact: bool,
+    /// B4: this host's platform key (`os-arch`, e.g. `linux-aarch64`) — used
+    /// to name the missing build in the renderer's `newerNoArtifact` copy.
+    #[serde(rename = "platform")]
+    pub platform: String,
 }
 
-/// Compare two dotted version strings (`x.y.z`) numerically, longest-
-/// wins on a prefix tie (`1.2.0` < `1.2.0.1`). Non-numeric components
-/// compare as 0 so a malformed manifest can never report a spurious
-/// upgrade. Returns `Ordering` of `a` vs `b`.
+/// serde `skip_serializing_if` predicate for a `bool` field defaulting false.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Compare two version strings. THE ONE CANONICAL RULE (mirrored by the
+/// renderer's `compareVersions` in `server-capabilities.ts` — keep the two
+/// in lockstep):
+///
+///   1. A leading `v`/`V` is dropped.
+///   2. Build metadata (`+...`) is ignored entirely.
+///   3. The release core (`major.minor.patch[.…]`) compares numerically,
+///      longest-wins on a prefix tie (`1.2.0` < `1.2.0.1`). Non-numeric
+///      core components compare as 0 so a malformed manifest can never
+///      report a spurious upgrade.
+///   4. A version WITH a prerelease suffix (`-rc1`) sorts BEFORE the same
+///      release WITHOUT one — `0.40.0-rc1 < 0.40.0 < 0.40.1`. Between two
+///      prereleases of the SAME release, the prerelease identifier compares
+///      ASCII-lexically (`-rc1 < -rc2`); this is intentionally simpler than
+///      full SemVer §11 dot-segment rules — we only ship `-rcN` today.
+///
+/// Returns `Ordering` of `a` vs `b`.
 pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    let pa: Vec<u64> = a.split('.').map(|c| c.parse::<u64>().unwrap_or(0)).collect();
-    let pb: Vec<u64> = b.split('.').map(|c| c.parse::<u64>().unwrap_or(0)).collect();
-    let n = pa.len().max(pb.len());
+
+    // Split "<core>-<prerelease>" after dropping a leading 'v' and any
+    // '+build' metadata. The first '-' separates core from prerelease.
+    fn split(v: &str) -> (Vec<u64>, Option<String>) {
+        let v = v.trim().trim_start_matches(['v', 'V']);
+        let v = v.split('+').next().unwrap_or(""); // drop build metadata
+        let (core, pre) = match v.split_once('-') {
+            Some((c, p)) => (c, Some(p.to_string())),
+            None => (v, None),
+        };
+        let nums = core
+            .split('.')
+            .map(|c| c.parse::<u64>().unwrap_or(0))
+            .collect();
+        (nums, pre)
+    }
+
+    let (na, pa) = split(a);
+    let (nb, pb) = split(b);
+
+    // Release core first.
+    let n = na.len().max(nb.len());
     for i in 0..n {
-        let x = pa.get(i).copied().unwrap_or(0);
-        let y = pb.get(i).copied().unwrap_or(0);
+        let x = na.get(i).copied().unwrap_or(0);
+        let y = nb.get(i).copied().unwrap_or(0);
         match x.cmp(&y) {
             Ordering::Equal => continue,
             ord => return ord,
         }
     }
-    Ordering::Equal
+
+    // Equal release core → a prerelease sorts BEFORE the bare release.
+    match (pa, pb) {
+        (None, None) => Ordering::Equal,
+        (Some(_), None) => Ordering::Less, // a is a prerelease of b
+        (None, Some(_)) => Ordering::Greater, // b is a prerelease of a
+        (Some(x), Some(y)) => x.cmp(&y),   // both prereleases → lexical
+    }
 }
 
 /// Decide whether `manifest` offers an upgrade over `current`, building
@@ -189,6 +248,11 @@ pub fn decide_check(current: &str, manifest: &DaemonManifest, install_kind: &str
     } else {
         newer && artifact.is_some()
     };
+    // B4: a standalone/unknown host that's behind but has no published
+    // artifact for its platform is NOT up to date — flag it distinctly so
+    // the UI doesn't read it as "current". Bundled-app hosts never hit this
+    // (their own updater downloads, not the daemon artifact).
+    let newer_no_artifact = newer && artifact.is_none() && install_kind != "bundled-app";
     CheckResult {
         current: current.to_string(),
         latest: manifest.version.clone(),
@@ -196,6 +260,8 @@ pub fn decide_check(current: &str, manifest: &DaemonManifest, install_kind: &str
         notes: manifest.notes.clone(),
         url: artifact.map(|a| a.url.clone()),
         install_kind: install_kind.to_string(),
+        newer_no_artifact,
+        platform: platform_key(),
     }
 }
 
@@ -1194,6 +1260,37 @@ mod tests {
         assert_eq!(compare_versions("garbage", "0.0.0"), Ordering::Equal);
     }
 
+    #[test]
+    fn compare_versions_prerelease_ordering() {
+        // THE canonical rule: a prerelease sorts BEFORE its release, which
+        // sorts before the next patch — 0.40.0-rc1 < 0.40.0 < 0.40.1.
+        assert_eq!(compare_versions("0.40.0-rc1", "0.40.0"), Ordering::Less);
+        assert_eq!(compare_versions("0.40.0", "0.40.0-rc1"), Ordering::Greater);
+        assert_eq!(compare_versions("0.40.0", "0.40.1"), Ordering::Less);
+        assert_eq!(compare_versions("0.40.0-rc1", "0.40.1"), Ordering::Less);
+        assert_eq!(compare_versions("0.40.1", "0.40.0-rc1"), Ordering::Greater);
+
+        // A later prerelease of the SAME release sorts after an earlier one.
+        assert_eq!(compare_versions("0.40.0-rc1", "0.40.0-rc2"), Ordering::Less);
+        assert_eq!(compare_versions("0.40.0-rc2", "0.40.0-rc1"), Ordering::Greater);
+
+        // A prerelease of a HIGHER release still beats a lower bare release.
+        assert_eq!(compare_versions("0.41.0-rc1", "0.40.0"), Ordering::Greater);
+    }
+
+    #[test]
+    fn compare_versions_prerelease_equality_and_metadata() {
+        // Identical prereleases are Equal; build metadata is ignored.
+        assert_eq!(compare_versions("0.40.0-rc1", "0.40.0-rc1"), Ordering::Equal);
+        assert_eq!(compare_versions("0.40.0+build7", "0.40.0"), Ordering::Equal);
+        assert_eq!(
+            compare_versions("0.40.0-rc1+abc", "0.40.0-rc1+xyz"),
+            Ordering::Equal
+        );
+        // Leading 'v' is dropped.
+        assert_eq!(compare_versions("v0.40.0", "0.40.0"), Ordering::Equal);
+    }
+
     // ── decide_check `available` logic ──────────────────────────────
 
     #[test]
@@ -1269,6 +1366,12 @@ mod tests {
             "no artifact for this platform ⇒ not available even though newer (standalone)"
         );
         assert!(r.url.is_none());
+        // B4: but it is NOT "up to date" — flag the distinct state.
+        assert!(
+            r.newer_no_artifact,
+            "standalone behind with no platform artifact ⇒ newer_no_artifact"
+        );
+        assert_eq!(r.platform, platform_key());
 
         // BUT a bundled-app host updates via its own Tauri updater, so a
         // missing daemon artifact must NOT suppress the offer — newer alone
@@ -1280,6 +1383,38 @@ mod tests {
         );
         assert_eq!(r_bundled.install_kind, "bundled-app");
         assert!(r_bundled.url.is_none(), "still no daemon artifact url");
+        // B4: bundled-app never sets the missing-artifact flag.
+        assert!(
+            !r_bundled.newer_no_artifact,
+            "bundled-app: missing daemon artifact is irrelevant ⇒ flag stays false"
+        );
+    }
+
+    #[test]
+    fn decide_check_no_newer_no_artifact_when_current() {
+        // Up to date (manifest == current) with no platform artifact must
+        // NOT set newer_no_artifact — there's nothing newer.
+        let mut artifacts = std::collections::HashMap::new();
+        artifacts.insert(
+            "someos-somearch".into(),
+            Artifact {
+                url: "https://x/bin".into(),
+                sig: "https://x/bin.sig".into(),
+                sha256: "00".into(),
+            },
+        );
+        let m = DaemonManifest {
+            version: "1.0.0".into(),
+            pub_date: String::new(),
+            artifacts,
+            notes: None,
+        };
+        let r = decide_check("1.0.0", &m, "standalone");
+        assert!(!r.available);
+        assert!(
+            !r.newer_no_artifact,
+            "same version ⇒ not newer ⇒ flag stays false"
+        );
     }
 
     // ── sha256 ──────────────────────────────────────────────────────

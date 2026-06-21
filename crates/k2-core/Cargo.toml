@@ -1,9 +1,9 @@
 [package]
 name = "k2-core"
-version = "0.40.5"
+version = "0.40.10"
 edition = "2021"
 license = "FSL-1.1-Apache-2.0"
-description = "K2SO device-local core library: db, llm, terminal, companion, scheduler, agent_hooks, push_adapter. Linked by both src-tauri (Tauri app, thin client) and k2so-daemon (persistent-agent runtime)."
+description = "K2 device-local core library: db, llm, terminal, companion, scheduler, agent_hooks, push_adapter. Linked by both src-tauri (Tauri app, thin client) and k2-daemon (persistent-agent runtime)."
 
 [lib]
 path = "src/lib.rs"
@@ -142,6 +142,11 @@ signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
 argon2 = "0.5"
 base64 = "0.22"
 subtle = "2.6"
+# K2 Connect #4 — persisted-session store hashes the session token with
+# SHA-256 (256-bit random input → plain SHA-256 is sufficient; argon2 is
+# only needed for low-entropy passwords). Already in the lock tree via
+# rcgen/argon2; pinned here as a direct dep.
+sha2 = "0.10"
 tungstenite = "0.24"
 
 # Companion tunnel (ngrok) + its supporting async stack. Moved over

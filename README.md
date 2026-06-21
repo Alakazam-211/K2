@@ -1,27 +1,20 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/k2-lockup-light-text.png">
-    <img src="assets/brand/k2-lockup-dark-text.png" alt="K2 by Alakazam Labs" width="380">
-  </picture>
+  <img src="resources/icon.png" width="128" height="128" alt="K2">
+</p>
+
+<h1 align="center">K2</h1>
+
+<p align="center">
+  <strong>The workspace where your AI agents run</strong><br>
+  <sub>by Alakazam Labs</sub>
 </p>
 
 <p align="center">
-  <strong>The workspace where your AI agents run</strong>
-</p>
-
-<p align="center">
-  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg" alt="Fair Source License"></a>
+  <a href="https://github.com/Alakazam-211/K2/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg" alt="FSL-1.1-Apache-2.0"></a>
   <a href="https://k2.dev"><img src="https://img.shields.io/badge/k2.dev-8B5CF6.svg" alt="k2.dev"></a>
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg" alt="macOS">
   <img src="https://img.shields.io/badge/built_with-Tauri_v2-24C8D8.svg" alt="Tauri v2">
 </p>
-
-> **K2 is the next chapter of the project previously known as K2SO.**
-> Versions through 0.39.x shipped from the old repository under MIT;
-> starting with 0.40.0, K2 ships from here under the Functional Source
-> License (Fair Source). Existing installs update in place — workspaces,
-> agents, settings, and sign-ins all migrate automatically. See
-> [NOTICE.md](NOTICE.md) for the provenance and licensing history.
 
 ---
 
@@ -76,7 +69,7 @@ Coordinators can run as persistent Claude sessions with MCP channel integration 
 Coordinators create and configure skill profiles via CLI (`k2 skills create`, `k2 skills profile`). Skill profiles (`SKILL.md`) are editable with AI assistance via the built-in AIFileEditor. Each Coordinator knows its workspace's available skills by reading those files before applying a role to work.
 
 **Decentralized Work Discovery:**
-Each workspace knows where to find work (GitHub Issues, Linear, PRDs) via its agent profile. No central scanner or integration layer needed -- agents use CLI tools (`gh`, `git`, `curl`) already available in the terminal. The filesystem work queue at `.k2so/inbox/` is the always-on mechanism, scanned by the local LLM triage at near-zero cost.
+Each workspace knows where to find work (GitHub Issues, Linear, PRDs) via its agent profile. No central scanner or integration layer needed -- agents use CLI tools (`gh`, `git`, `curl`) already available in the terminal. The filesystem work queue at `.k2/inbox/` is the always-on mechanism, scanned by the local LLM triage at near-zero cost.
 
 **Multi-Terminal Execution:**
 Agents can spawn parallel sub-terminals for concurrent tasks (`k2 terminal spawn`). Sub-terminals appear as pane splits within the agent's tab.
@@ -280,12 +273,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, project structure,
 
 ## License
 
-K2 is **Fair Source** software, licensed under the
-[Functional Source License, Version 1.1, Apache 2.0 Future License](LICENSE.md)
-(FSL-1.1-Apache-2.0). You can use, modify, and self-host K2 freely —
-including for your business. Competing commercial use is restricted for
-two years per version, after which that version converts to Apache 2.0.
+[FSL-1.1-Apache-2.0](LICENSE) — free for personal and internal/business use; it
+converts to Apache 2.0 two years after each release.
 
-- Hosting K2 for clients? See [COMMERCIAL_HOSTING_GRANT.md](COMMERCIAL_HOSTING_GRANT.md).
-- Name and logo usage: [TRADEMARKS.md](TRADEMARKS.md).
-- Licensing history (MIT through 0.39.x): [NOTICE.md](NOTICE.md).
+Hosting K2 commercially for others is additionally permitted **via the official
+K2 Connect tunnel service** — see the [Commercial Hosting Grant](COMMERCIAL_HOSTING_GRANT.md).

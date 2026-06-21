@@ -11,6 +11,8 @@ import {
   updateHostVisibility,
   updateHostConfirmCopy,
   updateAvailableCopy,
+  hostVersionCopy,
+  newerNoArtifactCopy,
   updatePhaseCopy,
   updateForbiddenCopy,
   isForbiddenError,
@@ -55,6 +57,12 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
 
 export function GeneralSection(): React.JSX.Element {
   const resetAllSettings = useSettingsStore((s) => s.resetAllSettings)
+  // B2: when connected to a REMOTE host, the left "App Version" row is THIS
+  // Mac's local Tauri app version — NOT the host's. Label it "This Mac" so
+  // it can't be mistaken for the host version (the host version lives in the
+  // right-pane UpdateHostRow). `activeHost === 'local'` ⇒ no badge.
+  const activeHost = useConnectHostStore((s) => s.activeHost)
+  const isRemote = activeHost !== 'local'
   const [confirming, setConfirming] = useState(false)
   const [currentVersion, setCurrentVersion] = useState<string>('')
   const updateStatus = useUpdateStore((s) => s.status)
@@ -92,7 +100,17 @@ export function GeneralSection(): React.JSX.Element {
       <div className="space-y-4">
         {/* Version & Update */}
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-          <span className="text-xs text-[var(--color-text-secondary)]">K2 by Alakazam Labs</span>
+          <span className="flex items-center gap-2 min-w-0">
+            <span className="text-xs text-[var(--color-text-secondary)]">K2 by Alakazam Labs</span>
+            {isRemote && (
+              <span
+                className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-amber-500/20 text-amber-300 flex-shrink-0"
+                title="This is your local Mac's app version — not the connected host's. The host version is shown under the remote-host controls."
+              >
+                This Mac
+              </span>
+            )}
+          </span>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5">
               <span
@@ -1054,7 +1072,17 @@ function UpdateHostRow(): React.JSX.Element | null {
       const result = await daemonCliPost<UpdateCheckResult>('daemon/update/check', {})
       setCheck(result)
       if (!result.available) {
-        addToast(`${hostLabel} is up to date (${result.current}).`, 'info', 6000)
+        // B4: a newer version exists but there's no build for this host's
+        // platform — DON'T claim "up to date"; surface the distinct state.
+        if (result.newerNoArtifact) {
+          addToast(
+            newerNoArtifactCopy(hostLabel, result.latest, result.platform),
+            'info',
+            8000,
+          )
+        } else {
+          addToast(`${hostLabel} is up to date (${result.current}).`, 'info', 6000)
+        }
       }
     } catch (e) {
       reportError(e)
@@ -1167,10 +1195,30 @@ function UpdateHostRow(): React.JSX.Element | null {
         </div>
       </div>
 
+      {/* B1: persistent host-version line — shown after ANY successful check,
+          for BOTH up-to-date and update-available states, so the remote
+          host's CURRENT version is always visible (not just in a toast or
+          the update banner). Hidden once a job is downloading/staging (the
+          phase line takes over) so the row doesn't double up. */}
+      {check && !inProgress && !staged && (
+        <div className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+          {hostVersionCopy(hostLabel, check.current)}
+        </div>
+      )}
+
       {/* Update-available banner once a check reports one (pre-download) */}
       {check?.available && !inProgress && !staged && (
-        <div className="mt-2 text-[11px] text-amber-200">
+        <div className="mt-1 text-[11px] text-amber-200">
           {updateAvailableCopy(hostLabel, check.current, check.latest)}
+        </div>
+      )}
+
+      {/* B4: a newer version exists but there's no build for this host's
+          platform — DISTINCT from "up to date" (available is false but the
+          host is behind). Only when not already in/after a job. */}
+      {check?.newerNoArtifact && !inProgress && !staged && (
+        <div className="mt-1 text-[11px] text-amber-200/90">
+          {newerNoArtifactCopy(hostLabel, check.latest, check.platform)}
         </div>
       )}
 

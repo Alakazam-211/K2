@@ -3050,7 +3050,7 @@ dependencies = [
 
 [[package]]
 name = "k2"
-version = "0.40.5"
+version = "0.40.10"
 dependencies = [
  "ahash",
  "alacritty_terminal",
@@ -3111,7 +3111,7 @@ dependencies = [
 
 [[package]]
 name = "k2-core"
-version = "0.40.5"
+version = "0.40.10"
 dependencies = [
  "alacritty_terminal",
  "arc-swap",
@@ -3146,6 +3146,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "signal-hook 0.3.18",
  "signal-hook-mio",
  "subtle",
@@ -3162,7 +3163,7 @@ dependencies = [
 
 [[package]]
 name = "k2-daemon"
-version = "0.40.5"
+version = "0.40.10"
 dependencies = [
  "arc-swap",
  "base64 0.22.1",
@@ -3181,6 +3182,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",

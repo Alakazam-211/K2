@@ -35,16 +35,31 @@ pub fn read_password_hash() -> Option<String> {
 
 #[cfg(target_os = "macos")]
 pub fn write_password_hash(hash: &str) -> Result<(), String> {
-    // `-U` overwrites an existing item; args are passed directly so the hash
-    // (which contains `$`) is never shell-interpreted.
-    let output = std::process::Command::new("security")
-        .args([
-            "add-generic-password",
-            "-U",
-            "-s", SERVICE,
-            "-a", ACCOUNT,
-            "-w", hash,
-        ])
+    // 0.40.7 — stamp an explicit trusted-application ACL so this item never
+    // provokes the login-keychain password prompt, and the grant survives an
+    // app-update re-sign. Both the WRITE (here) and the READ
+    // ([`read_password_hash`]) go through `/usr/bin/security`, so that is the
+    // process the keychain sees as the requester on every access; we also
+    // trust the daemon's own executable for any future direct read. (Same
+    // rationale as `tunnel::lease::acl_trusted_apps`, scoped to this item.)
+    //
+    // `security`'s `-U` updates the VALUE but does NOT reset the ACL, so to
+    // (re)install the ACL — including upgrading a pre-0.40.7 item created
+    // without one — we DELETE then plain-ADD (no `-U`). A delete of a
+    // missing item is a harmless no-op.
+    let _ = std::process::Command::new("security")
+        .args(["delete-generic-password", "-s", SERVICE, "-a", ACCOUNT])
+        .output();
+
+    let mut cmd = std::process::Command::new("security");
+    cmd.args(["add-generic-password", "-s", SERVICE, "-a", ACCOUNT]);
+    for app in acl_trusted_apps() {
+        cmd.arg("-T").arg(app);
+    }
+    // `-w <hash>` LAST; args are passed directly to exec (never shell-parsed)
+    // so the hash's `$` is safe.
+    cmd.arg("-w").arg(hash);
+    let output = cmd
         .output()
         .map_err(|e| format!("keychain spawn failed: {}", e))?;
     if !output.status.success() {
@@ -52,6 +67,23 @@ pub fn write_password_hash(hash: &str) -> Result<(), String> {
         return Err(format!("keychain write failed: {}", err.trim()));
     }
     Ok(())
+}
+
+/// Trusted-application `-T` set for the companion password-hash item.
+///
+/// `/usr/bin/security` — both the read and the write shell through it, so it
+/// is the requesting application the keychain sees on every access.
+/// The daemon executable (`current_exe`) is added too for any future direct
+/// Security-framework read. There is no renderer/app reader of this item
+/// (it's daemon-internal companion auth), so no `k2` app-binary entry.
+#[cfg(target_os = "macos")]
+fn acl_trusted_apps() -> Vec<String> {
+    let mut apps = vec!["/usr/bin/security".to_string()];
+    if let Ok(exe) = std::env::current_exe() {
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        apps.push(exe.to_string_lossy().to_string());
+    }
+    apps
 }
 
 #[cfg(target_os = "macos")]

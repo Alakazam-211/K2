@@ -22,7 +22,7 @@ import { onActiveHostChange } from '@/stores/connect-host'
 import { onProjectsChanged } from '@/stores/session-events'
 import { useGitInitDialogStore } from './git-init-dialog'
 import { useToastStore } from './toast'
-import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, registerActivateProject } from './tabs'
+import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, registerActivateProject, runLeaveGuard } from './tabs'
 import { useFocusGroupsStore } from './focus-groups'
 import { useSettingsStore } from './settings'
 
@@ -162,6 +162,12 @@ interface ProjectsState {
   removeProject: (id: string) => Promise<void>
   setActiveProject: (id: string | null) => void
   setActiveWorkspace: (projectId: string, workspaceId: string) => void
+  /** Internal: the unguarded project-switch body. Do not call directly —
+   *  use `setActiveProject`, which fronts it with the unsaved-changes leave
+   *  guard. Exposed on the store only so the guard can defer it. */
+  _doSetActiveProject: (id: string | null) => void
+  /** Internal: the unguarded workspace-switch body. See `_doSetActiveProject`. */
+  _doSetActiveWorkspace: (projectId: string, workspaceId: string) => void
   reorderProjects: (ids: string[]) => Promise<void>
   renameProject: (id: string, name: string) => Promise<void>
   createSection: (projectId: string, name: string, color?: string) => Promise<void>
@@ -461,6 +467,36 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     const state = get()
     const tabsStore = useTabsStore.getState()
 
+    // ── Unsaved-changes leave guard ───────────────────────────────────
+    // Engage ONLY when actually leaving a DIFFERENT project that has ≥1
+    // dirty file tab. The no-dirty path below is byte-for-byte unchanged
+    // (no guard, no await) — workspace switching is the hottest action in
+    // the app and must stay instant. Same-project re-activation never
+    // triggers the guard.
+    const leavingProjectId = state.activeProjectId
+    if (leavingProjectId && id !== null && id !== leavingProjectId) {
+      const dirtyIds = tabsStore.dirtyTabIdsForProject(leavingProjectId)
+      if (dirtyIds.length > 0) {
+        void runLeaveGuard(leavingProjectId).then((choice) => {
+          if (choice === 'cancel') return // stay put
+          if (choice === 'discard') tabsStore.markTabsDiscardPending(dirtyIds)
+          // 'save' / 'discard' → proceed with the switch.
+          get()._doSetActiveProject(id)
+        })
+        return
+      }
+    }
+
+    get()._doSetActiveProject(id)
+  },
+
+  // The actual project-switch body. Extracted so the dirty-tab leave guard
+  // in `setActiveProject` can defer it behind an async modal decision while
+  // the common (no-dirty) path runs it synchronously with zero added latency.
+  _doSetActiveProject: (id: string | null) => {
+    const state = get()
+    const tabsStore = useTabsStore.getState()
+
     // Stash current workspace (PTYs stay alive in background)
     if (state.activeProjectId && state.activeWorkspaceId) {
       tabsStore.stashWorkspace(`${state.activeProjectId}:${state.activeWorkspaceId}`)
@@ -527,6 +563,30 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     // Skip if already on this workspace — prevents unnecessary stash/restore
     if (state.activeProjectId === projectId && state.activeWorkspaceId === workspaceId) return
 
+    const tabsStore = useTabsStore.getState()
+
+    // ── Unsaved-changes leave guard ───────────────────────────────────
+    // Engage ONLY when actually leaving a DIFFERENT project that has ≥1
+    // dirty file tab. Same-project workspace switches (and the no-dirty
+    // path below) are byte-for-byte unchanged — no guard, no await.
+    const leavingProjectId = state.activeProjectId
+    if (leavingProjectId && projectId !== leavingProjectId) {
+      const dirtyIds = tabsStore.dirtyTabIdsForProject(leavingProjectId)
+      if (dirtyIds.length > 0) {
+        void runLeaveGuard(leavingProjectId).then((choice) => {
+          if (choice === 'cancel') return // stay put
+          if (choice === 'discard') tabsStore.markTabsDiscardPending(dirtyIds)
+          get()._doSetActiveWorkspace(projectId, workspaceId)
+        })
+        return
+      }
+    }
+
+    get()._doSetActiveWorkspace(projectId, workspaceId)
+  },
+
+  _doSetActiveWorkspace: (projectId: string, workspaceId: string) => {
+    const state = get()
     const tabsStore = useTabsStore.getState()
 
     // #672 — activating any workspace is an ACTIVATION (PRD §4.3.1): POST

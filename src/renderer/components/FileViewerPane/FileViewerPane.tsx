@@ -295,6 +295,34 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     setTabDirty(tabId, isDirty)
   }, [isDirty, tabId, setTabDirty])
 
+  // ── Autosave-on-leave (data-loss safety net) ─────────────────────────
+  // Workspace switches UNMOUNT this pane (PaneGroups are torn down), which
+  // is where in-memory edits were being lost. On unmount we flush the dirty
+  // buffer to disk so an unsaved edit survives a workspace switch.
+  //
+  // The unsaved-changes leave guard (projects store) honors the user's
+  // Discard choice by marking this tab discard-pending; we consume that flag
+  // here and SKIP the write when set. `consumeDiscardPending` is read via
+  // `getState()` inside the cleanup so it sees current state, not a stale
+  // closure. Latest filePath / edited buffer / on-disk content are tracked in
+  // refs so the unmount cleanup writes the freshest values.
+  const flushRef = useRef({ filePath, editedContent, content })
+  flushRef.current = { filePath, editedContent, content }
+  useEffect(() => {
+    return () => {
+      const { filePath: fp, editedContent: edited, content: onDisk } = flushRef.current
+      // Nothing edited, or buffer matches disk — nothing to flush.
+      if (edited === null || edited === undefined || edited === onDisk) return
+      // User chose Discard for this tab — drop the edit, don't write.
+      if (useTabsStore.getState().consumeDiscardPending(tabId)) return
+      void daemonCliPost('fs/write-file', { path: fp, content: edited }).catch((err) => {
+        console.error('[file-viewer] autosave-on-leave failed:', err)
+      })
+    }
+    // Run cleanup only on real unmount — refs carry the latest values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabId])
+
   // Scroll persistence for markdown/preview views.
   //
   // In-session tab switches don't remount this component (see
@@ -369,32 +397,6 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
 
     return () => clearInterval(interval)
   }, [filePath, isDirty])
-
-  // Mirror the latest unsaved edit buffer into a ref so the unmount flush
-  // below captures current edits (effect cleanups close over stale state).
-  const pendingSaveRef = useRef<{ path: string; content: string } | null>(null)
-  useEffect(() => {
-    pendingSaveRef.current =
-      isDirty && editedContent !== null ? { path: filePath, content: editedContent } : null
-  }, [isDirty, editedContent, filePath])
-
-  // Autosave unsaved edits to disk on unmount. Switching WORKSPACES unmounts
-  // this pane (panes tear down per-workspace to bound RAM), which would
-  // otherwise silently drop the in-memory edit buffer — you edit a markdown
-  // file for 45 minutes, leave the workspace, and come back to the original.
-  // (In-session TAB switches keep the pane mounted, so they were already safe
-  // — see the scroll-persistence comment above.) Fire-and-forget, exactly like
-  // the scroll-position flush; Cmd+S still works for explicit saves.
-  useEffect(() => {
-    return () => {
-      const pending = pendingSaveRef.current
-      if (pending) {
-        void daemonCliPost('fs/write-file', { path: pending.path, content: pending.content }).catch(
-          (e) => console.error('[file-viewer] autosave-on-leave failed:', e),
-        )
-      }
-    }
-  }, [])
 
   // Save file (Cmd+S) — called directly by CodeEditor with current content
   const saveFile = useCallback(async (contentToSave?: string) => {

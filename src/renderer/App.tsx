@@ -25,6 +25,7 @@ import CommandPalette from './components/CommandPalette/CommandPalette'
 import ContextMenu from './components/ContextMenu/ContextMenu'
 import ConfirmDialog from './components/ConfirmDialog/ConfirmDialog'
 import WhatsNewModal from './components/WhatsNewModal/WhatsNewModal'
+import { UnsavedChangesModalHost } from './components/UnsavedChangesModal/UnsavedChangesModal'
 import MemoryWatcher from './components/MemoryWatcher/MemoryWatcher'
 import HeartbeatScheduleDialog from './components/HeartbeatScheduleDialog/HeartbeatScheduleDialog'
 import MergeDialog from './components/MergeDialog/MergeDialog'
@@ -211,6 +212,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
       <ConfirmDialog />
       <WhatsNewModal />
       <MemoryWatcher />
+      <UnsavedChangesModalHost />
       <HeartbeatScheduleDialog />
       <MergeDialog />
       <Toast />
@@ -793,6 +795,7 @@ export default function App(): React.JSX.Element {
             is mounted). */}
         <WhatsNewModal mode="button-only" />
         <MemoryWatcher />
+        <UnsavedChangesModalHost />
         <HeartbeatScheduleDialog />
       <MergeDialog />
         <Toast />
@@ -845,6 +848,7 @@ export default function App(): React.JSX.Element {
       <ConfirmDialog />
       <WhatsNewModal />
       <MemoryWatcher />
+      <UnsavedChangesModalHost />
       <HeartbeatScheduleDialog />
       <MergeDialog />
       <Toast />

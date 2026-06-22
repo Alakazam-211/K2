@@ -94,6 +94,38 @@ function activateProjectViaRef(projectId: string): void {
   _activateProjectRef?.(projectId)
 }
 
+// ── Unsaved-changes leave guard (save/discard/cancel on workspace switch) ──
+//
+// When the user switches AWAY from a workspace that has dirty file tabs, the
+// projects store consults this guard. The guard (a UI promise that shows the
+// "Unsaved changes" modal) is registered at the top level via
+// `registerLeaveGuard`, mirroring the `registerActivateProject` indirection so
+// the store can call UI code without importing React. If no guard is
+// registered (e.g. startup, before the modal host mounts) the default is
+// 'save' so the switch is NEVER blocked.
+export type LeaveChoice = 'save' | 'discard' | 'cancel'
+let _leaveGuardRef: ((leavingProjectId: string) => Promise<LeaveChoice>) | null = null
+export function registerLeaveGuard(
+  fn: (leavingProjectId: string) => Promise<LeaveChoice>,
+): void {
+  _leaveGuardRef = fn
+}
+export async function runLeaveGuard(leavingProjectId: string): Promise<LeaveChoice> {
+  if (!_leaveGuardRef) return 'save'
+  try {
+    return await _leaveGuardRef(leavingProjectId)
+  } catch {
+    // A guard failure must never strand the user — fail safe to 'save'.
+    return 'save'
+  }
+}
+
+// Tabs whose pending FileViewerPane unmount-flush must be SKIPPED (the user
+// chose Discard). In-memory module state — deliberately NOT in zustand store
+// state so it is never serialized into a saved layout. Drained by the pane's
+// unmount cleanup via `consumeDiscardPending`.
+const _discardPendingTabs = new Set<string>()
+
 // ── Daemon-authoritative session events (0.38.0 Commit 4) ────────────────
 //
 // Pre-0.38.0 the renderer kept tabs in sync across windows by broadcasting
@@ -720,6 +752,18 @@ interface TabsState {
   applyDaemonTabTitle: (tabId: string, title: string, locked?: boolean) => void
   renameTabByTitle: (oldTitle: string, newTitle: string) => void
   setTabDirty: (tabId: string, dirty: boolean) => void
+  // ── Unsaved-changes leave guard support ──────────────────────────────
+  /** Enumerate the dirty tab ids in the ACTIVE (in-view) workspace. `state.tabs`
+   *  + `extraGroups` only ever hold the active workspace's tabs, so this is the
+   *  set of unsaved tabs that would be lost by leaving. `projectId` is accepted
+   *  for call-site clarity but the active view IS the leaving workspace. */
+  dirtyTabIdsForProject: (projectId: string) => string[]
+  /** Mark tabs so their FileViewerPane unmount-flush SKIPS the disk write
+   *  (the user chose Discard). In-memory only — never persisted. */
+  markTabsDiscardPending: (tabIds: string[]) => void
+  /** Returns true (and clears the flag) if this tab was marked discard-pending.
+   *  Called from the FileViewerPane unmount-flush right before it would write. */
+  consumeDiscardPending: (tabId: string) => boolean
   setFileViewerState: (tabId: string, paneId: string, itemId: string, state: { scrollTop?: number; cursorPos?: number }) => void
   /** @deprecated Use openFileInPane instead */
   openMarkdownPane: (tabId: string, filePath: string, splitDirection?: 'row' | 'column') => void
@@ -2556,6 +2600,29 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       const result = mapTabAcrossGroups(state, tabId, (tab) => ({ ...tab, isDirty: dirty }))
       return { tabs: result.tabs, extraGroups: result.extraGroups }
     })
+  },
+
+  // ── Unsaved-changes leave guard support ──────────────────────────────
+  // `projectId` is unused: the store only ever holds the ACTIVE workspace's
+  // tabs (group 0 `tabs` + `extraGroups`), so the in-view dirty tabs ARE the
+  // leaving workspace's unsaved tabs. The param keeps call sites self-
+  // documenting and lets a future multi-workspace store filter by owner.
+  dirtyTabIdsForProject: (_projectId: string) => {
+    const s = get()
+    const allTabs = [...s.tabs, ...s.extraGroups.flatMap((g) => g.tabs)]
+    return allTabs.filter((t) => t.isDirty).map((t) => t.id)
+  },
+
+  markTabsDiscardPending: (tabIds: string[]) => {
+    for (const id of tabIds) _discardPendingTabs.add(id)
+  },
+
+  consumeDiscardPending: (tabId: string) => {
+    if (_discardPendingTabs.has(tabId)) {
+      _discardPendingTabs.delete(tabId)
+      return true
+    }
+    return false
   },
 
   setFileViewerState: (tabId: string, paneId: string, itemId: string, viewerState: { scrollTop?: number; cursorPos?: number }) => {

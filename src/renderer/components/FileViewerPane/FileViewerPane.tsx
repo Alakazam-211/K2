@@ -370,6 +370,32 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     return () => clearInterval(interval)
   }, [filePath, isDirty])
 
+  // Mirror the latest unsaved edit buffer into a ref so the unmount flush
+  // below captures current edits (effect cleanups close over stale state).
+  const pendingSaveRef = useRef<{ path: string; content: string } | null>(null)
+  useEffect(() => {
+    pendingSaveRef.current =
+      isDirty && editedContent !== null ? { path: filePath, content: editedContent } : null
+  }, [isDirty, editedContent, filePath])
+
+  // Autosave unsaved edits to disk on unmount. Switching WORKSPACES unmounts
+  // this pane (panes tear down per-workspace to bound RAM), which would
+  // otherwise silently drop the in-memory edit buffer — you edit a markdown
+  // file for 45 minutes, leave the workspace, and come back to the original.
+  // (In-session TAB switches keep the pane mounted, so they were already safe
+  // — see the scroll-persistence comment above.) Fire-and-forget, exactly like
+  // the scroll-position flush; Cmd+S still works for explicit saves.
+  useEffect(() => {
+    return () => {
+      const pending = pendingSaveRef.current
+      if (pending) {
+        void daemonCliPost('fs/write-file', { path: pending.path, content: pending.content }).catch(
+          (e) => console.error('[file-viewer] autosave-on-leave failed:', e),
+        )
+      }
+    }
+  }, [])
+
   // Save file (Cmd+S) — called directly by CodeEditor with current content
   const saveFile = useCallback(async (contentToSave?: string) => {
     const toSave = contentToSave ?? editedContent

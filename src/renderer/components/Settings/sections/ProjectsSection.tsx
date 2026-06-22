@@ -1014,7 +1014,7 @@ function ProjectDetail({
   // button in its default "Set up …" state.
   useEffect(() => {
     let cancelled = false
-    invoke<HarnessProbe[]>('k2so_detect_canonical_state', { projectPath: project.path })
+    daemonCliPost<HarnessProbe[]>('canonical/detect-state', { project_path: project.path })
       .then((p) => { if (!cancelled) setCanonicalProbes(p) })
       .catch((err) => { if (!cancelled) console.warn('[canonical-state] detect failed:', err) })
     return () => { cancelled = true }

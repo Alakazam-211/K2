@@ -22,6 +22,10 @@
 //! - `POST /cli/skills/write-opt-in` → `skills::content::write_opt_in_skill`
 //! - `POST /cli/onboarding/set-harness-fanout-enabled`
 //!       → `workspace::onboarding::set_harness_fanout_enabled`
+//! - `POST /cli/onboarding/harness-fanout-enabled` (read)
+//!       → `workspace::onboarding::harness_fanout_enabled`
+//! - `POST /cli/canonical/detect-state` (read)
+//!       → `workspace::canonical::detect_canonical_state`
 //!
 //! All are workspace-scoped (a `project_path` in the body), NOT
 //! owner-only — they're the same writes any logged-in user performs
@@ -72,6 +76,12 @@ struct WriteOptInBody {
 struct SetHarnessFanoutBody {
     project_path: String,
     enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct ProjectPathBody {
+    project_path: String,
 }
 
 /// Deserialize a JSON body, returning a `400` `CliResponse` on parse
@@ -209,6 +219,38 @@ pub fn handle_set_harness_fanout_enabled(body: &[u8]) -> CliResponse {
     CliResponse::ok_json(r#"{"success":true}"#.to_string())
 }
 
+/// GET-equivalent read: `POST /cli/onboarding/harness-fanout-enabled` → `{ "enabled": bool }`.
+/// Host-aware mirror of the `k2so_harness_fanout_enabled` Tauri command — wraps the SAME
+/// `k2_core::workspace::onboarding::harness_fanout_enabled` so local + remote stay identical.
+pub fn handle_harness_fanout_enabled(body: &[u8]) -> CliResponse {
+    let b: ProjectPathBody = match parse(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if b.project_path.is_empty() {
+        return CliResponse::bad_request("missing project_path");
+    }
+    let enabled = k2_core::workspace::onboarding::harness_fanout_enabled(&b.project_path);
+    CliResponse::ok_json(serde_json::json!({ "enabled": enabled }).to_string())
+}
+
+/// `POST /cli/canonical/detect-state` → the `Vec<HarnessProbe>` JSON array.
+/// Host-aware mirror of the `k2so_detect_canonical_state` Tauri command.
+pub fn handle_detect_canonical_state(body: &[u8]) -> CliResponse {
+    let b: ProjectPathBody = match parse(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if b.project_path.is_empty() {
+        return CliResponse::bad_request("missing project_path");
+    }
+    let probes = k2_core::workspace::canonical::detect_canonical_state(&b.project_path);
+    match serde_json::to_string(&probes) {
+        Ok(j) => CliResponse::ok_json(j),
+        Err(e) => CliResponse::bad_request(format!("serialize probes: {e}")),
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Tests
 // ──────────────────────────────────────────────────────────────────────
@@ -340,5 +382,66 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn harness_fanout_enabled_read_mirrors_the_write() {
+        // The host-awareness fix: the READ route must report the SAME state
+        // the WRITE route just persisted, so the remote checkbox stops
+        // snapping back to unchecked.
+        let tmp = std::env::temp_dir().join(format!(
+            "k2so-fanout-read-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).expect("mk tempdir");
+        let pp = tmp.to_string_lossy().to_string();
+
+        // Enable via the write route, then read back via the read route.
+        let body = serde_json::json!({ "project_path": pp, "enabled": true }).to_string();
+        let r = handle_set_harness_fanout_enabled(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "enable body={}", r.body);
+
+        let body = serde_json::json!({ "project_path": pp }).to_string();
+        let r = handle_harness_fanout_enabled(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "read body={}", r.body);
+        assert!(
+            r.body.contains("\"enabled\":true"),
+            "read after enable should report enabled, body={}",
+            r.body
+        );
+
+        // Disable via the write route, then read back false.
+        let body = serde_json::json!({ "project_path": pp, "enabled": false }).to_string();
+        let r = handle_set_harness_fanout_enabled(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "disable body={}", r.body);
+
+        let body = serde_json::json!({ "project_path": pp }).to_string();
+        let r = handle_harness_fanout_enabled(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "read body={}", r.body);
+        assert!(
+            r.body.contains("\"enabled\":false"),
+            "read after disable should report disabled, body={}",
+            r.body
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn harness_fanout_enabled_read_rejects_missing_project_path() {
+        let r = handle_harness_fanout_enabled(br#"{}"#);
+        assert_eq!(r.status, "400 Bad Request");
+        assert!(r.body.contains("project_path"), "body={}", r.body);
+    }
+
+    #[test]
+    fn detect_canonical_state_rejects_missing_project_path() {
+        let r = handle_detect_canonical_state(br#"{}"#);
+        assert_eq!(r.status, "400 Bad Request");
+        assert!(r.body.contains("project_path"), "body={}", r.body);
     }
 }

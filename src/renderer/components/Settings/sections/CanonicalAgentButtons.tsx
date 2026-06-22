@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { type RoleSkill, roleSkillLabel } from './canonicalAgentSeeds'
 import { type HarnessProbe, anyHarnessUnified } from './canonicalState'
@@ -91,7 +90,8 @@ export function CanonicalAgentButton({
 
   useEffect(() => {
     let cancelled = false
-    invoke<boolean>('k2so_harness_fanout_enabled', { projectPath })
+    daemonCliPost<{ enabled: boolean }>('onboarding/harness-fanout-enabled', { project_path: projectPath })
+      .then((r) => r.enabled)
       .then((on) => { if (!cancelled) setFanoutEnabled(on) })
       .catch(() => { /* default off */ })
     return () => { cancelled = true }

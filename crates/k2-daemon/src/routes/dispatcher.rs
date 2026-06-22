@@ -458,6 +458,8 @@ async fn handle_one_request(
             | "/cli/skills/remove"
             | "/cli/skills/write-opt-in"
             | "/cli/onboarding/set-harness-fanout-enabled"
+            | "/cli/onboarding/harness-fanout-enabled"
+            | "/cli/canonical/detect-state"
             | "/cli/agents/regenerate-workspace-skill"
             | "/cli/agents/save-agent-md"
             | "/cli/agents/disable-workspace-claude-md"
@@ -2076,6 +2078,8 @@ async fn handle_one_request(
             && post_allowed
             && (p.starts_with("/cli/skills/")
                 || p == "/cli/onboarding/set-harness-fanout-enabled"
+                || p == "/cli/onboarding/harness-fanout-enabled"
+                || p == "/cli/canonical/detect-state"
                 || p == "/cli/agents/regenerate-workspace-skill"
                 || p == "/cli/agents/save-agent-md"
                 || p == "/cli/agents/disable-workspace-claude-md"
@@ -2518,6 +2522,16 @@ fn dispatch_connect_gap_post(path: &str, body: &[u8]) -> crate::cli::CliResponse
         "/cli/skills/write-opt-in" => crate::skills_routes::handle_write_opt_in(body),
         "/cli/onboarding/set-harness-fanout-enabled" => {
             crate::skills_routes::handle_set_harness_fanout_enabled(body)
+        }
+        // Host-aware READ mirrors (the GAP fix): the checkbox WRITE above is
+        // host-aware, but the renderer used to READ these via LOCAL Tauri
+        // invoke() — so on a remote host the marker was written remotely but
+        // read locally → always false. These read routes close that gap.
+        "/cli/onboarding/harness-fanout-enabled" => {
+            crate::skills_routes::handle_harness_fanout_enabled(body)
+        }
+        "/cli/canonical/detect-state" => {
+            crate::skills_routes::handle_detect_canonical_state(body)
         }
         // Agent / session writes.
         "/cli/agents/regenerate-workspace-skill" => {

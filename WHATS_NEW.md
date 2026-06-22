@@ -3,13 +3,15 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
-## 0.40.11 — Markdown edits are safe + canonical-agents fix on remote hosts
+## 0.40.11 — Unsaved edits are protected + canonical-agents fix on remote hosts
 
-- **Editing a file and leaving the workspace no longer loses your work.** If you
-  edit a markdown (or other) file and switch to another workspace before saving,
-  K2 now writes your changes to disk automatically as you leave, instead of
-  reverting to the original. (Cmd+S still works for explicit saves; in-workspace
-  tab switches were already safe.)
+- **Leaving a workspace with unsaved file edits now asks before you lose them.**
+  If you edit a markdown (or other) file and switch to another workspace before
+  saving, K2 prompts **Save / Discard / Cancel** instead of silently reverting to
+  the original — no more spending 45 minutes on a file and coming back to find it
+  reset. Save writes all your edits, Discard drops them, Cancel keeps you put.
+  (Cmd+S still works for explicit saves; switching tabs within a workspace was
+  always safe.)
 - **The "K2 Canonical Agent" checkbox now sticks on remote servers.** When you
   were connected to a remote K2 Connect host, enabling canonical agents would
   appear to revert to unchecked when you left and returned to Settings — the

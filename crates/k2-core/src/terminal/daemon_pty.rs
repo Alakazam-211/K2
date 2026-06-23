@@ -627,8 +627,12 @@ impl DaemonPtySession {
     /// (notably Claude) don't leave stale chrome above the new render.
     ///
     /// Subtle: we use `goto(0,0) + ClearMode::Below` instead of the
-    /// more obvious `ClearMode::All`. In non-alt-screen mode (Claude's
-    /// TUI is not alt-screen), `ClearMode::All` calls
+    /// more obvious `ClearMode::All`. In non-alt-screen mode (some
+    /// TUIs paint into the primary buffer; note current Claude
+    /// `/tui fullscreen` DOES use the alt screen + mouse reporting —
+    /// `?1049h` plus `?1000h`/`?1002h`/`?1003h`/`?1006h` — so this
+    /// path covers the primary-buffer case only), `ClearMode::All`
+    /// calls
     /// `grid.clear_viewport()` which **scrolls the visible content
     /// INTO scrollback** before clearing — exactly the unwanted
     /// "every resize appends a copy of the prompt to history"

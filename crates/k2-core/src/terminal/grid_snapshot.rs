@@ -50,6 +50,21 @@ pub struct TermGridSnapshot {
     /// Usually 0 for daemon sessions (only mutated via byte feed,
     /// not user scroll — clients do their own scrolling).
     pub display_offset: usize,
+    /// True when the child app has any mouse-reporting mode active
+    /// (`?1000h` / `?1002h` / `?1003h` → CLICK / DRAG / MOTION). When
+    /// set, the client must forward wheel/click as encoded mouse
+    /// events to the PTY instead of (or before) doing local-viewport
+    /// scroll — the app paints its own scrollable surface (e.g.
+    /// Claude `/tui fullscreen`) and has no alacritty scrollback.
+    pub mouse_report: bool,
+    /// True when the child requested SGR extended mouse encoding
+    /// (`?1006h`). Clients should emit `\e[<…M` sequences rather than
+    /// legacy X10 `\e[M` when this is set.
+    pub sgr_mouse: bool,
+    /// True when the child is on the alternate screen (`?1049h` /
+    /// `?47h`). The alt grid has no scrollback, so local scroll is a
+    /// no-op here — surfaced for client diagnostics / scroll routing.
+    pub alt_screen: bool,
 }
 
 /// Cursor position + visibility from a Term snapshot.
@@ -284,6 +299,17 @@ pub fn snapshot_term<L: EventListener>(
         visible: term.mode().contains(TermMode::SHOW_CURSOR),
     };
 
+    // Mouse-mode bits the child app set via DECSET. When mouse
+    // reporting is on, the client must forward wheel as encoded
+    // mouse events to the PTY rather than scrolling its local
+    // viewport (TUIs on the alt screen have no scrollback to move).
+    let mode = term.mode();
+    let mouse_report = mode.contains(TermMode::MOUSE_REPORT_CLICK)
+        || mode.contains(TermMode::MOUSE_DRAG)
+        || mode.contains(TermMode::MOUSE_MOTION);
+    let sgr_mouse = mode.contains(TermMode::SGR_MOUSE);
+    let alt_screen = mode.contains(TermMode::ALT_SCREEN);
+
     TermGridSnapshot {
         pane_id: pane_id.to_string(),
         cols,
@@ -293,6 +319,9 @@ pub fn snapshot_term<L: EventListener>(
         cursor,
         version,
         display_offset: grid.display_offset(),
+        mouse_report,
+        sgr_mouse,
+        alt_screen,
     }
 }
 

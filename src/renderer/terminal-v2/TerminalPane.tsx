@@ -87,6 +87,18 @@ interface TermGridSnapshot {
   cursor: CursorSnapshot
   version: number
   displayOffset: number
+  /** True when the child app has any mouse-reporting mode active
+   *  (?1000h / ?1002h / ?1003h). When set, the wheel handler must
+   *  forward wheel ticks to the PTY as encoded mouse events instead
+   *  of doing local-viewport scroll (TUIs on the alt screen have no
+   *  scrollback to move). Only present on full snapshots — deltas
+   *  carry it forward from the previous snapshot. */
+  mouseReport?: boolean
+  /** True when the child requested SGR extended mouse encoding
+   *  (?1006h) → emit `\x1b[<…M` rather than legacy X10 `\x1b[M`. */
+  sgrMouse?: boolean
+  /** True when the child is on the alternate screen (?1049h / ?47h). */
+  altScreen?: boolean
 }
 
 interface DamagedRow {
@@ -261,6 +273,12 @@ function mergeDelta(
     cursor: delta.cursor,
     version: delta.version,
     displayOffset: delta.displayOffset,
+    // Mouse-mode bits are sticky state the daemon only re-sends on
+    // full snapshots; carry the last-known values forward so the
+    // wheel handler keeps routing correctly across delta ticks.
+    mouseReport: prev.mouseReport,
+    sgrMouse: prev.sgrMouse,
+    altScreen: prev.altScreen,
   }
 }
 
@@ -2196,6 +2214,57 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     const FLUSH_MS = 50
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY === 0) return
+
+      // ── Mouse-reporting apps (e.g. Claude `/tui fullscreen`) ────
+      // When the child has DECSET mouse reporting on, it paints its
+      // own scrollable surface (typically on the alt screen, which
+      // has NO alacritty scrollback). Local-viewport scroll would be
+      // a no-op, so instead forward the wheel as encoded mouse events
+      // to the PTY and let the app scroll itself. SGR encoding only
+      // (Claude uses ?1006h); legacy X10 wheel is left to local
+      // scroll below (see commit note) since we can't reliably emit
+      // the high-bit byte form over the JSON text-input channel.
+      if (snapshot?.mouseReport && snapshot?.sgrMouse) {
+        const cw = cellMetrics.width
+        const ch2 = cellMetrics.height
+        if (cw > 0 && ch2 > 0) {
+          e.preventDefault()
+          const rect = el.getBoundingClientRect()
+          // Same 0-based cell math as the link/hover handler; SGR
+          // mouse coordinates are 1-based, so add 1 and clamp to ≥1.
+          const col = Math.max(
+            1,
+            Math.floor((e.clientX - rect.left - 4) / cw) + 1,
+          )
+          const row = Math.max(
+            1,
+            Math.floor((e.clientY - rect.top - 4) / ch2) + 1,
+          )
+          // SGR button code: wheel-up = 64, wheel-down = 65, press
+          // form terminated by `M`. deltaY < 0 is up (scroll toward
+          // older content), deltaY > 0 is down.
+          const up = e.deltaY < 0
+          const btn = up ? 64 : 65
+          // Quantize to whole notches. One sequence per line of
+          // movement (mirrors the local path's line accumulation),
+          // min one tick per event.
+          const lineH =
+            e.deltaMode === WheelEvent.DOM_DELTA_LINE
+              ? 1
+              : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+                ? snapshot?.rows ?? 24
+                : Math.abs(e.deltaY) / ch2
+          let ticks = Math.max(1, Math.round(lineH))
+          // Guard against a pathological huge delta flooding the PTY.
+          if (ticks > 16) ticks = 16
+          const seq = `\x1b[<${btn};${col};${row}M`
+          let out = ''
+          for (let i = 0; i < ticks; i++) out += seq
+          sendInput(out)
+          return
+        }
+      }
+
       e.preventDefault()
       const cellH = cellMetrics.height || 20
       const pixelDelta =
@@ -2233,7 +2302,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         scrollTimerRef.current = null
       }
     }
-  }, [config.scrolling.multiplier, cellMetrics.height, snapshot])
+  }, [
+    config.scrolling.multiplier,
+    cellMetrics.height,
+    cellMetrics.width,
+    snapshot,
+    sendInput,
+  ])
+
+  // ── Re-clamp viewport offset on snapshot change ───────────────
+  // A smaller-scrollback resend (resize / restart / alt-screen
+  // switch) can strand `viewportOffset` past the new scrollback
+  // length, which would freeze the viewport on a blank window.
+  // Clamp it down whenever the scrollback shrinks below the offset.
+  useEffect(() => {
+    const maxOffset = snapshot?.scrollback.length ?? 0
+    setViewportOffset((o) => (o > maxOffset ? maxOffset : o))
+  }, [snapshot])
 
   // ── Styles ────────────────────────────────────────────────────
   const containerStyle: React.CSSProperties = useMemo(

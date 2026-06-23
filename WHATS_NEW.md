@@ -3,8 +3,13 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
-## 0.40.11 — Unsaved edits are protected + canonical-agents fix on remote hosts
+## 0.40.11 — Unsaved edits protected + scroll fixed in fullscreen TUIs + canonical fix
 
+- **Mouse-wheel scrolling works again in fullscreen terminal apps.** When a
+  terminal program took over the screen with mouse support on (e.g. Claude Code
+  in `/tui fullscreen` mode), the scroll wheel did nothing — K2 now forwards
+  wheel ticks to the app so it scrolls its own view, the way native terminals do.
+  Plain shells and inline TUIs scroll exactly as before.
 - **Leaving a workspace with unsaved file edits now asks before you lose them.**
   If you edit a markdown (or other) file and switch to another workspace before
   saving, K2 prompts **Save / Discard / Cancel** instead of silently reverting to

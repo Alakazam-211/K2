@@ -367,7 +367,7 @@ impl DaemonPtySession {
         // bash prompts, ls --color, vim — basically every TUI — turn
         // OFF colors. Mirror what `alacritty_backend.rs` does for the
         // legacy renderer (TERM=xterm-256color + COLORTERM=truecolor +
-        // TERM_PROGRAM=K2SO) so v2 children render the same colors as
+        // TERM_PROGRAM=K2) so v2 children render the same colors as
         // legacy children.
         let mut child_env = cfg.env.clone();
 
@@ -400,7 +400,7 @@ impl DaemonPtySession {
             .or_insert_with(|| "truecolor".to_string());
         child_env
             .entry("TERM_PROGRAM".to_string())
-            .or_insert_with(|| "K2SO".to_string());
+            .or_insert_with(|| "K2".to_string());
 
         let pty_options = TtyOptions {
             shell,

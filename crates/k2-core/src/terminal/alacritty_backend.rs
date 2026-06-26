@@ -330,7 +330,7 @@ impl TerminalManager {
 
         // Environment variables
         pty_options.env.insert("TERM".to_string(), "xterm-256color".to_string());
-        pty_options.env.insert("TERM_PROGRAM".to_string(), "K2SO".to_string());
+        pty_options.env.insert("TERM_PROGRAM".to_string(), "K2".to_string());
         pty_options.env.insert("COLORTERM".to_string(), "truecolor".to_string());
         pty_options.env.insert("PROMPT_EOL_MARK".to_string(), String::new());
 

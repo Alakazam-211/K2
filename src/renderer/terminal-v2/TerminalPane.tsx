@@ -50,6 +50,7 @@ import {
   detectLinks,
   type DetectedLink,
 } from '@/components/Terminal/terminalLinkDetector'
+import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import {
   bracketPaste,
   isImagePath,
@@ -2549,9 +2550,26 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const finalContainerStyle: React.CSSProperties = {
     ...containerStyle,
     cursor: hoveredLink ? 'pointer' : 'text',
+    // Composer 1b: the pane now lives inside a flex-column wrapper so the
+    // compose bar can dock beneath it. Override the `height: 100%` from
+    // `containerStyle` with flex-grow + `minHeight: 0` so the terminal
+    // shrinks to leave room for the bar (and the ResizeObserver reshapes
+    // the PTY to the smaller height) instead of overflowing it.
+    height: 'auto',
+    minHeight: 0,
   }
 
   return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        height: '100%',
+        overflow: 'hidden',
+      }}
+      data-terminal-pane-wrapper=""
+    >
     <div
       ref={containerRef}
       className="alacritty-v2-pane"
@@ -2693,6 +2711,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           {' '}v:{snapshot?.version ?? 0}
           {!isReady && phase.kind !== 'idle' && ' · loading'}
         </div>
+      )}
+    </div>
+
+      {/* Composer 1b — message bar docked beneath the live pane. Gated on
+       *  phase 'ready' so it only renders with a RESOLVED daemon
+       *  sessionId (`phase.sessionId`, the id the daemon minted at
+       *  /cli/sessions/v2/spawn and that the grid-WS streams), NEVER the
+       *  renderer's `terminalId` and never a null/stale id. The composer
+       *  route resolves via `lookup_by_session_id`, so it must get the
+       *  real daemon session id. */}
+      {phase.kind === 'ready' && (
+        <TerminalComposeBar sessionId={phase.sessionId} />
       )}
     </div>
   )

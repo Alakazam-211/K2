@@ -611,6 +611,15 @@ async fn handle_one_request(
                     "supported": true,
                     "enabled": crate::session_token::scoped_hooks_enabled(),
                 },
+                // Observability/Agent-Ops Phase E: advertise the read-only
+                // `/cli/ops/*` capability (overview + activity + stream) so
+                // the agent-ops pane can feature-detect it. Additive +
+                // forward-compatible like `scopedHooks` (PROTOCOL not bumped);
+                // an older peer omitting it reads as unsupported.
+                "ops": {
+                    "supported": true,
+                    "version": "1",
+                },
             })
             .to_string();
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;

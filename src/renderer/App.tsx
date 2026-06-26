@@ -39,6 +39,8 @@ import { useSettingsStore } from './stores/settings'
 import { useCommandPaletteStore } from './stores/command-palette'
 import { useRunningAgentsStore } from './stores/running-agents'
 import RunningAgentsPanel from './components/RunningAgentsPanel/RunningAgentsPanel'
+import AgentOps from './components/AgentOps/AgentOps'
+import { useAgentOpsStore } from './stores/agent-ops'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
 import { useTabsStore } from './stores/tabs'
@@ -208,6 +210,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
       <CommandPalette />
       <ReviewQueueModal />
       <RunningAgentsPanel />
+      <AgentOps />
       <ContextMenu />
       <ConfirmDialog />
       <WhatsNewModal />
@@ -360,6 +363,11 @@ export default function App(): React.JSX.Element {
       if (e.metaKey && e.key === 'j') {
         e.preventDefault()
         toggleRunningAgents()
+      }
+      // Cmd+Shift+O — Agent Ops (Observability) fleet view
+      if (e.metaKey && e.shiftKey && (e.key === 'o' || e.key === 'O')) {
+        e.preventDefault()
+        useAgentOpsStore.getState().toggle()
       }
       // Cmd+[ to go back, Cmd+] to go forward
       if (e.metaKey && !e.shiftKey && e.key === '[') {
@@ -844,6 +852,7 @@ export default function App(): React.JSX.Element {
       <CommandPalette />
       <ReviewQueueModal />
       <RunningAgentsPanel />
+      <AgentOps />
       <ContextMenu />
       <ConfirmDialog />
       <WhatsNewModal />

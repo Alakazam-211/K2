@@ -5,7 +5,6 @@ import { useSettingsStore } from '@/stores/settings'
 import { usePresetsStore, parseCommand } from '@/stores/presets'
 import { useTabsStore } from '@/stores/tabs'
 import { useAssistantStore } from '@/stores/assistant'
-import { useAgentOpsStore } from '@/stores/agent-ops'
 import { useToastStore } from '@/stores/toast'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
@@ -1247,16 +1246,6 @@ export default function Sidebar(): React.JSX.Element {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
           </svg>
           Add Workspace
-        </button>
-        <button
-          className="no-drag flex items-center gap-1.5 px-2.5 py-2 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-white/[0.04] hover:bg-white/[0.08] transition-colors"
-          onClick={() => useAgentOpsStore.getState().open()}
-          title="Agent Ops — fleet view (⌘⇧O)"
-        >
-          {/* Fleet / pulse icon */}
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 12h4l2 5 4-12 2 7h6" />
-          </svg>
         </button>
         <button
           className="no-drag flex items-center gap-1.5 px-2.5 py-2 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-white/[0.04] hover:bg-white/[0.08] transition-colors"

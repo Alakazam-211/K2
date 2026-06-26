@@ -8,6 +8,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useReviewQueueStore } from '@/stores/review-queue'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useActiveAgentsStore } from '@/stores/active-agents'
+import { useAgentOpsStore } from '@/stores/agent-ops'
 import TimerButton from '@/components/Timer/TimerButton'
 import ServerSwitcher from './ServerSwitcher'
 
@@ -143,6 +144,8 @@ export default function TopBar({
         <ReviewQueueTopBarButton />
         {/* Running Agents */}
         <RunningAgentsTopBarButton />
+        {/* Agent Ops — fleet view */}
+        <AgentOpsTopBarButton />
         {/* Back / Forward navigation */}
         <NavButtons />
       </div>
@@ -319,6 +322,24 @@ function RunningAgentsTopBarButton(): React.JSX.Element {
           {agentCount > 99 ? '99+' : agentCount}
         </span>
       )}
+    </button>
+  )
+}
+
+function AgentOpsTopBarButton(): React.JSX.Element {
+  return (
+    <button
+      onClick={() => useAgentOpsStore.getState().open()}
+      className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+      style={{
+        // @ts-expect-error -- Electron-specific CSS property
+        WebkitAppRegion: 'no-drag'
+      }}
+      title="Agent Ops — fleet view (⌘⇧O)"
+    >
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 12h4l2 5 4-12 2 7h6" />
+      </svg>
     </button>
   )
 }

@@ -2209,6 +2209,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // ── Wheel scroll (client-side viewport offset) ────────────────
   const scrollAccumRef = useRef(0)
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Mouse-reporting (fullscreen TUI) wheel: accumulate + throttle so a
+  // trackpad's momentum-event flood doesn't fire a storm of SGR notches.
+  const mouseWheelAccumRef = useRef(0)
+  const mouseWheelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mouseWheelPosRef = useRef({ col: 1, row: 1 })
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -2241,27 +2246,44 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             1,
             Math.floor((e.clientY - rect.top - 4) / ch2) + 1,
           )
-          // SGR button code: wheel-up = 64, wheel-down = 65, press
-          // form terminated by `M`. deltaY < 0 is up (scroll toward
-          // older content), deltaY > 0 is down.
-          const up = e.deltaY < 0
-          const btn = up ? 64 : 65
-          // Quantize to whole notches. One sequence per line of
-          // movement (mirrors the local path's line accumulation),
-          // min one tick per event.
-          const lineH =
+          mouseWheelPosRef.current = { col, row }
+          // Accumulate signed pixel movement and flush on a timer, just
+          // like the local-scroll path below. WHY: a trackpad fires a
+          // flood of momentum wheel events; emitting SGR notches per-
+          // event made fullscreen TUIs scroll wildly fast. Throttling to
+          // one batch per FLUSH_MS + a cells-per-notch divisor tames it.
+          const pixelDelta =
             e.deltaMode === WheelEvent.DOM_DELTA_LINE
-              ? 1
+              ? e.deltaY * ch2
               : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
-                ? snapshot?.rows ?? 24
-                : Math.abs(e.deltaY) / ch2
-          let ticks = Math.max(1, Math.round(lineH))
-          // Guard against a pathological huge delta flooding the PTY.
-          if (ticks > 16) ticks = 16
-          const seq = `\x1b[<${btn};${col};${row}M`
-          let out = ''
-          for (let i = 0; i < ticks; i++) out += seq
-          sendInput(out)
+                ? e.deltaY * ch2 * (snapshot?.rows ?? 24)
+                : e.deltaY
+          mouseWheelAccumRef.current += pixelDelta
+          if (!mouseWheelTimerRef.current) {
+            mouseWheelTimerRef.current = setTimeout(() => {
+              mouseWheelTimerRef.current = null
+              const accum = mouseWheelAccumRef.current
+              mouseWheelAccumRef.current = 0
+              if (accum === 0) return
+              // SGR button: wheel-up = 64 (deltaY<0, toward older
+              // content), wheel-down = 65.
+              const btn = accum < 0 ? 64 : 65
+              // Higher = less sensitive: one SGR notch per ~this many
+              // cell-heights of accumulated movement. Tune to taste.
+              const CELLS_PER_NOTCH = 2.5
+              let ticks = Math.max(
+                1,
+                Math.round(Math.abs(accum) / (ch2 * CELLS_PER_NOTCH)),
+              )
+              // Cap so one fast flick can't flood the PTY.
+              if (ticks > 8) ticks = 8
+              const { col: c, row: r } = mouseWheelPosRef.current
+              const seq = `\x1b[<${btn};${c};${r}M`
+              let out = ''
+              for (let i = 0; i < ticks; i++) out += seq
+              sendInput(out)
+            }, FLUSH_MS)
+          }
           return
         }
       }
@@ -2301,6 +2323,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (scrollTimerRef.current) {
         clearTimeout(scrollTimerRef.current)
         scrollTimerRef.current = null
+      }
+      if (mouseWheelTimerRef.current) {
+        clearTimeout(mouseWheelTimerRef.current)
+        mouseWheelTimerRef.current = null
       }
     }
   }, [

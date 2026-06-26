@@ -1640,6 +1640,112 @@ for line in data.get('lines', []):
     fi
 }
 
+# ── BETA: `k2 talk` — fused read+send inter-agent collaboration verb ──
+#
+# The HITL-aware companion to `msg`. `msg` is a deliberate, blind
+# fire-and-forget send (the ~95%-working path); `talk` FUSES "read the
+# peer's live screen" + "send" into one call so the calling agent
+# CAN'T forget to look before it injects — the exact slip that gets a
+# message *eaten* by a human-in-the-loop prompt (a y/n / 1·2·3 /
+# confirm / arrow-menu the recipient is mid-answering, which silently
+# consumes the injected bytes as the answer).
+#
+# A CLI cannot comprehend — `talk` is a guided PROTOCOL the CALLING
+# agent (which IS an LLM) follows. The CLI only surfaces the screen +
+# guidance; the agent reads it, judges ready-vs-HITL, and decides to
+# drive / back off / deliver. There is NO daemon-side HITL detector and
+# NO new daemon route here: `talk` reuses `k2 read` (GET
+# /cli/terminal/read) for the read and `k2 msg` (/cli/workspace/msg)
+# for the send.
+#
+#   k2 talk <workspace> "<message>"   read the peer's screen, then send
+#   k2 talk <workspace> --read-only   read + judge only; do NOT send
+#                                     (use to BACK OFF / re-check later)
+cmd_talk() {
+    for arg in "$@"; do
+        case "$arg" in
+            --help|-h) cmd_help_talk; return 0 ;;
+        esac
+    done
+
+    local target="" text="" from="" command="" lines=50 agent=""
+    local read_only="false"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --from)      from="$2"; shift 2 ;;
+            --command)   command="$2"; shift 2 ;;
+            --lines)     lines="$2"; shift 2 ;;
+            --agent)     agent="$2"; shift 2 ;;
+            --read-only|--dry-run|--peek) read_only="true"; shift ;;
+            -*)
+                echo "Error: unknown flag '$1' (try 'k2 talk --help')" >&2
+                exit 1 ;;
+            *)
+                if [[ -z "$target" ]]; then target="$1"
+                else text="$1"
+                fi
+                shift ;;
+        esac
+    done
+
+    [[ -z "$target" ]] && {
+        echo "Error: workspace required" >&2
+        echo "Usage: k2 talk <workspace> \"text\" [--read-only] [--from <name>] [--lines N] [--agent <name>]" >&2
+        echo "       Run 'k2 talk --help' for the full BETA protocol." >&2
+        exit 1
+    }
+    if [[ "$read_only" != "true" && -z "$text" ]]; then
+        echo "Error: message text required (or pass --read-only to just peek)" >&2
+        echo "Usage: k2 talk <workspace> \"text\" [--read-only] [--from <name>] [--lines N] [--agent <name>]" >&2
+        exit 1
+    fi
+
+    # ── 1. READ FIRST ── surface the peer's live screen so the agent
+    # sees ready-vs-HITL BEFORE anything is sent. Reuses `k2 read`
+    # (GET /cli/terminal/read). `|| read_rc=$?` keeps `set -e` from
+    # aborting talk when the peer is asleep / not found — we still want
+    # to proceed (msg can wake it) and report.
+    echo "── talk(BETA): $target's live screen ──────────────────────────" >&2
+    local read_args=("$target" --lines "$lines")
+    [[ -n "$agent" ]] && read_args+=(--agent "$agent")
+    local read_rc=0
+    cmd_read "${read_args[@]}" || read_rc=$?
+    echo "───────────────────────────────────────────────────────────────" >&2
+
+    # ── 2. JUDGE (the agent's job, not the CLI's) ── surface the
+    # drive-or-back-off protocol from the message-composer PRD (D8).
+    cat >&2 <<EOF
+
+talk(BETA): you just READ $target's screen above. The COMPREHENSION is
+yours — a CLI can't judge it. Before this message lands, decide:
+  • READY (idle/empty prompt)? → deliver; it lands cleanly.
+  • In a HITL you should NOT answer for it (a canonical/federation peer
+    waiting on its OWNER's permission prompt, or any peer you lack
+    standing over)? → BACK OFF: re-run with --read-only in a few minutes
+    and only deliver once it's READY. Don't answer someone else's prompt.
+  • In a HITL you DO have standing over? → DRIVE it first via raw TUI
+    control ('k2 terminal write <id> "y"/"1"/Enter…'), re-read, repeat
+    for multi-step chains, THEN deliver.
+EOF
+
+    if [[ "$read_only" == "true" ]]; then
+        echo "talk(BETA): --read-only — nothing sent. Re-run without it to deliver." >&2
+        [[ -n "$text" ]] && echo "  (held message: $text)" >&2
+        return 0
+    fi
+
+    # ── 3. SEND ── deliver via the existing `k2 msg` path
+    # (/cli/workspace/msg). `talk` adds NO new send mechanism — `msg`
+    # stays the one delivery throat. Exit code mirrors msg's.
+    echo "talk(BETA): delivering to $target…" >&2
+    local msg_args=("$target" "$text")
+    [[ -n "$from" ]] && msg_args+=(--from "$from")
+    [[ -n "$command" ]] && msg_args+=(--command "$command")
+    local send_rc=0
+    cmd_msg "${msg_args[@]}" || send_rc=$?
+    return "$send_rc"
+}
+
 cmd_heartbeat_wake() {
     # Automated manager wake cycle:
     # 1. Check if any agents have inbox work
@@ -3914,6 +4020,7 @@ cmd_help() {
         -a|--advanced|advanced)   cmd_help_v2_advanced ;;
         --internal|internal)      cmd_help_internal ;;
         msg)                      cmd_help_msg ;;
+        talk)                     cmd_help_talk ;;
         read)                     cmd_help_read ;;
         inbox)                    cmd_help_inbox ;;
         workspace)                cmd_help_workspace ;;
@@ -4042,6 +4149,72 @@ EXAMPLES
   k2 read scout_v3                   # last 50 lines of its coordinator
   k2 read scout_v3 --lines 120       # more history
   k2 read MyApp --agent frontend-eng # a specific agent's session
+EOF
+}
+
+cmd_help_talk() {
+    cat <<'EOF'
+k2 talk <workspace> "text" [--read-only] [--from <name>] [--lines N] [--agent <name>]
+
+  ★ BETA — THE inter-agent interaction verb. ★
+
+`talk` FUSES "read the peer's live screen" + "send" into one call, so
+you can't forget to look before you inject. That slip is what gets a
+message *eaten*: if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow
+menu, a "proceed?" confirm), an injected `msg` is silently consumed as
+the ANSWER to that prompt instead of delivered. `talk` reads first so
+you SEE the state and decide.
+
+  talk vs msg:
+    k2 talk  = interactive collaboration. Read → judge → drive/back-off
+               → deliver. Use it whenever the peer might be busy/HITL.
+    k2 msg   = deliberate fire-and-forget. The blind send; unchanged.
+  A wrong-verb mistake is benign both ways, so prefer `talk` for any
+  interactive or HITL-sensitive exchange.
+
+HOW IT WORKS (no new daemon route — pure ergonomics over read + msg)
+  1. READS the target's live terminal (same as `k2 read`) and prints it.
+  2. Surfaces the drive-or-back-off guidance. YOU (the calling agent —
+     you are the LLM) comprehend the screen; the CLI does not judge.
+  3. SENDS via the existing `k2 msg` path — unless --read-only.
+
+YOU JUDGE — ready vs HITL:
+  • READY (idle/empty input)             → deliver; it lands cleanly.
+  • HITL you must NOT answer for it       → BACK OFF. Re-run --read-only
+    (canonical/federation peer waiting      in a few minutes; deliver
+     on its OWNER, or no standing)          only once it returns to READY.
+  • HITL you DO have standing over        → DRIVE it: answer via raw TUI
+                                            control ('k2 terminal write
+                                            <id> "y"/"1"/Enter…'), re-read,
+                                            repeat for chains, THEN deliver.
+
+ARGUMENTS
+  <workspace>    Workspace name (preferred), path, or UUID. Same
+                 addressing as `k2 msg` / `k2 read`.
+  "text"         The message body. Required unless --read-only.
+
+OPTIONS
+  --read-only    Read + judge ONLY; send nothing. Use this to BACK OFF
+                 and re-check a HITL peer later. (aliases: --dry-run, --peek)
+  --from <name>  Sender identity for the [from <name>] prefix (forwarded
+                 to `msg`; same default-derivation as `msg`).
+  --lines N      Lines of the peer's screen to read first. Default 50.
+  --agent <name> Read/target a specific agent's session in the workspace.
+  --command "<text>"  Slash-command prepended to the delivered message
+                 (forwarded to `msg`).
+
+EXIT CODE
+  Mirrors `k2 msg`: 0 when the message lands, 2 on a delivery failure.
+  --read-only always exits 0 (it only reads).
+
+EXAMPLES
+  k2 talk scout_v3 --read-only          # peek + judge; send nothing
+  k2 talk scout_v3 "ready when you are" # read its screen, then deliver
+  k2 talk MyApp "merged" --from ci-bot  # attributed delivery
+
+RELATED VERBS
+  k2 msg <workspace> "text"     Deliberate blind send (no read).
+  k2 read <workspace>           Just read a peer's live terminal.
 EOF
 }
 
@@ -5588,6 +5761,13 @@ EOF
         # by workspace name like `msg`, resolving to that workspace's
         # canonical session (or `--agent <name>` for a specific agent).
         shift; cmd_read "$@"
+        ;;
+    talk)
+        # BETA: fused read+send. Reads the peer's live screen (k2 read)
+        # FIRST so the agent can't forget to look, surfaces the
+        # drive-or-back-off HITL guidance, then delivers via the
+        # existing `k2 msg` path. No new daemon route; `msg` untouched.
+        shift; cmd_talk "$@"
         ;;
     whatsnew)
         # Phase 2.1: hard-deprecated spelling. Use whats-new.

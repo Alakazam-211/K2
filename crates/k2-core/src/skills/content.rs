@@ -371,6 +371,7 @@ k2so done                                      # shortcut for `checkin --done`
 
 ### Message another workspace — or read what it's doing
 ```
+k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
 k2so msg <workspace> "text"                              # live delivery (call/IM — SHORT messages only)
 k2so msg <workspace> --inbox --title "..." --body "..."  # inbox delivery (email — no length limit)
 k2so msg <workspace> --signal <kind> --payload '{...}'   # typed signal (advanced)
@@ -382,6 +383,8 @@ k2so read <workspace> [--lines N] [--agent <name>]       # read its live termina
 **`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text. Longer or multi-line content gets **truncated** by the recipient's terminal input widget — use `--inbox` for anything substantial (briefs, file contents, multi-line notes). This length limit is the reason the inbox exists.
 
 **`read` (the read complement to `msg`):** `k2so read <workspace>` returns the last N lines (default 50) of that workspace's live terminal — its primary/coordinator session, or a specific `--agent <name>`. Use it for human-in-the-loop: peek what an agent is doing or waiting on *before* you inject a `msg`, or to diagnose a stuck agent. If the workspace is asleep, `k2so sessions live <workspace>` shows whether it has any live session.
+
+**`talk` (BETA) — THE inter-agent interaction verb.** `k2so talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2so talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2so terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
 
 Only workspaces linked via `k2so connections` are reachable.
 
@@ -467,6 +470,7 @@ k2so done                           # shortcut for `checkin --done`
 ## Message another workspace — or read what it's doing
 
 ```
+k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
 k2so msg <workspace> "text"                              # live (call/IM — SHORT messages only)
 k2so msg <workspace> --inbox --title "..." --body "..."  # inbox (email — no length limit)
 k2so read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
@@ -477,6 +481,8 @@ k2so read <workspace> [--lines N] [--agent <name>]       # read its live termina
 **`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text — longer or multi-line content gets **truncated** by their terminal input widget. Use `--inbox` for anything substantial. (This length limit is why the inbox exists.)
 
 **`read` for human-in-the-loop:** `k2so read <workspace>` returns the last N lines (default 50) of that workspace's live terminal so you can see what an agent is doing or waiting on *before* injecting a `msg` — or to diagnose a stuck agent. Add `--agent <name>` for a specific agent.
+
+**`talk` (BETA) — THE inter-agent interaction verb.** `k2so talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2so talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2so terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
 
 Only workspaces linked via `k2so connections` are reachable.
 
@@ -615,6 +621,7 @@ k2so heartbeat log [-n N]
 
 ```
 k2so connections list                                    # who's wired up to me / workspaces with live agents
+k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
 k2so msg <workspace> "text"                              # live delivery (call/IM — SHORT messages only)
 k2so msg <workspace> --inbox --title "..." --body "..."  # inbox delivery (email — no length limit)
 k2so msg <workspace> --signal <kind> --payload '{...}'   # typed signal (advanced)
@@ -626,6 +633,8 @@ k2so read <workspace> [--lines N] [--agent <name>]       # read its live termina
 **`msg` length limit:** live `msg` is injected into the recipient's input line — short, single-line text only. Longer/multi-line content gets **truncated** by their terminal input widget; use `--inbox` for anything substantial. (That limit is why the inbox exists.)
 
 **`read`** returns the last N lines (default 50) of a workspace's live terminal — its primary/coordinator session, or a specific `--agent <name>`. Use it for human-in-the-loop: see what an agent is doing or waiting on before injecting a `msg`, or diagnose a stuck agent.
+
+**`talk` (BETA) — THE inter-agent interaction verb.** `k2so talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2so talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2so terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
 
 Only workspaces linked via `k2so connections` are reachable.
 

@@ -43,7 +43,7 @@ use std::time::Duration;
 use parking_lot::Mutex as PlMutex;
 
 use k2_core::workspace::agent_identity::resolve_project_id;
-use k2_core::db::schema::WorkspaceSession;
+use k2_core::db::schema::{Project, WorkspaceSession};
 use k2_core::log_debug;
 use k2_core::session::SessionId;
 use serde::Serialize;
@@ -103,7 +103,7 @@ impl MsgReason {
                 "Run `k2so connections list` to see available workspaces."
             }
             Self::NoAgentMode => {
-                "Workspace has no agent. Use `k2so work send` to queue, or `k2so mode custom` to set up an agent."
+                "Workspace has no agent. Use `k2 work send` to queue, or `k2 mode custom` to set up an agent."
             }
             Self::SpawnFailed => {
                 "Spawn failed. Verify `claude` is on PATH for the daemon."
@@ -606,25 +606,81 @@ pub fn deliver_live(
 /// disambiguate once it has exhausted the live-inject branches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DormantDecision {
-    /// No resolvable primary agent → un-wakeable; `no_agent_mode` with a
-    /// clear remedy. Never spawns.
+    /// No agent configured for the workspace → un-wakeable; `no_agent_mode`
+    /// with a clear remedy. Never spawns.
     NoAgent,
-    /// Primary agent exists but the caller did NOT request a wake →
+    /// An agent EXISTS but the caller did NOT request a wake →
     /// `dormant_no_wake`. The peer is wakeable; point them at `--wake`.
     NoWake,
-    /// Primary agent exists AND a wake was requested → resume/fresh-spawn
+    /// An agent EXISTS AND a wake was requested → resume/fresh-spawn
     /// and deliver.
     Wake,
 }
 
-/// Pure classifier for the dormant branch (#9). Kept separate from
-/// [`attempt_delivery`] so the three-state branching is unit-testable
-/// without touching the DB, the filesystem, or the (real) spawn path.
-fn classify_dormant(primary: Option<&str>, wake: bool) -> DormantDecision {
-    match (primary, wake) {
-        (None, _) => DormantDecision::NoAgent,
-        (Some(_), false) => DormantDecision::NoWake,
-        (Some(_), true) => DormantDecision::Wake,
+/// Pure classifier for the dormant branch (#9).
+///
+/// **#9 re-fix:** `agent_exists` is now a DB fact decided by the caller —
+/// a saved canonical `workspace_sessions.session_id` OR
+/// `projects.agent_enabled == 1` — NOT whether the persona FILE
+/// `.k2/agent/AGENT.md` is present. The persona file is frequently MISSING
+/// for configured, dormant workspaces post-AGENTS.md cutover (only the
+/// generated root-mirror `<ws>/AGENT.md` survives), so the prior
+/// `find_primary_agent`-based gate wrongly classified textbook wake cases
+/// (saved session + `agent_enabled=1`) as `no_agent_mode`.
+///
+/// Kept separate from [`attempt_delivery`] so the three-state branching is
+/// unit-testable without touching the DB, the filesystem, or the (real)
+/// spawn path.
+fn classify_dormant(agent_exists: bool, wake: bool) -> DormantDecision {
+    match (agent_exists, wake) {
+        (false, _) => DormantDecision::NoAgent,
+        (true, false) => DormantDecision::NoWake,
+        (true, true) => DormantDecision::Wake,
+    }
+}
+
+/// Issue #9 re-fix — resolve the name used as the daemon session-map key +
+/// heartbeat lock label when waking a dormant workspace.
+///
+/// **Why a fallback exists:** existence is now decided from the DB (a saved
+/// canonical session OR `agent_enabled=1`), so we reach the spawn path even
+/// when the persona FILE `<ws>/.k2/agent/AGENT.md` is missing — the exact
+/// condition that made the prior fix mis-classify configured agents as
+/// `no_agent_mode`. The name must NOT bail us back there.
+///
+/// **Resolution order:**
+///   1. The persona's declared `name:` via [`find_primary_agent`], when the
+///      AGENT.md file is present (preserves the original spawn name).
+///   2. Fallback = the workspace folder basename — this matches the product
+///      default ("agent display name defaults to the workspace basename")
+///      so the woken session is labeled consistently with the rest of the
+///      app (e.g. `testing-canonical`).
+///   3. Last-resort fallback = the `agent_mode` role label
+///      (`custom`/`manager`/`k2so`), else the literal `agent`, for the
+///      degenerate case of an empty/`/` workspace path.
+///
+/// The name does NOT determine which conversation resumes — that is keyed
+/// solely by `claude --resume <session_id>` — so any stable, recognizable
+/// label is correct here.
+fn resolve_spawn_name(project_path: &str, agent_mode: &str) -> String {
+    // 1. Persona file present → use its declared name.
+    if let Some(name) = k2_core::workspace::agent_identity::find_primary_agent(project_path) {
+        if !name.trim().is_empty() {
+            return name;
+        }
+    }
+    // 2. Workspace folder basename (the product-default display name).
+    if let Some(base) = Path::new(project_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.trim().is_empty())
+    {
+        return base;
+    }
+    // 3. Degenerate path → role label, else a generic constant.
+    match agent_mode {
+        "custom" | "manager" | "k2so" => agent_mode.to_string(),
+        _ => "agent".to_string(),
     }
 }
 
@@ -699,22 +755,51 @@ fn attempt_delivery(
     }
 
     // ── Issue #9: classify the no-live-session state BEFORE the spawn
-    // branches, so the three states the ticket calls out are distinct
-    // (today they were conflated):
-    //   • no resolvable primary agent  → no_agent_mode (un-wakeable;
+    // branches, so the three states the ticket calls out are distinct:
+    //   • no agent configured            → no_agent_mode (un-wakeable;
     //     clear remedy `k2 mode custom` / register). Do NOT spawn.
-    //   • primary agent + wake NOT requested → dormant_no_wake (the peer
+    //   • agent configured + wake NOT requested → dormant_no_wake (the peer
     //     CAN be woken; the caller opted out — point them at `--wake`).
-    //   • primary agent + wake requested → wake it (resume or fresh) and
+    //   • agent configured + wake requested → wake it (resume or fresh) and
     //     deliver, waiting until READY first.
-    let primary = k2_core::workspace::agent_identity::find_primary_agent(project_path);
-    let agent_name = match classify_dormant(primary.as_deref(), wake) {
+    //
+    // #9 RE-FIX — existence is a DB fact, NOT the persona file. The prior
+    // fix gated existence on `find_primary_agent`, which reads the persona
+    // FILE `<ws>/.k2/agent/AGENT.md`. That file is frequently MISSING for
+    // configured, dormant workspaces post-AGENTS.md cutover (only the
+    // generated root-mirror `<ws>/AGENT.md` survives), so a textbook wake
+    // case — a saved canonical session with `agent_enabled=1` and no live
+    // PTY — wrongly returned `no_agent_mode`. The authoritative signals are
+    // (a) a saved canonical `workspace_sessions.session_id` and (b)
+    // `projects.agent_enabled=1`; resuming by `--resume <session_id>`
+    // restores the conversation regardless of the persona file.
+    let project_row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        Project::get(&conn, &project_id).ok()
+    };
+    let agent_enabled = project_row
+        .as_ref()
+        .map(|p| p.agent_enabled == 1)
+        .unwrap_or(false);
+    let agent_mode = project_row
+        .as_ref()
+        .map(|p| p.agent_mode.clone())
+        .unwrap_or_else(|| "off".to_string());
+    let agent_exists = saved_session.is_some() || agent_enabled;
+
+    match classify_dormant(agent_exists, wake) {
         DormantDecision::NoAgent => return MsgResponse::fail(MsgReason::NoAgentMode),
         DormantDecision::NoWake => return MsgResponse::fail(MsgReason::DormantNoWake),
-        // Wake implies a resolved primary (the classifier only returns
-        // Wake when `primary` is Some), so the unwrap is total.
-        DormantDecision::Wake => primary.expect("Wake decision implies Some(primary)"),
-    };
+        DormantDecision::Wake => {}
+    }
+
+    // Wake confirmed. Resolve the spawn session-map name with a fallback so
+    // a missing persona file never bounces us back to `no_agent_mode`
+    // (the bug being fixed): the name is only the daemon session-map key +
+    // heartbeat lock label — `--resume <session_id>` restores the actual
+    // conversation regardless of the name.
+    let agent_name = resolve_spawn_name(project_path, &agent_mode);
 
     // Branch 2: saved session, no live PTY → resume + fire.
     if let Some(claude_sid) = saved_session.as_deref() {
@@ -1785,8 +1870,12 @@ mod tests {
         assert_eq!(json["reason"], "no_agent_mode");
         let hint = json["hint"].as_str().expect("hint must be present");
         assert!(
-            hint.contains("k2so work send"),
-            "no_agent_mode hint should point to work send"
+            hint.contains("k2 work send"),
+            "no_agent_mode hint should point to `k2 work send`: {hint}"
+        );
+        assert!(
+            !hint.contains("k2so"),
+            "no_agent_mode hint must use the `k2` CLI, not deprecated `k2so`: {hint}"
         );
         assert_eq!(json["attempts"], 1);
     }
@@ -1875,19 +1964,15 @@ mod tests {
     #[test]
     fn classify_dormant_distinguishes_the_three_states() {
         // The core ask of #9: the cascade must tell these apart instead of
-        // conflating them into one opaque error.
-        // No primary agent → un-wakeable, regardless of the wake flag.
-        assert_eq!(classify_dormant(None, true), DormantDecision::NoAgent);
-        assert_eq!(classify_dormant(None, false), DormantDecision::NoAgent);
-        // Primary agent present → the wake flag decides.
-        assert_eq!(
-            classify_dormant(Some("cortana"), false),
-            DormantDecision::NoWake
-        );
-        assert_eq!(
-            classify_dormant(Some("cortana"), true),
-            DormantDecision::Wake
-        );
+        // conflating them into one opaque error. #9 RE-FIX: existence is a
+        // DB-sourced bool (saved session OR agent_enabled), NOT the persona
+        // file — so the classifier now takes `agent_exists: bool`.
+        // No agent configured → un-wakeable, regardless of the wake flag.
+        assert_eq!(classify_dormant(false, true), DormantDecision::NoAgent);
+        assert_eq!(classify_dormant(false, false), DormantDecision::NoAgent);
+        // Agent exists → the wake flag decides.
+        assert_eq!(classify_dormant(true, false), DormantDecision::NoWake);
+        assert_eq!(classify_dormant(true, true), DormantDecision::Wake);
     }
 
     #[test]
@@ -1905,17 +1990,25 @@ mod tests {
     }
 
     /// Build a registered, DORMANT workspace in the shared in-memory test
-    /// DB: a `projects` row + a `workspace_sessions` row carrying a SAVED
-    /// claude session_id but NO live terminal. `with_agent` controls
-    /// whether a resolvable `.k2/agent/AGENT.md` persona exists. Returns
-    /// `(project_id, project_path)`.
-    fn scratch_dormant_workspace(with_agent: bool) -> (String, String) {
+    /// DB and dial the THREE independent existence inputs the #9 re-fix
+    /// cares about, so each test can isolate one:
+    ///   - `with_persona`: whether a resolvable `.k2/agent/AGENT.md` persona
+    ///     FILE exists (the signal the BUGGED prior fix gated on).
+    ///   - `with_saved_session`: whether a canonical `workspace_sessions
+    ///     .session_id` is saved (dormant = saved, no live terminal).
+    ///   - `agent_enabled`: the `projects.agent_enabled` flag.
+    /// Returns `(project_id, project_path)`.
+    fn scratch_dormant_workspace_ex(
+        with_persona: bool,
+        with_saved_session: bool,
+        agent_enabled: i64,
+    ) -> (String, String) {
         use std::fs;
         let uniq = format!("{}-{}", std::process::id(), uuid::Uuid::new_v4());
         let base = std::env::temp_dir().join(format!("k2-issue9-{uniq}"));
         fs::create_dir_all(&base).unwrap();
         let project_path = base.to_string_lossy().into_owned();
-        if with_agent {
+        if with_persona {
             let agent_dir = base.join(".k2").join("agent");
             fs::create_dir_all(&agent_dir).unwrap();
             fs::write(
@@ -1925,63 +2018,134 @@ mod tests {
             .unwrap();
         }
         let project_id = uuid::Uuid::new_v4().to_string();
-        let saved_session = uuid::Uuid::new_v4().to_string();
+        // Keep agent_mode consistent with the enabled flag, matching how
+        // production keeps the two in lockstep (schema `Project::update`).
+        let agent_mode = if agent_enabled == 1 { "custom" } else { "off" };
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
             conn.execute(
-                "INSERT INTO projects (id, name, path, agent_mode) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO projects (id, name, path, agent_enabled, agent_mode) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![
                     project_id,
                     format!("scratch-{uniq}"),
                     project_path,
-                    "custom"
+                    agent_enabled,
+                    agent_mode
                 ],
             )
             .unwrap();
-            WorkspaceSession::upsert(
-                &conn,
-                &uuid::Uuid::new_v4().to_string(),
-                &project_id,
-                None,
-                Some(&saved_session),
-                "claude",
-                "system",
-                "sleeping",
-            )
-            .unwrap();
+            if with_saved_session {
+                let saved_session = uuid::Uuid::new_v4().to_string();
+                WorkspaceSession::upsert(
+                    &conn,
+                    &uuid::Uuid::new_v4().to_string(),
+                    &project_id,
+                    None,
+                    Some(&saved_session),
+                    "claude",
+                    "system",
+                    "sleeping",
+                )
+                .unwrap();
+            }
         }
         (project_id, project_path)
     }
 
     #[test]
-    fn no_agent_workspace_returns_no_agent_mode_even_with_wake() {
-        // ProposalWriter's real-world shape: registered, has a saved
-        // session, but NO `.k2/agent/AGENT.md` → un-wakeable. Must surface
-        // no_agent_mode (NOT dormant_no_wake, NOT a silent spawn) so the
-        // caller gets the "set up an agent" remedy. Holds for BOTH wake
-        // values — there is nothing to wake.
-        let (_pid, path) = scratch_dormant_workspace(false);
+    fn dormant_saved_session_missing_persona_is_wakeable_not_no_agent() {
+        // ── #9 RE-FIX, LOAD-BEARING ──────────────────────────────────────
+        // The exact testing-canonical shape: a SAVED canonical session_id, a
+        // dormant workspace (no live terminal), and NO `.k2/agent/AGENT.md`
+        // persona file. Even `agent_enabled=0` here, to prove the SAVED
+        // SESSION ALONE establishes existence.
+        //
+        // Existence MUST be read from the DB, not the persona file:
+        //   - The BUGGED prior fix called `find_primary_agent` (reads the
+        //     missing file) → None → `no_agent_mode` (the bug).
+        //   - The fix: saved_session.is_some() → agent EXISTS → wakeable, so
+        //     `msg` WITHOUT --wake yields the distinct `dormant_no_wake`.
+        // Asserting `dormant_no_wake` (NOT `no_agent_mode`) IS the proof the
+        // existence check consulted the DB and not the file. Using wake=FALSE
+        // keeps this assertion spawn-free (no real `claude` launched); the
+        // WAKE leg of the same existence is covered by
+        // `classify_dormant_distinguishes_the_three_states` (true → Wake).
+        let (_pid, path) = scratch_dormant_workspace_ex(false, true, 0);
+        let r = attempt_delivery(&path, "hi", "tester", "", false, DEFAULT_WAKE_TIMEOUT);
+        assert!(!r.success);
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("dormant_no_wake"),
+            "saved session + missing persona must be recognized as a WAKEABLE \
+             agent via the DB (dormant_no_wake), NOT no_agent_mode; got {:?}",
+            r.reason
+        );
+        assert_ne!(
+            r.reason.as_deref(),
+            Some("no_agent_mode"),
+            "the #9 bug: existence must NOT be gated on the persona file"
+        );
+        assert!(r.target_session_id.is_none(), "must not spawn without --wake");
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn agent_enabled_drives_existence_without_saved_session_or_persona() {
+        // The OTHER authoritative DB signal: `projects.agent_enabled=1`
+        // alone establishes existence even with NO saved session and NO
+        // persona file (ProposalWriter/testing-canonical are both
+        // agent_enabled=1 in the live DB). wake=FALSE → dormant_no_wake
+        // (spawn-free), proving the agent_enabled column — not the file —
+        // drives existence.
+        let (_pid, path) = scratch_dormant_workspace_ex(false, false, 1);
+        let r = attempt_delivery(&path, "hi", "tester", "", false, DEFAULT_WAKE_TIMEOUT);
+        assert!(!r.success);
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("dormant_no_wake"),
+            "agent_enabled=1 must be recognized as a wakeable agent; got {:?}",
+            r.reason
+        );
+        assert!(r.target_session_id.is_none());
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn no_agent_enabled_and_no_saved_session_returns_no_agent_mode() {
+        // The genuinely-no-agent case: agent_enabled=0, NO saved session, NO
+        // persona file → un-wakeable. Must surface no_agent_mode (NOT
+        // dormant_no_wake, NOT a silent spawn) so the caller gets the "set up
+        // an agent" remedy — for BOTH wake values. Also locks the corrected
+        // `k2` (not deprecated `k2so`) hint.
+        let (_pid, path) = scratch_dormant_workspace_ex(false, false, 0);
         for wake in [false, true] {
             let r = attempt_delivery(&path, "hi", "tester", "", wake, DEFAULT_WAKE_TIMEOUT);
             assert!(!r.success, "no-agent must fail (wake={wake})");
             assert_eq!(
                 r.reason.as_deref(),
                 Some("no_agent_mode"),
-                "no-agent workspace must be no_agent_mode (wake={wake})"
+                "no agent_enabled + no saved session must be no_agent_mode (wake={wake})"
             );
             assert!(r.target_session_id.is_none());
+            let hint = r.hint.as_deref().unwrap_or("");
+            assert!(
+                hint.contains("k2 mode custom") && !hint.contains("k2so"),
+                "no_agent_mode hint must use the corrected `k2` CLI: {hint}"
+            );
         }
         let _ = std::fs::remove_dir_all(&path);
     }
 
     #[test]
     fn dormant_with_agent_no_wake_returns_dormant_no_wake_without_spawning() {
-        // Has a resolvable agent + a saved (sleeping) canonical session;
-        // `msg` WITHOUT --wake → the distinct dormant_no_wake. Crucially it
-        // must NOT spawn (the "keep msg a dumb blind send" default, #9): a
-        // spawn would have returned ok / spawn_failed, never this reason.
-        let (_pid, path) = scratch_dormant_workspace(true);
+        // Has a resolvable agent (persona present + agent_enabled=1) + a
+        // saved (sleeping) canonical session; `msg` WITHOUT --wake → the
+        // distinct dormant_no_wake. Crucially it must NOT spawn (the "keep
+        // msg a dumb blind send" default, #9): a spawn would have returned
+        // ok / spawn_failed, never this reason.
+        let (_pid, path) = scratch_dormant_workspace_ex(true, true, 1);
         let r = attempt_delivery(&path, "hi", "tester", "", false, DEFAULT_WAKE_TIMEOUT);
         assert!(!r.success);
         assert_eq!(
@@ -1992,6 +2156,43 @@ mod tests {
         );
         assert!(r.target_session_id.is_none());
         let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn resolve_spawn_name_falls_back_to_basename_when_persona_missing() {
+        // #9 re-fix: the spawn name must NOT bail to no_agent_mode when the
+        // persona file is missing. With no `.k2/agent/AGENT.md`, the name
+        // falls back to the workspace folder basename (the product-default
+        // display name); with a persona present, its declared `name:` wins.
+        use std::fs;
+        let uniq = format!("{}-{}", std::process::id(), uuid::Uuid::new_v4());
+        let base = std::env::temp_dir().join(format!("k2-issue9-name-{uniq}"));
+        fs::create_dir_all(&base).unwrap();
+        let path = base.to_string_lossy().into_owned();
+        let expected_basename = base.file_name().unwrap().to_string_lossy().into_owned();
+
+        // No persona → basename fallback (NOT empty, NOT a bail).
+        let fallback = resolve_spawn_name(&path, "custom");
+        assert_eq!(
+            fallback, expected_basename,
+            "missing persona must fall back to the workspace basename"
+        );
+        assert!(!fallback.trim().is_empty());
+
+        // Persona present → its declared name wins over the basename.
+        let agent_dir = base.join(".k2").join("agent");
+        fs::create_dir_all(&agent_dir).unwrap();
+        fs::write(
+            agent_dir.join("AGENT.md"),
+            "---\nname: cortana\ntype: custom\n---\n# Persona\n",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_spawn_name(&path, "custom"),
+            "cortana",
+            "a present persona's declared name must win over the basename"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     // NOTE on the wake=true positive path: a has-agent dormant workspace

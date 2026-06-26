@@ -1803,10 +1803,14 @@ cmd_talk() {
         local drive_sid
         drive_sid=$(resolve_write_session_id "$target" "$agent") || exit 1
         echo "── talk(BETA): driving $target — sending '$key' ───────────────" >&2
-        cli_request "/cli/terminal/write" "id=$(urlencode "$drive_sid")&message=$(urlencode "$key")" >/dev/null
-        # Settle: the daemon fires the submit \r at +150 ms (see
-        # handle_write); give the TUI a beat to repaint before re-reading
-        # so the printed screen reflects the answer.
+        # no_submit=true: send the key WITHOUT the daemon's trailing \r.
+        # In Claude's AskUserQuestion menu the number key auto-selects +
+        # advances, so an injected Enter then confirms the NEXT question's
+        # default — answering two questions per call (GH#11). Send exactly
+        # the one key and let the menu confirm it itself.
+        cli_request "/cli/terminal/write" "id=$(urlencode "$drive_sid")&message=$(urlencode "$key")&no_submit=true" >/dev/null
+        # Settle: give the TUI a beat to repaint after the keypress before
+        # re-reading so the printed screen reflects the answer.
         sleep 0.7
         echo "── talk(BETA): $target's screen after '$key' ──────────────────" >&2
         # Re-read the EXACT session we just drove (by its UUID) so the

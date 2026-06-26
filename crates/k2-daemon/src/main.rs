@@ -60,6 +60,7 @@ mod llm_host;
 mod llm_routes;
 mod misc_routes;
 mod ops_routes;
+mod ops_stream_ws;
 mod pending_live;
 mod pinned_chat;
 mod project_config_routes;

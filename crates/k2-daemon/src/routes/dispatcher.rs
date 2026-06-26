@@ -859,6 +859,37 @@ async fn handle_one_request(
             .await;
             return DispatchOutcome::Done;
         }
+        // Observability / Agent-Ops fan-in stream (Phase C of
+        // `.k2/prds/prd-observability-agent-ops.md`). WS, read-only:
+        // multiplexes the existing `session_events` broadcast + the
+        // awareness bus onto ONE socket, tagged by source, so the agent-ops
+        // pane subscribes once. NOT in `post_allowed` — GET WS, same shape
+        // as `/cli/awareness/subscribe`.
+        "/cli/ops/stream" => {
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            // Token already validated above; pass it through for the 5s
+            // re-auth heartbeat (same as `/cli/awareness/subscribe`).
+            let token = super::http::extract_token(&query)
+                .unwrap_or_default()
+                .to_string();
+            crate::ops_stream_ws::serve_ops_stream_connection(
+                stream,
+                token,
+                state.token.to_string(),
+            )
+            .await;
+            return DispatchOutcome::Done;
+        }
         // POST /cli/sessions/v2/spawn — Alacritty_v2 find-or-spawn
         // (A4). Parallel to /cli/sessions/spawn but produces a
         // DaemonPtySession (registered in v2_session_map) instead

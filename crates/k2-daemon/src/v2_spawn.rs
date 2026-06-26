@@ -363,6 +363,27 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
     };
     let dpty_spawn_ms = __t_spawn.elapsed().as_secs_f64() * 1000.0;
 
+    // COMPAT-58 (#58 Phase 0) — DORMANT per-cell UDS bind, gated on
+    // K2_HOOK_SCOPED (default OFF). The bind helper + accept-time peer-cred
+    // attestation exist now; the accept loop, the scoped-token mint, and
+    // injecting it into the PTY env are Phase 1. With the flag OFF this
+    // never runs → ZERO behavior change. We bind + immediately drop the
+    // listener (no accept loop in Phase 0) so the socket's filesystem +
+    // permission side effects are exercised behind the flag, nothing more.
+    #[cfg(unix)]
+    if crate::session_token::scoped_hooks_enabled() {
+        match crate::cell_uds::bind_cell_socket(&session_id_for_response) {
+            Ok(_listener) => log_debug!(
+                "[hook-scoped] bound per-cell UDS for session={}",
+                session_id_for_response
+            ),
+            Err(e) => log_debug!(
+                "[hook-scoped] WARN per-cell UDS bind failed for session={}: {e}",
+                session_id_for_response
+            ),
+        }
+    }
+
     v2_session_map::register(req.agent_name.clone(), session.clone());
 
     // Stamp the agent_sessions row's `active_terminal_id` (migration

@@ -43,6 +43,49 @@ pub(crate) fn extract_token(query: &str) -> Option<&str> {
     None
 }
 
+/// COMPAT-58: extract the `Authorization: Bearer <token>` credential from a
+/// request-headers blob (the peeked request head, up through `\r\n\r\n`).
+///
+/// The scoped per-cell hook channel (#58) authenticates with a Bearer
+/// HEADER, not `?token=`, so the credential never lands in the query string
+/// — which would be captured in the daemon's recorded transcript AND any
+/// access log (PRD §3.4). This is tried FIRST at the `/hook/complete` call
+/// site; [`extract_token`] (`?token=`) remains the back-compat fallback, so
+/// every existing query-param caller is unchanged.
+///
+/// The least-invasive integration choice (per the issue brief): a SIBLING
+/// helper tried at the call site, rather than threading the headers blob
+/// into [`extract_token`]'s `&str query` signature — which is shared by
+/// `token_ok` / `token_is_owner` / `actor_role` and would ripple through
+/// every owner-token caller for zero Phase-0 benefit.
+///
+/// Field name matched case-insensitively (RFC 9110 §5.6); the `Bearer`
+/// scheme token likewise; the credential itself is case-SENSITIVE.
+pub(crate) fn extract_bearer(headers_blob: &str) -> Option<&str> {
+    for line in headers_blob.lines() {
+        let Some(colon) = line.find(':') else { continue };
+        let (name, rest) = line.split_at(colon);
+        if !name.eq_ignore_ascii_case("authorization") {
+            continue;
+        }
+        // Drop the ':' then split "<scheme> <credential>" on the first run
+        // of whitespace.
+        let value = rest[1..].trim();
+        let mut parts = value.splitn(2, char::is_whitespace);
+        let Some(scheme) = parts.next() else { continue };
+        if !scheme.eq_ignore_ascii_case("bearer") {
+            continue;
+        }
+        let Some(cred) = parts.next() else { continue };
+        let cred = cred.trim();
+        if cred.is_empty() {
+            continue;
+        }
+        return Some(cred);
+    }
+    None
+}
+
 /// True iff the request's `?token=` is the OWNER token (the local daemon
 /// token, `state.token`). This is the STRICT gate — owner-only routes
 /// (user management + tunnel control) MUST use this, NOT [`token_ok`],
@@ -596,6 +639,62 @@ mod tests {
         // shifts the auth gate must fail closed (no match means no
         // entry). `Token=` is not equivalent to `token=`.
         assert!(!token_ok("Token=abc123", "abc123"));
+    }
+
+    // ── extract_bearer + Bearer-then-query precedence (COMPAT-58) ───
+
+    #[test]
+    fn extract_bearer_reads_authorization_header() {
+        let head = "POST /hook/complete HTTP/1.1\r\nAuthorization: Bearer abc.def\r\n\r\n";
+        assert_eq!(extract_bearer(head), Some("abc.def"));
+    }
+
+    #[test]
+    fn extract_bearer_scheme_is_case_insensitive_credential_is_not() {
+        // Scheme casing must not matter (RFC 9110 §5.6)…
+        assert_eq!(
+            extract_bearer("GET / HTTP/1.1\r\nAuthorization: bearer Tok123\r\n"),
+            Some("Tok123"),
+        );
+        // …but the credential is returned verbatim (case preserved).
+        assert_eq!(
+            extract_bearer("GET / HTTP/1.1\r\nAUTHORIZATION: BEARER Tok123\r\n"),
+            Some("Tok123"),
+        );
+    }
+
+    #[test]
+    fn extract_bearer_ignores_non_bearer_and_absent() {
+        assert_eq!(
+            extract_bearer("GET / HTTP/1.1\r\nAuthorization: Basic dXNlcg==\r\n"),
+            None,
+        );
+        assert_eq!(extract_bearer("GET / HTTP/1.1\r\nHost: x\r\n"), None);
+        // Bearer with no credential → None (don't authorize an empty token).
+        assert_eq!(extract_bearer("GET / HTTP/1.1\r\nAuthorization: Bearer \r\n"), None);
+    }
+
+    #[test]
+    fn bearer_then_query_precedence_matches_hook_call_site() {
+        // The `/hook/complete` scoped arm prefers the Bearer header and
+        // falls back to `?token=`. Assert that exact resolution order here
+        // so the contract is pinned even though the dispatcher wires it.
+        let head_with_bearer =
+            "POST /hook/complete?token=QVAL HTTP/1.1\r\nAuthorization: Bearer BVAL\r\n\r\n";
+        let head_no_bearer = "POST /hook/complete?token=QVAL HTTP/1.1\r\nHost: x\r\n\r\n";
+
+        let resolve = |head: &str| -> Option<String> {
+            extract_bearer(head)
+                .map(str::to_string)
+                .filter(|s| !s.is_empty())
+                .or_else(|| extract_token("token=QVAL").map(str::to_string))
+        };
+        assert_eq!(resolve(head_with_bearer).as_deref(), Some("BVAL"), "Bearer wins");
+        assert_eq!(
+            resolve(head_no_bearer).as_deref(),
+            Some("QVAL"),
+            "falls back to ?token= when no Bearer",
+        );
     }
 
     // ── project_param: project_path / project fallback ──────────────

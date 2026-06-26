@@ -54,6 +54,10 @@ pub mod project_config_routes;
 pub mod providers;
 pub mod review_checklist_routes;
 pub mod routes;
+// COMPAT-58 (#58 Phase 0): scoped per-session hook tokens + per-cell UDS.
+// Dormant superset, gated on K2_HOOK_SCOPED (default OFF).
+pub mod cell_uds;
+pub mod session_token;
 pub mod session_events;
 pub mod session_events_ws;
 pub mod session_lookup;

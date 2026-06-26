@@ -198,6 +198,13 @@ async fn handle_one_request(
     // clients can send it to opt out of the default keep-alive.
     let client_wants_close = super::http::request_wants_close(&req);
 
+    // COMPAT-58: parse `Authorization: Bearer <sid>.<secret>` while the
+    // header blob is still in scope (it's dropped at the bottom of the
+    // routing prologue). Consumed ONLY by the dormant scoped arm of
+    // `/hook/complete`; the `?token=` fallback keeps every legacy caller
+    // unchanged. Cheap, side-effect-free parse → no behavior change.
+    let bearer_token = super::http::extract_bearer(&req).map(str::to_string);
+
     let first_line = req.lines().next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
     let (method, path_and_query) = match parts.as_slice() {
@@ -577,6 +584,21 @@ async fn handle_one_request(
                 // via the in-daemon binary swap (Shape B). The renderer reads
                 // this to vary copy; update/start routes on it server-side.
                 "installKind": crate::boot_status::install_kind(),
+                // COMPAT-58 (#58 Phase 0): advertise the scoped-hook
+                // capability so clients can FEATURE-DETECT it without an app
+                // version bump. `supported` = this daemon understands the
+                // scoped per-cell token superset (always true once Phase 0
+                // lands); `enabled` = whether K2_HOOK_SCOPED is on for this
+                // process (default OFF). A daemon talking to an OLDER fleet
+                // peer that omits this field treats it as unsupported and
+                // stays on the owner-token/TCP path. PROTOCOL is intentionally
+                // NOT bumped: this is an additive, forward-compatible field,
+                // not a breaking contract change (boot_status::PROTOCOL gates
+                // only the latter).
+                "scopedHooks": {
+                    "supported": true,
+                    "enabled": crate::session_token::scoped_hooks_enabled(),
+                },
             })
             .to_string();
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
@@ -637,7 +659,37 @@ async fn handle_one_request(
             let _ = stream.read(&mut buf).await;
             let params = super::http::parse_params(&path, &query);
             let req_token = params.get("token").cloned().unwrap_or_default();
-            if !super::http::ct_eq_token(&req_token, &state.token) {
+
+            // COMPAT-58: remove in Phase 3 (owner-token deprecation).
+            // LEGACY owner-token arm — unchanged. The owner token authorizes
+            // a hook for ANY pane (it is the daemon-wide credential).
+            let owner_ok = super::http::ct_eq_token(&req_token, &state.token);
+
+            // #58 Phase 0 SCOPED arm — DORMANT unless K2_HOOK_SCOPED is on.
+            // A per-session scoped token authorizes ONLY its own paneId:
+            // the Bearer header is preferred (kept out of logs/transcripts),
+            // falling back to the `?token=` value. With the flag OFF nothing
+            // ever mints a scoped token, so `require_hook` never matches →
+            // this arm is inert and the gate is byte-identical to the
+            // owner-only check above.
+            let scoped_ok = if !owner_ok && crate::session_token::scoped_hooks_enabled() {
+                let presented = bearer_token
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(req_token.as_str());
+                let req_pane = params.get("paneId").map(String::as_str).unwrap_or("");
+                match crate::session_token::require_hook(presented, &path) {
+                    // Scope enforcement: the token must be bound to the
+                    // exact pane the hook is completing. Same token, a
+                    // different paneId → no match → 403 (PRD §5 smoke #4).
+                    Some(v) => !req_pane.is_empty() && v.pane_id == req_pane,
+                    None => false,
+                }
+            } else {
+                false
+            };
+
+            if !owner_ok && !scoped_ok {
                 super::http::send_response(
                     &mut *stream,
                     "403 Forbidden",

@@ -1754,6 +1754,12 @@ cmd_talk() {
     local target="" text="" from="" command="" lines=50 agent=""
     local read_only="false"
     local answer="" respond=""
+    # Issue #9 — `talk` is the explicit "interact now" verb, so it
+    # AUTO-WAKES a dormant canonical session by default (read → wake →
+    # wait READY → deliver). `--no-wake` suppresses that; `--wake-timeout`
+    # bounds the post-wake readiness wait.
+    local wake="true"
+    local wake_timeout=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --from)      from="$2"; shift 2 ;;
@@ -1762,6 +1768,8 @@ cmd_talk() {
             --agent)     agent="$2"; shift 2 ;;
             --answer)    answer="$2"; shift 2 ;;
             --respond)   respond="$2"; shift 2 ;;
+            --no-wake)   wake="false"; shift ;;
+            --wake-timeout) wake_timeout="$2"; shift 2 ;;
             --read-only|--dry-run|--peek) read_only="true"; shift ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 talk --help')" >&2
@@ -1869,6 +1877,13 @@ EOF
     local msg_args=("$target" "$text")
     [[ -n "$from" ]] && msg_args+=(--from "$from")
     [[ -n "$command" ]] && msg_args+=(--command "$command")
+    # Issue #9 — talk auto-wakes a dormant peer (suppress with --no-wake).
+    if [[ "$wake" == "true" ]]; then
+        msg_args+=(--wake)
+        [[ -n "$wake_timeout" ]] && msg_args+=(--wake-timeout "$wake_timeout")
+    else
+        msg_args+=(--no-wake)
+    fi
     local send_rc=0
     cmd_msg "${msg_args[@]}" || send_rc=$?
     return "$send_rc"
@@ -2361,14 +2376,23 @@ cmd_msg() {
     local text=""
     local explicit_from=""
     local explicit_command=""
-    local saw_wake="false"
+    # Issue #9 — `msg` is a blind send by DEFAULT (does NOT auto-wake a
+    # dormant canonical session). `--wake` opts in to wake-then-deliver;
+    # `--no-wake` is accepted (it's the default) so `talk` can pass it
+    # through uniformly. `--wake-timeout` bounds the post-wake readiness
+    # wait.
+    local wake="false"
+    local wake_timeout=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --from) explicit_from="$2"; shift 2 ;;
             --command) explicit_command="$2"; shift 2 ;;
             --wake)
-                # Deprecated — msg always tries live now.
-                saw_wake="true"; shift ;;
+                wake="true"; shift ;;
+            --no-wake)
+                wake="false"; shift ;;
+            --wake-timeout)
+                wake_timeout="$2"; shift 2 ;;
             --agent)
                 # 0.39.0f Phase 2.1b: hard-deprecated. The agent-keyed
                 # routing path is gone; `msg` is workspace-implicit.
@@ -2395,10 +2419,6 @@ cmd_msg() {
         echo "Usage: k2 msg <workspace> \"text\" [--from <name>] [--command \"<text>\"]" >&2
         exit 1
     }
-
-    if [[ "$saw_wake" == "true" ]]; then
-        echo "note: '--wake' is now the default; the flag is a no-op and will be removed in 0.39.x." >&2
-    fi
 
     # Resolve sender identity.
     #
@@ -2442,6 +2462,11 @@ except Exception:
     # delivered message (before the [from <name>] prefix). Only sent when
     # non-empty; an older daemon simply ignores this unknown param.
     [[ -n "$explicit_command" ]] && params="${params}&command=$(urlencode "$explicit_command")"
+    # Issue #9 — wake gating. Only send `wake=true` when opted in; an older
+    # daemon ignores the unknown param (and never auto-wakes either, so the
+    # default behavior is consistent across versions).
+    [[ "$wake" == "true" ]] && params="${params}&wake=true"
+    [[ -n "$wake_timeout" ]] && params="${params}&wake_timeout=$(urlencode "$wake_timeout")"
 
     local response
     response=$(cli_post_form "/cli/workspace/msg" "$params")
@@ -2453,6 +2478,20 @@ except Exception:
         rc=$?
     fi
     echo "$response"
+
+    # Issue #9 — if the daemon WOKE a dormant canonical session to deliver,
+    # surface it on stderr so the caller attributes the latency rather than
+    # mistaking a multi-second wake for a hang. `woke`/`wake_ms` are only
+    # present when a wake actually happened (older daemons omit them).
+    echo "$response" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    if d.get("woke"):
+        ms = d.get("wake_ms")
+        secs = " (%.1fs)" % (ms/1000.0) if isinstance(ms,(int,float)) else ""
+        sys.stderr.write("note: peer was dormant — woke canonical session%s — delivered\n" % secs)
+except Exception:
+    pass' 2>/dev/null
 
     # Exit code mirrors the response's success field so shell scripts
     # can branch cleanly: `k2 msg foo "hi" && echo delivered`.
@@ -4163,11 +4202,13 @@ cmd_help() {
 
 cmd_help_msg() {
     cat <<'EOF'
-k2 msg <workspace> "text" [--from <name>] [--command "<text>"]
+k2 msg <workspace> "text" [--from <name>] [--command "<text>"] [--wake]
 
-Deliver a message to a workspace's agent, live. Spawns the agent if
-not already running. Returns success only when the message has landed
-in the agent's session.
+Deliver a message to a workspace's agent, live. By DEFAULT this is a
+blind send to an already-running session: if the canonical session is
+asleep, msg does NOT wake it — it returns `dormant_no_wake` and you
+re-run with `--wake` (or use `k2 talk`, which auto-wakes). Returns
+success only when the message has landed in the agent's session.
 
 ARGUMENTS
   <workspace>    Workspace name (preferred — see `k2 connections list`).
@@ -4187,6 +4228,15 @@ OPTIONS
                      /loop [from <name>] <text>
                  Omitted (the default) leaves delivery unchanged:
                      [from <name>] <text>
+  --wake         Auto-wake a dormant canonical session: resume/spawn it,
+                 wait until it is READY, then deliver. Off by default for
+                 `msg` (keep it a dumb blind send). On a wake, the
+                 response carries `woke: true` + `wake_ms` and a note is
+                 printed to stderr so you attribute the latency.
+  --no-wake      Explicit opt-out (the default). Useful in scripts that
+                 want to be unambiguous.
+  --wake-timeout <secs>
+                 Ceiling for the post-wake readiness wait (default 20).
 
 RESPONSE (JSON)
   {
@@ -4197,7 +4247,10 @@ RESPONSE (JSON)
 
   Failures include `reason` + `hint` fields:
     workspace_not_found  — token didn't match a registered workspace
-    no_agent_mode        — workspace has no agent (use `work send`)
+    no_agent_mode        — workspace has no agent (set one up: `k2 mode
+                           custom`; or queue with `work send`)
+    dormant_no_wake      — canonical session is asleep + you didn't pass
+                           --wake (re-run with --wake, or use `k2 talk`)
     spawn_failed         — couldn't start the recipient's agent
     pty_died             — target session crashed during delivery
 
@@ -4234,6 +4287,7 @@ EXAMPLES
   k2 msg scout_v3 "ready when you are"
   k2 msg scout_v3 "ping" --from sms-bridge
   k2 msg scout_v3 "keep going" --command "/loop"
+  k2 msg scout_v3 "wake up and check in" --wake
   k2 msg /Users/me/work/MyApp "deploy completed"
 EOF
 }
@@ -4303,11 +4357,15 @@ you SEE the state and decide.
   A wrong-verb mistake is benign both ways, so prefer `talk` for any
   interactive or HITL-sensitive exchange.
 
-HOW IT WORKS (no new daemon route — pure ergonomics over read + msg)
+HOW IT WORKS (pure ergonomics over read + msg)
   1. READS the target's live terminal (same as `k2 read`) and prints it.
   2. Surfaces the drive-or-back-off guidance. YOU (the calling agent —
      you are the LLM) comprehend the screen; the CLI does not judge.
-  3. SENDS via the existing `k2 msg` path — unless --read-only.
+  3. SENDS via the `k2 msg` path — unless --read-only. `talk` AUTO-WAKES
+     a dormant canonical session by default (it's the explicit "interact
+     now" verb): if the peer is asleep it resumes it, waits until READY,
+     then delivers, and prints "peer was dormant — woke (Xs)". Suppress
+     with --no-wake.
 
 YOU JUDGE — ready vs HITL:
   • READY (idle/empty input)             → deliver; it lands cleanly.
@@ -4351,6 +4409,11 @@ OPTIONS
   --agent <name> Read/target a specific agent's session in the workspace.
   --command "<text>"  Slash-command prepended to the delivered message
                  (forwarded to `msg`).
+  --no-wake      Do NOT auto-wake a dormant canonical session (talk wakes
+                 by default). With --no-wake a sleeping peer returns
+                 `dormant_no_wake` instead of being spun up.
+  --wake-timeout <secs>
+                 Ceiling for the post-wake readiness wait (default 20).
 
 EXIT CODE
   Mirrors `k2 msg`: 0 when the message lands, 2 on a delivery failure.

@@ -477,8 +477,18 @@ fn run_workspace_session_delivery(
     // clear origin. The workspace token can be the project path
     // directly (it's already a registered project).
     // Heartbeat wake prompts carry no slash-command (empty `command`).
-    let result =
-        crate::workspace_msg::deliver_live(project_path, &prompt, "heartbeat", "");
+    // Issue #9: heartbeats are the canonical wake initiator — they MUST
+    // wake a dormant canonical session (that's the whole point of the
+    // schedule firing), so pass `wake: true` with the default bounded
+    // readiness timeout.
+    let result = crate::workspace_msg::deliver_live(
+        project_path,
+        &prompt,
+        "heartbeat",
+        "",
+        true,
+        crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+    );
 
     if result.success {
         let branch = result

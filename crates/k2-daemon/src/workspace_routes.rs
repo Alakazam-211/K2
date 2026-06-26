@@ -271,13 +271,30 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             // prefix). Empty/absent → unchanged delivery. An older CLI
             // simply never sends this param.
             let command = opt_param(params, "command").unwrap_or_default();
+            // Issue #9 — wake gating. `wake=true` auto-wakes a dormant
+            // canonical session (the `k2 talk` default + `k2 msg --wake`);
+            // absent/`false` keeps `k2 msg` a blind live-or-`dormant_no_wake`
+            // send. An older CLI never sends `wake`, so it defaults OFF —
+            // `msg` no longer silently spawns on its own (matches the new
+            // default; old scripts that relied on auto-wake pass `--wake`).
+            let wake = opt_param(params, "wake")
+                .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+                .unwrap_or(false);
+            // Optional per-call ceiling for the post-wake readiness wait.
+            let wake_timeout = opt_param(params, "wake_timeout")
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|s| *s > 0)
+                .map(std::time::Duration::from_secs)
+                .unwrap_or(crate::workspace_msg::DEFAULT_WAKE_TIMEOUT);
             if workspace.is_empty() {
                 return Some(CliResponse::bad_request("Missing workspace"));
             }
             if text.is_empty() {
                 return Some(CliResponse::bad_request("Missing text"));
             }
-            let resp = crate::workspace_msg::deliver_live(&workspace, &text, &from, &command);
+            let resp = crate::workspace_msg::deliver_live(
+                &workspace, &text, &from, &command, wake, wake_timeout,
+            );
             let body = serde_json::to_string(&resp)
                 .unwrap_or_else(|_| "{\"success\":false}".to_string());
             CliResponse::ok_json(body)

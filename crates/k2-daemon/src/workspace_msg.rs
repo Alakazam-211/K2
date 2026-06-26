@@ -76,6 +76,13 @@ pub enum MsgReason {
     /// and the caller is told truthfully instead of blocking forever.
     /// Transient — eligible for retry.
     PtyStalled,
+    /// Issue #9: the workspace HAS a resolvable primary agent but its
+    /// canonical session is asleep, and the caller did NOT request a wake
+    /// (`k2 msg` without `--wake`). Distinct from [`Self::NoAgentMode`]
+    /// (which is genuinely un-wakeable) — this peer CAN be woken, the
+    /// caller just opted out. Permanent for THIS call (re-firing without
+    /// `--wake` won't change anything); the remedy is `--wake` / `k2 talk`.
+    DormantNoWake,
 }
 
 impl MsgReason {
@@ -86,6 +93,7 @@ impl MsgReason {
             Self::SpawnFailed => "spawn_failed",
             Self::PtyDied => "pty_died",
             Self::PtyStalled => "pty_stalled",
+            Self::DormantNoWake => "dormant_no_wake",
         }
     }
 
@@ -106,6 +114,9 @@ impl MsgReason {
             Self::PtyStalled => {
                 "Target session's injection lock did not free within the deadline (a prior send is still in flight, or the child is wedged). Retry shortly."
             }
+            Self::DormantNoWake => {
+                "Peer's canonical session is asleep. Re-run with `--wake` (or use `k2 talk`, which auto-wakes) to wake it and deliver."
+            }
         }
     }
 
@@ -115,7 +126,10 @@ impl MsgReason {
     /// hot path inside [`deliver_live`] does its own string match.
     #[allow(dead_code)]
     fn is_permanent(self) -> bool {
-        matches!(self, Self::WorkspaceNotFound | Self::NoAgentMode)
+        matches!(
+            self,
+            Self::WorkspaceNotFound | Self::NoAgentMode | Self::DormantNoWake
+        )
     }
 }
 
@@ -137,10 +151,29 @@ pub struct MsgResponse {
     pub reason: Option<String>,
     pub hint: Option<String>,
 
+    /// Issue #9: `true` when THIS call woke a dormant canonical session
+    /// before delivering (so the caller can attribute the wall-clock cost
+    /// and print "peer was dormant — woke (Xs) — delivering"). Only
+    /// serialized when true so non-wake responses keep the lean canonical
+    /// shape.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub woke: bool,
+
+    /// Issue #9: wall-clock ms spent waking + waiting for the freshly
+    /// spawned session to reach a ready (bracketed-paste) state before the
+    /// body was injected. Present only when [`Self::woke`] is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake_ms: Option<u64>,
+
     /// Internal: which cascade branch fired (debug + audit only).
     /// Not part of the canonical JSON.
     #[serde(skip)]
     pub branch: Option<String>,
+}
+
+/// serde `skip_serializing_if` helper — keep `woke: false` out of the wire.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl MsgResponse {
@@ -151,8 +184,20 @@ impl MsgResponse {
             attempts: 1,
             reason: None,
             hint: None,
+            woke: false,
+            wake_ms: None,
             branch: Some(branch.to_string()),
         }
+    }
+
+    /// Issue #9: a successful delivery that REQUIRED waking a dormant
+    /// canonical session first. Carries the wake duration so the caller
+    /// can attribute the latency.
+    fn ok_woke(target_session_id: String, branch: &str, wake_ms: u64) -> Self {
+        let mut r = Self::ok(target_session_id, branch);
+        r.woke = true;
+        r.wake_ms = Some(wake_ms);
+        r
     }
 
     fn fail(reason: MsgReason) -> Self {
@@ -162,6 +207,8 @@ impl MsgResponse {
             attempts: 1,
             reason: Some(reason.code().to_string()),
             hint: Some(reason.hint().to_string()),
+            woke: false,
+            wake_ms: None,
             branch: None,
         }
     }
@@ -402,6 +449,42 @@ fn lock_for(sid: &SessionId) -> Arc<PlMutex<()>> {
         .clone()
 }
 
+/// Issue #9 — per-PROJECT wake locks. Keyed by `project_id` (NOT session
+/// id — a dormant workspace has no live session yet), these serialize the
+/// wake/spawn path so two callers `talk`/`msg --wake`-ing the SAME dormant
+/// peer don't each spawn a duplicate `claude --resume` session. The holder
+/// spawns + waits-for-ready + injects; a concurrent waiter blocks on this
+/// lock, then re-checks for the now-live session the first waker spawned
+/// and injects into THAT instead of spawning again. Distinct from the
+/// per-session [`INJECT_LOCKS`] (which serialize injection into an
+/// already-live PTY); the two never nest in a cycle (wake-lock → then
+/// inject-lock, never the reverse).
+static WAKE_LOCKS: LazyLock<PlMutex<HashMap<String, Arc<PlMutex<()>>>>> =
+    LazyLock::new(|| PlMutex::new(HashMap::new()));
+
+/// Clone out the wake lock for `project_id`, creating it on first use.
+fn wake_lock_for(project_id: &str) -> Arc<PlMutex<()>> {
+    let mut map = WAKE_LOCKS.lock();
+    map.entry(project_id.to_string())
+        .or_insert_with(|| Arc::new(PlMutex::new(())))
+        .clone()
+}
+
+/// Issue #9 — default ceiling for the post-wake readiness wait. A freshly
+/// spawned `claude` TUI typically flips bracketed-paste mode on within a
+/// few seconds; this is the generous upper bound after which we inject
+/// best-effort anyway. Overridable per call via `--wake-timeout`.
+pub const DEFAULT_WAKE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Issue #9 — minimum settle before the post-wake inject, even if the
+/// readiness signal flips early. Guards against injecting into a
+/// half-drawn first frame.
+const WAKE_MIN_SETTLE: Duration = Duration::from_millis(400);
+
+/// Issue #9 — poll cadence while waiting for the woken session to become
+/// ready.
+const WAKE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 // ─────────────────────────────────────────────────────────────────────
 // Public entry — `deliver_live` (retry-wrapped)
 // ─────────────────────────────────────────────────────────────────────
@@ -439,11 +522,27 @@ const BACKOFF_MS: [u64; 2] = [200, 400];
 /// `command` (when non-empty) is a slash-command (e.g. `/loop`) that is
 /// prepended at the VERY FRONT of the payload, before the `[from ...]`
 /// prefix. Empty = unchanged delivery (the default).
+///
+/// **Issue #9 — wake gating.** `wake` controls whether a *dormant
+/// canonical session* (workspace HAS a resolvable primary agent but no
+/// live PTY) is auto-woken before delivery:
+/// - `wake == true` (the `k2 talk` default, and `k2 msg --wake`): resume
+///   the saved session (or fresh-spawn), wait until it is READY (bounded
+///   by `wake_timeout`), then inject. The response carries `woke: true` +
+///   `wake_ms` so the caller can attribute the latency.
+/// - `wake == false` (the `k2 msg` default): a dormant-but-wakeable peer
+///   returns `dormant_no_wake` (distinct from `no_agent_mode`) instead of
+///   spawning — keep `msg` a dumb blind send unless the caller opts in.
+///
+/// A workspace with NO resolvable primary agent always returns
+/// `no_agent_mode` (it cannot be woken regardless of `wake`).
 pub fn deliver_live(
     workspace_token: &str,
     text: &str,
     from: &str,
     command: &str,
+    wake: bool,
+    wake_timeout: Duration,
 ) -> MsgResponse {
     // Resolve workspace once. WorkspaceNotFound is permanent; surface
     // immediately without entering the retry loop. 0.39.45 (#33): the
@@ -468,7 +567,7 @@ pub fn deliver_live(
 
     let mut last: Option<MsgResponse> = None;
     for attempt in 1..=MAX_ATTEMPTS {
-        let mut result = attempt_delivery(&project_path, text, from, command);
+        let mut result = attempt_delivery(&project_path, text, from, command, wake, wake_timeout);
         result.attempts = attempt;
 
         if result.success {
@@ -476,8 +575,13 @@ pub fn deliver_live(
         }
 
         // Permanent reasons short-circuit — waiting won't fix them.
+        // `dormant_no_wake` is permanent for THIS call: re-firing without
+        // a wake request will keep returning it (#9).
         if let Some(reason) = result.reason.as_deref() {
-            let permanent = matches!(reason, "workspace_not_found" | "no_agent_mode");
+            let permanent = matches!(
+                reason,
+                "workspace_not_found" | "no_agent_mode" | "dormant_no_wake"
+            );
             if permanent {
                 return result;
             }
@@ -498,9 +602,42 @@ pub fn deliver_live(
 // Inner — single delivery attempt (the cascade)
 // ─────────────────────────────────────────────────────────────────────
 
+/// Issue #9 — the three distinct no-live-session states the cascade must
+/// disambiguate once it has exhausted the live-inject branches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DormantDecision {
+    /// No resolvable primary agent → un-wakeable; `no_agent_mode` with a
+    /// clear remedy. Never spawns.
+    NoAgent,
+    /// Primary agent exists but the caller did NOT request a wake →
+    /// `dormant_no_wake`. The peer is wakeable; point them at `--wake`.
+    NoWake,
+    /// Primary agent exists AND a wake was requested → resume/fresh-spawn
+    /// and deliver.
+    Wake,
+}
+
+/// Pure classifier for the dormant branch (#9). Kept separate from
+/// [`attempt_delivery`] so the three-state branching is unit-testable
+/// without touching the DB, the filesystem, or the (real) spawn path.
+fn classify_dormant(primary: Option<&str>, wake: bool) -> DormantDecision {
+    match (primary, wake) {
+        (None, _) => DormantDecision::NoAgent,
+        (Some(_), false) => DormantDecision::NoWake,
+        (Some(_), true) => DormantDecision::Wake,
+    }
+}
+
 /// One delivery attempt. Returns `MsgResponse` with `attempts: 1`;
 /// the [`deliver_live`] retry wrapper rewrites it on retry.
-fn attempt_delivery(project_path: &str, text: &str, from: &str, command: &str) -> MsgResponse {
+fn attempt_delivery(
+    project_path: &str,
+    text: &str,
+    from: &str,
+    command: &str,
+    wake: bool,
+    wake_timeout: Duration,
+) -> MsgResponse {
     let project_id = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -561,13 +698,48 @@ fn attempt_delivery(project_path: &str, text: &str, from: &str, command: &str) -
         }
     }
 
+    // ── Issue #9: classify the no-live-session state BEFORE the spawn
+    // branches, so the three states the ticket calls out are distinct
+    // (today they were conflated):
+    //   • no resolvable primary agent  → no_agent_mode (un-wakeable;
+    //     clear remedy `k2 mode custom` / register). Do NOT spawn.
+    //   • primary agent + wake NOT requested → dormant_no_wake (the peer
+    //     CAN be woken; the caller opted out — point them at `--wake`).
+    //   • primary agent + wake requested → wake it (resume or fresh) and
+    //     deliver, waiting until READY first.
+    let primary = k2_core::workspace::agent_identity::find_primary_agent(project_path);
+    let agent_name = match classify_dormant(primary.as_deref(), wake) {
+        DormantDecision::NoAgent => return MsgResponse::fail(MsgReason::NoAgentMode),
+        DormantDecision::NoWake => return MsgResponse::fail(MsgReason::DormantNoWake),
+        // Wake implies a resolved primary (the classifier only returns
+        // Wake when `primary` is Some), so the unwrap is total.
+        DormantDecision::Wake => primary.expect("Wake decision implies Some(primary)"),
+    };
+
     // Branch 2: saved session, no live PTY → resume + fire.
     if let Some(claude_sid) = saved_session.as_deref() {
-        return resume_and_fire(project_path, &project_id, claude_sid, text, from, command);
+        return resume_and_fire(
+            project_path,
+            &project_id,
+            &agent_name,
+            claude_sid,
+            text,
+            from,
+            command,
+            wake_timeout,
+        );
     }
 
     // Branch 3: fresh fire — no saved session at all.
-    fresh_fire(project_path, &project_id, text, from, command)
+    fresh_fire(
+        project_path,
+        &project_id,
+        &agent_name,
+        text,
+        from,
+        command,
+        wake_timeout,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -790,15 +962,13 @@ fn inject_live(
 fn resume_and_fire(
     project_path: &str,
     project_id: &str,
+    agent_name: &str,
     claude_sid: &str,
     text: &str,
     from: &str,
     command: &str,
+    wake_timeout: Duration,
 ) -> MsgResponse {
-    let agent_name = match k2_core::workspace::agent_identity::find_primary_agent(project_path) {
-        Some(n) => n,
-        None => return MsgResponse::fail(MsgReason::NoAgentMode),
-    };
     let args = vec![
         "--dangerously-skip-permissions".to_string(),
         "--resume".to_string(),
@@ -807,27 +977,27 @@ fn resume_and_fire(
     spawn_and_inject(
         project_path,
         project_id,
-        &agent_name,
+        agent_name,
         args,
         text,
         from,
         command,
         "resume_and_fire",
         Some(claude_sid),
+        wake_timeout,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fresh_fire(
     project_path: &str,
     project_id: &str,
+    agent_name: &str,
     text: &str,
     from: &str,
     command: &str,
+    wake_timeout: Duration,
 ) -> MsgResponse {
-    let agent_name = match k2_core::workspace::agent_identity::find_primary_agent(project_path) {
-        Some(n) => n,
-        None => return MsgResponse::fail(MsgReason::NoAgentMode),
-    };
     let new_sid = uuid::Uuid::new_v4().to_string();
     let args = vec![
         "--dangerously-skip-permissions".to_string(),
@@ -837,14 +1007,98 @@ fn fresh_fire(
     spawn_and_inject(
         project_path,
         project_id,
-        &agent_name,
+        agent_name,
         args,
         text,
         from,
         command,
         "fresh_fire",
         Some(&new_sid),
+        wake_timeout,
     )
+}
+
+/// Issue #9 — re-resolve a now-live session for `project_id` AFTER taking
+/// the wake lock. A concurrent waker may have just spawned the canonical
+/// session; if so we inject into THAT rather than spawning a duplicate.
+/// Mirrors `attempt_delivery`'s Branch-1 (active_terminal_id) + Branch-1b
+/// (argv-scan) live lookups, but read-only (no stale-stamp clearing).
+fn relookup_live(project_id: &str, saved_session: Option<&str>) -> Option<session_lookup::LiveSession> {
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        WorkspaceSession::get(&conn, project_id).ok().flatten()
+    };
+    if let Some(active_tid) = row
+        .as_ref()
+        .and_then(|r| r.active_terminal_id.clone())
+        .filter(|s| !s.is_empty())
+    {
+        if let Some(sid) = SessionId::parse(&active_tid) {
+            if let Some(live) = session_lookup::lookup_by_session_id(&sid) {
+                return Some(live);
+            }
+        }
+    }
+    if let Some(claude_sid) = saved_session {
+        for (_n, live) in session_lookup::snapshot_all() {
+            let args = live.args();
+            let mut i = 0;
+            while i + 1 < args.len() {
+                if (args[i] == "--session-id" || args[i] == "--resume")
+                    && args[i + 1] == claude_sid
+                {
+                    return Some(live);
+                }
+                i += 1;
+            }
+        }
+    }
+    None
+}
+
+/// Issue #9 — wait until a freshly woken session is READY, then inject the
+/// body through the SHARED per-session lock (D7). Readiness signal:
+/// `claude`'s TUI enables bracketed-paste mode once it has drawn, so we
+/// poll `bracketed_paste_active()` (with a minimum settle floor) up to
+/// `wake_timeout`. Replaces the pre-#9 fixed 1500ms blind sleep with a
+/// real, bounded readiness wait. Returns the [`InjectOutcome`] so the
+/// caller maps it to the canonical response.
+fn deliver_post_wake(
+    live: &session_lookup::LiveSession,
+    payload: &str,
+    wake_timeout: Duration,
+) -> InjectOutcome {
+    let start = std::time::Instant::now();
+    // Minimum settle even if paste mode flips immediately.
+    std::thread::sleep(WAKE_MIN_SETTLE);
+    loop {
+        if !live.is_child_alive() {
+            return InjectOutcome::PtyDied;
+        }
+        // Ready once the TUI advertises bracketed-paste (claude/cursor do
+        // this after the input box is drawn). This is the same signal the
+        // injector relies on for framing.
+        if live.bracketed_paste_active() {
+            break;
+        }
+        if start.elapsed() >= wake_timeout {
+            // Best-effort: timed out waiting for the ready signal — inject
+            // anyway (bounded, never blocks forever) rather than dropping
+            // the message. Matches the pre-#9 "sleep then send" intent.
+            log_debug!(
+                "[msg/wake] session={} readiness wait hit {}ms ceiling — injecting best-effort",
+                live.session_id(),
+                wake_timeout.as_millis()
+            );
+            break;
+        }
+        std::thread::sleep(WAKE_POLL_INTERVAL);
+    }
+    // D7: post-wake delivery funnels through the SAME locked
+    // `inject_and_submit` as live sends, so the just-woken session's
+    // injection serializes against a concurrent human composer.
+    inject_and_submit(live, payload)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -858,7 +1112,31 @@ fn spawn_and_inject(
     command: &str,
     branch: &str,
     claude_session_id: Option<&str>,
+    wake_timeout: Duration,
 ) -> MsgResponse {
+    // Issue #9 — serialize the wake on `project_id`. Two callers
+    // `talk`/`msg --wake`-ing the same dormant peer must not each spawn a
+    // duplicate session. The holder spawns + waits-for-ready + injects; a
+    // waiter blocks here, then re-checks for the session the first waker
+    // just spawned (below) and injects into THAT.
+    let wake_lock = wake_lock_for(project_id);
+    let _wake_guard = wake_lock.lock();
+
+    // Post-lock re-check: did a concurrent waker already wake the peer? If
+    // a live canonical session now exists, deliver into it (no duplicate
+    // spawn). `woke: false` because THIS call didn't pay the wake cost.
+    if let Some(live) = relookup_live(project_id, claude_session_id) {
+        let payload = format_message(from, text, command);
+        return match inject_and_submit(&live, &payload) {
+            InjectOutcome::Delivered => {
+                MsgResponse::ok(live.session_id().to_string(), "wake_coalesced")
+            }
+            InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
+            InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
+        };
+    }
+
+    let wake_start = std::time::Instant::now();
     let outcome = match spawn_agent_session_v2_blocking(SpawnWorkspaceSessionRequest {
         agent_name: agent_name.to_string(),
         project_id: Some(project_id.to_string()),
@@ -904,41 +1182,54 @@ fn spawn_and_inject(
         from
     );
 
-    // Two-phase write — wait for claude TUI to draw before sending the
-    // body. Apply the `[from <name>] ` prefix to the bytes the
-    // recipient's PTY receives. The body goes through the same injector
-    // as live delivery — paste framing + insurance Enter.
+    // Issue #9 — SYNCHRONOUS wake-then-deliver. The recipient was dormant;
+    // we wait until the freshly spawned TUI is READY (bounded by
+    // `wake_timeout`) and inject the body BEFORE returning, so the caller
+    // (a) knows delivery actually happened and (b) gets the wake duration
+    // to attribute the latency. The wait runs while we still hold the
+    // per-project wake lock, so a concurrent waker keeps coalescing onto
+    // this woken session instead of spawning its own. The body goes
+    // through the same locked `inject_and_submit` as live delivery (D7) —
+    // paste framing + insurance Enter + per-session serialization.
     let session = session_lookup::lookup_by_session_id(&outcome.session_id);
-    if let Some(live) = session {
-        let payload = format_message(from, text, command);
-        let log_sid = target_id.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(1500));
-            // D7: the post-wake delivery goes through the SAME locked
-            // `inject_and_submit` as live sends, so a just-woken
-            // session's injection serializes against the human composer
-            // exactly like a live one (no collision).
-            match inject_and_submit(&live, &payload) {
-                InjectOutcome::Delivered => {}
-                InjectOutcome::PtyDied => log_debug!(
-                    "[daemon/workspace-msg] PTY died during post-spawn inject for session={}",
-                    log_sid
-                ),
-                InjectOutcome::Stalled => log_debug!(
-                    "[daemon/workspace-msg] injection lock stalled during post-spawn inject for session={}",
-                    log_sid
-                ),
-            }
-        });
-    } else {
+    let Some(live) = session else {
         log_debug!(
             "[daemon/workspace-msg] post-spawn lookup miss for session={} — body not delivered",
             target_id
         );
-    }
+        return MsgResponse::fail(MsgReason::SpawnFailed);
+    };
 
+    let payload = format_message(from, text, command);
     let _ = Path::new(project_path);
-    MsgResponse::ok(target_id, branch)
+    match deliver_post_wake(&live, &payload, wake_timeout) {
+        InjectOutcome::Delivered => {
+            let wake_ms = wake_start.elapsed().as_millis() as u64;
+            log_debug!(
+                "[daemon/workspace-msg] {} woke session={} in {}ms agent={} from={}",
+                branch,
+                target_id,
+                wake_ms,
+                agent_name,
+                from
+            );
+            MsgResponse::ok_woke(target_id, branch, wake_ms)
+        }
+        InjectOutcome::PtyDied => {
+            log_debug!(
+                "[daemon/workspace-msg] PTY died during post-wake inject for session={}",
+                target_id
+            );
+            MsgResponse::fail(MsgReason::PtyDied)
+        }
+        InjectOutcome::Stalled => {
+            log_debug!(
+                "[daemon/workspace-msg] injection lock stalled during post-wake inject for session={}",
+                target_id
+            );
+            MsgResponse::fail(MsgReason::PtyStalled)
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1065,6 +1356,7 @@ mod tests {
             MsgReason::SpawnFailed,
             MsgReason::PtyDied,
             MsgReason::PtyStalled,
+            MsgReason::DormantNoWake,
         ] {
             assert!(
                 !reason.hint().is_empty(),
@@ -1084,6 +1376,7 @@ mod tests {
         assert_eq!(MsgReason::SpawnFailed.code(), "spawn_failed");
         assert_eq!(MsgReason::PtyDied.code(), "pty_died");
         assert_eq!(MsgReason::PtyStalled.code(), "pty_stalled");
+        assert_eq!(MsgReason::DormantNoWake.code(), "dormant_no_wake");
     }
 
     /// 0.40.3: the live-inject success-check reverted to alive-based —
@@ -1549,7 +1842,14 @@ mod tests {
     fn deliver_live_unknown_workspace_returns_workspace_not_found() {
         // No DB setup, no project rows — resolver misses, we return
         // permanent failure immediately (no retry loop).
-        let r = deliver_live("definitely-not-a-real-workspace-name", "hi", "sender", "");
+        let r = deliver_live(
+            "definitely-not-a-real-workspace-name",
+            "hi",
+            "sender",
+            "",
+            false,
+            DEFAULT_WAKE_TIMEOUT,
+        );
         assert!(!r.success);
         assert_eq!(r.reason.as_deref(), Some("workspace_not_found"));
         // Permanent reasons short-circuit — no retries.
@@ -1565,8 +1865,212 @@ mod tests {
     fn deliver_live_empty_workspace_token_returns_workspace_not_found() {
         // Empty token must not match every row (resolve_workspace
         // short-circuits to None).
-        let r = deliver_live("", "hi", "sender", "");
+        let r = deliver_live("", "hi", "sender", "", false, DEFAULT_WAKE_TIMEOUT);
         assert_eq!(r.reason.as_deref(), Some("workspace_not_found"));
         assert_eq!(r.attempts, 1);
+    }
+
+    // ── Issue #9 — wake gating + three-state disambiguation ──────────
+
+    #[test]
+    fn classify_dormant_distinguishes_the_three_states() {
+        // The core ask of #9: the cascade must tell these apart instead of
+        // conflating them into one opaque error.
+        // No primary agent → un-wakeable, regardless of the wake flag.
+        assert_eq!(classify_dormant(None, true), DormantDecision::NoAgent);
+        assert_eq!(classify_dormant(None, false), DormantDecision::NoAgent);
+        // Primary agent present → the wake flag decides.
+        assert_eq!(
+            classify_dormant(Some("cortana"), false),
+            DormantDecision::NoWake
+        );
+        assert_eq!(
+            classify_dormant(Some("cortana"), true),
+            DormantDecision::Wake
+        );
+    }
+
+    #[test]
+    fn dormant_no_wake_is_permanent_and_has_actionable_hint() {
+        assert!(
+            MsgReason::DormantNoWake.is_permanent(),
+            "dormant_no_wake won't resolve on retry — must short-circuit"
+        );
+        assert_eq!(MsgReason::DormantNoWake.code(), "dormant_no_wake");
+        let hint = MsgReason::DormantNoWake.hint();
+        assert!(
+            hint.contains("--wake") || hint.contains("talk"),
+            "dormant hint must point at the wake remedy: {hint}"
+        );
+    }
+
+    /// Build a registered, DORMANT workspace in the shared in-memory test
+    /// DB: a `projects` row + a `workspace_sessions` row carrying a SAVED
+    /// claude session_id but NO live terminal. `with_agent` controls
+    /// whether a resolvable `.k2/agent/AGENT.md` persona exists. Returns
+    /// `(project_id, project_path)`.
+    fn scratch_dormant_workspace(with_agent: bool) -> (String, String) {
+        use std::fs;
+        let uniq = format!("{}-{}", std::process::id(), uuid::Uuid::new_v4());
+        let base = std::env::temp_dir().join(format!("k2-issue9-{uniq}"));
+        fs::create_dir_all(&base).unwrap();
+        let project_path = base.to_string_lossy().into_owned();
+        if with_agent {
+            let agent_dir = base.join(".k2").join("agent");
+            fs::create_dir_all(&agent_dir).unwrap();
+            fs::write(
+                agent_dir.join("AGENT.md"),
+                "---\nname: scratch-agent\ntype: custom\n---\n# Scratch\n",
+            )
+            .unwrap();
+        }
+        let project_id = uuid::Uuid::new_v4().to_string();
+        let saved_session = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, agent_mode) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    project_id,
+                    format!("scratch-{uniq}"),
+                    project_path,
+                    "custom"
+                ],
+            )
+            .unwrap();
+            WorkspaceSession::upsert(
+                &conn,
+                &uuid::Uuid::new_v4().to_string(),
+                &project_id,
+                None,
+                Some(&saved_session),
+                "claude",
+                "system",
+                "sleeping",
+            )
+            .unwrap();
+        }
+        (project_id, project_path)
+    }
+
+    #[test]
+    fn no_agent_workspace_returns_no_agent_mode_even_with_wake() {
+        // ProposalWriter's real-world shape: registered, has a saved
+        // session, but NO `.k2/agent/AGENT.md` → un-wakeable. Must surface
+        // no_agent_mode (NOT dormant_no_wake, NOT a silent spawn) so the
+        // caller gets the "set up an agent" remedy. Holds for BOTH wake
+        // values — there is nothing to wake.
+        let (_pid, path) = scratch_dormant_workspace(false);
+        for wake in [false, true] {
+            let r = attempt_delivery(&path, "hi", "tester", "", wake, DEFAULT_WAKE_TIMEOUT);
+            assert!(!r.success, "no-agent must fail (wake={wake})");
+            assert_eq!(
+                r.reason.as_deref(),
+                Some("no_agent_mode"),
+                "no-agent workspace must be no_agent_mode (wake={wake})"
+            );
+            assert!(r.target_session_id.is_none());
+        }
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn dormant_with_agent_no_wake_returns_dormant_no_wake_without_spawning() {
+        // Has a resolvable agent + a saved (sleeping) canonical session;
+        // `msg` WITHOUT --wake → the distinct dormant_no_wake. Crucially it
+        // must NOT spawn (the "keep msg a dumb blind send" default, #9): a
+        // spawn would have returned ok / spawn_failed, never this reason.
+        let (_pid, path) = scratch_dormant_workspace(true);
+        let r = attempt_delivery(&path, "hi", "tester", "", false, DEFAULT_WAKE_TIMEOUT);
+        assert!(!r.success);
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("dormant_no_wake"),
+            "has-agent dormant + no wake must be dormant_no_wake, got {:?}",
+            r.reason
+        );
+        assert!(r.target_session_id.is_none());
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    // NOTE on the wake=true positive path: a has-agent dormant workspace
+    // with wake=true routes to the real `spawn_agent_session_v2_blocking`
+    // (`claude`). We deliberately do NOT drive that end-to-end in a unit
+    // test (it would launch a real claude process on dev boxes where it's
+    // installed). The wake DECISION is proven by
+    // `classify_dormant_distinguishes_the_three_states` (→ Wake) and the
+    // post-wake DELIVERY + shared-lock guarantee by
+    // `deliver_post_wake_injects_through_the_shared_lock` below — together
+    // they cover D7's "wakes + delivers via the shared lock" intent
+    // without a live claude.
+
+    #[cfg(unix)]
+    #[test]
+    fn deliver_post_wake_injects_through_the_shared_lock() {
+        // D7 (load-bearing): the post-wake delivery MUST funnel through the
+        // SAME per-session INJECT_LOCKS as live sends, so a just-woken
+        // session serializes against a concurrent composer (no splice).
+        //
+        // Proof: hold the session's shared inject lock, then run
+        // deliver_post_wake in a thread. If it takes the shared lock it
+        // BLOCKS until we release; a private/un-locked path would deliver
+        // immediately. `cat` advertises no bracketed-paste, so the
+        // readiness wait runs to the (short) timeout, then the inject
+        // blocks on the held lock.
+        let live = spawn_cat_live();
+        let sid = live.session_id();
+        let lock = lock_for(&sid);
+        let guard = lock.lock(); // hold the SHARED inject lock
+
+        let live2 = live.clone();
+        let handle = std::thread::spawn(move || {
+            deliver_post_wake(&live2, "[from owner] hi", Duration::from_millis(150))
+        });
+
+        // Past the readiness settle (WAKE_MIN_SETTLE=400ms) it has reached
+        // the inject and is blocked on the held shared lock.
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(
+            !handle.is_finished(),
+            "deliver_post_wake must block on the SHARED inject lock (proves it acquired it)"
+        );
+
+        drop(guard); // release → the injector proceeds
+        let out = handle.join().unwrap();
+        assert_eq!(
+            out,
+            InjectOutcome::Delivered,
+            "once the shared lock frees, the post-wake body delivers"
+        );
+        live.0.kill();
+    }
+
+    #[test]
+    fn ok_woke_response_carries_wake_flag_and_duration() {
+        // The wake-happened signal the CLI reads to print
+        // "peer was dormant — woke (Xs) — delivering".
+        let r = MsgResponse::ok_woke("sid-123".into(), "resume_and_fire", 3200);
+        assert!(r.success);
+        assert!(r.woke);
+        assert_eq!(r.wake_ms, Some(3200));
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["woke"], true);
+        assert_eq!(json["wake_ms"], 3200);
+    }
+
+    #[test]
+    fn non_wake_response_omits_wake_fields_from_the_wire() {
+        // Lean canonical shape preserved for the common (no-wake) case:
+        // `woke`/`wake_ms` are skipped unless a wake actually happened.
+        let ok = MsgResponse::ok("sid".into(), "active_terminal_id");
+        let json = serde_json::to_value(&ok).unwrap();
+        assert!(json.get("woke").is_none(), "woke must be omitted when false");
+        assert!(json.get("wake_ms").is_none(), "wake_ms must be omitted when None");
+
+        let fail = MsgResponse::fail(MsgReason::DormantNoWake);
+        let fj = serde_json::to_value(&fail).unwrap();
+        assert!(fj.get("woke").is_none());
+        assert_eq!(fj["reason"], "dormant_no_wake");
     }
 }

@@ -16,6 +16,7 @@ import { keyEventToSequence, naturalTextEditingSequence } from '@/lib/key-mappin
 import { isFileDragActive, markDropConsumed, isImagePath, quotePathForImageDrop, bracketPaste } from '@/lib/file-drag'
 import { detectWorkingSignal } from '@/lib/agent-signals'
 import { detectLinks, type DetectedLink } from './terminalLinkDetector'
+import { TerminalComposeBar } from './TerminalComposeBar'
 import { useTabsStore } from '@/stores/tabs'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useToastStore } from '@/stores/toast'
@@ -987,9 +988,10 @@ export function AlacrittyTerminalView({
   }
 
   return (
+    <div className="flex h-full w-full flex-col overflow-hidden bg-[#0a0a0a]">
     <div
       ref={containerRef}
-      className="h-full w-full bg-[#0a0a0a] focus:outline-none overflow-hidden"
+      className="relative min-h-0 w-full flex-1 bg-[#0a0a0a] focus:outline-none overflow-hidden"
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
@@ -1072,6 +1074,12 @@ export function AlacrittyTerminalView({
           <strong style={{ color: '#ff0' }}>Alacritty (Legacy)</strong> · frames:{debugInfo.frames} offset:{debugInfo.offset} wheel:{debugInfo.wheel} cells:{gridState.cols}x{gridState.rows} cursor:{gridState.cursorCol},{gridState.cursorRow} vis:{gridState.cursorVisible?'Y':'N'} cell:{cellW.toFixed(1)}x{cellH}
         </div>
       )}
+    </div>
+
+      {/* Composer Phase 1b — message bar docked beneath the pane. The
+       *  pane's `terminalId` IS the resolved PTY SessionId the
+       *  send-message route needs. */}
+      <TerminalComposeBar sessionId={terminalId} />
     </div>
   )
 }

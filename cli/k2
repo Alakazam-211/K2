@@ -2376,12 +2376,12 @@ cmd_msg() {
     local text=""
     local explicit_from=""
     local explicit_command=""
-    # Issue #9 — `msg` is a blind send by DEFAULT (does NOT auto-wake a
-    # dormant canonical session). `--wake` opts in to wake-then-deliver;
-    # `--no-wake` is accepted (it's the default) so `talk` can pass it
-    # through uniformly. `--wake-timeout` bounds the post-wake readiness
-    # wait.
-    local wake="false"
+    # Issue #9 — `msg` AUTO-WAKES a dormant canonical session by DEFAULT
+    # (resume/spawn → wait READY → deliver), preserving the legacy
+    # wake-on-message UX (PRD D7). `--no-wake` opts out (blind live-only
+    # send); `--wake` is accepted as an explicit no-op for symmetry.
+    # `--wake-timeout` bounds the post-wake readiness wait.
+    local wake="true"
     local wake_timeout=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -2462,10 +2462,11 @@ except Exception:
     # delivered message (before the [from <name>] prefix). Only sent when
     # non-empty; an older daemon simply ignores this unknown param.
     [[ -n "$explicit_command" ]] && params="${params}&command=$(urlencode "$explicit_command")"
-    # Issue #9 — wake gating. Only send `wake=true` when opted in; an older
-    # daemon ignores the unknown param (and never auto-wakes either, so the
-    # default behavior is consistent across versions).
-    [[ "$wake" == "true" ]] && params="${params}&wake=true"
+    # Issue #9 — wake gating. Send the resolved value EXPLICITLY (both
+    # true and false): the daemon now defaults wake=ON, so `--no-wake`
+    # MUST send `wake=false` to actually opt out. (An older daemon that
+    # predates the param ignores it and never auto-woke — acceptable skew.)
+    params="${params}&wake=${wake}"
     [[ -n "$wake_timeout" ]] && params="${params}&wake_timeout=$(urlencode "$wake_timeout")"
 
     local response
@@ -4202,12 +4203,14 @@ cmd_help() {
 
 cmd_help_msg() {
     cat <<'EOF'
-k2 msg <workspace> "text" [--from <name>] [--command "<text>"] [--wake]
+k2 msg <workspace> "text" [--from <name>] [--command "<text>"] [--no-wake]
 
-Deliver a message to a workspace's agent, live. By DEFAULT this is a
-blind send to an already-running session: if the canonical session is
-asleep, msg does NOT wake it — it returns `dormant_no_wake` and you
-re-run with `--wake` (or use `k2 talk`, which auto-wakes). Returns
+Deliver a message to a workspace's agent, live. By DEFAULT msg AUTO-WAKES
+a dormant canonical session: if the agent's session is asleep, msg
+resumes/spawns it, waits until READY, then delivers (the legacy
+wake-on-message behavior). Pass `--no-wake` for a blind live-only send
+(returns `dormant_no_wake` instead of waking). A workspace with no
+configured agent returns `no_agent_mode` and is never spawned. Returns
 success only when the message has landed in the agent's session.
 
 ARGUMENTS
@@ -4228,13 +4231,14 @@ OPTIONS
                      /loop [from <name>] <text>
                  Omitted (the default) leaves delivery unchanged:
                      [from <name>] <text>
-  --wake         Auto-wake a dormant canonical session: resume/spawn it,
-                 wait until it is READY, then deliver. Off by default for
-                 `msg` (keep it a dumb blind send). On a wake, the
-                 response carries `woke: true` + `wake_ms` and a note is
-                 printed to stderr so you attribute the latency.
-  --no-wake      Explicit opt-out (the default). Useful in scripts that
-                 want to be unambiguous.
+  --no-wake      Suppress the default auto-wake: deliver only if the
+                 canonical session is already live, else return
+                 `dormant_no_wake`. Use for a cheap blind send that must
+                 not spin up a session.
+  --wake         Explicit opt-IN (the default; accepted for symmetry/
+                 scripts). On a wake the response carries `woke: true` +
+                 `wake_ms` and a note is printed to stderr so you
+                 attribute the latency.
   --wake-timeout <secs>
                  Ceiling for the post-wake readiness wait (default 20).
 

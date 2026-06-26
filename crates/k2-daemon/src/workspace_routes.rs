@@ -272,14 +272,18 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             // simply never sends this param.
             let command = opt_param(params, "command").unwrap_or_default();
             // Issue #9 — wake gating. `wake=true` auto-wakes a dormant
-            // canonical session (the `k2 talk` default + `k2 msg --wake`);
-            // absent/`false` keeps `k2 msg` a blind live-or-`dormant_no_wake`
-            // send. An older CLI never sends `wake`, so it defaults OFF —
-            // `msg` no longer silently spawns on its own (matches the new
-            // default; old scripts that relied on auto-wake pass `--wake`).
+            // canonical session (resume/spawn → wait READY → deliver).
+            // DEFAULT ON: this preserves the LEGACY wake-on-message UX
+            // (PRD D7 — bare `k2 msg`, party→agent companion sends, and
+            // agent→agent pings all wake a sleeping canonical session) and
+            // matches Rosson's directive that "msg should wake." Callers
+            // opt OUT explicitly with `wake=false` (`k2 msg --no-wake`).
+            // The state machine still distinguishes no-agent (never spawns)
+            // from dormant (wakes) — the #9 fix is the disambiguation, not
+            // the removal of auto-wake.
             let wake = opt_param(params, "wake")
                 .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-                .unwrap_or(false);
+                .unwrap_or(true);
             // Optional per-call ceiling for the post-wake readiness wait.
             let wake_timeout = opt_param(params, "wake_timeout")
                 .and_then(|v| v.parse::<u64>().ok())

@@ -12,6 +12,8 @@
 //!   companion/connections/states/agent-channel/skills/feed/commit/
 //!   heartbeat/terminal/sessions/onboarding/whats_new + the Phase 2
 //!   Unit 4/6 GET delegators to db / git / fs / chat / themes / inbox …).
+//! - `ops_routes::dispatch`       — `/cli/ops/*` read-only Observability /
+//!   Agent-Ops aggregate API (activity history + live overview snapshot).
 //!
 //! Each domain `dispatch` returns `Option<CliResponse>` (`None` = not my
 //! path); the first `Some` wins, else 404. Task #578 extracted the
@@ -98,6 +100,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     }
 
     if let Some(resp) = crate::misc_routes::dispatch(path, params) {
+        return resp;
+    }
+    // Observability / Agent-Ops read-only GET aggregate API (`/cli/ops/*`).
+    if let Some(resp) = crate::ops_routes::dispatch(path, params) {
         return resp;
     }
     CliResponse::not_found()

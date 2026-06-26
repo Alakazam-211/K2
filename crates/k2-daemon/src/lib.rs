@@ -48,6 +48,7 @@ pub mod inbox_routes;
 pub mod llm_host;
 pub mod llm_routes;
 pub mod misc_routes;
+pub mod ops_routes;
 pub mod pending_live;
 pub mod pinned_chat;
 pub mod project_config_routes;

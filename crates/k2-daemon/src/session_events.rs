@@ -23,7 +23,8 @@
 //! no live subscribers (broadcast::send returns an Err in that
 //! case but we treat it as a no-op).
 
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -310,6 +311,61 @@ pub enum SessionEvent {
 
 static SENDER: OnceLock<broadcast::Sender<SessionEvent>> = OnceLock::new();
 
+/// Observability (Phase B) — the latest `AgentStatusChanged` per `paneId`
+/// (== terminal id == the daemon-side session id), with the unix-seconds
+/// timestamp we observed it. This is a **memoization of the same truth the
+/// `/cli/sessions/events` stream carries, not a parallel one**: it is
+/// written ONLY from inside [`emit`] (the single chokepoint every
+/// `AgentStatusChanged` flows through — `events.rs::DaemonBroadcastSink`),
+/// so a reader of this cache and a subscriber of the bus are fed by the
+/// identical event. `/cli/ops/overview` reads it so a pane can render each
+/// agent's working/idle status in one round-trip without a live WS.
+///
+/// Bounded by the number of distinct panes the daemon has seen since boot;
+/// entries are overwritten in place. No eviction — a `paneId` count is the
+/// live-tab count, which stays small.
+static AGENT_STATUS: OnceLock<Mutex<HashMap<String, (String, i64)>>> = OnceLock::new();
+
+fn agent_status_map() -> &'static Mutex<HashMap<String, (String, i64)>> {
+    AGENT_STATUS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Record the latest agent status for a pane. Called from [`emit`] on every
+/// `AgentStatusChanged` so the cache can never drift from the bus.
+fn record_agent_status(pane_id: &str, status: &str) {
+    if pane_id.is_empty() {
+        return;
+    }
+    if let Ok(mut map) = agent_status_map().lock() {
+        map.insert(pane_id.to_string(), (status.to_string(), unix_now_secs()));
+    }
+}
+
+/// Observability read accessor — the latest cached `(status, observed_at)`
+/// for a pane/session id, or `None` if no `AgentStatusChanged` has been seen
+/// for it since boot. `status` is the raw canonical bucket the bus carries
+/// (`start` | `stop` | `permission`); callers normalize for display. Same
+/// source of truth as `/cli/sessions/events` (see [`AGENT_STATUS`]).
+pub fn agent_status_for(pane_id: &str) -> Option<(String, i64)> {
+    agent_status_map().lock().ok()?.get(pane_id).cloned()
+}
+
+/// Test-only — drop the agent-status cache so the global map doesn't leak
+/// between cases.
+#[cfg(test)]
+pub fn clear_agent_status_for_tests() {
+    if let Ok(mut map) = agent_status_map().lock() {
+        map.clear();
+    }
+}
+
 /// Lazy accessor for the broadcast sender. First caller creates the
 /// channel. Cheap — the OnceLock is a single atomic load on the hot
 /// path.
@@ -329,6 +385,13 @@ pub fn subscribe() -> broadcast::Receiver<SessionEvent> {
 /// bounded — broadcast doesn't synchronize beyond a single atomic
 /// per subscriber.
 pub fn emit(event: SessionEvent) -> Result<usize, broadcast::error::SendError<SessionEvent>> {
+    // Observability (Phase B): memoize the latest agent status off the SAME
+    // event that's about to hit the bus, so `/cli/ops/overview` and a
+    // `/cli/sessions/events` subscriber read one truth. This is the only
+    // writer of AGENT_STATUS.
+    if let SessionEvent::AgentStatusChanged { pane_id, status, .. } = &event {
+        record_agent_status(pane_id, status);
+    }
     sender().send(event)
 }
 
@@ -535,6 +598,66 @@ mod tests {
         assert_eq!(json["agent"], "nightly");
         assert_eq!(json["live"], true);
         assert_keys(&json, &["kind", "workspacePath", "project", "agent", "live"]);
+    }
+
+    /// Observability (Phase B) no-divergence guard: a single `emit` of an
+    /// `AgentStatusChanged` feeds BOTH the broadcast subscriber (what
+    /// `/cli/sessions/events` delivers) AND the `AGENT_STATUS` cache (what
+    /// `/cli/ops/overview` reads). They must carry the IDENTICAL status —
+    /// there is one writer (`emit`), so the cache can never drift from the
+    /// stream.
+    #[tokio::test(flavor = "current_thread")]
+    async fn agent_status_cache_matches_broadcast_truth() {
+        clear_agent_status_for_tests();
+        let pane = format!(
+            "ops-probe-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        );
+        let mut rx = subscribe();
+        let _ = emit(SessionEvent::AgentStatusChanged {
+            pane_id: pane.clone(),
+            tab_id: "tab-x".into(),
+            status: "start".into(),
+        });
+
+        // Drain until our probe arrives (the global bus may carry other
+        // tests' events). This is what a `/cli/sessions/events` subscriber
+        // would receive.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        let stream_status = loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                panic!("did not receive probe AgentStatusChanged in time");
+            }
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(SessionEvent::AgentStatusChanged { pane_id, status, .. }))
+                    if pane_id == pane =>
+                {
+                    break status;
+                }
+                Ok(Ok(_)) => continue, // contamination from another test
+                Ok(Err(_)) => panic!("receiver closed"),
+                Err(_) => panic!("timed out waiting for probe event"),
+            }
+        };
+
+        // The cache the overview reads must hold the SAME status.
+        let (cached_status, observed_at) =
+            agent_status_for(&pane).expect("cache populated by the same emit");
+        assert_eq!(
+            cached_status, stream_status,
+            "overview cache must match the broadcast truth (no divergent source)"
+        );
+        assert_eq!(cached_status, "start");
+        assert!(observed_at > 0, "observed_at timestamp must be stamped");
+
+        // A pane that never emitted has no cached status.
+        assert!(agent_status_for("ops-never-emitted").is_none());
+        clear_agent_status_for_tests();
     }
 
     #[test]

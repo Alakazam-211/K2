@@ -59,6 +59,7 @@ mod inbox_routes;
 mod llm_host;
 mod llm_routes;
 mod misc_routes;
+mod ops_routes;
 mod pending_live;
 mod pinned_chat;
 mod project_config_routes;

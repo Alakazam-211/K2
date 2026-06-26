@@ -477,6 +477,33 @@ else
     ' WHATS_NEW.md > "$NOTES_SRC"
     echo "  Using WHATS_NEW.md '## ${VERSION}' section as the release body."
 fi
+# ── Step 8.9: Commit + push the version bump, then create + push the tag ──
+# Historically release.sh bumped the version files only to BUILD the installers
+# and never committed them, so `main` lagged at the prior version after every
+# release and `gh release create` below tagged origin's stale HEAD (the tag
+# pointed at the wrong commit). Commit the bump, push main, and create + push
+# the annotated tag HERE — so the GitHub release attaches to the REAL release
+# commit and the repo's committed version always matches the published release.
+# Runs only after a fully built + notarized release, so a failed build never
+# leaves a stray commit/tag. A push failure (e.g. diverged origin) aborts
+# BEFORE publishing — safer than the old after-the-fact state.
+echo ""
+echo "Step 8.9: Committing version bump + pushing tag ${TAG}..."
+git add package.json src-tauri/tauri.conf.json cli/k2 Cargo.lock \
+    src-tauri/Cargo.toml crates/k2-core/Cargo.toml crates/k2-daemon/Cargo.toml \
+    WHATS_NEW.md
+if git diff --cached --quiet; then
+    echo "  (version files already committed — nothing new to commit)"
+else
+    git commit -m "chore(release): ${TAG}"
+    echo "  Committed version bump."
+fi
+git push origin HEAD
+git tag -fa "$TAG" -m "K2 ${TAG}"
+git push origin "refs/tags/${TAG}" --force
+echo "  Pushed main + tag ${TAG} at $(git rev-parse --short HEAD)."
+
+# ── Step 9: Create the GitHub release (attaches to the tag pushed above) ──
 gh release create "$TAG" "${ASSETS[@]}" \
     --repo "$RELEASE_REPO" \
     --title "$TAG" \

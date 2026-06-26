@@ -1781,9 +1781,18 @@ except Exception:
 # Parse N (total questions) from a 'Question X of Y' header. Echoes Y, or
 # nothing if the header is absent.
 _talk_parse_total() {
+    # NON-FATAL (GH#12): the trailing `|| true` is load-bearing. The
+    # leading grep exits 1 when there's no "Question X of Y" header —
+    # and Claude Code's AskUserQuestion renders a TAB BAR, not that
+    # header, so it NEVER matches on a real form. Under `set -euo
+    # pipefail` an unguarded `total=$(_talk_parse_total …)` would inherit
+    # that non-zero and abort --scout/--answers before they do anything.
+    # Empty output here just routes both to their no-header fallbacks
+    # (scout: walk-until-screen-stable; answers: best-effort drive).
+    # TODO(GH#12): replace header-parse with tab-bar (☐…✔ Submit) count.
     printf '%s' "$1" \
         | grep -oiE 'Question[[:space:]]+[0-9]+[[:space:]]+of[[:space:]]+[0-9]+' \
-        | head -1 | grep -oE '[0-9]+' | tail -1
+        | head -1 | grep -oE '[0-9]+' | tail -1 || true
 }
 
 # GH#8 #69 — `--scout`: surface an ENTIRE multi-question form in ONE call.

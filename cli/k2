@@ -1795,10 +1795,70 @@ _talk_parse_total() {
         | head -1 | grep -oE '[0-9]+' | tail -1 || true
 }
 
-# GH#8 #69 — `--scout`: surface an ENTIRE multi-question form in ONE call.
-# NON-destructive: presses ONLY arrow keys (never a number), walks → over
-# every question capturing each rendered screen, then walks ← back the
-# SAME number of steps so the form is left untouched, focused on Q1.
+# GH#12 — Parse the TAB BAR Claude Code's AskUserQuestion actually
+# renders (there is NO "Question X of Y" header). The bar looks like:
+#
+#     ←  ☐ Embodiment  ☒ Hot Take  ☐ Memoir  ✔ Submit  →
+#
+# Every `☐`/`☒ <name>` segment is a REAL question; the trailing
+# `✔ Submit` segment is nav, NOT a question. Echoes one question name
+# per line, IN ORDER, excluding Submit. Empty output ⇒ no parseable tab
+# bar (caller falls back to walk-until-stable). Read-only.
+_talk_parse_tabbar() {
+    printf '%s' "$1" | python3 -c '
+import sys, re
+text = sys.stdin.read()
+# The tab-bar line carries a question marker (☐/☒) AND the Submit tab.
+tab = None
+for ln in text.splitlines():
+    if ("☐" in ln or "☒" in ln) and ("✔" in ln or "✓" in ln or "Submit" in ln):
+        tab = ln
+        break
+if tab is None:
+    sys.exit(0)
+# Split into "<marker> <name>" segments: a marker, then everything up to
+# the NEXT marker or a nav arrow (← →). Question markers = ☐ ☒; the
+# Submit tab uses ✔/✓ (and/or is literally named "Submit") — excluded.
+for marker, name in re.findall(r"([☐☒✔✓])([^☐☒✔✓→←]*)", tab):
+    name = name.strip().strip("→←").strip()
+    if marker in ("☐", "☒") and name and name != "Submit":
+        print(name)
+' 2>/dev/null
+}
+
+# GH#12 (optional tidy) — Trim a full-screen capture to the question
+# region: from the tab-bar line through the LAST numbered option
+# (`❯ 1. …` / `2. …`). Best-effort — echoes the FULL screen UNCHANGED if
+# the region can't be bounded (correctness over tidiness).
+_talk_trim_screen() {
+    printf '%s' "$1" | python3 -c '
+import sys, re
+lines = sys.stdin.read().splitlines()
+start = None
+for i, ln in enumerate(lines):
+    if ("☐" in ln or "☒" in ln) and ("✔" in ln or "✓" in ln or "Submit" in ln):
+        start = i
+        break
+opt = re.compile(r"^\s*[❯>]?\s*\d+[.)]\s")
+end = None
+for i in range(len(lines) - 1, -1, -1):
+    if opt.match(lines[i]):
+        end = i
+        break
+if start is None or end is None or end < start:
+    sys.stdout.write("\n".join(lines))
+else:
+    sys.stdout.write("\n".join(lines[start:end + 1]))
+' 2>/dev/null
+}
+
+# GH#8 #69 / GH#12 — `--scout`: surface an ENTIRE multi-question form in
+# ONE call. NON-destructive: presses ONLY arrow keys (never a number),
+# walks → over every question capturing each rendered screen, then walks
+# ← back the SAME number of steps so the form is left untouched, focused
+# on Q1. The TAB BAR (`← ☐ name … ✔ Submit →`) is the authoritative count
+# + names — the walk STOPS before the `✔ Submit` tab (never captures it
+# as a phantom question). Walk-until-stable is the last-resort fallback.
 talk_scout() {
     local sid="$1" lines="$2" target="$3"
     local settle="$K2_TALK_NAV_SETTLE"
@@ -1808,17 +1868,32 @@ talk_scout() {
 
     echo "── talk(BETA) scout: walking $target's form (arrow-only, non-destructive) ──" >&2
 
-    local captures=() prev="" total="" screen
+    # GH#12 — Authoritative count + names from the tab bar on the FIRST
+    # screen (the full bar is visible regardless of focused question).
+    # `total` empty ⇒ no parseable tab bar ⇒ walk-until-stable fallback.
+    local first_screen names_blob
+    first_screen=$(_talk_read_raw "$sid" "$lines")
+    names_blob=$(_talk_parse_tabbar "$first_screen")
+    local names=()
+    if [[ -n "$names_blob" ]]; then
+        local _oldifs="$IFS"; IFS=$'\n'
+        while IFS= read -r _n; do [[ -n "$_n" ]] && names+=("$_n"); done <<< "$names_blob"
+        IFS="$_oldifs"
+    fi
+    local total=""
+    [[ "${#names[@]}" -gt 0 ]] && total="${#names[@]}"
+
+    local captures=() prev="" screen
     local i=1 rights=0
     while :; do
         screen=$(_talk_read_raw "$sid" "$lines")
-        [[ -z "$total" ]] && total=$(_talk_parse_total "$screen")
         captures+=("$screen")
         if [[ -n "$total" ]]; then
-            # Header known: stop once we've captured all N questions.
+            # Tab-bar count is authoritative: stop after N captures so the
+            # walk NEVER advances onto (or captures) the ✔ Submit tab.
             [[ "$i" -ge "$total" ]] && break
         else
-            # Fallback (no header): stop when the screen stops changing —
+            # Fallback (no tab bar): stop when the screen stops changing —
             # drop the duplicate trailing capture and back off one nav.
             if [[ -n "$prev" && "$screen" == "$prev" ]]; then
                 unset 'captures[${#captures[@]}-1]'
@@ -1841,12 +1916,30 @@ talk_scout() {
         sleep "$settle"
     done
 
+    # Comma-joined question names for the count line (GH#12).
+    local names_csv=""
+    if [[ "${#names[@]}" -gt 0 ]]; then
+        local _nm
+        for _nm in "${names[@]}"; do
+            names_csv="${names_csv:+$names_csv, }$_nm"
+        done
+    fi
+
     # Raw screens (the source of truth) → stdout, delimited per question.
-    local idx=1 cap
+    # Each capture is TRIMMED to the question + options region (best-effort;
+    # falls back to the full screen if it can't be bounded — GH#12).
+    local idx=1 cap qname trimmed
     for cap in "${captures[@]}"; do
+        qname="${names[$((idx - 1))]:-}"
+        trimmed=$(_talk_trim_screen "$cap")
+        [[ -z "$trimmed" ]] && trimmed="$cap"
         echo ""
-        echo "=== Question $idx${total:+ of $total} (raw screen) ==="
-        printf '%s\n' "$cap"
+        if [[ -n "$qname" ]]; then
+            echo "=== Question $idx of ${total} — ${qname} ==="
+        else
+            echo "=== Question $idx${total:+ of $total} (raw screen) ==="
+        fi
+        printf '%s\n' "$trimmed"
         idx=$((idx + 1))
     done
 
@@ -1854,18 +1947,25 @@ talk_scout() {
     {
         echo ""
         echo "── scout parsed summary (best-effort; raw screens above are authoritative) ──"
-        echo "   form: ${total:-?} question(s); left focused on Q1, unmodified."
+        if [[ -n "$total" ]]; then
+            echo "   form: $total question(s): ${names_csv}; left focused on Q1, unmodified."
+        else
+            echo "   form: ? question(s) (tab bar unparsed); left focused on Q1, unmodified."
+        fi
         idx=1
         for cap in "${captures[@]}"; do
-            local qline
-            qline=$(printf '%s\n' "$cap" | grep -iE 'Question[[:space:]]+[0-9]+[[:space:]]+of' | head -1 | sed 's/^[[:space:]]*//')
-            echo "Q$idx: ${qline:-(header unparsed — see raw screen)}"
-            printf '%s\n' "$cap" | grep -E '^[[:space:]]*[0-9]+[\.\)][[:space:]]' | sed 's/^[[:space:]]*/   /'
+            qname="${names[$((idx - 1))]:-}"
+            echo "Q$idx: ${qname:-(name unparsed — see raw screen)}"
+            printf '%s\n' "$cap" | grep -E '^[[:space:]]*❯?[[:space:]]*[0-9]+[\.\)][[:space:]]' | sed 's/^[[:space:]]*/   /' || true
             idx=$((idx + 1))
         done
         echo ""
         echo "── to answer: k2 talk $target --answers <a,b,c>  (N digits + auto final 1 to submit) ──"
     } >&2
+
+    # GH#12 — scout succeeded: explicit success so the dispatch (under
+    # set -e) returns 0 even if the last grep above matched nothing.
+    return 0
 }
 
 # GH#8 #69 — `--answers a,b,c`: drive a form currently focused on Q1.

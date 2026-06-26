@@ -31,6 +31,7 @@ pub mod boot_status;
 pub mod canonical_session;
 pub mod chat_routes;
 pub mod claude_auth_host;
+pub mod classify_routes;
 pub mod cli;
 pub mod cli_response;
 pub mod clone_routes;

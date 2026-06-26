@@ -579,6 +579,15 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/terminal/read" => crate::terminal_routes::handle_read(params),
         "/cli/terminal/write" => crate::terminal_routes::handle_write(params),
 
+        // ── GH #8: daemon-side HITL detector + extractor ────────────
+        // Read-only GET. Resolves the session's rendered screen (same
+        // text as /cli/terminal/read), runs a regex fast-path then the
+        // bundled qwen classifier, and returns
+        // `{is_hitl, source, kind, questions}`. The load-bearing
+        // detection primitive `talk` auto-routing (Phase 2) will
+        // consume. Not in `post_allowed` — no 405 guard needed.
+        "/cli/terminal/classify" => crate::classify_routes::handle_classify(params),
+
         // ── Phase 2 Unit 3: terminal lifecycle GETs ─────────────────
         // Read-only inspection routes for the TerminalManager
         // singleton. Mutating siblings (create/kill/resize/...) are

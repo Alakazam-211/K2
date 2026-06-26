@@ -42,6 +42,7 @@ mod boot_status;
 mod canonical_session;
 mod chat_routes;
 mod claude_auth_host;
+mod classify_routes;
 mod cli;
 mod cli_response;
 mod clone_routes;

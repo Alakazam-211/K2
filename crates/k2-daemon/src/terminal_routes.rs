@@ -54,7 +54,25 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
         .get("lines")
         .and_then(|s| s.parse().ok())
         .unwrap_or(50);
+    match resolve_screen_lines(params, requested_lines) {
+        Ok(tail) => CliResponse::ok_json(serde_json::json!({ "lines": tail }).to_string()),
+        Err(resp) => resp,
+    }
+}
 
+/// Resolve a session-addressing param set (`workspace`[+`agent`] /
+/// `id` / `session` / canonical key) to the last `requested_lines` of
+/// that session's rendered screen text — the SAME text `/cli/terminal/read`
+/// returns. Shared by `handle_read` and `classify_routes::handle_classify`
+/// so the classifier scores exactly what a human/agent sees.
+///
+/// `Ok(lines)` = resolved screen tail. `Err(resp)` = a `400` describing
+/// why the session couldn't be addressed (unknown workspace, no live
+/// session, bad UUID, …).
+pub(crate) fn resolve_screen_lines(
+    params: &HashMap<String, String>,
+    requested_lines: usize,
+) -> Result<Vec<String>, CliResponse> {
     // 0.39.x: workspace-name addressed read — the `k2so read <workspace>`
     // surface. Resolves a workspace NAME (or path / id) the same way
     // `msg` / `inbox` do, then reads that workspace's canonical
@@ -71,17 +89,17 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
         let project_path = match crate::workspace_msg::resolve_workspace(ws) {
             Some(p) => p,
             None => {
-                return CliResponse::bad_request(format!(
+                return Err(CliResponse::bad_request(format!(
                     "unknown workspace '{ws}' (pass a name, path, or id — see `k2so connections list`)"
-                ))
+                )))
             }
         };
         let project_id = match crate::canonical_session::lookup_project_id(&project_path) {
             Some(id) => id,
             None => {
-                return CliResponse::bad_request(format!(
+                return Err(CliResponse::bad_request(format!(
                     "workspace '{ws}' has no project id on record"
-                ))
+                )))
             }
         };
         let agent = params
@@ -90,20 +108,26 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
             .filter(|s| !s.is_empty());
         let key = build_canonical_read_key(&project_id, agent);
         return match crate::v2_session_map::lookup_by_agent_name(&key) {
-            Some(session) => read_v2_grid_lines(&session, requested_lines),
-            None => CliResponse::bad_request(format!(
+            Some(session) => Ok(v2_grid_lines(&session, requested_lines)),
+            None => Err(CliResponse::bad_request(format!(
                 "no live session for workspace '{ws}'{} — it may be asleep \
                  (check with `k2so sessions live {ws}`)",
                 agent
                     .map(|a| format!(" agent '{a}'"))
                     .unwrap_or_default(),
-            )),
+            ))),
         };
     }
 
-    let id_str = match params.get("id") {
+    // Accept both `id=` (the historical read param) and `session=`
+    // (the param name the classify endpoint advertises) so the two
+    // routes are addressable identically.
+    let id_str = match params
+        .get("id")
+        .or_else(|| params.get("session"))
+    {
         Some(s) if !s.is_empty() => s.as_str(),
-        _ => return CliResponse::bad_request("missing id or workspace param"),
+        _ => return Err(CliResponse::bad_request("missing id, session, or workspace param")),
     };
 
     // Form 2: canonical key `<project_id>:<agent>` — lookup_by_agent_name
@@ -113,11 +137,11 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
         && k2_core::session::SessionId::parse(id_str).is_none()
     {
         if let Some(session) = crate::v2_session_map::lookup_by_agent_name(id_str) {
-            return read_v2_grid_lines(&session, requested_lines);
+            return Ok(v2_grid_lines(&session, requested_lines));
         }
-        return CliResponse::bad_request(format!(
+        return Err(CliResponse::bad_request(format!(
             "no live v2 session under canonical key '{id_str}'"
-        ));
+        )));
     }
 
     // Form 1 + 3: try parsing as a UUID, then dispatch on which
@@ -125,11 +149,11 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
     // primary read surface.
     let session_id = match SessionId::parse(id_str) {
         Some(id) => id,
-        None => return CliResponse::bad_request("invalid session id (expected UUID or canonical key)"),
+        None => return Err(CliResponse::bad_request("invalid session id (expected UUID or canonical key)")),
     };
 
     if let Some(session) = crate::v2_session_map::lookup_by_session_id(&session_id) {
-        return read_v2_grid_lines(&session, requested_lines);
+        return Ok(v2_grid_lines(&session, requested_lines));
     }
 
     // Form 3 fallback: sub-terminal session-stream registry. This
@@ -139,9 +163,9 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
     // them, just a session_stream pipeline.
     let entry = match registry::lookup(&session_id) {
         Some(e) => e,
-        None => return CliResponse::bad_request(
+        None => return Err(CliResponse::bad_request(
             "session not found (checked v2_session_map + session_stream registry)",
-        ),
+        )),
     };
 
     // Decode every Frame::Text's bytes. LineMux emits a Frame::Text
@@ -192,9 +216,7 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
     }
 
     let start = lines.len().saturating_sub(requested_lines);
-    let tail: Vec<String> = lines[start..].to_vec();
-
-    CliResponse::ok_json(serde_json::json!({ "lines": tail }).to_string())
+    Ok(lines[start..].to_vec())
 }
 
 /// Render a v2 session's live grid + scrollback as plain-text lines
@@ -208,10 +230,15 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
 /// raw byte history). One line per Term row; trailing-empty rows
 /// are trimmed. Cursor / SGR styling is dropped — this is plain
 /// text for human eyes / shell pipelines.
-fn read_v2_grid_lines(
+/// Pure helper: render a v2 session's grid + scrollback to plain-text
+/// lines and return the last `requested_lines`. Split out of
+/// `read_v2_grid_lines` so `classify_routes` can read the SAME text a
+/// human/agent sees via `/cli/terminal/read` without re-wrapping a
+/// `CliResponse`.
+fn v2_grid_lines(
     session: &std::sync::Arc<k2_core::terminal::daemon_pty::DaemonPtySession>,
     requested_lines: usize,
-) -> CliResponse {
+) -> Vec<String> {
     use k2_core::terminal::grid_snapshot::snapshot_term;
 
     // Lock the Term briefly, take a snapshot, drop the lock fast.
@@ -247,8 +274,7 @@ fn read_v2_grid_lines(
     }
 
     let start = lines.len().saturating_sub(requested_lines);
-    let tail: Vec<String> = lines[start..].to_vec();
-    CliResponse::ok_json(serde_json::json!({ "lines": tail }).to_string())
+    lines[start..].to_vec()
 }
 
 /// Handler for `GET /cli/sessions/resize?session=<uuid>&cols=N&rows=N`.

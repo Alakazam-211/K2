@@ -96,6 +96,10 @@ _skip_conn_gate=0
 # plane + reads ~/.k2/tunnel.json — never the local daemon — so it must not
 # be blocked by the no-daemon gate.
 [ "${1:-}" = "connect" ] && _skip_conn_gate=1
+# `k2 --schema` (GH#8 #4) prints a STATIC command-surface manifest — it
+# talks to nothing, so it must work even with no daemon running (its whole
+# point is letting an agent load the CLI surface in one call).
+[ "${1:-}" = "--schema" ] && _skip_conn_gate=1
 
 if [ "$_skip_conn_gate" != "1" ] && { [ -z "$PORT" ] || [ -z "$TOKEN" ]; }; then
     echo "Error: Cannot connect to K2SO." >&2
@@ -1561,14 +1565,93 @@ cmd_review_feedback() {
 # 0.39.0f Phase 2.1b: cmd_agents_running / cmd_agents_reap removed.
 # Use `k2 workspace list --running` / `k2 daemon reap` instead.
 
+# GH#8 #3 — resolve a workspace NAME (or path) to a LIVE v2 session
+# UUID for the /cli/terminal/write route, which only accepts a session
+# UUID (the daemon's handle_write parses `id` as a UUID and nothing
+# else). This is the write-side complement to how `k2 read` / `k2 talk`
+# address a peer by name: the daemon resolves `workspace=` for READS,
+# but there is no `workspace=` form for WRITES, so we resolve here, in
+# the CLI, with no daemon change.
+#
+# Back-compat: if the arg ALREADY looks like a session UUID we echo it
+# verbatim — existing `terminal write <uuid> "text"` callers are
+# unaffected (byte-identical request).
+#
+# Name resolution mirrors the existing patterns in this script:
+#   1. name/path -> canonical project path  (/cli/workspace/resolve, as
+#      cmd_workspace_resume_chat_args does)
+#   2. project path -> live v2 session UUID  (/cli/sessions/list-for-workspace,
+#      as cmd_sessions_live does)
+# Best-effort selection: prefer a session matching `--agent <name>`,
+# else the workspace's sole/first live v2 session. On no live session it
+# prints a hint to stderr and returns non-zero (same failure shape as
+# `k2 read`). Echoes the resolved UUID on stdout.
+resolve_write_session_id() {
+    local target="$1"
+    local agent="${2:-}"
+    # UUID back-compat (8-4-4-4-12 hex) — use the arg directly.
+    if printf '%s' "$target" | grep -qiE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+        printf '%s' "$target"
+        return 0
+    fi
+    # Step 1: workspace name/path -> canonical project path.
+    local resolved_path
+    resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+    [ -z "$resolved_path" ] && resolved_path="$target"
+    # Step 2: project path -> live v2 session UUID.
+    local sid
+    sid=$(cli_request "/cli/sessions/list-for-workspace" "path=$(urlencode "$resolved_path")" 2>/dev/null \
+        | python3 -c "
+import json, sys
+agent = '''$agent'''
+try:
+    rows = json.loads(sys.stdin.read())
+except Exception:
+    rows = []
+if not isinstance(rows, list):
+    rows = []
+v2 = [r for r in rows if r.get('isV2')]
+pool = v2 if v2 else rows
+if agent:
+    matched = [r for r in pool if r.get('agentName') == agent]
+    pool = matched if matched else pool
+print(pool[0].get('sessionId', '') if pool else '')
+" 2>/dev/null)
+    if [ -z "$sid" ]; then
+        echo "Error: no live session for workspace '$target'${agent:+ agent '$agent'} — it may be asleep (check 'k2 sessions live $target')" >&2
+        return 1
+    fi
+    printf '%s' "$sid"
+}
+
 cmd_terminal_write() {
-    local terminal_id="${1:-}"
+    # GH#8 #3: the first arg is a session UUID (as before) OR a workspace
+    # NAME. A name is resolved to the workspace's live session via
+    # resolve_write_session_id (the write-side mirror of `k2 read`'s
+    # name-addressing), then posted to /cli/terminal/write. UUID callers
+    # are byte-identical.
+    local target="${1:-}"
     shift || true
+    # Optional leading `--agent <name>` selects a specific agent's session
+    # within the workspace. Consumed only when it's the very next token,
+    # so message text after it is untouched (and the historical
+    # `terminal write <id> "text"` form keeps `message="$*"` exactly).
+    local agent=""
+    if [ "${1:-}" = "--agent" ]; then
+        agent="${2:-}"; shift 2 || true
+    fi
     local message="$*"
-    if [ -z "$terminal_id" ] || [ -z "$message" ]; then
-        echo "Usage: k2 terminal write <terminal-id> \"message\"" >&2
+    if [ -z "$target" ] || [ -z "$message" ]; then
+        echo "Usage: k2 terminal write <terminal-id|workspace> [--agent <name>] \"message\"" >&2
         exit 1
     fi
+    local terminal_id
+    terminal_id=$(resolve_write_session_id "$target" "$agent") || exit 1
     cli_request "/cli/terminal/write" "id=$(urlencode "$terminal_id")&message=$(urlencode "$message")"
 }
 
@@ -1670,12 +1753,15 @@ cmd_talk() {
 
     local target="" text="" from="" command="" lines=50 agent=""
     local read_only="false"
+    local answer="" respond=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --from)      from="$2"; shift 2 ;;
             --command)   command="$2"; shift 2 ;;
             --lines)     lines="$2"; shift 2 ;;
             --agent)     agent="$2"; shift 2 ;;
+            --answer)    answer="$2"; shift 2 ;;
+            --respond)   respond="$2"; shift 2 ;;
             --read-only|--dry-run|--peek) read_only="true"; shift ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 talk --help')" >&2
@@ -1694,6 +1780,44 @@ cmd_talk() {
         echo "       Run 'k2 talk --help' for the full BETA protocol." >&2
         exit 1
     }
+
+    # ── act-returns-state (BETA, GH#8) ── the #1 round-trip win: fuse a
+    # DRIVE step (answer a HITL) with the confirm re-read so it's ONE
+    # call instead of write-then-separately-re-read. `--answer <N>` sends
+    # key <N>; `--respond <y|n>` sends y/n — both via the SAME raw
+    # TUI-control path cmd_terminal_write uses (/cli/terminal/write to the
+    # resolved session), then IMMEDIATELY re-read + print the resulting
+    # screen so the caller sees the result with no separate `read`.
+    #
+    # Deliberately NO option validation and NO structured-state parsing
+    # here (that's the next wave — it needs screen-parsing). `--answer N`
+    # just sends the digit, best-effort, exactly like a manual
+    # `terminal write <id> "N"` but fused with the re-read.
+    if [[ -n "$answer" || -n "$respond" ]]; then
+        if [[ -n "$answer" && -n "$respond" ]]; then
+            echo "Error: pass only one of --answer / --respond" >&2
+            exit 1
+        fi
+        local key="$answer"
+        [[ -n "$respond" ]] && key="$respond"
+        local drive_sid
+        drive_sid=$(resolve_write_session_id "$target" "$agent") || exit 1
+        echo "── talk(BETA): driving $target — sending '$key' ───────────────" >&2
+        cli_request "/cli/terminal/write" "id=$(urlencode "$drive_sid")&message=$(urlencode "$key")" >/dev/null
+        # Settle: the daemon fires the submit \r at +150 ms (see
+        # handle_write); give the TUI a beat to repaint before re-reading
+        # so the printed screen reflects the answer.
+        sleep 0.7
+        echo "── talk(BETA): $target's screen after '$key' ──────────────────" >&2
+        # Re-read the EXACT session we just drove (by its UUID) so the
+        # printed screen is guaranteed to reflect the answer — even in a
+        # multi-session workspace where the canonical read might pick a
+        # different agent's session than the one resolved for the write.
+        cmd_terminal_read "$drive_sid" --lines "$lines" || true
+        echo "───────────────────────────────────────────────────────────────" >&2
+        return 0
+    fi
+
     if [[ "$read_only" != "true" && -z "$text" ]]; then
         echo "Error: message text required (or pass --read-only to just peek)" >&2
         echo "Usage: k2 talk <workspace> \"text\" [--read-only] [--from <name>] [--lines N] [--agent <name>]" >&2
@@ -4096,10 +4220,11 @@ RELATED VERBS
       Read the recipient's live terminal (peek before you inject, or
       diagnose a stuck agent). The read complement to `msg`.
 
-  k2 terminal write <id> "text"      (see `k2 help --advanced`)
-      Raw bytes to any PTY by terminal ID. Power-user escape hatch
-      for cases where `msg`'s workspace-keyed routing isn't what you
-      want. `target_session_id` from a `msg` response is a valid <id>.
+  k2 terminal write <id|workspace> "text"   (see `k2 help --advanced`)
+      Raw bytes to a PTY, by session UUID OR by workspace NAME (GH#8 —
+      resolved to the workspace's live session, like `k2 read`). Power-
+      user escape hatch when `msg`'s routing isn't what you want.
+      `target_session_id` from a `msg` response is a valid <id>.
 
 EXAMPLES
   k2 msg scout_v3 "ready when you are"
@@ -4155,6 +4280,8 @@ EOF
 cmd_help_talk() {
     cat <<'EOF'
 k2 talk <workspace> "text" [--read-only] [--from <name>] [--lines N] [--agent <name>]
+k2 talk <workspace> --answer <N>      # BETA: drive a HITL + re-read in one call
+k2 talk <workspace> --respond <y|n>   # BETA: same, for a y/n confirm
 
   ★ BETA — THE inter-agent interaction verb. ★
 
@@ -4183,19 +4310,37 @@ YOU JUDGE — ready vs HITL:
   • HITL you must NOT answer for it       → BACK OFF. Re-run --read-only
     (canonical/federation peer waiting      in a few minutes; deliver
      on its OWNER, or no standing)          only once it returns to READY.
-  • HITL you DO have standing over        → DRIVE it: answer via raw TUI
-                                            control ('k2 terminal write
-                                            <id> "y"/"1"/Enter…'), re-read,
+  • HITL you DO have standing over        → DRIVE it: answer + re-read in
+                                            ONE call with --answer <N> /
+                                            --respond <y|n> (see below),
                                             repeat for chains, THEN deliver.
+
+ACT-RETURNS-STATE (BETA, GH#8) — the #1 round-trip win:
+  --answer <N> / --respond <y|n> FUSE the drive + the confirm re-read so
+  a drive step is ONE call instead of write-then-separately-re-read:
+    1. send the key (<N>, or y/n) to the resolved session via the SAME
+       raw TUI-control path `k2 terminal write` uses (/cli/terminal/write);
+    2. immediately re-read + print the resulting screen.
+  Best-effort and DELIBERATELY un-validated: `--answer 4` just sends the
+  digit (exactly like a manual `terminal write <id> "4"`), it does NOT
+  check that option 4 exists or parse the menu — YOU still read the
+  re-printed screen to confirm. Structured-state (--json) and
+  option-name selection (--select) are a later wave.
 
 ARGUMENTS
   <workspace>    Workspace name (preferred), path, or UUID. Same
                  addressing as `k2 msg` / `k2 read`.
-  "text"         The message body. Required unless --read-only.
+  "text"         The message body. Required unless --read-only or a
+                 drive flag (--answer / --respond) is used.
 
 OPTIONS
   --read-only    Read + judge ONLY; send nothing. Use this to BACK OFF
                  and re-check a HITL peer later. (aliases: --dry-run, --peek)
+  --answer <N>   BETA. Send key <N> to the resolved session, then re-read
+                 + print the resulting screen. Drives a numbered/menu HITL
+                 in one call. No message text needed.
+  --respond <y|n> BETA. Send y/n to the resolved session, then re-read +
+                 print the resulting screen. Drives a y/n confirm.
   --from <name>  Sender identity for the [from <name>] prefix (forwarded
                  to `msg`; same default-derivation as `msg`).
   --lines N      Lines of the peer's screen to read first. Default 50.
@@ -4211,10 +4356,253 @@ EXAMPLES
   k2 talk scout_v3 --read-only          # peek + judge; send nothing
   k2 talk scout_v3 "ready when you are" # read its screen, then deliver
   k2 talk MyApp "merged" --from ci-bot  # attributed delivery
+  k2 talk scout_v3 --answer 2           # BETA: pick menu option 2, see result
+  k2 talk scout_v3 --respond y          # BETA: confirm a y/n, see result
 
 RELATED VERBS
   k2 msg <workspace> "text"     Deliberate blind send (no read).
   k2 read <workspace>           Just read a peer's live terminal.
+EOF
+}
+
+# ── GH#8 #4: `k2 --schema [json]` — machine-readable command surface ──
+#
+# Dumps every agent-facing verb (flags/args + a one-line description) as
+# JSON so a calling agent loads the whole CLI surface in ONE call rather
+# than burning a round-trip per `--help`. The wire format is a STATIC
+# manifest hand-maintained below.
+#
+#   !!! KEEP IN SYNC WITH THE VERBS !!!
+#   This block is hand-written and is NOT auto-derived from the router
+#   (the `case` at the bottom) or the cmd_help_* text. When you ADD,
+#   RENAME, REMOVE, or change the flags of a verb, update this manifest
+#   in the same commit. It intentionally covers the agent-facing surface
+#   (msg / talk / read / terminal / inbox / review / sessions /
+#   connections / checkin / workspace / activity / --schema / ...), not
+#   every internal/deprecated arm. See the report note re: a generated
+#   approach (feasible later via a router+help introspection pass).
+cmd_schema() {
+    # Unquoted heredoc so $K2_CLI_VERSION expands; the JSON below
+    # deliberately avoids other `$` and backticks so nothing else is
+    # interpolated. Validate with: k2 --schema | python3 -m json.tool
+    cat <<EOF
+{
+  "tool": "k2",
+  "version": "$K2_CLI_VERSION",
+  "description": "Agent interface to K2 workspace orchestration (talks to the local K2 daemon over HTTP).",
+  "schema_note": "Static hand-maintained manifest of the agent-facing command surface. Run 'k2 help <verb>' for full prose.",
+  "addressing": "Most verbs take a <workspace> as a NAME (preferred; see 'k2 connections list'), an absolute path, or a project UUID.",
+  "commands": [
+    {
+      "name": "msg",
+      "usage": "k2 msg <workspace> \"text\" [--from <name>] [--command \"<text>\"]",
+      "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; use --inbox for long content.",
+      "args": [{"name": "workspace", "required": true}, {"name": "text", "required": true}],
+      "flags": [
+        {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
+        {"name": "--command", "arg": "text", "description": "Prepend text (e.g. a slash-command) at the very front of the delivered line."},
+        {"name": "--inbox", "arg": null, "description": "Queue an email-style task instead of a live send (no length limit). Pair with --title/--body."},
+        {"name": "--title", "arg": "text", "description": "Inbox item title (with --inbox)."},
+        {"name": "--body", "arg": "text", "description": "Inbox item body (with --inbox)."}
+      ]
+    },
+    {
+      "name": "talk",
+      "usage": "k2 talk <workspace> [\"text\"] [--read-only] [--answer <N>|--respond <y|n>] [--from <name>] [--lines N] [--agent <name>] [--command \"<text>\"]",
+      "description": "BETA. Fused read+send. Reads the peer's live screen FIRST (so you can't inject into a HITL blind), then delivers via msg. --answer/--respond DRIVE a HITL and re-read in one call.",
+      "args": [{"name": "workspace", "required": true}, {"name": "text", "required": false}],
+      "flags": [
+        {"name": "--read-only", "arg": null, "description": "Read + judge only; send nothing (aliases: --dry-run, --peek)."},
+        {"name": "--answer", "arg": "N", "description": "BETA (act-returns-state). Send key <N> to the resolved session, then re-read + print the resulting screen. Best-effort; no option validation."},
+        {"name": "--respond", "arg": "y|n", "description": "BETA (act-returns-state). Send y/n to the resolved session, then re-read + print the resulting screen."},
+        {"name": "--from", "arg": "name", "description": "Sender identity for the [from <name>] prefix (forwarded to msg)."},
+        {"name": "--lines", "arg": "N", "description": "Lines of the peer's screen to read first. Default 50."},
+        {"name": "--agent", "arg": "name", "description": "Read/target a specific agent's session in the workspace."},
+        {"name": "--command", "arg": "text", "description": "Slash-command prepended to the delivered message (forwarded to msg)."}
+      ]
+    },
+    {
+      "name": "read",
+      "usage": "k2 read <workspace> [--lines N] [--agent <name>]",
+      "description": "Read another workspace's LIVE terminal (last N lines of plain text). Peek before you inject, or diagnose a stuck agent.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [
+        {"name": "--lines", "arg": "N", "description": "Trailing lines to return. Default 50."},
+        {"name": "--agent", "arg": "name", "description": "Read a specific agent's session (default: workspace primary)."}
+      ]
+    },
+    {
+      "name": "terminal write",
+      "usage": "k2 terminal write <terminal-id|workspace> [--agent <name>] \"message\"",
+      "description": "Raw bytes to a PTY. Accepts a session UUID (back-compat) OR a workspace NAME (resolved to its live session, GH#8). Power-user escape hatch under msg/talk routing.",
+      "args": [{"name": "terminal-id|workspace", "required": true}, {"name": "message", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "name", "description": "Select a specific agent's session when addressing by workspace name."}
+      ]
+    },
+    {
+      "name": "terminal read",
+      "usage": "k2 terminal read <terminal-id> [--lines N]",
+      "description": "Read a PTY's screen by session id (the by-id complement to 'k2 read <workspace>').",
+      "args": [{"name": "terminal-id", "required": true}],
+      "flags": [{"name": "--lines", "arg": "N", "description": "Trailing lines to return. Default 50."}]
+    },
+    {
+      "name": "terminal spawn",
+      "usage": "k2 terminal spawn --agent <name> --command \"<cmd>\" [--cwd <dir>] [--title <t>]",
+      "description": "Spawn a new session for an agent and surface it to any attached UI.",
+      "args": [],
+      "flags": [
+        {"name": "--agent", "arg": "name", "description": "Agent name (session key)."},
+        {"name": "--command", "arg": "cmd", "description": "Command to run (default shell)."},
+        {"name": "--cwd", "arg": "dir", "description": "Working directory (default: project path)."},
+        {"name": "--title", "arg": "t", "description": "Display title for the UI pane."}
+      ]
+    },
+    {
+      "name": "inbox",
+      "usage": "k2 inbox [list|compose|move|archive] ...",
+      "description": "Email-style work primitive. Default shows new arrivals; compose/move/archive manage items.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "review",
+      "usage": "k2 review <approve|reject|feedback> <agent> [--reason <r>] [--message <m>]",
+      "description": "Review an agent's proposed work: approve (merge), reject (--reason), or send feedback (--message).",
+      "args": [{"name": "agent", "required": true}],
+      "flags": [
+        {"name": "--reason", "arg": "r", "description": "Rejection reason (with reject)."},
+        {"name": "--message", "arg": "m", "description": "Feedback text (with feedback)."}
+      ]
+    },
+    {
+      "name": "sessions live",
+      "usage": "k2 sessions live <workspace> [--json|--count]",
+      "description": "List the daemon's currently-open live v2 sessions for a workspace (each row has a sessionId UUID).",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."},
+        {"name": "--count", "arg": null, "description": "Just the integer count."}
+      ]
+    },
+    {
+      "name": "sessions spawn",
+      "usage": "k2 sessions spawn --agent <name> [...]",
+      "description": "Spawn a v2 session for an agent (daemon-side).",
+      "args": [],
+      "flags": [{"name": "--agent", "arg": "name", "description": "Agent name."}]
+    },
+    {
+      "name": "connections",
+      "usage": "k2 connections <list|add|remove> [<target>]",
+      "description": "Manage/list the workspaces this one is connected to (the yellow pages used for name addressing).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "checkin",
+      "usage": "k2 checkin [--status \"msg\"] [--done]",
+      "description": "Agent check-in / status update.",
+      "args": [],
+      "flags": [
+        {"name": "--status", "arg": "msg", "description": "Post a status message."},
+        {"name": "--done", "arg": null, "description": "Mark current work done."}
+      ]
+    },
+    {
+      "name": "workspace",
+      "usage": "k2 workspace <list|status|...> [...]",
+      "description": "Workspace registry + status verbs (list, status, profile, etc.).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "activity",
+      "usage": "k2 activity [...]",
+      "description": "Show the cross-workspace activity feed.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "glossary",
+      "usage": "k2 glossary [term]",
+      "description": "Look up a K2 glossary term.",
+      "args": [{"name": "term", "required": false}],
+      "flags": []
+    },
+    {
+      "name": "whats-new",
+      "usage": "k2 whats-new",
+      "description": "Show release notes for recent versions.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "update",
+      "usage": "k2 update [--app|--cli|--list]",
+      "description": "Update the K2 app or this CLI.",
+      "args": [],
+      "flags": [
+        {"name": "--app", "arg": null, "description": "Update the desktop app (default)."},
+        {"name": "--cli", "arg": null, "description": "Update this CLI script."},
+        {"name": "--list", "arg": null, "description": "List available versions."}
+      ]
+    },
+    {
+      "name": "daemon",
+      "usage": "k2 daemon <status|start|stop|restart|log|install|uninstall|companion> [...]",
+      "description": "Manage the local (or, with --host, a remote) K2 daemon.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "tunnel",
+      "usage": "k2 tunnel [...]",
+      "description": "K2 Connect tunnel — expose this daemon at https://<user>.k2.dev.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "skills",
+      "usage": "k2 skills <list|create|remove|profile|...> [...]",
+      "description": "Manage skill profiles (SKILL.md) for workspaces/agents.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "settings",
+      "usage": "k2 settings [--agentic <on|off>] [--state <id>] [...]",
+      "description": "Read/update daemon + workspace settings.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "version",
+      "usage": "k2 version",
+      "description": "Print the CLI version.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "--schema",
+      "usage": "k2 --schema [json]",
+      "description": "Print this command-surface manifest as JSON (one call to load the whole CLI surface).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "help",
+      "usage": "k2 help [<verb>|--advanced|--internal]",
+      "description": "Human-readable help. 'k2 help <verb>' shows full prose for one verb.",
+      "args": [{"name": "verb", "required": false}],
+      "flags": [
+        {"name": "--advanced", "arg": null, "description": "Power-user verbs."},
+        {"name": "--internal", "arg": null, "description": "Orchestrator-RPC verbs."}
+      ]
+    }
+  ]
+}
 EOF
 }
 
@@ -5569,7 +5957,9 @@ case "${1:-help}" in
             spawn) shift 2; cmd_terminal_spawn "$@" ;;
             write) shift 2; cmd_terminal_write "$@" ;;
             read)  shift 2; cmd_terminal_read "$@" ;;
-            *)     echo "Usage: k2 terminal <spawn|write|read> ..." >&2; exit 1 ;;
+            *)     echo "Usage: k2 terminal <spawn|write|read> ..." >&2
+                   echo "  write <id|workspace> [--agent <name>] \"message\"" >&2
+                   exit 1 ;;
         esac
         ;;
     agentic)
@@ -5848,6 +6238,13 @@ EOF
         ;;
     version|--version|-v)
         echo "k2 $K2_CLI_VERSION"
+        ;;
+    --schema|schema)
+        # GH#8 #4: dump the full command surface as JSON so an agent
+        # loads every verb + flags + a one-line description in ONE call,
+        # instead of probing `--help` per verb. Optional trailing `json`
+        # is accepted (JSON is the only/default format).
+        cmd_schema
         ;;
     help|--help|-h)
         # Guard against `set -u` when no trailing args.

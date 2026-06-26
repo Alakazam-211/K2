@@ -203,7 +203,7 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
           onKeyDown={handleKeyDown}
           rows={1}
           spellCheck={false}
-          placeholder="Send a message to the agent — Enter to send, Shift+Enter for a newline. (Raw TUI control — arrows, Ctrl-C, menus — still goes through typing in the terminal.)"
+          placeholder="Message the agent — Enter to send, Shift+Enter for newline"
           className="w-full resize-none bg-[#0a0a0a] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
           style={{
             fontFamily:

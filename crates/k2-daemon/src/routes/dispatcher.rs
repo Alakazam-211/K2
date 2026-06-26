@@ -489,6 +489,15 @@ async fn handle_one_request(
             // params remains supported for older CLIs (dedicated arm
             // below; GET falls through to crate::cli::dispatch).
             | "/cli/workspace/msg"
+            // Composer Phase 1a — session-scoped verified send. Body
+            // (form OR JSON) carries `session_id` + `text`; `from` is
+            // resolved server-side from the token (never the body, D3).
+            // OWNER-TOKEN-ONLY (token_is_owner) per the audit decision —
+            // this instructs an agent running --dangerously-skip-
+            // permissions (= full RCE), so connect-user access + the D4
+            // capability gate are deferred to 1c. Method-gated per-handler
+            // below (the dedicated arm re-checks is_post).
+            | "/cli/terminal/send-message"
     );
     if method != "GET" && !(is_post && post_allowed) {
         let _ = stream.read(&mut buf).await;
@@ -2426,6 +2435,73 @@ async fn handle_one_request(
                     .to_string(),
             });
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
+        }
+        // Composer Phase 1a — session-scoped verified send. Mirrors the
+        // /cli/workspace/msg spawn_blocking pattern (injection sleeps
+        // ~520ms across its settle windows + may block on the per-session
+        // lock, so it must not pin a runtime worker).
+        //
+        // OWNER-TOKEN-ONLY (token_is_owner, NOT token_ok): this route
+        // instructs an agent running --dangerously-skip-permissions =
+        // full RCE; connect-user access + the D4 capability gate land in
+        // 1c. The if-!is_post guard is enforced by the top-level 405 gate
+        // (post_allowed lists this route); we additionally pin `p ==`
+        // here so only a POST reaches the handler body.
+        p if is_post && p == "/cli/terminal/send-message" => {
+            if !super::http::token_is_owner(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // Body may be form-encoded OR JSON; query is the fallback.
+            // session_id/text only — `from` is NEVER read from the body
+            // (D3), it is resolved server-side below.
+            let mut params = super::http::parse_params(&path, &query);
+            for (k, v) in super::http::parse_form_body(&body_bytes) {
+                params.insert(k, v);
+            }
+            if let Ok(serde_json::Value::Object(map)) =
+                serde_json::from_slice::<serde_json::Value>(&body_bytes)
+            {
+                for key in ["session_id", "text"] {
+                    if let Some(s) = map.get(key).and_then(|v| v.as_str()) {
+                        params.insert(key.to_string(), s.to_string());
+                    }
+                }
+            }
+            let session_id = params.get("session_id").cloned().unwrap_or_default();
+            let text = params.get("text").cloned().unwrap_or_default();
+            // D3 — `from` resolved server-side, never the body. 1a is
+            // owner-token-only, so the attributed sender is the owner.
+            // (The literal display string is PRD open-question #1;
+            // "owner" is the 1a choice.)
+            let from = "owner".to_string();
+            let body = tokio::task::spawn_blocking(move || {
+                let resp = crate::workspace_msg::send_message_to_session(
+                    &session_id,
+                    &from,
+                    &text,
+                );
+                serde_json::to_string(&resp)
+                    .unwrap_or_else(|_| "{\"success\":false}".to_string())
+            })
+            .await
+            .unwrap_or_else(|e| {
+                serde_json::json!({
+                    "success": false,
+                    "reason": "worker_join",
+                    "hint": format!("{e}")
+                })
+                .to_string()
+            });
+            super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
         }
         // Unified /cli/* dispatch. Auth + param validation +
         // per-route handler all live in `crate::cli::dispatch`; main.rs

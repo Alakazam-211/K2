@@ -35,8 +35,12 @@
 //! the sender's workspace name when available; falls back to `external`
 //! when the call originates outside any registered workspace.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
+
+use parking_lot::Mutex as PlMutex;
 
 use k2_core::workspace::agent_identity::resolve_project_id;
 use k2_core::db::schema::WorkspaceSession;
@@ -66,6 +70,12 @@ pub enum MsgReason {
     /// PTY existed but the child process exited during the write
     /// (race we used to mask as `injected_to_pty: true`). Transient.
     PtyDied,
+    /// Composer 1a (D2/C2): the per-session injection lock did not free
+    /// within the deadline — a prior send is still in flight, or the
+    /// child is wedged. The waiter is released (it never holds the lock)
+    /// and the caller is told truthfully instead of blocking forever.
+    /// Transient — eligible for retry.
+    PtyStalled,
 }
 
 impl MsgReason {
@@ -75,6 +85,7 @@ impl MsgReason {
             Self::NoAgentMode => "no_agent_mode",
             Self::SpawnFailed => "spawn_failed",
             Self::PtyDied => "pty_died",
+            Self::PtyStalled => "pty_stalled",
         }
     }
 
@@ -91,6 +102,9 @@ impl MsgReason {
             }
             Self::PtyDied => {
                 "Target session crashed during delivery. Check `~/.k2/daemon.stderr.log`."
+            }
+            Self::PtyStalled => {
+                "Target session's injection lock did not free within the deadline (a prior send is still in flight, or the child is wedged). Retry shortly."
             }
         }
     }
@@ -247,6 +261,84 @@ pub fn format_message(from: &str, text: &str, command: &str) -> String {
     } else {
         format!("{command} [from {sender}] {text}")
     }
+}
+
+/// Composer 1a (D3) — attributed bytes formatter for the session-scoped
+/// `send-message` route. ALWAYS produces a non-empty `[from <name>]`
+/// prefix. The sender is resolved server-side from the auth token by the
+/// caller (NEVER from the request body); this helper just frames it.
+///
+/// Deliberately distinct from [`format_message`]:
+/// - It does NOT fall back to `external` (that is `k2 msg`'s defense-in-
+///   depth fallback and must stay there) — an empty `from` here falls
+///   back to `owner` (1a is owner-token-only), so an injection is never
+///   unattributed (red-team C3).
+/// - It has no `command` slash-prefix branch (the composer never sends
+///   slash-commands; that surface is `k2 msg`/`--command` only).
+pub fn format_message_user(from: &str, text: &str) -> String {
+    let sender = if from.trim().is_empty() { "owner" } else { from };
+    format!("[from {sender}] {text}")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Composer 1a — per-session injection lock + payload sanitization
+// ─────────────────────────────────────────────────────────────────────
+
+/// Composer 1a (D5 / red-team H2) — neutralize bracketed-paste
+/// close-marker breakout. A payload containing a raw `ESC` (`0x1b`) —
+/// most dangerously `ESC[201~` — would end paste mode early, so the
+/// remainder of the "message" is interpreted as live keystrokes: exactly
+/// the splice this feature exists to prevent. We strip EVERY raw `ESC`
+/// byte BEFORE the bracketed-paste frame is added, so `[201~` (and any
+/// other escape sequence) is left as inert literal text inside the
+/// frame. Applied at the shared injection chokepoint so `k2 msg` payloads
+/// get the same protection.
+pub fn sanitize_inject_text(text: &str) -> String {
+    text.chars().filter(|&c| c != '\u{1b}').collect()
+}
+
+/// Composer 1a (D2) — max time a waiting injector blocks for the
+/// per-session lock before giving up with a truthful `pty_stalled`.
+/// Generously exceeds a single injection's ~520ms of timed sleeps so
+/// legitimately-serialized sends (composer + `k2 msg`) all land in
+/// order, while a truly stuck holder still releases the waiter instead
+/// of pinning it forever.
+const INJECT_LOCK_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Outcome of a single locked injection attempt (Composer 1a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InjectOutcome {
+    /// Payload + submit CR written into a still-alive child.
+    Delivered,
+    /// The child died mid-injection → caller reports `pty_died`.
+    PtyDied,
+    /// The per-session injection lock did not free within the deadline
+    /// (D2) → caller reports `pty_stalled`. The waiter never acquired
+    /// the lock, so it holds nothing.
+    Stalled,
+}
+
+/// Composer 1a (D1/M1) — per-RESOLVED-session injection locks.
+///
+/// Keyed by the live PTY [`SessionId`] (NOT project_id — one project can
+/// own many terminals; the lock is per recipient PTY). The map mutex is
+/// held only long enough to clone out the per-session `Arc`; the actual
+/// serialization happens on that inner `parking_lot::Mutex` (which we
+/// need for `try_lock_for`, D2). Entries are tiny (`Arc<Mutex<()>>`); we
+/// never reap them.
+static INJECT_LOCKS: LazyLock<PlMutex<HashMap<SessionId, Arc<PlMutex<()>>>>> =
+    LazyLock::new(|| PlMutex::new(HashMap::new()));
+
+/// Clone out the injection lock for `sid`, creating it on first use.
+/// Every injector targeting the same resolved live session converges on
+/// the SAME `Arc` — composer route, `k2 msg`'s live branch, and the
+/// post-wake spawn delivery — so they are strictly one-at-a-time
+/// ("one throat to choke", D1/D7).
+fn lock_for(sid: &SessionId) -> Arc<PlMutex<()>> {
+    let mut map = INJECT_LOCKS.lock();
+    map.entry(*sid)
+        .or_insert_with(|| Arc::new(PlMutex::new(())))
+        .clone()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -453,23 +545,83 @@ fn attempt_delivery(project_path: &str, text: &str, from: &str, command: &str) -
 // loud `pty_died`.
 
 /// Inject `payload` + submit into `live`, with paste framing and an
-/// insurance Enter for latency. `Ok(())` = delivered to a live child;
-/// `Err(())` = the child died mid-injection (caller reports `pty_died`).
+/// insurance Enter for latency — **serialized by the per-session
+/// injection lock** (Composer 1a, D1/D2/D5/D7).
+///
+/// This is the single chokepoint EVERY injector funnels through —
+/// `inject_live` (`k2 msg` branch 1/1b), `spawn_and_inject`'s post-wake
+/// delivery (`k2 msg` branches 2/3), and the composer `send-message`
+/// route — so making it own the lock makes them all mutually exclusive
+/// against one PTY ("one throat to choke"). The lock is keyed on the
+/// RESOLVED `live.session_id()` (M1), so a re-spawned/woken session and
+/// the human composer serialize on the same key.
+///
+/// D2 is satisfied in BOTH halves:
+/// - **Waiter bound:** `try_lock_for(INJECT_LOCK_TIMEOUT)` — a waiter
+///   gives up and returns [`InjectOutcome::Stalled`] (→ `pty_stalled`)
+///   instead of blocking forever; it never acquires the lock so it holds
+///   nothing.
+/// - **Holder safety (non-blocking write):** satisfied structurally —
+///   `LiveSession::write` enqueues onto alacritty's event-loop channel
+///   and returns immediately (`daemon_pty.rs` `write`, documented
+///   "Non-blocking"); it does NOT write the PTY master FD directly. So a
+///   `SIGSTOP`ped/backpressured child fills alacritty's IO-thread pipe,
+///   never the lock holder's `write()` call — the holder only ever sleeps
+///   the bounded ~520ms of timed settles, then releases. (There is no raw
+///   master-FD `O_NONBLOCK` flag to flip from here; the architecture
+///   removes the wedge this guards against.)
 fn inject_and_submit(
     live: &session_lookup::LiveSession,
     payload: &str,
-) -> Result<(), ()> {
+) -> InjectOutcome {
+    inject_and_submit_with_timeout(live, payload, INJECT_LOCK_TIMEOUT)
+}
+
+/// [`inject_and_submit`] with an explicit lock-acquire deadline. The
+/// production wrapper passes [`INJECT_LOCK_TIMEOUT`]; tests pass a short
+/// deadline to exercise the `Stalled` path deterministically without a
+/// real wedged child.
+fn inject_and_submit_with_timeout(
+    live: &session_lookup::LiveSession,
+    payload: &str,
+    lock_timeout: Duration,
+) -> InjectOutcome {
+    // D1/D2 — acquire the per-session lock on the RESOLVED live session,
+    // bounded by the deadline so a stuck holder can't pin this waiter.
+    let lock = lock_for(&live.session_id());
+    let _guard = match lock.try_lock_for(lock_timeout) {
+        Some(g) => g,
+        None => {
+            log_debug!(
+                "[msg/inject] session={} injection lock held past deadline — pty_stalled",
+                live.session_id()
+            );
+            return InjectOutcome::Stalled;
+        }
+    };
+    inject_framed_locked(live, payload)
+}
+
+/// The actual framed write + submit. ALWAYS called while holding the
+/// per-session injection lock (via [`inject_and_submit_with_timeout`]).
+fn inject_framed_locked(
+    live: &session_lookup::LiveSession,
+    payload: &str,
+) -> InjectOutcome {
+    // D5 — strip raw ESC BEFORE framing so an embedded `ESC[201~` can't
+    // close the paste early and splice live keystrokes.
+    let clean = sanitize_inject_text(payload);
     let body: Vec<u8> = if live.bracketed_paste_active() {
-        let mut b = Vec::with_capacity(payload.len() + 12);
+        let mut b = Vec::with_capacity(clean.len() + 12);
         b.extend_from_slice(b"\x1b[200~");
-        b.extend_from_slice(payload.as_bytes());
+        b.extend_from_slice(clean.as_bytes());
         b.extend_from_slice(b"\x1b[201~");
         b
     } else {
-        payload.as_bytes().to_vec()
+        clean.into_bytes()
     };
     if live.write(&body).is_err() {
-        return Err(());
+        return InjectOutcome::PtyDied;
     }
     // Let the TUI ingest + render the body before the submit keystroke.
     std::thread::sleep(Duration::from_millis(150));
@@ -479,18 +631,59 @@ fn inject_and_submit(
     // submits it; if the first already submitted, this hits an empty
     // input box and no-ops.
     if live.write(b"\r").is_err() {
-        return Err(());
+        return InjectOutcome::PtyDied;
     }
     std::thread::sleep(Duration::from_millis(250));
     if !live.is_child_alive() {
-        return Err(());
+        return InjectOutcome::PtyDied;
     }
     let _ = live.write(b"\r");
     std::thread::sleep(Duration::from_millis(120));
     if !live.is_child_alive() {
-        return Err(());
+        return InjectOutcome::PtyDied;
     }
-    Ok(())
+    InjectOutcome::Delivered
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Composer 1a — session-scoped `POST /cli/terminal/send-message`
+// ─────────────────────────────────────────────────────────────────────
+
+/// Deliver `text` to a specific LIVE PTY session, attributed to `from`.
+///
+/// The Phase 1a `send-message` route entrypoint. Contrast with
+/// [`deliver_live`] (`k2 msg`), which is workspace-scoped and carries a
+/// wake/spawn cascade:
+///
+/// - **Live-session-only (M1).** This NEVER spawns. A `session_id` that
+///   is malformed or no longer maps to a live session returns `pty_died`;
+///   the wake behavior is owned solely by `k2 msg` (D7).
+/// - **Identity (D3).** `from` is resolved by the caller from the auth
+///   token (NEVER the request body) and is already non-empty; it is
+///   framed by [`format_message_user`] — the attributed branch, NOT
+///   `k2 msg`'s `external` fallback.
+/// - **Anti-splice (D1/D2/D5).** Delivery funnels through the shared,
+///   bounded, ESC-sanitized [`inject_and_submit`], so the composer and
+///   `k2 msg` are strictly one-at-a-time on the same PTY.
+pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgResponse {
+    // M1 — resolve to a LIVE session; never spawn.
+    let sid = match SessionId::parse(session_id) {
+        Some(s) => s,
+        None => return MsgResponse::fail(MsgReason::PtyDied),
+    };
+    let live = match session_lookup::lookup_by_session_id(&sid) {
+        Some(l) => l,
+        None => return MsgResponse::fail(MsgReason::PtyDied),
+    };
+
+    let payload = format_message_user(from, text);
+    match inject_and_submit(&live, &payload) {
+        InjectOutcome::Delivered => {
+            MsgResponse::ok(live.session_id().to_string(), "send_message")
+        }
+        InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
+        InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -507,9 +700,16 @@ fn inject_live(
     project_id: &str,
 ) -> MsgResponse {
     let payload = format_message(from, text, command);
-    if inject_and_submit(live, &payload).is_err() {
-        log_debug!("[msg/inject_live] PTY died during injection — pty_died");
-        return MsgResponse::fail(MsgReason::PtyDied);
+    match inject_and_submit(live, &payload) {
+        InjectOutcome::Delivered => {}
+        InjectOutcome::PtyDied => {
+            log_debug!("[msg/inject_live] PTY died during injection — pty_died");
+            return MsgResponse::fail(MsgReason::PtyDied);
+        }
+        InjectOutcome::Stalled => {
+            log_debug!("[msg/inject_live] injection lock stalled — pty_stalled");
+            return MsgResponse::fail(MsgReason::PtyStalled);
+        }
     }
 
     let target_id = live.session_id().to_string();
@@ -653,11 +853,20 @@ fn spawn_and_inject(
         let log_sid = target_id.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(1500));
-            if inject_and_submit(&live, &payload).is_err() {
-                log_debug!(
+            // D7: the post-wake delivery goes through the SAME locked
+            // `inject_and_submit` as live sends, so a just-woken
+            // session's injection serializes against the human composer
+            // exactly like a live one (no collision).
+            match inject_and_submit(&live, &payload) {
+                InjectOutcome::Delivered => {}
+                InjectOutcome::PtyDied => log_debug!(
                     "[daemon/workspace-msg] PTY died during post-spawn inject for session={}",
                     log_sid
-                );
+                ),
+                InjectOutcome::Stalled => log_debug!(
+                    "[daemon/workspace-msg] injection lock stalled during post-spawn inject for session={}",
+                    log_sid
+                ),
             }
         });
     } else {
@@ -780,12 +989,21 @@ mod tests {
     }
 
     #[test]
+    fn pty_stalled_is_transient() {
+        // Composer 1a (D2): a stalled lock is transient — a prior send
+        // in flight clears, so retrying is sensible (not short-circuited
+        // like the permanent reasons).
+        assert!(!MsgReason::PtyStalled.is_permanent());
+    }
+
+    #[test]
     fn every_reason_has_a_nonempty_hint() {
         for reason in [
             MsgReason::WorkspaceNotFound,
             MsgReason::NoAgentMode,
             MsgReason::SpawnFailed,
             MsgReason::PtyDied,
+            MsgReason::PtyStalled,
         ] {
             assert!(
                 !reason.hint().is_empty(),
@@ -804,6 +1022,7 @@ mod tests {
         assert_eq!(MsgReason::NoAgentMode.code(), "no_agent_mode");
         assert_eq!(MsgReason::SpawnFailed.code(), "spawn_failed");
         assert_eq!(MsgReason::PtyDied.code(), "pty_died");
+        assert_eq!(MsgReason::PtyStalled.code(), "pty_stalled");
     }
 
     /// 0.40.3: the live-inject success-check reverted to alive-based —
@@ -817,9 +1036,317 @@ mod tests {
             MsgReason::NoAgentMode.code(),
             MsgReason::SpawnFailed.code(),
             MsgReason::PtyDied.code(),
+            MsgReason::PtyStalled.code(),
         ] {
             assert_ne!(code, "no_submit", "no_submit must not return");
         }
+    }
+
+    // ── Composer 1a (D5) — close-marker sanitization ─────────────────
+    //
+    // These live alongside the retired-oracle lock-in above per the PRD
+    // test plan ("extend the no_submit_reason_is_retired test block").
+
+    #[test]
+    fn sanitize_strips_bracketed_paste_close_marker() {
+        // A literal ESC[201~ embedded in user text must be neutralized so
+        // it cannot end paste mode early and splice live keystrokes
+        // (red-team H2 / D5). The ESC is removed; the inert `[201~`
+        // remains as literal text inside the paste frame.
+        let malicious = "hello\u{1b}[201~rm -rf /";
+        let clean = sanitize_inject_text(malicious);
+        assert!(
+            !clean.contains('\u{1b}'),
+            "no raw ESC may survive sanitization: {clean:?}"
+        );
+        assert_eq!(clean, "hello[201~rm -rf /");
+    }
+
+    #[test]
+    fn sanitize_strips_all_escape_bytes_including_open_marker() {
+        // Both the open (ESC[200~) and close (ESC[201~) markers — and any
+        // other escape sequence — are neutralized.
+        let s = sanitize_inject_text("\u{1b}[200~payload\u{1b}[201~");
+        assert!(!s.contains('\u{1b}'));
+        assert_eq!(s, "[200~payload[201~");
+    }
+
+    #[test]
+    fn sanitize_leaves_clean_text_untouched() {
+        assert_eq!(
+            sanitize_inject_text("a normal message 123 ✓"),
+            "a normal message 123 ✓"
+        );
+    }
+
+    // ── Composer 1a (D3) — attributed `from`, never empty ────────────
+
+    #[test]
+    fn format_message_user_attributes_owner() {
+        assert_eq!(format_message_user("owner", "hello"), "[from owner] hello");
+    }
+
+    #[test]
+    fn format_message_user_is_never_empty_and_never_external() {
+        // The route resolves `from` server-side and never passes empty,
+        // but defense-in-depth: an empty `from` must still produce a
+        // non-empty attribution — and must NOT reuse `k2 msg`'s
+        // `external` fallback (red-team C3 / D3).
+        let out = format_message_user("", "hi");
+        assert!(out.starts_with("[from "), "must carry a prefix: {out}");
+        assert!(!out.contains("[from ]"), "from must never be empty: {out}");
+        assert!(
+            !out.contains("external"),
+            "composer must NOT reuse k2 msg's `external` fallback: {out}"
+        );
+    }
+
+    #[test]
+    fn format_message_user_keeps_prefix_on_first_line_only() {
+        assert_eq!(
+            format_message_user("owner", "line1\nline2"),
+            "[from owner] line1\nline2"
+        );
+    }
+
+    // ── Composer 1a (M1) — live-only `send-message`, no spawn ────────
+
+    #[test]
+    fn send_message_unknown_session_returns_pty_died() {
+        // A well-formed but unregistered session id resolves to no live
+        // PTY → pty_died. Crucially it must NOT spawn anything (M1).
+        let r = send_message_to_session(&SessionId::new().to_string(), "owner", "hi");
+        assert!(!r.success);
+        assert_eq!(r.reason.as_deref(), Some("pty_died"));
+        assert!(r.target_session_id.is_none());
+    }
+
+    #[test]
+    fn send_message_malformed_session_id_returns_pty_died() {
+        let r = send_message_to_session("not-a-uuid", "owner", "hi");
+        assert!(!r.success);
+        assert_eq!(r.reason.as_deref(), Some("pty_died"));
+    }
+
+    // ── Composer 1a (D1) — per-session lock keying ───────────────────
+
+    #[test]
+    fn inject_lock_same_session_reuses_one_lock_distinct_per_session() {
+        // Same session → same Arc, so every injector converges on one
+        // lock (D1/D7). Different sessions → distinct Arcs, so one busy
+        // PTY never blocks another (D2 isolation, M1 keying).
+        let a = SessionId::new();
+        let b = SessionId::new();
+        let la = lock_for(&a);
+        let la2 = lock_for(&a);
+        let lb = lock_for(&b);
+        assert!(
+            Arc::ptr_eq(&la, &la2),
+            "same session must reuse exactly one lock"
+        );
+        assert!(
+            !Arc::ptr_eq(&la, &lb),
+            "different sessions must get distinct locks"
+        );
+    }
+
+    // ── Composer 1a (D2/C2) — bounded acquire + isolation ────────────
+
+    #[test]
+    fn inject_lock_acquire_is_bounded_and_session_isolated() {
+        // D2 half-1 (waiter bound): a waiter for a HELD lock gives up
+        // after the deadline (→ pty_stalled) rather than blocking
+        // forever. This is the lock-layer model of the wedge case; the
+        // real-PTY mapping is exercised in
+        // `inject_and_submit_returns_stalled_when_lock_held` below.
+        //
+        // (Note: a real SIGSTOP child does NOT wedge the *writer* in this
+        // architecture — LiveSession::write enqueues onto alacritty's
+        // event-loop channel and returns immediately, daemon_pty.rs
+        // `write` "Non-blocking" — so the meaningful, testable failure
+        // mode is lock contention, exercised directly here.)
+        let sid = SessionId::new();
+        let held = lock_for(&sid);
+        let _g = held.lock();
+
+        let waiter = lock_for(&sid);
+        let t0 = std::time::Instant::now();
+        let got = waiter.try_lock_for(Duration::from_millis(80));
+        assert!(got.is_none(), "waiter must time out while lock is held");
+        assert!(
+            t0.elapsed() >= Duration::from_millis(60),
+            "waiter must have actually waited ~the deadline, waited {:?}",
+            t0.elapsed()
+        );
+
+        // Isolation: a DIFFERENT session is unaffected by the wedged one.
+        let other = lock_for(&SessionId::new());
+        assert!(
+            other.try_lock_for(Duration::from_millis(80)).is_some(),
+            "a healthy session must not be blocked by another session's held lock"
+        );
+    }
+
+    // ── Composer 1a (anti-splice, LOAD-BEARING) ──────────────────────
+
+    #[test]
+    fn inject_lock_serializes_concurrent_injectors_same_session() {
+        // The core guarantee: two simultaneous sends + a k2 msg at ONE
+        // session never interleave. The anti-splice property IS the lock
+        // (not the framing), so we prove it at the lock: three injectors
+        // each push Start(id) then End(id) into a shared log while
+        // holding the per-session lock. If the lock serializes, every
+        // Start is IMMEDIATELY followed by its own End — no interleave.
+        // The 15ms hold guarantees that WITHOUT the lock the threads
+        // would interleave (they all start near-simultaneously).
+        use std::sync::Mutex as StdMutex;
+
+        let sid = SessionId::new();
+        let log: Arc<StdMutex<Vec<(char, usize)>>> = Arc::new(StdMutex::new(Vec::new()));
+
+        let mut handles = Vec::new();
+        for id in 0..3usize {
+            let log = Arc::clone(&log);
+            handles.push(std::thread::spawn(move || {
+                let lock = lock_for(&sid);
+                let _g = lock.lock();
+                log.lock().unwrap().push(('S', id));
+                std::thread::sleep(Duration::from_millis(15));
+                log.lock().unwrap().push(('E', id));
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let events = log.lock().unwrap().clone();
+        assert_eq!(events.len(), 6, "3 injectors → 3 Start + 3 End: {events:?}");
+        let mut i = 0;
+        while i < events.len() {
+            let (s, sid_) = events[i];
+            assert_eq!(s, 'S', "expected Start at {i}, got {:?}: {events:?}", events[i]);
+            let (e, eid) = events[i + 1];
+            assert_eq!(
+                e, 'E',
+                "Start id={sid_} not immediately followed by an End — injectors INTERLEAVED: {events:?}"
+            );
+            assert_eq!(
+                eid, sid_,
+                "End id mismatch — injectors INTERLEAVED: {events:?}"
+            );
+            i += 2;
+        }
+    }
+
+    // ── Composer 1a — real-PTY integration (Unix only) ───────────────
+    //
+    // These spawn a real `cat` PTY (cat echoes stdin, never self-exits)
+    // so `inject_and_submit` runs against a live child. `cat` does NOT
+    // enable bracketed-paste, so injection takes the non-framed write
+    // path; the lock + outcome mapping are identical either way.
+
+    #[cfg(unix)]
+    fn spawn_cat_live() -> session_lookup::LiveSession {
+        use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession, LabelSource};
+        use std::path::PathBuf;
+        let cfg = DaemonPtyConfig {
+            session_id: SessionId::new(),
+            cols: 80,
+            rows: 24,
+            cwd: Some(PathBuf::from("/tmp")),
+            program: Some("cat".to_string()),
+            args: vec![],
+            env: Default::default(),
+            drain_on_exit: true,
+            label: String::new(),
+            label_source: LabelSource::Pty,
+        };
+        let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
+        session_lookup::LiveSession(s)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inject_and_submit_returns_stalled_when_lock_held() {
+        // D2 (C2) end-to-end: with the per-session lock already held
+        // (simulating an in-flight injection), inject_and_submit returns
+        // Stalled within the deadline and does NOT block forever — it
+        // never acquired the lock, so it holds nothing. A subsequent
+        // send to a HEALTHY session is unaffected (Delivered).
+        let live = spawn_cat_live();
+        let sid = live.session_id();
+
+        let held = lock_for(&sid);
+        let guard = held.lock();
+
+        let live2 = live.clone();
+        let t0 = std::time::Instant::now();
+        let out = std::thread::spawn(move || {
+            inject_and_submit_with_timeout(&live2, "[from owner] hi", Duration::from_millis(150))
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            out,
+            InjectOutcome::Stalled,
+            "a held lock past the deadline must yield Stalled (→ pty_stalled)"
+        );
+        assert!(
+            t0.elapsed() < Duration::from_secs(2),
+            "stalled send must return promptly at the deadline, took {:?}",
+            t0.elapsed()
+        );
+        drop(guard);
+
+        // A healthy, uncontended session delivers normally.
+        let healthy = spawn_cat_live();
+        let out2 = inject_and_submit_with_timeout(
+            &healthy,
+            "[from owner] hi",
+            Duration::from_secs(2),
+        );
+        assert_eq!(
+            out2,
+            InjectOutcome::Delivered,
+            "a healthy session must be unaffected by another's wedged lock"
+        );
+
+        live.0.kill();
+        healthy.0.kill();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_injectors_all_deliver_through_shared_lock() {
+        // Two simultaneous composer sends + a k2-msg-style send at ONE
+        // live session: all three funnel through the same locked
+        // inject_and_submit, serialize, and EACH delivers (none lost,
+        // none spliced). This grounds the lock-layer anti-splice proof in
+        // the real injection path.
+        let live = spawn_cat_live();
+
+        let mut handles = Vec::new();
+        for i in 0..3 {
+            let l = live.clone();
+            handles.push(std::thread::spawn(move || {
+                inject_and_submit_with_timeout(
+                    &l,
+                    &format!("[from owner] msg{i}"),
+                    Duration::from_secs(10),
+                )
+            }));
+        }
+        let outs: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(outs.len(), 3);
+        for o in &outs {
+            assert_eq!(
+                *o,
+                InjectOutcome::Delivered,
+                "every serialized injector must deliver (none lost): {outs:?}"
+            );
+        }
+
+        live.0.kill();
     }
 
     // ── MsgResponse serialization (the canonical JSON contract) ─────

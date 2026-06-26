@@ -2270,7 +2270,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               const btn = accum < 0 ? 64 : 65
               // Higher = less sensitive: one SGR notch per ~this many
               // cell-heights of accumulated movement. Tune to taste.
-              const CELLS_PER_NOTCH = 1.8
+              const CELLS_PER_NOTCH = 1.0
               let ticks = Math.max(
                 1,
                 Math.round(Math.abs(accum) / (ch2 * CELLS_PER_NOTCH)),

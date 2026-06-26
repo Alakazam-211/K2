@@ -297,6 +297,67 @@ pub fn sanitize_inject_text(text: &str) -> String {
     text.chars().filter(|&c| c != '\u{1b}').collect()
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// "Your display name" — owner `from` resolution (D3)
+// ─────────────────────────────────────────────────────────────────────
+
+/// Max length of a resolved owner display name. Mirrors
+/// [`k2_core::workspace::display::validate_display_name`]'s 64-char
+/// ceiling so the attributed `[from <name>]` prefix can never balloon.
+const OWNER_DISPLAY_NAME_MAX: usize = 64;
+
+/// Sanitize a user-configured owner display name before it is embedded
+/// into [`format_message_user`]'s `[from <name>]` prefix and injected
+/// into a PTY.
+///
+/// The name flows into the SAME PTY-injection chokepoint as the
+/// composer's text payload, so it gets the same anti-splice treatment
+/// and then some: it must additionally stay on ONE line (a raw newline
+/// would break the single-line prefix). Steps:
+///   1. Strip raw `ESC` (`0x1b`) via the shared [`sanitize_inject_text`]
+///      chokepoint (red-team H2 / D5 — no bracketed-paste breakout).
+///   2. Drop every remaining ASCII/Unicode control char (newlines, CR,
+///      tab, other C0/C1) — these would corrupt the one-line prefix.
+///   3. Trim surrounding whitespace.
+///   4. Cap to [`OWNER_DISPLAY_NAME_MAX`] chars.
+///
+/// Returns `None` when nothing usable survives, so the caller falls back
+/// to the literal `"owner"`.
+pub fn sanitize_owner_display_name(name: &str) -> Option<String> {
+    // Step 1 — shared ESC-stripping chokepoint (anti-splice).
+    let no_esc = sanitize_inject_text(name);
+    // Step 2 — drop any remaining control chars (newlines/CR/tab/etc.).
+    let cleaned: String = no_esc.chars().filter(|c| !c.is_control()).collect();
+    // Step 3 — trim.
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Step 4 — cap length (char-wise, never splitting a multi-byte char).
+    Some(trimmed.chars().take(OWNER_DISPLAY_NAME_MAX).collect())
+}
+
+/// Pure resolver (D3): given the configured `owner_display_name` exactly
+/// as stored in app_settings, produce the attributed `from`. Sanitizes
+/// for safe PTY injection; falls back to `"owner"` when unset / blank /
+/// all-control. Kept separate from [`resolve_owner_from`] so it is unit-
+/// testable without touching `~/.k2/settings.json`.
+pub fn owner_from_or_default(configured: Option<&str>) -> String {
+    configured
+        .and_then(sanitize_owner_display_name)
+        .unwrap_or_else(|| "owner".to_string())
+}
+
+/// D3 entrypoint for the `send-message` route: resolve the OWNER's
+/// attributed `from` from the canonical, daemon-side app_settings
+/// (`owner_display_name`), falling back to `"owner"` when unset/blank.
+///
+/// **D3 holds:** the name is read ONLY from server-side settings — NEVER
+/// from the request body — so a client cannot spoof the attribution.
+pub fn resolve_owner_from() -> String {
+    owner_from_or_default(k2_core::app_settings::load().owner_display_name.as_deref())
+}
+
 /// Composer 1a (D2) — max time a waiting injector blocks for the
 /// per-session lock before giving up with a truthful `pty_stalled`.
 /// Generously exceeds a single injection's ~520ms of timed sleeps so
@@ -1098,6 +1159,66 @@ mod tests {
         assert!(
             !out.contains("external"),
             "composer must NOT reuse k2 msg's `external` fallback: {out}"
+        );
+    }
+
+    // ── "Your display name" — owner `from` resolution (D3) ───────────
+
+    #[test]
+    fn owner_from_resolves_configured_name_when_set() {
+        // A configured name is used verbatim as the attribution.
+        assert_eq!(owner_from_or_default(Some("Rosson")), "Rosson");
+        assert_eq!(
+            format_message_user(&owner_from_or_default(Some("Rosson")), "hi"),
+            "[from Rosson] hi"
+        );
+    }
+
+    #[test]
+    fn owner_from_falls_back_to_owner_when_unset_or_blank() {
+        // Unset (None), empty, and whitespace-only all fall back to the
+        // literal "owner" — the D3 default.
+        assert_eq!(owner_from_or_default(None), "owner");
+        assert_eq!(owner_from_or_default(Some("")), "owner");
+        assert_eq!(owner_from_or_default(Some("   ")), "owner");
+        // A name that is ALL control chars also resolves to "owner".
+        assert_eq!(owner_from_or_default(Some("\u{1b}\n\t")), "owner");
+    }
+
+    #[test]
+    fn owner_display_name_strips_esc_and_newlines_before_injection() {
+        // The name is embedded in the injected frame, so a raw ESC (paste
+        // breakout, red-team H2/D5) or a newline (breaks the one-line
+        // prefix) must be neutralized.
+        let clean =
+            sanitize_owner_display_name("ro\u{1b}sson\nadmin").expect("usable name remains");
+        assert!(!clean.contains('\u{1b}'), "no raw ESC may survive: {clean:?}");
+        assert!(!clean.contains('\n'), "no newline may survive: {clean:?}");
+        assert_eq!(clean, "rossonadmin");
+
+        // End-to-end: a malicious configured name produces an injected
+        // frame with NO raw ESC.
+        let from = owner_from_or_default(Some("a\u{1b}[201~rm -rf /\nb"));
+        let frame = format_message_user(&from, "payload");
+        assert!(
+            !frame.contains('\u{1b}'),
+            "no raw ESC may reach the injected frame: {frame:?}"
+        );
+        assert!(!frame.contains('\n'), "the `from` segment must stay one-line: {frame:?}");
+    }
+
+    #[test]
+    fn owner_display_name_is_length_capped() {
+        let long = "x".repeat(200);
+        let clean = sanitize_owner_display_name(&long).expect("usable");
+        assert_eq!(clean.chars().count(), OWNER_DISPLAY_NAME_MAX);
+    }
+
+    #[test]
+    fn owner_display_name_trims_surrounding_whitespace() {
+        assert_eq!(
+            sanitize_owner_display_name("  Rosson  ").as_deref(),
+            Some("Rosson")
         );
     }
 

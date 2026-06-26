@@ -199,6 +199,16 @@ pub struct AppSettings {
     /// persist. Defaults to 24 for old settings.json snapshots.
     #[serde(default = "default_active_window_hours")]
     pub active_window_hours: u32,
+    /// User-set "your display name" — the name K2 agents recognize the
+    /// OWNER by. Resolved server-side as the `from` attribution when the
+    /// owner sends via the composer (`/cli/terminal/send-message`); the
+    /// route NEVER reads `from` from the request body (D3). `None`/blank
+    /// falls back to the literal `"owner"`. A typed `Option<String>` is
+    /// required: `AppSettings` round-trips through `serde_json::from_value`
+    /// on every `load`/`update`, which silently drops keys with no matching
+    /// field — an untyped key would never persist.
+    #[serde(default)]
+    pub owner_display_name: Option<String>,
     #[serde(default)]
     pub editor: EditorSettings,
     #[serde(default)]
@@ -389,6 +399,7 @@ impl Default for AppSettings {
             last_active_project_id: None,
             last_active_workspace_id: None,
             active_window_hours: default_active_window_hours(),
+            owner_display_name: None,
             editor: EditorSettings::default(),
             companion: CompanionSettings::default(),
             wake_scheduler: WakeSchedulerSettings::default(),
@@ -679,6 +690,37 @@ mod tests {
         assert_eq!(after.default_agent, "claude");
         let loaded = load();
         assert_eq!(loaded.default_agent, "claude");
+    }
+
+    /// "Your display name" (composer `from` attribution) must persist
+    /// through save→load and through an `update()` deep-merge, and default
+    /// to `None` on a fresh settings file (→ the route's "owner" fallback).
+    #[test]
+    fn owner_display_name_round_trips() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        // Fresh file: defaults to None (route falls back to "owner").
+        assert_eq!(load().owner_display_name, None);
+
+        // save → load preserves an explicit value.
+        let mut s = AppSettings::default();
+        s.owner_display_name = Some("Rosson".to_string());
+        save(&s).expect("save");
+        assert_eq!(load().owner_display_name.as_deref(), Some("Rosson"));
+
+        // update() deep-merge ingests the camelCase key like any other
+        // field (the generic /cli/settings/update path), no bespoke route.
+        let merged = update(serde_json::json!({
+            "ownerDisplayName": "Captain"
+        }))
+        .expect("update");
+        assert_eq!(merged.owner_display_name.as_deref(), Some("Captain"));
+        assert_eq!(load().owner_display_name.as_deref(), Some("Captain"));
+
+        // reset() clears it back to None.
+        let after = reset().expect("reset");
+        assert_eq!(after.owner_display_name, None);
     }
 
     #[test]

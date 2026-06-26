@@ -51,6 +51,11 @@ interface SettingsState {
   // (and a future reaper). Default 24, min 1.
   activeWindowHours: number
 
+  // "Your display name" — the name K2 agents recognize you (the owner)
+  // by. Used server-side as the composer `from` attribution. Empty
+  // string = unset (the daemon falls back to "owner").
+  ownerDisplayName: string
+
   // Editor settings
   editor: EditorSettingsBackend
 
@@ -85,6 +90,7 @@ interface SettingsState {
   setAiAssistantEnabled: (enabled: boolean) => void
   setClaudeAuthAutoRefresh: (enabled: boolean) => void
   setActiveWindowHours: (hours: number) => void
+  setOwnerDisplayName: (name: string) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
   resetAllSettings: () => void
@@ -97,6 +103,27 @@ export const DEFAULT_ACTIVE_WINDOW_HOURS = 24
 export function clampActiveWindowHours(h: number): number {
   if (!Number.isFinite(h)) return DEFAULT_ACTIVE_WINDOW_HOURS
   return Math.max(1, Math.floor(h))
+}
+
+/** "Your display name" — max length, mirrors the daemon's 64-char cap
+ *  (`OWNER_DISPLAY_NAME_MAX` / `validate_display_name`). */
+export const OWNER_DISPLAY_NAME_MAX = 64
+
+/** Light client-side sanitize that MIRRORS the daemon's
+ *  `sanitize_owner_display_name`: strip ESC + control chars (newlines,
+ *  CR, tab), trim, cap length. The daemon re-sanitizes server-side
+ *  regardless (D3 is enforced there); this just keeps the UI honest. */
+export function sanitizeOwnerDisplayName(raw: string): string {
+  // Drop C0 controls (incl. ESC 0x1b, newline, CR, tab) + DEL (0x7f),
+  // then trim + cap. Char-code filter avoids embedding raw control bytes
+  // in a regex literal.
+  const stripped = Array.from(raw)
+    .filter((ch) => {
+      const code = ch.codePointAt(0) ?? 0
+      return code >= 0x20 && code !== 0x7f
+    })
+    .join('')
+  return stripped.trim().slice(0, OWNER_DISPLAY_NAME_MAX)
 }
 
 const DEFAULT_TERMINAL: TerminalSettings = {
@@ -153,6 +180,7 @@ async function persistAndApply(
       agenticSystemsEnabled: result.agenticSystemsEnabled ?? true,
       claudeAuthAutoRefresh: result.claudeAuthAutoRefresh ?? false,
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
+      ownerDisplayName: result.ownerDisplayName ?? '',
       editor: mergeEditorDefaults(result.editor),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,
@@ -173,6 +201,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   agenticSystemsEnabled: true,
   claudeAuthAutoRefresh: false,
   activeWindowHours: DEFAULT_ACTIVE_WINDOW_HOURS,
+  ownerDisplayName: '',
   editor: { ...DEFAULT_EDITOR },
   defaultAgent: 'claude',
   initialProjectId: null,
@@ -294,6 +323,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setOwnerDisplayName: async (name: string) => {
+    const prev = get().ownerDisplayName
+    // Mirror the daemon's sanitize so the optimistic value matches what
+    // gets persisted (the daemon re-sanitizes server-side regardless).
+    const next = sanitizeOwnerDisplayName(name)
+    set({ ownerDisplayName: next })
+    try {
+      // Empty string clears the override → daemon falls back to "owner".
+      await persistAndApply(set, { ownerDisplayName: next })
+    } catch (err) {
+      console.error('[settings] Failed to persist owner display name:', err)
+      set({ ownerDisplayName: prev })
+    }
+  },
+
   updateEditorSettings: async (partial: Partial<EditorSettingsBackend>) => {
     const prev = get().editor
     const merged = { ...prev, ...partial }
@@ -323,6 +367,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       terminal: result.terminal,
       keybindings: result.keybindings,
       projectSettings: result.projectSettings ?? {},
+      ownerDisplayName: result.ownerDisplayName ?? '',
       editor: mergeEditorDefaults(result.editor),
     })
   },
@@ -340,6 +385,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       agenticSystemsEnabled: result.agenticSystemsEnabled ?? true,
       claudeAuthAutoRefresh: result.claudeAuthAutoRefresh ?? false,
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
+      ownerDisplayName: result.ownerDisplayName ?? '',
       editor: mergeEditorDefaults(result.editor),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,

@@ -2511,9 +2511,12 @@ async fn handle_one_request(
             let text = params.get("text").cloned().unwrap_or_default();
             // D3 — `from` resolved server-side, never the body. 1a is
             // owner-token-only, so the attributed sender is the owner.
-            // (The literal display string is PRD open-question #1;
-            // "owner" is the 1a choice.)
-            let from = "owner".to_string();
+            // PRD open-question #1 is now resolved: the user-set
+            // "your display name" (app_settings `owner_display_name`,
+            // canonical + headless-safe) is the attribution, sanitized
+            // for safe PTY injection, falling back to the literal "owner"
+            // when unset/blank. Resolved from settings, NEVER the body.
+            let from = crate::workspace_msg::resolve_owner_from();
             let body = tokio::task::spawn_blocking(move || {
                 let resp = crate::workspace_msg::send_message_to_session(
                     &session_id,

@@ -29,7 +29,7 @@ import {
 // `/cli/settings/{get,update}`; route them through the host-aware
 // daemon-settings client instead so the toggle works against any daemon.
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
-import { useSettingsStore } from '@/stores/settings'
+import { useSettingsStore, sanitizeOwnerDisplayName, OWNER_DISPLAY_NAME_MAX } from '@/stores/settings'
 import { useUpdateStore } from '@/stores/update'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
 import { AgenticSystemsToggle } from '../shared/AgenticSystemsToggle'
@@ -47,6 +47,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.restart-host', section: 'general', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
   { id: 'general.update-host', section: 'general', label: 'Update connected host', description: 'Update the REMOTE machine you are connected to over K2 Connect', keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
   { id: 'general.active-window-hours', section: 'general', label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
+  { id: 'general.owner-display-name', section: 'general', label: 'Your name', description: 'The name K2 agents call you when you message them', keywords: ['name', 'display', 'owner', 'you', 'from', 'identity', 'agents', 'call', 'message', 'sender'] },
   { id: 'general.ai-assistant', section: 'general', label: 'AI Workspace Assistant', description: 'Local LLM for natural-language workspace operations (⌘L)', keywords: ['ai', 'assistant', 'llm', 'cmd+l', 'qwen', 'model', 'local', 'gguf'] },
   { id: 'general.model-status', section: 'general', label: 'Model Status', description: 'Current local LLM load state', keywords: ['model', 'llm', 'loaded', 'download'] },
   { id: 'general.download-model', section: 'general', label: 'Download Default Model', description: 'Fetch Qwen2.5-1.5B locally (~1.1GB)', keywords: ['download', 'model', 'qwen', 'local llm'] },
@@ -225,6 +226,10 @@ export function GeneralSection(): React.JSX.Element {
         {/* P1.C — configurable Active-Bar tenure window */}
         <ActiveWindowHoursRow />
 
+        {/* "Your display name" — the `from` attribution agents see when
+            you message them via the composer (resolved server-side). */}
+        <OwnerDisplayNameRow />
+
         {/* K2 Daemon — persistent-agents service */}
         <DaemonRow />
 
@@ -351,6 +356,66 @@ function ActiveWindowHoursRow(): React.JSX.Element {
           className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
         />
         <span className="text-[10px] text-[var(--color-text-muted)]">hours</span>
+      </div>
+    </div>
+  )
+}
+
+// ── "Your display name" ────────────────────────────────────────────────
+// The name K2 agents recognize YOU (the owner) by. Used server-side as the
+// composer `from` attribution when you message an agent — the daemon
+// resolves it from app_settings (`ownerDisplayName`) and NEVER from the
+// request body (D3), falling back to "owner" when blank. Backed by
+// `settings.ownerDisplayName` (persisted via the daemon's app_settings
+// deep-merge), mirroring the typed-input ergonomics of ActiveWindowHoursRow.
+function OwnerDisplayNameRow(): React.JSX.Element {
+  const ownerDisplayName = useSettingsStore((s) => s.ownerDisplayName)
+  const setOwnerDisplayName = useSettingsStore((s) => s.setOwnerDisplayName)
+  // Local draft so the user can type freely; commit (sanitized) on blur
+  // or Enter. The store re-sanitizes and the daemon re-sanitizes again.
+  const [draft, setDraft] = useState<string>(ownerDisplayName)
+
+  useEffect(() => {
+    setDraft(ownerDisplayName)
+  }, [ownerDisplayName])
+
+  const commit = useCallback(() => {
+    const next = sanitizeOwnerDisplayName(draft)
+    setDraft(next)
+    if (next !== ownerDisplayName) {
+      void setOwnerDisplayName(next)
+    }
+  }, [draft, ownerDisplayName, setOwnerDisplayName])
+
+  return (
+    <div
+      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
+      data-settings-id="general.owner-display-name"
+    >
+      <div className="flex-1 min-w-0 mr-3">
+        <span className="text-xs text-[var(--color-text-secondary)]">
+          Your name
+        </span>
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+          What agents call you when you message them. Leave blank to use
+          &ldquo;owner&rdquo;.
+        </p>
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <input
+          type="text"
+          value={draft}
+          placeholder="owner"
+          maxLength={OWNER_DISPLAY_NAME_MAX}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.currentTarget.blur()
+            }
+          }}
+          className="w-40 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
+        />
       </div>
     </div>
   )

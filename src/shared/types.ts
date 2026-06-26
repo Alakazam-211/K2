@@ -95,6 +95,13 @@ export interface AppSettingsResponse {
   // daemon's deep-merge of `settings.json` (no Rust struct field needed —
   // the JSON store keeps unknown keys verbatim).
   activeWindowHours?: number
+  // "Your display name" — the name K2 agents recognize the OWNER by.
+  // Resolved server-side as the composer `from` attribution (the
+  // daemon NEVER reads `from` from the request body, D3). Optional +
+  // nullable: older snapshots omit it and the Rust field is
+  // `Option<String>` (serializes to `null` when unset), so readers
+  // treat unset/null/blank as "owner".
+  ownerDisplayName?: string | null
 }
 
 export interface EditorSettingsBackend {

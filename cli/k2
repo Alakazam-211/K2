@@ -1744,6 +1744,167 @@ for line in data.get('lines', []):
 #   k2 talk <workspace> "<message>"   read the peer's screen, then send
 #   k2 talk <workspace> --read-only   read + judge only; do NOT send
 #                                     (use to BACK OFF / re-check later)
+#
+# ── GH#8 #69 (Wave 2) — batch HITL "scout" + batch-answer ────────────
+# Claude's AskUserQuestion renders N questions CO-RESIDENT: ←/→ move
+# between them, a number key auto-selects + ADVANCES (no Enter), and the
+# last question lands on a "Review your answers" → "1. Submit / 2.
+# Cancel" screen. `--scout` surfaces the WHOLE form in one call
+# (arrow-only, NON-destructive, left on Q1); `--answers a,b,c` drives the
+# whole form (N digits, auto-advancing, + a final `1` to submit) in one
+# call. Both reuse the SAME /cli/terminal/write?...&no_submit=true raw
+# path the single `--answer` uses — no daemon changes.
+#
+# Tunables are named so the test agent can tweak timing/keys without
+# hunting; each is env-overridable for quick iteration.
+K2_TALK_NAV_SETTLE="${K2_TALK_NAV_SETTLE:-0.35}"       # settle (s) between an arrow-nav and the re-read (scout)
+K2_TALK_ANSWER_SETTLE="${K2_TALK_ANSWER_SETTLE:-0.35}" # settle (s) between batch answer digits
+K2_TALK_SUBMIT_KEY="${K2_TALK_SUBMIT_KEY:-1}"          # key selecting "1. Submit answers" on the review screen
+K2_TALK_SCOUT_MAX="${K2_TALK_SCOUT_MAX:-20}"           # safety cap on questions walked when N is unknown
+K2_TALK_ARROW_RIGHT=$'\033[C'   # → move to the NEXT question (Esc [ C)
+K2_TALK_ARROW_LEFT=$'\033[D'     # ← move to the PREVIOUS question (Esc [ D)
+
+# Read a session's screen as raw newline-joined text (no daemon JSON
+# wrapper) for parsing. Best-effort; empty on any failure.
+_talk_read_raw() {
+    local sid="$1" lines="$2"
+    cli_request "/cli/terminal/read" "id=$(urlencode "$sid")&lines=$lines" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print('\n'.join(d.get('lines', [])))
+except Exception:
+    pass
+" 2>/dev/null
+}
+
+# Parse N (total questions) from a 'Question X of Y' header. Echoes Y, or
+# nothing if the header is absent.
+_talk_parse_total() {
+    printf '%s' "$1" \
+        | grep -oiE 'Question[[:space:]]+[0-9]+[[:space:]]+of[[:space:]]+[0-9]+' \
+        | head -1 | grep -oE '[0-9]+' | tail -1
+}
+
+# GH#8 #69 — `--scout`: surface an ENTIRE multi-question form in ONE call.
+# NON-destructive: presses ONLY arrow keys (never a number), walks → over
+# every question capturing each rendered screen, then walks ← back the
+# SAME number of steps so the form is left untouched, focused on Q1.
+talk_scout() {
+    local sid="$1" lines="$2" target="$3"
+    local settle="$K2_TALK_NAV_SETTLE"
+    local right_url left_url
+    right_url=$(urlencode "$K2_TALK_ARROW_RIGHT")
+    left_url=$(urlencode "$K2_TALK_ARROW_LEFT")
+
+    echo "── talk(BETA) scout: walking $target's form (arrow-only, non-destructive) ──" >&2
+
+    local captures=() prev="" total="" screen
+    local i=1 rights=0
+    while :; do
+        screen=$(_talk_read_raw "$sid" "$lines")
+        [[ -z "$total" ]] && total=$(_talk_parse_total "$screen")
+        captures+=("$screen")
+        if [[ -n "$total" ]]; then
+            # Header known: stop once we've captured all N questions.
+            [[ "$i" -ge "$total" ]] && break
+        else
+            # Fallback (no header): stop when the screen stops changing —
+            # drop the duplicate trailing capture and back off one nav.
+            if [[ -n "$prev" && "$screen" == "$prev" ]]; then
+                unset 'captures[${#captures[@]}-1]'
+                break
+            fi
+        fi
+        [[ "$i" -ge "$K2_TALK_SCOUT_MAX" ]] && break
+        prev="$screen"
+        # Advance → to the next question.
+        cli_request "/cli/terminal/write" "id=$(urlencode "$sid")&message=${right_url}&no_submit=true" >/dev/null
+        sleep "$settle"
+        rights=$((rights + 1))
+        i=$((i + 1))
+    done
+
+    # Walk ← back to Q1: exactly as many lefts as rights → form unchanged.
+    local b
+    for ((b = 0; b < rights; b++)); do
+        cli_request "/cli/terminal/write" "id=$(urlencode "$sid")&message=${left_url}&no_submit=true" >/dev/null
+        sleep "$settle"
+    done
+
+    # Raw screens (the source of truth) → stdout, delimited per question.
+    local idx=1 cap
+    for cap in "${captures[@]}"; do
+        echo ""
+        echo "=== Question $idx${total:+ of $total} (raw screen) ==="
+        printf '%s\n' "$cap"
+        idx=$((idx + 1))
+    done
+
+    # Light best-effort parsed summary → stderr (raw screens above win).
+    {
+        echo ""
+        echo "── scout parsed summary (best-effort; raw screens above are authoritative) ──"
+        echo "   form: ${total:-?} question(s); left focused on Q1, unmodified."
+        idx=1
+        for cap in "${captures[@]}"; do
+            local qline
+            qline=$(printf '%s\n' "$cap" | grep -iE 'Question[[:space:]]+[0-9]+[[:space:]]+of' | head -1 | sed 's/^[[:space:]]*//')
+            echo "Q$idx: ${qline:-(header unparsed — see raw screen)}"
+            printf '%s\n' "$cap" | grep -E '^[[:space:]]*[0-9]+[\.\)][[:space:]]' | sed 's/^[[:space:]]*/   /'
+            idx=$((idx + 1))
+        done
+        echo ""
+        echo "── to answer: k2 talk $target --answers <a,b,c>  (N digits + auto final 1 to submit) ──"
+    } >&2
+}
+
+# GH#8 #69 — `--answers a,b,c`: drive a form currently focused on Q1.
+# Sends each digit (auto-selects + advances), settling between, then a
+# final K2_TALK_SUBMIT_KEY ('1') to pick "Submit answers" on the review
+# screen. Re-reads + prints the outcome.
+talk_answers() {
+    local sid="$1" lines="$2" csv="$3" target="$4"
+    local settle="$K2_TALK_ANSWER_SETTLE"
+
+    # Split the comma-list (trim incidental spaces around each answer).
+    local ans=() oldifs="$IFS"
+    IFS=',' read -ra ans <<< "$csv"
+    IFS="$oldifs"
+    local cleaned=() a t
+    for a in "${ans[@]}"; do
+        t="${a//[[:space:]]/}"
+        [[ -n "$t" ]] && cleaned+=("$t")
+    done
+    local count=${#cleaned[@]}
+    if [[ "$count" -eq 0 ]]; then
+        echo "Error: --answers needs a comma-list of answers (e.g. --answers 1,2,1)" >&2
+        return 1
+    fi
+
+    # Best-effort N from the current screen's header → warn on mismatch
+    # (read-only; still proceed best-effort).
+    local total
+    total=$(_talk_parse_total "$(_talk_read_raw "$sid" "$lines")")
+    if [[ -n "$total" && "$total" != "$count" ]]; then
+        echo "talk(BETA) answers: WARNING — $count answers given but form has $total question(s); proceeding best-effort." >&2
+    fi
+
+    echo "── talk(BETA) answers: driving $target — ${cleaned[*]} then submit ('$K2_TALK_SUBMIT_KEY') ──" >&2
+    # One digit per question — auto-selects + advances (no Enter).
+    for a in "${cleaned[@]}"; do
+        cli_request "/cli/terminal/write" "id=$(urlencode "$sid")&message=$(urlencode "$a")&no_submit=true" >/dev/null
+        sleep "$settle"
+    done
+    # Final submit: pick "1. Submit answers" on the review screen.
+    cli_request "/cli/terminal/write" "id=$(urlencode "$sid")&message=$(urlencode "$K2_TALK_SUBMIT_KEY")&no_submit=true" >/dev/null
+    sleep "$settle"
+
+    echo "── talk(BETA) answers: $target's screen after submit ──" >&2
+    cmd_terminal_read "$sid" --lines "$lines" || true
+    echo "───────────────────────────────────────────────────────────────" >&2
+}
+
 cmd_talk() {
     for arg in "$@"; do
         case "$arg" in
@@ -1754,6 +1915,7 @@ cmd_talk() {
     local target="" text="" from="" command="" lines=50 agent=""
     local read_only="false"
     local answer="" respond=""
+    local scout="false" answers=""
     # Issue #9 — `talk` is the explicit "interact now" verb, so it
     # AUTO-WAKES a dormant canonical session by default (read → wake →
     # wait READY → deliver). `--no-wake` suppresses that; `--wake-timeout`
@@ -1768,6 +1930,8 @@ cmd_talk() {
             --agent)     agent="$2"; shift 2 ;;
             --answer)    answer="$2"; shift 2 ;;
             --respond)   respond="$2"; shift 2 ;;
+            --scout)     scout="true"; shift ;;
+            --answers)   answers="$2"; shift 2 ;;
             --no-wake)   wake="false"; shift ;;
             --wake-timeout) wake_timeout="$2"; shift 2 ;;
             --read-only|--dry-run|--peek) read_only="true"; shift ;;
@@ -1801,13 +1965,40 @@ cmd_talk() {
     # here (that's the next wave — it needs screen-parsing). `--answer N`
     # just sends the digit, best-effort, exactly like a manual
     # `terminal write <id> "N"` but fused with the re-read.
+    # ── batch HITL (BETA, GH#8 #69 / Wave 2) ── `--scout` surfaces the
+    # WHOLE form in one call (arrow-only, non-destructive, left on Q1);
+    # `--answers a,b,c` drives the whole form (N digits + final submit) in
+    # one call. Both reuse the same raw /cli/terminal/write?...&no_submit
+    # path the single `--answer` uses.
+    if [[ "$scout" == "true" ]]; then
+        local scout_sid
+        scout_sid=$(resolve_write_session_id "$target" "$agent") || exit 1
+        talk_scout "$scout_sid" "$lines" "$target"
+        return 0
+    fi
+    if [[ -n "$answers" ]]; then
+        local ans_sid
+        ans_sid=$(resolve_write_session_id "$target" "$agent") || exit 1
+        talk_answers "$ans_sid" "$lines" "$answers" "$target"
+        return 0
+    fi
+
     if [[ -n "$answer" || -n "$respond" ]]; then
         if [[ -n "$answer" && -n "$respond" ]]; then
             echo "Error: pass only one of --answer / --respond" >&2
             exit 1
         fi
+        # --respond is an ALIAS of --answer for numbered menus: map the
+        # y/n confirm words onto the standard "1. Yes / 2. No" ordering
+        # (y→1, n→2); a bare number passes straight through.
         local key="$answer"
-        [[ -n "$respond" ]] && key="$respond"
+        if [[ -n "$respond" ]]; then
+            case "$respond" in
+                y|Y|yes|YES|Yes) key="1" ;;
+                n|N|no|NO|No)     key="2" ;;
+                *)                key="$respond" ;;
+            esac
+        fi
         local drive_sid
         drive_sid=$(resolve_write_session_id "$target" "$agent") || exit 1
         echo "── talk(BETA): driving $target — sending '$key' ───────────────" >&2
@@ -4342,8 +4533,10 @@ EOF
 cmd_help_talk() {
     cat <<'EOF'
 k2 talk <workspace> "text" [--read-only] [--from <name>] [--lines N] [--agent <name>]
-k2 talk <workspace> --answer <N>      # BETA: drive a HITL + re-read in one call
-k2 talk <workspace> --respond <y|n>   # BETA: same, for a y/n confirm
+k2 talk <workspace> --answer <N>      # BETA: drive a 1-question HITL + re-read
+k2 talk <workspace> --respond <y|n>   # BETA: alias of --answer (y->1, n->2)
+k2 talk <workspace> --scout           # BETA: surface a WHOLE multi-Q form at once
+k2 talk <workspace> --answers <a,b,c> # BETA: answer a whole form + submit, one call
 
   ★ BETA — THE inter-agent interaction verb. ★
 
@@ -4392,6 +4585,23 @@ ACT-RETURNS-STATE (BETA, GH#8) — the #1 round-trip win:
   check that option 4 exists or parse the menu — YOU still read the
   re-printed screen to confirm. Structured-state (--json) and
   option-name selection (--select) are a later wave.
+  --respond <y|n> is just an ALIAS of --answer for the standard
+  "1. Yes / 2. No" confirm ordering: y->1, n->2 (a number passes through).
+
+BATCH FORM (BETA, GH#8 #69) — collapse an N-question form to ~2 turns:
+  Claude's AskUserQuestion shows N questions CO-RESIDENT: ←/→ move
+  between them, a number key auto-selects + ADVANCES (no Enter), and the
+  last question lands on a "Review your answers" -> "1. Submit / 2.
+  Cancel" screen. So the whole form = N digits (one per question, each
+  auto-advancing) + a final `1` to submit.
+  --scout            Walk the form with ARROW KEYS ONLY (non-destructive),
+                     capturing every question+options, then return focus
+                     to Q1 UNMODIFIED — see the WHOLE form in one call.
+  --answers <a,b,c>  From Q1, send each digit (auto-advances), then the
+                     final `1` to submit; re-reads + prints the outcome.
+                     Warns if the count != the form's N (still proceeds).
+  Tunables (env-overridable): K2_TALK_NAV_SETTLE / K2_TALK_ANSWER_SETTLE
+  (settle seconds), K2_TALK_SUBMIT_KEY (submit key, default 1).
 
 ARGUMENTS
   <workspace>    Workspace name (preferred), path, or UUID. Same
@@ -4405,8 +4615,15 @@ OPTIONS
   --answer <N>   BETA. Send key <N> to the resolved session, then re-read
                  + print the resulting screen. Drives a numbered/menu HITL
                  in one call. No message text needed.
-  --respond <y|n> BETA. Send y/n to the resolved session, then re-read +
-                 print the resulting screen. Drives a y/n confirm.
+  --respond <y|n> BETA. ALIAS of --answer for a y/n confirm: maps y->1,
+                 n->2 (standard "1. Yes / 2. No" ordering); a number
+                 passes through. Sends the key, then re-reads + prints.
+  --scout        BETA. Surface a WHOLE multi-question form in one call:
+                 walks it with ARROW KEYS ONLY (non-destructive), captures
+                 every question, then returns focus to Q1 unmodified.
+  --answers <a,b,c>  BETA. Answer a form currently on Q1: send each digit
+                 (auto-advances), then a final 1 to submit; re-read +
+                 print the outcome. Warns if count != N (still proceeds).
   --from <name>  Sender identity for the [from <name>] prefix (forwarded
                  to `msg`; same default-derivation as `msg`).
   --lines N      Lines of the peer's screen to read first. Default 50.
@@ -4428,7 +4645,9 @@ EXAMPLES
   k2 talk scout_v3 "ready when you are" # read its screen, then deliver
   k2 talk MyApp "merged" --from ci-bot  # attributed delivery
   k2 talk scout_v3 --answer 2           # BETA: pick menu option 2, see result
-  k2 talk scout_v3 --respond y          # BETA: confirm a y/n, see result
+  k2 talk scout_v3 --respond y          # BETA: confirm a y/n (y->1), see result
+  k2 talk scout_v3 --scout              # BETA: see a WHOLE multi-Q form at once
+  k2 talk scout_v3 --answers 1,2,1      # BETA: answer all 3 Qs + auto-submit
 
 RELATED VERBS
   k2 msg <workspace> "text"     Deliberate blind send (no read).
@@ -4479,13 +4698,15 @@ cmd_schema() {
     },
     {
       "name": "talk",
-      "usage": "k2 talk <workspace> [\"text\"] [--read-only] [--answer <N>|--respond <y|n>] [--from <name>] [--lines N] [--agent <name>] [--command \"<text>\"]",
-      "description": "BETA. Fused read+send. Reads the peer's live screen FIRST (so you can't inject into a HITL blind), then delivers via msg. --answer/--respond DRIVE a HITL and re-read in one call.",
+      "usage": "k2 talk <workspace> [\"text\"] [--read-only] [--answer <N>|--respond <y|n>] [--scout] [--answers <a,b,c>] [--from <name>] [--lines N] [--agent <name>] [--command \"<text>\"]",
+      "description": "BETA. Fused read+send. Reads the peer's live screen FIRST (so you can't inject into a HITL blind), then delivers via msg. --answer/--respond DRIVE a single HITL; --scout surfaces a whole multi-Q form, --answers drives it (N digits + submit) in one call.",
       "args": [{"name": "workspace", "required": true}, {"name": "text", "required": false}],
       "flags": [
         {"name": "--read-only", "arg": null, "description": "Read + judge only; send nothing (aliases: --dry-run, --peek)."},
         {"name": "--answer", "arg": "N", "description": "BETA (act-returns-state). Send key <N> to the resolved session, then re-read + print the resulting screen. Best-effort; no option validation."},
-        {"name": "--respond", "arg": "y|n", "description": "BETA (act-returns-state). Send y/n to the resolved session, then re-read + print the resulting screen."},
+        {"name": "--respond", "arg": "y|n", "description": "BETA. Alias of --answer for a y/n confirm: maps y->1, n->2 (standard 1.Yes/2.No ordering); a number passes through. Sends the key, then re-reads."},
+        {"name": "--scout", "arg": null, "description": "BETA (GH#69). Surface a WHOLE multi-question AskUserQuestion form in one call: walks it with arrow keys only (non-destructive), captures every question, returns focus to Q1 unmodified."},
+        {"name": "--answers", "arg": "a,b,c", "description": "BETA (GH#69). Answer a form on Q1: send each digit (auto-advances), then a final 1 to submit; re-read + print outcome. Warns if count != N (still proceeds)."},
         {"name": "--from", "arg": "name", "description": "Sender identity for the [from <name>] prefix (forwarded to msg)."},
         {"name": "--lines", "arg": "N", "description": "Lines of the peer's screen to read first. Default 50."},
         {"name": "--agent", "arg": "name", "description": "Read/target a specific agent's session in the workspace."},

@@ -22,9 +22,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
+import { useConnectHostStore } from '@/stores/connect-host'
+import { useSettingsStore } from '@/stores/settings'
 import {
   type ComposeStatus,
   type MsgResponse,
+  composerPermitted,
   mapMsgResponseToStatus,
   shouldSendOnKey,
 } from './terminalCompose'
@@ -63,7 +66,15 @@ interface TerminalComposeBarProps {
  * the bar + send + status lane. No capability gate (1c), no raw-typing
  * collision guard (1c), no queue UI (Phase 2).
  */
-export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): React.JSX.Element {
+export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): React.JSX.Element | null {
+  // Composer 1c (D4) — renderer-hide. The composer is shown iff the active
+  // host is LOCAL (owner, always allowed) OR that host opted into remote
+  // instruction (`allowRemoteInstruct`, default OFF). The DAEMON enforces
+  // the same gate server-side (403); this hide is defense-in-depth only.
+  const isLocalHost = useConnectHostStore((s) => s.activeHost === 'local')
+  const allowRemoteInstruct = useSettingsStore((s) => s.allowRemoteInstruct)
+  const permitted = composerPermitted({ isLocalHost, allowRemoteInstruct })
+
   const [collapsed, setCollapsed] = useState(false)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -134,6 +145,10 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
   )
 
   const lane = statusLabel(status)
+
+  // 1c renderer-hide (after all hooks, per the Rules of Hooks): not
+  // permitted → render nothing. The daemon still enforces the gate.
+  if (!permitted) return null
 
   // ── Collapsed: a thin toggle strip ──────────────────────────────────
   if (collapsed) {

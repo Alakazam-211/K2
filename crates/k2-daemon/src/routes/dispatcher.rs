@@ -489,14 +489,17 @@ async fn handle_one_request(
             // params remains supported for older CLIs (dedicated arm
             // below; GET falls through to crate::cli::dispatch).
             | "/cli/workspace/msg"
-            // Composer Phase 1a — session-scoped verified send. Body
+            // Composer Phase 1a/1c — session-scoped verified send. Body
             // (form OR JSON) carries `session_id` + `text`; `from` is
             // resolved server-side from the token (never the body, D3).
-            // OWNER-TOKEN-ONLY (token_is_owner) per the audit decision —
-            // this instructs an agent running --dangerously-skip-
-            // permissions (= full RCE), so connect-user access + the D4
-            // capability gate are deferred to 1c. Method-gated per-handler
-            // below (the dedicated arm re-checks is_post).
+            // 1c capability gate (authorize_send_message, D4): owner token
+            // is ALWAYS allowed; a connect-user (role >= Member) is allowed
+            // only when the host opted into remote instruction
+            // (app_settings.allow_remote_instruct, default OFF) — else
+            // drain-then-403. This route instructs an agent running
+            // --dangerously-skip-permissions (= full RCE), so the gate is
+            // server-enforced. Method-gated per-handler below (the dedicated
+            // arm re-checks is_post).
             | "/cli/terminal/send-message"
     );
     if method != "GET" && !(is_post && post_allowed) {
@@ -2467,33 +2470,70 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
         }
-        // Composer Phase 1a — session-scoped verified send. Mirrors the
+        // Composer Phase 1a/1c — session-scoped verified send. Mirrors the
         // /cli/workspace/msg spawn_blocking pattern (injection sleeps
         // ~520ms across its settle windows + may block on the per-session
         // lock, so it must not pin a runtime worker).
         //
-        // OWNER-TOKEN-ONLY (token_is_owner, NOT token_ok): this route
-        // instructs an agent running --dangerously-skip-permissions =
-        // full RCE; connect-user access + the D4 capability gate land in
-        // 1c. The if-!is_post guard is enforced by the top-level 405 gate
+        // 1c CAPABILITY GATE (D4): this route instructs an agent running
+        // --dangerously-skip-permissions (= full shell+fs RCE), so the gate
+        // is SERVER-ENFORCED and fails CLOSED. Authorized iff:
+        //   • the OWNER token is presented (ALWAYS allowed, 1a parity), OR
+        //   • a connect-user session with role >= Member AND the host has
+        //     opted into remote multi-user instruction
+        //     (`app_settings.allow_remote_instruct`, DEFAULT OFF).
+        // Anything else → drain-then-403 (mirrors require_manage). The
+        // renderer hides the composer on the same signal, but THIS is the
+        // source of truth (the renderer-hide is defense-in-depth only).
+        //
+        // The if-!is_post guard is enforced by the top-level 405 gate
         // (post_allowed lists this route); we additionally pin `p ==`
         // here so only a POST reaches the handler body.
         p if is_post && p == "/cli/terminal/send-message" => {
-            if !super::http::token_is_owner(&query, state.token.as_str()) {
-                let _ = stream.read(&mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"invalid or missing token"}"#,
-                )
-                .await;
-                return DispatchOutcome::Done;
-            }
+            // D4 — capability decision. The opt-in flag gates ONLY the
+            // connect-user path; the owner is allowed regardless.
+            let remote_opt_in =
+                k2_core::app_settings::load().allow_remote_instruct;
+            let auth = super::http::authorize_send_message(
+                &query,
+                state.token.as_str(),
+                remote_opt_in,
+            );
+            // D3 — `from` is resolved server-side ONLY, NEVER from the body:
+            //   owner       → the user-set "your display name" (app_settings
+            //                 `owner_display_name`, sanitized) or "owner".
+            //   connect-user → their daemon-validated username.
+            // `revalidate` carries the connect-user's token so we can
+            // re-check it at inject time (M2 — a user revoked mid-flight
+            // must not land an injection).
+            let (from, revalidate): (String, Option<String>) = match auth {
+                super::http::SendMessageAuth::Owner => {
+                    (crate::workspace_msg::resolve_owner_from(), None)
+                }
+                super::http::SendMessageAuth::ConnectUser { username } => {
+                    let tok = super::http::extract_token(&query)
+                        .unwrap_or_default()
+                        .to_string();
+                    (username, Some(tok))
+                }
+                super::http::SendMessageAuth::Denied => {
+                    // drain-then-403 (mirror require_manage): a rejected
+                    // request must still read its body before responding.
+                    let _ = stream.read(&mut buf).await;
+                    super::http::send_response(
+                        &mut *stream,
+                        "403 Forbidden",
+                        "application/json",
+                        r#"{"error":"invalid or missing token"}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+            };
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             // Body may be form-encoded OR JSON; query is the fallback.
             // session_id/text only — `from` is NEVER read from the body
-            // (D3), it is resolved server-side below.
+            // (D3), it is resolved above.
             let mut params = super::http::parse_params(&path, &query);
             for (k, v) in super::http::parse_form_body(&body_bytes) {
                 params.insert(k, v);
@@ -2509,15 +2549,22 @@ async fn handle_one_request(
             }
             let session_id = params.get("session_id").cloned().unwrap_or_default();
             let text = params.get("text").cloned().unwrap_or_default();
-            // D3 — `from` resolved server-side, never the body. 1a is
-            // owner-token-only, so the attributed sender is the owner.
-            // PRD open-question #1 is now resolved: the user-set
-            // "your display name" (app_settings `owner_display_name`,
-            // canonical + headless-safe) is the attribution, sanitized
-            // for safe PTY injection, falling back to the literal "owner"
-            // when unset/blank. Resolved from settings, NEVER the body.
-            let from = crate::workspace_msg::resolve_owner_from();
             let body = tokio::task::spawn_blocking(move || {
+                // M2 (inject-time half): re-validate a connect-user token
+                // right before injecting. The gate validated it once, but
+                // the injection blocks ~520ms+; a user revoked in that
+                // window must NOT land an injection. The owner token is
+                // never revoked, so `revalidate` is None for owner sends.
+                if let Some(tok) = revalidate.as_deref() {
+                    if k2_core::connect_users::validate_session(tok).is_none() {
+                        return serde_json::json!({
+                            "success": false,
+                            "reason": "revoked",
+                            "hint": "connect-user session was revoked before delivery"
+                        })
+                        .to_string();
+                    }
+                }
                 let resp = crate::workspace_msg::send_message_to_session(
                     &session_id,
                     &from,

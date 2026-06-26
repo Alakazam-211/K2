@@ -56,6 +56,12 @@ interface SettingsState {
   // string = unset (the daemon falls back to "owner").
   ownerDisplayName: string
 
+  // Composer 1c (D4) — per-host opt-in letting CONNECT-USERS instruct
+  // agents via the composer. Owner is always allowed regardless; this
+  // gates only remote multi-user instruction. DEFAULTS OFF. The daemon
+  // enforces it server-side; the renderer-hide reads this same signal.
+  allowRemoteInstruct: boolean
+
   // Editor settings
   editor: EditorSettingsBackend
 
@@ -91,6 +97,7 @@ interface SettingsState {
   setClaudeAuthAutoRefresh: (enabled: boolean) => void
   setActiveWindowHours: (hours: number) => void
   setOwnerDisplayName: (name: string) => void
+  setAllowRemoteInstruct: (enabled: boolean) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
   resetAllSettings: () => void
@@ -181,6 +188,7 @@ async function persistAndApply(
       claudeAuthAutoRefresh: result.claudeAuthAutoRefresh ?? false,
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',
+      allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       editor: mergeEditorDefaults(result.editor),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,
@@ -202,6 +210,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   claudeAuthAutoRefresh: false,
   activeWindowHours: DEFAULT_ACTIVE_WINDOW_HOURS,
   ownerDisplayName: '',
+  allowRemoteInstruct: false,
   editor: { ...DEFAULT_EDITOR },
   defaultAgent: 'claude',
   initialProjectId: null,
@@ -338,6 +347,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setAllowRemoteInstruct: async (enabled: boolean) => {
+    const prev = get().allowRemoteInstruct
+    set({ allowRemoteInstruct: enabled }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `allowRemoteInstruct`.
+      // The daemon ALSO enforces the gate server-side; this toggle only
+      // sets the host's opt-in (and drives the renderer-hide signal).
+      await persistAndApply(set, { allowRemoteInstruct: enabled })
+    } catch (err) {
+      console.error('[settings] Failed to persist allow-remote-instruct:', err)
+      set({ allowRemoteInstruct: prev })
+    }
+  },
+
   updateEditorSettings: async (partial: Partial<EditorSettingsBackend>) => {
     const prev = get().editor
     const merged = { ...prev, ...partial }
@@ -368,6 +391,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       keybindings: result.keybindings,
       projectSettings: result.projectSettings ?? {},
       ownerDisplayName: result.ownerDisplayName ?? '',
+      allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       editor: mergeEditorDefaults(result.editor),
     })
   },
@@ -386,6 +410,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       claudeAuthAutoRefresh: result.claudeAuthAutoRefresh ?? false,
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',
+      allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       editor: mergeEditorDefaults(result.editor),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,

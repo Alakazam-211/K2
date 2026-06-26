@@ -102,6 +102,14 @@ export interface AppSettingsResponse {
   // `Option<String>` (serializes to `null` when unset), so readers
   // treat unset/null/blank as "owner".
   ownerDisplayName?: string | null
+  // Composer 1c (D4) — per-host opt-in that lets a CONNECT-USER instruct
+  // agents via the composer route. The OWNER is always allowed regardless;
+  // this gates ONLY remote multi-user instruction and DEFAULTS OFF (the
+  // route instructs an agent running --dangerously-skip-permissions). The
+  // renderer hides the composer when this is off on a remote host, but the
+  // daemon enforces the gate server-side (renderer-hide is defense-in-depth).
+  // Optional: older snapshots omit it → readers treat absent as false.
+  allowRemoteInstruct?: boolean
 }
 
 export interface EditorSettingsBackend {

@@ -62,3 +62,24 @@ export function shouldSendOnKey(e: {
 }): boolean {
   return e.key === 'Enter' && !e.shiftKey && !e.isComposing
 }
+
+/**
+ * Composer 1c (D4) — renderer-hide predicate. Mirrors the DAEMON's
+ * capability gate (`authorize_send_message`): the composer is permitted iff
+ *   • the active host is LOCAL (the owner is always allowed), OR
+ *   • the active host opted into remote instruction
+ *     (`allowRemoteInstruct`, default OFF).
+ *
+ * This is DEFENSE-IN-DEPTH only — the daemon rejects an unauthorized send
+ * with a 403 regardless of what the renderer shows. A connect-user's role
+ * is never below Member (Member is the floor), so the renderer needs no
+ * role input; the daemon enforces the `>= Member` floor and a future
+ * sub-Member role slots in there. Pure + exported so the mapping is
+ * unit-testable without mounting the component.
+ */
+export function composerPermitted(input: {
+  isLocalHost: boolean
+  allowRemoteInstruct: boolean
+}): boolean {
+  return input.isLocalHost || input.allowRemoteInstruct
+}

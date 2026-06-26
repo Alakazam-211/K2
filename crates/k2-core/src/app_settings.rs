@@ -209,6 +209,25 @@ pub struct AppSettings {
     /// field — an untyped key would never persist.
     #[serde(default)]
     pub owner_display_name: Option<String>,
+    /// Composer 1c (D4 / red-team H1) — per-host opt-in that lets a
+    /// CONNECT-USER (role >= Member) instruct agents via the composer route
+    /// `POST /cli/terminal/send-message`. The OWNER token is ALWAYS allowed
+    /// regardless of this flag; this gates ONLY remote multi-user
+    /// instruction. **Defaults OFF**: the composer route instructs an agent
+    /// running `--dangerously-skip-permissions` (= full RCE), so a daemon
+    /// must never accept connect-user instructions until the owner
+    /// explicitly opts this host in. The gate is server-enforced
+    /// (drain-then-403 in the dispatcher); the renderer-hide is
+    /// defense-in-depth only. A typed `bool` is required: `AppSettings`
+    /// round-trips through `serde_json::from_value` on every `load`/`update`,
+    /// which silently drops keys with no matching field — an untyped key
+    /// would never persist.
+    ///
+    /// PRD note: the PRD calls for a *per-workspace* opt-in; this app-level
+    /// flag is the safe-default 1c implementation, with the per-workspace
+    /// refinement tracked as follow-up. Default MUST stay OFF either way.
+    #[serde(default)]
+    pub allow_remote_instruct: bool,
     #[serde(default)]
     pub editor: EditorSettings,
     #[serde(default)]
@@ -400,6 +419,7 @@ impl Default for AppSettings {
             last_active_workspace_id: None,
             active_window_hours: default_active_window_hours(),
             owner_display_name: None,
+            allow_remote_instruct: false,
             editor: EditorSettings::default(),
             companion: CompanionSettings::default(),
             wake_scheduler: WakeSchedulerSettings::default(),
@@ -721,6 +741,39 @@ mod tests {
         // reset() clears it back to None.
         let after = reset().expect("reset");
         assert_eq!(after.owner_display_name, None);
+    }
+
+    /// Composer 1c (D4) — the remote-instruct opt-in must default OFF on a
+    /// fresh settings file, persist through save→load, and ingest the
+    /// camelCase `allowRemoteInstruct` key via the generic `update()`
+    /// deep-merge (the /cli/settings/update path the toggle hits). Default
+    /// MUST be OFF: it gates connect-user RCE-grade agent instruction.
+    #[test]
+    fn allow_remote_instruct_defaults_off_and_round_trips() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        // Fresh file: the security default is OFF.
+        assert!(!load().allow_remote_instruct);
+        assert!(!AppSettings::default().allow_remote_instruct);
+
+        // save → load preserves an explicit opt-in.
+        let mut s = AppSettings::default();
+        s.allow_remote_instruct = true;
+        save(&s).expect("save");
+        assert!(load().allow_remote_instruct);
+
+        // update() deep-merge ingests the camelCase key like any other field.
+        let merged = update(serde_json::json!({
+            "allowRemoteInstruct": false
+        }))
+        .expect("update");
+        assert!(!merged.allow_remote_instruct);
+        assert!(!load().allow_remote_instruct);
+
+        // reset() returns to the OFF default.
+        let after = reset().expect("reset");
+        assert!(!after.allow_remote_instruct);
     }
 
     #[test]

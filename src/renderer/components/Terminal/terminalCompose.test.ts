@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   type MsgResponse,
+  composerPermitted,
   mapMsgResponseToStatus,
   shouldSendOnKey,
 } from './terminalCompose'
@@ -75,5 +76,28 @@ describe('mapMsgResponseToStatus', () => {
   it('a failure with a null reason still maps to busy (never delivered)', () => {
     const s = mapMsgResponseToStatus(resp({ success: false, reason: null }))
     expect(s.kind).toBe('busy')
+  })
+})
+
+// ── Composer 1c (D4) — renderer-hide predicate ───────────────────────
+// Mirrors the daemon's authorize_send_message gate. The composer shows iff
+// the host is local (owner) OR the host opted into remote instruction. The
+// daemon enforces the real gate; this is defense-in-depth only.
+
+describe('composerPermitted', () => {
+  it('owner (local host) is permitted even with remote-instruct OFF', () => {
+    expect(composerPermitted({ isLocalHost: true, allowRemoteInstruct: false })).toBe(true)
+  })
+
+  it('owner (local host) is permitted with remote-instruct ON', () => {
+    expect(composerPermitted({ isLocalHost: true, allowRemoteInstruct: true })).toBe(true)
+  })
+
+  it('remote host is HIDDEN by default (opt-in OFF — the safe default)', () => {
+    expect(composerPermitted({ isLocalHost: false, allowRemoteInstruct: false })).toBe(false)
+  })
+
+  it('remote host is permitted only once the host opts in', () => {
+    expect(composerPermitted({ isLocalHost: false, allowRemoteInstruct: true })).toBe(true)
   })
 })

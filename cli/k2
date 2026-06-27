@@ -2352,7 +2352,7 @@ EOF
     # ── 3. SEND ── deliver via the existing `k2 msg` path
     # (/cli/workspace/msg). `talk` adds NO new send mechanism — `msg`
     # stays the one delivery throat. Exit code mirrors msg's.
-    echo "talk(BETA): delivering to $target…" >&2
+    echo "talk(BETA): delivering to ${target}…" >&2
     # --session: deliver straight into the addressed session (raw write +
     # submit) then re-read it — the per-session analogue of the canonical
     # msg deliver below. Used for "talk to THIS session" on a remote host.

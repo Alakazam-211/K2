@@ -85,38 +85,29 @@ describe('mapMsgResponseToStatus', () => {
 // daemon enforces the real gate; this is defense-in-depth only.
 
 describe('composerPermitted', () => {
-  it('owner (local host) is permitted even with remote-instruct OFF', () => {
+  // CONTRACT (2026-06-27): the composer ALWAYS renders. Authorization moved
+  // entirely server-side — the daemon 403s an unauthorized send regardless of
+  // what the renderer shows (owner always allowed; connect-user gated
+  // per-workspace). The renderer no longer hides the bar (a vanishing composer
+  // was confusing, and remote-instruct is the K2-as-a-server default).
+  it('local host (owner) is permitted', () => {
     expect(composerPermitted({ isLocalHost: true, allowRemoteInstruct: false })).toBe(true)
   })
 
-  it('owner (local host) is permitted with remote-instruct ON', () => {
-    expect(composerPermitted({ isLocalHost: true, allowRemoteInstruct: true })).toBe(true)
+  it('remote host is permitted by default — composer no longer vanishes on remote', () => {
+    expect(composerPermitted({ isLocalHost: false, allowRemoteInstruct: false })).toBe(true)
   })
 
-  it('remote host is HIDDEN by default (opt-in OFF — the safe default)', () => {
-    expect(composerPermitted({ isLocalHost: false, allowRemoteInstruct: false })).toBe(false)
-  })
-
-  it('remote host is permitted once the app-level master opts in', () => {
-    expect(composerPermitted({ isLocalHost: false, allowRemoteInstruct: true })).toBe(true)
-  })
-
-  // #67 — per-workspace refinement: a remote host with the app-level master
-  // OFF is still permitted when the ACTIVE WORKSPACE opted in, and stays
-  // hidden when neither the master nor the workspace opted in.
-  it('remote host is permitted when the active workspace opts in (app-level off)', () => {
+  it('remote host is permitted even with every opt-in OFF (daemon is the gate)', () => {
     expect(
-      composerPermitted({ isLocalHost: false, allowRemoteInstruct: false, perWorkspaceAllow: true })
+      composerPermitted({ isLocalHost: false, allowRemoteInstruct: false, perWorkspaceAllow: false })
     ).toBe(true)
   })
 
-  it('remote host is HIDDEN when neither the master nor the workspace opted in', () => {
+  it('remote host is permitted with the app-level master / per-workspace ON too', () => {
+    expect(composerPermitted({ isLocalHost: false, allowRemoteInstruct: true })).toBe(true)
     expect(
-      composerPermitted({ isLocalHost: false, allowRemoteInstruct: false, perWorkspaceAllow: false })
-    ).toBe(false)
-  })
-
-  it('omitting perWorkspaceAllow keeps the safe default (hidden) on a remote host', () => {
-    expect(composerPermitted({ isLocalHost: false, allowRemoteInstruct: false })).toBe(false)
+      composerPermitted({ isLocalHost: false, allowRemoteInstruct: false, perWorkspaceAllow: true })
+    ).toBe(true)
   })
 })

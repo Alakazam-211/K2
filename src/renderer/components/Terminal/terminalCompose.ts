@@ -80,10 +80,17 @@ export function shouldSendOnKey(e: {
  * in there. Pure + exported so the mapping is unit-testable without
  * mounting the component.
  */
-export function composerPermitted(input: {
+export function composerPermitted(_input: {
   isLocalHost: boolean
   allowRemoteInstruct: boolean
   perWorkspaceAllow?: boolean
 }): boolean {
-  return input.isLocalHost || input.allowRemoteInstruct || input.perWorkspaceAllow === true
+  // The composer ALWAYS renders — including on remote hosts. Authorization is
+  // enforced SERVER-SIDE: the daemon 403s an unauthorized send regardless of
+  // what the renderer shows (the owner is always allowed; a connect-user is
+  // gated per-workspace). Hiding the bar on remote just made it vanish, which
+  // was confusing — so we keep it visible and let the daemon be the single
+  // gate. (Rosson 2026-06-27: leave the composer enabled by default on remote
+  // machines.) Input kept for call-site stability + the unit-test contract.
+  return true
 }

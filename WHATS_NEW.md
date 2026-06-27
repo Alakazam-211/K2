@@ -3,6 +3,29 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.12 — Message your agents from the app + a live Agent Ops view
+
+- **Message an agent right from its terminal.** Every terminal now has a compose
+  bar at the bottom — type a note and press **Enter** to send it straight to the
+  agent running there (Shift+Enter for a newline). It's delivered as a proper
+  message, not raw keystrokes, so it lands cleanly even mid-task. Your messages
+  are attributed to your name.
+- **Set your display name.** Settings → General → **Your name** controls how your
+  messages to agents are signed (defaults to "owner").
+- **Agent Ops — a live view of your fleet (Cmd+Shift+O).** A new pane, opened from
+  the top bar, shows what your agents are doing across every workspace in one
+  place: active sessions and a live activity feed. The start of K2's
+  management console.
+- **Optional on-device detection for "agent is waiting on you."** A new **AI
+  Workspace Assistant → "Use local LLM to detect HITL"** toggle. It's **off by
+  default** — detection stays fast and deterministic — but once you've loaded a
+  local model you can turn it on to let the on-device 1.5B model help spot when an
+  agent is paused on a question. Fully local; nothing leaves your machine.
+- **`k2 talk` (beta) — agents collaborating over the CLI.** A new command that
+  lets one agent read a peer's terminal and respond in a single step, for
+  orchestration setups. (Power-user / agent feature; everyday messaging is the
+  compose bar above.)
+
 ## 0.40.11 — Unsaved edits protected + scroll fixed in fullscreen TUIs + canonical fix
 
 - **Mouse-wheel scrolling works again in fullscreen terminal apps.** When a

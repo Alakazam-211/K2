@@ -182,6 +182,74 @@ cli_post_form() {
         --data-raw "$body" 2>/dev/null
 }
 
+# ── Remote target addressing (K2-as-a-server, 0.40.x) ────────────────
+# `k2 talk <ws>@<subdomain>` / `k2 read <ws>@<host>` address a workspace
+# on a CONNECTED remote daemon over K2 Connect — the SAME model as local
+# workspace<->workspace agent talk, just pointed at a remote base URL.
+# We split off the @host, repoint BASE_URL at https://<host>, and swap
+# TOKEN for that host's owner token. Every existing cli_request /
+# cli_post_* call then routes to the remote daemon with NO call-site
+# change: the remote daemon resolves the workspace name against ITS own
+# projects (canonical session by default; --session <id> targets a
+# specific one). No daemon change — all routes used already exist and are
+# reachable over the tunnel with the owner token.
+_REMOTE_HOST=""
+_BARE_TARGET=""
+# Split `<target>[@<host>]` into the globals _BARE_TARGET (workspace[/agent],
+# @host stripped) and _REMOTE_HOST (the host, or "" when local). Sets GLOBALS
+# rather than echoing — callers MUST invoke it directly (NOT in a "$(...)"
+# command substitution, which runs in a subshell and would drop the global).
+# Split on the LAST '@' so `ai@ws@host` still peels the host cleanly.
+_split_remote_target() {
+    local raw="$1"
+    case "$raw" in
+        *@*) _REMOTE_HOST="${raw##*@}"; _BARE_TARGET="${raw%@*}" ;;
+        *)   _REMOTE_HOST="";           _BARE_TARGET="$raw" ;;
+    esac
+}
+
+# Resolve the owner token for a remote host. Precedence:
+#   1. explicit --token (arg $2)   2. $K2_REMOTE_TOKEN
+#   3. ~/.k2/connect-tokens.json  { "<host>": "<token>", ... }
+# Echoes the token (empty when none found). connect-hosts.json is the
+# non-secret address book (no tokens by invariant); this sibling file is
+# the CLI-readable token store, 0600.
+_remote_token_for_host() {
+    local host="$1" explicit="${2:-}"
+    if [ -n "$explicit" ]; then printf '%s' "$explicit"; return 0; fi
+    if [ -n "${K2_REMOTE_TOKEN:-}" ]; then printf '%s' "$K2_REMOTE_TOKEN"; return 0; fi
+    local f="${K2_HOME}/connect-tokens.json"
+    if [ -f "$f" ] && command -v python3 >/dev/null 2>&1; then
+        python3 -c "
+import json,sys
+try:
+    print(json.load(open('''$f''')).get('''$host''','') or '')
+except Exception:
+    pass" 2>/dev/null
+    fi
+}
+
+# Point the HTTP helpers at a remote host for the rest of this command
+# (overrides the globals BASE_URL + TOKEN). No-op for a local target.
+# Non-zero + stderr hint when no token is available.
+_apply_remote_host() {
+    local host="$1" explicit_token="${2:-}"
+    [ -z "$host" ] && return 0
+    local tok
+    tok="$(_remote_token_for_host "$host" "$explicit_token")"
+    if [ -z "$tok" ]; then
+        echo "Error: no owner token for remote host '$host'." >&2
+        echo "Pass --token <tok>, set \$K2_REMOTE_TOKEN, or add it to ${K2_HOME}/connect-tokens.json ({\"$host\": \"<token>\"})." >&2
+        return 1
+    fi
+    case "$host" in
+        http://*|https://*) BASE_URL="${host%/}" ;;
+        *)                  BASE_URL="https://${host}" ;;
+    esac
+    TOKEN="$tok"
+    return 0
+}
+
 # 0.39.0f Phase 2.1b: format_agents / format_work removed. Their
 # only callers (cmd_agents_list / cmd_agents_work / cmd_work_inbox)
 # are also gone; the inbox surface uses format_inbox instead.
@@ -1670,7 +1738,7 @@ cmd_terminal_write() {
         exit 1
     fi
     local terminal_id
-    terminal_id=$(resolve_write_session_id "$target" "$agent") || exit 1
+    terminal_id=$(resolve_write_session_id "$resolve_target" "$agent") || exit 1
     cli_request "/cli/terminal/write" "id=$(urlencode "$terminal_id")&message=$(urlencode "$message")"
 }
 
@@ -1707,21 +1775,36 @@ cmd_read() {
     local workspace="${1:-}"
     local lines=50
     local agent=""
+    local session=""
+    local token=""
     shift || true
     while [ $# -gt 0 ]; do
         case "$1" in
             --lines) lines="$2"; shift 2 ;;
             --agent) agent="$2"; shift 2 ;;
+            --session) session="$2"; shift 2 ;;
+            --token) token="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
-    if [ -z "$workspace" ]; then
-        echo "Usage: k2 read <workspace> [--lines N] [--agent <name>]" >&2
+    if [ -z "$workspace" ] && [ -z "$session" ]; then
+        echo "Usage: k2 read <workspace>[@<host>] [--lines N] [--agent <name>] [--session <id>] [--token <tok>]" >&2
         exit 1
     fi
-    local query="workspace=$(urlencode "$workspace")&lines=$lines"
-    if [ -n "$agent" ]; then
-        query="$query&agent=$(urlencode "$agent")"
+    # Remote addressing (K2-as-a-server): <workspace>@<host> reads a
+    # workspace on a CONNECTED remote daemon (owner token over the tunnel).
+    # Splits off @host and repoints BASE_URL/TOKEN; local target = no-op.
+    _split_remote_target "$workspace"; workspace="$_BARE_TARGET"
+    _apply_remote_host "$_REMOTE_HOST" "$token" || exit 1
+    local query
+    if [ -n "$session" ]; then
+        # Address a specific session directly (the route accepts session=).
+        query="session=$(urlencode "$session")&lines=$lines"
+    else
+        query="workspace=$(urlencode "$workspace")&lines=$lines"
+        if [ -n "$agent" ]; then
+            query="$query&agent=$(urlencode "$agent")"
+        fi
     fi
     # Prefer python to unwrap {"lines":[...]} into one line per row and
     # surface daemon {"error":...} to stderr with a non-zero exit (so
@@ -2069,7 +2152,7 @@ cmd_talk() {
         esac
     done
 
-    local target="" text="" from="" command="" lines=50 agent=""
+    local target="" text="" from="" command="" lines=50 agent="" session="" token=""
     local read_only="false"
     local answer="" respond=""
     local scout="false" answers=""
@@ -2085,6 +2168,8 @@ cmd_talk() {
             --command)   command="$2"; shift 2 ;;
             --lines)     lines="$2"; shift 2 ;;
             --agent)     agent="$2"; shift 2 ;;
+            --session)   session="$2"; shift 2 ;;
+            --token)     token="$2"; shift 2 ;;
             --answer)    answer="$2"; shift 2 ;;
             --respond)   respond="$2"; shift 2 ;;
             --scout)     scout="true"; shift ;;
@@ -2110,6 +2195,16 @@ cmd_talk() {
         exit 1
     }
 
+    # Remote addressing (K2-as-a-server): <workspace>@<host> talks to a
+    # workspace on a CONNECTED remote daemon (owner token over the tunnel) —
+    # the SAME model as local cross-workspace talk, just a remote base URL.
+    # --session <id> scopes the read/drive/deliver to a specific session;
+    # omit it for the workspace's canonical session (the default).
+    _split_remote_target "$target"; target="$_BARE_TARGET"
+    _apply_remote_host "$_REMOTE_HOST" "$token" || exit 1
+    local resolve_target="$target"
+    [[ -n "$session" ]] && resolve_target="$session"
+
     # ── act-returns-state (BETA, GH#8) ── the #1 round-trip win: fuse a
     # DRIVE step (answer a HITL) with the confirm re-read so it's ONE
     # call instead of write-then-separately-re-read. `--answer <N>` sends
@@ -2129,13 +2224,13 @@ cmd_talk() {
     # path the single `--answer` uses.
     if [[ "$scout" == "true" ]]; then
         local scout_sid
-        scout_sid=$(resolve_write_session_id "$target" "$agent") || exit 1
+        scout_sid=$(resolve_write_session_id "$resolve_target" "$agent") || exit 1
         talk_scout "$scout_sid" "$lines" "$target"
         return 0
     fi
     if [[ -n "$answers" ]]; then
         local ans_sid
-        ans_sid=$(resolve_write_session_id "$target" "$agent") || exit 1
+        ans_sid=$(resolve_write_session_id "$resolve_target" "$agent") || exit 1
         talk_answers "$ans_sid" "$lines" "$answers" "$target"
         return 0
     fi
@@ -2157,7 +2252,7 @@ cmd_talk() {
             esac
         fi
         local drive_sid
-        drive_sid=$(resolve_write_session_id "$target" "$agent") || exit 1
+        drive_sid=$(resolve_write_session_id "$resolve_target" "$agent") || exit 1
         echo "── talk(BETA): driving $target — sending '$key' ───────────────" >&2
         # no_submit=true: send the key WITHOUT the daemon's trailing \r.
         # In Claude's AskUserQuestion menu the number key auto-selects +
@@ -2192,6 +2287,7 @@ cmd_talk() {
     echo "── talk(BETA): $target's live screen ──────────────────────────" >&2
     local read_args=("$target" --lines "$lines")
     [[ -n "$agent" ]] && read_args+=(--agent "$agent")
+    [[ -n "$session" ]] && read_args+=(--session "$session")
     local read_rc=0
     cmd_read "${read_args[@]}" || read_rc=$?
     echo "───────────────────────────────────────────────────────────────" >&2
@@ -2242,7 +2338,7 @@ EOF
     if [[ "$det_is_hitl" == "true" ]]; then
         echo "── talk(BETA): HITL detected on $target (source: ${det_source:-?}) — holding the message, scouting the form ──" >&2
         local scout_sid
-        if scout_sid=$(resolve_write_session_id "$target" "$agent"); then
+        if scout_sid=$(resolve_write_session_id "$resolve_target" "$agent"); then
             talk_scout "$scout_sid" "$lines" "$target"
         fi
         echo "" >&2
@@ -2257,6 +2353,17 @@ EOF
     # (/cli/workspace/msg). `talk` adds NO new send mechanism — `msg`
     # stays the one delivery throat. Exit code mirrors msg's.
     echo "talk(BETA): delivering to $target…" >&2
+    # --session: deliver straight into the addressed session (raw write +
+    # submit) then re-read it — the per-session analogue of the canonical
+    # msg deliver below. Used for "talk to THIS session" on a remote host.
+    if [[ -n "$session" ]]; then
+        local deliver_sid
+        deliver_sid=$(resolve_write_session_id "$resolve_target" "$agent") || exit 1
+        cli_request "/cli/terminal/write" "id=$(urlencode "$deliver_sid")&message=$(urlencode "$text")" >/dev/null
+        sleep 0.7
+        cmd_terminal_read "$deliver_sid" --lines "$lines" || true
+        return 0
+    fi
     local msg_args=("$target" "$text")
     [[ -n "$from" ]] && msg_args+=(--from "$from")
     [[ -n "$command" ]] && msg_args+=(--command "$command")

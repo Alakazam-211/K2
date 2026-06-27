@@ -99,6 +99,10 @@ mod workspace_layouts_dedup;
 mod workspace_msg;
 mod workspace_routes;
 
+#[cfg(test)]
+#[path = "test_support.rs"]
+mod test_support;
+
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;

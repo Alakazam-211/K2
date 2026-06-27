@@ -476,9 +476,18 @@ fn new_job_id() -> String {
     hex_encode(&bytes)
 }
 
+/// Reset the process-global job map and serialize the calling test against
+/// every other job-touching test. The returned guard MUST be bound for the
+/// test's duration (`let _g = clear_jobs_for_test();`): the `jobs()` map is a
+/// crate-wide singleton, so without this lock a concurrent test's reset would
+/// wipe a job mid-assertion (`get_job(id)` → `None`).
 #[cfg(test)]
-fn clear_jobs_for_test() {
+#[must_use = "bind the returned guard for the test's duration to serialize against other job tests"]
+fn clear_jobs_for_test() -> std::sync::MutexGuard<'static, ()> {
+    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
+    let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     jobs().lock().unwrap_or_else(|e| e.into_inner()).clear();
+    guard
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1502,7 +1511,7 @@ mod tests {
 
     #[test]
     fn job_lifecycle_create_get_update() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         let id = create_job("0.40.0");
         let j = get_job(&id).expect("job exists after create");
         assert_eq!(j.phase, Phase::Downloading);
@@ -1527,7 +1536,7 @@ mod tests {
 
     #[test]
     fn get_unknown_job_is_none() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         assert!(get_job("nope").is_none());
     }
 
@@ -1568,7 +1577,7 @@ mod tests {
 
     #[test]
     fn app_update_progress_updates_phase_and_progress() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         let id = create_job("0.40.0");
         let body = serde_json::json!({
             "job_id": id,
@@ -1585,7 +1594,7 @@ mod tests {
 
     #[test]
     fn app_update_progress_records_error_on_failed() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         let id = create_job("0.40.0");
         let body = serde_json::json!({
             "job_id": id,
@@ -1602,7 +1611,7 @@ mod tests {
 
     #[test]
     fn app_update_progress_rejects_bad_phase() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         let id = create_job("0.40.0");
         let body = serde_json::json!({ "job_id": id, "phase": "bogus" }).to_string();
         let resp = handle_app_update_progress(body.as_bytes());
@@ -1614,7 +1623,7 @@ mod tests {
 
     #[test]
     fn app_update_progress_rejects_unknown_job() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         let body = serde_json::json!({ "job_id": "ghost", "phase": "staged" }).to_string();
         let resp = handle_app_update_progress(body.as_bytes());
         assert!(resp.status.starts_with("400"), "status={}", resp.status);
@@ -1631,7 +1640,7 @@ mod tests {
 
     #[test]
     fn bundled_start_fails_job_when_no_event_tx() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         // None ⇒ no broadcast sender at all (test harness): the co-located
         // app is definitionally unreachable, so the job must FAIL with the
         // actionable "app isn't running" reason rather than hang.
@@ -1650,7 +1659,7 @@ mod tests {
 
     #[test]
     fn bundled_start_fails_job_when_no_subscribers() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         // A sender with ZERO receivers ⇒ the app's /events subscriber isn't
         // attached ⇒ same actionable failure.
         let (tx, _) = tokio::sync::broadcast::channel::<crate::events::WireEvent>(4);
@@ -1665,7 +1674,7 @@ mod tests {
 
     #[test]
     fn bundled_start_emits_trigger_when_app_listening() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         // A live subscriber ⇒ the app is "running": the job is NOT failed and
         // an app:update-trigger frame carrying the job_id is broadcast.
         let (tx, mut rx) = tokio::sync::broadcast::channel::<crate::events::WireEvent>(4);
@@ -1696,7 +1705,7 @@ mod tests {
 
     #[test]
     fn prepare_apply_rejects_unknown_job() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         let err = prepare_apply("ghost").expect_err("unknown job must reject");
         assert!(err.status.starts_with("400"), "status={}", err.status);
         assert!(err.body.contains("unknown job_id"), "body={}", err.body);
@@ -1704,7 +1713,7 @@ mod tests {
 
     #[test]
     fn prepare_apply_rejects_non_staged_job() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         let id = create_job("0.40.0"); // phase = Downloading, not Staged
         let err = prepare_apply(&id).expect_err("non-staged job must reject");
         assert!(err.status.starts_with("400"), "status={}", err.status);
@@ -1717,7 +1726,7 @@ mod tests {
 
     #[test]
     fn prepare_apply_rejects_missing_staged_file() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         let id = create_job("0.40.0");
         update_job(&id, |j| {
             j.phase = Phase::Staged;
@@ -1729,7 +1738,7 @@ mod tests {
 
     #[test]
     fn prepare_apply_accepts_staged_job_with_existing_file() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         // Create a real staged file in a tempdir so the precondition passes.
         let dir = std::env::temp_dir().join(format!("k2so-p3-prep-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mk tmp");
@@ -1758,7 +1767,7 @@ mod tests {
 
     #[test]
     fn handle_apply_none_seam_acks_without_firing() {
-        clear_jobs_for_test();
+        let _g = clear_jobs_for_test();
         let dir = std::env::temp_dir().join(format!("k2so-p3-apply-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mk tmp");
         let staged = dir.join("k2-daemon");

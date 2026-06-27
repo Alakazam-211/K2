@@ -963,36 +963,14 @@ mod tests {
         assert!(!token_still_valid("not-a-real-session", "owner-secret"));
     }
 
-    /// Redirect `$HOME` to a fresh tempdir so the `connect-users.json`
-    /// store + session lifecycle are isolated from the real machine and
-    /// other tests, run `f`, then restore `$HOME`. Mirrors the helper in
-    /// `tests/auth_routes_integration.rs`. Serialized via `SESSION_LOCK`
-    /// because the session map + `$HOME` are process-wide singletons.
-    fn with_temp_home<F: FnOnce()>(f: F) {
-        use std::sync::Mutex;
-        static SESSION_LOCK: Mutex<()> = Mutex::new(());
-        let _guard = SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let prev = std::env::var_os("HOME");
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let tmp = std::env::temp_dir().join(format!(
-            "k2-reauth-{}-{nanos}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&tmp).expect("create temp HOME");
-        std::env::set_var("HOME", &tmp);
-
-        f();
-
-        match prev {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
+    // Redirect `$HOME` to a fresh tempdir so the `connect-users.json` store +
+    // session lifecycle are isolated from the real machine and other tests,
+    // run `f`, then restore `$HOME`. Delegates to the crate-wide
+    // `test_support::with_temp_home` so this serializes on the SAME lock as
+    // every other HOME-swapping test in the crate (e.g. the tunnel-TLS cert
+    // tests). `$HOME` is a process-global singleton; a module-local lock would
+    // not prevent cross-module stomping.
+    use crate::test_support::with_temp_home;
 
     #[test]
     fn token_still_valid_follows_session_lifecycle_create_then_revoke() {

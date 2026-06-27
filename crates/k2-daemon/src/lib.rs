@@ -88,6 +88,9 @@ pub mod workspace_layouts_dedup;
 pub mod workspace_msg;
 pub mod workspace_routes;
 
+#[cfg(test)]
+mod test_support;
+
 use std::sync::Arc;
 use std::time::Instant;
 

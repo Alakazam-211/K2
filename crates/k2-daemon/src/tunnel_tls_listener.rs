@@ -609,6 +609,10 @@ mod tests {
         //    the explicit dev/spike self-signed escape hatch
         //    (`K2_E2E_SELF_SIGNED=1`) — the default path is broker-issued.
         std::env::set_var("K2_E2E_SELF_SIGNED", "1");
+        // Sandbox $HOME (crate-wide serialized) so the self-signed leaf is
+        // minted fresh for "rosson" into a throwaway `.k2/` rather than reusing
+        // whatever real cert is persisted in this box's `~/.k2`.
+        let _home = crate::test_support::TempHome::new();
         let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert("rosson")
             .expect("provision self-signed cert");
         let server_config =
@@ -717,6 +721,13 @@ mod tests {
 
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
+        // Acquire the crate-wide serialization lock FIRST (sandboxes $HOME and
+        // serializes against every other global-state test). This must wrap the
+        // whole body because we mutate the process-global subdomain routing map
+        // below — a concurrent tunnel test resetting that map would otherwise
+        // misroute our nested label.
+        let _home = crate::test_support::TempHome::new();
+
         // Two distinct backends so we can prove WHERE a connection landed.
         let daemon_port = spawn_tagged_stub("DAEMON").await;
         let internal_port = spawn_tagged_stub("INTERNAL").await;
@@ -787,6 +798,9 @@ mod tests {
     async fn slowloris_handshake_times_out_within_deadline() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         std::env::set_var("K2_E2E_SELF_SIGNED", "1");
+        // Sandbox $HOME (crate-wide serialized) so the self-signed leaf is
+        // minted fresh for "rosson" rather than reusing this box's real cert.
+        let _home = crate::test_support::TempHome::new();
         let (cert_pem, key_pem) =
             k2_core::tunnel::tls::load_or_provision_cert("rosson").expect("cert");
         let server_config =
@@ -895,6 +909,9 @@ mod tests {
     fn server_config_advertises_only_http1_1() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         std::env::set_var("K2_E2E_SELF_SIGNED", "1");
+        // Sandbox $HOME (crate-wide serialized) so the self-signed leaf is
+        // minted fresh for "rosson" rather than reusing this box's real cert.
+        let _home = crate::test_support::TempHome::new();
         let (cert_pem, key_pem) =
             k2_core::tunnel::tls::load_or_provision_cert("rosson").expect("cert");
         let cfg =
@@ -925,16 +942,9 @@ mod tests {
         // for OUR chosen name ("rosson") rather than reusing whatever leaf is
         // persisted in the real ~/.k2 on this box (which may be for another
         // subdomain). `load_or_provision_cert` honors $HOME via `k2_dir()`.
-        let tmp_home = std::env::temp_dir().join(format!(
-            "k2-test-home-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp_home).expect("mk temp home");
-        let prev_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp_home);
+        // Crate-wide serialized via the shared `home_lock` so concurrent
+        // HOME-swapping tests in other modules can't stomp this sandbox.
+        let _home = crate::test_support::TempHome::new();
 
         // No nested subdomains → everything routes to the daemon arm.
         use k2_core::tunnel::subdomains::{self, SubdomainMap};
@@ -999,10 +1009,6 @@ mod tests {
         );
 
         subdomains::store(SubdomainMap::default());
-        match prev_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp_home);
+        // `_home` (TempHome) restores $HOME and removes the tempdir on drop.
     }
 }

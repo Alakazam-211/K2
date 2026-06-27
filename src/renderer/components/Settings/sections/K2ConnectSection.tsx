@@ -1037,6 +1037,37 @@ export function K2ConnectSection(): React.JSX.Element {
       </p>
 
       <div className="space-y-5">
+        {/* ── Enable Federation (PER-SERVER) — renders for owner/admin on BOTH
+            this Mac AND a remote host. Federation is a per-server setting, so it
+            must be settable wherever you're looking; the rest of K2 Connect
+            (tunnel config) is local-only below. Host-aware persist writes to the
+            ACTIVE server's daemon. Hidden for confirmed members (the daemon also
+            owner-gates the write + the /cli/federation/* gate). ── */}
+        {viewerRole !== 'member' && (
+          <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
+            <label className="flex items-center gap-2 cursor-pointer select-none no-drag">
+              <input
+                type="checkbox"
+                checked={federationEnabled}
+                onChange={(e) => void setFederationEnabled(e.target.checked)}
+                className="peer sr-only"
+              />
+              <span
+                aria-hidden="true"
+                className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
+              >
+                {federationEnabled && (
+                  <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M2.5 6.5 L5 9 L9.5 3.5" />
+                  </svg>
+                )}
+              </span>
+              <span className="text-xs text-[var(--color-text-secondary)]">Enable federation (cross-server agents)</span>
+            </label>
+            <span className="text-[10px] text-[var(--color-text-muted)]">{isRemote ? 'this server' : 'this device'}</span>
+          </div>
+        )}
+
         {/* K2 #628: the EXPOSE controls (account login, tunnel config,
             start/stop) only apply to THIS Mac's own daemon. On a remote
             host show a short note instead and let the user switch back. */}
@@ -1233,31 +1264,6 @@ export function K2ConnectSection(): React.JSX.Element {
           )}
         </div>
 
-        {/* ── Federation toggle — enable cross-server agent comms on the
-            ACTIVE host (host-aware persist → the connected server). Dark by
-            default; the daemon's /cli/federation/* gate honors it live. ── */}
-        <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
-          <label className="flex items-center gap-2 cursor-pointer select-none no-drag">
-            <input
-              type="checkbox"
-              checked={federationEnabled}
-              onChange={(e) => void setFederationEnabled(e.target.checked)}
-              className="peer sr-only"
-            />
-            <span
-              aria-hidden="true"
-              className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-            >
-              {federationEnabled && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                </svg>
-              )}
-            </span>
-            <span className="text-xs text-[var(--color-text-secondary)]">Enable federation (cross-server agents)</span>
-          </label>
-          <span className="text-[10px] text-[var(--color-text-muted)]">{isRemote ? 'this server' : 'this device'}</span>
-        </div>
 
         <div className="text-[10px] text-[var(--color-text-muted)] space-y-1">
           <p>1. Sign in to k2.dev above and pick a subdomain you own (e.g. <span className="font-mono">alice</span>).</p>

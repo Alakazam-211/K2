@@ -6591,9 +6591,34 @@ cmd_fed() {
                 *) echo "usage: k2 fed pubkey [--pem|--fingerprint|--json]" >&2; exit 2 ;;
             esac
             ;;
+        enable|disable)
+            # Flip the persisted federation master switch on THIS daemon — the
+            # headless equivalent of Settings → K2 Connect → Enable federation.
+            # Owner-gated via /cli/settings/update; federation::set_enabled() is
+            # synced so the /cli/federation/* gate goes live/dark immediately
+            # (no restart). Built for Linux headless setup.
+            local fval="true"; [ "$sub" = "disable" ] && fval="false"
+            cli_post_json "/cli/settings/update" "{\"federationEnabled\": $fval}" \
+                | python3 -c "import json,sys
+try:
+    d = json.load(sys.stdin)
+    print('federation: ' + ('ENABLED' if d.get('federationEnabled') else 'disabled') + ' (this server)')
+except Exception:
+    sys.stderr.write('k2 fed: unexpected response from /cli/settings/update\n'); sys.exit(1)"
+            ;;
+        status)
+            cli_request "/cli/settings/get" \
+                | python3 -c "import json,sys
+try:
+    d = json.load(sys.stdin)
+    print('federation: ' + ('ENABLED' if d.get('federationEnabled') else 'disabled') + ' (this server)')
+except Exception:
+    sys.stderr.write('k2 fed status: unexpected response from /cli/settings/get\n'); sys.exit(1)"
+            ;;
         *)
-            echo "usage: k2 fed <pubkey|send|pair-request|confirm> ..." >&2
-            echo "  (send/pair-request/confirm need K2_FEDERATION=1 on the daemon; pubkey works anytime)" >&2
+            echo "usage: k2 fed <enable|disable|status|pubkey|send|pair-request|confirm> ..." >&2
+            echo "  enable/disable/status: flip the persisted federation switch (headless-friendly)" >&2
+            echo "  send/pair-request/confirm need federation ON; pubkey works anytime" >&2
             exit 2
             ;;
     esac

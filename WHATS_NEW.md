@@ -3,6 +3,27 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.13 — Per-workspace remote access + agent reliability + the federation groundwork
+
+- **Choose which workspaces accept remote messages.** A new **Workspace
+  Settings → Remote Access** toggle lets you opt *specific* workspaces into
+  being messaged by your K2 Connect users — instead of one all-or-nothing
+  account setting. Default **off**: a workspace never accepts a remote
+  instruction until you turn it on (the owner can always message their own
+  workspaces). Your existing account-wide setting still works as a master
+  switch.
+- **Agents in workspaces without a persona file now behave correctly.** Some
+  workspaces (especially newly-created ones) didn't have an `AGENT.md` persona
+  file, which silently stopped their heartbeats, inbox wake-ups, and canonical
+  chat session from working. K2 now resolves a workspace's agent identity from
+  its actual configuration, so those workspaces run like any other.
+- **Security hardening (opt-in): scoped per-session agent-hook tokens.**
+  Groundwork so an agent's lifecycle hooks can use a per-session, capability-
+  scoped credential over a private per-cell socket instead of the broad owner
+  token — behind an off-by-default switch, no change unless you enable it.
+- **Branded installer.** The `.dmg` install window now carries the K2 lockup
+  and a drag-to-Applications guide.
+
 ## 0.40.12 — Message your agents from the app + a live Agent Ops view
 
 - **Message an agent right from its terminal.** Every terminal now has a compose

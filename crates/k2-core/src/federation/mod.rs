@@ -38,10 +38,15 @@ pub mod ingress;
 pub mod outbox;
 pub mod pairing;
 pub mod peers;
+pub mod roster;
 
 pub use envelope::{open, seal, FederationEnvelope, FederationError, SignedPayload};
 pub use ingress::{ingest, IngressError, NonceCache, CAP_INBOUND, DEFAULT_SKEW_SECS};
 pub use outbox::{OutboxItem};
+pub use roster::{
+    build_local_roster, sign_roster_request, verify_roster_request, LocalRoster, RosterAgent,
+    RosterAuthError, CAP_ROSTER, DEFAULT_ROSTER_SKEW_SECS,
+};
 pub use pairing::{
     apply_pair_confirm, apply_pair_request, sas_code, PairOutcome, PairRequest,
     DEFAULT_CONFIRM_CAPS,

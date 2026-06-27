@@ -2747,9 +2747,53 @@ async fn handle_one_request(
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
                 "/cli/federation/roster" => {
-                    // GET stub (Phase 5 fills the require_peer projection).
+                    // GET, peer-authenticated by a SIGNED CHALLENGE in the query
+                    // (fp/ts/sig) — NOT a token (DECISION-2). Verification +
+                    // require_peer(fp,"roster") live in the handler; fail-closed.
                     let _ = stream.read(&mut buf).await;
-                    crate::federation_routes::handle_roster()
+                    let params = super::http::parse_params(&path, &query);
+                    let fp = params.get("fp").cloned();
+                    let ts = params.get("ts").cloned();
+                    let sig = params.get("sig").cloned();
+                    tokio::task::spawn_blocking(move || {
+                        crate::federation_routes::handle_roster(
+                            fp.as_deref(),
+                            ts.as_deref(),
+                            sig.as_deref(),
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/federation/peers" => {
+                    // GET, OWNER-gated (local convenience for the renderer's
+                    // cross-server picker). A connect-user session must NOT see
+                    // the pinned-peer list.
+                    let _ = stream.read(&mut buf).await;
+                    if !super::http::token_is_owner(&query, state.token.as_str()) {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        tokio::task::spawn_blocking(crate::federation_routes::handle_peers)
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                }
+                "/cli/federation/peer-roster" => {
+                    // GET, OWNER-gated. The LOCAL daemon dials a PAIRED peer's
+                    // signed roster GET and returns its agent projection so the
+                    // renderer can populate the dropdown. Blocking (network).
+                    let _ = stream.read(&mut buf).await;
+                    if !super::http::token_is_owner(&query, state.token.as_str()) {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        let params = super::http::parse_params(&path, &query);
+                        let peer = params.get("peer").cloned().unwrap_or_default();
+                        tokio::task::spawn_blocking(move || {
+                            crate::federation_routes::handle_peer_roster(&peer)
+                        })
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
                 }
                 _ => {
                     let _ = stream.read(&mut buf).await;

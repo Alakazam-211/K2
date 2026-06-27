@@ -13,8 +13,12 @@
 //!     replay/skew/ttl → sanitize → deliver to the local INBOX ONLY.
 //!   - [`handle_send`] — P4 seal an [`AgentSignal`], durably enqueue, dial the
 //!     peer's E2E listener, POST to its `/cli/federation/inbound`.
-//!   - [`handle_roster`] — P5 stub (owner-gated for now; full peer-auth
-//!     projection lands in Phase 5).
+//!   - [`handle_roster`] — P5 peer-facing roster: signed-challenge auth
+//!     (`verify_roster_request` → `require_peer(fp,"roster")`) → this daemon's
+//!     exposed agents (read-only, no spawn).
+//!   - [`handle_peers`] / [`handle_peer_roster`] — P5 LOCAL owner-gated seams
+//!     the renderer calls: list pinned peers, and fetch a paired peer's roster
+//!     (the local daemon dials the peer's signed roster GET).
 //!
 //! The dispatcher owns method/auth gating (POST-only via `require_post`; owner
 //! token via `require_owner` on confirm/send; the inbound route is
@@ -23,7 +27,7 @@
 use crate::cli_response::CliResponse;
 
 use k2_core::awareness::{AgentAddress, AgentSignal, Delivery, SignalKind, WorkspaceId};
-use k2_core::federation::{self, ingress, outbox, pairing, PeerStore};
+use k2_core::federation::{self, ingress, outbox, pairing, roster, PeerStore};
 
 /// Default hop budget stamped on outbound envelopes (Risk M2).
 const OUTBOUND_TTL: u8 = 8;
@@ -317,17 +321,144 @@ pub fn post_inbound(base: &str, envelope_bytes: &[u8]) -> Result<(), String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// P5 — roster (stub)
+// P5 — roster (peer-facing) + local roster helpers for the renderer
 // ─────────────────────────────────────────────────────────────────────
 
-/// `GET /cli/federation/roster` — STUB. Phase 5 fills this with a per-peer
-/// cached workspace/agent/presence projection gated by `require_peer`. For now
-/// it returns an empty projection so the route exists end-to-end.
-pub fn handle_roster() -> CliResponse {
-    CliResponse::ok_json(
-        serde_json::json!({ "workspaces": [], "note": "roster stub — Phase 5 fills this" })
-            .to_string(),
-    )
+/// `GET /cli/federation/roster?fp&ts&sig` — peer-facing roster projection.
+///
+/// Authenticated by a SIGNED CHALLENGE, not a token (the GET carries no signed
+/// envelope; DECISION-2 — never `token_ok`/owner). The calling peer signs
+/// `roster_challenge(fp, ts)` with its pinned key; we verify the signature,
+/// bound `ts` by a skew window, and gate with `require_peer(fp, "roster")`.
+/// Every failure is a generic 403 DENY (no reason enumeration). On success we
+/// return THIS daemon's exposed agents (read-only; no spawn).
+pub fn handle_roster(fp: Option<&str>, ts: Option<&str>, sig: Option<&str>) -> CliResponse {
+    let (fp, ts, sig) = match (fp, ts, sig) {
+        (Some(f), Some(t), Some(s)) if !f.is_empty() && !t.is_empty() && !s.is_empty() => (f, t, s),
+        // Fail-closed: a roster read MUST present peer authentication.
+        _ => return json_err("403 Forbidden", "roster requires peer authentication"),
+    };
+    let ts: i64 = match ts.parse() {
+        Ok(v) => v,
+        Err(_) => return CliResponse::bad_request("ts must be a unix timestamp"),
+    };
+    let store = match PeerStore::load() {
+        Ok(s) => s,
+        Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
+    };
+    match roster::verify_roster_request(&store, fp, ts, sig, roster::DEFAULT_ROSTER_SKEW_SECS) {
+        Ok(_peer) => {
+            let projection = roster::build_local_roster();
+            match serde_json::to_string(&projection) {
+                Ok(body) => CliResponse::ok_json(body),
+                Err(e) => json_err("500 Internal Server Error", format!("serialize roster: {e}")),
+            }
+        }
+        // Generic deny — never leak which check failed (no peer enumeration).
+        Err(_) => json_err("403 Forbidden", "roster denied"),
+    }
+}
+
+/// `GET /cli/federation/peers` — OWNER-gated (dispatcher enforces). Lists the
+/// LOCALLY pinned peers (the renderer matches the active host against these to
+/// decide whether to surface the cross-server agent picker). Secrets (the
+/// pinned public key, epoch) are omitted — only what the picker needs.
+pub fn handle_peers() -> CliResponse {
+    let store = match PeerStore::load() {
+        Ok(s) => s,
+        Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
+    };
+    let peers: Vec<serde_json::Value> = store
+        .list()
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "fingerprint": p.fingerprint,
+                "label": p.label,
+                "subdomain": p.subdomain,
+                "trust": serde_json::to_value(p.trust).unwrap_or(serde_json::Value::Null),
+                "capabilities": p.capabilities,
+            })
+        })
+        .collect();
+    CliResponse::ok_json(serde_json::json!({ "peers": peers }).to_string())
+}
+
+/// `GET /cli/federation/peer-roster?peer=<selector>` — OWNER-gated (dispatcher
+/// enforces). The renderer convenience seam: the LOCAL daemon dials a PAIRED
+/// peer's `/cli/federation/roster` (signing the challenge with our own key as
+/// that peer's pinned counterpart) and returns the peer's agent projection so
+/// the renderer can populate the dropdown. Blocking (network I/O).
+pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
+    if peer_selector.is_empty() {
+        return CliResponse::bad_request("peer selector required");
+    }
+    let store = match PeerStore::load() {
+        Ok(s) => s,
+        Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
+    };
+    // Resolve the peer by fingerprint, label, OR subdomain (identity is the
+    // key; label/subdomain are convenience selectors — mirrors handle_send).
+    let peer = store
+        .list()
+        .iter()
+        .find(|p| {
+            p.fingerprint == peer_selector
+                || p.label == peer_selector
+                || p.subdomain == peer_selector
+        })
+        .cloned();
+    let peer = match peer {
+        Some(p) => p,
+        None => return json_err("404 Not Found", format!("no pinned peer matches '{peer_selector}'")),
+    };
+    if peer.trust != k2_core::federation::PeerTrust::Trusted {
+        return json_err(
+            "403 Forbidden",
+            format!("peer '{peer_selector}' is not Trusted (state={:?})", peer.trust),
+        );
+    }
+
+    let key = match k2_core::tunnel::tls::load_or_generate_keypair() {
+        Ok(k) => k,
+        Err(e) => return json_err("500 Internal Server Error", format!("load keypair: {e}")),
+    };
+    let ts = chrono::Utc::now().timestamp();
+    let (fp, sig) = match roster::sign_roster_request(&key, ts) {
+        Ok(v) => v,
+        Err(e) => return json_err("500 Internal Server Error", format!("sign roster request: {e}")),
+    };
+
+    match get_peer_roster(&peer_base_url(&peer.subdomain), &fp, ts, &sig) {
+        Ok(body) => {
+            let parsed: serde_json::Value =
+                serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+            CliResponse::ok_json(
+                serde_json::json!({ "peer": peer.fingerprint, "roster": parsed }).to_string(),
+            )
+        }
+        Err(e) => json_err("502 Bad Gateway", format!("fetch peer roster: {e}")),
+    }
+}
+
+/// GET `<base>/cli/federation/roster?fp&ts&sig` and return the body. Blocking
+/// (reqwest::blocking); a non-2xx or transport error returns `Err`.
+fn get_peer_roster(base: &str, fp: &str, ts: i64, sig: &str) -> Result<String, String> {
+    let url = format!("{base}/cli/federation/roster");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("build http client: {e}"))?;
+    let resp = client
+        .get(&url)
+        .query(&[("fp", fp), ("ts", &ts.to_string()), ("sig", sig)])
+        .send()
+        .map_err(|e| format!("GET {url}: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("peer rejected roster: HTTP {}", status.as_u16()));
+    }
+    resp.text().map_err(|e| format!("read roster body: {e}"))
 }
 
 #[cfg(test)]
@@ -559,6 +690,115 @@ mod tests {
             outbox::list_for_peer(&fp).is_empty(),
             "a confirmed delivery must remove the queued copy"
         );
+    }
+
+    // ── P5 roster: peer-authenticated GET + local owner helpers ──
+
+    fn peer_key() -> rcgen::KeyPair {
+        rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap()
+    }
+
+    #[test]
+    fn roster_denies_unauthenticated_request() {
+        with_temp_home(|| {
+            // No fp/ts/sig → fail-closed 403 (no projection leaked).
+            let resp = handle_roster(None, None, None);
+            assert_eq!(resp.status, "403 Forbidden", "body: {}", resp.body);
+        });
+    }
+
+    #[test]
+    fn roster_denies_untrusted_peer() {
+        with_temp_home(|| {
+            // Pin the peer Pending (not Trusted) but granted roster → denied.
+            let key = peer_key();
+            let mut store = PeerStore::default();
+            let fp = store.upsert(FederationPeer::pin("p", "p", key.public_key_pem()).unwrap());
+            store.grant(&fp, k2_core::federation::CAP_ROSTER);
+            store.save().unwrap();
+
+            let ts = chrono::Utc::now().timestamp();
+            let (signed_fp, sig) = roster::sign_roster_request(&key, ts).unwrap();
+            let resp = handle_roster(
+                Some(&signed_fp),
+                Some(&ts.to_string()),
+                Some(&sig),
+            );
+            assert_eq!(resp.status, "403 Forbidden", "untrusted must deny: {}", resp.body);
+        });
+    }
+
+    #[test]
+    fn roster_returns_agents_for_trusted_peer() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            // A configured workspace this daemon exposes.
+            let ws_path = std::env::temp_dir().join(format!(
+                "k2-fedrt-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            let ws_path = ws_path.to_string_lossy().into_owned();
+            let ws_id = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let id = uuid::Uuid::new_v4().to_string();
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, agent_enabled) VALUES (?1, ?2, ?3, 1)",
+                    rusqlite::params![id, "fed-roster-ws", ws_path],
+                )
+                .unwrap();
+                id
+            };
+
+            // Pin the calling peer Trusted + roster, then sign a valid request.
+            let key = peer_key();
+            let mut store = PeerStore::default();
+            let fp = store.upsert(FederationPeer::pin("peer", "peer", key.public_key_pem()).unwrap());
+            store.set_trust(&fp, PeerTrust::Trusted);
+            store.grant(&fp, k2_core::federation::CAP_ROSTER);
+            store.save().unwrap();
+
+            let ts = chrono::Utc::now().timestamp();
+            let (signed_fp, sig) = roster::sign_roster_request(&key, ts).unwrap();
+            let resp = handle_roster(Some(&signed_fp), Some(&ts.to_string()), Some(&sig));
+            assert_eq!(resp.status, "200 OK", "trusted+roster must serve: {}", resp.body);
+
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            let agents = v["agents"].as_array().expect("agents array");
+            assert!(
+                agents.iter().any(|a| a["workspace_id"] == ws_id),
+                "the configured workspace must be exposed in the roster: {}",
+                resp.body
+            );
+        });
+    }
+
+    #[test]
+    fn peers_lists_pinned_peers() {
+        with_temp_home(|| {
+            let key = peer_key();
+            let mut store = PeerStore::default();
+            let fp = store.upsert(
+                FederationPeer::pin("teammate", "rosson", key.public_key_pem()).unwrap(),
+            );
+            store.set_trust(&fp, PeerTrust::Trusted);
+            store.grant(&fp, k2_core::federation::CAP_ROSTER);
+            store.save().unwrap();
+
+            let resp = handle_peers();
+            assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            let peers = v["peers"].as_array().expect("peers array");
+            let p = peers
+                .iter()
+                .find(|p| p["fingerprint"] == fp)
+                .expect("pinned peer must be listed");
+            assert_eq!(p["subdomain"], "rosson");
+            assert_eq!(p["trust"], "trusted");
+            // Secrets are NOT exposed.
+            assert!(p.get("public_key_pem").is_none(), "must not leak the pinned key");
+        });
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

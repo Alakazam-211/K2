@@ -8,7 +8,7 @@
 //
 // WHERE we upload is decided by WHAT was dropped on (target-driven model,
 // per the PRD's "Target-driven destination model" table):
-//   - terminal  → `<workspace>/.k2so/downloads/`, then inject the remote
+//   - terminal  → `<workspace>/.k2/downloads/`, then inject the remote
 //                 path into the PTY (so the agent can reference a file
 //                 that really exists on the host).
 //   - folder    → upload into that folder (user-chosen path).
@@ -34,7 +34,7 @@ export type DropTarget =
 /** Context the resolver needs that the pure function can't read itself. */
 export interface DropContext {
   /**
-   * The workspace root for a terminal drop — its `.k2so/downloads/` is the
+   * The workspace root for a terminal drop — its `.k2/downloads/` is the
    * upload destination. Required for the terminal case; for folder/miss
    * it's unused. Each terminal passes its own `cwd` so split-pane drops
    * land in the right workspace.
@@ -78,7 +78,7 @@ export function resolveDropDestination(
   switch (target.kind) {
     case 'terminal': {
       if (!ctx.workspacePath || ctx.workspacePath.length === 0) {
-        // No workspace to anchor `.k2so/downloads/` — can't proceed.
+        // No workspace to anchor `.k2/downloads/` — can't proceed.
         return { destDir: null, inject: true }
       }
       return { destDir: downloadsDir(ctx.workspacePath), inject: true }

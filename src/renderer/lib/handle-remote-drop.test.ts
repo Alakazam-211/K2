@@ -37,13 +37,13 @@ beforeEach(() => {
 // ── resolveDropDestination (pure) ──────────────────────────────────────
 
 describe('resolveDropDestination', () => {
-  it('terminal → <workspace>/.k2so/downloads, inject:true', () => {
+  it('terminal → <workspace>/.k2/downloads, inject:true', () => {
     const dest = resolveDropDestination(
       { kind: 'terminal' },
       { workspacePath: '/home/u/ws' },
     )
     expect(dest).toEqual({
-      destDir: '/home/u/ws/.k2so/downloads',
+      destDir: '/home/u/ws/.k2/downloads',
       inject: true,
     })
   })
@@ -53,7 +53,7 @@ describe('resolveDropDestination', () => {
       { kind: 'terminal' },
       { workspacePath: '/home/u/ws/' },
     )
-    expect(dest.destDir).toBe('/home/u/ws/.k2so/downloads')
+    expect(dest.destDir).toBe('/home/u/ws/.k2/downloads')
   })
 
   it('terminal with NO workspace → destDir:null (executor picks), inject:true', () => {
@@ -87,14 +87,14 @@ describe('executeRemoteDrop', () => {
       buildPayload,
     )
     // Both files uploaded into the downloads dir, in order.
-    expect(uploadMock).toHaveBeenNthCalledWith(1, '/local/a.png', '/ws/.k2so/downloads')
-    expect(uploadMock).toHaveBeenNthCalledWith(2, '/local/b.txt', '/ws/.k2so/downloads')
+    expect(uploadMock).toHaveBeenNthCalledWith(1, '/local/a.png', '/ws/.k2/downloads')
+    expect(uploadMock).toHaveBeenNthCalledWith(2, '/local/b.txt', '/ws/.k2/downloads')
     // The payload is built from the REMOTE paths, not the local ones.
     expect(buildPayload).toHaveBeenCalledWith([
-      '/ws/.k2so/downloads/a.png',
-      '/ws/.k2so/downloads/b.txt',
+      '/ws/.k2/downloads/a.png',
+      '/ws/.k2/downloads/b.txt',
     ])
-    expect(payload).toBe('PAYLOAD(/ws/.k2so/downloads/a.png,/ws/.k2so/downloads/b.txt)')
+    expect(payload).toBe('PAYLOAD(/ws/.k2/downloads/a.png,/ws/.k2/downloads/b.txt)')
   })
 
   it('folder: uploads into the folder and returns null (no injection)', async () => {

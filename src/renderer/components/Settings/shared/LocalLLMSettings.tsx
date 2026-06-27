@@ -10,6 +10,13 @@ export function LocalLLMSettings(): React.JSX.Element {
   const { isDownloading, downloadProgress, modelLoaded } = useAssistantStore()
   const aiAssistantEnabled = useSettingsStore((s) => s.aiAssistantEnabled)
   const setAiAssistantEnabled = useSettingsStore((s) => s.setAiAssistantEnabled)
+  // GH#8 — "Use local LLM to detect HITL" opt-in, gated on the model being
+  // loaded and ready. The toggle is disabled (greyed, not clickable) until a
+  // model is actually loaded; with no model there's nothing to run, so we
+  // don't let the flag flip and we show a "Load a model to enable." hint.
+  const useLlmHitlDetection = useSettingsStore((s) => s.useLlmHitlDetection)
+  const setUseLlmHitlDetection = useSettingsStore((s) => s.setUseLlmHitlDetection)
+  const modelReady = modelLoaded && !isDownloading
   const [modelPath, setModelPath] = useState<string | null>(null)
   const [modelExists, setModelExists] = useState<boolean | null>(null)
   const [customPath, setCustomPath] = useState('')
@@ -109,6 +116,50 @@ export function LocalLLMSettings(): React.JSX.Element {
               {modelPath}
             </p>
           )}
+        </div>
+        {/* GH#8 — "Use local LLM to detect HITL" opt-in. Gates whether
+            `k2 talk`'s HITL detection runs the bundled 1.5B model (catches
+            unmarked prompts) vs. regex-only. Usable ONLY when the model is
+            loaded and ready — disabled (and the stored value left untouched)
+            otherwise. The daemon reads this same flag server-side. */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
+          <div className="flex-1 min-w-0 mr-3">
+            <span className={`text-xs ${modelReady ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'}`}>
+              Use local LLM to detect HITL states (off = regex only)
+            </span>
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+              {!modelReady
+                ? 'Load a model to enable.'
+                : useLlmHitlDetection
+                  ? 'On: k2 talk runs the bundled 1.5B model to spot human-in-the-loop prompts the regex misses (unmarked menus/confirmations). Costs some battery and CPU per check.'
+                  : 'Off (default): k2 talk detects human-in-the-loop prompts with fast regex only — no model inference. Obvious prompts are still caught; unmarked ones may not be.'}
+            </p>
+          </div>
+          <button
+            onClick={() => { if (modelReady) void setUseLlmHitlDetection(!useLlmHitlDetection) }}
+            disabled={!modelReady}
+            className="no-drag flex-shrink-0 relative cursor-pointer disabled:cursor-default disabled:opacity-40"
+            data-settings-id="general.use-llm-hitl-detection"
+            style={{
+              width: 36,
+              height: 20,
+              backgroundColor: useLlmHitlDetection && modelReady ? 'var(--color-accent)' : '#333',
+              border: 'none',
+              transition: 'background-color 150ms',
+            }}
+          >
+            <span
+              style={{
+                position: 'absolute',
+                top: 2,
+                left: useLlmHitlDetection && modelReady ? 18 : 2,
+                width: 16,
+                height: 16,
+                backgroundColor: '#fff',
+                transition: 'left 150ms',
+              }}
+            />
+          </button>
         </div>
         {/* Default Model */}
         <div className="px-4 py-3 border-b border-[var(--color-border)]">

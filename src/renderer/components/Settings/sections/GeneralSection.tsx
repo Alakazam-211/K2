@@ -42,7 +42,6 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.cli-version', section: 'general', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
   { id: 'general.agentic-systems', section: 'general', label: 'Agentic Systems', description: 'Enable AI agent orchestration, workspace manager, heartbeat, review queue', keywords: ['ai', 'agent', 'agentic', 'heartbeat', 'manager', 'workspace states', 'review', 'beta'] },
   { id: 'general.claude-auth-refresh', section: 'general', label: 'Auto-refresh Claude credentials', description: 'Background scheduler that keeps your Claude session alive', keywords: ['claude', 'auth', 'token', 'login', 'credentials', 'scheduler'] },
-  { id: 'general.use-llm-hitl-detection', section: 'general', label: 'Use local LLM to detect HITL', description: 'Let k2 talk use the bundled 1.5B model to detect human-in-the-loop prompts (off = regex only)', keywords: ['hitl', 'human in the loop', 'talk', 'llm', 'model', 'detect', 'classify', 'regex', 'scout', 'qwen', '1.5b'] },
   { id: 'general.daemon', section: 'general', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
   { id: 'general.keep-daemon-on-quit', section: 'general', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
   { id: 'general.restart-host', section: 'general', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
@@ -234,12 +233,6 @@ export function GeneralSection(): React.JSX.Element {
         {/* Composer 1c — per-host opt-in for connect-users to message
             agents (owner is always allowed; default OFF, daemon-enforced). */}
         <AllowRemoteInstructRow />
-
-        {/* GH#8 — "Use local LLM to detect HITL" opt-in. Gates whether
-            `k2 talk`'s HITL detection runs the bundled 1.5B model (catches
-            unmarked prompts) vs. regex-only. Default OFF — inference costs
-            battery/CPU; the daemon reads this same flag server-side. */}
-        <UseLlmHitlDetectionRow />
 
         {/* K2 Daemon — persistent-agents service */}
         <DaemonRow />
@@ -478,64 +471,6 @@ function AllowRemoteInstructRow(): React.JSX.Element {
             position: 'absolute',
             top: 2,
             left: allow ? 18 : 2,
-            width: 16,
-            height: 16,
-            backgroundColor: '#fff',
-            transition: 'left 150ms',
-          }}
-        />
-      </button>
-    </div>
-  )
-}
-
-// ── GH#8 — "Use local LLM to detect HITL" ──────────────────────────────
-// Gates whether `k2 talk`'s HITL-detection step (the daemon's
-// /cli/terminal/classify endpoint) is allowed to run the bundled 1.5B
-// model. DEFAULTS OFF: with it off, `talk` detects human-in-the-loop
-// prompts with the REGEX fast-path only (free, no inference) and starts
-// the scout on a detected HITL; with it on, classify additionally runs
-// the model to catch unmarked HITLs the regex misses — which costs
-// battery/CPU, hence opt-in. The daemon reads this same flag server-side
-// (it is the literal enable/disable for the model on this path); this
-// toggle just persists the host's opt-in.
-function UseLlmHitlDetectionRow(): React.JSX.Element {
-  const enabled = useSettingsStore((s) => s.useLlmHitlDetection)
-  const setEnabled = useSettingsStore((s) => s.setUseLlmHitlDetection)
-
-  const toggle = useCallback(() => {
-    void setEnabled(!enabled)
-  }, [enabled, setEnabled])
-
-  return (
-    <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
-          Use local LLM to detect HITL states (off = regex only)
-        </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-          {enabled
-            ? 'On: k2 talk runs the bundled 1.5B model to spot human-in-the-loop prompts the regex misses (unmarked menus/confirmations). Costs some battery and CPU per check.'
-            : 'Off (default): k2 talk detects human-in-the-loop prompts with fast regex only — no model inference. Obvious prompts are still caught; unmarked ones may not be.'}
-        </p>
-      </div>
-      <button
-        onClick={toggle}
-        className="no-drag cursor-pointer flex-shrink-0 relative"
-        data-settings-id="general.use-llm-hitl-detection"
-        style={{
-          width: 36,
-          height: 20,
-          backgroundColor: enabled ? 'var(--color-accent)' : '#333',
-          border: 'none',
-          transition: 'background-color 150ms',
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute',
-            top: 2,
-            left: enabled ? 18 : 2,
             width: 16,
             height: 16,
             backgroundColor: '#fff',

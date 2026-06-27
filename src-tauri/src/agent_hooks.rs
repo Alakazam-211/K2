@@ -217,20 +217,13 @@ pub fn generate_hook_script(_port: u16) -> String {
 K2SO_PORT_FILE="$HOME/.k2so/heartbeat.port"
 K2SO_TOKEN_FILE="$HOME/.k2so/heartbeat.token"
 
-if [ ! -r "$K2SO_PORT_FILE" ]; then
-    # K2SO isn't running — exit silently so we don't block the agent
-    exit 0
-fi
-K2SO_PORT=$(cat "$K2SO_PORT_FILE" 2>/dev/null)
-[ -z "$K2SO_PORT" ] && exit 0
-
-# Token from disk takes precedence over the PTY-injected env var so that
-# a K2SO restart (which rotates the token) immediately picks up the new
-# value instead of sending 403-rejected requests for the rest of the
-# session's life.
-if [ -r "$K2SO_TOKEN_FILE" ]; then
-    K2SO_HOOK_TOKEN=$(cat "$K2SO_TOKEN_FILE" 2>/dev/null)
-fi
+# COMPAT-58 (#58 Phase 1): capture the PTY-injected SCOPED token + per-cell
+# socket BEFORE the disk-token read below clobbers $K2SO_HOOK_TOKEN. The
+# scoped token is used ONLY on the per-cell UDS (Bearer); the TCP fallback
+# re-sources the disk OWNER token — the disk-token inversion that keeps a
+# flag-off rollback from stranding the hook.
+K2_HOOK_SOCK_SCOPED="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+K2_HOOK_TOKEN_SCOPED="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
 
 # Read JSON from argument or stdin
 INPUT="${1:-}"
@@ -255,6 +248,38 @@ fi
 
 [ -z "$EVENT_TYPE" ] && exit 0
 [ -z "$K2SO_TAB_ID" ] && exit 0
+
+# Phase 1 UDS arm (preferred): when this is a scoped session, hit the per-cell
+# socket with the scoped token as a Bearer header (kept out of access logs /
+# the recorded transcript). On success we're done; on ANY failure we fall
+# through to the TCP arm so a flag-off rollback (UDS no longer served) doesn't
+# strand the hook.
+if [ -n "$K2_HOOK_SOCK_SCOPED" ] && [ -S "$K2_HOOK_SOCK_SCOPED" ]; then
+    if curl -sf -G --unix-socket "$K2_HOOK_SOCK_SCOPED" "http://localhost/hook/complete" \
+        --connect-timeout 1 --max-time 2 \
+        -H "Authorization: Bearer $K2_HOOK_TOKEN_SCOPED" \
+        --data-urlencode "paneId=$K2SO_PANE_ID" \
+        --data-urlencode "tabId=$K2SO_TAB_ID" \
+        --data-urlencode "eventType=$EVENT_TYPE" \
+        >/dev/null 2>&1; then
+        exit 0
+    fi
+fi
+
+# TCP fallback arm. Owner token from disk takes precedence over the PTY-
+# injected env var so that a K2SO restart (which rotates the token) is picked
+# up immediately, AND so a scoped session falls back to the OWNER token here
+# (the scoped token would 403 on the owner-token /hook/complete arm).
+if [ ! -r "$K2SO_PORT_FILE" ]; then
+    # K2SO isn't running — exit silently so we don't block the agent
+    exit 0
+fi
+K2SO_PORT=$(cat "$K2SO_PORT_FILE" 2>/dev/null)
+[ -z "$K2SO_PORT" ] && exit 0
+
+if [ -r "$K2SO_TOKEN_FILE" ]; then
+    K2SO_HOOK_TOKEN=$(cat "$K2SO_TOKEN_FILE" 2>/dev/null)
+fi
 
 curl -sG "http://127.0.0.1:$K2SO_PORT/hook/complete" \
     --connect-timeout 1 --max-time 2 \

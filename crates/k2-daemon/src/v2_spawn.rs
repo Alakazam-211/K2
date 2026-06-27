@@ -44,6 +44,21 @@ fn is_uuid_shape(s: &str) -> bool {
         && s.as_bytes()[23] == b'-'
 }
 
+/// Resolve the `workspace_uuid` (`projects.id`) for a spawned cell's scoped
+/// principal (#58 Phase 1). A bare-UUID `agent_name` IS the project id
+/// (post-0.37.5 canonical key); otherwise resolve from the cwd. Best-effort:
+/// the principal is attribution metadata, never a trust input — an empty
+/// string is acceptable when the project can't be resolved. Only called when
+/// scoped hooks are ON.
+fn scoped_principal_workspace(agent_name: &str, cwd: &str) -> String {
+    if is_uuid_shape(agent_name) {
+        return agent_name.to_string();
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::workspace::agent_identity::resolve_project_id(&conn, cwd).unwrap_or_default()
+}
+
 /// Handler for `POST /cli/sessions/v2/spawn`.
 ///
 /// Request body (JSON):
@@ -334,7 +349,7 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
     } else {
         k2_core::terminal::LabelSource::Pty
     };
-    let cfg = DaemonPtyConfig {
+    let mut cfg = DaemonPtyConfig {
         session_id: SessionId::new(),
         cols: req.cols,
         rows: req.rows,
@@ -347,6 +362,34 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
         label_source,
     };
     let session_id_for_response = cfg.session_id;
+
+    // COMPAT-58 (#58 Phase 1) — OPT-IN per-cell scoped token + UDS, gated on
+    // K2_HOOK_SCOPED (default OFF → this whole block is skipped and the env is
+    // untouched, i.e. ZERO behavior change AND zero extra work — no principal
+    // resolution / db lock on the hot spawn path). When ON we mint a per-cell
+    // scoped token (NOT the owner token) + the deterministic per-cell socket
+    // path and inject them into the child env behind the SAME K2_HOOK_TOKEN
+    // key + K2_HOOK_SOCK. The owner token is STILL accepted over TCP
+    // (dual-accept); Phase 2 (owner REJECTION) ships separately. The socket
+    // is bound + served AFTER spawn below.
+    if crate::session_token::scoped_hooks_enabled() {
+        let pane_id = session_id_for_response.to_string();
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: scoped_principal_workspace(&req.agent_name, &req.cwd),
+            agent_address: req.agent_name.clone(),
+        };
+        if let Some(pairs) =
+            crate::session_token::cell_env_pairs(&session_id_for_response, &pane_id, principal)
+        {
+            for (k, v) in pairs {
+                cfg.env.insert(k, v);
+            }
+            log_debug!(
+                "[hook-scoped] injected scoped K2_HOOK_TOKEN + K2_HOOK_SOCK for session={}",
+                session_id_for_response
+            );
+        }
+    }
 
     let __t_spawn = std::time::Instant::now();
     let session = match DaemonPtySession::spawn(cfg) {
@@ -363,20 +406,23 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
     };
     let dpty_spawn_ms = __t_spawn.elapsed().as_secs_f64() * 1000.0;
 
-    // COMPAT-58 (#58 Phase 0) — DORMANT per-cell UDS bind, gated on
-    // K2_HOOK_SCOPED (default OFF). The bind helper + accept-time peer-cred
-    // attestation exist now; the accept loop, the scoped-token mint, and
-    // injecting it into the PTY env are Phase 1. With the flag OFF this
-    // never runs → ZERO behavior change. We bind + immediately drop the
-    // listener (no accept loop in Phase 0) so the socket's filesystem +
-    // permission side effects are exercised behind the flag, nothing more.
+    // COMPAT-58 (#58 Phase 1) — OPT-IN per-cell UDS, gated on K2_HOOK_SCOPED
+    // (default OFF → never runs → ZERO behavior change). When ON we bind the
+    // cell's socket (0600 in 0700) and hand the listener to the per-cell hook
+    // server, which authenticates + serves `/hook/complete` for THIS cell
+    // (structural socket binding + scoped-token + peer-cred belt). The scoped
+    // token + this socket's path were already injected into the child env
+    // above. Bind failure logs + degrades to the TCP hook path (non-fatal).
     #[cfg(unix)]
     if crate::session_token::scoped_hooks_enabled() {
         match crate::cell_uds::bind_cell_socket(&session_id_for_response) {
-            Ok(_listener) => log_debug!(
-                "[hook-scoped] bound per-cell UDS for session={}",
-                session_id_for_response
-            ),
+            Ok(listener) => {
+                crate::cell_server::serve_cell(session_id_for_response, listener);
+                log_debug!(
+                    "[hook-scoped] bound + serving per-cell UDS for session={}",
+                    session_id_for_response
+                );
+            }
             Err(e) => log_debug!(
                 "[hook-scoped] WARN per-cell UDS bind failed for session={}: {e}",
                 session_id_for_response
@@ -650,6 +696,10 @@ fn current_dims(session: &DaemonPtySession) -> (u16, u16) {
 /// and we exit silently.
 pub fn spawn_child_exit_observer(agent_name: String, session: std::sync::Arc<DaemonPtySession>) {
     use k2_core::terminal::AlacEvent;
+    // Capture the session id BEFORE downgrading so the teardown path can
+    // revoke the scoped token + remove the per-cell socket even if every
+    // strong ref is gone by the time ChildExit lands (#58 Phase 1).
+    let session_id = session.session_id;
     let weak = std::sync::Arc::downgrade(&session);
     drop(session);
     tokio::spawn(async move {
@@ -682,6 +732,23 @@ pub fn spawn_child_exit_observer(agent_name: String, session: std::sync::Arc<Dae
                         s.mark_child_exited();
                     }
                     v2_session_map::unregister(&agent_name);
+
+                    // COMPAT-58 (#58 Phase 1) — flag-gated teardown. Revoke the
+                    // cell's scoped token (epoch bump → next call 403, no
+                    // restart) and remove its per-cell socket so the accept
+                    // loop stops. Default OFF → skipped → zero behavior change
+                    // (no hook-sessions.json write, no socket touch).
+                    #[cfg(unix)]
+                    if crate::session_token::scoped_hooks_enabled() {
+                        crate::session_token::revoke_session(&session_id);
+                        let _ = std::fs::remove_file(
+                            crate::cell_uds::cell_socket_path(&session_id),
+                        );
+                        log_debug!(
+                            "[hook-scoped] revoked scoped token + removed UDS for session={}",
+                            session_id
+                        );
+                    }
                     return;
                 }
                 Ok(_) => continue,

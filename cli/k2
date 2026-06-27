@@ -84,6 +84,25 @@ if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
     fi
 fi
 
+# COMPAT-58 (#58 Phase 1) — scoped-session disk-token INVERSION.
+# When K2_HOOK_SCOPED is on, the daemon injects a per-cell SCOPED token behind
+# $K2_HOOK_TOKEN and the per-cell socket behind $K2_HOOK_SOCK. That scoped
+# token is accepted ONLY on the per-cell UDS / the /hook/complete dual-accept
+# arm — it 403s on the owner-only loopback-TCP /cli/* routes this CLI uses for
+# msg/reply/inbox/review. So whenever $K2_HOOK_SOCK is present (the scoped-
+# session marker), we must NOT send the scoped env token over TCP: re-source
+# the DISK OWNER token (heartbeat.token) for the TCP arm instead. This is the
+# load-bearing non-stranding condition — a flag-OFF daemon rollback (UDS no
+# longer served) then leaves these verbs working over TCP with the owner
+# token rather than stranded on a worthless scoped credential. notify.sh
+# (which DOES use the UDS for /hook/complete) keeps the scoped token via its
+# own Bearer arm. The UDS arm itself remains the scoped token.
+if [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ]; then
+    if [ -r "${K2_HOME}/heartbeat.token" ]; then
+        TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+    fi
+fi
+
 # DAEMON_INSTALL_EARLY_BYPASS — `k2 daemon install` provisions the
 # standalone daemon on a FRESH headless box where no daemon is running
 # yet, so it cannot satisfy the PORT/TOKEN connection gate below (and

@@ -299,6 +299,23 @@ impl SessionTokenRegistry {
     pub fn revoke_all(&mut self) {
         self.global_epoch = self.global_epoch.wrapping_add(1);
     }
+
+    /// The SCOPED half of the `/hook/complete` dual-accept decision (and the
+    /// per-cell UDS server's auth): a presented bearer authorizes a hook for
+    /// `req_pane` iff it validates against this registry AND is bound to
+    /// EXACTLY that pane. A token scoped to cell A presenting `paneId` = cell
+    /// B → `false` (PRD §5 smoke #4). The OWNER-token arm is independent
+    /// (`ct_eq_token`) and handled by the caller — this is the scoped half
+    /// only, so it is provably DISJOINT from the owner credential.
+    pub fn scoped_hook_authorizes_pane(&self, bearer: &str, req_pane: &str) -> bool {
+        if req_pane.is_empty() {
+            return false;
+        }
+        match self.validate_hook(bearer) {
+            Some(v) => v.pane_id == req_pane,
+            None => false,
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -445,12 +462,9 @@ fn save_to_disk(reg: &SessionTokenRegistry) {
 }
 
 /// Mint via the process registry + persist. Returns the `<sid>.<secret>`
-/// PAT. (Phase 1 wires this into the spawn env; Phase 0 exposes it for the
-/// dormant per-cell prep + the smoke harness.)
-// COMPAT-58: Phase-1 wiring entry point — unused by the Phase-0 binary
-// (nothing mints while the flag's behavior is dormant). Kept as the public
-// seam the spawn path calls in Phase 1.
-#[allow(dead_code)]
+/// PAT. Phase 1 wires this into the spawn env (via [`cell_env_pairs`]).
+// COMPAT-58: remove in Phase 3 (owner-token deprecation) once the scoped
+// token is the ONLY hook credential.
 pub fn mint_session_token(
     session_id: &SessionId,
     pane_id: &str,
@@ -471,10 +485,10 @@ pub fn validate_hook(bearer: &str) -> Option<ValidatedHook> {
         .validate_hook(bearer)
 }
 
-/// Revoke one session's token via the process registry + persist.
-// COMPAT-58: Phase-1 teardown wiring (called on cell kill/teardown). Unused
-// by the Phase-0 binary; the pure logic is covered by the registry tests.
-#[allow(dead_code)]
+/// Revoke one session's token via the process registry + persist. Phase 1
+/// calls this on cell teardown/kill (the child-exit observer) so a dead
+/// cell's token 403s immediately, no daemon restart.
+// COMPAT-58: remove in Phase 3 (owner-token deprecation).
 pub fn revoke_session(session_id: &SessionId) {
     let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
     g.revoke(session_id);
@@ -486,6 +500,66 @@ pub fn revoke_all() {
     let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
     g.revoke_all();
     save_to_disk(&g);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 1 — spawn-time activation (opt-in, flag-gated)
+// ─────────────────────────────────────────────────────────────────────
+
+/// Build the per-cell env pairs injected into a spawned PTY for a given
+/// (already-minted) scoped token + socket path. **PURE** — no flag read,
+/// no disk, no minting — so the env SHAPE is unit-testable in isolation.
+///
+/// The scoped token replaces the owner token behind the SAME
+/// `K2_HOOK_TOKEN` key (the load-bearing security change: the value in the
+/// cell is now per-cell, not the daemon owner credential), and the per-cell
+/// socket path rides `K2_HOOK_SOCK` so `notify.sh` / the `k2` CLI can prefer
+/// the UDS. Both the canonical `K2_*` and the legacy `K2SO_*` aliases are
+/// emitted (0.40 rebrand dual-emit; `COMPAT-58` for the eventual cleanup).
+pub fn scoped_cell_env_for_token(
+    sock_path: &str,
+    scoped_token: &str,
+    pane_id: &str,
+) -> Vec<(String, String)> {
+    vec![
+        // Scoped per-cell token (NOT the owner token) behind the same key
+        // the CLI + notify.sh already read.
+        ("K2_HOOK_TOKEN".to_string(), scoped_token.to_string()),
+        ("K2SO_HOOK_TOKEN".to_string(), scoped_token.to_string()),
+        // Per-cell UDS path — the preferred (Bearer) hook channel.
+        ("K2_HOOK_SOCK".to_string(), sock_path.to_string()),
+        ("K2SO_HOOK_SOCK".to_string(), sock_path.to_string()),
+        // Pane/tab identity the hook script echoes back as `paneId` — the
+        // dual-accept arm + the per-cell server match it against the token.
+        ("K2_PANE_ID".to_string(), pane_id.to_string()),
+        ("K2SO_PANE_ID".to_string(), pane_id.to_string()),
+        ("K2_TAB_ID".to_string(), pane_id.to_string()),
+        ("K2SO_TAB_ID".to_string(), pane_id.to_string()),
+    ]
+}
+
+/// Phase 1 spawn entry point: when scoped hooks are ON, mint a per-cell
+/// scoped token (process registry + disk) and return the env pairs to inject
+/// into the child PTY. **Returns `None` when the flag is OFF — the default —
+/// so the caller injects NOTHING and behavior is byte-identical to Phase 0.**
+///
+/// The minted token is bound to `(session_id, pane_id, principal)`; the
+/// socket path is the deterministic [`crate::cell_uds::cell_socket_path`].
+pub fn cell_env_pairs(
+    session_id: &SessionId,
+    pane_id: &str,
+    principal: HookPrincipal,
+) -> Option<Vec<(String, String)>> {
+    if !scoped_hooks_enabled() {
+        return None;
+    }
+    let token = mint_session_token(session_id, pane_id, principal);
+    let sock = crate::cell_uds::cell_socket_path(session_id);
+    Some(scoped_cell_env_for_token(
+        &sock.to_string_lossy(),
+        &token,
+        pane_id,
+    ))
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -725,6 +799,91 @@ mod tests {
         assert!(
             !crate::routes::http::token_ok(&q, owner_token),
             "a scoped token is not a connect-user session either → fails token_ok",
+        );
+    }
+
+    // ── Phase 1: spawn-time activation (flag-OFF no-op + env shape) ──
+
+    #[test]
+    fn cell_env_pairs_returns_none_when_flag_off() {
+        // THE load-bearing Phase-1 default-OFF no-op: with K2_HOOK_SCOPED
+        // unset, the spawn path mints NOTHING and injects NO env — behavior
+        // is byte-identical to Phase 0. (Only reads the env var; no disk,
+        // no registry mutation, so it's safe regardless of test ordering.)
+        std::env::remove_var("K2_HOOK_SCOPED");
+        let sid = SessionId::new();
+        assert!(
+            cell_env_pairs(&sid, &sid.to_string(), principal()).is_none(),
+            "flag OFF (default) MUST inject no scoped env (zero behavior change)",
+        );
+    }
+
+    #[test]
+    fn scoped_cell_env_for_token_carries_token_behind_hook_token_and_sock() {
+        // Phase-1 env SHAPE (pure builder — no flag, no disk): the scoped
+        // token rides the SAME K2_HOOK_TOKEN key (now per-cell, not owner)
+        // and the per-cell socket rides K2_HOOK_SOCK, with K2SO_* aliases.
+        let sid = SessionId::new();
+        let pane = sid.to_string();
+        let pairs = scoped_cell_env_for_token("/run/cells/x.sock", "sid.secretverifier", &pane);
+        let map: std::collections::HashMap<_, _> = pairs.into_iter().collect();
+
+        // The scoped token REPLACES the owner token behind the same key.
+        assert_eq!(map.get("K2_HOOK_TOKEN").map(String::as_str), Some("sid.secretverifier"));
+        assert_eq!(map.get("K2SO_HOOK_TOKEN").map(String::as_str), Some("sid.secretverifier"));
+        // The per-cell UDS path is exposed so the CLI / notify.sh prefer it.
+        assert_eq!(map.get("K2_HOOK_SOCK").map(String::as_str), Some("/run/cells/x.sock"));
+        assert_eq!(map.get("K2SO_HOOK_SOCK").map(String::as_str), Some("/run/cells/x.sock"));
+        // Pane/tab identity the hook script echoes back as paneId.
+        assert_eq!(map.get("K2_PANE_ID").map(String::as_str), Some(pane.as_str()));
+        assert_eq!(map.get("K2SO_TAB_ID").map(String::as_str), Some(pane.as_str()));
+    }
+
+    // ── Phase 1: dual-accept + pane scoping (flag-ON semantics) ──────
+
+    #[test]
+    fn dual_accept_owner_token_independent_of_scoped_token() {
+        // The OWNER arm of /hook/complete is `ct_eq_token` and is NEVER
+        // touched by the scoped machinery — so the owner token keeps working
+        // over TCP whether or not the flag is on (Phase 1 is dual-accept;
+        // Phase 2 — owner REJECTION — is deliberately NOT implemented here).
+        let owner = "owner-fixed-hex-token";
+        let mut reg = SessionTokenRegistry::new();
+        let sid = SessionId::new();
+        let scoped = reg.mint(&sid, &sid.to_string(), principal());
+
+        // Owner token always passes its own constant-time compare.
+        assert!(crate::routes::http::ct_eq_token(owner, owner));
+        // …and the scoped token is provably NOT the owner token.
+        assert_ne!(scoped, owner);
+        assert!(!crate::routes::http::ct_eq_token(&scoped, owner));
+    }
+
+    #[test]
+    fn scoped_hook_authorizes_only_its_own_pane() {
+        // PRD §5 smoke #3/#4: a scoped token authorizes ONLY the exact pane
+        // it was minted for; the same token with a different paneId → false.
+        let mut reg = SessionTokenRegistry::new();
+        let sid = SessionId::new();
+        let token = reg.mint(&sid, "pane-A", principal());
+
+        assert!(
+            reg.scoped_hook_authorizes_pane(&token, "pane-A"),
+            "correct pane must authorize",
+        );
+        assert!(
+            !reg.scoped_hook_authorizes_pane(&token, "pane-B"),
+            "a different pane MUST be refused (scoping enforced)",
+        );
+        assert!(
+            !reg.scoped_hook_authorizes_pane(&token, ""),
+            "an empty paneId never authorizes",
+        );
+        // After revoke the token authorizes NO pane.
+        reg.revoke(&sid);
+        assert!(
+            !reg.scoped_hook_authorizes_pane(&token, "pane-A"),
+            "a revoked token authorizes no pane",
         );
     }
 

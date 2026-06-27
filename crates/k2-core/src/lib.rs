@@ -69,6 +69,11 @@ pub mod db_ops;
 // `#[deprecated]` and exist only for the deprecation window.
 pub mod deprecated;
 pub mod editors;
+// Cross-Server Agent Comms (federation) — Phase 1: internal cryptographic +
+// trust-store primitives ONLY (TOFU peer store + signed-envelope seal/open).
+// Opens NO network trust boundary; inert until later phases wire ingress.
+// Gated behind the default-OFF `K2_FEDERATION` flag (see `federation::enabled`).
+pub mod federation;
 pub mod fs_abstract;
 pub mod fs_atomic;
 pub mod fs_commands;

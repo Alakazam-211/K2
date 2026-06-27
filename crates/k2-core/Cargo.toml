@@ -164,6 +164,12 @@ url = "2"
 rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 rustls-pemfile = "2"
+# Cross-Server Agent Comms (federation) Phase 1 — ECDSA P-256 sign/verify of
+# signed envelopes against the EXISTING daemon tunnel keypair. aws-lc-rs is
+# ALREADY in the lock tree (rustls/rcgen `aws_lc_rs` feature), so this pins it
+# as a direct dep for `signature::{EcdsaKeyPair, UnparsedPublicKey}` without
+# adding a new crate. No new key material — reuses `tunnel::tls` identity.
+aws-lc-rs = "1"
 # K2 Connect E2E cert broker (PRD §6): parse the installed leaf cert's
 # `notAfter` so the daemon knows when to renew (~30d pre-expiry). rcgen can
 # build/sign certs but not read an already-issued chain's validity, so we

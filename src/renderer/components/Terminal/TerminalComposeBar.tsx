@@ -95,7 +95,7 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
   // One condensed row — just the textarea.
   return (
     <div
-      className="flex flex-shrink-0 items-start gap-1 border-t border-[var(--color-border)] bg-[#111] px-2 py-1.5"
+      className="flex flex-shrink-0 items-start gap-1 border-t border-[var(--color-border)] bg-[#111] px-2 pt-1.5 pb-2.5"
       data-compose-bar=""
       data-session-id={sessionId}
     >

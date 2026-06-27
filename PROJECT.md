@@ -1,10 +1,10 @@
-# K2SO — Project Context (workspace-specific)
+# K2 — Project Context (workspace-specific)
 
-This file is for **this workspace's** specific architectural rules — content here gets adopted into `SKILL.md` on regen via the SOURCE region mechanism (per `crates/k2so-core/src/skills/version.rs` docs). It does NOT ship to other K2 users.
+This file is for **this workspace's** specific architectural rules — content here gets adopted into `SKILL.md` on regen via the SOURCE region mechanism (per `crates/k2-core/src/skills/version.rs` docs). It does NOT ship to other K2 users.
 
 ## Foundational rule: the thin client is connection-only
 
-**`src-tauri/` is NOT where features belong.** It is connection points + OS integration only. Features live in `crates/k2so-core` (shared library) or `crates/k2so-daemon` (daemon-side).
+**`src-tauri/` is NOT where features belong.** It is connection points + OS integration only. Features live in `crates/k2-core` (shared library) or `crates/k2-daemon` (daemon-side).
 
 ### Why
 
@@ -18,14 +18,14 @@ K2 Connect (the paid hosted tier launching at 0.40.0) lets a thin client connect
 - Hook script generation (writes user's `~/.claude`, `~/.cursor`, `~/.config/gemini` configs — host file I/O)
 - Window/webview hosting
 
-**🔴 DOES NOT belong in `src-tauri/`** (move to `k2so-core` or `k2so-daemon`):
+**🔴 DOES NOT belong in `src-tauri/`** (move to `k2-core` or `k2-daemon`):
 - HTTP servers, route dispatchers
 - Database access (the daemon owns `db::shared()`)
 - Business decisions, validation, authorization
 - Workspace state management
 - Migration helpers (run from daemon startup, not Tauri startup)
 - Template generation
-- Anything duplicating `k2so-core` logic
+- Anything duplicating `k2-core` logic
 
 ### The K2 Connect litmus test
 
@@ -37,14 +37,14 @@ Before adding code to `src-tauri/`, ask: **"If a user's daemon were running on A
 - ❌ SQLite queries in Tauri commands → DB lives where the daemon is
 - ❌ Migration walker at Tauri startup → migrations are the daemon's job
 
-If the answer is NO, the code belongs in `k2so-core` or `k2so-daemon`, not `src-tauri/`.
+If the answer is NO, the code belongs in `k2-core` or `k2-daemon`, not `src-tauri/`.
 
 ### Current state (2026-05-25)
 
 `src-tauri/src/` is 8,053 lines — up from ~3,200 pre-refactor. Audit subagent confirmed most growth is LEGITIMATE OS integration (hooks, launchctl, menu, tray, permissions). The genuine K2-Connect-blocker bloat is concentrated in:
 
-1. `commands/daemon.rs` (403 lines) — launchctl wrappers; should expose `DaemonPlist` generation via `k2so-core::daemon_lifecycle` so K2 Connect can call the same code
-2. `commands/k2so_agents.rs` (1,749 lines) — has dead-code shims (lines ~577-623) and one `teardown_workspace_harness_files` helper that should move to `k2so-core::workspace`
+1. `commands/daemon.rs` (403 lines) — launchctl wrappers; should expose `DaemonPlist` generation via `k2-core::daemon_lifecycle` so K2 Connect can call the same code
+2. `commands/k2so_agents.rs` (1,749 lines) — has dead-code shims (lines ~577-623) and one `teardown_workspace_harness_files` helper that should move to `k2-core::workspace`
 3. `lib.rs` (1,071 lines) — legacy agent-type migration at lines 325-380 runs only on Tauri startup; should move to daemon first-boot so K2 Connect's headless flow also migrates
 
 Slim-down tracked as task #574. Target: ~7,900 lines after the immediate cleanup; ~3,500 once `daemon_lifecycle` is extracted.
@@ -53,7 +53,7 @@ Slim-down tracked as task #574. Target: ~7,900 lines after the immediate cleanup
 
 - Reject anything where a Tauri command is >10 lines and not OS-integration-specific
 - Reject new HTTP servers, route handlers, state machines in `src-tauri/`
-- Reject embedded business logic — push to `k2so-core::*` and have Tauri call it
+- Reject embedded business logic — push to `k2-core::*` and have Tauri call it
 
 This rule trumps convenience. If it "feels easier" to add logic to `src-tauri/` because it needs OS access, check whether the daemon could do it instead (it usually can — daemons spawn processes, write to keychain, etc.).
 

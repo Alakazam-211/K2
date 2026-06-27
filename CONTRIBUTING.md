@@ -7,7 +7,7 @@ Thanks for your interest in contributing. This guide covers development setup, p
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (stable toolchain)
-- [Node.js](https://nodejs.org/) 18+ or [Bun](https://bun.sh/)
+- [Bun](https://bun.sh/) (or [Node.js](https://nodejs.org/) 18+)
 - cmake (required for llama.cpp compilation)
 - Xcode Command Line Tools (macOS): `xcode-select --install`
 
@@ -16,7 +16,7 @@ Thanks for your interest in contributing. This guide covers development setup, p
 ```bash
 git clone https://github.com/Alakazam-211/K2.git
 cd K2
-npm install
+bun install
 cargo tauri dev
 ```
 
@@ -25,8 +25,8 @@ This starts Vite's dev server (hot reload) and compiles the Rust backend. The fi
 ### Useful Commands
 
 ```bash
-npm run vite:dev       # Frontend only (no Tauri)
-npm run typecheck      # TypeScript type checking
+bun run vite:dev       # Frontend only (no Tauri)
+bun run typecheck      # TypeScript type checking
 cargo fmt              # Format Rust code
 cargo clippy           # Lint Rust code
 cargo test -p k2-core  # Run Rust tests
@@ -163,6 +163,6 @@ Example existing primitives: `workspace_split_pane`, `workspace_close_pane`, `wo
 
 1. Fork the repo and create a feature branch from `main`.
 2. Make your changes following the code style guidelines above.
-3. Run `cargo fmt`, `cargo clippy`, and `npm run typecheck` before pushing.
+3. Run `cargo fmt`, `cargo clippy`, and `bun run typecheck` before pushing.
 4. Open a PR against `main` with a clear description of what changed and why.
 5. Keep PRs focused -- one feature or fix per PR.

@@ -71,8 +71,15 @@ src-tauri/_broadcast/
 src-tauri/_orphan/
 
 # Daemon scratch dirs (empty in practice, leftover from older flows).
-crates/k2so-daemon/canonical-ws/
-crates/k2so-daemon/k2so-ws/
+crates/k2-daemon/canonical-ws/
+crates/k2-daemon/k2so-ws/
 
 # Personal editor config (Aider CLI). Not project-wide.
 .aider.conf.yml
+
+# Tauri-generated capability schemas — regenerated on every build from the
+# hand-authored source in src-tauri/capabilities/. Not source of truth.
+src-tauri/gen/schemas/
+
+# Stray build log (was committed by accident).
+build-daemon-warnings.log

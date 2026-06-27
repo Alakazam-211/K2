@@ -1,12 +1,5 @@
 <p align="center">
-  <img src="resources/icon.png" width="128" height="128" alt="K2">
-</p>
-
-<h1 align="center">K2</h1>
-
-<p align="center">
-  <strong>The workspace where your AI agents run</strong><br>
-  <sub>by Alakazam Labs</sub>
+  <img src="docs/hero.png" width="100%" alt="K2 by Alakazam Labs — The workspace where your AI agents run">
 </p>
 
 <p align="center">
@@ -183,14 +176,14 @@ Get the latest release from the [GitHub Releases](https://github.com/Alakazam-21
 
 **Prerequisites:**
 - [Rust](https://rustup.rs/) (stable)
-- [Node.js](https://nodejs.org/) 18+ (or [Bun](https://bun.sh/))
+- [Bun](https://bun.sh/) (or [Node.js](https://nodejs.org/) 18+)
 - cmake (for llama.cpp compilation)
 - Xcode Command Line Tools (macOS)
 
 ```bash
 git clone https://github.com/Alakazam-211/K2.git
 cd K2
-npm install
+bun install
 cargo tauri dev
 ```
 

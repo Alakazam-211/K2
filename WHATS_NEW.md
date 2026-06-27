@@ -3,6 +3,20 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.14 — Cross-server agent messaging (experimental, opt-in)
+
+- **Your agents on different K2 machines can message each other.** Pair two of
+  your own K2 servers and an agent on one can send a message into an agent's
+  **inbox** on the other — over the same end-to-end-encrypted path as K2 Connect
+  (the relay only ever sees ciphertext; each message is signed and verified
+  against the peer's pinned key). As an owner/admin you can see a paired server's
+  agents in **Workspace Connections** and address them directly.
+- **Off by default, for self-hosted fleets.** This is early and **opt-in** —
+  enable it per-daemon (the `K2_FEDERATION` flag) on the machines you want
+  federated. Pairing is owner-confirmed. Cross-server messages are delivered to
+  the inbox and **never auto-run** — a remote message can't drive or spawn a
+  session on its own.
+
 ## 0.40.13 — Per-workspace remote access + agent reliability + the federation groundwork
 
 - **Choose which workspaces accept remote messages.** A new **Workspace

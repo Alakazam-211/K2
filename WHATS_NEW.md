@@ -3,6 +3,22 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.15 — Cross-server connections + talk reliability
+
+- **`k2 talk` reliably delivers again.** A shell-parsing bug could abort a
+  `talk` send right before delivery on some systems — fixed, so agent-to-agent
+  messages land every time.
+- **The message composer no longer disappears on remote machines.** When you're
+  driving a connected K2 server, the compose bar stays available; authorization
+  is enforced by the daemon either way.
+- **Federation, made operable (experimental, opt-in).** You can now turn
+  cross-server agent messaging on **per server** from **Settings → K2 Connect →
+  Enable federation** (no config files), and connect a *specific* remote agent
+  to a workspace with `k2 connections add ai@your-server.k2.dev`. Agents can only
+  message a remote agent that's an explicit **connection** — same-server agents
+  still reach each other freely; cross-server requires the connection. Still
+  early and off by default.
+
 ## 0.40.14 — Cross-server agent messaging (experimental, opt-in)
 
 - **Your agents on different K2 machines can message each other.** Pair two of

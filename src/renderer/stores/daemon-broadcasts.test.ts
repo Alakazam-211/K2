@@ -42,6 +42,7 @@ const ev = vi.hoisted(() => {
   type Fn = (...a: unknown[]) => void
   const reg = {
     llm: [] as Fn[],
+    projects: [] as Fn[],
     agent: [] as Fn[],
     tunnel: [] as Fn[],
     appHello: [] as Fn[],
@@ -56,6 +57,10 @@ vi.mock('@/stores/session-events', () => ({
   onLlmStatusChanged: vi.fn((fn: (...a: unknown[]) => void) => {
     ev.reg.llm.push(fn)
     return () => void (ev.reg.llm = ev.reg.llm.filter((f) => f !== fn))
+  }),
+  onProjectsChanged: vi.fn((fn: (...a: unknown[]) => void) => {
+    ev.reg.projects.push(fn)
+    return () => void (ev.reg.projects = ev.reg.projects.filter((f) => f !== fn))
   }),
   onAgentStatusChanged: vi.fn((fn: (...a: unknown[]) => void) => {
     ev.reg.agent.push(fn)

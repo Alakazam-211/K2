@@ -6480,11 +6480,14 @@ cmd_update_v2() {
 # DARK by default: the daemon 404s every /cli/federation/* route unless it
 # was started with K2_FEDERATION=1. SSOT: prd-cross-server-agent-comms.md.
 #
+#   k2 fed pubkey [--pem|--fingerprint|--json]   export THIS box's SPKI pubkey
 #   k2 fed send <peer>::<workspace>::<agent> "message"
 #   k2 fed pair-request --pubkey <spki.pem> [--label L] [--subdomain S]
 #   k2 fed confirm <fingerprint> <sas-code>
 #
-# send + confirm are OWNER-gated (they need ~/.k2/daemon.token).
+# send + confirm are OWNER-gated (they need ~/.k2/daemon.token). pubkey is
+# pure-CLI (reads the on-box tunnel key) so it works even when federation is
+# dark — you need your key to bootstrap the very first pairing.
 cmd_fed() {
     local owner_token=""
     local _tok_file="$K2_HOME/daemon.token"
@@ -6554,9 +6557,37 @@ cmd_fed() {
                 --data-raw "$body" 2>/dev/null
             echo
             ;;
+        pubkey)
+            # Export THIS box's federation identity — the SPKI public key PEM a
+            # peer pins via `k2 fed pair-request --pubkey`. Pure-CLI: derive it
+            # from the on-box ECDSA P-256 tunnel key with openssl, so it works
+            # even when K2_FEDERATION is off (you need the key to START pairing).
+            # fingerprint = sha256(SPKI DER) hex — matches the daemon's
+            # federation::peers::fingerprint_of_spki_der.
+            local key_file="$K2_HOME/tunnel-key.pem"
+            local want="${1:-}"
+            if [ ! -f "$key_file" ]; then
+                echo "k2 fed pubkey: no federation key at $key_file (start the daemon once to generate it)" >&2
+                exit 1
+            fi
+            if ! command -v openssl >/dev/null 2>&1; then
+                echo "k2 fed pubkey: openssl not found on PATH" >&2
+                exit 1
+            fi
+            local pem fp
+            pem=$(openssl pkey -in "$key_file" -pubout 2>/dev/null) || {
+                echo "k2 fed pubkey: failed to derive SPKI public key from $key_file" >&2; exit 1; }
+            fp=$(openssl pkey -in "$key_file" -pubout -outform DER 2>/dev/null | shasum -a 256 | awk '{print $1}')
+            case "$want" in
+                --fingerprint|--fp) printf '%s\n' "$fp" ;;
+                --json) python3 -c 'import json,sys; print(json.dumps({"public_key_pem":sys.argv[1],"fingerprint":sys.argv[2]}))' "$pem" "$fp" ;;
+                ""|--pem) printf '%s\n' "$pem"; printf '# fingerprint: %s\n' "$fp" >&2 ;;
+                *) echo "usage: k2 fed pubkey [--pem|--fingerprint|--json]" >&2; exit 2 ;;
+            esac
+            ;;
         *)
-            echo "usage: k2 fed <send|pair-request|confirm> ..." >&2
-            echo "  (cross-server federation is dark unless the daemon ran with K2_FEDERATION=1)" >&2
+            echo "usage: k2 fed <pubkey|send|pair-request|confirm> ..." >&2
+            echo "  (send/pair-request/confirm need K2_FEDERATION=1 on the daemon; pubkey works anytime)" >&2
             exit 2
             ;;
     esac

@@ -1,0 +1,19 @@
+-- #67 — per-workspace remote-instruct opt-in.
+--
+-- Refines the composer's connect-user gate (Composer 1c) from an
+-- APP-LEVEL flag (`~/.k2/settings.json` `allowRemoteInstruct`) to a
+-- PER-WORKSPACE opt-in. The owner enables remote instruction for
+-- SPECIFIC workspaces; default OFF, fail-closed.
+--
+-- The daemon gate (`authorize_send_message`) authorizes a connect-user
+-- (role >= Member) IFF the target session's workspace is opted in.
+-- Back-compat semantics: a workspace is opted in if its per-workspace
+-- flag is 1 OR the app-level `allowRemoteInstruct` is on — i.e. the
+-- old app-level flag stays a GLOBAL MASTER so existing deployments that
+-- enabled it keep working. The owner token is ALWAYS allowed regardless.
+--
+-- Default 0 (OFF): the composer instructs an agent running
+-- `--dangerously-skip-permissions` (= full shell + filesystem RCE), so
+-- a workspace must never accept connect-user instructions until the
+-- owner explicitly opts it in. Existing rows backfill to 0.
+ALTER TABLE projects ADD COLUMN allow_remote_instruct INTEGER NOT NULL DEFAULT 0;

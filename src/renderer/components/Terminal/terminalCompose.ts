@@ -64,22 +64,26 @@ export function shouldSendOnKey(e: {
 }
 
 /**
- * Composer 1c (D4) — renderer-hide predicate. Mirrors the DAEMON's
- * capability gate (`authorize_send_message`): the composer is permitted iff
+ * Composer 1c (D4) + #67 per-workspace — renderer-hide predicate. Mirrors
+ * the DAEMON's capability gate (`authorize_send_message` +
+ * `remote_instruct_opt_in_for_session`): the composer is permitted iff
  *   • the active host is LOCAL (the owner is always allowed), OR
- *   • the active host opted into remote instruction
- *     (`allowRemoteInstruct`, default OFF).
+ *   • the app-level `allowRemoteInstruct` master is ON (global, back-compat), OR
+ *   • the ACTIVE WORKSPACE opted into remote instruction
+ *     (`perWorkspaceAllow`, default OFF).
  *
  * This is DEFENSE-IN-DEPTH only — the daemon rejects an unauthorized send
- * with a 403 regardless of what the renderer shows. A connect-user's role
- * is never below Member (Member is the floor), so the renderer needs no
- * role input; the daemon enforces the `>= Member` floor and a future
- * sub-Member role slots in there. Pure + exported so the mapping is
- * unit-testable without mounting the component.
+ * with a 403 regardless of what the renderer shows, and enforces the
+ * decision PER-WORKSPACE server-side. A connect-user's role is never below
+ * Member (Member is the floor), so the renderer needs no role input; the
+ * daemon enforces the `>= Member` floor and a future sub-Member role slots
+ * in there. Pure + exported so the mapping is unit-testable without
+ * mounting the component.
  */
 export function composerPermitted(input: {
   isLocalHost: boolean
   allowRemoteInstruct: boolean
+  perWorkspaceAllow?: boolean
 }): boolean {
-  return input.isLocalHost || input.allowRemoteInstruct
+  return input.isLocalHost || input.allowRemoteInstruct || input.perWorkspaceAllow === true
 }

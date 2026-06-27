@@ -31,9 +31,21 @@ pub fn update_project_setting(
         "tier_id",
         // 0.34.0 Session Stream opt-in (Phase 2). Values: 'on' | 'off'.
         "use_session_stream",
+        // #67 — per-workspace remote-instruct opt-in. Values: '1' | '0'
+        // (default 0/OFF, fail-closed). Gates the composer's connect-user
+        // path for THIS workspace; see `remote_instruct_allowed_for_path`.
+        "allow_remote_instruct",
     ];
     if !allowed.contains(&field) {
         return Err(format!("Unknown setting: {}", field));
+    }
+    // Validate the per-workspace remote-instruct flag so a typo can't
+    // silently leave a security gate in an undefined state. Stored as a
+    // 0/1 int column (migration 0054).
+    if field == "allow_remote_instruct" && value != "0" && value != "1" {
+        return Err(format!(
+            "allow_remote_instruct must be '0' or '1', got {value:?}"
+        ));
     }
     // Validate value for the new enum-like setting so a typo doesn't
     // silently leave a project in a broken half-state. Existing fields
@@ -91,7 +103,7 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
         "SELECT agent_mode, worktree_mode, \
                 (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
                 agent_enabled, \
-                pinned, name, tier_id, use_session_stream \
+                pinned, name, tier_id, use_session_stream, allow_remote_instruct \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| {
@@ -111,6 +123,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "name": row.get::<_, String>(5).unwrap_or_default(),
                 "stateId": row.get::<_, Option<String>>(6).unwrap_or(None),
                 "useSessionStream": uss_raw == "on",
+                // #67 — per-workspace remote-instruct opt-in (default 0/OFF).
+                "allowRemoteInstruct": row.get::<_, i64>(8).unwrap_or(0) == 1,
             }))
         },
     )
@@ -185,6 +199,42 @@ pub fn get_use_session_stream(project_path: &str) -> bool {
     )
     .map(|v| v.as_deref() == Some("on"))
     .unwrap_or(false)
+}
+
+/// #67 — read the PER-WORKSPACE remote-instruct opt-in for `project_path`.
+/// Returns `false` (fail-closed) when the project isn't registered or the
+/// column reads NULL. Does NOT consider the app-level master flag — use
+/// [`remote_instruct_allowed_for_path`] for the effective gate decision.
+pub fn get_allow_remote_instruct(project_path: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT allow_remote_instruct FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// #67 — the EFFECTIVE remote-instruct gate decision for `project_path`.
+///
+/// A workspace is opted in iff its per-workspace flag is set OR the
+/// app-level `allowRemoteInstruct` master is on. The app-level flag is
+/// kept as a GLOBAL MASTER for back-compat: deployments that enabled the
+/// old app-level (0.40.12) flag keep working — every workspace stays
+/// opted in — while the default (both OFF) denies, fail-closed.
+///
+/// This gates ONLY the connect-user path; the owner token is always
+/// allowed by [`crate::routes`]'s `authorize_send_message` regardless.
+/// Fail-closed: an unknown/unregistered workspace + app-level off → false.
+pub fn remote_instruct_allowed_for_path(project_path: &str) -> bool {
+    // App-level master switch opts in ALL workspaces (back-compat).
+    if crate::app_settings::load().allow_remote_instruct {
+        return true;
+    }
+    // Otherwise consult the per-workspace flag.
+    get_allow_remote_instruct(project_path)
 }
 
 #[cfg(test)]
@@ -297,6 +347,95 @@ mod tests {
         let settings = get_project_settings(&path).expect("read");
         assert_eq!(settings["useSessionStream"], false);
         assert!(!get_use_session_stream(&path));
+    }
+
+    // ── #67 per-workspace remote-instruct opt-in ───────────────────
+
+    /// A fresh workspace row defaults to remote-instruct OFF (fail-closed),
+    /// surfaces as `allowRemoteInstruct: false` in the settings JSON, and
+    /// round-trips through `update_project_setting`.
+    #[test]
+    fn allow_remote_instruct_defaults_off_and_round_trips() {
+        let path = unique_path("remote-instruct");
+        let _pid = insert_project(&path);
+
+        // Fresh row: the security default is OFF.
+        let settings = get_project_settings(&path).expect("read default");
+        assert_eq!(settings["allowRemoteInstruct"], false);
+        assert!(!get_allow_remote_instruct(&path));
+
+        // Opt in → reads true.
+        update_project_setting(&path, "allow_remote_instruct", "1").expect("opt in");
+        assert!(get_allow_remote_instruct(&path));
+        let settings = get_project_settings(&path).expect("read on");
+        assert_eq!(settings["allowRemoteInstruct"], true);
+
+        // Opt back out → reads false.
+        update_project_setting(&path, "allow_remote_instruct", "0").expect("opt out");
+        assert!(!get_allow_remote_instruct(&path));
+    }
+
+    /// A non-'0'/'1' value must be rejected loudly so a typo can't leave
+    /// the security gate in an undefined state.
+    #[test]
+    fn allow_remote_instruct_rejects_bad_value() {
+        let path = unique_path("remote-instruct-bad");
+        let _pid = insert_project(&path);
+        let err = update_project_setting(&path, "allow_remote_instruct", "true")
+            .expect_err("non 0/1 value must be rejected");
+        assert!(
+            err.contains("allow_remote_instruct"),
+            "error should reference the field, got {err:?}",
+        );
+    }
+
+    /// An unregistered workspace path fails CLOSED — `false`, never panics.
+    #[test]
+    fn get_allow_remote_instruct_fails_closed_for_unknown_path() {
+        let path = unique_path("remote-instruct-missing");
+        // No insert — the path doesn't exist in `projects`.
+        assert!(!get_allow_remote_instruct(&path));
+    }
+
+    /// The EFFECTIVE gate decision (`remote_instruct_allowed_for_path`):
+    ///   - both flags OFF (default)            → deny (fail-closed)
+    ///   - per-workspace ON, app-level OFF     → allow
+    ///   - per-workspace OFF, app-level ON     → allow (global master, back-compat)
+    /// HOME is pointed at a tempdir so the app-level flag in
+    /// `~/.k2/settings.json` is isolated; the per-workspace flag lives in
+    /// the shared in-memory DB.
+    #[test]
+    fn remote_instruct_effective_or_semantics() {
+        let _g = HOME_TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        let path = unique_path("remote-instruct-effective");
+        let _pid = insert_project(&path);
+
+        // Both OFF → deny.
+        crate::app_settings::update(serde_json::json!({ "allowRemoteInstruct": false }))
+            .expect("app off");
+        update_project_setting(&path, "allow_remote_instruct", "0").expect("ws off");
+        assert!(
+            !remote_instruct_allowed_for_path(&path),
+            "both flags off must deny (fail-closed)",
+        );
+
+        // Per-workspace ON, app-level OFF → allow.
+        update_project_setting(&path, "allow_remote_instruct", "1").expect("ws on");
+        assert!(
+            remote_instruct_allowed_for_path(&path),
+            "per-workspace opt-in must allow even with app-level off",
+        );
+
+        // Per-workspace OFF, app-level ON → allow (global master).
+        update_project_setting(&path, "allow_remote_instruct", "0").expect("ws off again");
+        crate::app_settings::update(serde_json::json!({ "allowRemoteInstruct": true }))
+            .expect("app on");
+        assert!(
+            remote_instruct_allowed_for_path(&path),
+            "app-level master must opt in every workspace (back-compat)",
+        );
     }
 
     // ── app_settings JSON accessors ────────────────────────────────

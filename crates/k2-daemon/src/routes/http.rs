@@ -507,11 +507,15 @@ pub(crate) enum SendMessageAuth {
     Denied,
 }
 
-/// Decide whether a `send-message` request is authorized (Composer 1c, D4).
+/// Decide whether a `send-message` request is authorized (Composer 1c, D4;
+/// #67 per-workspace refinement).
 ///
-/// `remote_instruct_opt_in` is the host's `app_settings.allow_remote_instruct`
-/// flag (default OFF); it gates ONLY the connect-user path. The owner token
-/// is allowed regardless. See [`SendMessageAuth`].
+/// `remote_instruct_opt_in` is the EFFECTIVE opt-in for the TARGET
+/// workspace (default OFF): the per-workspace `projects.allow_remote_instruct`
+/// flag OR the app-level `allowRemoteInstruct` master. The dispatcher
+/// computes it via `remote_instruct_opt_in_for_session` before calling
+/// here. It gates ONLY the connect-user path; the owner token is allowed
+/// regardless. See [`SendMessageAuth`].
 pub(crate) fn authorize_send_message(
     query: &str,
     owner_token: &str,
@@ -1009,12 +1013,19 @@ mod tests {
         });
     }
 
-    // ── authorize_send_message: Composer 1c capability gate (D4) ────────
+    // ── authorize_send_message: Composer 1c capability gate (D4; #67) ───
     //
     // The load-bearing security gate for the send-message route. The owner
-    // token is ALWAYS allowed; a connect-user is allowed ONLY when the host
-    // opted in (`allow_remote_instruct`) AND role >= Member; everything else
-    // is Denied (→ drain-then-403). These assertions fail LOUDLY.
+    // token is ALWAYS allowed; a connect-user is allowed ONLY when the
+    // target workspace is opted in AND role >= Member; everything else is
+    // Denied (→ drain-then-403). The `opt_in` bool here is the EFFECTIVE
+    // per-workspace decision the dispatcher computes
+    // (`remote_instruct_opt_in_for_session` = per-workspace flag OR
+    // app-level master): `false` models "workspace NOT opted in, even with
+    // the app-level master off"; `true` models "workspace opted in" (via
+    // either the per-workspace flag or the global master). The OR-derivation
+    // itself is unit-tested in `k2_core::workspace::settings`. These
+    // assertions fail LOUDLY.
 
     #[test]
     fn authorize_send_message_owner_always_allowed() {
@@ -1048,9 +1059,11 @@ mod tests {
     }
 
     #[test]
-    fn authorize_send_message_connect_user_blocked_when_opt_in_off() {
-        // The whole point of the safe default: a fully-valid connect-user
-        // (role >= Member) is STILL Denied while the host opt-in is OFF.
+    fn authorize_send_message_connect_user_blocked_when_workspace_not_opted_in() {
+        // The whole point of the safe default (#67): a fully-valid
+        // connect-user (role >= Member) is STILL Denied when the TARGET
+        // workspace is not opted in — i.e. its per-workspace flag is off AND
+        // the app-level master is off (effective opt_in == false).
         with_temp_home(|| {
             let owner = "owner-token-xyz";
             k2_core::connect_users::add_user("member_user", "password123")
@@ -1066,9 +1079,11 @@ mod tests {
     }
 
     #[test]
-    fn authorize_send_message_connect_user_allowed_when_opt_in_on() {
-        // With the host opted in, a Member connect-user is allowed and the
-        // resolved `from` is THEIR username (D3 — never the body).
+    fn authorize_send_message_connect_user_allowed_when_workspace_opted_in() {
+        // With the target workspace opted in (#67 — effective opt_in true,
+        // via the per-workspace flag or the app-level master), a Member
+        // connect-user is allowed and the resolved `from` is THEIR username
+        // (D3 — never the body).
         with_temp_home(|| {
             let owner = "owner-token-xyz";
             k2_core::connect_users::add_user("member_user", "password123")

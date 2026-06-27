@@ -28,6 +28,42 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
+/// #67 — resolve the EFFECTIVE remote-instruct opt-in for the workspace
+/// that owns the live PTY `session_id`.
+///
+/// Maps `session_id` → live session → its spawn cwd → the matching
+/// `projects.path` row's per-workspace flag, OR'd with the app-level
+/// master (`remote_instruct_allowed_for_path`). This is the value fed to
+/// [`super::http::authorize_send_message`]; it gates ONLY the connect-user
+/// path (the owner token is always allowed).
+///
+/// Fail-CLOSED: an unparsable/unknown session id, a session with no cwd,
+/// or an unregistered workspace → `false` (deny the connect-user). The
+/// owner is unaffected because `authorize_send_message` short-circuits on
+/// the owner token before consulting this flag.
+fn remote_instruct_opt_in_for_session(session_id: &str) -> bool {
+    // App-level master opts in everything (back-compat) — short-circuit
+    // before any session lookup so an owner-disabled-but-app-on host still
+    // works even mid-spawn.
+    if k2_core::app_settings::load().allow_remote_instruct {
+        return true;
+    }
+    let Some(sid) = k2_core::session::SessionId::parse(session_id) else {
+        return false;
+    };
+    let Some(live) = crate::session_lookup::lookup_by_session_id(&sid) else {
+        return false;
+    };
+    let cwd = live.cwd();
+    if cwd.is_empty() {
+        return false;
+    }
+    // App-level already checked above; this reads ONLY the per-workspace
+    // flag for the resolved cwd (the OR-with-master is handled by the
+    // early return above, but the core helper also re-checks it harmlessly).
+    k2_core::workspace::settings::remote_instruct_allowed_for_path(&cwd)
+}
+
 /// Outcome of [`handle_one_request`] — tells the outer keep-alive loop
 /// whether to wait for the next request on this socket or tear it down.
 ///
@@ -2499,10 +2535,38 @@ async fn handle_one_request(
         // (post_allowed lists this route); we additionally pin `p ==`
         // here so only a POST reaches the handler body.
         p if is_post && p == "/cli/terminal/send-message" => {
-            // D4 — capability decision. The opt-in flag gates ONLY the
-            // connect-user path; the owner is allowed regardless.
-            let remote_opt_in =
-                k2_core::app_settings::load().allow_remote_instruct;
+            // Read + parse the body UP-FRONT. The #67 per-workspace gate
+            // needs the target `session_id` (carried in the JSON/form body)
+            // to resolve which workspace's opt-in to consult — so the body
+            // must be read before the capability decision. Reading it here
+            // also means a rejected request has already drained its body
+            // before the 403 (mirrors require_manage's drain-then-403).
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // Body may be form-encoded OR JSON; query is the fallback.
+            // session_id/text only — `from` is NEVER read from the body
+            // (D3), it is resolved below from the token.
+            let mut params = super::http::parse_params(&path, &query);
+            for (k, v) in super::http::parse_form_body(&body_bytes) {
+                params.insert(k, v);
+            }
+            if let Ok(serde_json::Value::Object(map)) =
+                serde_json::from_slice::<serde_json::Value>(&body_bytes)
+            {
+                for key in ["session_id", "text"] {
+                    if let Some(s) = map.get(key).and_then(|v| v.as_str()) {
+                        params.insert(key.to_string(), s.to_string());
+                    }
+                }
+            }
+            let session_id = params.get("session_id").cloned().unwrap_or_default();
+            let text = params.get("text").cloned().unwrap_or_default();
+
+            // #67 — D4 capability decision, now PER-WORKSPACE. The opt-in
+            // gates ONLY the connect-user path; the owner is allowed
+            // regardless. Resolve the target session's workspace and read
+            // its EFFECTIVE opt-in (per-workspace flag OR app-level master);
+            // fail-closed when the session/workspace can't be resolved.
+            let remote_opt_in = remote_instruct_opt_in_for_session(&session_id);
             let auth = super::http::authorize_send_message(
                 &query,
                 state.token.as_str(),
@@ -2526,9 +2590,7 @@ async fn handle_one_request(
                     (username, Some(tok))
                 }
                 super::http::SendMessageAuth::Denied => {
-                    // drain-then-403 (mirror require_manage): a rejected
-                    // request must still read its body before responding.
-                    let _ = stream.read(&mut buf).await;
+                    // Body already read above — respond 403 directly.
                     super::http::send_response(
                         &mut *stream,
                         "403 Forbidden",
@@ -2539,25 +2601,6 @@ async fn handle_one_request(
                     return DispatchOutcome::Done;
                 }
             };
-            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            // Body may be form-encoded OR JSON; query is the fallback.
-            // session_id/text only — `from` is NEVER read from the body
-            // (D3), it is resolved above.
-            let mut params = super::http::parse_params(&path, &query);
-            for (k, v) in super::http::parse_form_body(&body_bytes) {
-                params.insert(k, v);
-            }
-            if let Ok(serde_json::Value::Object(map)) =
-                serde_json::from_slice::<serde_json::Value>(&body_bytes)
-            {
-                for key in ["session_id", "text"] {
-                    if let Some(s) = map.get(key).and_then(|v| v.as_str()) {
-                        params.insert(key.to_string(), s.to_string());
-                    }
-                }
-            }
-            let session_id = params.get("session_id").cloned().unwrap_or_default();
-            let text = params.get("text").cloned().unwrap_or_default();
             let body = tokio::task::spawn_blocking(move || {
                 // M2 (inject-time half): re-validate a connect-user token
                 // right before injecting. The gate validated it once, but

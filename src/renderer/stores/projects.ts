@@ -145,6 +145,11 @@ interface Project {
   heartbeatMode: string // 'off' | 'scheduled' | 'hourly'
   heartbeatSchedule: string | null // JSON
   heartbeatLastFire: string | null // ISO8601
+  // #67 — per-workspace remote-instruct opt-in (0/1, default 0/OFF).
+  // 1 = connect-users (role >= Member) may instruct this workspace's
+  // agent via the composer. The daemon ENFORCES the gate server-side;
+  // this drives the renderer composer-hide for non-owner principals.
+  allowRemoteInstruct: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

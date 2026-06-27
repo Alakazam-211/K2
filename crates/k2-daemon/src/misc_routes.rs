@@ -147,6 +147,32 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
             Err(r) => r,
         },
+        // #67 — per-workspace remote-instruct opt-in. GET with `?enable=`
+        // mirrors the `/cli/worktree` pattern (path-scoped write via
+        // `update_project_setting`). Default OFF / fail-closed; the daemon
+        // still ENFORCES the gate server-side in `authorize_send_message`
+        // (this route only records the per-workspace opt-in + drives the
+        // renderer composer-hide). The owner is always allowed regardless.
+        "/cli/remote-instruct" => match need_project(params) {
+            Ok(p) => {
+                let enable = bool_param(params, "enable");
+                let value = if enable { "1" } else { "0" };
+                match k2_core::workspace::settings::update_project_setting(&p, "allow_remote_instruct", value) {
+                    Ok(()) => {
+                        k2_core::agent_hooks::emit(
+                            k2_core::agent_hooks::HookEvent::SyncProjects,
+                            serde_json::Value::Null,
+                        );
+                        CliResponse::ok_json(
+                            serde_json::json!({"success": true, "allowRemoteInstruct": enable})
+                                .to_string(),
+                        )
+                    }
+                    Err(e) => CliResponse::bad_request(e),
+                }
+            }
+            Err(r) => r,
+        },
         "/cli/agentic" => {
             // Global toggle, not project-specific.
             if let Some(enable) = opt_param(params, "enable") {

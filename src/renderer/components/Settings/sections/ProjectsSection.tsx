@@ -1611,6 +1611,11 @@ function ProjectDetail({
         <WorktreeFoldersOnDisk project={project} fetchProjects={fetchProjects} />
       </SettingsGroup>
 
+      {/* ── #67 Remote access (per-workspace remote-instruct opt-in) ── */}
+      <SettingsGroup title="Remote Access">
+        <RemoteInstructToggle project={project} fetchProjects={fetchProjects} />
+      </SettingsGroup>
+
       {/* ── Group 4: Chat Migrations ── */}
       <SettingsGroup title="Chat Migrations">
         <CursorMigrationPanel projectPath={project.path} />
@@ -1747,6 +1752,79 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
             {enabled
               ? 'Each heartbeat fire opens a background tab in this window. Tabs persist until you close them. Audit the agent\'s work as it happens.'
               : 'Heartbeat fires run silently in the daemon (recommended). Audit them on demand from the sidebar Heartbeats panel.'}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── #67 Per-workspace remote-instruct opt-in ───────────────────────
+// Lets CONNECT-USERS (role >= Member, signed into this host over K2
+// Connect) message THIS workspace's agent via the composer. The OWNER is
+// always allowed regardless. DEFAULTS OFF / fail-closed: the composer
+// instructs an agent running --dangerously-skip-permissions (= full shell
+// + filesystem access), so a workspace must be explicitly opted in. The
+// daemon ENFORCES this server-side per-workspace; this toggle only records
+// the opt-in (and drives the composer-hide). Reads the current state from
+// the projects store (`allowRemoteInstruct`); writes via /cli/remote-instruct.
+function RemoteInstructToggle({
+  project,
+  fetchProjects,
+}: {
+  project: ProjectWithWorkspaces
+  fetchProjects: () => Promise<void>
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const enabled = (project.allowRemoteInstruct ?? 0) === 1
+
+  const toggle = async (): Promise<void> => {
+    if (busy) return
+    const next = !enabled
+    setBusy(true)
+    try {
+      // Path-scoped GET write (mirrors /cli/worktree). The daemon still
+      // enforces the gate server-side; this only records the opt-in.
+      await daemonCliGet('remote-instruct', {
+        project: project.path,
+        enable: next ? '1' : '0',
+      })
+      await fetchProjects()
+    } catch (err) {
+      console.error('[remote-instruct] write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          disabled={busy}
+          data-settings-id="projects.allow-remote-instruct"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={enabled ? 'Remote users can message this workspace\'s agent' : 'Only the owner can message this workspace\'s agent'}
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-white block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Let remote users message this workspace
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            {enabled
+              ? 'People signed into this host over K2 Connect can send messages to this workspace\'s agent via the composer. You (the owner) can always message agents.'
+              : 'Off (recommended): only you can message this workspace\'s agent. Turn on to let K2 Connect users instruct the agent here — it runs with full shell and filesystem access.'}
           </div>
         </div>
       </div>

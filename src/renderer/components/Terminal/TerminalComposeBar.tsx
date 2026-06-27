@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import {
   type MsgResponse,
@@ -30,11 +31,20 @@ interface TerminalComposeBarProps {
 }
 
 export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): React.JSX.Element | null {
-  // 1c (D4) renderer-hide: shown iff the active host is LOCAL (owner) OR that
-  // host opted into remote instruction (default OFF). Daemon enforces too.
+  // 1c (D4) + #67 renderer-hide: shown iff the active host is LOCAL (owner)
+  // OR the app-level master is on OR the ACTIVE WORKSPACE opted into remote
+  // instruction (default OFF). The daemon enforces the same gate per-workspace
+  // server-side; this hide is defense-in-depth only.
   const isLocalHost = useConnectHostStore((s) => s.activeHost === 'local')
   const allowRemoteInstruct = useSettingsStore((s) => s.allowRemoteInstruct)
-  const permitted = composerPermitted({ isLocalHost, allowRemoteInstruct })
+  // Per-workspace opt-in for the currently-active workspace. Approximate on
+  // the renderer (the daemon resolves the EXACT target session's workspace);
+  // good enough for the convenience hide.
+  const perWorkspaceAllow = useProjectsStore((s) => {
+    const active = s.projects.find((p) => p.id === s.activeProjectId)
+    return (active?.allowRemoteInstruct ?? 0) === 1
+  })
+  const permitted = composerPermitted({ isLocalHost, allowRemoteInstruct, perWorkspaceAllow })
 
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)

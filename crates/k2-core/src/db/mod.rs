@@ -399,6 +399,11 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // tab_titles so a user's explicit rename is STICKY and never
         // overwritten by a program-generated PTY title.
         ("0053_tab_title_locked", include_str!("../../drizzle_sql/0053_tab_title_locked.sql")),
+        // 0054 (#67): per-workspace remote-instruct opt-in column on
+        // `projects` (default 0/OFF, fail-closed). Refines the Composer 1c
+        // connect-user gate from an app-level flag to a per-workspace
+        // opt-in; the app-level flag stays a global master (back-compat).
+        ("0054_project_allow_remote_instruct", include_str!("../../drizzle_sql/0054_project_allow_remote_instruct.sql")),
     ];
 
     for (name, sql) in migrations {

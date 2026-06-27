@@ -98,6 +98,12 @@ pub struct Project {
     pub heartbeat_mode: String,
     pub heartbeat_schedule: Option<String>,
     pub heartbeat_last_fire: Option<String>,
+    /// #67 — per-workspace remote-instruct opt-in (migration 0054).
+    /// 1 = connect-users (role >= Member) may instruct this workspace's
+    /// agent via the composer; 0 (default) = deny. The owner is always
+    /// allowed regardless; the app-level `allowRemoteInstruct` is a
+    /// global master OR'd on top (back-compat). Fail-closed: default 0.
+    pub allow_remote_instruct: i64,
 }
 
 impl Project {
@@ -113,7 +119,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -138,6 +144,7 @@ impl Project {
                 heartbeat_mode: row.get::<_, String>(17).unwrap_or_else(|_| "off".to_string()),
                 heartbeat_schedule: row.get(18).ok().flatten(),
                 heartbeat_last_fire: row.get(19).ok().flatten(),
+                allow_remote_instruct: row.get(20).unwrap_or(0),
             })
         })?;
         rows.collect()
@@ -148,7 +155,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -173,6 +180,7 @@ impl Project {
                     heartbeat_mode: row.get::<_, String>(17).unwrap_or_else(|_| "off".to_string()),
                     heartbeat_schedule: row.get(18).ok().flatten(),
                     heartbeat_last_fire: row.get(19).ok().flatten(),
+                    allow_remote_instruct: row.get(20).unwrap_or(0),
                 })
             },
         )

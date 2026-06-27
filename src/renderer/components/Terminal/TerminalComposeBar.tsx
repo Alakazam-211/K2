@@ -8,8 +8,8 @@
 // daemon enforces the same gate server-side.
 //
 // Condensed UI: just the input + its placeholder hint — no title, no send
-// button, no status lane. A successful send clears the box; a failed send
-// restores the text (the box reappearing IS the feedback).
+// button, no status lane, no collapse control. A successful send clears the
+// box; a failed send restores the text (the box reappearing IS the feedback).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
@@ -36,7 +36,6 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
   const allowRemoteInstruct = useSettingsStore((s) => s.allowRemoteInstruct)
   const permitted = composerPermitted({ isLocalHost, allowRemoteInstruct })
 
-  const [collapsed, setCollapsed] = useState(false)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -50,8 +49,8 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
   }, [])
 
   useEffect(() => {
-    if (!collapsed) autoGrow()
-  }, [draft, collapsed, autoGrow])
+    autoGrow()
+  }, [draft, autoGrow])
 
   const send = useCallback(async () => {
     const text = draft.trim()
@@ -93,30 +92,10 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
   // 1c renderer-hide (after all hooks): not permitted → render nothing.
   if (!permitted) return null
 
-  // Collapsed: a minimal re-open caret.
-  if (collapsed) {
-    return (
-      <div
-        className="flex flex-shrink-0 items-center justify-center border-t border-[var(--color-border)] bg-[#111]"
-        style={{ height: 14, minHeight: 14 }}
-      >
-        <button
-          type="button"
-          onClick={() => setCollapsed(false)}
-          className="text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
-          style={{ fontSize: 9, lineHeight: 1 }}
-          title="Show message composer"
-        >
-          ▴
-        </button>
-      </div>
-    )
-  }
-
-  // Expanded: one condensed row — textarea + a minimal collapse caret.
+  // One condensed row — just the textarea.
   return (
     <div
-      className="flex flex-shrink-0 items-start gap-1 border-t border-[var(--color-border)] bg-[#111] px-2 py-1"
+      className="flex flex-shrink-0 items-start gap-1 border-t border-[var(--color-border)] bg-[#111] px-2 py-1.5"
       data-compose-bar=""
       data-session-id={sessionId}
     >
@@ -135,21 +114,12 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
           fontSize: 12,
           lineHeight: 1.4,
           border: '1px solid var(--color-border)',
-          borderRadius: 4,
+          borderRadius: 0,
           padding: '4px 6px',
           maxHeight: MAX_TEXTAREA_HEIGHT,
           overflowY: 'auto',
         }}
       />
-      <button
-        type="button"
-        onClick={() => setCollapsed(true)}
-        className="text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
-        style={{ fontSize: 9, lineHeight: 1, paddingTop: 5 }}
-        title="Hide message composer"
-      >
-        ▾
-      </button>
     </div>
   )
 }

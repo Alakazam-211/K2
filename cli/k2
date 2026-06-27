@@ -6505,8 +6505,14 @@ cmd_fed() {
                 echo "k2 fed send: no owner token (need $_tok_file)" >&2
                 exit 1
             fi
+            # GAP #3: carry the SOURCE workspace ($PROJECT, resolved at the
+            # top of this script from K2_PROJECT_PATH/CWD — same source
+            # cmd_connections uses). The daemon GATES the cross-daemon send
+            # on `is_remote_connection(from_workspace, <agent>@<host>)`:
+            # an agent may only message a peer its workspace is connected
+            # to. (Owner-remote `k2 talk` is a different, ungated path.)
             local body
-            body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2]}))' "$to" "$text")
+            body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' "$to" "$text" "$PROJECT")
             curl -s -X POST "${BASE_URL}/cli/federation/send?token=${owner_token}" \
                 --connect-timeout 5 --max-time 60 \
                 -H "Content-Type: application/json" \

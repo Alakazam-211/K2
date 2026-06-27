@@ -191,6 +191,15 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     struct Req {
         to: String,
         text: String,
+        /// GAP #3: the SOURCE workspace (filesystem path) the calling
+        /// agent is in. When present, the cross-daemon send is GATED on
+        /// `is_remote_connection(from_workspace, "<agent>@<host>")` —
+        /// an agent may only message a peer its workspace is connected
+        /// to. Absent ⇒ the connection gate is skipped (owner-remote
+        /// `k2 talk` and legacy owner sends are a different, ungated
+        /// path); the `peer.trust == Trusted` check still always runs.
+        #[serde(default)]
+        from_workspace: Option<String>,
     }
     let req: Req = match serde_json::from_slice(body) {
         Ok(r) => r,
@@ -222,6 +231,27 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
             "403 Forbidden",
             format!("peer '{peer_sel}' is not Trusted (state={:?})", peer.trust),
         );
+    }
+
+    // GAP #3 — the CROSS-DAEMON CONNECTION GATE (fail-closed). When the
+    // caller supplies `from_workspace` (an agent-initiated send), the
+    // send is allowed ONLY IF that source workspace is connected to the
+    // target `<agent>@<host>`. This is IN ADDITION to the trust check
+    // above — trust says "I've paired with this peer"; the connection
+    // says "THIS workspace is allowed to message THIS remote agent".
+    // INTRA-daemon sends never reach here; owner-remote `k2 talk` is a
+    // different, ungated code path (it never sets `from_workspace`).
+    if let Some(from_ws) = req.from_workspace.as_deref().filter(|s| !s.is_empty()) {
+        let remote_addr = format!("{agent}@{}", peer_host(&peer.subdomain));
+        if !k2_core::connections::is_remote_connection(from_ws, &remote_addr) {
+            return json_err(
+                "403 Forbidden",
+                format!(
+                    "'{remote_addr}' is not a connection — add it with \
+                     `k2 connections add {remote_addr}`"
+                ),
+            );
+        }
     }
 
     let key = match k2_core::tunnel::tls::load_or_generate_keypair() {
@@ -295,6 +325,20 @@ fn peer_base_url(subdomain: &str) -> String {
         }
     }
     format!("https://{subdomain}.k2.dev")
+}
+
+/// The peer's full HOST (no scheme/path) — the right-hand side of the
+/// `<agent>@<host>` connection address. Derived from the SAME source as
+/// the dial target ([`peer_base_url`]) so the gate's reconstructed
+/// `<agent>@<host>` matches what the operator typed into
+/// `k2 connections add` (canonically `<subdomain>.k2.dev`; the
+/// `K2_FEDERATION_INBOUND_BASE` override host for local/loopback tests).
+fn peer_host(subdomain: &str) -> String {
+    let base = peer_base_url(subdomain);
+    base.trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// POST a sealed envelope to `<base>/cli/federation/inbound`. Blocking
@@ -799,6 +843,103 @@ mod tests {
             // Secrets are NOT exposed.
             assert!(p.get("public_key_pem").is_none(), "must not leak the pinned key");
         });
+    }
+
+    // ── GAP #3: the cross-daemon CONNECTION GATE on `handle_send` ──
+    //
+    // When the caller supplies `from_workspace`, the send is allowed ONLY
+    // IF that source workspace is connected to the target `<agent>@<host>`
+    // (a `workspace_remote_connections` row). Fail-closed: no connection ⇒
+    // 403, never a dial. With a connection it falls through to the normal
+    // seal/enqueue/dial path (here the dial fails on a dead port → queued,
+    // which proves the gate let it through).
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_is_gated_on_source_workspace_remote_connection() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+
+        // Register a LOCAL source workspace (the agent's workspace).
+        let src_path = std::env::temp_dir().join(format!(
+            "k2-gate-src-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let src_path = src_path.to_string_lossy().into_owned();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), "gate-src-ws", src_path],
+            )
+            .unwrap();
+        }
+
+        // Pin a Trusted peer (subdomain "peer", inbound granted).
+        let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut store = PeerStore::default();
+        let fp = store.upsert(
+            FederationPeer::pin("teammate", "peer", peer_key.public_key_pem()).unwrap(),
+        );
+        store.set_trust(&fp, PeerTrust::Trusted);
+        store.grant(&fp, "inbound");
+        store.save().unwrap();
+
+        // Override the dial host to a dead port → peer_host() == "127.0.0.1:1".
+        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+
+        // (A) No connection for the source workspace → 403, fail-closed.
+        let send_body = body(serde_json::json!({
+            "to": "peer::ws::bob",
+            "text": "should be blocked",
+            "from_workspace": src_path,
+        }));
+        let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status, "403 Forbidden",
+            "an agent send without a remote connection must be rejected: {}",
+            resp.body
+        );
+        assert!(
+            resp.body.contains("not a connection"),
+            "the 403 must explain the missing connection; got {}",
+            resp.body
+        );
+
+        // Add the matching remote connection `bob@127.0.0.1:1` for the source.
+        k2_core::connections::connections(
+            &src_path,
+            "add",
+            Some("bob@127.0.0.1:1"),
+            None,
+        )
+        .expect("add remote connection");
+
+        // (B) Now the gate opens; the dead-port dial then fails → queued.
+        let send_body = body(serde_json::json!({
+            "to": "peer::ws::bob",
+            "text": "now allowed",
+            "from_workspace": src_path,
+        }));
+        let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
+            .await
+            .unwrap();
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        assert_eq!(
+            resp.status, "200 OK",
+            "a connected source workspace must pass the gate: {}",
+            resp.body
+        );
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(
+            v["status"], "queued",
+            "past the gate, the dead-port dial leaves the message queued: {}",
+            resp.body
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

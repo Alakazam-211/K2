@@ -1994,6 +1994,102 @@ impl WorkspaceRelation {
     }
 }
 
+// ── Workspace Remote Connections (GAP #3) ───────────────────────────────
+
+/// A CROSS-DAEMON connection: a local source workspace connected to a
+/// remote `<agent>@<full-host>` (e.g. `ai@rpm.k2.dev`). Unlike
+/// [`WorkspaceRelation`] (LOCAL project→project, same daemon), the peer
+/// here lives on a DIFFERENT daemon and has no `projects` row locally —
+/// it's addressed by host. This is the gate for agent-initiated
+/// cross-server sends (see `connections::is_remote_connection` +
+/// `federation::handle_send`). Storage migration 0055.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRemoteConnection {
+    pub id: String,
+    pub source_project_id: String,
+    /// Canonical `<agent>@<host>` address.
+    pub remote_addr: String,
+    pub host: String,
+    pub agent: String,
+    /// Paired peer's fingerprint when known; `None` until resolved.
+    pub peer_fingerprint: Option<String>,
+    pub created_at: i64,
+}
+
+impl WorkspaceRemoteConnection {
+    /// Insert a remote connection. Idempotent at the storage layer via the
+    /// `UNIQUE(source_project_id, remote_addr)` constraint — callers should
+    /// still check [`exists`](Self::exists) first to surface a friendly
+    /// no-op rather than relying on the constraint error.
+    pub fn create(
+        conn: &Connection,
+        id: &str,
+        source_project_id: &str,
+        remote_addr: &str,
+        host: &str,
+        agent: &str,
+        peer_fingerprint: Option<&str>,
+    ) -> Result<()> {
+        conn.execute(
+            "INSERT INTO workspace_remote_connections \
+             (id, source_project_id, remote_addr, host, agent, peer_fingerprint, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch())",
+            params![id, source_project_id, remote_addr, host, agent, peer_fingerprint],
+        )?;
+        Ok(())
+    }
+
+    /// All remote connections for a source workspace, oldest first.
+    pub fn list_for_source(
+        conn: &Connection,
+        source_project_id: &str,
+    ) -> Result<Vec<WorkspaceRemoteConnection>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, source_project_id, remote_addr, host, agent, peer_fingerprint, created_at \
+             FROM workspace_remote_connections WHERE source_project_id = ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map(params![source_project_id], |row| {
+            Ok(WorkspaceRemoteConnection {
+                id: row.get(0)?,
+                source_project_id: row.get(1)?,
+                remote_addr: row.get(2)?,
+                host: row.get(3)?,
+                agent: row.get(4)?,
+                peer_fingerprint: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Whether `(source_project_id, remote_addr)` is already connected.
+    /// Backs the cross-daemon send gate — keep it cheap (COUNT, no row
+    /// materialization).
+    pub fn exists(conn: &Connection, source_project_id: &str, remote_addr: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT COUNT(*) > 0 FROM workspace_remote_connections \
+             WHERE source_project_id = ?1 AND remote_addr = ?2",
+            params![source_project_id, remote_addr],
+            |row| row.get(0),
+        )
+    }
+
+    /// Delete the `(source_project_id, remote_addr)` connection. Returns the
+    /// number of rows removed (0 when there was nothing to remove).
+    pub fn delete(
+        conn: &Connection,
+        source_project_id: &str,
+        remote_addr: &str,
+    ) -> Result<usize> {
+        conn.execute(
+            "DELETE FROM workspace_remote_connections \
+             WHERE source_project_id = ?1 AND remote_addr = ?2",
+            params![source_project_id, remote_addr],
+        )
+    }
+}
+
 // ── Activity Feed ───────────────────────────────────────────────────────
 
 /// Audit trail entry for workspace agent communications and lifecycle
@@ -3177,6 +3273,42 @@ mod unit_tests {
         let n = WorkspaceRelation::delete(&conn, "rel-1").unwrap();
         assert_eq!(n, 1);
         assert!(WorkspaceRelation::list_for_source(&conn, &src).unwrap().is_empty());
+    }
+
+    // ── WorkspaceRemoteConnection (GAP #3) ─────────────────────────
+    #[test]
+    fn workspace_remote_connection_create_list_exists_delete() {
+        let conn = fresh();
+        let src = make_project_row(&conn, "/tmp/remote-src");
+
+        WorkspaceRemoteConnection::create(
+            &conn,
+            "rc-1",
+            &src,
+            "ai@rpm.k2.dev",
+            "rpm.k2.dev",
+            "ai",
+            Some("fp-abc"),
+        )
+        .unwrap();
+
+        // Round-trip read.
+        let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].remote_addr, "ai@rpm.k2.dev");
+        assert_eq!(rows[0].host, "rpm.k2.dev");
+        assert_eq!(rows[0].agent, "ai");
+        assert_eq!(rows[0].peer_fingerprint.as_deref(), Some("fp-abc"));
+
+        // exists() — the gate query.
+        assert!(WorkspaceRemoteConnection::exists(&conn, &src, "ai@rpm.k2.dev").unwrap());
+        assert!(!WorkspaceRemoteConnection::exists(&conn, &src, "ai@other.k2.dev").unwrap());
+
+        // delete() by (source, addr).
+        let n = WorkspaceRemoteConnection::delete(&conn, &src, "ai@rpm.k2.dev").unwrap();
+        assert_eq!(n, 1);
+        assert!(WorkspaceRemoteConnection::list_for_source(&conn, &src).unwrap().is_empty());
+        assert!(!WorkspaceRemoteConnection::exists(&conn, &src, "ai@rpm.k2.dev").unwrap());
     }
 
     // ── AgentPreset seed ──────────────────────────────────────────

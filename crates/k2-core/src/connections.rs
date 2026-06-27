@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::schema::{log_activity, WorkspaceRelation};
+use crate::db::schema::{log_activity, WorkspaceRelation, WorkspaceRemoteConnection};
 use crate::workspace::agent_identity::resolve_project_id;
 
 /// A connected peer workspace, deduped across the directional
@@ -56,6 +56,13 @@ pub struct Peer {
     /// be "collaborator" in one direction and "oversees" in the
     /// other; both labels are listed (sorted alphabetically, deduped).
     pub relation_types: Vec<String>,
+    /// GAP #3: `false` for LOCAL (same-daemon) peers — every `Peer`
+    /// built by [`list_peers`]. The `list` dispatch sets this default
+    /// (`#[serde(default)]` → false) so local and remote entries share
+    /// one uniform shape in the `connections` array; remote entries
+    /// (`{"remote": true, ...}`) are appended separately by `list`.
+    #[serde(default)]
+    pub remote: bool,
 }
 
 /// Best-effort "did you mean" over registered project names (0.39.45,
@@ -191,6 +198,7 @@ pub fn list_peers(project_path: &str) -> Result<Vec<Peer>, String> {
                 path,
                 reachable,
                 relation_types: Vec::new(),
+                remote: false,
             })
             .relation_types
             .push(rel.relation_type.clone());
@@ -208,6 +216,7 @@ pub fn list_peers(project_path: &str) -> Result<Vec<Peer>, String> {
                 path,
                 reachable,
                 relation_types: Vec::new(),
+                remote: false,
             })
             .relation_types
             .push(rel.relation_type.clone());
@@ -225,6 +234,70 @@ pub fn list_peers(project_path: &str) -> Result<Vec<Peer>, String> {
         .collect();
     out.sort_by(|a, b| a.project_name.cmp(&b.project_name));
     Ok(out)
+}
+
+// ── GAP #3: cross-daemon (remote) connections ───────────────────────
+//
+// A target token containing `@` is a REMOTE connection: `<agent>@<host>`
+// (e.g. `ai@rpm.k2.dev`). It lives on a DIFFERENT daemon, so it can't be
+// a `workspace_relations` row (the peer has no local `projects` row).
+// `add`/`remove`/`list` branch on the `@` and persist these in
+// `workspace_remote_connections` instead. `is_remote_connection` is the
+// gate `federation::handle_send` consults before dialing a peer.
+
+/// Whether `target` is a REMOTE (cross-daemon) address — i.e. it carries
+/// an `@`. Local workspace names/paths never contain `@`.
+pub fn is_remote_target(target: &str) -> bool {
+    target.contains('@')
+}
+
+/// Parse `<agent>@<host>` by splitting on the LAST `@` (so an agent token
+/// may itself contain `@`, though that's unusual). Returns
+/// `(agent, host)`. Both sides must be non-empty.
+pub fn parse_remote_addr(addr: &str) -> Result<(String, String), String> {
+    let at = addr
+        .rfind('@')
+        .ok_or_else(|| format!("'{}' is not a remote address (expected <agent>@<host>)", addr))?;
+    let agent = &addr[..at];
+    let host = &addr[at + 1..];
+    if agent.is_empty() || host.is_empty() {
+        return Err(format!(
+            "remote address '{}' must be <agent>@<host> (both sides non-empty)",
+            addr
+        ));
+    }
+    Ok((agent.to_string(), host.to_string()))
+}
+
+/// Resolve a source workspace selector (a filesystem PATH, or — as a
+/// fallback — an already-resolved project id) to its project id. The
+/// gate's caller passes `$PROJECT`/CWD which is a path; the id fallback
+/// keeps callers that already hold an id working.
+fn resolve_source_project_id(conn: &rusqlite::Connection, path_or_id: &str) -> Option<String> {
+    if let Some(id) = resolve_project_id(conn, path_or_id) {
+        return Some(id);
+    }
+    // Fallback: treat the input as a project id directly.
+    conn.query_row(
+        "SELECT id FROM projects WHERE id = ?1",
+        rusqlite::params![path_or_id],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// THE CROSS-DAEMON SEND GATE. Returns `true` iff the source workspace
+/// (a path or project id) has a `workspace_remote_connections` row for
+/// `remote_addr` (`<agent>@<host>`). Fails CLOSED — an unresolvable
+/// source workspace or any DB error yields `false`, so no connection ⇒
+/// no cross-daemon send. Consulted by `federation::handle_send`.
+pub fn is_remote_connection(source_project_path_or_id: &str, remote_addr: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let Some(source_id) = resolve_source_project_id(&conn, source_project_path_or_id) else {
+        return false;
+    };
+    WorkspaceRemoteConnection::exists(&conn, &source_id, remote_addr).unwrap_or(false)
 }
 
 /// Dispatch by `action`. Returns a JSON-serialized string.
@@ -254,7 +327,11 @@ pub fn connections(
             // project, the operator used to see an "inherited" list
             // with no clue it wasn't their workspace's. Echoing the
             // resolved identity makes that failure self-evident.
-            let workspace = {
+            //
+            // GAP #3: also pull REMOTE (cross-daemon) connections for the
+            // resolved source workspace and merge them into the same
+            // `connections` array (each marked `remote: true`).
+            let (workspace, remotes) = {
                 let db = crate::db::shared();
                 let conn = db.lock();
                 let name: Option<String> = conn
@@ -264,16 +341,43 @@ pub fn connections(
                         |row| row.get(0),
                     )
                     .ok();
-                serde_json::json!({ "name": name, "path": project_path })
+                let ws = serde_json::json!({ "name": name, "path": project_path });
+                // Remote connections (best-effort: an unregistered source
+                // workspace simply has none).
+                let remotes: Vec<WorkspaceRemoteConnection> =
+                    match resolve_source_project_id(&conn, project_path) {
+                        Some(src_id) => {
+                            WorkspaceRemoteConnection::list_for_source(&conn, &src_id)
+                                .map_err(|e| e.to_string())?
+                        }
+                        None => Vec::new(),
+                    };
+                (ws, remotes)
             };
             // Emit as `{"connections": [...]}` for backwards-compatible
             // envelope shape (CLI parsers still key on "connections").
-            // Each entry uses the Peer struct's serde camelCase form
+            // Local entries use the Peer struct's serde camelCase form
             // — `projectId`, `projectName`, `path`, `reachable`,
-            // `relationTypes`.
+            // `relationTypes`, `remote: false`. Remote entries carry a
+            // uniform-shaped object marked `remote: true`.
+            let mut connections: Vec<serde_json::Value> = peers
+                .into_iter()
+                .map(|p| serde_json::to_value(p).unwrap_or(serde_json::Value::Null))
+                .collect();
+            for r in remotes {
+                connections.push(serde_json::json!({
+                    "remote": true,
+                    "address": r.remote_addr,
+                    "host": r.host,
+                    "agent": r.agent,
+                    "projectName": r.remote_addr,
+                    "reachable": true,
+                    "relationTypes": [],
+                }));
+            }
             Ok(serde_json::json!({
                 "workspace": workspace,
-                "connections": peers
+                "connections": connections
             })
             .to_string())
         }
@@ -286,6 +390,57 @@ pub fn connections(
             let target_name = target
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| "Missing 'target' parameter (workspace name or path)".to_string())?;
+
+            // GAP #3: a target with `@` is a REMOTE (cross-daemon)
+            // connection (`<agent>@<host>`). Persist it in
+            // `workspace_remote_connections` instead of `workspace_relations`
+            // — the peer has no local `projects` row to point at. Idempotent:
+            // re-adding the same source+remote_addr is a no-op.
+            if is_remote_target(target_name) {
+                let (agent, host) = parse_remote_addr(target_name)?;
+                let remote_addr = target_name.to_string();
+                if WorkspaceRemoteConnection::exists(&conn, &project_id, &remote_addr)
+                    .map_err(|e| e.to_string())?
+                {
+                    return Ok(serde_json::json!({
+                        "success": true,
+                        "target": remote_addr,
+                        "remote": true,
+                        "noop": true,
+                        "message": format!("already connected to {}", remote_addr),
+                    })
+                    .to_string());
+                }
+                let id = uuid::Uuid::new_v4().to_string();
+                WorkspaceRemoteConnection::create(
+                    &conn,
+                    &id,
+                    &project_id,
+                    &remote_addr,
+                    &host,
+                    &agent,
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+                log_activity(
+                    &conn,
+                    &project_id,
+                    None,
+                    "connection.created",
+                    None,
+                    None,
+                    None,
+                    Some(&format!("Connected to {} (remote)", remote_addr)),
+                );
+                return Ok(serde_json::json!({
+                    "success": true,
+                    "id": id,
+                    "target": remote_addr,
+                    "remote": true,
+                })
+                .to_string());
+            }
+
             // 0.39.45 (#32/#33): case-insensitive name fallback + a
             // did-you-mean error instead of the bare not-found.
             let target_id = resolve_target_project_id(&conn, target_name)?;
@@ -367,6 +522,29 @@ pub fn connections(
             let target_name = target
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| "Missing 'target' parameter".to_string())?;
+
+            // GAP #3: remote (`<agent>@<host>`) removal — delete the
+            // `workspace_remote_connections` row for this source+addr.
+            if is_remote_target(target_name) {
+                let remote_addr = target_name.to_string();
+                let removed = WorkspaceRemoteConnection::delete(&conn, &project_id, &remote_addr)
+                    .map_err(|e| e.to_string())?;
+                if removed == 0 {
+                    return Err(format!("No connection to '{}' found", remote_addr));
+                }
+                log_activity(
+                    &conn,
+                    &project_id,
+                    None,
+                    "connection.removed",
+                    None,
+                    None,
+                    None,
+                    Some(&format!("Disconnected from {} (remote)", remote_addr)),
+                );
+                return Ok(serde_json::json!({"success": true, "remote": true}).to_string());
+            }
+
             // 0.39.45 (#33): same case-insensitive + did-you-mean
             // resolution as `add`.
             let target_id = resolve_target_project_id(&conn, target_name)?;
@@ -1087,6 +1265,169 @@ mod tests {
         assert!(
             !peers[0].reachable,
             "peer whose path does not exist on disk must be flagged unreachable (#31)"
+        );
+    }
+
+    // ── GAP #3: remote (cross-daemon) connections ────────────────────
+
+    #[test]
+    fn parse_remote_addr_splits_on_last_at() {
+        assert_eq!(
+            parse_remote_addr("ai@rpm.k2.dev").unwrap(),
+            ("ai".to_string(), "rpm.k2.dev".to_string())
+        );
+        // Split on the LAST '@' — an agent token may itself contain '@'.
+        assert_eq!(
+            parse_remote_addr("a@b@host.example").unwrap(),
+            ("a@b".to_string(), "host.example".to_string())
+        );
+        // Both sides must be non-empty.
+        assert!(parse_remote_addr("@host").is_err());
+        assert!(parse_remote_addr("agent@").is_err());
+        assert!(parse_remote_addr("no-at-sign").is_err());
+    }
+
+    #[test]
+    fn is_remote_target_detects_at() {
+        assert!(is_remote_target("ai@rpm.k2.dev"));
+        assert!(!is_remote_target("LocalWorkspace"));
+        assert!(!is_remote_target("/tmp/some/path"));
+    }
+
+    #[test]
+    fn add_remote_persists_row_and_is_idempotent() {
+        let (src_path, src_id) = make_project("RemoteAddSrc");
+        let addr = "ai@rpm.k2.dev";
+
+        // First add → creates the row, not a no-op.
+        let resp = connections(&src_path, "add", Some(addr), None).expect("remote add ok");
+        let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
+        assert_eq!(parsed["success"], serde_json::json!(true));
+        assert_eq!(parsed["remote"], serde_json::json!(true));
+        assert!(parsed.get("noop").is_none(), "fresh remote add must not be a no-op");
+
+        // Storage round-trip: exactly one row, correctly decomposed.
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
+            assert_eq!(rows.len(), 1, "remote add must persist exactly one row");
+            assert_eq!(rows[0].remote_addr, addr);
+            assert_eq!(rows[0].host, "rpm.k2.dev");
+            assert_eq!(rows[0].agent, "ai");
+        }
+
+        // Second add of the SAME addr → idempotent no-op, still one row.
+        let resp2 = connections(&src_path, "add", Some(addr), None).expect("remote re-add ok");
+        let parsed2: serde_json::Value = serde_json::from_str(&resp2).expect("valid JSON");
+        assert_eq!(parsed2["noop"], serde_json::json!(true), "re-add must report noop");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
+            assert_eq!(rows.len(), 1, "idempotent re-add must not create a duplicate");
+        }
+    }
+
+    #[test]
+    fn remove_remote_deletes_row() {
+        let (src_path, src_id) = make_project("RemoteRemoveSrc");
+        let addr = "ops@peer.example.com";
+        connections(&src_path, "add", Some(addr), None).expect("remote add ok");
+
+        let resp = connections(&src_path, "remove", Some(addr), None).expect("remote remove ok");
+        let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
+        assert_eq!(parsed["success"], serde_json::json!(true));
+
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
+        assert!(rows.is_empty(), "remove must delete the remote row");
+    }
+
+    #[test]
+    fn remove_remote_errors_when_absent() {
+        let (src_path, _src_id) = make_project("RemoteRemoveMissSrc");
+        let err = connections(&src_path, "remove", Some("ghost@nowhere.dev"), None)
+            .expect_err("removing a non-existent remote must error loudly");
+        assert!(
+            err.contains("No connection"),
+            "missing-remote removal must report no connection; got {err}"
+        );
+    }
+
+    #[test]
+    fn list_merges_remote_connections_with_local() {
+        let (src_path, src_id) = make_project("MergeSrc");
+        let (_tgt_path, tgt_id) = make_project("MergeLocalTgt");
+        // One LOCAL connection …
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            WorkspaceRelation::create(
+                &conn,
+                &Uuid::new_v4().to_string(),
+                &src_id,
+                &tgt_id,
+                "oversees",
+            )
+            .unwrap();
+        }
+        // … and one REMOTE connection.
+        connections(&src_path, "add", Some("ai@rpm.k2.dev"), None).expect("remote add ok");
+
+        let resp = connections(&src_path, "list", None, None).expect("list ok");
+        let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
+        let conns = parsed["connections"].as_array().expect("connections array");
+        assert_eq!(conns.len(), 2, "list must include both local and remote; got {conns:?}");
+
+        // Local entry carries remote:false (serde default), name = the
+        // local project's name.
+        let local = conns
+            .iter()
+            .find(|c| c["projectName"] == serde_json::json!("MergeLocalTgt"))
+            .expect("local entry present");
+        assert_eq!(local["remote"], serde_json::json!(false));
+
+        // Remote entry carries the GAP #3 shape.
+        let remote = conns
+            .iter()
+            .find(|c| c["remote"] == serde_json::json!(true))
+            .expect("remote entry present");
+        assert_eq!(remote["address"], serde_json::json!("ai@rpm.k2.dev"));
+        assert_eq!(remote["host"], serde_json::json!("rpm.k2.dev"));
+        assert_eq!(remote["agent"], serde_json::json!("ai"));
+        assert_eq!(remote["projectName"], serde_json::json!("ai@rpm.k2.dev"));
+        assert_eq!(remote["reachable"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn is_remote_connection_true_only_for_added_remote() {
+        let (src_path, _src_id) = make_project("GateSrc");
+        let addr = "ai@gate.k2.dev";
+
+        // Before adding → false (fail-closed).
+        assert!(
+            !is_remote_connection(&src_path, addr),
+            "gate must be closed before the connection is added"
+        );
+
+        connections(&src_path, "add", Some(addr), None).expect("remote add ok");
+
+        // After adding → true.
+        assert!(
+            is_remote_connection(&src_path, addr),
+            "gate must open for the exact added <agent>@<host>"
+        );
+        // A DIFFERENT addr for the same source stays closed.
+        assert!(
+            !is_remote_connection(&src_path, "ai@other.k2.dev"),
+            "gate must not open for an unconnected remote"
+        );
+        // An unknown source workspace stays closed (fail-closed).
+        assert!(
+            !is_remote_connection("/tmp/never-registered-ws-xyz", addr),
+            "gate must fail closed for an unresolvable source workspace"
         );
     }
 }

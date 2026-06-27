@@ -404,6 +404,11 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // connect-user gate from an app-level flag to a per-workspace
         // opt-in; the app-level flag stays a global master (back-compat).
         ("0054_project_allow_remote_instruct", include_str!("../../drizzle_sql/0054_project_allow_remote_instruct.sql")),
+        // 0055 (GAP #3): cross-server connections. `workspace_remote_connections`
+        // links a LOCAL source workspace to a remote `<agent>@<host>`; it is the
+        // gate for agent-initiated cross-daemon sends (federation::handle_send
+        // fails closed unless the source workspace has a row for the target).
+        ("0055_workspace_remote_connections", include_str!("../../drizzle_sql/0055_workspace_remote_connections.sql")),
     ];
 
     for (name, sql) in migrations {

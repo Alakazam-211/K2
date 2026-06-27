@@ -19,7 +19,7 @@ use std::fs;
 
 use serde::Serialize;
 
-use crate::workspace::agent_identity::{agent_dir, find_primary_agent, resolve_project_id};
+use crate::workspace::agent_identity::{resolve_agent_name, resolve_project_id};
 use crate::db::schema::{AgentHeartbeat, HeartbeatFire};
 use crate::log_debug;
 use crate::scheduler::should_project_fire;
@@ -325,7 +325,10 @@ pub fn k2so_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandid
     if heartbeats.is_empty() {
         return vec![];
     }
-    let Some(agent_name) = find_primary_agent(project_path) else {
+    // #70: DB-canonical name (file `name:` → workspace basename when the
+    // workspace is configured but has no AGENT.md) so heartbeats still fire
+    // for fileless configured workspaces.
+    let Some(agent_name) = resolve_agent_name(project_path) else {
         return vec![];
     };
 

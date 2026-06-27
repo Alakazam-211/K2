@@ -26,7 +26,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::workspace::agent_identity::{agents_dir, find_primary_agent, parse_frontmatter};
+use crate::workspace::agent_identity::{agents_dir, parse_frontmatter, resolve_agent_name};
 use crate::workspace::scheduler::{agent_work_dir, get_workspace_state, is_agent_locked};
 use crate::workspace::work_item::{read_work_item, WorkItem};
 use crate::inbox::{list_folder as inbox_list_folder, InboxItem};
@@ -159,7 +159,7 @@ pub fn triage_summary(project_path: &str) -> Result<String, String> {
         // Resolve the primary agent to check the lock; the display
         // label remains "Coordinator" (human-facing presentation, not
         // a routing key).
-        let coordinator_locked = find_primary_agent(project_path)
+        let coordinator_locked = resolve_agent_name(project_path)
             .map(|primary| is_agent_locked(project_path, &primary))
             .unwrap_or(false);
         summary.push_str("Workspace Inbox (unassigned — needs Coordinator):\n");
@@ -253,7 +253,9 @@ pub fn triage_decide(project_path: &str) -> Result<Vec<String>, String> {
         !inbox_list_folder(Path::new(project_path), "").is_empty();
 
     if has_workspace_inbox {
-        if let Some(primary) = find_primary_agent(project_path) {
+        // #70: DB-canonical name so a fileless configured workspace is still
+        // launchable from a workspace-inbox arrival.
+        if let Some(primary) = resolve_agent_name(project_path) {
             launchable.push(primary);
         }
     }

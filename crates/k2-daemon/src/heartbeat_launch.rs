@@ -30,7 +30,7 @@
 
 use std::path::Path;
 
-use k2_core::workspace::agent_identity::{find_primary_agent, resolve_project_id};
+use k2_core::workspace::agent_identity::{resolve_agent_name, resolve_project_id};
 use k2_core::workspace::wake_prompts as wake;
 use k2_core::db::schema::{AgentHeartbeat, HeartbeatFire};
 use k2_core::session::SessionId;
@@ -352,7 +352,9 @@ fn resolve_row(
         return Err(error_value("skipped_archived",
             &format!("heartbeat '{name}' is archived"), name));
     }
-    let agent_name = find_primary_agent(project_path).ok_or_else(|| {
+    // #70: DB-canonical name so a fileless configured workspace can still
+    // fire a named heartbeat.
+    let agent_name = resolve_agent_name(project_path).ok_or_else(|| {
         error_value("error", "no scheduleable agent in this workspace", name)
     })?;
     Ok((hb, agent_name, project_id))

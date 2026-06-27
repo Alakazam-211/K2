@@ -828,7 +828,7 @@ impl OptInSkill {
                 // The K2 Agent skill is keyed on the primary agent name
                 // where one exists; fall back to a stable label.
                 let agent_name =
-                    crate::workspace::agent_identity::find_primary_agent(project_path)
+                    crate::workspace::agent_identity::resolve_agent_name(project_path)
                         .unwrap_or_else(|| "k2-agent".to_string());
                 generate_k2so_agent_skill_content(project_name, &agent_name)
             }

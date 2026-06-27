@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Resolve a project's primary-key id from its filesystem path. `None`
 /// when the project hasn't been registered via `projects` yet.
@@ -288,6 +288,89 @@ pub fn find_primary_agent(project_path: &str) -> Option<String> {
     None
 }
 
+/// Is this workspace's agent CONFIGURED according to the DB — independent
+/// of whether the persona FILE `.k2/agent/AGENT.md` exists on disk?
+///
+/// Mirrors the #9 msg/talk fix's existence test
+/// (`crates/k2-daemon/src/workspace_msg.rs`): a workspace HAS an agent when
+/// either
+///   (a) it has a saved canonical chat session
+///       (`workspace_sessions.session_id` non-empty), or
+///   (b) `projects.agent_enabled == 1`.
+///
+/// The persona file is frequently MISSING for configured workspaces post
+/// AGENTS.md cutover (only the generated root-mirror `<ws>/AGENT.md`
+/// survives), so it is NOT a reliable existence signal. This is the
+/// authoritative DB-canonical check used by [`resolve_agent_name`].
+pub fn workspace_has_configured_agent(project_path: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let Some(project_id) = resolve_project_id(&conn, project_path) else {
+        return false;
+    };
+    // (a) Saved canonical chat session.
+    if let Ok(Some(ws)) = crate::db::schema::WorkspaceSession::get(&conn, &project_id) {
+        if ws.session_id.as_deref().map_or(false, |s| !s.is_empty()) {
+            return true;
+        }
+    }
+    // (b) agent_enabled flag on the project row.
+    if let Ok(p) = crate::db::schema::Project::get(&conn, &project_id) {
+        if p.agent_enabled == 1 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Resolve a workspace's primary-agent NAME for identity / addressing /
+/// display — sourced from the DB-canonical truth, NOT solely the persona
+/// file.
+///
+/// **Why this exists (issue #70).** [`find_primary_agent`] resolves the
+/// name purely from the on-disk persona file (`.k2/agent/AGENT.md`'s
+/// `name:` frontmatter, or the legacy `.k2/agents/<name>/` tree). That
+/// file is frequently ABSENT for newly-created or DB-configured
+/// workspaces, so every identity/addressing caller that gated on
+/// `find_primary_agent` (heartbeat fire, inbox-wake routing, canonical
+/// session ensurance, lock checks) silently returned `None` and treated a
+/// perfectly-configured workspace as having no agent.
+///
+/// **Resolution order** (matches the #9 `resolve_spawn_name` fallback):
+///   1. The persona file's declared `name:` via [`find_primary_agent`] —
+///      preserves explicit naming and keeps the file-based path working
+///      with zero regression for workspaces that DO have an AGENT.md.
+///   2. If the DB says the workspace has a configured agent
+///      ([`workspace_has_configured_agent`]) → the workspace folder
+///      basename, the product-default display name ("agent display name
+///      defaults to the workspace basename").
+///   3. Otherwise `None` — genuinely no agent configured.
+///
+/// Persona-CONTENT callers (rendering AGENT.md body, launch-profile
+/// parsing, writing into the persona file) must keep using
+/// [`find_primary_agent`] / direct file reads — the name from this
+/// resolver is an addressing label, not a guarantee the file exists.
+pub fn resolve_agent_name(project_path: &str) -> Option<String> {
+    // 1. Persona file declared name (no regression for file-backed workspaces).
+    if let Some(name) = find_primary_agent(project_path) {
+        if !name.trim().is_empty() {
+            return Some(name);
+        }
+    }
+    // 2. DB-canonical: a configured workspace falls back to its basename.
+    if workspace_has_configured_agent(project_path) {
+        if let Some(base) = Path::new(project_path)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.trim().is_empty())
+        {
+            return Some(base);
+        }
+    }
+    // 3. No agent configured.
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +395,122 @@ mod tests {
         let fm = parse_frontmatter("---\n: lonely\nkey:\nrole: eng\n---\n");
         assert_eq!(fm.len(), 1);
         assert_eq!(fm.get("role"), Some(&"eng".to_string()));
+    }
+
+    // ── #70: DB-canonical name resolution ───────────────────────────
+    //
+    // These tests share the process-wide in-memory test DB (first
+    // `db::shared()` under cfg(test)). Each inserts its own unique
+    // project row (random UUID + unique path) so siblings don't collide.
+
+    fn unique_ws_path(label: &str) -> String {
+        let base = std::env::temp_dir().join(format!(
+            "k2-id70-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        base.to_string_lossy().into_owned()
+    }
+
+    fn insert_project(path: &str, agent_enabled: i64) -> String {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, agent_enabled) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, "id70-test", path, agent_enabled],
+        )
+        .expect("insert project row");
+        id
+    }
+
+    fn save_canonical_session(project_id: &str, session_id: &str) {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        crate::db::schema::WorkspaceSession::upsert(
+            &conn,
+            &uuid::Uuid::new_v4().to_string(),
+            project_id,
+            None,
+            Some(session_id),
+            "claude",
+            "system",
+            "stopped",
+        )
+        .expect("upsert workspace_sessions");
+    }
+
+    /// THE BUG REPRO: a configured workspace with a saved canonical
+    /// session but NO `.k2/agent/AGENT.md` file must still resolve its
+    /// name (to the workspace folder basename), where the file-only
+    /// `find_primary_agent` returns None.
+    #[test]
+    fn resolve_agent_name_saved_session_no_agent_md() {
+        let path = unique_ws_path("session");
+        let project_id = insert_project(&path, 0);
+        save_canonical_session(&project_id, "claude-sess-abc123");
+
+        // No AGENT.md on disk — the file-based resolver finds nothing.
+        assert_eq!(find_primary_agent(&path), None);
+
+        // DB-canonical resolver recovers the basename.
+        let expected_basename = Path::new(&path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(resolve_agent_name(&path), Some(expected_basename));
+        assert!(workspace_has_configured_agent(&path));
+    }
+
+    /// agent_enabled=1 (no saved session, no file) also resolves.
+    #[test]
+    fn resolve_agent_name_agent_enabled_no_agent_md() {
+        let path = unique_ws_path("enabled");
+        let _project_id = insert_project(&path, 1);
+
+        assert_eq!(find_primary_agent(&path), None);
+        let expected_basename = Path::new(&path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(resolve_agent_name(&path), Some(expected_basename));
+    }
+
+    /// NO regression: a workspace WITH a valid AGENT.md resolves to its
+    /// declared `name:` (the file path wins over the basename fallback).
+    #[test]
+    fn resolve_agent_name_prefers_agent_md_name() {
+        let path = unique_ws_path("withfile");
+        let _project_id = insert_project(&path, 1);
+
+        let agent_dir = workspace_agent_path(&path);
+        fs::create_dir_all(&agent_dir).expect("mkdir .k2/agent");
+        fs::write(
+            agent_dir.join("AGENT.md"),
+            "---\nname: scout\ntype: custom\n---\n# persona\n",
+        )
+        .expect("write AGENT.md");
+
+        assert_eq!(find_primary_agent(&path), Some("scout".to_string()));
+        // Declared name wins over the basename fallback.
+        assert_eq!(resolve_agent_name(&path), Some("scout".to_string()));
+
+        let _ = fs::remove_dir_all(crate::workspace_dot_dir(&path));
+    }
+
+    /// An UNCONFIGURED workspace (registered but no agent, no session,
+    /// no file) still resolves to None — the resolver does not invent an
+    /// agent for every project row.
+    #[test]
+    fn resolve_agent_name_none_when_unconfigured() {
+        let path = unique_ws_path("unconfigured");
+        let _project_id = insert_project(&path, 0);
+
+        assert_eq!(find_primary_agent(&path), None);
+        assert!(!workspace_has_configured_agent(&path));
+        assert_eq!(resolve_agent_name(&path), None);
     }
 
     #[test]

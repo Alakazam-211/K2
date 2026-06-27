@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::workspace::agent_identity::{
-    agent_dir, agents_dir, find_primary_agent, parse_frontmatter, resolve_project_id,
+    agent_dir, agents_dir, parse_frontmatter, resolve_agent_name, resolve_project_id,
 };
 use crate::db::schema::{WorkspaceSession, HeartbeatFire, WorkspaceState};
 use crate::fs_atomic::atomic_write_str;
@@ -463,7 +463,9 @@ pub fn k2so_agents_scheduler_tick(project_path: String) -> Result<Vec<String>, S
     let has_workspace_inbox = ws_inbox_count > 0;
 
     if has_workspace_inbox {
-        if let Some(primary) = find_primary_agent(&project_path) {
+        // #70: DB-canonical routing name so a fileless configured workspace
+        // still wakes on inbox arrivals.
+        if let Some(primary) = resolve_agent_name(&project_path) {
             if is_agent_locked(&project_path, &primary) {
                 audit(
                     Some(&primary),
@@ -626,7 +628,7 @@ pub fn k2so_agents_scheduler_tick(project_path: String) -> Result<Vec<String>, S
     // workspace inbox (untriaged arrivals) takes precedence over any
     // sub-agent inbox even on equal priority. Resolved once outside the
     // sort closure so we don't re-read AGENT.md for every comparison.
-    let primary_name = find_primary_agent(&project_path);
+    let primary_name = resolve_agent_name(&project_path);
     launchable.sort_by(|a, b| {
         if let Some(ref primary) = primary_name {
             if a == primary {

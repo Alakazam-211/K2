@@ -947,7 +947,7 @@ r#"# {project_name}
         // emits the planner-focused brief including PRD/milestone
         // workflow, cross-workspace messaging, heartbeat scheduling,
         // and review-queue triage.
-        let planner_name = find_primary_agent(&project_path)
+        let planner_name = crate::workspace::agent_identity::resolve_agent_name(&project_path)
             .unwrap_or_else(|| "k2so-agent".to_string());
         crate::skills::content::generate_k2so_agent_skill_content(&project_name, &planner_name)
     };

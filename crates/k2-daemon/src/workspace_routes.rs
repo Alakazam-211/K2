@@ -180,7 +180,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         };
                         if let Some(project_id) = project_id_opt {
                             if let Some(agent_name) =
-                                k2_core::workspace::agent_identity::find_primary_agent(&p)
+                                k2_core::workspace::agent_identity::resolve_agent_name(&p)
                             {
                                 let canonical_key = format!("{project_id}:{agent_name}");
                                 if let Some(session) =

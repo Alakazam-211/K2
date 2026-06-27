@@ -570,7 +570,7 @@ pub fn latest_manifest(project_path: &str) -> Option<SetupManifest> {
 /// primary agent's name when a live session is detected, else None.
 fn running_agent_name(project_path: &str) -> Option<String> {
     let primary =
-        crate::workspace::agent_identity::find_primary_agent(project_path)?;
+        crate::workspace::agent_identity::resolve_agent_name(project_path)?;
     if is_agent_locked(project_path, &primary) {
         Some(primary)
     } else {

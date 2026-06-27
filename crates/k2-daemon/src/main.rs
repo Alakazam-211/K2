@@ -182,6 +182,12 @@ async fn async_main() {
         Ok(outcome) => k2_core::log_debug!("[daemon/boot] home migration: {outcome:?}"),
         Err(e) => eprintln!("[daemon/boot] home migration FAILED: {e} — continuing on legacy layout"),
     }
+    // Sync the persisted federation master switch into the process so a daemon
+    // that boots with it already ON has the /cli/federation/* surface live
+    // immediately (the K2 Connect toggle persists it; env-var force-on still
+    // wins in federation::enabled()).
+    k2_core::federation::set_enabled(k2_core::app_settings::load().federation_enabled);
+
     // 0.40.0 — retire com.k2so.* LaunchAgents (idempotent; the app's
     // boot runs the same sweep — whichever boots first wins). A swept
     // plist means that agent WAS enabled, so eagerly re-ensure its

@@ -59,10 +59,16 @@ pub fn handle_settings_update(body: &[u8]) -> CliResponse {
         );
     }
     match k2_core::app_settings::update(partial) {
-        Ok(merged) => match serde_json::to_string(&merged) {
-            Ok(body) => CliResponse::ok_json(body),
-            Err(e) => CliResponse::bad_request(format!("serialize merged: {e}")),
-        },
+        Ok(merged) => {
+            // Sync the federation master switch into the running process so the
+            // /cli/federation/* gate flips immediately (no restart) when the K2
+            // Connect toggle changes it. Env-var force-on still wins in enabled().
+            k2_core::federation::set_enabled(merged.federation_enabled);
+            match serde_json::to_string(&merged) {
+                Ok(body) => CliResponse::ok_json(body),
+                Err(e) => CliResponse::bad_request(format!("serialize merged: {e}")),
+            }
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -76,10 +82,14 @@ pub fn handle_settings_update(body: &[u8]) -> CliResponse {
 /// shouldn't be reachable via a browser-cached idempotent fetch.
 pub fn handle_settings_reset() -> CliResponse {
     match k2_core::app_settings::reset() {
-        Ok(defaults) => match serde_json::to_string(&defaults) {
-            Ok(body) => CliResponse::ok_json(body),
-            Err(e) => CliResponse::bad_request(format!("serialize defaults: {e}")),
-        },
+        Ok(defaults) => {
+            // Reset returns federation to its default (OFF) — sync it.
+            k2_core::federation::set_enabled(defaults.federation_enabled);
+            match serde_json::to_string(&defaults) {
+                Ok(body) => CliResponse::ok_json(body),
+                Err(e) => CliResponse::bad_request(format!("serialize defaults: {e}")),
+            }
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }

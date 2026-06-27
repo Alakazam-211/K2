@@ -42,6 +42,7 @@ import {
 } from '../lib/k2-account'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { useSettingsStore } from '@/stores/settings'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 
 const DEFAULT_SERVER_ADDR = '178.156.232.105'
@@ -105,6 +106,7 @@ export const K2_CONNECT_MANIFEST: SettingEntry[] = [
   { id: 'k2-connect.start-stop', section: 'k2-connect', label: 'Start / Stop Tunnel', description: 'Expose this device at a public URL', keywords: ['start', 'stop', 'tunnel', 'expose', 'connect'] },
   { id: 'k2-connect.auto-start', section: 'k2-connect', label: 'Re-launch tunnel on restart', description: 'Automatically start this tunnel when the daemon restarts', keywords: ['auto', 'autostart', 'restart', 'reconnect', 'boot', 'relaunch'] },
   { id: 'k2-connect.users', section: 'k2-connect', label: 'Users / Access', description: 'People you allow to connect in to this device’s daemon', keywords: ['users', 'access', 'people', 'login', 'password', 'connect in', 'multi-user', 'allow', 'invite'] },
+  { id: 'k2-connect.federation', section: 'k2-connect', label: 'Enable federation', description: 'Allow cross-server agent communication on this server', keywords: ['federation', 'cross-server', 'peers', 'agents', 'connect', 'mesh', 'cortana'] },
 ]
 
 interface TunnelStatus {
@@ -365,6 +367,11 @@ export function K2ConnectSection(): React.JSX.Element {
   // remote daemon's users, already role-gated via /cli/auth/whoami).
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const isRemote = activeHost !== 'local'
+  // Federation master switch for the ACTIVE host. persistAndApply is
+  // host-aware, so toggling while connected to a remote server writes to THAT
+  // server's daemon — that's the per-server enable.
+  const federationEnabled = useSettingsStore((s) => s.federationEnabled)
+  const setFederationEnabled = useSettingsStore((s) => s.setFederationEnabled)
   // #638: when viewing a REMOTE host whose version is known but predates
   // roles (#629), whoami returns no role → the generic "handled by an
   // administrator" note would mislead. Swap in a version-aware hint instead.
@@ -1224,6 +1231,32 @@ export function K2ConnectSection(): React.JSX.Element {
               Start tunnel
             </button>
           )}
+        </div>
+
+        {/* ── Federation toggle — enable cross-server agent comms on the
+            ACTIVE host (host-aware persist → the connected server). Dark by
+            default; the daemon's /cli/federation/* gate honors it live. ── */}
+        <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
+          <label className="flex items-center gap-2 cursor-pointer select-none no-drag">
+            <input
+              type="checkbox"
+              checked={federationEnabled}
+              onChange={(e) => void setFederationEnabled(e.target.checked)}
+              className="peer sr-only"
+            />
+            <span
+              aria-hidden="true"
+              className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
+            >
+              {federationEnabled && (
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
+                </svg>
+              )}
+            </span>
+            <span className="text-xs text-[var(--color-text-secondary)]">Enable federation (cross-server agents)</span>
+          </label>
+          <span className="text-[10px] text-[var(--color-text-muted)]">{isRemote ? 'this server' : 'this device'}</span>
         </div>
 
         <div className="text-[10px] text-[var(--color-text-muted)] space-y-1">

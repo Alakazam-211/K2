@@ -228,6 +228,13 @@ pub struct AppSettings {
     /// refinement tracked as follow-up. Default MUST stay OFF either way.
     #[serde(default)]
     pub allow_remote_instruct: bool,
+    /// Cross-server federation master switch (K2 Connect → Enable federation).
+    /// Persisted app-level mirror of the `K2_FEDERATION` env var so the owner
+    /// can turn federation on/off per-server from the UI without editing a
+    /// launchd plist + restarting. `federation::enabled()` is true when EITHER
+    /// the env var OR this flag is set. Default MUST stay OFF (dark by default).
+    #[serde(default)]
+    pub federation_enabled: bool,
     /// GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
     /// Gates whether the `talk` CLI tool's `/cli/terminal/classify`
     /// detection step is allowed to run the bundled 1.5B model.
@@ -434,6 +441,7 @@ impl Default for AppSettings {
             active_window_hours: default_active_window_hours(),
             owner_display_name: None,
             allow_remote_instruct: false,
+            federation_enabled: false,
             use_llm_hitl_detection: false,
             editor: EditorSettings::default(),
             companion: CompanionSettings::default(),

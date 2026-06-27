@@ -55,20 +55,35 @@ pub use peers::{
     local_fingerprint, FederationPeer, PeerStore, PeerTrust, RequirePeerError, STORE_VERSION,
 };
 
-/// True iff `K2_FEDERATION` is set to an affirmative value
-/// (`1`/`true`/`yes`/`on`, case-insensitive). **Default OFF.**
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Runtime mirror of the persisted `AppSettings.federation_enabled` switch.
+/// The daemon syncs this at boot and after every settings update, so
+/// [`enabled`] stays a pure, cheap, thread-safe check (no per-request disk
+/// read) yet is togglable from the UI (K2 Connect → Enable federation)
+/// per-server without a restart.
+static SETTING_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Sync the persisted federation switch into this process. The daemon calls
+/// this at boot and after a `/cli/settings/update` that changes the flag.
+pub fn set_enabled(on: bool) {
+    SETTING_ENABLED.store(on, Ordering::Relaxed);
+}
+
+/// True iff federation is enabled — via the `K2_FEDERATION` env var
+/// (`1`/`true`/`yes`/`on`, case-insensitive) OR the persisted app-level
+/// `federation_enabled` switch synced through [`set_enabled`]. **Default OFF.**
 ///
-/// This is the single switch later phases (ingress/egress wiring) consult so
-/// the cross-server surface stays dormant until explicitly enabled. Phase 1
-/// ships it OFF and has no caller — the module is inert in production.
+/// The single switch the cross-server surface consults so it stays dormant
+/// until explicitly enabled (env force-on for headless boxes; the Settings
+/// toggle for everyone else).
 pub fn enabled() -> bool {
-    match std::env::var("K2_FEDERATION") {
-        Ok(v) => matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
-        Err(_) => false,
+    if let Ok(v) = std::env::var("K2_FEDERATION") {
+        if matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on") {
+            return true;
+        }
     }
+    SETTING_ENABLED.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -87,6 +102,15 @@ mod tests {
         assert!(enabled(), "K2_FEDERATION=1 must enable");
         std::env::set_var("K2_FEDERATION", "off");
         assert!(!enabled(), "K2_FEDERATION=off must disable");
+
+        // The persisted app-level switch (synced via set_enabled) also turns it
+        // on with the env var off/unset, and back off — the UI-toggle path.
+        std::env::remove_var("K2_FEDERATION");
+        set_enabled(true);
+        assert!(enabled(), "federation_enabled setting must enable");
+        set_enabled(false);
+        assert!(!enabled(), "federation_enabled OFF must disable");
+
         match prev {
             Some(p) => std::env::set_var("K2_FEDERATION", p),
             None => std::env::remove_var("K2_FEDERATION"),

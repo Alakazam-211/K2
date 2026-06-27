@@ -62,6 +62,11 @@ interface SettingsState {
   // enforces it server-side; the renderer-hide reads this same signal.
   allowRemoteInstruct: boolean
 
+  // Cross-server federation master switch (K2 Connect → Enable federation).
+  // Persisted per-server; the daemon's /cli/federation/* gate honors it via
+  // federation::set_enabled(). DEFAULTS OFF (dark by default).
+  federationEnabled: boolean
+
   // GH#8 — "Use local LLM to detect HITL" opt-in. Gates whether the
   // `talk` CLI's /cli/terminal/classify detection step runs the bundled
   // 1.5B model (ON) or stays regex-only (OFF). DEFAULTS OFF (inference
@@ -105,6 +110,7 @@ interface SettingsState {
   setActiveWindowHours: (hours: number) => void
   setOwnerDisplayName: (name: string) => void
   setAllowRemoteInstruct: (enabled: boolean) => void
+  setFederationEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
@@ -197,6 +203,7 @@ async function persistAndApply(
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
+      federationEnabled: result.federationEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       editor: mergeEditorDefaults(result.editor),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
@@ -220,6 +227,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   activeWindowHours: DEFAULT_ACTIVE_WINDOW_HOURS,
   ownerDisplayName: '',
   allowRemoteInstruct: false,
+  federationEnabled: false,
   useLlmHitlDetection: false,
   editor: { ...DEFAULT_EDITOR },
   defaultAgent: 'claude',
@@ -371,6 +379,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setFederationEnabled: async (enabled: boolean) => {
+    const prev = get().federationEnabled
+    set({ federationEnabled: enabled }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `federationEnabled` and syncs
+      // it into federation::set_enabled() so the /cli/federation/* gate flips
+      // immediately on THIS host. persistAndApply is host-aware, so toggling
+      // while connected to a remote server writes to THAT server's daemon.
+      await persistAndApply(set, { federationEnabled: enabled })
+    } catch (err) {
+      console.error('[settings] Failed to persist federation-enabled:', err)
+      set({ federationEnabled: prev })
+    }
+  },
+
   setUseLlmHitlDetection: async (enabled: boolean) => {
     const prev = get().useLlmHitlDetection
     set({ useLlmHitlDetection: enabled }) // optimistic
@@ -415,6 +438,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       projectSettings: result.projectSettings ?? {},
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
+      federationEnabled: result.federationEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       editor: mergeEditorDefaults(result.editor),
     })
@@ -435,6 +459,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
+      federationEnabled: result.federationEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       editor: mergeEditorDefaults(result.editor),
       lastActiveProjectId: result.lastActiveProjectId ?? null,

@@ -6369,9 +6369,99 @@ cmd_update_v2() {
     fi
 }
 
+# ── Federation (cross-server agent comms) ────────────────────────────
+# DARK by default: the daemon 404s every /cli/federation/* route unless it
+# was started with K2_FEDERATION=1. SSOT: prd-cross-server-agent-comms.md.
+#
+#   k2 fed send <peer>::<workspace>::<agent> "message"
+#   k2 fed pair-request --pubkey <spki.pem> [--label L] [--subdomain S]
+#   k2 fed confirm <fingerprint> <sas-code>
+#
+# send + confirm are OWNER-gated (they need ~/.k2/daemon.token).
+cmd_fed() {
+    local owner_token=""
+    local _tok_file="$K2_HOME/daemon.token"
+    [ -f "$_tok_file" ] && owner_token=$(cat "$_tok_file" 2>/dev/null | tr -d '[:space:]')
+
+    local sub="${1:-}"; shift || true
+    case "$sub" in
+        send)
+            local to="${1:-}"; local text="${2:-}"
+            if [ -z "$to" ] || [ -z "$text" ]; then
+                echo "usage: k2 fed send <peer>::<workspace>::<agent> \"message\"" >&2
+                exit 2
+            fi
+            if [ -z "$owner_token" ]; then
+                echo "k2 fed send: no owner token (need $_tok_file)" >&2
+                exit 1
+            fi
+            local body
+            body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2]}))' "$to" "$text")
+            curl -s -X POST "${BASE_URL}/cli/federation/send?token=${owner_token}" \
+                --connect-timeout 5 --max-time 60 \
+                -H "Content-Type: application/json" \
+                --data-raw "$body" 2>/dev/null
+            echo
+            ;;
+        pair-request)
+            local pubkey_file="" label="" subdomain=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --pubkey) pubkey_file="${2:-}"; shift 2 ;;
+                    --pubkey=*) pubkey_file="${1#--pubkey=}"; shift ;;
+                    --label) label="${2:-}"; shift 2 ;;
+                    --label=*) label="${1#--label=}"; shift ;;
+                    --subdomain) subdomain="${2:-}"; shift 2 ;;
+                    --subdomain=*) subdomain="${1#--subdomain=}"; shift ;;
+                    *) echo "k2 fed pair-request: unknown arg: $1" >&2; exit 2 ;;
+                esac
+            done
+            if [ -z "$pubkey_file" ] || [ ! -f "$pubkey_file" ]; then
+                echo "usage: k2 fed pair-request --pubkey <spki.pem> [--label L] [--subdomain S]" >&2
+                exit 2
+            fi
+            local body
+            body=$(python3 -c 'import json,sys; print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"public_key_pem":open(sys.argv[3]).read()}))' "$label" "$subdomain" "$pubkey_file")
+            # UNAUTH route (creates only a Pending peer).
+            curl -s -X POST "${BASE_URL}/cli/federation/pair/request" \
+                --connect-timeout 5 --max-time 30 \
+                -H "Content-Type: application/json" \
+                --data-raw "$body" 2>/dev/null
+            echo
+            ;;
+        confirm)
+            local fp="${1:-}"; local sas="${2:-}"
+            if [ -z "$fp" ] || [ -z "$sas" ]; then
+                echo "usage: k2 fed confirm <fingerprint> <sas-code>" >&2
+                exit 2
+            fi
+            if [ -z "$owner_token" ]; then
+                echo "k2 fed confirm: no owner token (need $_tok_file)" >&2
+                exit 1
+            fi
+            local body
+            body=$(python3 -c 'import json,sys; print(json.dumps({"fingerprint":sys.argv[1],"sas":sys.argv[2]}))' "$fp" "$sas")
+            curl -s -X POST "${BASE_URL}/cli/federation/pair/confirm?token=${owner_token}" \
+                --connect-timeout 5 --max-time 30 \
+                -H "Content-Type: application/json" \
+                --data-raw "$body" 2>/dev/null
+            echo
+            ;;
+        *)
+            echo "usage: k2 fed <send|pair-request|confirm> ..." >&2
+            echo "  (cross-server federation is dark unless the daemon ran with K2_FEDERATION=1)" >&2
+            exit 2
+            ;;
+    esac
+}
+
 # ── Router ───────────────────────────────────────────────────────────
 
 case "${1:-help}" in
+    fed)
+        # Federation V1 (cross-server agent comms). Dark by default.
+        shift; cmd_fed "$@"
+        ;;
     agent)
         # 0.39.0f Phase 2.1b: singular `agent` keeps only the documented
         # internal-tier subverbs (`update`, `complete`). Undocumented

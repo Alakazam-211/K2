@@ -128,3 +128,7 @@ minisign-verify = "0.2"
 # need the in-memory DB helper (`db::init_for_tests`). Production
 # binaries don't link this path — only `cargo test` does.
 k2-core = { path = "../k2-core", features = ["test-util"] }
+# Federation route tests mint a fresh "peer" keypair to pin (distinct from
+# the daemon's own tunnel key). Same rcgen version/features k2-core uses, so
+# it resolves to the one crate already in the lock tree — no new dep.
+rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }

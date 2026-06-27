@@ -34,9 +34,18 @@
 //! runtime branch inside the crypto.
 
 pub mod envelope;
+pub mod ingress;
+pub mod outbox;
+pub mod pairing;
 pub mod peers;
 
 pub use envelope::{open, seal, FederationEnvelope, FederationError, SignedPayload};
+pub use ingress::{ingest, IngressError, NonceCache, CAP_INBOUND, DEFAULT_SKEW_SECS};
+pub use outbox::{OutboxItem};
+pub use pairing::{
+    apply_pair_confirm, apply_pair_request, sas_code, PairOutcome, PairRequest,
+    DEFAULT_CONFIRM_CAPS,
+};
 pub use peers::{
     local_fingerprint, FederationPeer, PeerStore, PeerTrust, RequirePeerError, STORE_VERSION,
 };

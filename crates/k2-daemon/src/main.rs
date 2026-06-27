@@ -51,6 +51,7 @@ mod companion_routes;
 mod connect_users_routes;
 mod db_routes;
 mod events;
+mod federation_routes;
 mod fs_routes;
 mod grid_emitter;
 mod git_routes;

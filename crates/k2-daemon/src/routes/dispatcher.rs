@@ -537,6 +537,18 @@ async fn handle_one_request(
             // server-enforced. Method-gated per-handler below (the dedicated
             // arm re-checks is_post).
             | "/cli/terminal/send-message"
+            // Federation V1 (prd-cross-server-agent-comms) — the cross-server
+            // POST routes. The whole surface is DARK by default: the dispatch
+            // arm below 404s every `/cli/federation/*` path unless
+            // K2_FEDERATION is on, so listing them here is inert in a shipped
+            // build. `pair/request` is UNAUTH (creates only Pending);
+            // `pair/confirm`/`send` are owner-gated; `inbound` is authenticated
+            // by the signed envelope itself (require_peer), NOT a token. Method-
+            // gated per-handler below (require_post). The `roster` read is a GET.
+            | "/cli/federation/pair/request"
+            | "/cli/federation/pair/confirm"
+            | "/cli/federation/inbound"
+            | "/cli/federation/send"
     );
     if method != "GET" && !(is_post && post_allowed) {
         let _ = stream.read(&mut buf).await;
@@ -2635,6 +2647,116 @@ async fn handle_one_request(
                 .to_string()
             });
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
+        }
+        // ── Federation V1 (prd-cross-server-agent-comms) — the ONE
+        // dispatcher touch for the whole `/cli/federation/*` surface.
+        //
+        // DARK BY DEFAULT: with K2_FEDERATION OFF (the shipped default) every
+        // path here 404s exactly as if the routes didn't exist — zero behavior
+        // change. Routes: pair/request (UNAUTH → creates only Pending),
+        // pair/confirm (owner SAS confirm → Trusted), inbound (envelope-
+        // authenticated ingress → deliver to INBOX ONLY), send (owner-gated
+        // outbound seal+dial), roster (GET stub). Each mutating route starts
+        // with `if !is_post { 405 }` via require_post (the top-level dispatch
+        // lets a GET through on POST-allowlisted routes; see
+        // feedback_post_only_route_guards). Auth model is DECISION-2: inbound is
+        // authenticated by the SIGNED ENVELOPE (require_peer inside the
+        // handler), never a token; confirm/send take the owner token.
+        p if p.starts_with("/cli/federation/") => {
+            if !k2_core::federation::enabled() {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "404 Not Found",
+                    "application/json",
+                    r#"{"error":"not found"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let r = match p {
+                "/cli/federation/pair/request" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::federation_routes::handle_pair_request(&body)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/federation/pair/confirm" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    // Owner-gated: a connect-user session must NOT confirm peers.
+                    if !super::http::require_owner(
+                        &mut *stream,
+                        &mut buf,
+                        &query,
+                        state.token.as_str(),
+                    )
+                    .await
+                    {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::federation_routes::handle_pair_confirm(&body)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/federation/inbound" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    // NO token gate — the SIGNED ENVELOPE is the credential
+                    // (verify against the pinned key + require_peer, all inside
+                    // the handler). DECISION-2: peers are asymmetric-key
+                    // principals, never token_ok/owner.
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::federation_routes::handle_inbound(&body)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/federation/send" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    // Local actor initiates outbound → owner token required.
+                    if !super::http::require_owner(
+                        &mut *stream,
+                        &mut buf,
+                        &query,
+                        state.token.as_str(),
+                    )
+                    .await
+                    {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    // Blocking: seal + durable enqueue + network dial.
+                    tokio::task::spawn_blocking(move || {
+                        crate::federation_routes::handle_send(&body)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/federation/roster" => {
+                    // GET stub (Phase 5 fills the require_peer projection).
+                    let _ = stream.read(&mut buf).await;
+                    crate::federation_routes::handle_roster()
+                }
+                _ => {
+                    let _ = stream.read(&mut buf).await;
+                    crate::cli_response::CliResponse::not_found()
+                }
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // Unified /cli/* dispatch. Auth + param validation +
         // per-route handler all live in `crate::cli::dispatch`; main.rs

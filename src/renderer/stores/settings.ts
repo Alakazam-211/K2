@@ -62,6 +62,13 @@ interface SettingsState {
   // enforces it server-side; the renderer-hide reads this same signal.
   allowRemoteInstruct: boolean
 
+  // GH#8 — "Use local LLM to detect HITL" opt-in. Gates whether the
+  // `talk` CLI's /cli/terminal/classify detection step runs the bundled
+  // 1.5B model (ON) or stays regex-only (OFF). DEFAULTS OFF (inference
+  // costs battery/CPU). The daemon reads this same flag server-side to
+  // decide whether the model is ever consulted.
+  useLlmHitlDetection: boolean
+
   // Editor settings
   editor: EditorSettingsBackend
 
@@ -98,6 +105,7 @@ interface SettingsState {
   setActiveWindowHours: (hours: number) => void
   setOwnerDisplayName: (name: string) => void
   setAllowRemoteInstruct: (enabled: boolean) => void
+  setUseLlmHitlDetection: (enabled: boolean) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
   resetAllSettings: () => void
@@ -189,6 +197,7 @@ async function persistAndApply(
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
+      useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       editor: mergeEditorDefaults(result.editor),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,
@@ -211,6 +220,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   activeWindowHours: DEFAULT_ACTIVE_WINDOW_HOURS,
   ownerDisplayName: '',
   allowRemoteInstruct: false,
+  useLlmHitlDetection: false,
   editor: { ...DEFAULT_EDITOR },
   defaultAgent: 'claude',
   initialProjectId: null,
@@ -361,6 +371,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setUseLlmHitlDetection: async (enabled: boolean) => {
+    const prev = get().useLlmHitlDetection
+    set({ useLlmHitlDetection: enabled }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `useLlmHitlDetection` and
+      // reads it server-side on the /cli/terminal/classify path.
+      await persistAndApply(set, { useLlmHitlDetection: enabled })
+    } catch (err) {
+      console.error('[settings] Failed to persist use-llm-hitl-detection:', err)
+      set({ useLlmHitlDetection: prev })
+    }
+  },
+
   updateEditorSettings: async (partial: Partial<EditorSettingsBackend>) => {
     const prev = get().editor
     const merged = { ...prev, ...partial }
@@ -392,6 +415,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       projectSettings: result.projectSettings ?? {},
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
+      useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       editor: mergeEditorDefaults(result.editor),
     })
   },
@@ -411,6 +435,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
+      useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       editor: mergeEditorDefaults(result.editor),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,

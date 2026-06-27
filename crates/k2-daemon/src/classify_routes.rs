@@ -161,16 +161,48 @@ pub fn handle_classify(params: &HashMap<String, String>) -> CliResponse {
     };
     let screen = lines.join("\n");
 
-    classify_screen(&screen).into_response()
+    // "Use local LLM to detect HITL" opt-in (Settings → General, default
+    // OFF). This is the literal enable/disable for the bundled 1.5B model
+    // on the HITL-detection path: OFF ⇒ the model NEVER runs, classify is
+    // the regex fast-path only.
+    let use_llm = k2_core::app_settings::load().use_llm_hitl_detection;
+
+    classify_screen(&screen, use_llm).into_response()
 }
 
 /// Pure classification over already-rendered screen text. Split from
 /// the HTTP handler so unit tests can exercise the fast-path + parse
 /// robustness without a session or the network.
-fn classify_screen(screen: &str) -> ClassifyResult {
-    // 1. Regex fast-path — model-independent, ≈0 ms.
+///
+/// `use_llm` is the "Use local LLM to detect HITL" setting. When `false`
+/// the bundled model is NEVER consulted: a no-marker screen returns
+/// `source=Unavailable` / `is_hitl=null` so the caller (`talk`) falls
+/// back to today's regex/manual behavior. The regex fast-path runs
+/// regardless of the flag — it is free and model-independent.
+fn classify_screen(screen: &str, use_llm: bool) -> ClassifyResult {
+    // 1. Regex fast-path — model-independent, ≈0 ms. Always runs.
     if let Some(result) = fast_path_detect(screen) {
         return result;
+    }
+
+    // GATE: with the "Use local LLM to detect HITL" checkbox OFF, the
+    // 1.5B model MUST NOT run. The fast-path didn't fire, so we report
+    // `unavailable` (unknown — NOT "clear") and the caller uses today's
+    // regex/manual behavior. We return BEFORE touching `llm_host` so no
+    // inference is ever queued.
+    if !use_llm {
+        return ClassifyResult {
+            is_hitl: None,
+            source: ClassifySource::Unavailable,
+            kind: "none".to_string(),
+            questions: Vec::new(),
+            detail: Some(
+                "LLM HITL detection disabled (Settings → General → \
+                 \"Use local LLM to detect HITL\"); fast-path did not fire \
+                 — caller should use regex/manual behavior"
+                    .to_string(),
+            ),
+        };
     }
 
     // 2. Model path — only if the bundled model is actually loaded
@@ -633,17 +665,65 @@ The build passes now.";
     fn classify_screen_uses_fastpath_without_model() {
         // This screen has an obvious marker, so classify_screen must
         // return a Fastpath verdict WITHOUT consulting the model — safe
-        // to run in CI where no model is installed.
+        // to run in CI where no model is installed. The fast-path fires
+        // regardless of the `use_llm` flag, so a marker hit is Fastpath
+        // even with the LLM detection checkbox OFF.
         let screen = "Choose:\n❯ 1. Yes\n  2. No\nEnter to select";
-        let r = classify_screen(screen);
+        let r = classify_screen(screen, false);
         assert_eq!(r.source, ClassifySource::Fastpath);
         assert_eq!(r.is_hitl, Some(true));
     }
 
+    // ── "Use local LLM to detect HITL" gating (checkbox OFF) ─────────
+
+    #[test]
+    fn checkbox_off_fastpath_marker_is_fastpath_no_model() {
+        // Checkbox OFF + a fast-path marker → Fastpath (model never
+        // consulted). This is the "regex still catches obvious HITLs even
+        // with the LLM off" guarantee.
+        let screen = "Edit src/main.rs?\nDo you want to proceed?\n❯ 1. Yes\n  2. No";
+        let r = classify_screen(screen, false);
+        assert_eq!(r.source, ClassifySource::Fastpath);
+        assert_eq!(r.is_hitl, Some(true));
+        assert_eq!(r.kind, "permission");
+    }
+
+    #[test]
+    fn checkbox_off_no_marker_is_unavailable_and_never_invokes_model() {
+        // Checkbox OFF + NO fast-path marker → the model MUST NOT run.
+        // We assert the verdict is the model-independent `Unavailable`
+        // branch (is_hitl=null), which classify_screen returns BEFORE it
+        // ever touches `llm_host`. If the gate were missing this screen
+        // would fall through to the model/unavailable host-dependent path;
+        // pinning source=Unavailable + is_hitl=None proves the 1.5B is not
+        // invoked when the checkbox is off.
+        let screen = "rosson@host ~/proj % ls\nCargo.toml  src  target\nrosson@host ~/proj % ";
+        let r = classify_screen(screen, false);
+        assert_eq!(r.source, ClassifySource::Unavailable);
+        assert_eq!(r.is_hitl, None);
+        // Unavailable is "unknown", NOT "clear" — never claims is_hitl=false.
+        assert_ne!(r.is_hitl, Some(false));
+    }
+
     // The real qwen inference path (source=Model over ~20 live screens)
     // is the validation-agent's job and requires the model file, which
-    // may be absent in CI — so there is NO unit test that invokes the
-    // model here. `classify_screen` over a non-marker screen would hit
-    // the model/unavailable branch, which depends on host state; we do
-    // not assert on it in unit tests.
+    // may be absent in CI — so it is gated behind `#[ignore]` (run with
+    // `cargo test -- --ignored` on a box with the GGUF loaded). With the
+    // checkbox ON and no fast-path marker, classify_screen MUST reach the
+    // model path: it returns either `Model` (model loaded) or
+    // `Unavailable` (model not loaded) — but it is the only configuration
+    // in which the model branch is reachable at all.
+    #[test]
+    #[ignore = "requires the bundled GGUF model; run with --ignored"]
+    fn checkbox_on_no_marker_reaches_model_path() {
+        let screen = "Tell me about your day. It was fine, thanks for asking.";
+        let r = classify_screen(screen, true);
+        // With a real model loaded this is Model; if absent it degrades to
+        // Unavailable. Either way it must NOT be Fastpath (no marker here).
+        assert_ne!(r.source, ClassifySource::Fastpath);
+        assert!(
+            matches!(r.source, ClassifySource::Model | ClassifySource::Unavailable),
+            "checkbox ON must route a non-marker screen to the model path"
+        );
+    }
 }

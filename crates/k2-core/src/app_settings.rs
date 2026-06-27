@@ -228,6 +228,20 @@ pub struct AppSettings {
     /// refinement tracked as follow-up. Default MUST stay OFF either way.
     #[serde(default)]
     pub allow_remote_instruct: bool,
+    /// GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
+    /// Gates whether the `talk` CLI tool's `/cli/terminal/classify`
+    /// detection step is allowed to run the bundled 1.5B model.
+    /// **Defaults OFF**: with the checkbox off, classify does the regex
+    /// fast-path ONLY (free, no inference) and returns `unavailable` when
+    /// no marker fires — so `talk` falls back to today's regex/manual
+    /// behavior; with it on, classify additionally runs the qwen model to
+    /// catch unmarked HITLs the regex misses (costs battery/CPU). A typed
+    /// `bool` is required: `AppSettings` round-trips through
+    /// `serde_json::from_value` on every `load`/`update`, which silently
+    /// drops keys with no matching field — an untyped key would never
+    /// persist.
+    #[serde(default)]
+    pub use_llm_hitl_detection: bool,
     #[serde(default)]
     pub editor: EditorSettings,
     #[serde(default)]
@@ -420,6 +434,7 @@ impl Default for AppSettings {
             active_window_hours: default_active_window_hours(),
             owner_display_name: None,
             allow_remote_instruct: false,
+            use_llm_hitl_detection: false,
             editor: EditorSettings::default(),
             companion: CompanionSettings::default(),
             wake_scheduler: WakeSchedulerSettings::default(),
@@ -774,6 +789,41 @@ mod tests {
         // reset() returns to the OFF default.
         let after = reset().expect("reset");
         assert!(!after.allow_remote_instruct);
+    }
+
+    /// GH#8 — the "Use local LLM to detect HITL" opt-in must default OFF
+    /// on a fresh settings file, persist through save→load, ingest the
+    /// camelCase `useLlmHitlDetection` key via the generic `update()`
+    /// deep-merge (the /cli/settings/update path the toggle hits), and
+    /// return to OFF on reset. Default MUST be OFF: it is what keeps the
+    /// 1.5B model from ever running during `talk` HITL detection unless
+    /// the owner explicitly opts in.
+    #[test]
+    fn use_llm_hitl_detection_defaults_off_and_round_trips() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        // Fresh file: the cost/battery default is OFF.
+        assert!(!load().use_llm_hitl_detection);
+        assert!(!AppSettings::default().use_llm_hitl_detection);
+
+        // save → load preserves an explicit opt-in.
+        let mut s = AppSettings::default();
+        s.use_llm_hitl_detection = true;
+        save(&s).expect("save");
+        assert!(load().use_llm_hitl_detection);
+
+        // update() deep-merge ingests the camelCase key like any other field.
+        let merged = update(serde_json::json!({
+            "useLlmHitlDetection": false
+        }))
+        .expect("update");
+        assert!(!merged.use_llm_hitl_detection);
+        assert!(!load().use_llm_hitl_detection);
+
+        // reset() returns to the OFF default.
+        let after = reset().expect("reset");
+        assert!(!after.use_llm_hitl_detection);
     }
 
     #[test]

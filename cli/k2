@@ -1778,6 +1778,35 @@ except Exception:
 " 2>/dev/null
 }
 
+# GH#8 — `talk`'s HITL DETECTION step. Calls the daemon's
+# /cli/terminal/classify over the peer's live screen and echoes the
+# verdict as "<is_hitl>|<source>" where <is_hitl> is `true`/`false`/`null`
+# and <source> is `fastpath`/`model`/`unavailable`. Empty on request
+# failure (caller treats empty as "not detected" → deliver).
+#
+# The "Use local LLM to detect HITL" setting (Settings → General, default
+# OFF) is read SERVER-SIDE by the endpoint: OFF ⇒ regex fast-path only
+# (a no-marker screen comes back `null|unavailable`); ON ⇒ regex + the
+# 1.5B model. `talk` keys ONLY on is_hitl==true to auto-scout; `false`
+# and `unavailable` both deliver (the agent already saw the screen).
+# Read-only; addresses the session by workspace[+agent], same as `read`.
+_talk_classify() {
+    local target="$1" agent="$2" lines="$3"
+    local params="workspace=$(urlencode "$target")&lines=$lines"
+    [[ -n "$agent" ]] && params="${params}&agent=$(urlencode "$agent")"
+    cli_request "/cli/terminal/classify" "$params" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    h = d.get('is_hitl', None)
+    s = d.get('source', '')
+    hs = 'null' if h is None else ('true' if h else 'false')
+    print(hs + '|' + s)
+except Exception:
+    pass
+" 2>/dev/null
+}
+
 # Parse N (total questions) from a 'Question X of Y' header. Echoes Y, or
 # nothing if the header is absent.
 _talk_parse_total() {
@@ -2167,6 +2196,41 @@ EOF
     if [[ "$read_only" == "true" ]]; then
         echo "talk(BETA): --read-only — nothing sent. Re-run without it to deliver." >&2
         [[ -n "$text" ]] && echo "  (held message: $text)" >&2
+        return 0
+    fi
+
+    # ── 2b. AUTO-DETECT HITL (GH#8) ── before delivering, ask the daemon's
+    # /cli/terminal/classify whether $target is sitting on a human-in-the-
+    # loop prompt. The "Use local LLM to detect HITL" setting (Settings →
+    # General, default OFF) is enforced SERVER-SIDE: OFF ⇒ regex fast-path
+    # only (no model ever runs; a no-marker screen returns `unavailable`),
+    # ON ⇒ regex + the bundled 1.5B model (catches unmarked HITLs).
+    #
+    #   • is_hitl == true  → AUTO-START the scout (surface the whole form,
+    #     arrow-only / non-destructive) and HOLD the message — don't let it
+    #     get eaten by the open prompt.
+    #   • is_hitl == false / null / unavailable / (request failed) → DELIVER.
+    #     The agent ALREADY saw the screen from the read above, and an
+    #     `unavailable`/`false` verdict NEVER claims the peer is clear — so
+    #     this preserves today's behavior (read-before-send) when there's no
+    #     detector, exactly the degrade-gracefully contract.
+    local verdict="" det_is_hitl="" det_source=""
+    verdict=$(_talk_classify "$target" "$agent" "$lines" || true)
+    if [[ -n "$verdict" ]]; then
+        det_is_hitl="${verdict%%|*}"
+        det_source="${verdict#*|}"
+    fi
+    if [[ "$det_is_hitl" == "true" ]]; then
+        echo "── talk(BETA): HITL detected on $target (source: ${det_source:-?}) — holding the message, scouting the form ──" >&2
+        local scout_sid
+        if scout_sid=$(resolve_write_session_id "$target" "$agent"); then
+            talk_scout "$scout_sid" "$lines" "$target"
+        fi
+        echo "" >&2
+        echo "talk(BETA): $target is in a human-in-the-loop prompt — message HELD, NOT delivered:" >&2
+        [[ -n "$text" ]] && echo "  (held message: $text)" >&2
+        echo "talk(BETA): answer the form above with  k2 talk $target --answers <a,b,c>  (or single-step --answer <N> / --respond <y|n>)," >&2
+        echo "            then re-run  k2 talk $target \"…\"  once it's READY to deliver." >&2
         return 0
     fi
 
@@ -4667,7 +4731,17 @@ HOW IT WORKS (pure ergonomics over read + msg)
   1. READS the target's live terminal (same as `k2 read`) and prints it.
   2. Surfaces the drive-or-back-off guidance. YOU (the calling agent —
      you are the LLM) comprehend the screen; the CLI does not judge.
-  3. SENDS via the `k2 msg` path — unless --read-only. `talk` AUTO-WAKES
+  3. AUTO-DETECTS a HITL (GH#8): before sending, it asks the daemon's
+     /cli/terminal/classify whether the peer is on a human-in-the-loop
+     prompt. If so it AUTO-STARTS --scout (surfaces the whole form, non-
+     destructive) and HOLDS your message instead of letting it get eaten;
+     answer with `--answers`/`--answer`, then re-run to deliver. The "Use
+     local LLM to detect HITL" setting (Settings → General, default OFF)
+     gates this: OFF = regex-only detection (no model runs), ON = regex +
+     the bundled 1.5B model (catches unmarked prompts). When nothing is
+     detected (or detection is unavailable) it delivers as normal — you
+     already saw the screen from step 1.
+  4. SENDS via the `k2 msg` path — unless --read-only. `talk` AUTO-WAKES
      a dormant canonical session by default (it's the explicit "interact
      now" verb): if the peer is asleep it resumes it, waits until READY,
      then delivers, and prints "peer was dormant — woke (Xs)". Suppress

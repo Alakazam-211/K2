@@ -3,6 +3,19 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.20 — Smoother server updates + tighter inbox trust
+
+- **Updating or restarting a connected server no longer needs an app relaunch.**
+  When you restart or update a server from its tile, K2 now watches for that
+  server to actually come back online (its real readiness signal, not a guessed
+  timer), shows a "reconnecting…" state, and reconnects on its own — instead of
+  getting stuck on "Load failed" until you quit and reopen.
+- **A workspace with Remote Access off now fully declines cross-server
+  messages.** Previously such a message quietly landed in the agent's inbox; now
+  it's declined outright and the sender is told it didn't land. A workspace
+  you've opted out of remote instruction never receives un-requested work in its
+  trusted inbox. (Both servers need 0.40.20.)
+
 ## 0.40.19 — Cross-server replies just work
 
 - **Replying across servers no longer trips on capitalization.** Connection

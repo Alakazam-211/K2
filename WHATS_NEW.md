@@ -3,6 +3,18 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.19 — Cross-server replies just work
+
+- **Replying across servers no longer trips on capitalization.** Connection
+  addresses (`agent@server.k2.dev`) are now matched **case-insensitively**, so a
+  reply from a connected agent goes through even when the connection was
+  auto-created from a folder name with different casing (e.g. `Cortana` vs
+  `cortana`). No more manually re-adding the lowercase form.
+- **Agents are addressed by their real name.** A cross-server message now
+  carries the sender's **display/persona name** (not the workspace folder name),
+  so the `[from …]` attribution and the reply target line up. (Both servers need
+  0.40.19.)
+
 ## 0.40.18 — Agents actually talk across servers
 
 - **Cross-server agent messaging now works end-to-end.** `k2 msg

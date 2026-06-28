@@ -10,7 +10,8 @@
 //!     `Pending` peer (fail-closed; promotion needs the owner SAS confirm).
 //!   - [`handle_pair_confirm`] — P2 OWNER-gated SAS confirm → `Trusted` + caps.
 //!   - [`handle_inbound`] — P3 the SECURITY CORE: verify → require_peer →
-//!     replay/skew/ttl → sanitize → deliver to the local INBOX ONLY.
+//!     replay/skew/ttl → sanitize → deliver to the canonical chat IFF the
+//!     recipient opted into remote instruction, else DECLINE (never trusted).
 //!   - [`handle_send`] — P4 seal an [`AgentSignal`], durably enqueue, dial the
 //!     peer's E2E listener, POST to its `/cli/federation/inbound`.
 //!   - [`handle_roster`] — P5 peer-facing roster: signed-challenge auth
@@ -187,9 +188,11 @@ pub fn handle_pubkey() -> CliResponse {
 ///      "allow remote instruction" opt-in:
 ///        - opt-in ON  → [`workspace_msg::deliver_live`] (inject if live,
 ///          wake+resume+inject if dormant) — the canonical chat.
-///        - opt-in OFF → [`k2_core::inbox::compose`] a respondable, VISIBLE
-///          item under `<ws>/.k2/inbox/` (`k2 inbox`). A remote peer can
-///          NEVER drive a session the owner hasn't opted into.
+///        - opt-in OFF → DECLINE (200, `delivered:false`,
+///          `mode:"declined"`). The message is NOT written anywhere trusted
+///          (the `.k2/inbox/` is inherently trusted work), and the sender is
+///          told it did not land. A remote peer can NEVER drive — nor seed
+///          trusted work for — a session the owner hasn't opted into.
 ///
 /// Delivery always targets EXACTLY the agent named in the verified, signed
 /// `to`; the sender host attribution is derived from the VERIFIED peer,
@@ -304,29 +307,23 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
             .to_string(),
         )
     } else {
-        // Opt-in OFF: a verified remote peer may NOT drive the session. Land
-        // a respondable, VISIBLE copy in the real inbox so it is listable
-        // via `k2 inbox` and never lost. No inject, no wake.
-        let title = inbox_title_excerpt(&text);
-        match k2_core::inbox::compose(
-            Path::new(&project_path),
-            &title,
-            &text,
-            None,
-            Some("federation"),
-            Some(&from_label),
-        ) {
-            Ok(item) => CliResponse::ok_json(
-                serde_json::json!({
-                    "delivered": true,
-                    "mode": "inbox",
-                    "signal_id": signal.id.to_string(),
-                    "inbox_id": item.id,
-                })
-                .to_string(),
-            ),
-            Err(e) => json_err("500 Internal Server Error", format!("inbox compose: {e}")),
-        }
+        // Opt-in OFF: "allow remote instruction = OFF" means remote messages
+        // must NOT instruct this agent. The `.k2/inbox/` is inherently TRUSTED
+        // (agents treat inbox items as work), so writing there would contradict
+        // the opt-out. DECLINE explicitly instead: deliver nowhere trusted, and
+        // tell the sender it did not land (a future distrusted, email-style
+        // inbox is where un-instructed remote messages will belong). The dial
+        // still succeeds (200) so the sender can distinguish a clean decline
+        // from a transport/security failure — but `delivered:false`.
+        CliResponse::ok_json(
+            serde_json::json!({
+                "delivered": false,
+                "mode": "declined",
+                "reason": "remote_instruction_disabled",
+                "signal_id": signal.id.to_string(),
+            })
+            .to_string(),
+        )
     }
 }
 
@@ -342,17 +339,6 @@ fn resolve_project_path_by_id(workspace_id: &str) -> Option<String> {
         |row| row.get::<_, String>(0),
     )
     .ok()
-}
-
-/// First non-empty line of `text`, truncated to a short inbox title. Falls
-/// back to a generic label so [`k2_core::inbox::compose`]'s non-empty-title
-/// requirement always holds.
-fn inbox_title_excerpt(text: &str) -> String {
-    let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-    if first.is_empty() {
-        return "Federation message".to_string();
-    }
-    first.chars().take(60).collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -845,11 +831,15 @@ mod tests {
         federation::seal(&signal, key, subdomain, 8).unwrap()
     }
 
-    // ── P3 receive: opt-in OFF → a respondable copy lands in the REAL inbox.
-    //    The verified message is preserved + visible (`k2 inbox`); a remote
-    //    peer can NOT drive (inject/wake) a session the owner hasn't opted in.
+    // ── P3 receive: opt-in OFF → DECLINE. "Allow remote instruction = OFF"
+    //    means remote messages must NOT instruct this agent, and the
+    //    `.k2/inbox/` is inherently TRUSTED work — so the verified message is
+    //    written NOWHERE trusted and the sender is told it did not land
+    //    (200, `delivered:false`, `mode:"declined"`). The security gate still
+    //    passed (the peer is Trusted+inbound); only the trusted-inbox write is
+    //    gone.
     #[test]
-    fn inbound_opt_in_off_lands_in_real_inbox() {
+    fn inbound_opt_in_off_declines_no_trusted_inbox() {
         with_temp_home(|| {
             k2_core::db::init_for_tests();
             let ws_path = temp_ws_path();
@@ -858,21 +848,25 @@ mod tests {
             let key = pin_trusted_peer("peer");
             let bytes = seal_msg_to(&ws_id, &key, "peer", "hello over the wire");
             let resp = handle_inbound(&bytes);
-            assert_eq!(resp.status, "200 OK", "valid envelope must deliver: {}", resp.body);
+            // Received-but-not-delivered: the dial succeeds so the sender can
+            // tell a clean decline from a transport/security failure.
+            assert_eq!(resp.status, "200 OK", "valid envelope dial must succeed: {}", resp.body);
 
             let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
-            assert_eq!(v["mode"], "inbox", "opt-in OFF must route to the real inbox");
-
-            // The item is listable under `<ws>/.k2/inbox/`, attributed to the
-            // VERIFIED sender + peer host, sourced "federation".
-            let items = k2_core::inbox::list_root(Path::new(&ws_path));
-            assert_eq!(items.len(), 1, "exactly one inbox item");
-            assert_eq!(items[0].source, "federation");
+            assert_eq!(v["delivered"], false, "opt-in OFF must NOT report delivered");
+            assert_eq!(v["mode"], "declined", "opt-in OFF must decline delivery");
             assert_eq!(
-                items[0].from, "cortana@peer.k2.dev",
-                "attribution = <sender-agent>@<verified-peer-host>"
+                v["reason"], "remote_instruction_disabled",
+                "decline must carry the explicit reason"
             );
-            assert!(items[0].title.contains("hello over the wire"));
+
+            // NOTHING was written to the TRUSTED inbox under `<ws>/.k2/inbox/`.
+            let items = k2_core::inbox::list_root(Path::new(&ws_path));
+            assert!(
+                items.is_empty(),
+                "opt-in OFF must NOT write the trusted inbox, found {}",
+                items.len()
+            );
         });
     }
 

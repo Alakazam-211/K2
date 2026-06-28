@@ -10,6 +10,7 @@ import {
   federationBadgeText,
   hostOpPost,
   hostOpGet,
+  hostBootStatus,
   type HostCreds,
 } from './host-ops'
 import type { UpdateCheckResult } from '@/components/Settings/sections/update-host'
@@ -147,5 +148,53 @@ describe('hostOpPost / hostOpGet — survive a remote restart (retry-on-network-
 
     await expect(hostOpGet(CREDS, 'settings/get')).rejects.toThrow('boom')
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+// The state-aware reconnect: after a restart/update the tile polls the host's
+// PUBLIC `/boot-status` (a TOP-LEVEL route, NO token) until phase === 'ready'.
+// A still-restarting host throws at the network layer → hostBootStatus must
+// resolve to null ("keep waiting"), never a hard failure; once it answers the
+// parsed JSON (incl. version) flows back so the tile can refresh.
+describe('hostBootStatus — public readiness handshake (top-level, unauthenticated)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('hits <base>/boot-status (NOT /cli, NO token) and returns the parsed phase + version', async () => {
+    const fetchMock = vi.fn(async () =>
+      fakeRes({ body: JSON.stringify({ phase: 'ready', version: '0.40.12', protocol: 3 }) }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(hostBootStatus(CREDS)).resolves.toEqual({
+      phase: 'ready',
+      version: '0.40.12',
+      protocol: 3,
+    })
+    const url = fetchMock.mock.calls[0][0] as string
+    expect(url).toBe('https://rosson.k2.dev/boot-status')
+    expect(url).not.toContain('/cli/')
+    expect(url).not.toContain('token')
+  })
+
+  it('a still-restarting connection error resolves to null (keep waiting, not a failure)', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error('Load failed') // dead pooled socket / host still down
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(hostBootStatus(CREDS)).resolves.toBeNull()
+  })
+
+  it('a connection error THEN a ready 200 resolves ready (the retry evicted the dead socket)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Load failed'))
+      .mockResolvedValueOnce(fakeRes({ body: JSON.stringify({ phase: 'ready' }) }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(hostBootStatus(CREDS)).resolves.toEqual({ phase: 'ready' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

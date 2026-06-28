@@ -32,11 +32,13 @@ import {
   remoteCreds,
   hostOpPost,
   hostOpGet,
+  hostBootStatus,
   summarizeCheck,
   federationBadgeText,
   type CheckSummary,
   type FederationState,
 } from '@/lib/host-ops'
+import { isConnectionLevelError } from '@/lib/remote-retry'
 import {
   updatePhaseCopy,
   isTerminalPhase,
@@ -406,6 +408,9 @@ function HostTile({
   const [updateBusy, setUpdateBusy] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
   const [phaseText, setPhaseText] = useState<string | null>(null)
+  // True while polling /boot-status back to 'ready' after a restart/update we
+  // triggered — drives the "reconnecting…" UX and disables re-triggering.
+  const [reconnecting, setReconnecting] = useState(false)
 
   // Stays false after unmount so async pollers / fetches don't setState on a
   // gone tile.
@@ -452,13 +457,90 @@ function HostTile({
     if (isAuthError(m)) clearHostToken(host.id)
   }
 
+  // Best-effort re-read of THIS host's federation badge (used by the reconnect
+  // poller once the host is back; the mount effect below has its own copy with
+  // a per-render `cancelled` guard). aliveRef-guarded so a gone tile is safe.
+  const refreshFederation = async (): Promise<void> => {
+    if (signedOut) {
+      setFederation('unknown')
+      return
+    }
+    setFederation('loading')
+    try {
+      const s = await hostOpGet<{ federationEnabled?: boolean }>(creds, 'settings/get')
+      if (!aliveRef.current) return
+      setFederation(s?.federationEnabled === true ? 'on' : s?.federationEnabled === false ? 'off' : 'unknown')
+    } catch {
+      if (aliveRef.current) setFederation('unknown')
+    }
+  }
+
+  // STATE-AWARE reconnect after a restart/update WE triggered on this host.
+  // The server goes down for a while (download → install → restart → tunnel
+  // reconnect) and the WKWebView pool holds DEAD sockets, so the tile would
+  // otherwise show "Load failed" / "Can't connect" until a full app relaunch.
+  //
+  // Instead of guessing a delay, poll the daemon's PUBLIC `/boot-status` until
+  // it reports `phase === 'ready'` again — reacting to the server ACTUALLY
+  // being back, NOT a fixed timer. Each `hostBootStatus` fetch's
+  // throw-then-retry also evicts the dead pooled socket and reopens a fresh
+  // one, so the pool is healthy by the time `ready` is observed. aliveRef
+  // guards every setState so a navigated-away tile is safe. The total wait is
+  // capped (~4 min) so a host that never returns surfaces a recovery hint
+  // instead of looping forever.
+  const waitForHostReady = async (): Promise<void> => {
+    if (reconnecting) return // already polling this host back to life
+    setReconnecting(true)
+    // Clear the transient errors the dropping server produced — "reconnecting"
+    // is the correct UX here, not a hard failure.
+    setRestartMsg(null)
+    setCheckError(null)
+    setUpdateError(null)
+    setFederation('unknown') // the server is dropping; re-read once it's back
+    setPhaseText(`${label} is restarting — reconnecting…`)
+
+    const deadline = Date.now() + 4 * 60_000 // cap the total wait at ~4 minutes
+    const intervalMs = 2500
+    try {
+      while (aliveRef.current && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, intervalMs))
+        if (!aliveRef.current) return
+        const status = await hostBootStatus(creds)
+        if (!aliveRef.current) return
+        if (status?.phase === 'ready') {
+          // The server is genuinely back — clear the reconnecting/phase state,
+          // refresh the federation badge + current-version read so the tile
+          // reflects the new state, and stop polling.
+          setPhaseText(null)
+          if (status.version) setHostCurrent(status.version)
+          setRestartMsg({
+            ok: true,
+            text: `${label} is back online${status.version ? ` (v${status.version})` : ''}.`,
+          })
+          void refreshFederation()
+          return
+        }
+      }
+      if (!aliveRef.current) return
+      // Timed out — don't loop forever; give a concrete recovery path.
+      setPhaseText(null)
+      setUpdateError(
+        `${label} is still unreachable — try “Check for updates”, or relaunch K2 if it persists.`,
+      )
+    } finally {
+      if (aliveRef.current) setReconnecting(false)
+    }
+  }
+
   const doRestart = async (): Promise<void> => {
     setRestartBusy(true)
     setRestartMsg(null)
     try {
       await hostOpPost(creds, 'daemon/restart')
-      setRestartMsg({ ok: true, text: `${label} is restarting — it'll be briefly unreachable, then reconnect.` })
-      setFederation('unknown') // the server is dropping; re-read after it's back
+      // The server is dropping now — poll /boot-status until it's back on
+      // 'ready' (state-aware), showing a "reconnecting…" line meanwhile,
+      // instead of a guessed delay or a premature "Load failed".
+      void waitForHostReady()
     } catch (e) {
       const m = errMsg(e)
       clearIfAuthError(m)
@@ -502,17 +584,23 @@ function HostTile({
         status = await hostOpGet<UpdateStatusResult>(creds, 'daemon/update/status', { job_id: jobId })
       } catch {
         // The host goes unreachable while it installs & restarts — that's the
-        // expected terminal state, not an error.
-        if (aliveRef.current) {
-          setPhaseText(`${label} is installing & restarting… it'll reconnect automatically.`)
-        }
+        // EXPECTED terminal state, not an error. Hand off to the state-aware
+        // reconnect poll: watch /boot-status until the host is back on 'ready'.
+        if (aliveRef.current) void waitForHostReady()
         return
       }
       if (!aliveRef.current) return
       const pct = typeof status.progress === 'number' ? status.progress * 100 : undefined
       setPhaseText(updatePhaseCopy(status.phase, label, { progress: pct, current: hostCurrent }))
       if (isTerminalPhase(status.phase)) {
-        if (status.error) setUpdateError(`Update error on ${label}: ${status.error}`)
+        if (status.error) {
+          setUpdateError(`Update error on ${label}: ${status.error}`)
+        } else if (status.phase === 'restarting' || status.phase === 'done') {
+          // The host is going down to apply the update — start the state-aware
+          // reconnect poll instead of leaving a stale "restarting…" line that
+          // never clears (failed/rolled-back stay put: nothing to wait for).
+          if (aliveRef.current) void waitForHostReady()
+        }
         return
       }
     }
@@ -535,6 +623,16 @@ function HostTile({
     } catch (e) {
       const m = errMsg(e)
       clearIfAuthError(m)
+      // The user explicitly triggered this update. A CONNECTION-level failure
+      // here (e.g. "Load failed" because the host already started dropping and
+      // the update/start response socket died) is NOT a hard failure — the
+      // correct UX is "reconnecting", so poll /boot-status back to ready
+      // instead of surfacing the transient network error. Auth/403 are
+      // authoritative and still surface immediately.
+      if (!isForbiddenError(m) && !isAuthError(m) && isConnectionLevelError(e)) {
+        void waitForHostReady()
+        return
+      }
       setPhaseText(null)
       setUpdateError(isForbiddenError(m) ? updateForbiddenCopy(label) : `Couldn't start the update on ${label}: ${m}`)
     } finally {
@@ -607,14 +705,14 @@ function HostTile({
               Sign in again
             </button>
           )}
-          <button onClick={() => void doRestart()} disabled={restartBusy} className={BTN_ORANGE}>
-            {restartBusy ? 'Restarting…' : 'Restart'}
+          <button onClick={() => void doRestart()} disabled={restartBusy || reconnecting} className={BTN_ORANGE}>
+            {restartBusy ? 'Restarting…' : reconnecting ? 'Reconnecting…' : 'Restart'}
           </button>
           <button onClick={() => void doCheck()} disabled={checkBusy} className={BTN_ORANGE}>
             {checkBusy ? 'Checking…' : 'Check for updates'}
           </button>
           {summary?.kind === 'available' && (
-            <button onClick={() => void doUpdate()} disabled={updateBusy} className={BTN_ACCENT}>
+            <button onClick={() => void doUpdate()} disabled={updateBusy || reconnecting} className={BTN_ACCENT}>
               {updateBusy ? 'Updating…' : `Update to ${summary.latest}`}
             </button>
           )}

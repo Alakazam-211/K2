@@ -114,6 +114,51 @@ export async function hostOpGet<T = unknown>(
   })
 }
 
+// ── Readiness handshake (public, unauthenticated) ────────────────────────
+
+/** A minimal view of a host's `/boot-status` readiness handshake — only the
+ *  fields the post-restart/update reconnect poller reads. The full daemon
+ *  shape is `{version, protocol, phase, detail?}` (see ConnectionGate). */
+export interface HostBootStatus {
+  /** `'starting' | 'migrating' | 'ready' | 'error' | …` — readiness is
+   *  ONLY ever `phase === 'ready'`; the poller never assumes a delay. */
+  phase?: string
+  /** The daemon's running version once it's back (used to refresh the tile). */
+  version?: string
+}
+
+/**
+ * GET `<base>/boot-status` from a SPECIFIC host — the daemon's PUBLIC,
+ * unauthenticated readiness handshake. This is a TOP-LEVEL route
+ * (`<base>/boot-status`), NOT under `/cli/`, and needs NO token (so it does
+ * NOT go through `hostOpGet`).
+ *
+ * Used to poll a host back to life after the owner triggers a restart/update
+ * from its tile: each fetch is wrapped in `withRemoteRetry`, so the
+ * throw-then-retry EVICTS the DEAD pooled WKWebView socket and reopens a fresh
+ * one — by the time `phase === 'ready'` is observed the connection pool is
+ * healthy again. Returns the parsed JSON, or `null` when the host is (still)
+ * unreachable: the poller treats null as "not back yet", never a hard failure.
+ */
+export async function hostBootStatus(
+  creds: HostCreds,
+  timeoutMs = 4000,
+): Promise<HostBootStatus | null> {
+  try {
+    return await withRemoteRetry(async () => {
+      const res = await fetch(`${creds.base}/boot-status`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      return parse<HostBootStatus>(res)
+    })
+  } catch {
+    // Unreachable / still restarting / dead socket after every retry — the
+    // poller interprets null as "keep waiting", not an error to surface.
+    return null
+  }
+}
+
 // ── Update-check → display string ────────────────────────────────────────
 
 /** A digested view of a `POST /cli/daemon/update/check` response, ready to

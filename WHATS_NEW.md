@@ -5,11 +5,12 @@ files in the repo root for the full developer-facing changelog.
 
 ## 0.40.16 — Connect your servers, manage them in place
 
-- **Connect a remote agent to a workspace in one step.** As an owner, type
-  `ai@your-server.k2.dev` into a workspace's Connections and K2 pairs the two
-  servers for you — mutual trust, no codes to compare — and records the
-  connection, so your agents can message each other across machines. (Both
-  servers must be on 0.40.16.)
+- **Connect a remote workspace to a workspace in one step.** As an owner, type
+  the remote workspace's address — `workspace@yourserver.k2.dev` (the part
+  before the `@` is the workspace name on that server) — into a workspace's
+  Connections, and K2 pairs the two servers for you (mutual trust, no codes to
+  compare) and records the connection, so your agents can message each other
+  across machines. (Both servers must be on 0.40.16.)
 - **Operate your connected servers from their tiles.** Each saved server in
   **Settings → Connections** now has real buttons: **Sign in** (manage it in
   place without switching to it), **Restart**, **Check for updates / Update**,
@@ -37,8 +38,9 @@ files in the repo root for the full developer-facing changelog.
   is enforced by the daemon either way.
 - **Federation, made operable (experimental, opt-in).** You can now turn
   cross-server agent messaging on **per server** from **Settings → K2 Connect →
-  Enable federation** (no config files), and connect a *specific* remote agent
-  to a workspace with `k2 connections add ai@your-server.k2.dev`. Agents can only
+  Enable federation** (no config files), and connect a *specific* remote
+  workspace to a workspace with `k2 connections add workspace@yourserver.k2.dev`.
+  Agents can only
   message a remote agent that's an explicit **connection** — same-server agents
   still reach each other freely; cross-server requires the connection. Still
   early and off by default.

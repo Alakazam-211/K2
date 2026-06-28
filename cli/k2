@@ -208,6 +208,180 @@ _split_remote_target() {
     esac
 }
 
+# ── Cross-server agent msg over FEDERATION ────────────────────────────
+# `k2 msg <agent>@<host> "text"` routes a CONNECTED cross-server peer over
+# federation — the SAME verb agents use for a local peer. This is the
+# federation send-surface (gated on `is_remote_connection`), NOT the
+# owner-remote drive-the-box path that `k2 talk <ws>@<host>` uses.
+#
+# Args: <agent> <host> <text> <from_project>. Returns:
+#   0  delivered ("sent") or durably queued ("queued")
+#   2  actionable user error (fed off, no peer, not trusted, no agent,
+#      daemon "not a connection" 403/404)
+#   1  unexpected/unparseable daemon response
+#
+# Steps: resolve the peer by matching "<subdomain>.k2.dev" == <host> in
+# /cli/federation/peers (capture fingerprint) → resolve the agent's
+# workspace_id from that peer's /cli/federation/peer-roster → POST
+# /cli/federation/send with to="<fp>::<wsid>::<agent>". All parsing is
+# python3 (consistent with the rest of this CLI).
+_send_remote_msg() {
+    local agent="$1" host="$2" text="$3" from_project="$4"
+
+    if [ -z "$agent" ]; then
+        echo "k2 msg: empty agent name in '<agent>@<host>' target." >&2
+        return 2
+    fi
+    if [ -z "$host" ]; then
+        echo "k2 msg: empty host in '<agent>@<host>' target." >&2
+        return 2
+    fi
+
+    # 1. Resolve the peer by host (subdomain.k2.dev == host) → fingerprint.
+    local peers_json
+    peers_json=$(cli_request "/cli/federation/peers")
+    local pmatch
+    pmatch=$(printf '%s' "$peers_json" | python3 -c '
+import json, sys
+host = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("ERR\tparse"); sys.exit(0)
+if not isinstance(d, dict) or not isinstance(d.get("peers"), list):
+    # federation off (404 {"error":...}) or unexpected shape
+    print("NOFED"); sys.exit(0)
+for p in d["peers"]:
+    sub = p.get("subdomain") or ""
+    if sub and (sub + ".k2.dev") == host:
+        print("OK\t%s\t%s" % (p.get("fingerprint", ""), p.get("trust", "")))
+        sys.exit(0)
+print("NONE")
+' "$host")
+
+    local pkind fp trust
+    IFS=$'\t' read -r pkind fp trust <<<"$pmatch"
+    case "$pkind" in
+        NOFED|ERR)
+            echo "federation is off or unreachable on $host — enable it and pair first (k2 fed enable / k2 fed pair-request)." >&2
+            return 2 ;;
+        NONE)
+            echo "no paired peer for $host — pair it first (k2 fed pair-request / confirm), or check the host." >&2
+            return 2 ;;
+        OK) ;;
+        *)
+            echo "k2 msg: could not read federation peers from the local daemon." >&2
+            return 2 ;;
+    esac
+    if [ -z "$fp" ]; then
+        echo "no paired peer for $host — pair it first (k2 fed pair-request / confirm), or check the host." >&2
+        return 2
+    fi
+    if [ -n "$trust" ] && [ "$trust" != "Trusted" ]; then
+        echo "peer $host is not trusted yet (state=$trust) — confirm the pairing (k2 fed confirm)." >&2
+        return 2
+    fi
+
+    # 2. Resolve the agent's workspace_id from that peer's roster.
+    local roster_json
+    roster_json=$(cli_request "/cli/federation/peer-roster" "peer=$(urlencode "$fp")")
+    local rres
+    rres=$(printf '%s' "$roster_json" | python3 -c '
+import json, sys
+agent = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("ERR\tparse"); sys.exit(0)
+if not isinstance(d, dict):
+    print("ERR\t"); sys.exit(0)
+if "error" in d:
+    print("ERR\t%s" % d.get("error", "")); sys.exit(0)
+roster = d.get("roster") or {}
+agents = roster.get("agents") or []
+matches = [a for a in agents if a.get("agent") == agent]
+if not matches:
+    names = ", ".join(a.get("agent", "?") for a in agents)
+    print("NONE\t%s" % names); sys.exit(0)
+if len(matches) > 1:
+    info = "; ".join("%s (%s)" % (a.get("workspace_name", "?"), a.get("workspace_id", "?")) for a in matches)
+    print("AMBIG\t%s" % info); sys.exit(0)
+print("OK\t%s" % (matches[0].get("workspace_id", "") or ""))
+' "$agent")
+
+    local rkind rdetail
+    rkind="${rres%%$'\t'*}"
+    rdetail="${rres#*$'\t'}"
+    [ "$rdetail" = "$rres" ] && rdetail=""
+    case "$rkind" in
+        ERR)
+            echo "could not reach $host's roster: ${rdetail:-$roster_json}" >&2
+            return 2 ;;
+        NONE)
+            if [ -n "$rdetail" ]; then
+                echo "no agent \"$agent\" on $host. Available: $rdetail." >&2
+            else
+                echo "no agent \"$agent\" on $host (its roster is empty)." >&2
+            fi
+            return 2 ;;
+        AMBIG)
+            echo "ambiguous agent \"$agent\" on $host — multiple workspaces expose it: $rdetail. Disambiguate on the host." >&2
+            return 2 ;;
+        OK) ;;
+        *)
+            echo "could not parse $host's roster." >&2
+            return 2 ;;
+    esac
+    local wsid="$rdetail"
+    if [ -z "$wsid" ]; then
+        echo "no resolvable workspace for agent \"$agent\" on $host." >&2
+        return 2
+    fi
+
+    # 3. Send. Build the body safely with python3 (mirrors cmd_fed send).
+    local body resp
+    body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' \
+        "${fp}::${wsid}::${agent}" "$text" "$from_project")
+    resp=$(cli_post_json "/cli/federation/send" "$body")
+
+    # 4. Surface the response.
+    local sres skind sdetail
+    sres=$(printf '%s' "$resp" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("RAW"); sys.exit(0)
+if not isinstance(d, dict):
+    print("RAW"); sys.exit(0)
+if "error" in d:
+    print("ERROR\t%s" % d.get("error", "")); sys.exit(0)
+st = d.get("status", "")
+if st == "sent":
+    print("SENT"); sys.exit(0)
+if st == "queued":
+    print("QUEUED\t%s" % (d.get("hint", "") or "")); sys.exit(0)
+print("OTHER")
+')
+    skind="${sres%%$'\t'*}"
+    sdetail="${sres#*$'\t'}"
+    [ "$sdetail" = "$sres" ] && sdetail=""
+    case "$skind" in
+        SENT)
+            echo "delivered to ${agent}@${host} (federation)"
+            return 0 ;;
+        QUEUED)
+            echo "${sdetail:-queued for ${agent}@${host} — peer briefly unreachable, will deliver when it reconnects (federation)}" >&2
+            return 0 ;;
+        ERROR)
+            echo "${sdetail:-$resp}" >&2
+            return 2 ;;
+        *)
+            echo "k2 msg: unexpected daemon response: $resp" >&2
+            return 1 ;;
+    esac
+}
+
 # Resolve the owner token for a remote host. Precedence:
 #   1. explicit --token (arg $2)   2. $K2_REMOTE_TOKEN
 #   3. ~/.k2/connect-tokens.json  { "<host>": "<token>", ... }
@@ -2910,6 +3084,17 @@ cmd_msg() {
         exit 1
     }
 
+    # Cross-server peer: `k2 msg <agent>@<host> "text"` routes a CONNECTED
+    # remote peer over federation (same verb as a local peer). Only the
+    # @host form diverts here; the local-workspace path below is untouched
+    # when _REMOTE_HOST is empty. (cmd_talk's @host is a different,
+    # owner-remote path and is intentionally NOT unified here.)
+    _split_remote_target "$target"
+    if [ -n "$_REMOTE_HOST" ]; then
+        _send_remote_msg "$_BARE_TARGET" "$_REMOTE_HOST" "$text" "$PROJECT"
+        return $?
+    fi
+
     # Resolve sender identity.
     #
     # Priority:
@@ -3591,8 +3776,15 @@ conns = d.get('connections', [])
 if not conns:
     print('  (none)')
 for c in conns:
-    flag = '' if c.get('reachable', True) else '  [UNREACHABLE — project missing or path gone]'
-    print('  - %s%s' % (c.get('projectName', '?'), flag))
+    if c.get('remote'):
+        # Cross-server connection (issue #13B). Show the address + a
+        # (remote) tag. We deliberately do NOT surface the daemon's
+        # hardcoded reachable:true as a liveness signal for remotes.
+        addr = c.get('address') or ('%s@%s' % (c.get('agent', '?'), c.get('host', '?')))
+        print('  - %s   (remote)' % addr)
+    else:
+        flag = '' if c.get('reachable', True) else '  [UNREACHABLE — project missing or path gone]'
+        print('  - %s%s' % (c.get('projectName', '?'), flag))
 "
             ;;
         add)

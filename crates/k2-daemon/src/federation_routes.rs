@@ -24,7 +24,10 @@
 //! token via `require_owner` on confirm/send; the inbound route is
 //! authenticated by the ENVELOPE itself, not a token — DECISION-2).
 
+use std::path::Path;
+
 use crate::cli_response::CliResponse;
+use crate::workspace_msg;
 
 use k2_core::awareness::{AgentAddress, AgentSignal, Delivery, SignalKind, WorkspaceId};
 use k2_core::federation::{self, ingress, outbox, pairing, roster, PeerStore};
@@ -170,26 +173,43 @@ pub fn handle_pubkey() -> CliResponse {
 
 /// `POST /cli/federation/inbound` — accept a signed envelope. Authenticated by
 /// the ENVELOPE (verify against the pinned key + `require_peer`), NOT by any
-/// token. Delivers to the local inbox ONLY. Every failure REJECTS.
+/// token.
+///
+/// Two stages, in order:
+///
+///   1. **Security gate** — [`ingress::ingest`] runs EVERY check (decode →
+///      verify signature vs pinned key → `require_peer(fp,"inbound")` →
+///      replay → skew → ttl → loop → control-byte sanitize). Any failure
+///      REJECTS here, before any delivery. It returns the verified,
+///      sanitized signal + the AUTHENTICATED peer fingerprint.
+///   2. **Delivery** — make a cross-server message behave EXACTLY like a
+///      local `k2 msg`, gated by the recipient workspace's per-project
+///      "allow remote instruction" opt-in:
+///        - opt-in ON  → [`workspace_msg::deliver_live`] (inject if live,
+///          wake+resume+inject if dormant) — the canonical chat.
+///        - opt-in OFF → [`k2_core::inbox::compose`] a respondable, VISIBLE
+///          item under `<ws>/.k2/inbox/` (`k2 inbox`). A remote peer can
+///          NEVER drive a session the owner hasn't opted into.
+///
+/// Delivery always targets EXACTLY the agent named in the verified, signed
+/// `to`; the sender host attribution is derived from the VERIFIED peer,
+/// never from request plaintext (Risk C1).
 pub fn handle_inbound(body: &[u8]) -> CliResponse {
     let local_fp = federation::local_fingerprint().unwrap_or_default();
     let store = match PeerStore::load() {
         Ok(s) => s,
         Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
     };
-    let inbox_root = k2_core::awareness::inbox_root();
-    match ingress::ingest(
+
+    // ── STAGE 1: SECURITY GATE (fail-closed; no delivery on any error) ──
+    let ingested = match ingress::ingest(
         body,
         &store,
         ingress::global_nonce_cache(),
-        &inbox_root,
         &local_fp,
         ingress::DEFAULT_SKEW_SECS,
     ) {
-        Ok(signal) => CliResponse::ok_json(
-            serde_json::json!({ "delivered": true, "signal_id": signal.id.to_string() })
-                .to_string(),
-        ),
+        Ok(v) => v,
         Err(e) => {
             // Fail-closed: map each reject to a status. Auth/authorization
             // failures are 403; malformed/bad-sig are 400; replay/skew/ttl/loop
@@ -206,9 +226,133 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
                 | ingress::IngressError::TtlExpired
                 | ingress::IngressError::LoopDetected => "409 Conflict",
             };
-            json_err(status, e)
+            return json_err(status, e);
+        }
+    };
+
+    // ── STAGE 2: DELIVERY (the gate has passed) ──
+    let signal = ingested.signal;
+
+    // The recipient is EXACTLY the signed `to` agent — never a different
+    // workspace. Resolve its workspace UUID → registered project path.
+    let ws_id = match &signal.to {
+        AgentAddress::Agent { workspace, .. } => workspace.0.clone(),
+        other => {
+            return json_err(
+                "400 Bad Request",
+                format!("inbound signal is not addressed to an agent: {other:?}"),
+            );
+        }
+    };
+    let project_path = match resolve_project_path_by_id(&ws_id) {
+        Some(p) => p,
+        None => {
+            return json_err(
+                "404 Not Found",
+                format!("addressed workspace '{ws_id}' is not registered on this server"),
+            );
+        }
+    };
+
+    // Sender attribution `<sender-agent>@<peer-host>`. The host is derived
+    // from the VERIFIED peer (looked up by the AUTHENTICATED fingerprint the
+    // gate returned), never from request plaintext.
+    let host = store
+        .get(&ingested.peer_fingerprint)
+        .map(|p| peer_host(&p.subdomain))
+        .unwrap_or_default();
+    let sender_agent = match &signal.from {
+        AgentAddress::Agent { name, .. } => name.clone(),
+        AgentAddress::Workspace { workspace } => workspace.0.clone(),
+        _ => "peer".to_string(),
+    };
+    let from_label = if host.is_empty() {
+        sender_agent
+    } else {
+        format!("{sender_agent}@{host}")
+    };
+
+    // The deliverable text (federation sends `Msg`; render any other kind
+    // so nothing is silently lost).
+    let text = match &signal.kind {
+        SignalKind::Msg { text } => text.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    };
+
+    // CONSENT GATE — the recipient workspace's per-project "allow remote
+    // instruction" opt-in is the consent for canonical-chat DRIVE.
+    let opt_in = k2_core::workspace::settings::remote_instruct_allowed_for_path(&project_path);
+
+    if opt_in {
+        // Identical to local `k2 msg`: inject if live, wake+resume+inject if
+        // dormant. (wake=true, like `k2 talk`.)
+        let result = workspace_msg::deliver_live(
+            &project_path,
+            &text,
+            &from_label,
+            "",
+            true,
+            workspace_msg::DEFAULT_WAKE_TIMEOUT,
+        );
+        CliResponse::ok_json(
+            serde_json::json!({
+                "delivered": result.success,
+                "mode": "live",
+                "signal_id": signal.id.to_string(),
+                "result": result,
+            })
+            .to_string(),
+        )
+    } else {
+        // Opt-in OFF: a verified remote peer may NOT drive the session. Land
+        // a respondable, VISIBLE copy in the real inbox so it is listable
+        // via `k2 inbox` and never lost. No inject, no wake.
+        let title = inbox_title_excerpt(&text);
+        match k2_core::inbox::compose(
+            Path::new(&project_path),
+            &title,
+            &text,
+            None,
+            Some("federation"),
+            Some(&from_label),
+        ) {
+            Ok(item) => CliResponse::ok_json(
+                serde_json::json!({
+                    "delivered": true,
+                    "mode": "inbox",
+                    "signal_id": signal.id.to_string(),
+                    "inbox_id": item.id,
+                })
+                .to_string(),
+            ),
+            Err(e) => json_err("500 Internal Server Error", format!("inbox compose: {e}")),
         }
     }
+}
+
+/// Look up `projects.path` by `projects.id` — the addressed workspace UUID
+/// carried in the verified `to` address. `None` when no project matches
+/// (the addressed workspace isn't on this server).
+fn resolve_project_path_by_id(workspace_id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT path FROM projects WHERE id = ?1",
+        rusqlite::params![workspace_id],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// First non-empty line of `text`, truncated to a short inbox title. Falls
+/// back to a generic label so [`k2_core::inbox::compose`]'s non-empty-title
+/// requirement always holds.
+fn inbox_title_excerpt(text: &str) -> String {
+    let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    if first.is_empty() {
+        return "Federation message".to_string();
+    }
+    first.chars().take(60).collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -295,14 +439,30 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     };
     let local_fp = federation::local_fingerprint().unwrap_or_default();
 
-    // `from` is a Workspace address tagged with our fingerprint — informative
-    // for the recipient; the recipient forces inbox delivery regardless. The
-    // whole signal is signed end-to-end, so `from` is authenticated to the
-    // verified peer (no forgeable plaintext `[from]`, Risk C1).
-    let signal = AgentSignal {
-        from: AgentAddress::Workspace {
-            workspace: WorkspaceId(format!("peer:{local_fp}")),
+    // `from` carries the SENDER AGENT IDENTITY so the recipient's chat can
+    // render `[from <agent>@<host>]` and reply with `k2 msg <agent>@<host>`.
+    // In the workspace==agent model the agent name is the source workspace
+    // folder basename (`from_workspace` is the source project path the CLI
+    // passes). Owner-remote sends (`k2 talk`, no `from_workspace`) carry no
+    // source agent → attributed to `owner`. The whole signal is signed
+    // end-to-end, so this identity is AUTHENTICATED to the verified peer (no
+    // forgeable plaintext `[from]`, Risk C1).
+    let from = match req.from_workspace.as_deref().filter(|s| !s.is_empty()) {
+        Some(src) => AgentAddress::Agent {
+            workspace: WorkspaceId(src.to_string()),
+            name: Path::new(src)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| src.to_string()),
         },
+        None => AgentAddress::Agent {
+            workspace: WorkspaceId(format!("peer:{local_fp}")),
+            name: "owner".to_string(),
+        },
+    };
+    let signal = AgentSignal {
+        from,
         to: AgentAddress::Agent {
             workspace: WorkspaceId(ws.to_string()),
             name: agent.to_string(),
@@ -623,40 +783,133 @@ mod tests {
         });
     }
 
+    /// Register a local project row; returns its UUID. The verified `to`
+    /// address carries this UUID and `handle_inbound` resolves it → path.
+    fn register_project(path: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, "fed-recv-ws", path],
+        )
+        .unwrap();
+        id
+    }
+
+    /// A unique temp workspace path (not created on disk; inbox::compose
+    /// makes the `.k2/inbox/` dir on demand).
+    fn temp_ws_path() -> String {
+        std::env::temp_dir()
+            .join(format!("k2-fed-recv-{}-{}", std::process::id(), uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Pin a DISTINCT peer key (not the local key, or the loop guard trips
+    /// on self-in-trace) as Trusted+inbound under `subdomain`. Returns the
+    /// peer keypair so the caller can seal an envelope with it.
+    fn pin_trusted_peer(subdomain: &str) -> rcgen::KeyPair {
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut store = PeerStore::default();
+        let fp = store.upsert(FederationPeer::pin("peer", subdomain, key.public_key_pem()).unwrap());
+        store.set_trust(&fp, PeerTrust::Trusted);
+        store.grant(&fp, "inbound");
+        store.save().unwrap();
+        key
+    }
+
+    /// Seal `text` from `cortana@<peer>` addressed to agent `bob` in `ws_id`.
+    fn seal_msg_to(ws_id: &str, key: &rcgen::KeyPair, subdomain: &str, text: &str) -> Vec<u8> {
+        let signal = AgentSignal::new(
+            AgentAddress::Agent {
+                workspace: WorkspaceId("/src/cortana".into()),
+                name: "cortana".into(),
+            },
+            AgentAddress::Agent {
+                workspace: WorkspaceId(ws_id.into()),
+                name: "bob".into(),
+            },
+            SignalKind::Msg { text: text.into() },
+        );
+        federation::seal(&signal, key, subdomain, 8).unwrap()
+    }
+
+    // ── P3 receive: opt-in OFF → a respondable copy lands in the REAL inbox.
+    //    The verified message is preserved + visible (`k2 inbox`); a remote
+    //    peer can NOT drive (inject/wake) a session the owner hasn't opted in.
     #[test]
-    fn inbound_delivers_valid_envelope_from_trusted_peer() {
+    fn inbound_opt_in_off_lands_in_real_inbox() {
         with_temp_home(|| {
             k2_core::db::init_for_tests();
-            // Point the awareness inbox at a temp dir inside HOME.
-            let inbox_root = dirs::home_dir().unwrap().join(".k2/awareness/inbox");
-            k2_core::awareness::set_inbox_root(inbox_root.clone());
+            let ws_path = temp_ws_path();
+            let ws_id = register_project(&ws_path); // opt-in defaults OFF
 
-            // Pin a DISTINCT peer key (not the local key, or the loop guard
-            // would trip on self-in-trace) as Trusted+inbound, then seal with it.
-            let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-            let pem = key.public_key_pem();
-            let mut store = PeerStore::default();
-            let fp = store.upsert(FederationPeer::pin("peer", "peer", &pem).unwrap());
-            store.set_trust(&fp, PeerTrust::Trusted);
-            store.grant(&fp, "inbound");
-            store.save().unwrap();
-
-            let signal = AgentSignal::new(
-                AgentAddress::Broadcast,
-                AgentAddress::Agent {
-                    workspace: WorkspaceId("ws".into()),
-                    name: "bob".into(),
-                },
-                SignalKind::Msg { text: "hello over the wire".into() },
-            );
-            let bytes = federation::seal(&signal, &key, "self", 8).unwrap();
+            let key = pin_trusted_peer("peer");
+            let bytes = seal_msg_to(&ws_id, &key, "peer", "hello over the wire");
             let resp = handle_inbound(&bytes);
             assert_eq!(resp.status, "200 OK", "valid envelope must deliver: {}", resp.body);
 
-            let drained = k2_core::awareness::inbox::drain(&inbox_root, "bob");
-            assert_eq!(drained.len(), 1, "one inbox item delivered");
-            assert_eq!(drained[0].delivery, Delivery::Inbox);
-            k2_core::awareness::ingress::clear_inbox_root_for_tests();
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["mode"], "inbox", "opt-in OFF must route to the real inbox");
+
+            // The item is listable under `<ws>/.k2/inbox/`, attributed to the
+            // VERIFIED sender + peer host, sourced "federation".
+            let items = k2_core::inbox::list_root(Path::new(&ws_path));
+            assert_eq!(items.len(), 1, "exactly one inbox item");
+            assert_eq!(items[0].source, "federation");
+            assert_eq!(
+                items[0].from, "cortana@peer.k2.dev",
+                "attribution = <sender-agent>@<verified-peer-host>"
+            );
+            assert!(items[0].title.contains("hello over the wire"));
+        });
+    }
+
+    // ── P3 receive: opt-in ON → drive the canonical chat via the SAME
+    //    `deliver_live` local `k2 msg` uses (NOT the inbox). Here the
+    //    workspace has no agent/session so deliver_live reports
+    //    `no_agent_mode` — but crucially it took the LIVE path and wrote NO
+    //    inbox file (the orphaned-awareness-inbox bug regression-lock).
+    #[test]
+    fn inbound_opt_in_on_routes_to_live_delivery() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let ws_path = temp_ws_path();
+            let ws_id = register_project(&ws_path);
+            // Opt THIS workspace in to remote instruction.
+            k2_core::workspace::settings::update_project_setting(
+                &ws_path,
+                "allow_remote_instruct",
+                "1",
+            )
+            .expect("opt in");
+
+            let key = pin_trusted_peer("peer");
+            let bytes = seal_msg_to(&ws_id, &key, "peer", "drive my chat");
+            let resp = handle_inbound(&bytes);
+            assert_eq!(resp.status, "200 OK", "must deliver: {}", resp.body);
+
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["mode"], "live", "opt-in ON must route to the canonical chat");
+
+            // The LIVE path was taken — nothing was written to the inbox.
+            let items = k2_core::inbox::list_root(Path::new(&ws_path));
+            assert!(items.is_empty(), "opt-in ON must NOT write an inbox file");
+        });
+    }
+
+    // ── P3 receive: a message addressed to a workspace NOT on this server is
+    //    rejected (resolution failure, after the security gate passed).
+    #[test]
+    fn inbound_unknown_workspace_is_rejected() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let key = pin_trusted_peer("peer");
+            // No project registered for this UUID.
+            let bytes = seal_msg_to(&uuid::Uuid::new_v4().to_string(), &key, "peer", "nowhere");
+            let resp = handle_inbound(&bytes);
+            assert_eq!(resp.status, "404 Not Found", "unknown workspace must reject: {}", resp.body);
         });
     }
 
@@ -763,12 +1016,90 @@ mod tests {
             }
             other => panic!("unexpected to-address: {other:?}"),
         }
+        // No `from_workspace` (owner-remote send) → attributed to `owner`.
+        match signal.from {
+            AgentAddress::Agent { name, .. } => assert_eq!(name, "owner"),
+            other => panic!("unexpected from-address: {other:?}"),
+        }
 
         // Delivered → outbox drained.
         assert!(
             outbox::list_for_peer(&fp).is_empty(),
             "a confirmed delivery must remove the queued copy"
         );
+    }
+
+    // ── P4 send: the SENDER AGENT IDENTITY is carried in `from` so the
+    //    recipient can render `[from <agent>@<host>]` and reply. Regression
+    //    lock for the dropped-identity bug (`from` used to be a bare
+    //    `peer:<fp>` Workspace address). `from.name` = source workspace
+    //    folder basename (workspace==agent).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_sets_from_agent_identity_from_source_basename() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+
+        let (port, rx) = spawn_inbound_stub().await;
+        let base = format!("http://127.0.0.1:{port}");
+
+        // Source workspace whose folder basename is the agent name `cortana`.
+        let src_path = std::env::temp_dir()
+            .join(format!("k2-src-{}-{}", std::process::id(), uuid::Uuid::new_v4()))
+            .join("cortana")
+            .to_string_lossy()
+            .into_owned();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), "cortana", src_path],
+            )
+            .unwrap();
+        }
+
+        let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut store = PeerStore::default();
+        let fp = store.upsert(FederationPeer::pin("teammate", "peer", peer_key.public_key_pem()).unwrap());
+        store.set_trust(&fp, PeerTrust::Trusted);
+        store.grant(&fp, "inbound");
+        store.save().unwrap();
+
+        let local_pem = k2_core::tunnel::tls::load_or_generate_keypair().unwrap().public_key_pem();
+
+        std::env::set_var("K2_FEDERATION_INBOUND_BASE", &base);
+        // Agent-initiated send → satisfy the GAP #3 connection gate first.
+        k2_core::connections::connections(
+            &src_path,
+            "add",
+            Some(&format!("bob@127.0.0.1:{port}")),
+            None,
+        )
+        .expect("add remote connection");
+
+        let send_body = body(serde_json::json!({
+            "to": "peer::ws-b::bob",
+            "text": "from the source agent",
+            "from_workspace": src_path,
+        }));
+        let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
+            .await
+            .unwrap();
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        assert_eq!(resp.status, "200 OK", "send body: {}", resp.body);
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+            .await
+            .expect("stub must receive within timeout")
+            .expect("stub body");
+        let signal = federation::open(&received, &local_pem).expect("envelope opens against sender key");
+        match signal.from {
+            AgentAddress::Agent { name, .. } => {
+                assert_eq!(name, "cortana", "from.name must be the source workspace basename");
+            }
+            other => panic!("from must carry the sender agent identity, got {other:?}"),
+        }
     }
 
     // ── P5 roster: peer-authenticated GET + local owner helpers ──

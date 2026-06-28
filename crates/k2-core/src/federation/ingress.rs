@@ -13,21 +13,27 @@
 //!      (AUTHORIZATION; DECISION-2 — NEVER a `token_ok`/owner check);
 //!   5. **replay / skew / ttl / loop** guards (Risks M1/M2);
 //!   6. **control-byte sanitize** the payload (Risk H3 — neutralize
-//!      bracketed-paste / CSI injection across the trust boundary);
-//!   7. **deliver INTO THE LOCAL INBOX ONLY** via `awareness::egress`
-//!      ([`Delivery::Inbox`] is FORCED) — never live-inject, never spawn
-//!      (Risks H2/C1).
+//!      bracketed-paste / CSI injection across the trust boundary).
 //!
-//! Every non-`Ok` return is a REJECT. There is no "accept on error" path.
+//! [`ingest`] is now a PURE SECURITY GATE: on success it RETURNS the
+//! verified, sanitized [`AgentSignal`] (plus the authenticated peer
+//! fingerprint) to the caller and performs NO delivery itself. The caller
+//! (`federation_routes::handle_inbound`) decides delivery — gated by the
+//! recipient workspace's per-project "allow remote instruction" opt-in. The
+//! prior behavior (force [`Delivery::Inbox`] + write the orphaned
+//! `awareness` inbox, which had no production reader) is removed: messages
+//! were verified + delivered there but the recipient agent never saw them.
+//!
+//! Every non-`Ok` return is a REJECT. There is no "accept on error" path —
+//! ALL of steps 1–6 run BEFORE the signal is ever returned for delivery.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::Path;
 use std::sync::OnceLock;
 
 use chrono::Utc;
 use parking_lot::Mutex;
 
-use crate::awareness::{egress, AgentSignal, Delivery, SignalKind};
+use crate::awareness::{AgentSignal, SignalKind};
 
 use super::envelope::{open, FederationEnvelope};
 use super::peers::{PeerStore, RequirePeerError};
@@ -162,9 +168,28 @@ fn sanitize_signal(mut signal: AgentSignal) -> AgentSignal {
     signal
 }
 
-/// Ingest a raw inbound federation envelope. See the module docs for the
-/// fail-closed order. On success the (sanitized, inbox-forced) signal has
-/// been delivered into the local awareness inbox and is returned.
+/// The verified output of [`ingest`]: a sanitized [`AgentSignal`] plus the
+/// AUTHENTICATED peer fingerprint it arrived from. The fingerprint is
+/// trustworthy because it is bound into the signed payload (`open` verifies
+/// the signature over the whole payload, including `from_fingerprint`, and
+/// re-binds the claimed fingerprint to the pinned key). The caller uses it
+/// to look up the verified peer's host for delivery attribution — NEVER
+/// from request plaintext (Risk C1).
+#[derive(Debug, Clone)]
+pub struct Ingested {
+    /// The sanitized signal (control bytes stripped — Risk H3).
+    pub signal: AgentSignal,
+    /// The authenticated sender peer fingerprint (verified, not claimed).
+    pub peer_fingerprint: String,
+}
+
+/// Ingest a raw inbound federation envelope — the PURE SECURITY GATE. See
+/// the module docs for the fail-closed order. On success EVERY check
+/// (decode → verify signature vs pinned key → `require_peer` → replay →
+/// skew → ttl → loop → sanitize) has run, and the verified, sanitized
+/// signal + authenticated peer fingerprint are returned for the caller to
+/// deliver. `ingest` itself performs NO delivery (no inject, no wake, no
+/// inbox write).
 ///
 /// `local_fp` is THIS daemon's fingerprint (for the loop check). `skew_secs`
 /// is the accepted clock-skew window ([`DEFAULT_SKEW_SECS`] in production).
@@ -172,10 +197,9 @@ pub fn ingest(
     bytes: &[u8],
     store: &PeerStore,
     nonce_cache: &NonceCache,
-    inbox_root: &Path,
     local_fp: &str,
     skew_secs: i64,
-) -> Result<AgentSignal, IngressError> {
+) -> Result<Ingested, IngressError> {
     // 1. DECODE — read the claimed sender + replay fields (untrusted).
     let envelope: FederationEnvelope =
         serde_json::from_slice(bytes).map_err(|e| IngressError::Decode(e.to_string()))?;
@@ -220,21 +244,24 @@ pub fn ingest(
         return Err(IngressError::Replay);
     }
 
-    // 6. SANITIZE (Risk H3).
-    let mut delivered = sanitize_signal(signal);
+    // 6. SANITIZE (Risk H3). This is the LAST step before the verified
+    //    signal is handed back to the caller for delivery — there is no
+    //    delivery inside the gate. The caller decides inject/wake (opt-in
+    //    ON) vs the real `k2_core::inbox` (opt-in OFF); either way the
+    //    recipient-workspace consent gate stands between a peer and a live
+    //    session drive.
+    let signal = sanitize_signal(signal);
 
-    // 7. INBOX ONLY — force the delivery mode so a sender can NEVER drive a
-    //    live-inject / wake / spawn across the federation boundary (H2/C1).
-    delivered.delivery = Delivery::Inbox;
-    let _report = egress::deliver(&delivered, inbox_root);
-
-    Ok(delivered)
+    Ok(Ingested {
+        signal,
+        peer_fingerprint: claimed_fp,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::awareness::{inbox, AgentAddress, SignalKind, WorkspaceId};
+    use crate::awareness::{AgentAddress, SignalKind, WorkspaceId};
     use crate::federation::envelope::{seal, FederationEnvelope};
     use crate::federation::peers::{FederationPeer, PeerStore, PeerTrust};
     use crate::tunnel::test_support::with_temp_home;
@@ -264,29 +291,30 @@ mod tests {
     }
 
     #[test]
-    fn valid_envelope_from_trusted_peer_delivers_to_inbox() {
+    fn valid_envelope_from_trusted_peer_returns_verified_signal() {
         with_temp_home(|| {
             crate::db::init_for_tests();
             let key = load_or_generate_keypair().expect("keypair");
             let pem = key.public_key_pem();
-            let (store, _fp) = trusted_store(&pem);
+            let (store, fp) = trusted_store(&pem);
             let cache = NonceCache::new();
-            let inbox_root = std::env::temp_dir().join(format!(
-                "k2-fed-inbox-{}-{}",
-                std::process::id(),
-                uuid::Uuid::new_v4()
-            ));
 
             let bytes = seal(&signal_to("bob", "hello peer"), &key, "peer", 8).expect("seal");
-            let delivered = ingest(&bytes, &store, &cache, &inbox_root, "local", DEFAULT_SKEW_SECS)
-                .expect("valid envelope must deliver");
-            assert_eq!(delivered.delivery, Delivery::Inbox, "must be forced to inbox");
+            // The gate RETURNS the verified signal; it performs NO delivery.
+            let out = ingest(&bytes, &store, &cache, "local", DEFAULT_SKEW_SECS)
+                .expect("valid envelope must pass the gate");
 
-            // The signal landed in bob's inbox (inbox-only, no spawn/live).
-            let drained = inbox::drain(&inbox_root, "bob");
-            assert_eq!(drained.len(), 1, "exactly one inbox item");
-            assert_eq!(drained[0].delivery, Delivery::Inbox);
-            let _ = std::fs::remove_dir_all(&inbox_root);
+            // The authenticated peer fingerprint is the pinned one.
+            assert_eq!(out.peer_fingerprint, fp, "verified fingerprint surfaced");
+            // The recipient + body survive verification + sanitization.
+            match out.signal.to {
+                AgentAddress::Agent { name, .. } => assert_eq!(name, "bob"),
+                other => panic!("unexpected to-address: {other:?}"),
+            }
+            match out.signal.kind {
+                SignalKind::Msg { text } => assert_eq!(text, "hello peer"),
+                other => panic!("unexpected kind: {other:?}"),
+            }
         });
     }
 
@@ -297,7 +325,7 @@ mod tests {
             let bytes = seal(&signal_to("bob", "hi"), &key, "peer", 8).expect("seal");
             let store = PeerStore::default(); // nobody pinned
             let cache = NonceCache::new();
-            let err = ingest(&bytes, &store, &cache, std::path::Path::new("/tmp/x"), "l", 300)
+            let err = ingest(&bytes, &store, &cache, "l", 300)
                 .expect_err("unknown peer must reject");
             assert_eq!(err, IngressError::UnknownPeer);
         });
@@ -314,7 +342,7 @@ mod tests {
             store.grant(&fp, CAP_INBOUND);
             let bytes = seal(&signal_to("bob", "hi"), &key, "peer", 8).expect("seal");
             let cache = NonceCache::new();
-            let err = ingest(&bytes, &store, &cache, std::path::Path::new("/tmp/x"), "l", 300)
+            let err = ingest(&bytes, &store, &cache, "l", 300)
                 .expect_err("pending peer must reject");
             assert_eq!(err, IngressError::NotTrusted);
         });
@@ -330,7 +358,7 @@ mod tests {
             store.set_trust(&fp, PeerTrust::Trusted); // Trusted but NO inbound cap
             let bytes = seal(&signal_to("bob", "hi"), &key, "peer", 8).expect("seal");
             let cache = NonceCache::new();
-            let err = ingest(&bytes, &store, &cache, std::path::Path::new("/tmp/x"), "l", 300)
+            let err = ingest(&bytes, &store, &cache, "l", 300)
                 .expect_err("missing cap must reject");
             assert_eq!(err, IngressError::CapabilityDenied);
         });
@@ -350,7 +378,7 @@ mod tests {
                 text: "TAMPERED".into(),
             };
             let tampered = serde_json::to_vec(&env).unwrap();
-            let err = ingest(&tampered, &store, &cache, std::path::Path::new("/tmp/x"), "l", 300)
+            let err = ingest(&tampered, &store, &cache, "l", 300)
                 .expect_err("tamper must reject");
             assert_eq!(err, IngressError::BadSignature);
         });
@@ -364,18 +392,12 @@ mod tests {
             let pem = key.public_key_pem();
             let (store, _fp) = trusted_store(&pem);
             let cache = NonceCache::new();
-            let inbox_root = std::env::temp_dir().join(format!(
-                "k2-fed-replay-{}-{}",
-                std::process::id(),
-                uuid::Uuid::new_v4()
-            ));
             let bytes = seal(&signal_to("bob", "once"), &key, "peer", 8).expect("seal");
-            // First delivery succeeds; the SAME bytes (same nonce) replay-fail.
-            ingest(&bytes, &store, &cache, &inbox_root, "l", 300).expect("first ok");
-            let err = ingest(&bytes, &store, &cache, &inbox_root, "l", 300)
+            // First pass succeeds; the SAME bytes (same nonce) replay-fail.
+            ingest(&bytes, &store, &cache, "l", 300).expect("first ok");
+            let err = ingest(&bytes, &store, &cache, "l", 300)
                 .expect_err("replay must reject");
             assert_eq!(err, IngressError::Replay);
-            let _ = std::fs::remove_dir_all(&inbox_root);
         });
     }
 
@@ -387,7 +409,7 @@ mod tests {
             let (store, _fp) = trusted_store(&pem);
             let cache = NonceCache::new();
             let bytes = seal(&signal_to("bob", "hi"), &key, "peer", 0).expect("seal");
-            let err = ingest(&bytes, &store, &cache, std::path::Path::new("/tmp/x"), "l", 300)
+            let err = ingest(&bytes, &store, &cache, "l", 300)
                 .expect_err("ttl=0 must reject");
             assert_eq!(err, IngressError::TtlExpired);
         });
@@ -405,7 +427,7 @@ mod tests {
             let bytes = seal(&signal_to("bob", "hi"), &key, "peer", 8).expect("seal");
             let env: FederationEnvelope = serde_json::from_slice(&bytes).unwrap();
             let me = env.payload.trace[0].clone();
-            let err = ingest(&bytes, &store, &cache, std::path::Path::new("/tmp/x"), &me, 300)
+            let err = ingest(&bytes, &store, &cache, &me, 300)
                 .expect_err("self-in-trace must reject");
             assert_eq!(err, IngressError::LoopDetected);
         });

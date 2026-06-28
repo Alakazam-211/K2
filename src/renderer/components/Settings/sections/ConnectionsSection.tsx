@@ -41,6 +41,7 @@ import {
   updatePhaseCopy,
   isTerminalPhase,
   isForbiddenError,
+  isAuthError,
   updateForbiddenCopy,
   type UpdateCheckResult,
   type UpdateStatusResult,
@@ -393,6 +394,7 @@ function HostTile({
   const creds = remoteCreds(host)
   const signedOut = creds.token.length === 0
   const signInForManagement = useConnectHostStore((s) => s.signInForManagement)
+  const clearHostToken = useConnectHostStore((s) => s.clearHostToken)
 
   const [federation, setFederation] = useState<FederationState>('loading')
   const [restartBusy, setRestartBusy] = useState(false)
@@ -441,6 +443,15 @@ function HostTile({
 
   const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
+  // On a 401-class rejection, drop this host's dead token so the tile flips to
+  // signed-out and surfaces its Sign-in button (the thin client realizing its
+  // credentials went stale). A network failure ("Load failed"/timeout) is NOT
+  // auth — the server may just be restarting — so we leave the token intact and
+  // rely on the inline "Sign in again" escape hatch instead.
+  const clearIfAuthError = (m: string): void => {
+    if (isAuthError(m)) clearHostToken(host.id)
+  }
+
   const doRestart = async (): Promise<void> => {
     setRestartBusy(true)
     setRestartMsg(null)
@@ -450,6 +461,7 @@ function HostTile({
       setFederation('unknown') // the server is dropping; re-read after it's back
     } catch (e) {
       const m = errMsg(e)
+      clearIfAuthError(m)
       setRestartMsg({
         ok: false,
         text: isForbiddenError(m)
@@ -473,6 +485,7 @@ function HostTile({
       setHostCurrent(r.current)
     } catch (e) {
       const m = errMsg(e)
+      clearIfAuthError(m)
       setCheckError(isForbiddenError(m) ? updateForbiddenCopy(label) : `Update check failed: ${m}`)
     } finally {
       setCheckBusy(false)
@@ -521,6 +534,7 @@ function HostTile({
       await pollStatus(jobId)
     } catch (e) {
       const m = errMsg(e)
+      clearIfAuthError(m)
       setPhaseText(null)
       setUpdateError(isForbiddenError(m) ? updateForbiddenCopy(label) : `Couldn't start the update on ${label}: ${m}`)
     } finally {
@@ -583,6 +597,16 @@ function HostTile({
         </div>
       ) : (
         <div className="flex justify-end gap-1 flex-wrap">
+          {/* Escape hatch: a signed-in op just failed (e.g. "Load failed" after
+              a remote restart/update, when we CAN'T tell if the token went
+              stale). Offer re-sign-in so the user is never stranded with a
+              present-but-dead token. A true 401 already cleared the token above
+              and flipped the tile to the signed-out branch. */}
+          {(checkError || updateError || (restartMsg ? !restartMsg.ok : false)) && (
+            <button onClick={() => signInForManagement(host)} className={BTN_ACCENT}>
+              Sign in again
+            </button>
+          )}
           <button onClick={() => void doRestart()} disabled={restartBusy} className={BTN_ORANGE}>
             {restartBusy ? 'Restarting…' : 'Restart'}
           </button>

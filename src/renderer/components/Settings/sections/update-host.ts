@@ -207,3 +207,13 @@ export function updateForbiddenCopy(hostLabel: string): string {
 export function isForbiddenError(message: string): boolean {
   return /403|forbidden|invalid or missing token/i.test(message)
 }
+
+/** True when a per-host op failed because the session token is stale/rejected
+ *  (401-class) — the tile should drop the dead token and offer re-sign-in.
+ *  NOTE: a network failure ("Load failed", timeouts) is NOT an auth error — the
+ *  server is unreachable, the token may still be fine, so we don't clear it. */
+export function isAuthError(message: string): boolean {
+  return /\b401\b|unauthorized|session (?:expired|invalid|not found)|token (?:expired|invalid|rejected)|not signed in|please sign in/i.test(
+    message,
+  )
+}

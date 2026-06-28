@@ -272,6 +272,14 @@ export interface ConnectHostState {
    * or a host id that isn't the active remote (a stale 401 from a prior
    * host must not interrupt the current one). */
   expireSession: (hostId: string) => void
+  /** Clear a SPECIFIC host's cached session token (in-memory + keychain),
+   *  regardless of whether it's the active host. Unlike `expireSession` (which
+   *  only fires for the active remote and raises the full-screen overlay), this
+   *  is for the Connections TILES: when a per-host op is rejected as
+   *  unauthorized, the tile clears the dead token so it flips to signed-out and
+   *  shows its inline Sign-in button. Keeps the remembered password. No-op if
+   *  the host already has no token. */
+  clearHostToken: (hostId: string) => void
   /** Dismiss the full-screen sign-in without switching. */
   cancelSignIn: () => void
   /**
@@ -636,6 +644,15 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
       serverVersion: null,
       serverProtocol: null,
     })
+  },
+
+  clearHostToken: (hostId) => {
+    const { hosts } = get()
+    // No-op if it's already tokenless — avoids a needless re-render/keychain hit.
+    if (!hosts.some((h) => h.id === hostId && h.token)) return
+    const cleared = hosts.map((h) => (h.id === hostId ? { ...h, token: '' } : h))
+    void forgetToken(hostId)
+    set({ hosts: cleared })
   },
 
   cancelSignIn: () => {

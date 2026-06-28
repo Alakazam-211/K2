@@ -3,6 +3,25 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.18 — Agents actually talk across servers
+
+- **Cross-server agent messaging now works end-to-end.** `k2 msg
+  <workspace>@<server>.k2.dev` reaches a connected agent on another of your
+  servers exactly like messaging a local one — and the message now **lands in
+  the recipient agent's chat** (or its inbox), so it's actually seen and can be
+  replied to. Before, a cross-server message was accepted but silently dropped
+  on the receiving side; that's fixed.
+- **Same commands, local or remote.** The CLI tools behave identically whether
+  the agent is on this machine or a connected server — so you and your agents
+  can rely on `k2 msg` working the same everywhere. A message only goes through
+  if the connection exists (otherwise you get a clear *"not a connection — add
+  it with `k2 connections add …`"*). Replying is just `k2 msg` back.
+- **You control which workspaces a remote agent can reach.** A remote message
+  only drives a workspace's agent if that workspace has **Remote Access** turned
+  on; otherwise it lands in that agent's **inbox** to pick up — never lost,
+  never forced. Cross-server messaging still requires an owner-confirmed
+  pairing + an explicit connection. (Both servers need 0.40.18.)
+
 ## 0.40.17 — Cross-server connections that actually connect
 
 - **Connect a workspace on another of your servers — both directions.** Type a

@@ -27,6 +27,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { getDaemonWs, daemonHttpBase, invalidateDaemonWs } from '@/kessel/daemon-ws'
+import { withRemoteRetry } from '@/lib/remote-retry'
 import type { SettingEntry } from '../searchManifest'
 import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingControls'
 import {
@@ -162,75 +163,91 @@ interface TunnelConfigView {
 // failure, so HTTP /cli/* calls can keep sending a stale token → 403
 // until a manual window reload. Wrap each request so a 403 invalidates
 // the creds cache, re-resolves fresh creds, and retries exactly once.
+// withRemoteRetry wraps the whole send+403-retry so a REMOTE active host
+// restarting/updating (which leaves a DEAD pooled WKWebView socket → a thrown
+// network error) self-heals without an app relaunch. The 403 path (stale
+// token, a Response not a throw) is orthogonal and stays inside the op;
+// invalidateDaemonWs is the between-retries hook so a rotated port/token is
+// re-read.
 async function tunnelGet(suffix: string): Promise<Response> {
-  const send = async (): Promise<Response> => {
-    const creds = await getDaemonWs()
-    const sep = suffix.includes('?') ? '&' : '?'
-    return fetch(`${daemonHttpBase(creds)}/cli/tunnel/${suffix}${sep}token=${creds.token}`, { method: 'GET' })
-  }
-  const res = await send()
-  if (res.status !== 403) return res
-  invalidateDaemonWs()
-  return send()
+  return withRemoteRetry(async () => {
+    const send = async (): Promise<Response> => {
+      const creds = await getDaemonWs()
+      const sep = suffix.includes('?') ? '&' : '?'
+      return fetch(`${daemonHttpBase(creds)}/cli/tunnel/${suffix}${sep}token=${creds.token}`, { method: 'GET' })
+    }
+    const res = await send()
+    if (res.status !== 403) return res
+    invalidateDaemonWs()
+    return send()
+  }, { onRetry: invalidateDaemonWs })
 }
 
 async function tunnelPost(suffix: string, body?: unknown): Promise<Response> {
-  const send = async (): Promise<Response> => {
-    const creds = await getDaemonWs()
-    const sep = suffix.includes('?') ? '&' : '?'
-    return fetch(`${daemonHttpBase(creds)}/cli/tunnel/${suffix}${sep}token=${creds.token}`, {
-      method: 'POST',
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-  }
-  const res = await send()
-  if (res.status !== 403) return res
-  invalidateDaemonWs()
-  return send()
+  return withRemoteRetry(async () => {
+    const send = async (): Promise<Response> => {
+      const creds = await getDaemonWs()
+      const sep = suffix.includes('?') ? '&' : '?'
+      return fetch(`${daemonHttpBase(creds)}/cli/tunnel/${suffix}${sep}token=${creds.token}`, {
+        method: 'POST',
+        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      })
+    }
+    const res = await send()
+    if (res.status !== 403) return res
+    invalidateDaemonWs()
+    return send()
+  }, { onRetry: invalidateDaemonWs })
 }
 
 // ── Users / Access (owner-gated /cli/users/*) ──────────────────────────
 // Same stale-token-retry shape as tunnelGet/tunnelPost: the LOCAL daemon
 // creds from getDaemonWs() carry the owner token these routes require.
 async function userGet(suffix: string): Promise<Response> {
-  const send = async (): Promise<Response> => {
-    const creds = await getDaemonWs()
-    return fetch(`${daemonHttpBase(creds)}/cli/users${suffix}?token=${creds.token}`, { method: 'GET' })
-  }
-  const res = await send()
-  if (res.status !== 403) return res
-  invalidateDaemonWs()
-  return send()
+  return withRemoteRetry(async () => {
+    const send = async (): Promise<Response> => {
+      const creds = await getDaemonWs()
+      return fetch(`${daemonHttpBase(creds)}/cli/users${suffix}?token=${creds.token}`, { method: 'GET' })
+    }
+    const res = await send()
+    if (res.status !== 403) return res
+    invalidateDaemonWs()
+    return send()
+  }, { onRetry: invalidateDaemonWs })
 }
 
 async function userPost(suffix: string, body?: unknown): Promise<Response> {
-  const send = async (): Promise<Response> => {
-    const creds = await getDaemonWs()
-    return fetch(`${daemonHttpBase(creds)}/cli/users${suffix}?token=${creds.token}`, {
-      method: 'POST',
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-  }
-  const res = await send()
-  if (res.status !== 403) return res
-  invalidateDaemonWs()
-  return send()
+  return withRemoteRetry(async () => {
+    const send = async (): Promise<Response> => {
+      const creds = await getDaemonWs()
+      return fetch(`${daemonHttpBase(creds)}/cli/users${suffix}?token=${creds.token}`, {
+        method: 'POST',
+        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      })
+    }
+    const res = await send()
+    if (res.status !== 403) return res
+    invalidateDaemonWs()
+    return send()
+  }, { onRetry: invalidateDaemonWs })
 }
 
 // GET /cli/auth/whoami — resolve the LOCAL viewer's identity + role
 // (K2 #629). With the local daemon owner token this returns
 // {owner:true, role:'owner'}; the role gates the management UI below.
 async function whoamiGet(): Promise<Response> {
-  const send = async (): Promise<Response> => {
-    const creds = await getDaemonWs()
-    return fetch(`${daemonHttpBase(creds)}/cli/auth/whoami?token=${creds.token}`, { method: 'GET' })
-  }
-  const res = await send()
-  if (res.status !== 403) return res
-  invalidateDaemonWs()
-  return send()
+  return withRemoteRetry(async () => {
+    const send = async (): Promise<Response> => {
+      const creds = await getDaemonWs()
+      return fetch(`${daemonHttpBase(creds)}/cli/auth/whoami?token=${creds.token}`, { method: 'GET' })
+    }
+    const res = await send()
+    if (res.status !== 403) return res
+    invalidateDaemonWs()
+    return send()
+  }, { onRetry: invalidateDaemonWs })
 }
 
 async function errText(res: Response): Promise<string> {

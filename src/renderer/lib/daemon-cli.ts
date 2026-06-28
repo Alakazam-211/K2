@@ -16,6 +16,7 @@
 
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { withRemoteRetry } from '@/lib/remote-retry'
 
 /**
  * connect-users (#617) session expiry: a 401 from a REMOTE host means its
@@ -120,51 +121,19 @@ export async function daemonCliPost<T = unknown>(
 }
 
 /**
- * Run `op` once. If it throws a connection-level error (caught
- * `fetch` failure — distinct from a non-2xx response), invalidate
- * the cached daemon creds and try a second time. A successful
- * second attempt returns the value; a second failure throws.
+ * Run `op`, retrying on a connection-level error (a caught `fetch` failure —
+ * distinct from a non-2xx response). The shared {@link withRemoteRetry}
+ * backoff evicts a dead pooled WKWebView socket on the first (immediate) retry
+ * and rides out a remote restart over the rest of the schedule; the
+ * `invalidateDaemonWs` hook fires before each retry so the daemon's
+ * (possibly rotated) port/token is re-read.
  *
- * Non-2xx responses are NOT retried — those are application errors
- * the route handler explicitly returned, not stale-creds issues.
- *
- * Kept distinct from `parseDaemonResponse` so HTTP errors continue
- * to throw verbatim — the retry only protects against the kernel
- * refusing the connection (the symptom of finding #547).
+ * Non-2xx responses are NOT retried — those are application errors the route
+ * handler explicitly returned (incl. a remote 401, which must surface
+ * immediately so `handleRemoteUnauthorized` can drop the dead session).
  */
-async function withConnRetry<T>(op: () => Promise<T>): Promise<T> {
-  try {
-    return await op()
-  } catch (err) {
-    if (!isConnectionLevelError(err)) throw err
-    // Daemon may have rebooted and rotated its port; force a re-read.
-    invalidateDaemonWs()
-    return await op()
-  }
-}
-
-/** Detect connection-level errors (kernel refused the connection,
- *  DNS failure, network down). These are the failure modes a
- *  port-mismatch produces — distinct from HTTP-level errors which
- *  `parseDaemonResponse` already throws. Browser `fetch` throws a
- *  `TypeError` with message starting "Failed to fetch" / "Load
- *  failed" / "NetworkError" depending on engine; Tauri's webview
- *  uses WKWebView (Safari) and surfaces "Load failed". */
-function isConnectionLevelError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
-  const m = err.message.toLowerCase()
-  return (
-    m.includes('failed to fetch') ||
-    m.includes('load failed') ||
-    m.includes('networkerror') ||
-    m.includes('connection refused') ||
-    m.includes('ecconnrefused') ||
-    m.includes('econnrefused') ||
-    // `getDaemonWs` rejects with this prefix when the daemon hasn't
-    // published creds yet — same recovery path.
-    m.includes('daemon_ws_url invoke failed') ||
-    m.includes('daemon not reachable')
-  )
+function withConnRetry<T>(op: () => Promise<T>): Promise<T> {
+  return withRemoteRetry(op, { onRetry: invalidateDaemonWs })
 }
 
 async function parseDaemonResponse<T>(res: Response): Promise<T> {

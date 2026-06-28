@@ -21,6 +21,7 @@
 // follow-up read.
 
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
+import { withRemoteRetry } from '@/lib/remote-retry'
 import type { AppSettingsResponse } from '@shared/types'
 
 async function daemonUrl(path: string): Promise<string> {
@@ -91,29 +92,10 @@ export async function settingsReset(): Promise<AppSettingsResponse> {
   })
 }
 
-/** See `daemon-cli.ts::withConnRetry` for the rationale. Kept as a
- *  local copy rather than imported because both modules need to be
- *  safe to load before each other. */
-async function withConnRetry<T>(op: () => Promise<T>): Promise<T> {
-  try {
-    return await op()
-  } catch (err) {
-    if (!isConnectionLevelError(err)) throw err
-    invalidateDaemonWs()
-    return await op()
-  }
-}
-
-function isConnectionLevelError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
-  const m = err.message.toLowerCase()
-  return (
-    m.includes('failed to fetch') ||
-    m.includes('load failed') ||
-    m.includes('networkerror') ||
-    m.includes('connection refused') ||
-    m.includes('econnrefused') ||
-    m.includes('daemon_ws_url invoke failed') ||
-    m.includes('daemon not reachable')
-  )
+/** See `remote-retry.ts::withRemoteRetry` for the rationale: retry-on-network-
+ *  error survives a remote daemon restart/update (dead pooled WKWebView
+ *  socket) without an app relaunch. The `invalidateDaemonWs` hook fires before
+ *  each retry so a rotated port/token is re-read. */
+function withConnRetry<T>(op: () => Promise<T>): Promise<T> {
+  return withRemoteRetry(op, { onRetry: invalidateDaemonWs })
 }

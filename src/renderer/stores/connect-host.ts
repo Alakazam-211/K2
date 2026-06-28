@@ -35,6 +35,7 @@
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import { withRemoteRetry } from '@/lib/remote-retry'
 
 /**
  * Keychain service name for remembered remote-host tokens. Each token is
@@ -524,24 +525,23 @@ export async function loginToHost(
   // through, but a fresh login POST reuses the dead socket and throws at the
   // network layer. The throw evicts the bad connection from the pool, so a
   // brief pause + retry opens a FRESH socket — recovering without the full app
-  // relaunch that was previously the only fix. Only surface an error if the
-  // retry also fails (then it's likely a real connectivity/server problem).
+  // relaunch that was previously the only fix. The shared withRemoteRetry
+  // backoff (immediate first retry to evict+reopen, then widening pauses)
+  // rides out the restart window; only surface an error if every attempt fails
+  // (then it's likely a real connectivity/server problem). The per-attempt
+  // AbortSignal.timeout stays inside the op so each attempt is freshly bounded.
   let resp: Response | undefined
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      resp = await fetch(url, {
+  try {
+    resp = await withRemoteRetry(() =>
+      fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
         signal: AbortSignal.timeout(timeoutMs),
-      })
-      break
-    } catch {
-      if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 400))
-        continue
-      }
-    }
+      }),
+    )
+  } catch {
+    /* every attempt threw a connection-level error — handled below */
   }
   if (!resp) {
     return {

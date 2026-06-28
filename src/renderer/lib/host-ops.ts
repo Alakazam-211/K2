@@ -14,6 +14,7 @@
 // the federation badge).
 
 import type { ConnectHost } from '@/stores/connect-host'
+import { withRemoteRetry } from '@/lib/remote-retry'
 import {
   updateAvailableCopy,
   newerNoArtifactCopy,
@@ -75,13 +76,19 @@ export async function hostOpPost<T = unknown>(
   route: string,
   timeoutMs = 30000,
 ): Promise<T> {
-  const url = `${creds.base}/cli/${route}?token=${encodeURIComponent(creds.token)}`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(timeoutMs),
+  // Wrap in withRemoteRetry so a remote restart/update (which leaves a DEAD
+  // pooled WKWebView socket) self-heals: the network throw evicts the dead
+  // socket and a retry opens a fresh one. The per-attempt AbortSignal.timeout
+  // stays INSIDE the op so each attempt gets its own fresh timeout.
+  return withRemoteRetry(async () => {
+    const url = `${creds.base}/cli/${route}?token=${encodeURIComponent(creds.token)}`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    return parse<T>(res)
   })
-  return parse<T>(res)
 }
 
 /** GET `<base>/cli/<route>?…&token=<token>` from a SPECIFIC host. */
@@ -91,16 +98,20 @@ export async function hostOpGet<T = unknown>(
   params?: Record<string, string | number | boolean | undefined | null>,
   timeoutMs = 8000,
 ): Promise<T> {
-  const search = new URLSearchParams()
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) search.set(k, String(v))
+  // See hostOpPost: retry-on-network-error survives a remote restart without
+  // an app relaunch; the per-attempt AbortSignal.timeout stays inside the op.
+  return withRemoteRetry(async () => {
+    const search = new URLSearchParams()
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null) search.set(k, String(v))
+      }
     }
-  }
-  search.set('token', creds.token)
-  const url = `${creds.base}/cli/${route}?${search.toString()}`
-  const res = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) })
-  return parse<T>(res)
+    search.set('token', creds.token)
+    const url = `${creds.base}/cli/${route}?${search.toString()}`
+    const res = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) })
+    return parse<T>(res)
+  })
 }
 
 // ── Update-check → display string ────────────────────────────────────────

@@ -34,6 +34,7 @@ import {
   autoPairWithHost,
   addRemoteConnection,
   listRemoteConnections,
+  getPubkey,
 } from '@/lib/federation'
 
 const REMOTE_BASE = 'https://rpm.k2.dev' // secure + port 443 → no :port
@@ -223,5 +224,43 @@ describe('listRemoteConnections', () => {
     vi.stubGlobal('fetch', f)
     expect(await listRemoteConnections('')).toEqual([])
     expect(f).not.toHaveBeenCalled()
+  })
+})
+
+// The federation client (cliGet/cliPost) must survive a remote restart/update:
+// the dead pooled WKWebView socket throws, withRemoteRetry evicts+reopens it.
+// A non-2xx (404 federation-off) is authoritative and must NOT be retried.
+describe('cliGet retry-on-network-error (via getPubkey)', () => {
+  beforeEach(() => {
+    hosts = signedInRemote()
+    vi.unstubAllGlobals()
+  })
+
+  it('a connection error then a 200 RESOLVES (retry happened)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Load failed')) // dead pooled socket
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ public_key_pem: 'PEM', fingerprint: 'FP', subdomain: 'mybox' }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getPubkey()).resolves.toMatchObject({ fingerprint: 'FP' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('a 404 (federation off) is NOT retried — surfaces immediately (single fetch)', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 404,
+      text: async () => JSON.stringify({ error: 'federation disabled' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getPubkey()).rejects.toThrow(/federation disabled/i)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

@@ -226,7 +226,7 @@ describe('handleRemoteUnauthorized — a remote 401 expires the session', () => 
   })
 })
 
-describe('withConnRetry — connection-level failures retry once', () => {
+describe('withConnRetry — connection-level failures retry (shared withRemoteRetry backoff)', () => {
   beforeEach(() => {
     mem.clear()
     __resetConnectHostStoreForTests()
@@ -250,13 +250,25 @@ describe('withConnRetry — connection-level failures retry once', () => {
     expect(invalidateDaemonWsMock).toHaveBeenCalledTimes(1)
   })
 
-  it('a connection error that fails BOTH times rejects (one retry only)', async () => {
-    getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
-    const fetchMock = vi.fn().mockRejectedValue(new Error('Failed to fetch'))
-    vi.stubGlobal('fetch', fetchMock)
+  it('a connection error that fails every attempt rejects after the full backoff', async () => {
+    // The shared withRemoteRetry backoff is [0, 400, 1200, 2000] → 1 initial
+    // try + 4 retries = 5 attempts; fake timers drive the delayed retries.
+    vi.useFakeTimers()
+    try {
+      getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
+      const fetchMock = vi.fn().mockRejectedValue(new Error('Failed to fetch'))
+      vi.stubGlobal('fetch', fetchMock)
 
-    await expect(daemonCliGet('projects/list')).rejects.toThrow('Failed to fetch')
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+      const p = daemonCliGet('projects/list')
+      const assertion = expect(p).rejects.toThrow('Failed to fetch')
+      await vi.runAllTimersAsync()
+      await assertion
+      expect(fetchMock).toHaveBeenCalledTimes(5)
+      // invalidateDaemonWs fired before each of the 4 retries.
+      expect(invalidateDaemonWsMock).toHaveBeenCalledTimes(4)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('an APP-level non-2xx is NOT retried — it surfaces the daemon error verbatim', async () => {

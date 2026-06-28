@@ -19,6 +19,7 @@
 // (the local daemon dials the peer's signed roster GET).
 
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { withRemoteRetry } from '@/lib/remote-retry'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
 
@@ -201,25 +202,32 @@ async function cliGet<T>(
   route: string,
   params?: Record<string, string | number | boolean | undefined | null>,
 ): Promise<T> {
-  const search = new URLSearchParams()
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) search.set(k, String(v))
+  // Retry-on-network-error so a remote restart (dead pooled WKWebView socket)
+  // self-heals without an app relaunch. Non-2xx (404 federation-off / 403
+  // not-owner) is authoritative and surfaces immediately.
+  return withRemoteRetry(async () => {
+    const search = new URLSearchParams()
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null) search.set(k, String(v))
+      }
     }
-  }
-  search.set('token', creds.token)
-  const res = await fetch(`${creds.base}/cli/${route}?${search.toString()}`, { method: 'GET' })
-  return parse<T>(res)
+    search.set('token', creds.token)
+    const res = await fetch(`${creds.base}/cli/${route}?${search.toString()}`, { method: 'GET' })
+    return parse<T>(res)
+  })
 }
 
 /** POST `<base>/cli/<route>` (JSON body) against an explicit daemon. */
 async function cliPost<T>(creds: DaemonCreds, route: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${creds.base}/cli/${route}?token=${encodeURIComponent(creds.token)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+  return withRemoteRetry(async () => {
+    const res = await fetch(`${creds.base}/cli/${route}?token=${encodeURIComponent(creds.token)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+    return parse<T>(res)
   })
-  return parse<T>(res)
 }
 
 /** Read a daemon's federation identity. Throws if federation is off there

@@ -3,13 +3,27 @@
 // the credential resolution + the update-check → display-string mapping + the
 // federation badge copy, the bits that must never drift from the daemon shape.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   remoteCreds,
   summarizeCheck,
   federationBadgeText,
+  hostOpPost,
+  hostOpGet,
+  type HostCreds,
 } from './host-ops'
 import type { UpdateCheckResult } from '@/components/Settings/sections/update-host'
+
+/** A minimal Response stand-in covering exactly what host-ops `parse` reads. */
+function fakeRes({ status = 200, body = '' }: { status?: number; body?: string } = {}): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => body,
+  } as unknown as Response
+}
+
+const CREDS: HostCreds = { base: 'https://rosson.k2.dev', token: 'tok' }
 
 describe('remoteCreds — per-host base/token resolution', () => {
   it('builds an https base and omits port 443 for a secure host', () => {
@@ -81,5 +95,57 @@ describe('federationBadgeText', () => {
     expect(federationBadgeText('on')).toBe('Federation: on')
     expect(federationBadgeText('off')).toBe('Federation: off')
     expect(federationBadgeText('unknown')).toBe('Federation: —')
+  })
+})
+
+// The tile fix: a remote restart/update leaves a DEAD pooled WKWebView socket
+// so the next fetch throws at the network layer. withRemoteRetry must retry
+// (the throw evicts the socket; the retry opens a fresh one), but must NOT
+// retry an authoritative non-2xx (401 stale token / 403 not-owner).
+describe('hostOpPost / hostOpGet — survive a remote restart (retry-on-network-error)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('hostOpPost: a connection error then a 200 RESOLVES (retry happened)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Load failed')) // dead pooled socket
+      .mockResolvedValueOnce(fakeRes({ body: JSON.stringify({ ok: true }) }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(hostOpPost(CREDS, 'daemon/restart')).resolves.toEqual({ ok: true })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('hostOpGet: a connection error then a 200 RESOLVES (retry happened)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValueOnce(fakeRes({ body: JSON.stringify({ federationEnabled: true }) }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(hostOpGet(CREDS, 'settings/get')).resolves.toEqual({ federationEnabled: true })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('hostOpPost: a 401 is NOT retried — surfaces immediately (single fetch)', async () => {
+    const fetchMock = vi.fn(async () =>
+      fakeRes({ status: 401, body: JSON.stringify({ error: 'session expired' }) }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(hostOpPost(CREDS, 'daemon/restart')).rejects.toThrow('session expired')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('hostOpGet: a 500 app error is NOT retried (single fetch)', async () => {
+    const fetchMock = vi.fn(async () =>
+      fakeRes({ status: 500, body: JSON.stringify({ error: 'boom' }) }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(hostOpGet(CREDS, 'settings/get')).rejects.toThrow('boom')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

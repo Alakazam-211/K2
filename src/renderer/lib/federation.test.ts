@@ -33,6 +33,7 @@ import {
   parseAgentAtHost,
   autoPairWithHost,
   addRemoteConnection,
+  removeRemoteConnection,
   listRemoteConnections,
   getPubkey,
 } from '@/lib/federation'
@@ -60,11 +61,27 @@ interface Recorded {
   body: unknown
 }
 
+/** Default peer roster the LOCAL `federation/peer-roster` seam returns: one
+ *  workspace exposes agent `ai` (workspace UUID `WS-AI`). */
+const DEFAULT_ROSTER_AGENTS = [
+  { workspace_id: 'WS-AI', workspace_name: 'ai', agent: 'ai', address: 'WS-AI::ai' },
+]
+/** Default REMOTE `projects/list`: maps the `ai` workspace UUID → fs path. */
+const DEFAULT_REMOTE_PROJECTS = [{ id: 'WS-AI', name: 'ai', path: '/srv/ai' }]
+
 /** Install a fetch stub that answers each daemon route. `peers` controls the
  *  idempotency state per base. Records every call for assertion. */
 function installFetch(opts: {
   localPeers?: unknown[]
   remotePeers?: unknown[]
+  /** LOCAL pubkey subdomain (default `mybox`; `''` disables the reverse row). */
+  localSubdomain?: string
+  /** Agents the LOCAL `federation/peer-roster` reports (default the `ai` ws). */
+  rosterAgents?: unknown[]
+  /** Rows the REMOTE `projects/list` returns (default UUID→`/srv/ai`). */
+  remoteProjects?: unknown[]
+  /** Make the REMOTE `projects/list` fail with a 500 (reverse soft-fails). */
+  failRemoteProjects?: boolean
 }): Recorded[] {
   const recorded: Recorded[] = []
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -84,7 +101,11 @@ function installFetch(opts: {
     if (path === '/cli/federation/pubkey') {
       return ok(
         isLocal
-          ? { public_key_pem: 'LOCALPEM', fingerprint: 'LOCALFP', subdomain: 'mybox' }
+          ? {
+              public_key_pem: 'LOCALPEM',
+              fingerprint: 'LOCALFP',
+              subdomain: opts.localSubdomain ?? 'mybox',
+            }
           : { public_key_pem: 'REMOTEPEM', fingerprint: 'REMOTEFP', subdomain: 'rpm' },
       )
     }
@@ -96,6 +117,16 @@ function installFetch(opts: {
     }
     if (path === '/cli/federation/pair/confirm') {
       return ok({ ok: true })
+    }
+    // Reverse-row resolution: roster comes from the LOCAL seam, paths from REMOTE.
+    if (path === '/cli/federation/peer-roster') {
+      return ok({ peer: 'REMOTEFP', roster: { agents: opts.rosterAgents ?? DEFAULT_ROSTER_AGENTS } })
+    }
+    if (path === '/cli/projects/list') {
+      if (opts.failRemoteProjects && !isLocal) {
+        return { ok: false, status: 500, text: async () => '{"error":"boom"}' }
+      }
+      return ok(opts.remoteProjects ?? DEFAULT_REMOTE_PROJECTS)
     }
     if (path === '/cli/connections') {
       return ok({ success: true })
@@ -189,6 +220,112 @@ describe('addRemoteConnection', () => {
     await expect(addRemoteConnection('/Users/me/ws', 'not-an-address')).rejects.toThrow(
       /not a valid remote agent address/i,
     )
+  })
+})
+
+describe('addRemoteConnection reverse row', () => {
+  beforeEach(() => {
+    hosts = signedInRemote()
+    vi.unstubAllGlobals()
+  })
+
+  // Helper: the reverse `/cli/connections` calls recorded against the REMOTE base.
+  const reverseConns = (rec: Recorded[]) =>
+    rec.filter((r) => r.url.startsWith(REMOTE_BASE) && r.url.includes('/cli/connections'))
+
+  it('records the reverse row on the REMOTE base (project=/srv/ai, target=cortana@mybox.k2.dev)', async () => {
+    const rec = installFetch({ localPeers: [], remotePeers: [] })
+    const res = await addRemoteConnection('/Users/me/cortana', 'ai@rpm.k2.dev')
+    expect(res.reverseWarning).toBeNull()
+
+    // Forward call unchanged: LOCAL base, action=add, target=ai@rpm.k2.dev.
+    const forward = rec.find(
+      (r) => r.url.startsWith(LOCAL_BASE) && r.url.includes('/cli/connections'),
+    )
+    expect(forward).toBeDefined()
+    const fu = new URL(forward!.url)
+    expect(fu.searchParams.get('project')).toBe('/Users/me/cortana')
+    expect(fu.searchParams.get('action')).toBe('add')
+    expect(fu.searchParams.get('target')).toBe('ai@rpm.k2.dev')
+
+    // Reverse call on REMOTE base: project=/srv/ai, action=add, target=cortana@mybox.k2.dev.
+    const reverse = reverseConns(rec)
+    expect(reverse).toHaveLength(1)
+    const ru = new URL(reverse[0].url)
+    expect(ru.searchParams.get('project')).toBe('/srv/ai')
+    expect(ru.searchParams.get('action')).toBe('add')
+    expect(ru.searchParams.get('target')).toBe('cortana@mybox.k2.dev')
+  })
+
+  it('skips the reverse (with a warning) when this server has no tunnel subdomain', async () => {
+    const rec = installFetch({ localPeers: [], remotePeers: [], localSubdomain: '' })
+    const res = await addRemoteConnection('/Users/me/cortana', 'ai@rpm.k2.dev')
+    expect(res.reverseWarning).toMatch(/no tunnel subdomain/i)
+    expect(reverseConns(rec)).toHaveLength(0)
+    // Forward still recorded.
+    expect(
+      rec.some((r) => r.url.startsWith(LOCAL_BASE) && r.url.includes('/cli/connections')),
+    ).toBe(true)
+  })
+
+  it('skips the reverse (with a warning) when the agent is ambiguous on the peer', async () => {
+    const rec = installFetch({
+      localPeers: [],
+      remotePeers: [],
+      rosterAgents: [
+        { workspace_id: 'WS-AI', workspace_name: 'ai', agent: 'ai', address: 'WS-AI::ai' },
+        { workspace_id: 'WS-AI2', workspace_name: 'ai-2', agent: 'ai', address: 'WS-AI2::ai' },
+      ],
+    })
+    const res = await addRemoteConnection('/Users/me/cortana', 'ai@rpm.k2.dev')
+    expect(res.reverseWarning).toMatch(/ambiguous/i)
+    expect(reverseConns(rec)).toHaveLength(0)
+  })
+
+  it('skips the reverse (with a warning) when no peer workspace exposes the agent', async () => {
+    const rec = installFetch({ localPeers: [], remotePeers: [], rosterAgents: [] })
+    const res = await addRemoteConnection('/Users/me/cortana', 'ai@rpm.k2.dev')
+    expect(res.reverseWarning).toMatch(/no workspace.*exposes agent/i)
+    expect(reverseConns(rec)).toHaveLength(0)
+  })
+
+  it('a reverse failure is non-fatal — resolves with a warning, forward recorded', async () => {
+    const rec = installFetch({ localPeers: [], remotePeers: [], failRemoteProjects: true })
+    const res = await addRemoteConnection('/Users/me/cortana', 'ai@rpm.k2.dev')
+    expect(res.reverseWarning).toMatch(/reverse connection skipped/i)
+    // Forward still recorded; no reverse connections add fired.
+    expect(
+      rec.some((r) => r.url.startsWith(LOCAL_BASE) && r.url.includes('/cli/connections')),
+    ).toBe(true)
+    expect(reverseConns(rec)).toHaveLength(0)
+  })
+})
+
+describe('removeRemoteConnection reverse row', () => {
+  beforeEach(() => {
+    hosts = signedInRemote()
+    vi.unstubAllGlobals()
+  })
+
+  it('best-effort removes the mirrored reverse row on the REMOTE base', async () => {
+    const rec = installFetch({ localPeers: [], remotePeers: [] })
+    await removeRemoteConnection('/Users/me/cortana', 'ai@rpm.k2.dev')
+
+    const reverse = rec.filter(
+      (r) => r.url.startsWith(REMOTE_BASE) && r.url.includes('/cli/connections'),
+    )
+    expect(reverse).toHaveLength(1)
+    const ru = new URL(reverse[0].url)
+    expect(ru.searchParams.get('project')).toBe('/srv/ai')
+    expect(ru.searchParams.get('action')).toBe('remove')
+    expect(ru.searchParams.get('target')).toBe('cortana@mybox.k2.dev')
+  })
+
+  it('does not reject when the reverse cleanup fails on the remote', async () => {
+    installFetch({ localPeers: [], remotePeers: [], failRemoteProjects: true })
+    await expect(
+      removeRemoteConnection('/Users/me/cortana', 'ai@rpm.k2.dev'),
+    ).resolves.toBeUndefined()
   })
 })
 

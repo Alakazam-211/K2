@@ -2675,10 +2675,13 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
     try {
       // Auto-pairs both daemons (owner authority on each) then records the
       // connection on the source side. Fails loud — surface the message.
-      await addRemoteConnection(sourcePath, remoteTarget)
+      // The forward connection succeeded if this resolves; `reverseWarning`
+      // (if any) is a soft note that the reverse/back-messaging row wasn't wired.
+      const { reverseWarning } = await addRemoteConnection(sourcePath, remoteTarget)
       setShowAdd(false)
       setSearch('')
       await fetchRelations()
+      if (reverseWarning) setRemoteError(reverseWarning)
     } catch (e) {
       setRemoteError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -2734,6 +2737,11 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
               autoFocus
               className="w-full bg-transparent text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none"
             />
+          </div>
+          {/* GAP #3 discoverability: persistent hint that a full `agent@host`
+              address connects a workspace on another server (not just local). */}
+          <div className="px-3 py-1.5 text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
+            Tip: to connect a workspace on another server, type its full address — agent@server.k2.dev
           </div>
           <div className="max-h-[200px] overflow-y-auto">
             {/* GAP #3: a `<agent>@<host>` input is a REMOTE agent — offer an

@@ -297,23 +297,28 @@ function subdomainForHost(host: string, reported: string): string {
  * confirm already committed) if any step errors.
  */
 export async function autoPairWithHost(host: string): Promise<void> {
+  // Distinguish an AUTH failure (403 — not an owner/admin, or not signed in)
+  // from federation-off / unreachable (404 / network) so the copy is accurate.
+  const isAuthErr = (m: string) => /403|forbidden|invalid or missing auth token/i.test(m)
+
   const localC = await activeCreds()
   const remoteC = await remoteCreds(host)
 
-  // 1. Read both identities. A federation-off peer 404s here → clear error.
+  // 1. Read both identities. A federation-off peer 404s here; a 403 means the
+  //    operator lacks owner/admin authority. Map each to clear copy.
   const localPub = await getPubkeyFor(localC).catch((e: unknown) => {
-    throw new Error(
-      `This server isn't ready for cross-server connections — enable K2 Connect federation in Settings. (${
-        e instanceof Error ? e.message : String(e)
-      })`,
-    )
+    const inner = e instanceof Error ? e.message : String(e)
+    const lead = isAuthErr(inner)
+      ? `You must be an owner or admin on this server to connect across servers.`
+      : `This server isn't ready for cross-server connections — enable K2 Connect federation in Settings.`
+    throw new Error(`${lead} (${inner})`)
   })
   const remotePub = await getPubkeyFor(remoteC).catch((e: unknown) => {
-    throw new Error(
-      `"${host}" isn't ready for cross-server connections — federation may be off there. (${
-        e instanceof Error ? e.message : String(e)
-      })`,
-    )
+    const inner = e instanceof Error ? e.message : String(e)
+    const lead = isAuthErr(inner)
+      ? `You must be an owner or admin on "${host}" (and signed in there) to connect across servers.`
+      : `"${host}" isn't ready for cross-server connections — federation may be off there.`
+    throw new Error(`${lead} (${inner})`)
   })
 
   // 2. Idempotency: skip whichever direction is already Trusted.
@@ -345,24 +350,71 @@ export function parseAgentAtHost(target: string): { agent: string; host: string 
   return { agent: t.slice(0, at), host: t.slice(at + 1) }
 }
 
+/** Workspace folder basename (the source agent's default name). Splits on / and \\. */
+function workspaceBasename(path: string): string {
+  const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/)
+  return parts[parts.length - 1] ?? ''
+}
+
+/** Resolve a remote `agent@host`'s workspace FILESYSTEM PATH on the peer, by
+ *  joining the peer roster (agent→workspace UUID, via the LOCAL peer-roster seam)
+ *  with the peer's projects/list (UUID→path). Never throws; returns {error} when
+ *  it can't resolve unambiguously. */
+async function resolveRemoteWorkspacePath(
+  localC: DaemonCreds, remoteC: DaemonCreds, remoteFp: string, remoteAgent: string,
+): Promise<{ path: string } | { error: string }> {
+  const rosterBody = await cliGet<{ roster?: { agents?: RosterAgent[] } }>(
+    localC, 'federation/peer-roster', { peer: remoteFp })
+  const agents = rosterBody?.roster?.agents ?? []
+  const matches = agents.filter((a) => a.agent === remoteAgent)
+  if (matches.length === 0) return { error: `no workspace on the peer exposes agent "${remoteAgent}"` }
+  if (matches.length > 1) return { error: `agent "${remoteAgent}" is ambiguous on the peer (${matches.length} workspaces)` }
+  const wsId = matches[0].workspace_id
+  const projects = await cliGet<Array<{ id: string; path: string }>>(remoteC, 'projects/list')
+  const proj = (Array.isArray(projects) ? projects : []).find((p) => p?.id === wsId)
+  if (!proj?.path) return { error: `peer has no project path for workspace ${wsId}` }
+  return { path: proj.path }
+}
+
+/** Best-effort REVERSE row. Never throws — returns a human warning on soft failure, else null. */
+async function tryAddReverseConnection(
+  sourceWorkspacePath: string, remoteAgent: string, host: string,
+): Promise<string | null> {
+  try {
+    const localC = await activeCreds()
+    const remoteC = await remoteCreds(host)
+    const [localPub, remotePub] = await Promise.all([getPubkeyFor(localC), getPubkeyFor(remoteC)])
+    if (!localPub.subdomain) return 'Reverse connection skipped: this server has no tunnel subdomain (the peer could not reach it back).'
+    const sourceAgent = workspaceBasename(sourceWorkspacePath)
+    if (!sourceAgent) return 'Reverse connection skipped: could not derive this workspace’s agent name.'
+    const resolved = await resolveRemoteWorkspacePath(localC, remoteC, remotePub.fingerprint, remoteAgent)
+    if ('error' in resolved) return `Reverse connection skipped: ${resolved.error}.`
+    const reverseTarget = `${sourceAgent}@${localPub.subdomain}.k2.dev`
+    await cliGet(remoteC, 'connections', { project: resolved.path, action: 'add', target: reverseTarget })
+    return null
+  } catch (e) {
+    return `Reverse connection skipped: ${e instanceof Error ? e.message : String(e)}`
+  }
+}
+
 /**
  * Add a REMOTE (cross-daemon) connection `<agent>@<host>` for `sourceWorkspacePath`:
- * auto-pair the two daemons if needed, then record the connection on the LOCAL
- * (active) daemon for the source workspace. The local→remote direction is the
- * one the daemon's send-gate checks, so this is sufficient for the source
- * workspace's agent to message the remote agent.
+ * auto-pair the two daemons if needed, record the connection on the LOCAL
+ * (active) daemon for the source workspace, then best-effort record the REVERSE
+ * row on `host`.
  *
- * REVERSE-CONNECTION LIMITATION (TODO): the symmetric reverse — on `host`,
- * record `<sourceAgent>@<localSubdomain>` for some remote workspace — is NOT
- * done here. There is no single well-defined remote workspace to attach it to,
- * and resolving the source workspace's agent name on the peer is non-trivial.
- * Mutual TRUST is established (so the reverse is one `connections add` away),
- * but the reverse connection row is left for a follow-up.
+ * The forward (local→remote) direction is the one the local daemon's send-gate
+ * checks. The reverse row lets the remote agent message back: on `host`, for the
+ * workspace exposing `<agent>`, it records `<sourceBasename>@<localSubdomain>.k2.dev`
+ * (source agent name = source workspace folder basename; local subdomain from the
+ * active daemon's federation pubkey). The reverse is FAIL-SOFT — it NEVER breaks
+ * the forward connection or pairing; on any soft failure it returns a human
+ * `reverseWarning` (else null) so the operator knows back-messaging isn't wired yet.
  */
 export async function addRemoteConnection(
   sourceWorkspacePath: string,
   target: string,
-): Promise<void> {
+): Promise<{ reverseWarning: string | null }> {
   const parsed = parseAgentAtHost(target)
   if (!parsed) {
     throw new Error(`"${target}" is not a valid remote agent address (expected <agent>@<host>).`)
@@ -376,10 +428,15 @@ export async function addRemoteConnection(
     action: 'add',
     target,
   })
+  // 3. Best-effort reverse row (never throws — soft warning only).
+  const reverseWarning = await tryAddReverseConnection(sourceWorkspacePath, parsed.agent, parsed.host)
+  return { reverseWarning }
 }
 
 /** Remove a REMOTE connection `<agent>@<host>` for `sourceWorkspacePath` from
- *  the local (active) daemon. (Trust pins are left intact.) */
+ *  the local (active) daemon, then best-effort remove the mirrored REVERSE row
+ *  on `host`. (Trust pins are left intact.) The forward removal is authoritative;
+ *  a remote failure in the reverse cleanup never rejects. */
 export async function removeRemoteConnection(
   sourceWorkspacePath: string,
   target: string,
@@ -390,6 +447,17 @@ export async function removeRemoteConnection(
     action: 'remove',
     target,
   })
+  const parsed = parseAgentAtHost(target)
+  if (!parsed) return
+  try {
+    const remoteC = await remoteCreds(parsed.host)
+    const [localPub, remotePub] = await Promise.all([getPubkey(), getPubkeyFor(remoteC)])
+    if (!localPub.subdomain) return
+    const resolved = await resolveRemoteWorkspacePath(await activeCreds(), remoteC, remotePub.fingerprint, parsed.agent)
+    if ('error' in resolved) return
+    const reverseTarget = `${workspaceBasename(sourceWorkspacePath)}@${localPub.subdomain}.k2.dev`
+    await cliGet(remoteC, 'connections', { project: resolved.path, action: 'remove', target: reverseTarget })
+  } catch { /* best-effort */ }
 }
 
 /** A remote connection row as the `/cli/connections` list returns it. */

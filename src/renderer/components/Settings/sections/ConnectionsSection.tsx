@@ -25,6 +25,7 @@ import {
 } from '@/stores/connect-host'
 import { parseServerUrl, isValidUsername } from '@/lib/connect-validate'
 import { IconLock } from '@/components/icons/IconLock'
+import { FederationOverview } from './FederationOverview'
 import { useAddServerFocus } from '@/stores/add-server-focus'
 import type { SettingEntry } from '../searchManifest'
 import {
@@ -109,6 +110,12 @@ export function ConnectionsSection(): React.JSX.Element {
   const addHost = useConnectHostStore((s) => s.addHost)
   const removeHost = useConnectHostStore((s) => s.removeHost)
   const pickHost = useConnectHostStore((s) => s.pickHost)
+
+  // The device address book (saved-server tiles + add form) is a per-DEVICE
+  // concept — only meaningful when the active daemon is local. On a remote host
+  // it's replaced by the host-aware FederationOverview.
+  const isLocalActive = activeHost === 'local'
+  const activeHostLabel = isLocalActive ? 'This Mac' : activeHost.label || activeHost.hostname
 
   const [draft, setDraft] = useState<DraftHost | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -232,10 +239,17 @@ export function ConnectionsSection(): React.JSX.Element {
     <div className="w-full">
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Connections</h2>
       <p className="text-[10px] text-[var(--color-text-muted)] mb-4">
-        K2 servers this device connects to. Each server&apos;s password is stored in your OS
-        keychain only when &ldquo;Remember password&rdquo; is on — never in plain text.
+        {isLocalActive
+          ? 'K2 servers this device connects to. Each server’s password is stored in your OS keychain only when “Remember password” is on — never in plain text. Below: who the local daemon is federated with.'
+          : `Viewing ${activeHostLabel}. The saved-servers address book is per-device and hidden while you’re on a remote host — instead, here is who ${activeHostLabel} is federated with.`}
       </p>
 
+      {/* Device address book (Local tile + saved hosts + add/edit form) is a
+          per-DEVICE client concept — show it only when the active daemon is
+          local. On a remote host it'd be confusing (it's THIS Mac's list, not
+          the remote's), so it's replaced by the federation overview below. */}
+      {isLocalActive && (
+      <>
       {/* Local — always present, never editable. */}
       <div className="flex items-center gap-2 mb-2 px-3 py-2 border border-[var(--color-border)]">
         <span
@@ -346,6 +360,12 @@ export function ConnectionsSection(): React.JSX.Element {
           + Add a server
         </button>
       )}
+      </>
+      )}
+
+      {/* Host-aware federation overview — the ACTIVE daemon's peers + cross-agent
+          connections (local or remote). Always shown. */}
+      <FederationOverview />
     </div>
   )
 }

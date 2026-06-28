@@ -392,6 +392,47 @@ export interface RemoteConnectionEntry {
   agent: string
 }
 
+/** A daemon-wide remote connection: a `RemoteConnectionEntry` plus which of
+ *  the daemon's workspaces it belongs to (so the overview can show `(ws: ai)`). */
+export interface AggregatedRemoteConnection extends RemoteConnectionEntry {
+  /** Source workspace display name on the ACTIVE daemon. */
+  sourceWorkspace: string
+  /** Source workspace path (stable key). */
+  sourcePath: string
+}
+
+/**
+ * List EVERY cross-daemon `agent@host` connection configured on the ACTIVE
+ * daemon, across all of its workspaces — the daemon-global view for the K2
+ * Connect overview. Host-aware: returns the connections of whichever daemon is
+ * active (local or remote). Walks `projects/list` then each workspace's
+ * `/cli/connections` (existing routes — no daemon change, so it works against
+ * already-shipped remotes). Returns `[]` on any failure (overview degrades to
+ * empty, never throws into the render).
+ */
+export async function listAllRemoteConnections(): Promise<AggregatedRemoteConnection[]> {
+  try {
+    const projects = await daemonCliGet<Array<{ id: string; name?: string; path: string }>>(
+      'projects/list',
+    )
+    const list = Array.isArray(projects) ? projects : []
+    const out: AggregatedRemoteConnection[] = []
+    // Sequential (not Promise.all): the daemon serves one request per TCP
+    // connection, and the connection counts are small — bursting would just
+    // churn sockets. Each workspace failure degrades to none for that ws.
+    for (const p of list) {
+      if (!p?.path) continue
+      const conns = await listRemoteConnections(p.path)
+      for (const c of conns) {
+        out.push({ ...c, sourceWorkspace: p.name || p.path, sourcePath: p.path })
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
 /** List the REMOTE (cross-daemon) connections recorded for a source
  *  workspace on the active daemon. Returns `[]` on any failure (the editor
  *  degrades to local-only). */

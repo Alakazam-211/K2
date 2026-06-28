@@ -255,9 +255,14 @@ export function ConnectionsSection(): React.JSX.Element {
         )}
       </div>
 
-      {/* Saved hosts */}
+      {/* Saved hosts — sorted alphabetically by display label (case-insensitive).
+          'Local' is the separate pinned tile above this list. */}
       <div className="space-y-2" data-settings-id="connections.list">
-        {hosts.map((h) => {
+        {[...hosts]
+          .sort((a, b) =>
+            (a.label || a.hostname).localeCompare(b.label || b.hostname, undefined, { sensitivity: 'base' })
+          )
+          .map((h) => {
           const isActive = activeHost !== 'local' && activeHost.id === h.id
           return (
             <HostTile

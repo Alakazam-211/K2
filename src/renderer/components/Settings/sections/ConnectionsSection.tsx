@@ -570,16 +570,6 @@ function HostTile({
         </div>
       </div>
 
-      {/* Inline status — fail loud, never silent. */}
-      {restartMsg && (
-        <div className={`text-[10px] ${restartMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-red-400'}`}>
-          {restartMsg.text}
-        </div>
-      )}
-      {checkError && <div className="text-[10px] text-red-400">{checkError}</div>}
-      {phaseText && <div className="text-[10px] text-[var(--color-text-muted)]">{phaseText}</div>}
-      {updateError && <div className="text-[10px] text-red-400">{updateError}</div>}
-
       {/* Per-host actions — orange (matches the General-tab remote Restart/
           Update color). Signed out ⇒ just a Sign in button, hint on the left.
           Signed in ⇒ Restart + Check for updates (both orange) in one
@@ -607,11 +597,21 @@ function HostTile({
         </div>
       )}
 
-      {/* Update status (e.g. "Update available for RPM — 0.40.15 → 0.40.16" /
-          "Up to date") — below the action row, right-justified. */}
-      {summary && !checkError && (
-        <div className="text-[10px] text-[var(--color-text-muted)] text-right">{summary.text}</div>
+      {/* All inline status — below the action row, right-justified. Covers
+          restart result, check error, update-available/up-to-date summary,
+          "Starting update for <server>…" phase text, and update errors.
+          Fail loud, never silent. */}
+      {restartMsg && (
+        <div className={`text-[10px] text-right ${restartMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-red-400'}`}>
+          {restartMsg.text}
+        </div>
       )}
+      {checkError && <div className="text-[10px] text-right text-red-400">{checkError}</div>}
+      {summary && !checkError && (
+        <div className="text-[10px] text-right text-[var(--color-text-muted)]">{summary.text}</div>
+      )}
+      {phaseText && <div className="text-[10px] text-right text-[var(--color-text-muted)]">{phaseText}</div>}
+      {updateError && <div className="text-[10px] text-right text-red-400">{updateError}</div>}
     </div>
   )
 }

@@ -32,6 +32,9 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
   const selectHost = useConnectHostStore((s) => s.selectHost)
   const addHost = useConnectHostStore((s) => s.addHost)
   const cancelSignIn = useConnectHostStore((s) => s.cancelSignIn)
+  // false ⇒ tile "Sign in" for management: cache the token but DON'T switch the
+  // active daemon (the overlay just closes, staying on the current view).
+  const activate = useConnectHostStore((s) => s.signInActivate)
 
   const [password, setPassword] = useState('')
   // Default the remember toggle to the host's saved intent.
@@ -68,8 +71,14 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
     } else {
       await forgetPassword(host.id)
     }
-    // Switch — the gate re-polls against the new host and mounts on accept.
-    selectHost(updated)
+    // Switcher path ⇒ switch (the gate re-polls against the new host and
+    // mounts on accept). Management path ⇒ just close the overlay; the token is
+    // cached so the tile's owner controls work, and we stay on the current view.
+    if (activate) {
+      selectHost(updated)
+    } else {
+      cancelSignIn()
+    }
     return true
   }
 
@@ -168,7 +177,16 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
             onChange={(e) => setRemember(e.target.checked)}
             className="peer sr-only"
           />
-          <span className="w-3.5 h-3.5 flex-shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)]" />
+          <span
+            aria-hidden="true"
+            className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border border-[var(--color-border)] bg-[var(--color-bg)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)]"
+          >
+            {remember && (
+              <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2.5 6.5 L5 9 L9.5 3.5" />
+              </svg>
+            )}
+          </span>
           Remember password (stored in your OS keychain)
         </label>
 

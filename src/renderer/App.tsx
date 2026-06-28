@@ -490,21 +490,21 @@ export default function App(): React.JSX.Element {
       listen('menu:new-document', () => {
         const ps = useProjectsStore.getState()
         const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
-        const ws = proj?.workspaces.find((w) => w.id === ps.activeWorkspaceId)
+        const ws = proj?.workspaces?.find((w) => w.id === ps.activeWorkspaceId)
         const cwd = ws?.worktreePath ?? proj?.path ?? '~'
         useTabsStore.getState().openUntitledDocument(cwd)
       }).then((fn) => unlisteners.push(fn))
       listen('menu:new-tab', () => {
         const ps = useProjectsStore.getState()
         const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
-        const ws = proj?.workspaces.find((w) => w.id === ps.activeWorkspaceId)
+        const ws = proj?.workspaces?.find((w) => w.id === ps.activeWorkspaceId)
         const cwd = ws?.worktreePath ?? proj?.path ?? '~'
         useTabsStore.getState().addTab(cwd)
       }).then((fn) => unlisteners.push(fn))
       listen('menu:launch-agent', async () => {
         const ps = useProjectsStore.getState()
         const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
-        const ws = proj?.workspaces.find((w) => w.id === ps.activeWorkspaceId)
+        const ws = proj?.workspaces?.find((w) => w.id === ps.activeWorkspaceId)
         const cwd = ws?.worktreePath ?? proj?.path ?? '~'
         const { usePresetsStore: presetsStore } = await import('@/stores/presets')
         const state = presetsStore.getState()
@@ -527,7 +527,7 @@ export default function App(): React.JSX.Element {
         if (!firstPaneId) return
         const ps = useProjectsStore.getState()
         const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
-        const ws = proj?.workspaces.find((w) => w.id === ps.activeWorkspaceId)
+        const ws = proj?.workspaces?.find((w) => w.id === ps.activeWorkspaceId)
         const cwd = ws?.worktreePath ?? proj?.path ?? '~'
         const newPaneId = crypto.randomUUID()
         tabsState.splitPane(activeTab.id, firstPaneId, newPaneId, { type: 'terminal', terminalId: newPaneId, cwd }, 'column')
@@ -733,7 +733,7 @@ export default function App(): React.JSX.Element {
 
   const effectiveProjectId = focusProjectId ?? activeProjectId
   const activeProject = projects.find((p) => p.id === effectiveProjectId)
-  const activeWorkspace = activeProject?.workspaces.find((w) => w.id === activeWorkspaceId)
+  const activeWorkspace = activeProject?.workspaces?.find((w) => w.id === activeWorkspaceId)
   const cwd = activeWorkspace?.worktreePath ?? activeProject?.path ?? '~'
 
   // 0.37.11 A9 Phase 4c — track this window's OS focus.

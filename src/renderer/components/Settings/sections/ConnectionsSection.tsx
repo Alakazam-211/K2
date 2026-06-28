@@ -225,10 +225,6 @@ export function ConnectionsSection(): React.JSX.Element {
     setError(null)
   }
 
-  const connect = (h: ConnectHost): void => {
-    pickHost(h)
-  }
-
   const inputCls =
     'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 
@@ -269,7 +265,6 @@ export function ConnectionsSection(): React.JSX.Element {
               host={h}
               isActive={isActive}
               connectionStatus={connectionStatus}
-              onConnect={() => connect(h)}
               onEdit={() => beginEdit(h)}
               onRemove={() => removeHost(h.id)}
             />
@@ -360,20 +355,19 @@ function HostTile({
   host,
   isActive,
   connectionStatus,
-  onConnect,
   onEdit,
   onRemove,
 }: {
   host: ConnectHost
   isActive: boolean
   connectionStatus: ConnectionStatus
-  onConnect: () => void
   onEdit: () => void
   onRemove: () => void
 }): React.JSX.Element {
   const label = host.label || host.hostname
   const creds = remoteCreds(host)
   const signedOut = creds.token.length === 0
+  const signInForManagement = useConnectHostStore((s) => s.signInForManagement)
 
   const [federation, setFederation] = useState<FederationState>('loading')
   const [restartBusy, setRestartBusy] = useState(false)
@@ -536,17 +530,11 @@ function HostTile({
           >
             {federationBadgeText(federation)}
           </span>
-          {isActive ? (
+          {/* "Active" badge only — switching to a host happens from the
+              server switcher / K2 Connect view, not here. The tile is for
+              managing the host in place (Sign in / Restart / updates). */}
+          {isActive && (
             <span className="text-[10px] text-[var(--color-text-muted)]">Active</span>
-          ) : (
-            // A signed-in (token-bearing) host switches the active connection
-            // here; a signed-OUT host's connect/sign-in action lives in the
-            // orange bottom-right row instead.
-            !signedOut && (
-              <button onClick={onConnect} className={BTN_ACCENT}>
-                Connect
-              </button>
-            )
           )}
           <button onClick={onEdit} className={BTN_SECONDARY}>
             Edit
@@ -555,22 +543,6 @@ function HostTile({
             Remove
           </button>
         </div>
-      </div>
-
-      {/* Per-host management — drives THIS host's daemon over its own creds.
-          (Restart lives in the orange bottom-right row below.) */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <button onClick={() => void doCheck()} disabled={signedOut || checkBusy} className={BTN_SECONDARY}>
-          {checkBusy ? 'Checking…' : 'Check for updates'}
-        </button>
-        {summary?.kind === 'available' && (
-          <button onClick={() => void doUpdate()} disabled={signedOut || updateBusy} className={BTN_ACCENT}>
-            {updateBusy ? 'Updating…' : `Update to ${summary.latest}`}
-          </button>
-        )}
-        {signedOut && (
-          <span className="text-[10px] text-[var(--color-text-muted)]">Sign in (Connect) to manage this server</span>
-        )}
       </div>
 
       {/* Inline status — fail loud, never silent. */}
@@ -584,20 +556,32 @@ function HostTile({
       {phaseText && <div className="text-[10px] text-[var(--color-text-muted)]">{phaseText}</div>}
       {updateError && <div className="text-[10px] text-red-400">{updateError}</div>}
 
-      {/* Orange bottom-right action — matches the General-tab remote
-          Restart/Update color. Signed in ⇒ Restart this host; signed out ⇒
-          Sign in (Connect) to this host. Both behaviors are unchanged. */}
-      <div className="flex justify-end gap-1">
-        {signedOut ? (
-          <button onClick={onConnect} className={BTN_ORANGE}>
+      {/* Per-host actions — orange (matches the General-tab remote Restart/
+          Update color). Signed out ⇒ just a Sign in button, hint on the left.
+          Signed in ⇒ Restart + Check for updates (both orange) in one
+          bottom-right row, plus Update when one's available. */}
+      {signedOut ? (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] text-[var(--color-text-muted)]">Sign in to manage this server</span>
+          <button onClick={() => signInForManagement(host)} className={BTN_ORANGE}>
             Sign in
           </button>
-        ) : (
+        </div>
+      ) : (
+        <div className="flex justify-end gap-1 flex-wrap">
           <button onClick={() => void doRestart()} disabled={restartBusy} className={BTN_ORANGE}>
             {restartBusy ? 'Restarting…' : 'Restart'}
           </button>
-        )}
-      </div>
+          <button onClick={() => void doCheck()} disabled={checkBusy} className={BTN_ORANGE}>
+            {checkBusy ? 'Checking…' : 'Check for updates'}
+          </button>
+          {summary?.kind === 'available' && (
+            <button onClick={() => void doUpdate()} disabled={updateBusy} className={BTN_ACCENT}>
+              {updateBusy ? 'Updating…' : `Update to ${summary.latest}`}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

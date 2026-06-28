@@ -145,7 +145,7 @@ export default function ReviewPanel(): React.JSX.Element {
   const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
 
   const activeProject = projects.find((p) => p.id === activeProjectId)
-  const activeWorkspace = activeProject?.workspaces.find((w) => w.id === activeWorkspaceId)
+  const activeWorkspace = activeProject?.workspaces?.find((w) => w.id === activeWorkspaceId)
   const workspacePath = activeWorkspace?.worktreePath ?? activeProject?.path
   const currentBranch = activeWorkspace?.branch
 

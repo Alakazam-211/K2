@@ -220,6 +220,12 @@ export interface ConnectHostState {
    * a remembered host with a resolved token bypasses it (silent auto
    * sign-in via `selectHost`). */
   pendingSignIn: ConnectHost | null
+  /** When the sign-in overlay succeeds, should it SWITCH the active daemon to
+   *  the signed-in host (true — switcher / auto-sign-in), or just cache the
+   *  session token and close, staying on the current view (false — tile
+   *  "Sign in" for management)? `requestSignIn` sets true; `signInForManagement`
+   *  sets false. */
+  signInActivate: boolean
   /** Switch the active daemon. Pass 'local' for This Mac, or a saved
    *  ConnectHost. Sets `connectionStatus:'connecting'` then flips
    *  `activeHost` synchronously. The renderer routes daemon-data through
@@ -254,6 +260,10 @@ export interface ConnectHostState {
   hydrateFromDisk: () => Promise<void>
   /** Open the full-screen sign-in for `host` (no/expired token). */
   requestSignIn: (host: ConnectHost) => void
+  /** Open the sign-in overlay to cache a host's session token for tile-based
+   *  management WITHOUT switching the active daemon (stays on the current
+   *  view). On success the overlay just closes. */
+  signInForManagement: (host: ConnectHost) => void
   /**
    * connect-users (#617) session expiry: a `/cli/*` call to a remote host
    * returned 401, so its cached session token is stale. Drop the
@@ -564,6 +574,7 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
   hosts: loadHosts(),
   connectionStatus: 'connecting',
   pendingSignIn: null,
+  signInActivate: true,
   serverVersion: null,
   serverProtocol: null,
 
@@ -587,7 +598,17 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
   },
 
   requestSignIn: (host) => {
-    set({ pendingSignIn: host })
+    // Switcher / auto-sign-in path: on success, SWITCH the active daemon to
+    // this host (the default).
+    set({ pendingSignIn: host, signInActivate: true })
+  },
+
+  signInForManagement: (host) => {
+    // Tile "Sign in" path: authenticate to cache this host's session token so
+    // its owner-gated tile controls (Restart / Check-for-updates / federation
+    // toggle) work — but DON'T switch the active daemon. The overlay closes on
+    // success (no switch), so the user stays on the local K2 Connect view.
+    set({ pendingSignIn: host, signInActivate: false })
   },
 
   expireSession: (hostId) => {

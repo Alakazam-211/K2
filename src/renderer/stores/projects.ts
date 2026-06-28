@@ -194,15 +194,23 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // GET query params are snake_case (the daemon reads `project_id`);
       // the camelCase Project/Workspace/Section response shapes match the
       // Rust structs' `#[serde(rename_all = "camelCase")]` so no remap.
-      const projectList = await daemonCliGet<Project[]>('projects/list')
+      const projectListRaw = await daemonCliGet<Project[]>('projects/list')
+      // Daemon data is host-aware: a host swap (or an older/odd remote) can
+      // return a non-array body (null, an error envelope, a {…}-wrapper). The
+      // rest of the renderer treats `projects` / `workspaces` as arrays
+      // (.find/.map/[0]), so normalize HERE — never let a non-array reach the
+      // store. (`?.` at consumers can't save a truthy non-array.)
+      const projectList = Array.isArray(projectListRaw) ? projectListRaw : []
 
       // Fetch workspaces and sections for each project
       const projectsWithWorkspaces: ProjectWithWorkspaces[] = await Promise.all(
         projectList.map(async (project: Project) => {
-          const ws = await daemonCliGet<Workspace[]>('workspaces/list', { project_id: project.id })
+          const wsRaw = await daemonCliGet<Workspace[]>('workspaces/list', { project_id: project.id })
+          const ws: Workspace[] = Array.isArray(wsRaw) ? wsRaw : []
           let secs: WorkspaceSection[] = []
           try {
-            secs = await daemonCliGet<WorkspaceSection[]>('sections/list', { project_id: project.id })
+            const secsRaw = await daemonCliGet<WorkspaceSection[]>('sections/list', { project_id: project.id })
+            secs = Array.isArray(secsRaw) ? secsRaw : []
           } catch {
             // sections table might not exist yet
           }

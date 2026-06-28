@@ -129,6 +129,41 @@ pub fn handle_pair_confirm(body: &[u8]) -> CliResponse {
     )
 }
 
+/// `GET /cli/federation/pubkey` — OWNER-gated (dispatcher enforces). Returns
+/// THIS daemon's federation identity so a peer can PIN it during pairing:
+///
+///   - `public_key_pem` — the SPKI PEM of the existing tunnel keypair (no new
+///     key material; same key `seal`/`pair` derive their fingerprint from).
+///   - `fingerprint`    — `sha256(SPKI DER)` hex (== [`federation::local_fingerprint`]).
+///   - `subdomain`      — this daemon's tunnel subdomain (or `""` when none).
+///
+/// The renderer's owner-driven auto-pair reads BOTH daemons' pubkey here (it
+/// holds an owner token for each) so it can present each side's key to the
+/// other and confirm the SAS programmatically — no human out-of-band step.
+pub fn handle_pubkey() -> CliResponse {
+    let key = match k2_core::tunnel::tls::load_or_generate_keypair() {
+        Ok(k) => k,
+        Err(e) => return json_err("500 Internal Server Error", format!("load keypair: {e}")),
+    };
+    let fingerprint = match federation::local_fingerprint() {
+        Ok(fp) => fp,
+        Err(e) => return json_err("500 Internal Server Error", format!("local fingerprint: {e}")),
+    };
+    // Best-effort: a missing/unconfigured tunnel just yields an empty
+    // subdomain — the renderer falls back to deriving it from the host.
+    let subdomain = k2_core::tunnel::config::load()
+        .map(|c| c.subdomain)
+        .unwrap_or_default();
+    CliResponse::ok_json(
+        serde_json::json!({
+            "public_key_pem": key.public_key_pem(),
+            "fingerprint": fingerprint,
+            "subdomain": subdomain,
+        })
+        .to_string(),
+    )
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // P3 — inbound ingress (the security core)
 // ─────────────────────────────────────────────────────────────────────
@@ -842,6 +877,34 @@ mod tests {
             assert_eq!(p["trust"], "trusted");
             // Secrets are NOT exposed.
             assert!(p.get("public_key_pem").is_none(), "must not leak the pinned key");
+        });
+    }
+
+    // ── GAP #3: pubkey identity for owner-driven auto-pair ──
+
+    #[test]
+    fn pubkey_returns_spki_pem_and_matching_fingerprint() {
+        with_temp_home(|| {
+            let resp = handle_pubkey();
+            assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            let pem = v["public_key_pem"].as_str().expect("public_key_pem present");
+            assert!(
+                pem.contains("BEGIN PUBLIC KEY"),
+                "must return an SPKI PEM; got {pem}"
+            );
+            let fp = v["fingerprint"].as_str().expect("fingerprint present");
+            // The advertised fingerprint MUST equal the local fingerprint a
+            // peer would compute from the presented PEM (so the pin is
+            // self-consistent).
+            assert_eq!(fp, federation::local_fingerprint().unwrap());
+            assert_eq!(
+                fp,
+                k2_core::federation::peers::fingerprint_of_spki_pem(pem).unwrap(),
+                "fingerprint must be sha256(SPKI DER) of the presented PEM"
+            );
+            // `subdomain` is always present (empty when no tunnel configured).
+            assert!(v.get("subdomain").is_some(), "subdomain key must be present");
         });
     }
 

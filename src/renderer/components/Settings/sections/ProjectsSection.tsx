@@ -3,6 +3,13 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { listen, emit } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import {
+  addRemoteConnection,
+  removeRemoteConnection,
+  listRemoteConnections,
+  parseAgentAtHost,
+  type RemoteConnectionEntry,
+} from '@/lib/federation'
 import { agentDisplayName, setAgentDisplayName } from '@/lib/workspace-agent'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
@@ -2568,27 +2575,43 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
   const [showAdd, setShowAdd] = useState(false)
   const [adding, setAdding] = useState(false)
   const [search, setSearch] = useState('')
+  // GAP #3: REMOTE (cross-daemon) connections for this source workspace +
+  // any error surfaced from the owner-driven auto-pair/add flow.
+  const [remoteConns, setRemoteConns] = useState<RemoteConnectionEntry[]>([])
+  const [remoteError, setRemoteError] = useState<string | null>(null)
   const projects = useProjectsStore((s) => s.projects)
+
+  // The source workspace's filesystem PATH — the key the `/cli/connections`
+  // remote API addresses (it stores remote rows per source workspace path).
+  const sourcePath = useMemo(
+    () => projects.find((p) => p.id === projectId)?.path ?? '',
+    [projects, projectId],
+  )
 
   const fetchRelations = useCallback(async () => {
     try {
-      const [outgoing, inc] = await Promise.all([
+      const [outgoing, inc, remote] = await Promise.all([
         // Host-aware: read through the daemon so the "Connected Workspaces"
         // panel works when driving a remote K2 Connect host (the LOCAL
         // Tauri invoke misfired against a remote daemon). Mirrors the
         // host-aware relations/create + relations/delete writes.
         daemonCliGet<WorkspaceRelation[]>('relations/list', { project_id: projectId }),
         daemonCliGet<WorkspaceRelation[]>('relations/list-incoming', { project_id: projectId }),
+        // GAP #3: remote (`<agent>@<host>`) connections live in a separate
+        // store keyed by the source workspace PATH — best-effort, [] on fail.
+        listRemoteConnections(sourcePath),
       ])
       setRelations(outgoing)
       setIncoming(inc)
+      setRemoteConns(remote)
     } catch {
       setRelations([])
       setIncoming([])
+      setRemoteConns([])
     } finally {
       setLoading(false)
     }
-  }, [projectId])
+  }, [projectId, sourcePath])
 
   useEffect(() => {
     fetchRelations()
@@ -2631,6 +2654,47 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
     }
   }, [fetchRelations])
 
+  // GAP #3: when the typed search looks like `<agent>@<host>` it's a REMOTE
+  // agent, not a local workspace — surface an explicit "add remote" affordance
+  // instead of "no matching workspaces". Owner-only on the daemon side
+  // (pubkey/pair-confirm are owner-gated) — no readily-available client role
+  // signal here, so we rely on the daemon's owner-gating + fail loud.
+  const remoteTarget = useMemo(() => {
+    const parsed = parseAgentAtHost(search)
+    return parsed ? `${parsed.agent}@${parsed.host}` : null
+  }, [search])
+
+  const handleAddRemote = useCallback(async () => {
+    if (!remoteTarget) return
+    if (!sourcePath) {
+      setRemoteError('This workspace has no resolved path on the active server.')
+      return
+    }
+    setAdding(true)
+    setRemoteError(null)
+    try {
+      // Auto-pairs both daemons (owner authority on each) then records the
+      // connection on the source side. Fails loud — surface the message.
+      await addRemoteConnection(sourcePath, remoteTarget)
+      setShowAdd(false)
+      setSearch('')
+      await fetchRelations()
+    } catch (e) {
+      setRemoteError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAdding(false)
+    }
+  }, [remoteTarget, sourcePath, fetchRelations])
+
+  const handleRemoveRemote = useCallback(async (address: string) => {
+    try {
+      await removeRemoteConnection(sourcePath, address)
+      await fetchRelations()
+    } catch (e) {
+      console.error('[connected-workspaces] Remote disconnect failed:', e)
+    }
+  }, [sourcePath, fetchRelations])
+
   // Resolve target project details
   const projectsById = useMemo(() => {
     const map = new Map<string, typeof projects[number]>()
@@ -2647,15 +2711,15 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
             Connect other workspaces so this agent can oversee or interact with them.
           </p>
         </div>
-        {availableProjects.length > 0 && (
-          <button
-            onClick={() => { setShowAdd(!showAdd); setSearch('') }}
-            title="Add connection"
-            className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-white cursor-pointer no-drag"
-          >
-            +
-          </button>
-        )}
+        {/* GAP #3: always available — the add box also accepts a remote
+            `<agent>@<host>` even when there are no local workspaces left. */}
+        <button
+          onClick={() => { setShowAdd(!showAdd); setSearch(''); setRemoteError(null) }}
+          title="Add connection"
+          className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-white cursor-pointer no-drag"
+        >
+          +
+        </button>
       </div>
 
       {/* Add connection dropdown with search */}
@@ -2665,17 +2729,43 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
             <input
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search workspaces..."
+              onChange={(e) => { setSearch(e.target.value); setRemoteError(null) }}
+              placeholder="Search workspaces, or type agent@host…"
               autoFocus
               className="w-full bg-transparent text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none"
             />
           </div>
           <div className="max-h-[200px] overflow-y-auto">
+            {/* GAP #3: a `<agent>@<host>` input is a REMOTE agent — offer an
+                explicit add affordance (and surface auto-pair errors). */}
+            {remoteTarget && (
+              <>
+                <button
+                  onClick={handleAddRemote}
+                  disabled={adding}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.06] transition-colors no-drag cursor-pointer disabled:opacity-50 border-b border-[var(--color-border)]"
+                >
+                  <span className="w-2 h-2 flex-shrink-0 rounded-full bg-[var(--color-accent)]" />
+                  <span className="text-xs text-[var(--color-text-primary)] truncate">
+                    {adding ? 'Connecting…' : `Add remote agent: ${remoteTarget}`}
+                  </span>
+                  <span className="text-[9px] text-[var(--color-text-muted)] ml-auto flex-shrink-0 uppercase tracking-wider">
+                    remote
+                  </span>
+                </button>
+                {remoteError && (
+                  <div className="px-3 py-2 text-[10px] text-red-400 border-b border-[var(--color-border)]">
+                    {remoteError}
+                  </div>
+                )}
+              </>
+            )}
             {filteredProjects.length === 0 ? (
-              <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
-                {search.trim() ? 'No matching workspaces.' : 'No more workspaces available to connect.'}
-              </div>
+              remoteTarget ? null : (
+                <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
+                  {search.trim() ? 'No matching workspaces.' : 'No more workspaces available to connect.'}
+                </div>
+              )
             ) : (
               filteredProjects.map((p) => (
                 <button
@@ -2704,11 +2794,11 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
       {/* Connected workspaces list */}
       {loading ? (
         <div className="text-[10px] text-[var(--color-text-muted)]">Loading...</div>
-      ) : relations.length === 0 ? (
+      ) : relations.length === 0 && remoteConns.length === 0 ? (
         <div className="text-[10px] text-[var(--color-text-muted)]">
           No connected workspaces yet.
         </div>
-      ) : (
+      ) : relations.length === 0 ? null : (
         <div className="border border-[var(--color-border)]">
           {relations.map((rel) => {
             const target = projectsById.get(rel.targetProjectId)
@@ -2742,6 +2832,38 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* GAP #3: remote (cross-daemon) connections — agents on OTHER servers
+          this workspace is connected to. Marked with a clear "remote" badge
+          and shown by their `<agent>@<host>` address. */}
+      {!loading && remoteConns.length > 0 && (
+        <div className="border border-[var(--color-border)] mt-1">
+          {remoteConns.map((rc) => (
+            <div
+              key={rc.address}
+              className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
+            >
+              <span className="w-2 h-2 flex-shrink-0 rounded-full bg-[var(--color-accent)]" />
+              <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate" title={rc.address}>
+                {rc.address}
+              </span>
+              <span className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">
+                remote
+              </span>
+              <button
+                onClick={() => handleRemoveRemote(rc.address)}
+                className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-red-400 transition-colors no-drag cursor-pointer flex-shrink-0"
+                title="Remove remote connection"
+              >
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <line x1="1" y1="1" x2="7" y2="7" />
+                  <line x1="7" y1="1" x2="1" y2="7" />
+                </svg>
+              </button>
+            </div>
+          ))}
         </div>
       )}
 

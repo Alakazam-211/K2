@@ -2765,6 +2765,21 @@ async fn handle_one_request(
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
+                "/cli/federation/pubkey" => {
+                    // GET, OWNER-gated. Returns THIS daemon's federation
+                    // identity (SPKI PEM + fingerprint + subdomain) so a peer
+                    // can pin it during owner-driven auto-pair. Reachable
+                    // whenever federation is enabled; a connect-user session
+                    // must NOT read it (same owner gate as peers).
+                    let _ = stream.read(&mut buf).await;
+                    if !super::http::token_is_owner(&query, state.token.as_str()) {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        tokio::task::spawn_blocking(crate::federation_routes::handle_pubkey)
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                }
                 "/cli/federation/peers" => {
                     // GET, OWNER-gated (local convenience for the renderer's
                     // cross-server picker). A connect-user session must NOT see

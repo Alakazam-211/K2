@@ -27,6 +27,34 @@ import { parseServerUrl, isValidUsername } from '@/lib/connect-validate'
 import { IconLock } from '@/components/icons/IconLock'
 import { useAddServerFocus } from '@/stores/add-server-focus'
 import type { SettingEntry } from '../searchManifest'
+import {
+  remoteCreds,
+  hostOpPost,
+  hostOpGet,
+  summarizeCheck,
+  federationBadgeText,
+  type CheckSummary,
+  type FederationState,
+} from '@/lib/host-ops'
+import {
+  updatePhaseCopy,
+  isTerminalPhase,
+  isForbiddenError,
+  updateForbiddenCopy,
+  type UpdateCheckResult,
+  type UpdateStatusResult,
+} from './update-host'
+
+// Shared small-button styles for the per-host tile controls — matching the
+// Save/Add/Cancel buttons in this file and K2ConnectSection.tsx (bordered/
+// elevated, accent for primary, red for destructive). Real buttons, not the
+// pre-#661 text links.
+const BTN_SECONDARY =
+  'px-2 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
+const BTN_ACCENT =
+  'px-2 py-1 text-[11px] text-white bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
+const BTN_DANGER =
+  'px-2 py-1 text-[11px] text-red-400 border border-red-400/40 hover:bg-red-400/10 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
 
 export const CONNECTIONS_MANIFEST: SettingEntry[] = [
   { id: 'connections.add', section: 'connections', label: 'Add a Server', description: 'Save a remote K2 daemon to connect to', keywords: ['server', 'remote', 'connect', 'host', 'add', 'k2 connect', 'address book'] },
@@ -218,10 +246,7 @@ export function ConnectionsSection(): React.JSX.Element {
         {activeHost === 'local' ? (
           <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">Active</span>
         ) : (
-          <button
-            onClick={() => pickHost('local')}
-            className="ml-auto text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
-          >
+          <button onClick={() => pickHost('local')} className={`ml-auto ${BTN_ACCENT}`}>
             Connect
           </button>
         )}
@@ -232,37 +257,15 @@ export function ConnectionsSection(): React.JSX.Element {
         {hosts.map((h) => {
           const isActive = activeHost !== 'local' && activeHost.id === h.id
           return (
-            <div key={h.id} className="px-3 py-2 border border-[var(--color-border)]">
-              <div className="flex items-center gap-2">
-                <span
-                  className="w-2 h-2 flex-shrink-0 rounded-full"
-                  style={{ backgroundColor: isActive ? statusColor(connectionStatus) : '#6b7280' }}
-                />
-                <div className="flex flex-col min-w-0">
-                  <span className="text-xs text-[var(--color-text-primary)] truncate">{h.label}</span>
-                  <span className="text-[10px] text-[var(--color-text-muted)] truncate flex items-center gap-1">
-                    {h.secure && <IconLock className="w-2.5 h-2.5 flex-shrink-0" />}
-                    {h.secure && h.port === 443 ? h.hostname : `${h.hostname}:${h.port}`}
-                    {h.remember ? ' · saved' : ''}
-                  </span>
-                </div>
-                <div className="ml-auto flex items-center gap-2">
-                  {isActive ? (
-                    <span className="text-[10px] text-[var(--color-text-muted)]">Active</span>
-                  ) : (
-                    <button onClick={() => connect(h)} className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer">
-                      Connect
-                    </button>
-                  )}
-                  <button onClick={() => beginEdit(h)} className="text-[10px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer">
-                    Edit
-                  </button>
-                  <button onClick={() => removeHost(h.id)} className="text-[10px] text-red-400 hover:text-red-300 no-drag cursor-pointer">
-                    Remove
-                  </button>
-                </div>
-              </div>
-            </div>
+            <HostTile
+              key={h.id}
+              host={h}
+              isActive={isActive}
+              connectionStatus={connectionStatus}
+              onConnect={() => connect(h)}
+              onEdit={() => beginEdit(h)}
+              onRemove={() => removeHost(h.id)}
+            />
           )
         })}
         {hosts.length === 0 && (
@@ -327,6 +330,240 @@ export function ConnectionsSection(): React.JSX.Element {
           + Add a server
         </button>
       )}
+    </div>
+  )
+}
+
+/** One saved-server tile. Owns its own per-host operation state (restart /
+ *  update-check / update / federation badge) and drives THAT host's daemon
+ *  via its OWN `{base, token}` (host-ops `remoteCreds(h)`), never the active
+ *  connection — so the owner can operate a connected server straight from its
+ *  tile without switching to it. A signed-out host (no token) disables the
+ *  owner-gated controls and shows a "sign in" hint. */
+function HostTile({
+  host,
+  isActive,
+  connectionStatus,
+  onConnect,
+  onEdit,
+  onRemove,
+}: {
+  host: ConnectHost
+  isActive: boolean
+  connectionStatus: ConnectionStatus
+  onConnect: () => void
+  onEdit: () => void
+  onRemove: () => void
+}): React.JSX.Element {
+  const label = host.label || host.hostname
+  const creds = remoteCreds(host)
+  const signedOut = creds.token.length === 0
+
+  const [federation, setFederation] = useState<FederationState>('loading')
+  const [restartBusy, setRestartBusy] = useState(false)
+  const [restartMsg, setRestartMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [checkBusy, setCheckBusy] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const [summary, setSummary] = useState<CheckSummary | null>(null)
+  const [hostCurrent, setHostCurrent] = useState<string | undefined>(undefined)
+  const [updateBusy, setUpdateBusy] = useState(false)
+  const [updateError, setUpdateError] = useState<string | null>(null)
+  const [phaseText, setPhaseText] = useState<string | null>(null)
+
+  // Stays false after unmount so async pollers / fetches don't setState on a
+  // gone tile.
+  const aliveRef = useRef(true)
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
+
+  // Best-effort federation badge: fetch THIS host's settings on mount (and
+  // whenever its base/token change). Never blocks the tile render; any
+  // failure (signed out / unreachable / field absent) collapses to "—".
+  useEffect(() => {
+    if (signedOut) {
+      setFederation('unknown')
+      return
+    }
+    let cancelled = false
+    setFederation('loading')
+    void hostOpGet<{ federationEnabled?: boolean }>(creds, 'settings/get')
+      .then((s) => {
+        if (cancelled) return
+        setFederation(s?.federationEnabled === true ? 'on' : s?.federationEnabled === false ? 'off' : 'unknown')
+      })
+      .catch(() => {
+        if (!cancelled) setFederation('unknown')
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creds.base, creds.token])
+
+  const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+  const doRestart = async (): Promise<void> => {
+    setRestartBusy(true)
+    setRestartMsg(null)
+    try {
+      await hostOpPost(creds, 'daemon/restart')
+      setRestartMsg({ ok: true, text: `${label} is restarting — it'll be briefly unreachable, then reconnect.` })
+      setFederation('unknown') // the server is dropping; re-read after it's back
+    } catch (e) {
+      const m = errMsg(e)
+      setRestartMsg({
+        ok: false,
+        text: isForbiddenError(m)
+          ? `You don't have permission to restart ${label}. Only the host owner or an admin can.`
+          : `Couldn't restart ${label}: ${m}`,
+      })
+    } finally {
+      setRestartBusy(false)
+    }
+  }
+
+  const doCheck = async (): Promise<void> => {
+    setCheckBusy(true)
+    setCheckError(null)
+    setSummary(null)
+    setPhaseText(null)
+    setUpdateError(null)
+    try {
+      const r = await hostOpPost<UpdateCheckResult>(creds, 'daemon/update/check', 15000)
+      setSummary(summarizeCheck(label, r))
+      setHostCurrent(r.current)
+    } catch (e) {
+      const m = errMsg(e)
+      setCheckError(isForbiddenError(m) ? updateForbiddenCopy(label) : `Update check failed: ${m}`)
+    } finally {
+      setCheckBusy(false)
+    }
+  }
+
+  const pollStatus = async (jobId: string): Promise<void> => {
+    for (let i = 0; i < 90; i++) {
+      if (!aliveRef.current) return
+      await new Promise((r) => setTimeout(r, 2000))
+      if (!aliveRef.current) return
+      let status: UpdateStatusResult
+      try {
+        status = await hostOpGet<UpdateStatusResult>(creds, 'daemon/update/status', { job_id: jobId })
+      } catch {
+        // The host goes unreachable while it installs & restarts — that's the
+        // expected terminal state, not an error.
+        if (aliveRef.current) {
+          setPhaseText(`${label} is installing & restarting… it'll reconnect automatically.`)
+        }
+        return
+      }
+      if (!aliveRef.current) return
+      const pct = typeof status.progress === 'number' ? status.progress * 100 : undefined
+      setPhaseText(updatePhaseCopy(status.phase, label, { progress: pct, current: hostCurrent }))
+      if (isTerminalPhase(status.phase)) {
+        if (status.error) setUpdateError(`Update error on ${label}: ${status.error}`)
+        return
+      }
+    }
+  }
+
+  const doUpdate = async (): Promise<void> => {
+    setUpdateBusy(true)
+    setUpdateError(null)
+    setRestartMsg(null)
+    setPhaseText(`Starting update for ${label}…`)
+    try {
+      const res = await hostOpPost<{ job_id?: string }>(creds, 'daemon/update/start', 30000)
+      const jobId = res?.job_id
+      if (!jobId) {
+        setPhaseText(null)
+        setUpdateError(`${label} did not return an update job id.`)
+        return
+      }
+      await pollStatus(jobId)
+    } catch (e) {
+      const m = errMsg(e)
+      setPhaseText(null)
+      setUpdateError(isForbiddenError(m) ? updateForbiddenCopy(label) : `Couldn't start the update on ${label}: ${m}`)
+    } finally {
+      setUpdateBusy(false)
+    }
+  }
+
+  const fedClass =
+    federation === 'on'
+      ? 'border-[var(--color-accent)]/50 text-[var(--color-accent)]'
+      : 'border-[var(--color-border)] text-[var(--color-text-muted)]'
+
+  return (
+    <div className="px-3 py-2 border border-[var(--color-border)] space-y-2">
+      <div className="flex items-center gap-2">
+        <span
+          className="w-2 h-2 flex-shrink-0 rounded-full"
+          style={{ backgroundColor: isActive ? statusColor(connectionStatus) : '#6b7280' }}
+        />
+        <div className="flex flex-col min-w-0">
+          <span className="text-xs text-[var(--color-text-primary)] truncate">{host.label}</span>
+          <span className="text-[10px] text-[var(--color-text-muted)] truncate flex items-center gap-1">
+            {host.secure && <IconLock className="w-2.5 h-2.5 flex-shrink-0" />}
+            {host.secure && host.port === 443 ? host.hostname : `${host.hostname}:${host.port}`}
+            {host.remember ? ' · saved' : ''}
+          </span>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <span
+            className={`text-[9px] px-1.5 py-0.5 border whitespace-nowrap no-drag ${fedClass}`}
+            title="Whether cross-server federation is enabled on this server"
+          >
+            {federationBadgeText(federation)}
+          </span>
+          {isActive ? (
+            <span className="text-[10px] text-[var(--color-text-muted)]">Active</span>
+          ) : (
+            <button onClick={onConnect} className={BTN_ACCENT}>
+              Connect
+            </button>
+          )}
+          <button onClick={onEdit} className={BTN_SECONDARY}>
+            Edit
+          </button>
+          <button onClick={onRemove} className={BTN_DANGER}>
+            Remove
+          </button>
+        </div>
+      </div>
+
+      {/* Per-host management — drives THIS host's daemon over its own creds. */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={() => void doRestart()} disabled={signedOut || restartBusy} className={BTN_SECONDARY}>
+          {restartBusy ? 'Restarting…' : 'Restart'}
+        </button>
+        <button onClick={() => void doCheck()} disabled={signedOut || checkBusy} className={BTN_SECONDARY}>
+          {checkBusy ? 'Checking…' : 'Check for updates'}
+        </button>
+        {summary?.kind === 'available' && (
+          <button onClick={() => void doUpdate()} disabled={signedOut || updateBusy} className={BTN_ACCENT}>
+            {updateBusy ? 'Updating…' : `Update to ${summary.latest}`}
+          </button>
+        )}
+        {signedOut && (
+          <span className="text-[10px] text-[var(--color-text-muted)]">Sign in (Connect) to manage this server</span>
+        )}
+      </div>
+
+      {/* Inline status — fail loud, never silent. */}
+      {restartMsg && (
+        <div className={`text-[10px] ${restartMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-red-400'}`}>
+          {restartMsg.text}
+        </div>
+      )}
+      {checkError && <div className="text-[10px] text-red-400">{checkError}</div>}
+      {summary && !checkError && <div className="text-[10px] text-[var(--color-text-muted)]">{summary.text}</div>}
+      {phaseText && <div className="text-[10px] text-[var(--color-text-muted)]">{phaseText}</div>}
+      {updateError && <div className="text-[10px] text-red-400">{updateError}</div>}
     </div>
   )
 }

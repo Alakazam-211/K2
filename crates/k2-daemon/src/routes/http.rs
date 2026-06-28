@@ -96,6 +96,16 @@ pub(crate) fn token_is_owner(query: &str, owner_token: &str) -> bool {
     extract_token(query).is_some_and(|tok| ct_eq_token(tok, owner_token))
 }
 
+/// Owner-OR-Admin gate in the SYNC boolean shape (mirrors `token_is_owner`),
+/// for routes that already drained the request stream and return a
+/// `CliResponse` themselves. Accepts the on-box owner token OR a live
+/// connect-user session whose role can manage (Owner|Admin). A Member session
+/// (or unknown/missing/empty token) returns false. This is the federation
+/// equivalent of the async `require_owner_or_admin` used for host Restart.
+pub(crate) fn token_is_owner_or_admin(query: &str, owner_token: &str) -> bool {
+    actor_role(query, owner_token).is_some_and(k2_core::connect_users::can_manage_users)
+}
+
 /// The shared authorization gate for the bulk of `/cli/*` routes.
 ///
 /// K2SO #617: a request is authorized when its `?token=` is EITHER the
@@ -1009,6 +1019,79 @@ mod tests {
             assert!(
                 token_still_valid(owner, owner),
                 "owner token survives a user revoke",
+            );
+        });
+    }
+
+    // ── token_is_owner_or_admin: federation owner-or-admin gate ──────────
+    //
+    // The sync boolean gate the owner-gated `/cli/federation/*` routes use so
+    // a REMOTE owner/admin connect-user (who holds only a session token, never
+    // the on-box owner token) can drive cross-server federation over the
+    // tunnel — while a Member session stays barred. Mirrors `token_is_owner`'s
+    // shape but broadens to the `can_manage_users` (Owner|Admin) tier, exactly
+    // like the async `require_owner_or_admin` used for host Restart. These
+    // assertions fail LOUDLY. `set_role` revokes live sessions, so the role is
+    // set BEFORE the session is minted (so the session carries the new role).
+
+    #[test]
+    fn token_is_owner_or_admin_accepts_owner_token() {
+        // The on-box owner token always passes (it maps to Role::Owner).
+        assert!(token_is_owner_or_admin("token=owner-secret", "owner-secret"));
+    }
+
+    #[test]
+    fn token_is_owner_or_admin_accepts_admin_session() {
+        // A live connect-user session whose stored role is Admin passes.
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            k2_core::connect_users::add_user("admin_user", "password123")
+                .expect("add_user");
+            k2_core::connect_users::set_role("admin_user", k2_core::connect_users::Role::Admin)
+                .expect("set_role admin");
+            let session = k2_core::connect_users::create_session("admin_user");
+            assert_ne!(session.as_str(), owner);
+            assert!(
+                token_is_owner_or_admin(&format!("token={session}"), owner),
+                "an Admin-role connect-user session must pass the owner-or-admin gate",
+            );
+        });
+    }
+
+    #[test]
+    fn token_is_owner_or_admin_rejects_member_session() {
+        // THE regression lock: a fully-valid Member session is rejected (Member
+        // is the `add_user` default; can_manage_users is false for Member).
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            k2_core::connect_users::add_user("member_user", "password123")
+                .expect("add_user");
+            let session = k2_core::connect_users::create_session("member_user");
+            assert_ne!(session.as_str(), owner);
+            assert!(
+                !token_is_owner_or_admin(&format!("token={session}"), owner),
+                "a Member-role connect-user session must NOT pass the owner-or-admin gate",
+            );
+        });
+    }
+
+    #[test]
+    fn token_is_owner_or_admin_rejects_unknown_and_empty() {
+        // An unknown (non-owner, non-session) token and an empty/missing token
+        // are all rejected — fail closed.
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            assert!(
+                !token_is_owner_or_admin("token=not-a-session", owner),
+                "unknown token must be rejected",
+            );
+            assert!(
+                !token_is_owner_or_admin("token=", owner),
+                "empty token value must be rejected",
+            );
+            assert!(
+                !token_is_owner_or_admin("project=/tmp/x", owner),
+                "missing token param must be rejected",
             );
         });
     }

@@ -2690,8 +2690,9 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    // Owner-gated: a connect-user session must NOT confirm peers.
-                    if !super::http::require_owner(
+                    // Owner-or-admin gated: a remote owner/admin connect-user
+                    // session may confirm peers; a Member session must NOT.
+                    if !super::http::require_owner_or_admin(
                         &mut *stream,
                         &mut buf,
                         &query,
@@ -2727,8 +2728,10 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    // Local actor initiates outbound → owner token required.
-                    if !super::http::require_owner(
+                    // Local actor initiates outbound → owner-or-admin required
+                    // (a remote owner/admin connect-user may send; a Member may
+                    // not).
+                    if !super::http::require_owner_or_admin(
                         &mut *stream,
                         &mut buf,
                         &query,
@@ -2769,10 +2772,11 @@ async fn handle_one_request(
                     // GET, OWNER-gated. Returns THIS daemon's federation
                     // identity (SPKI PEM + fingerprint + subdomain) so a peer
                     // can pin it during owner-driven auto-pair. Reachable
-                    // whenever federation is enabled; a connect-user session
-                    // must NOT read it (same owner gate as peers).
+                    // whenever federation is enabled; a remote owner/admin
+                    // connect-user session may read it, a Member must NOT (same
+                    // owner-or-admin gate as peers).
                     let _ = stream.read(&mut buf).await;
-                    if !super::http::token_is_owner(&query, state.token.as_str()) {
+                    if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
                         crate::cli_response::CliResponse::forbidden()
                     } else {
                         tokio::task::spawn_blocking(crate::federation_routes::handle_pubkey)
@@ -2781,11 +2785,11 @@ async fn handle_one_request(
                     }
                 }
                 "/cli/federation/peers" => {
-                    // GET, OWNER-gated (local convenience for the renderer's
-                    // cross-server picker). A connect-user session must NOT see
-                    // the pinned-peer list.
+                    // GET, OWNER-or-ADMIN-gated (local convenience for the
+                    // renderer's cross-server picker). A Member connect-user
+                    // session must NOT see the pinned-peer list.
                     let _ = stream.read(&mut buf).await;
-                    if !super::http::token_is_owner(&query, state.token.as_str()) {
+                    if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
                         crate::cli_response::CliResponse::forbidden()
                     } else {
                         tokio::task::spawn_blocking(crate::federation_routes::handle_peers)
@@ -2797,8 +2801,9 @@ async fn handle_one_request(
                     // GET, OWNER-gated. The LOCAL daemon dials a PAIRED peer's
                     // signed roster GET and returns its agent projection so the
                     // renderer can populate the dropdown. Blocking (network).
+                    // OWNER-or-ADMIN-gated; a Member session must NOT.
                     let _ = stream.read(&mut buf).await;
-                    if !super::http::token_is_owner(&query, state.token.as_str()) {
+                    if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
                         crate::cli_response::CliResponse::forbidden()
                     } else {
                         let params = super::http::parse_params(&path, &query);

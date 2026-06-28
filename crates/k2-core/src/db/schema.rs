@@ -2066,17 +2066,25 @@ impl WorkspaceRemoteConnection {
     /// Whether `(source_project_id, remote_addr)` is already connected.
     /// Backs the cross-daemon send gate — keep it cheap (COUNT, no row
     /// materialization).
+    ///
+    /// The `remote_addr` (`<agent>@<host>`) match is CASE-INSENSITIVE
+    /// (`LOWER(...) = LOWER(...)`): hostnames are case-insensitive, and the
+    /// agent token can differ in case between the folder-basename-derived
+    /// reverse row (e.g. `Cortana@host`) and the agent's real display name
+    /// (`cortana@host`). New rows are stored lowercased; pre-existing capital
+    /// rows still match here with no migration needed.
     pub fn exists(conn: &Connection, source_project_id: &str, remote_addr: &str) -> Result<bool> {
         conn.query_row(
             "SELECT COUNT(*) > 0 FROM workspace_remote_connections \
-             WHERE source_project_id = ?1 AND remote_addr = ?2",
+             WHERE source_project_id = ?1 AND LOWER(remote_addr) = LOWER(?2)",
             params![source_project_id, remote_addr],
             |row| row.get(0),
         )
     }
 
     /// Delete the `(source_project_id, remote_addr)` connection. Returns the
-    /// number of rows removed (0 when there was nothing to remove).
+    /// number of rows removed (0 when there was nothing to remove). The
+    /// `remote_addr` match is CASE-INSENSITIVE, matching [`exists`](Self::exists).
     pub fn delete(
         conn: &Connection,
         source_project_id: &str,
@@ -2084,7 +2092,7 @@ impl WorkspaceRemoteConnection {
     ) -> Result<usize> {
         conn.execute(
             "DELETE FROM workspace_remote_connections \
-             WHERE source_project_id = ?1 AND remote_addr = ?2",
+             WHERE source_project_id = ?1 AND LOWER(remote_addr) = LOWER(?2)",
             params![source_project_id, remote_addr],
         )
     }

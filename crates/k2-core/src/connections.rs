@@ -397,8 +397,14 @@ pub fn connections(
             // — the peer has no local `projects` row to point at. Idempotent:
             // re-adding the same source+remote_addr is a no-op.
             if is_remote_target(target_name) {
-                let (agent, host) = parse_remote_addr(target_name)?;
-                let remote_addr = target_name.to_string();
+                // Normalize the routing key: `<agent>@<host>` is
+                // case-insensitive (hostnames already are; the agent token
+                // must not break on folder-case-vs-display-case — see
+                // `WorkspaceRemoteConnection::exists`). Store lowercased so
+                // new rows match the case-insensitive gate and `connections
+                // list` renders a canonical form.
+                let remote_addr = target_name.trim().to_lowercase();
+                let (agent, host) = parse_remote_addr(&remote_addr)?;
                 if WorkspaceRemoteConnection::exists(&conn, &project_id, &remote_addr)
                     .map_err(|e| e.to_string())?
                 {
@@ -526,7 +532,10 @@ pub fn connections(
             // GAP #3: remote (`<agent>@<host>`) removal — delete the
             // `workspace_remote_connections` row for this source+addr.
             if is_remote_target(target_name) {
-                let remote_addr = target_name.to_string();
+                // Same case-insensitive normalization as `add` so a remove
+                // matches both new lowercased rows AND pre-existing capital
+                // rows (delete also compares via LOWER(...)).
+                let remote_addr = target_name.trim().to_lowercase();
                 let removed = WorkspaceRemoteConnection::delete(&conn, &project_id, &remote_addr)
                     .map_err(|e| e.to_string())?;
                 if removed == 0 {
@@ -1399,6 +1408,114 @@ mod tests {
         assert_eq!(remote["agent"], serde_json::json!("ai"));
         assert_eq!(remote["projectName"], serde_json::json!("ai@rpm.k2.dev"));
         assert_eq!(remote["reachable"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn exists_matches_case_insensitively_for_preexisting_capital_row() {
+        // Repro for the cross-server REPLY 403 ("not a connection"): the
+        // reverse row was auto-created from the FOLDER BASENAME
+        // (`Cortana@host`, capital C) but the agent's real display name is
+        // `cortana` (lowercase), so the reply targets `cortana@host`. The
+        // gate must match regardless of case — AND without any migration of
+        // the pre-existing capital row.
+        let (src_path, src_id) = make_project("CaseGateSrc");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            // Simulate the LIVE pre-existing CAPITAL row (no normalization).
+            WorkspaceRemoteConnection::create(
+                &conn,
+                &Uuid::new_v4().to_string(),
+                &src_id,
+                "Cortana@z3thon.k2.dev",
+                "z3thon.k2.dev",
+                "Cortana",
+                None,
+            )
+            .unwrap();
+        }
+
+        // Lowercase reply target matches the capital stored row.
+        assert!(
+            is_remote_connection(&src_path, "cortana@z3thon.k2.dev"),
+            "lowercase lookup must match a pre-existing capital row"
+        );
+        // Upper-case lookup also matches (fully case-insensitive).
+        assert!(
+            is_remote_connection(&src_path, "CORTANA@Z3THON.K2.DEV"),
+            "upper-case lookup must match the stored row case-insensitively"
+        );
+        // Exact stored casing still matches.
+        assert!(
+            is_remote_connection(&src_path, "Cortana@z3thon.k2.dev"),
+            "exact-case lookup must still match"
+        );
+        // A genuinely different agent stays closed (no false positives).
+        assert!(
+            !is_remote_connection(&src_path, "ai@z3thon.k2.dev"),
+            "a different agent must NOT match"
+        );
+        // A different host stays closed.
+        assert!(
+            !is_remote_connection(&src_path, "cortana@other.k2.dev"),
+            "a different host must NOT match"
+        );
+    }
+
+    #[test]
+    fn add_normalizes_remote_addr_to_lowercase_and_looks_up_case_insensitively() {
+        let (src_path, src_id) = make_project("CaseAddSrc");
+
+        // Add with mixed case — stored canonical form must be lowercased.
+        let resp = connections(&src_path, "add", Some("Cortana@Z3thon.K2.Dev"), None)
+            .expect("remote add ok");
+        let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
+        assert_eq!(parsed["success"], serde_json::json!(true));
+        assert_eq!(parsed["remote"], serde_json::json!(true));
+        assert_eq!(
+            parsed["target"], serde_json::json!("cortana@z3thon.k2.dev"),
+            "stored target must be normalized to lowercase"
+        );
+
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
+            assert_eq!(rows.len(), 1, "exactly one row persisted");
+            assert_eq!(rows[0].remote_addr, "cortana@z3thon.k2.dev");
+            assert_eq!(rows[0].agent, "cortana");
+            assert_eq!(rows[0].host, "z3thon.k2.dev");
+        }
+
+        // Gate opens for any casing of the same addr.
+        assert!(is_remote_connection(&src_path, "cortana@z3thon.k2.dev"));
+        assert!(is_remote_connection(&src_path, "Cortana@Z3thon.K2.Dev"));
+        assert!(is_remote_connection(&src_path, "CORTANA@Z3THON.K2.DEV"));
+
+        // Re-adding a differently-cased form is an idempotent no-op (matches
+        // the normalized row), so no duplicate is created.
+        let resp2 = connections(&src_path, "add", Some("CORTANA@z3thon.k2.dev"), None)
+            .expect("remote re-add ok");
+        let parsed2: serde_json::Value = serde_json::from_str(&resp2).expect("valid JSON");
+        assert_eq!(parsed2["noop"], serde_json::json!(true), "re-add must no-op");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
+            assert_eq!(rows.len(), 1, "case-variant re-add must not duplicate");
+        }
+
+        // Remove with yet another casing must delete the row.
+        let resp3 = connections(&src_path, "remove", Some("CoRtAnA@Z3THON.k2.dev"), None)
+            .expect("remote remove ok");
+        let parsed3: serde_json::Value = serde_json::from_str(&resp3).expect("valid JSON");
+        assert_eq!(parsed3["success"], serde_json::json!(true));
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
+            assert!(rows.is_empty(), "case-variant remove must delete the row");
+        }
     }
 
     #[test]

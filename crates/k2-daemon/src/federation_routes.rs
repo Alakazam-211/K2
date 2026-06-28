@@ -441,20 +441,30 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
 
     // `from` carries the SENDER AGENT IDENTITY so the recipient's chat can
     // render `[from <agent>@<host>]` and reply with `k2 msg <agent>@<host>`.
-    // In the workspace==agent model the agent name is the source workspace
-    // folder basename (`from_workspace` is the source project path the CLI
-    // passes). Owner-remote sends (`k2 talk`, no `from_workspace`) carry no
-    // source agent → attributed to `owner`. The whole signal is signed
-    // end-to-end, so this identity is AUTHENTICATED to the verified peer (no
-    // forgeable plaintext `[from]`, Risk C1).
+    // In the workspace==agent model the agent name is the source workspace's
+    // AUTHORITATIVE agent name — persona/display `name:` first, folder
+    // basename fallback — resolved via `resolve_agent_name`. Using the
+    // resolved name (not the bare basename) keeps the `[from]` attribution +
+    // reply target consistent with what the recipient's roster sees, so a
+    // reply to `<agent>@<host>` matches the connection row (Part 1's gate is
+    // case-insensitive, so we don't force-lowercase here). Owner-remote sends
+    // (`k2 talk`, no `from_workspace`) carry no source agent → attributed to
+    // `owner`. The whole signal is signed end-to-end, so this identity is
+    // AUTHENTICATED to the verified peer (no forgeable plaintext `[from]`,
+    // Risk C1).
     let from = match req.from_workspace.as_deref().filter(|s| !s.is_empty()) {
         Some(src) => AgentAddress::Agent {
             workspace: WorkspaceId(src.to_string()),
-            name: Path::new(src)
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
+            name: k2_core::workspace::agent_identity::resolve_agent_name(src)
+                .map(|n| n.trim().to_string())
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| src.to_string()),
+                .unwrap_or_else(|| {
+                    Path::new(src)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| src.to_string())
+                }),
         },
         None => AgentAddress::Agent {
             workspace: WorkspaceId(format!("peer:{local_fp}")),
@@ -1097,6 +1107,98 @@ mod tests {
         match signal.from {
             AgentAddress::Agent { name, .. } => {
                 assert_eq!(name, "cortana", "from.name must be the source workspace basename");
+            }
+            other => panic!("from must carry the sender agent identity, got {other:?}"),
+        }
+    }
+
+    /// `from.name` must come from the workspace's RESOLVED agent name
+    /// (persona/display `name:` first), NOT the bare folder basename. Repro
+    /// for the cross-server reply mismatch: when the persona name differs
+    /// from the folder basename, the `[from]` attribution + reply target
+    /// must use the resolved name so the recipient's reply matches the
+    /// roster/connection.
+    #[tokio::test]
+    async fn send_sets_from_agent_identity_from_resolved_name_not_basename() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+
+        let (port, rx) = spawn_inbound_stub().await;
+        let base = format!("http://127.0.0.1:{port}");
+
+        // Source workspace whose FOLDER BASENAME ("agent-box") deliberately
+        // differs from the persona `name:` ("Aria"). The resolved name must
+        // win.
+        let src_path = std::env::temp_dir()
+            .join(format!("k2-src-{}-{}", std::process::id(), uuid::Uuid::new_v4()))
+            .join("agent-box")
+            .to_string_lossy()
+            .into_owned();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), "agent-box", src_path],
+            )
+            .unwrap();
+        }
+        // Write a persona file whose declared name differs from the basename.
+        let agent_dir = k2_core::workspace::agent_identity::workspace_agent_path(&src_path);
+        std::fs::create_dir_all(&agent_dir).expect("mkdir .k2/agent");
+        std::fs::write(
+            agent_dir.join("AGENT.md"),
+            "---\nname: Aria\ntype: custom\n---\n# persona\n",
+        )
+        .expect("write AGENT.md");
+        // Sanity: the resolver returns the persona name, not the basename.
+        assert_eq!(
+            k2_core::workspace::agent_identity::resolve_agent_name(&src_path).as_deref(),
+            Some("Aria"),
+        );
+
+        let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut store = PeerStore::default();
+        let fp = store.upsert(FederationPeer::pin("teammate", "peer", peer_key.public_key_pem()).unwrap());
+        store.set_trust(&fp, PeerTrust::Trusted);
+        store.grant(&fp, "inbound");
+        store.save().unwrap();
+
+        let local_pem = k2_core::tunnel::tls::load_or_generate_keypair().unwrap().public_key_pem();
+
+        std::env::set_var("K2_FEDERATION_INBOUND_BASE", &base);
+        // Satisfy the GAP #3 connection gate first.
+        k2_core::connections::connections(
+            &src_path,
+            "add",
+            Some(&format!("bob@127.0.0.1:{port}")),
+            None,
+        )
+        .expect("add remote connection");
+
+        let send_body = body(serde_json::json!({
+            "to": "peer::ws-b::bob",
+            "text": "from the resolved agent",
+            "from_workspace": src_path,
+        }));
+        let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
+            .await
+            .unwrap();
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        assert_eq!(resp.status, "200 OK", "send body: {}", resp.body);
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+            .await
+            .expect("stub must receive within timeout")
+            .expect("stub body");
+        let signal = federation::open(&received, &local_pem).expect("envelope opens against sender key");
+        match signal.from {
+            AgentAddress::Agent { name, .. } => {
+                assert_eq!(
+                    name, "Aria",
+                    "from.name must be the RESOLVED persona name, not the folder basename"
+                );
             }
             other => panic!("from must carry the sender agent identity, got {other:?}"),
         }

@@ -3,6 +3,26 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.17 — Cross-server connections that actually connect
+
+- **Connect a workspace on another of your servers — both directions.** Type a
+  remote agent's full address (`workspace@server.k2.dev`) into a workspace's
+  **Connected Workspaces**, and K2 pairs the two servers and records the link on
+  *both* sides, so your agents can message each other across machines either
+  way. Works as long as you're an **owner or admin** on the other server. (Both
+  servers must be on 0.40.17.) This is the fix that makes the 0.40.16
+  cross-server feature actually work over K2 Connect.
+- **Connected servers survive a restart or update — no relaunch.** After a
+  remote server restarts or updates, the app now reconnects on its own instead
+  of getting stuck behind a dead connection. You no longer have to quit and
+  reopen K2 to reach a server you just restarted.
+- **Friendlier connection management.** When a saved server's sign-in expires,
+  its tile offers **Sign in** again instead of silently failing; cross-server
+  errors now say what's actually wrong (not signed in / must be owner-or-admin /
+  federation off); the add box guides you to type a full
+  `agent@server.k2.dev` address; and per-server update status sits tidily
+  beneath each server's buttons.
+
 ## 0.40.16 — Connect your servers, manage them in place
 
 - **Connect a remote workspace to a workspace in one step.** As an owner, type

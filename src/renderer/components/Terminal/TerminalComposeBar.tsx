@@ -1,5 +1,7 @@
 // Composer compose bar docked beneath a terminal pane. The human types a
-// draft (renderer-local, ephemeral RAM only — no daemon draft store), hits
+// draft (persisted per-session in the THIN CLIENT — renderer localStorage,
+// per-user/per-device, NEVER the daemon which may be remote/shared — so it
+// survives workspace/tab switches AND app crashes/restarts), hits
 // Enter, and the message is delivered to the agent via the daemon route
 // POST /cli/terminal/send-message (attributed `[from <name>] `, submitted
 // once through the per-session injection lock). NOT raw keystrokes — raw TUI
@@ -46,9 +48,42 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
   })
   const permitted = composerPermitted({ isLocalHost, allowRemoteInstruct, perWorkspaceAllow })
 
-  const [draft, setDraft] = useState('')
+  // Draft persistence (thin client): key the draft by this pane's PTY session
+  // and back it with localStorage so switching workspaces/tabs restores each
+  // composer's own text instead of clearing it, and a crash/restart never loses
+  // it. Per-user/per-device by nature (localStorage is the desktop app's own
+  // storage); the draft never touches the daemon.
+  const draftKey = `k2:composer:draft:${sessionId}`
+  const [draft, setDraft] = useState<string>(() => {
+    try {
+      return localStorage.getItem(`k2:composer:draft:${sessionId}`) ?? ''
+    } catch {
+      return ''
+    }
+  })
   const [sending, setSending] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Reload the saved draft when the pane's session changes — this component can
+  // be reused with a new sessionId on a workspace/tab switch without remounting.
+  useEffect(() => {
+    try {
+      setDraft(localStorage.getItem(draftKey) ?? '')
+    } catch {
+      setDraft('')
+    }
+  }, [draftKey])
+
+  // Persist on every change (localStorage writes are cheap + synchronous — this
+  // is the crash-durable store). An empty draft clears the key.
+  useEffect(() => {
+    try {
+      if (draft) localStorage.setItem(draftKey, draft)
+      else localStorage.removeItem(draftKey)
+    } catch {
+      /* storage disabled/full — draft just won't persist */
+    }
+  }, [draft, draftKey])
 
   // Auto-grow the textarea to fit its content, capped at MAX_TEXTAREA_HEIGHT.
   const autoGrow = useCallback(() => {

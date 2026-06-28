@@ -577,7 +577,6 @@ function HostTile({
         </div>
       )}
       {checkError && <div className="text-[10px] text-red-400">{checkError}</div>}
-      {summary && !checkError && <div className="text-[10px] text-[var(--color-text-muted)]">{summary.text}</div>}
       {phaseText && <div className="text-[10px] text-[var(--color-text-muted)]">{phaseText}</div>}
       {updateError && <div className="text-[10px] text-red-400">{updateError}</div>}
 
@@ -606,6 +605,12 @@ function HostTile({
             </button>
           )}
         </div>
+      )}
+
+      {/* Update status (e.g. "Update available for RPM — 0.40.15 → 0.40.16" /
+          "Up to date") — below the action row, right-justified. */}
+      {summary && !checkError && (
+        <div className="text-[10px] text-[var(--color-text-muted)] text-right">{summary.text}</div>
       )}
     </div>
   )

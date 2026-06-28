@@ -277,7 +277,10 @@ print("NONE")
         echo "no paired peer for $host — pair it first (k2 fed pair-request / confirm), or check the host." >&2
         return 2
     fi
-    if [ -n "$trust" ] && [ "$trust" != "Trusted" ]; then
+    # Trust serializes lowercase ("trusted") on the wire — compare case-insensitively.
+    local trust_lc
+    trust_lc=$(printf '%s' "$trust" | tr '[:upper:]' '[:lower:]')
+    if [ -n "$trust_lc" ] && [ "$trust_lc" != "trusted" ]; then
         echo "peer $host is not trusted yet (state=$trust) — confirm the pairing (k2 fed confirm)." >&2
         return 2
     fi

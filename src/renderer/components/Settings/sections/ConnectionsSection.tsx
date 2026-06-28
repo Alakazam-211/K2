@@ -563,7 +563,7 @@ function HostTile({
       {signedOut ? (
         <div className="flex items-center justify-between gap-2">
           <span className="text-[10px] text-[var(--color-text-muted)]">Sign in to manage this server</span>
-          <button onClick={() => signInForManagement(host)} className={BTN_ORANGE}>
+          <button onClick={() => signInForManagement(host)} className={BTN_ACCENT}>
             Sign in
           </button>
         </div>

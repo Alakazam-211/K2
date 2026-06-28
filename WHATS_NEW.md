@@ -3,6 +3,30 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.16 — Connect your servers, manage them in place
+
+- **Connect a remote agent to a workspace in one step.** As an owner, type
+  `ai@your-server.k2.dev` into a workspace's Connections and K2 pairs the two
+  servers for you — mutual trust, no codes to compare — and records the
+  connection, so your agents can message each other across machines. (Both
+  servers must be on 0.40.16.)
+- **Operate your connected servers from their tiles.** Each saved server in
+  **Settings → Connections** now has real buttons: **Sign in** (manage it in
+  place without switching to it), **Restart**, **Check for updates / Update**,
+  and a **Federation on/off** badge.
+- **The Connections page reflects the server you're viewing.** When you're on a
+  connected server, the panel shows what *that* server is federated with and its
+  cross-agent connections — not your own device's address book.
+- **Turn federation on or off on a connected server, remotely.** Flip it from
+  **Settings → K2 Connect** while viewing that server (or headless with
+  `k2 fed enable/disable/status`).
+- **Your draft messages stick around.** The compose bar keeps what you've typed
+  when you switch workspaces — and even if the app restarts — per terminal, on
+  your device. Works on remote servers too.
+- **Fixes & polish.** Switching servers on the Connections page no longer
+  crashes; the saved-server list is sorted alphabetically; the
+  Remember-password checkbox shows a proper checkmark.
+
 ## 0.40.15 — Cross-server connections + talk reliability
 
 - **`k2 talk` reliably delivers again.** A shell-parsing bug could abort a

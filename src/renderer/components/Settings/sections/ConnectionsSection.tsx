@@ -55,6 +55,13 @@ const BTN_ACCENT =
   'px-2 py-1 text-[11px] text-white bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
 const BTN_DANGER =
   'px-2 py-1 text-[11px] text-red-400 border border-red-400/40 hover:bg-red-400/10 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
+// Orange/amber, mirroring the remote Restart/Update buttons on the General
+// settings tab (GeneralSection.tsx RestartHostRow/UpdateHostRow) so the
+// per-host Restart + Sign-in read as the same "remote host" action color.
+// Same amber tokens as General; only the spacing (px-2 py-1) and disabled
+// cursor match this file's sibling BTN_* consts.
+const BTN_ORANGE =
+  'px-2 py-1 text-[11px] font-medium text-amber-200 bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
 
 export const CONNECTIONS_MANIFEST: SettingEntry[] = [
   { id: 'connections.add', section: 'connections', label: 'Add a Server', description: 'Save a remote K2 daemon to connect to', keywords: ['server', 'remote', 'connect', 'host', 'add', 'k2 connect', 'address book'] },
@@ -308,7 +315,16 @@ export function ConnectionsSection(): React.JSX.Element {
               checked={draft.remember}
               onChange={(e) => setDraft({ ...draft, remember: e.target.checked })}
             />
-            <span className="w-3.5 h-3.5 flex-shrink-0 border border-[var(--color-border)] bg-[var(--color-bg-surface)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)]" />
+            <span
+              aria-hidden
+              className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border border-[var(--color-border)] bg-[var(--color-bg-surface)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)]"
+            >
+              {draft.remember && (
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
+                </svg>
+              )}
+            </span>
             Remember password (OS keychain)
           </label>
           {error && <div className="text-[10px] text-red-400">{error}</div>}
@@ -523,9 +539,14 @@ function HostTile({
           {isActive ? (
             <span className="text-[10px] text-[var(--color-text-muted)]">Active</span>
           ) : (
-            <button onClick={onConnect} className={BTN_ACCENT}>
-              Connect
-            </button>
+            // A signed-in (token-bearing) host switches the active connection
+            // here; a signed-OUT host's connect/sign-in action lives in the
+            // orange bottom-right row instead.
+            !signedOut && (
+              <button onClick={onConnect} className={BTN_ACCENT}>
+                Connect
+              </button>
+            )
           )}
           <button onClick={onEdit} className={BTN_SECONDARY}>
             Edit
@@ -536,11 +557,9 @@ function HostTile({
         </div>
       </div>
 
-      {/* Per-host management — drives THIS host's daemon over its own creds. */}
+      {/* Per-host management — drives THIS host's daemon over its own creds.
+          (Restart lives in the orange bottom-right row below.) */}
       <div className="flex items-center gap-2 flex-wrap">
-        <button onClick={() => void doRestart()} disabled={signedOut || restartBusy} className={BTN_SECONDARY}>
-          {restartBusy ? 'Restarting…' : 'Restart'}
-        </button>
         <button onClick={() => void doCheck()} disabled={signedOut || checkBusy} className={BTN_SECONDARY}>
           {checkBusy ? 'Checking…' : 'Check for updates'}
         </button>
@@ -564,6 +583,21 @@ function HostTile({
       {summary && !checkError && <div className="text-[10px] text-[var(--color-text-muted)]">{summary.text}</div>}
       {phaseText && <div className="text-[10px] text-[var(--color-text-muted)]">{phaseText}</div>}
       {updateError && <div className="text-[10px] text-red-400">{updateError}</div>}
+
+      {/* Orange bottom-right action — matches the General-tab remote
+          Restart/Update color. Signed in ⇒ Restart this host; signed out ⇒
+          Sign in (Connect) to this host. Both behaviors are unchanged. */}
+      <div className="flex justify-end gap-1">
+        {signedOut ? (
+          <button onClick={onConnect} className={BTN_ORANGE}>
+            Sign in
+          </button>
+        ) : (
+          <button onClick={() => void doRestart()} disabled={restartBusy} className={BTN_ORANGE}>
+            {restartBusy ? 'Restarting…' : 'Restart'}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

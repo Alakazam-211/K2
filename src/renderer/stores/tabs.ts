@@ -438,6 +438,18 @@ export interface TerminalItemData {
   /** Agent name on the agent_sessions row whose `surfaced` flag is
    *  toggled when this tab opens / closes. */
   surfacedAgentName?: string
+  /** D9 — request intent: when true, TerminalPane asks the daemon to
+   *  run this session in a sandbox (microVM backend) via the additive
+   *  `sandbox` key on /cli/sessions/v2/spawn. Persisted in the
+   *  serialized layout so a reattach re-asks. Nothing sets it today
+   *  (default-OFF); dormant until the Linux microVM backend ships. */
+  sandbox?: boolean
+  /** D9 — resolved backend name stamped from the spawn response
+   *  (`'microvm' | 'passthrough' | undefined`). THIS drives the
+   *  orange tab marker (truthful — a degraded passthrough shows no
+   *  orange). Runtime-only; intentionally NOT serialized — it is
+   *  re-derived from the next spawn response on reattach. */
+  sandboxBackend?: string
 }
 
 export interface FileViewerItemData {
@@ -554,6 +566,11 @@ export interface SerializedTerminalItemV2 {
   attachAgentName?: string
   /** Load-bearing for close-as-minimize. See doc comment on the type. */
   projectPath?: string
+  /** D9 — sandbox REQUEST intent persisted across reattach. Only the
+   *  intent is serialized; the resolved `sandboxBackend` is runtime-
+   *  only and re-derived from the next spawn response. Optional, so
+   *  older layouts missing it deserialize to undefined (default-OFF). */
+  sandbox?: boolean
 }
 
 /** Legacy v1 terminal shape — read-only, never emitted by 0.38.0+.
@@ -744,6 +761,11 @@ interface TabsState {
    *    WITHOUT `locked`; the action skips any tab already `locked` so the
    *    user's rename wins. */
   setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => void
+  /** D9 — stamp the resolved sandbox backend name from the spawn
+   *  response onto the matching terminal item. TerminalPane calls this
+   *  after every successful spawn (fresh + reuse). `'microvm'` drives
+   *  the orange tab marker; `'passthrough' | undefined` clears it. */
+  setTerminalSandboxBackend: (terminalId: string, backend: string | undefined) => void
   /** 0.39.39 (#676) — apply a daemon-canonical title to a tab WITHOUT
    *  re-POSTing (used by the `tab_title_changed` broadcast handler + the
    *  on-load `tab-titles` snapshot, so a rename in another client shows
@@ -1031,6 +1053,10 @@ function serializeTab(tab: Tab): SerializedTab {
           projectPath: d.projectPath,
           surfacedAgentName: d.surfacedAgentName,
           attachAgentName: d.attachAgentName,
+          // D9 — persist the sandbox REQUEST intent only (so a
+          // reattach re-asks). The resolved `sandboxBackend` stays
+          // runtime-only and is re-derived from the spawn response.
+          sandbox: d.sandbox,
         }
         return v2
       } else if (item.type === 'agent') {
@@ -2554,6 +2580,46 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     }
   },
 
+  setTerminalSandboxBackend: (terminalId: string, backend: string | undefined) => {
+    // D9 — stamp the resolved backend name from the spawn response onto
+    // the matching terminal item's `data.sandboxBackend`. Scans every
+    // tab's paneGroups across both groups. Uses the immutable shallow-
+    // copy pattern (mirror of reconcileSystemAgentTab) so Zustand
+    // reference-equality selectors notice the change — NEVER mutate in
+    // place. No-ops (returns the same references) when nothing matches
+    // or the value is unchanged, so it can't trigger spurious renders.
+    set((state) => {
+      let anyTabChanged = false
+      const patchTab = (tab: Tab): Tab => {
+        let tabChanged = false
+        const newPaneGroups = new Map<string, PaneGroup>()
+        for (const [pgId, pg] of tab.paneGroups) {
+          let pgChanged = false
+          const newItems = pg.items.map((item) => {
+            if (item.type !== 'terminal') return item
+            const d = item.data as TerminalItemData
+            if (d.terminalId !== terminalId) return item
+            if (d.sandboxBackend === backend) return item
+            pgChanged = true
+            return { ...item, data: { ...d, sandboxBackend: backend } }
+          })
+          if (pgChanged) tabChanged = true
+          newPaneGroups.set(pgId, pgChanged ? { ...pg, items: newItems } : pg)
+        }
+        if (!tabChanged) return tab
+        anyTabChanged = true
+        return { ...tab, paneGroups: newPaneGroups }
+      }
+      const newTabs = state.tabs.map(patchTab)
+      const newExtraGroups = state.extraGroups.map((g) => {
+        const tabs = g.tabs.map(patchTab)
+        return tabs === g.tabs ? g : { ...g, tabs }
+      })
+      if (!anyTabChanged) return {}
+      return { tabs: newTabs, extraGroups: newExtraGroups }
+    })
+  },
+
   applyDaemonTabTitle: (tabId: string, title: string, locked?: boolean) => {
     // Local-only apply (no re-POST) for the broadcast handler + on-load
     // snapshot. Same pinned-system-agent guard as setTabTitle: those tabs
@@ -3066,6 +3132,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                 projectPath: t.projectPath,
                 surfacedAgentName: t.surfacedAgentName,
                 attachAgentName: t.attachAgentName,
+                // D9 — restore the sandbox request intent (default-OFF
+                // for legacy layouts where the field is absent).
+                sandbox: t.sandbox,
               },
             }
           } else if (si.type === 'agent') {
@@ -3185,6 +3254,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                       projectPath: t.projectPath,
                       surfacedAgentName: t.surfacedAgentName,
                       attachAgentName: t.attachAgentName,
+                      // D9 — restore the sandbox request intent
+                      // (default-OFF for legacy layouts).
+                      sandbox: t.sandbox,
                     },
                   }
                 } else if (si.type === 'agent') {

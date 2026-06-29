@@ -234,6 +234,10 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                     // smudging chat-history-restored tabs.
                     seedLabel={isMeaningfulTitle ? tabTitle : undefined}
                     lockLabel={isMeaningfulTitle ? true : undefined}
+                    // D9 — thread the sandbox request intent so the
+                    // pane asks for a sandbox backend at spawn time.
+                    // Nothing sets `td.sandbox` today (default-OFF).
+                    sandbox={td.sandbox}
                   />
                 )
               } else {

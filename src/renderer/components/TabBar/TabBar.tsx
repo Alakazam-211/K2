@@ -415,6 +415,19 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
             if (cliAgent) break
           }
 
+          // D9 — orange/amber top-line marker when ANY terminal in this
+          // tab resolved to the microVM sandbox backend. Gate STRICTLY
+          // on 'microvm' — passthrough / fail-closed / undefined render
+          // nothing (truthful: no real isolation ⇒ no orange). Dormant
+          // on Mac / feature-off builds (resolve_sandbox never returns
+          // Microvm there), so this is a no-op until the Linux microVM
+          // backend ships.
+          const isSandboxed = Array.from(tab.paneGroups.values()).some((pg) =>
+            pg.items.some(
+              (i) => i.type === 'terminal' && (i.data as TerminalItemData).sandboxBackend === 'microvm',
+            ),
+          )
+
           // Pinned system agent tab — compact with just icon.
           // Post-0.36.0 the agent UI is split across two pinned tabs;
           // each gets its own icon based on the agent item's section.
@@ -516,6 +529,17 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
             >
               {showDropBefore && <div className="absolute left-0 top-1 bottom-1 w-[2px] bg-[var(--color-accent)] z-10" />}
               {showDropAfter && <div className="absolute right-0 top-1 bottom-1 w-[2px] bg-[var(--color-accent)] z-10" />}
+              {/* D9 — sandbox (microVM) marker. Absolute bar (NOT
+                  borderTop) so non-sandboxed tabs have ZERO layout/
+                  height change. #f59e0b matches globals.css:792.
+                  pointer-events-none + z-10 ⇒ never intercepts
+                  click/drag and sits below the drag indicators. */}
+              {isSandboxed && (
+                <div
+                  className="absolute top-0 left-0 right-0 h-[2px] z-10 pointer-events-none"
+                  style={{ background: '#f59e0b' }}
+                />
+              )}
               {/* Tab icon — single icon with activity indicator beneath */}
               {(() => {
                 // Determine which icon to show

@@ -321,6 +321,12 @@ export interface TerminalPaneProps {
    *  common case "I know the right label, don't let the PTY
    *  smudge it." */
   lockLabel?: boolean
+  /** D9 — sandbox REQUEST intent. When true, the spawn POST carries
+   *  `sandbox: true` so the daemon resolves a sandbox backend; the
+   *  resolved backend name echoes back in the response and is stamped
+   *  onto the tab (drives the orange marker). Omitted from the request
+   *  when falsy → byte-identical to today for every normal tab. */
+  sandbox?: boolean
   /** K2 #682 — fired when the daemon reports the child process
    *  exited (`child_exit`). Carries the exit code so the consumer can
    *  distinguish a clean quit from a crash, and is the signal a
@@ -382,6 +388,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     attachAgentName,
     seedLabel,
     lockLabel,
+    sandbox,
   } = props
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
@@ -732,6 +739,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // emits LabelInitial/LabelChanged accordingly.
         label: seedLabel ?? null,
         label_locked: lockLabel ?? null,
+        // D9 — only emit the sandbox key when the tab requested it, so
+        // the request/response stay byte-identical to today for every
+        // normal (non-sandbox) tab. Default-OFF.
+        sandbox: sandbox ? true : undefined,
       }
 
       // Boot with retry. `Tauri auto-update → relaunch` produces a
@@ -756,6 +767,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         cols: number
         rows: number
         reused: boolean
+        // D9 — resolved sandbox backend, echoed ONLY when the caller
+        // asked for sandbox. 'microvm' | 'passthrough' | undefined.
+        sandbox?: string
       } | null = null
       let attempt = 0
       while (true) {
@@ -843,6 +857,21 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // once through a typed local keeps this change at zero new tsc
       // errors AND reads cleaner.
       const sessionId: string = (spawn as { sessionId: string }).sessionId
+
+      // D9 — stamp the resolved sandbox backend onto the tab. The
+      // daemon echoes `sandbox` ONLY when this pane asked for it
+      // (gated `if sandbox_echo.is_some()` server-side), and the echo
+      // fires on BOTH the fresh and reuse branches — so this runs for
+      // every successful spawn/attach. Read through the same `as` cast
+      // used for sessionId above (the `spawn` local is typed `never`
+      // here, a pre-existing quirk). Normal tabs never request sandbox
+      // ⇒ `sandbox` is undefined ⇒ the marker stays off. Truthful: a
+      // degraded passthrough stamps 'passthrough', which renders no
+      // orange (TabBar gates strictly on === 'microvm').
+      useTabsStore.getState().setTerminalSandboxBackend(
+        terminalId,
+        (spawn as { sandbox?: string }).sandbox,
+      )
 
       // 0.39.13 — spawn ⊥ stream. The PTY is now spawned/attached on the
       // daemon. We do NOT open the grid-WS here. Instead we stash the

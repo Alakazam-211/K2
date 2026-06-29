@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, type AgentItemData } from './tabs'
+import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, type AgentItemData, type TerminalItemData } from './tabs'
 
 // ensurePinnedAgentTabForMode resolves the agent name via Tauri
 // `invoke`. Stub it so the async resolution completes deterministically
@@ -548,5 +548,104 @@ describe('pinned HTML file tabs (#587)', () => {
     expect(tabs[pinnedIdx - 1].isSystemAgent).toBe(true)
     expect(tabs[pinnedIdx + 1].isSystemAgent).toBeFalsy()
     expect(tabs[pinnedIdx + 1].isPinnedFile).toBeFalsy()
+  })
+})
+
+/**
+ * D9 — sandbox (microVM) orange tab marker.
+ *
+ * The marker is DORMANT on Mac / feature-off builds (resolve_sandbox
+ * never returns Microvm there), so these unit tests are the primary
+ * proof the gating works. They cover (a) the store action that stamps
+ * the resolved backend onto the terminal item, and (b) the exact
+ * gating predicate TabBar uses to decide whether to render the bar.
+ */
+describe('D9 sandbox tab marker', () => {
+  beforeEach(reset)
+
+  // Mirror of TabBar.tsx's `isSandboxed` derivation. Kept in lockstep
+  // with the renderer: a tab is marked iff SOME terminal item resolved
+  // to the 'microvm' backend — passthrough / undefined render nothing.
+  const isSandboxed = (tab: { paneGroups: Map<string, { items: Array<{ type: string; data: unknown }> }> }): boolean =>
+    Array.from(tab.paneGroups.values()).some((pg) =>
+      pg.items.some(
+        (i) => i.type === 'terminal' && (i.data as TerminalItemData).sandboxBackend === 'microvm',
+      ),
+    )
+
+  function makeTerminalTab(terminalId: string, sandboxBackend?: string): void {
+    useTabsStore.setState({
+      tabs: [{
+        id: 'term-tab',
+        title: 'Terminal 1',
+        mosaicTree: 'pg-1',
+        paneGroups: new Map([['pg-1', {
+          id: 'pg-1',
+          items: [{
+            id: 'item-1',
+            type: 'terminal',
+            data: { terminalId, cwd: '/tmp/proj', renderer: 'alacritty-v2', sandboxBackend } as TerminalItemData,
+          }],
+          activeItemIndex: 0,
+        }]]),
+      }],
+      activeTabId: 'term-tab',
+      splitCount: 1,
+      extraGroups: [],
+      activeGroupIndex: 0,
+    })
+  }
+
+  function firstTerminalData(): TerminalItemData {
+    const tab = useTabsStore.getState().tabs[0]
+    const item = Array.from(tab.paneGroups.values())[0].items[0]
+    return item.data as TerminalItemData
+  }
+
+  it("gates STRICTLY on 'microvm' — microvm ⇒ marked", () => {
+    makeTerminalTab('t1', 'microvm')
+    expect(isSandboxed(useTabsStore.getState().tabs[0])).toBe(true)
+  })
+
+  it("'passthrough' ⇒ NOT marked (degraded/no real isolation)", () => {
+    makeTerminalTab('t1', 'passthrough')
+    expect(isSandboxed(useTabsStore.getState().tabs[0])).toBe(false)
+  })
+
+  it('undefined backend (default-OFF / normal tab) ⇒ NOT marked', () => {
+    makeTerminalTab('t1', undefined)
+    expect(isSandboxed(useTabsStore.getState().tabs[0])).toBe(false)
+  })
+
+  it('setTerminalSandboxBackend stamps the resolved backend onto the matching terminal', () => {
+    makeTerminalTab('t1', undefined)
+    expect(firstTerminalData().sandboxBackend).toBeUndefined()
+    expect(isSandboxed(useTabsStore.getState().tabs[0])).toBe(false)
+
+    useTabsStore.getState().setTerminalSandboxBackend('t1', 'microvm')
+    expect(firstTerminalData().sandboxBackend).toBe('microvm')
+    expect(isSandboxed(useTabsStore.getState().tabs[0])).toBe(true)
+
+    // Clearing back to passthrough drops the marker (truthful echo).
+    useTabsStore.getState().setTerminalSandboxBackend('t1', 'passthrough')
+    expect(firstTerminalData().sandboxBackend).toBe('passthrough')
+    expect(isSandboxed(useTabsStore.getState().tabs[0])).toBe(false)
+  })
+
+  it('setTerminalSandboxBackend is an immutable update (new tab reference on change)', () => {
+    makeTerminalTab('t1', undefined)
+    const before = useTabsStore.getState().tabs[0]
+    useTabsStore.getState().setTerminalSandboxBackend('t1', 'microvm')
+    const after = useTabsStore.getState().tabs[0]
+    // Reference changed (Zustand selectors must notice) — no in-place mutation.
+    expect(after).not.toBe(before)
+    expect(before.paneGroups).not.toBe(after.paneGroups)
+  })
+
+  it('no-ops (same references) when terminalId does not match', () => {
+    makeTerminalTab('t1', 'microvm')
+    const before = useTabsStore.getState().tabs
+    useTabsStore.getState().setTerminalSandboxBackend('does-not-exist', 'passthrough')
+    expect(useTabsStore.getState().tabs).toBe(before)
   })
 })

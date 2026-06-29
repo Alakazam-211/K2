@@ -202,7 +202,12 @@ pub async fn serve_session_bytes_connection(
             // Re-auth heartbeat — see `auth_recheck` above. Closes the
             // socket the moment the connecting user is revoked.
             _ = auth_recheck.tick() => {
-                if !crate::routes::http::token_still_valid(&token, &owner_token) {
+                // Owner/connect-user token OR the P3b per-session stream token
+                // bound to THIS session — so an external /v1/sandboxes viewer
+                // keeps streaming until teardown/TTL, never the API key.
+                let still_ok = crate::routes::http::token_still_valid(&token, &owner_token)
+                    || crate::stream_token::authorizes_session(&token, &session_id);
+                if !still_ok {
                     log_debug!(
                         "[daemon/sessions_bytes_ws] token revoked mid-session; \
                          closing bytes WS for session {session_id}"

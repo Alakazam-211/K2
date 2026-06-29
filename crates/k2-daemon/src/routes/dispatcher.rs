@@ -821,7 +821,14 @@ async fn handle_one_request(
         // to /cli/sessions/subscribe but streams PTY bytes as
         // binary WS frames for clients running their own vte.
         "/cli/sessions/bytes" => {
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            // Auth: the owner/connect-user token (token_ok) OR a P3b per-session
+            // STREAM token scoped to EXACTLY this request's `?session=` (so an
+            // external /v1/sandboxes caller streams with the per-session token,
+            // never the API key — which is NOT token_ok and NOT in the stream
+            // registry, so it is rejected here).
+            if !super::http::token_ok(&query, state.token.as_str())
+                && !crate::stream_token::query_authorizes(&query)
+            {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -845,7 +852,13 @@ async fn handle_one_request(
         // Serves one Tauri thin client per session. Single-subscriber
         // by design. See `.k2so/prds/alacritty-v2.md`.
         "/cli/sessions/grid" => {
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            // Auth: the owner/connect-user token (token_ok) OR a P3b per-session
+            // STREAM token scoped to EXACTLY this request's `?session=` (the
+            // external /v1/sandboxes caller streams with the per-session token;
+            // the API key is NEVER accepted here — it fails both checks).
+            if !super::http::token_ok(&query, state.token.as_str())
+                && !crate::stream_token::query_authorizes(&query)
+            {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -2818,6 +2831,18 @@ async fn handle_one_request(
                 "/v1/ping" => {
                     let _ = stream.read(&mut buf).await;
                     crate::misc_routes::handle_v1_ping(&principal.display_id())
+                }
+                // P3b — POST /v1/sandboxes: the public sandbox-spawn route. The
+                // principal is host-resolved above; the policy-resolver inside
+                // produces a host-trusted SpawnRequest (the cell/caller never
+                // decides workspace/command/env/creds/identity), and the route
+                // 409s if this daemon can't deliver a real microVM. POST-only.
+                "/v1/sandboxes" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    crate::v1_sandboxes::handle_v1_sandboxes(&principal, &body)
                 }
                 _ => {
                     let _ = stream.read(&mut buf).await;

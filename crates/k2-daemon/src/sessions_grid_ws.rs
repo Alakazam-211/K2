@@ -453,7 +453,13 @@ pub async fn serve_session_grid_connection(
             // Re-auth heartbeat — see `auth_recheck` above. Closes the
             // socket the moment the connecting user is revoked.
             _ = auth_recheck.tick() => {
-                if !crate::routes::http::token_still_valid(&token, &owner_token) {
+                // Accept the owner/connect-user token OR the P3b per-session
+                // stream token bound to THIS session (revoked on teardown +
+                // TTL-bounded), so an external /v1/sandboxes viewer isn't torn
+                // off a still-live stream.
+                let still_ok = crate::routes::http::token_still_valid(&token, &owner_token)
+                    || crate::stream_token::authorizes_session(&token, &session.session_id);
+                if !still_ok {
                     log_debug!(
                         "[daemon/sessions_grid_ws] token revoked mid-session; \
                          closing grid WS for session {}",

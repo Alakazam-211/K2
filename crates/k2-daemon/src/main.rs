@@ -74,6 +74,9 @@ mod routes;
 mod cell_server;
 mod cell_uds;
 mod session_token;
+// P3b (sandbox / K2-as-a-server): stream tokens + POST /v1/sandboxes + policy.
+mod stream_token;
+mod v1_sandboxes;
 mod session_events;
 mod session_events_ws;
 mod session_lookup;

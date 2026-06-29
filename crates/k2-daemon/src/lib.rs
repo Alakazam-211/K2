@@ -63,6 +63,10 @@ pub mod routes;
 pub mod cell_server;
 pub mod cell_uds;
 pub mod session_token;
+// P3b (sandbox / K2-as-a-server): per-session stream tokens + the public
+// `POST /v1/sandboxes` route + policy-resolver. Behind K2_SANDBOX_API (OFF).
+pub mod stream_token;
+pub mod v1_sandboxes;
 pub mod session_events;
 pub mod session_events_ws;
 pub mod session_lookup;

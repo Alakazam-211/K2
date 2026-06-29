@@ -88,54 +88,88 @@ fn scoped_principal_workspace(agent_name: &str, cwd: &str) -> String {
 /// `reused: true` means the caller's `agent_name` already had a
 /// live session; we returned its handle instead of spawning.
 /// Tauri's attach path treats reused and fresh identically.
+/// The host-trusted spawn request consumed by [`spawn_session`]. Public within
+/// the crate so the P3b policy-resolver (`v1_sandboxes::policy`) can build one
+/// HOST-SIDE for an external `/v1/sandboxes` caller. The wire schema IS the v2
+/// spawn body; the non-wire `ephemeral_cwd` is `#[serde(skip)]` so the
+/// deserialized shape — and thus every existing v2 caller — is byte-identical.
+#[derive(serde::Deserialize)]
+pub struct SpawnRequest {
+    pub agent_name: String,
+    #[serde(default = "default_cwd")]
+    pub cwd: String,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default = "default_cols")]
+    pub cols: u16,
+    #[serde(default = "default_rows")]
+    pub rows: u16,
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+    /// Phase B: caller-supplied initial label. Sent to the
+    /// first WS subscriber as `LabelInitial`. Empty/absent ⇒
+    /// no seed; `Pty` source means PTY title events fill it.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Phase B: lock the label so future PTY title events
+    /// (e.g. claude --resume emitting "Claude Code") cannot
+    /// overwrite it. Common cases: canonical workspace+agent
+    /// session, heartbeat fire sessions, restored chat-history
+    /// tabs whose label is the session-derived friendly name.
+    #[serde(default)]
+    pub label_locked: Option<bool>,
+    /// Sandbox P1: opt-in request to sandbox this session. In P1 this is
+    /// ACCEPT-AND-MARK — `true` resolves to the host-direct Passthrough
+    /// backend (no real isolation yet) and is echoed back as the literal
+    /// backend NAME, never rejected. Absent ⇒ default path (response
+    /// unchanged, byte-identical to pre-seam).
+    #[serde(default)]
+    pub sandbox: Option<bool>,
+    /// P3b: a daemon-provisioned EPHEMERAL workspace dir to remove on
+    /// ChildExit (the `/v1/sandboxes` per-session cwd). `#[serde(skip)]` so it
+    /// NEVER arrives off the wire — a caller can NEVER ask the daemon to delete
+    /// an arbitrary path. `None` for every v2 caller (no teardown); `Some` only
+    /// when the P3b policy-resolver provisioned a throwaway dir for an API
+    /// session, in which case the child-exit observer removes it.
+    #[serde(skip)]
+    pub ephemeral_cwd: Option<PathBuf>,
+}
+
+fn default_cwd() -> String {
+    std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
+}
+fn default_cols() -> u16 {
+    80
+}
+fn default_rows() -> u16 {
+    24
+}
+
+/// Whether THIS daemon can deliver a real microVM-isolated cell: a Linux build
+/// compiled with `sandbox-microvm` AND with `K2_SANDBOX` enabled at runtime —
+/// the EXACT condition under which [`resolve_sandbox`] resolves `Microvm` (this
+/// is the single source of truth; both consult the same compile-gate + runtime
+/// flag, so they can never diverge). Surfaced so the PUBLIC `/v1/sandboxes`
+/// route can REFUSE (409) rather than silently degrade to an unsandboxed
+/// passthrough cell. On macOS / any feature-off build → `false` (always 409).
+pub fn can_sandbox() -> bool {
+    #[cfg(all(target_os = "linux", feature = "sandbox-microvm"))]
+    {
+        return k2_sandbox_enabled();
+    }
+    #[cfg(not(all(target_os = "linux", feature = "sandbox-microvm")))]
+    {
+        false
+    }
+}
+
+/// Handler for `POST /cli/sessions/v2/spawn` — parse the wire body then defer to
+/// [`spawn_session`]. Thin wrapper: ALL spawn plumbing lives in `spawn_session`
+/// so `/v1/sandboxes` reuses it verbatim with a host-trusted request, and the v2
+/// path stays behavior-identical (parse error → the same 400 as before).
 pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
-    #[derive(serde::Deserialize)]
-    struct SpawnRequest {
-        agent_name: String,
-        #[serde(default = "default_cwd")]
-        cwd: String,
-        #[serde(default)]
-        command: Option<String>,
-        #[serde(default)]
-        args: Option<Vec<String>>,
-        #[serde(default = "default_cols")]
-        cols: u16,
-        #[serde(default = "default_rows")]
-        rows: u16,
-        #[serde(default)]
-        env: Option<HashMap<String, String>>,
-        /// Phase B: caller-supplied initial label. Sent to the
-        /// first WS subscriber as `LabelInitial`. Empty/absent ⇒
-        /// no seed; `Pty` source means PTY title events fill it.
-        #[serde(default)]
-        label: Option<String>,
-        /// Phase B: lock the label so future PTY title events
-        /// (e.g. claude --resume emitting "Claude Code") cannot
-        /// overwrite it. Common cases: canonical workspace+agent
-        /// session, heartbeat fire sessions, restored chat-history
-        /// tabs whose label is the session-derived friendly name.
-        #[serde(default)]
-        label_locked: Option<bool>,
-        /// Sandbox P1: opt-in request to sandbox this session. In P1 this is
-        /// ACCEPT-AND-MARK — `true` resolves to the host-direct Passthrough
-        /// backend (no real isolation yet) and is echoed back as the literal
-        /// backend NAME, never rejected. Absent ⇒ default path (response
-        /// unchanged, byte-identical to pre-seam).
-        #[serde(default)]
-        sandbox: Option<bool>,
-    }
-    fn default_cwd() -> String {
-        std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
-    }
-    fn default_cols() -> u16 {
-        80
-    }
-    fn default_rows() -> u16 {
-        24
-    }
-
-    let __t_total = std::time::Instant::now();
-
     let req: SpawnRequest = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(e) => {
@@ -148,12 +182,25 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
             }
         }
     };
+    spawn_session(req)
+}
+
+/// The PROVEN v2 spawn internals: find-or-spawn by `agent_name`, restart
+/// recovery, #58 scoped token/UDS + B3a key-injection, the child-exit observer,
+/// and microVM cgroup/dir teardown. Extracted UNCHANGED from `handle_v2_spawn`
+/// (the only delta: it now takes an already-parsed [`SpawnRequest`] and honors
+/// `ephemeral_cwd` teardown) so the existing v2 path is behavior-identical;
+/// `/v1/sandboxes` calls it directly with a host-trusted request from the
+/// policy-resolver.
+pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     if req.agent_name.is_empty() {
         return HandlerResult {
             status: "400 Bad Request",
             body: r#"{"error":"agent_name required"}"#.into(),
         };
     }
+
+    let __t_total = std::time::Instant::now();
 
     // Find-or-spawn: existing session wins. The response preserves
     // whatever cols/rows the existing session was opened at — the
@@ -623,7 +670,7 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
     // eventually, but eventually-consistent stale data is the kind
     // of "feels haunted" UX we'd rather avoid. See
     // `heartbeat-active-session-tracking` PRD.
-    spawn_child_exit_observer(req.agent_name.clone(), session.clone());
+    spawn_child_exit_observer(req.agent_name.clone(), session.clone(), req.ephemeral_cwd.clone());
 
     // Drain any pending-live signals that were queued while this
     // agent was offline so they become input to the fresh session.
@@ -847,7 +894,11 @@ fn current_dims(session: &DaemonPtySession) -> (u16, u16) {
 /// doesn't keep the Arc alive past the last legitimate holder. If
 /// every other holder drops first, `Weak::upgrade()` returns None
 /// and we exit silently.
-pub fn spawn_child_exit_observer(agent_name: String, session: std::sync::Arc<DaemonPtySession>) {
+pub fn spawn_child_exit_observer(
+    agent_name: String,
+    session: std::sync::Arc<DaemonPtySession>,
+    ephemeral_cwd: Option<PathBuf>,
+) {
     use k2_core::terminal::AlacEvent;
     // Capture the session id BEFORE downgrading so the teardown path can
     // revoke the scoped token + remove the per-cell socket even if every
@@ -895,6 +946,12 @@ pub fn spawn_child_exit_observer(agent_name: String, session: std::sync::Arc<Dae
                         s.mark_child_exited();
                     }
                     v2_session_map::unregister(&agent_name);
+
+                    // P3b — drop any per-session STREAM token for this session so
+                    // a torn-down API session's grid/bytes token stops
+                    // authorizing immediately (in-memory no-op for the vast
+                    // majority of sessions that never minted one).
+                    crate::stream_token::revoke_for_session(&session_id);
 
                     // COMPAT-58 (#58 Phase 1) — flag-gated teardown. Revoke the
                     // cell's scoped token (epoch bump → next call 403, no
@@ -953,6 +1010,31 @@ pub fn spawn_child_exit_observer(agent_name: String, session: std::sync::Arc<Dae
                             }
                         }
                         let _ = std::fs::remove_dir(format!("/run/k2cell-{sid}"));
+                    }
+
+                    // P3b — ephemeral workspace teardown. The `/v1/sandboxes`
+                    // policy-resolver provisions a throwaway per-session cwd
+                    // (`~/.k2/sandbox-sessions/<uuid>`) and stamps it here via
+                    // `SpawnRequest::ephemeral_cwd`; remove it now the cell has
+                    // exited so per-session disk doesn't accumulate. `None` for
+                    // EVERY v2 caller (no stat, default-OFF parity); the path is
+                    // daemon-minted (NEVER caller-supplied — `#[serde(skip)]`),
+                    // so this can only ever delete a dir the daemon created.
+                    // Best-effort / ENOENT-tolerant.
+                    if let Some(dir) = ephemeral_cwd.as_ref() {
+                        match std::fs::remove_dir_all(dir) {
+                            Ok(_) => log_debug!(
+                                "[v1-sandbox] removed ephemeral workspace {} for session={}",
+                                dir.display(),
+                                session_id
+                            ),
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(e) => log_debug!(
+                                "[v1-sandbox] WARN remove ephemeral workspace {} for session={} failed: {e}",
+                                dir.display(),
+                                session_id
+                            ),
+                        }
                     }
                     return;
                 }

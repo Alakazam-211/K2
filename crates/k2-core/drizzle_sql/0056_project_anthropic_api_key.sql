@@ -1,0 +1,19 @@
+-- B3a (sandbox) — per-workspace Anthropic API key (bring-your-own-key).
+--
+-- A PER-WORKSPACE configured API key ("set up in the workspace") that, at
+-- microVM spawn for THIS workspace, is staged as `ANTHROPIC_API_KEY=<key>`
+-- into the sandboxed cell's guest env so the in-cell Claude Code skips
+-- interactive auth and calls Anthropic directly. K2 is NOT in the API path.
+--
+-- Scoping (security): the key is per-workspace — a tenant embeds THEIR OWN
+-- key in THEIR cell, and the microVM jail isolates cells from each other +
+-- the host, so a prompt-injected in-cell agent can read only its own
+-- workspace's key (their account, their risk — never a shared platform key).
+--
+-- AT-REST: this column is PLAINTEXT in k2so.db (the box DB is root-only).
+-- At-rest encryption is a follow-up; do NOT log/echo this value anywhere.
+--
+-- Nullable (no DEFAULT): an absent value reads NULL → no key staged → the
+-- cell has no Anthropic credential (logged host-side). Existing rows
+-- backfill to NULL.
+ALTER TABLE projects ADD COLUMN anthropic_api_key TEXT;

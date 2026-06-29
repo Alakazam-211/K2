@@ -62,7 +62,7 @@ fn principal() -> HookPrincipal {
 /// cell's socket, and start serving it. Returns (session_id, token, sock).
 fn mint_bind_serve(pane: &str) -> (SessionId, String, PathBuf) {
     let sid = SessionId::new();
-    let token = session_token::mint_session_token(&sid, pane, principal());
+    let token = session_token::mint_session_token(&sid, pane, principal(), session_token::CredMode::ApiKey, session_token::Provider::Anthropic);
     let listener = cell_uds::bind_cell_socket(&sid).expect("bind cell socket");
     let sock = cell_uds::cell_socket_path(&sid);
     // Non-microVM cell (no peer-uid widening) — exercises the same-uid belt.
@@ -116,7 +116,7 @@ fn principal_in_ws(uuid: &str) -> HookPrincipal {
 /// path — so the Finding-1 force pins operands to it instead of failing closed.
 fn mint_bind_serve_in_ws(pane: &str, ws_uuid: &str) -> (SessionId, String, PathBuf) {
     let sid = SessionId::new();
-    let token = session_token::mint_session_token(&sid, pane, principal_in_ws(ws_uuid));
+    let token = session_token::mint_session_token(&sid, pane, principal_in_ws(ws_uuid), session_token::CredMode::ApiKey, session_token::Provider::Anthropic);
     let listener = cell_uds::bind_cell_socket(&sid).expect("bind cell socket");
     let sock = cell_uds::cell_socket_path(&sid);
     // Non-microVM cell (no peer-uid widening) — exercises the same-uid belt.
@@ -229,7 +229,7 @@ async fn case3_other_cells_token_on_this_socket_is_403() {
     // Cell A's socket; cell B's token.
     let (_sid_a, _tok_a, sock_a) = mint_bind_serve("pane-A");
     let other_sid = SessionId::new();
-    let tok_b = session_token::mint_session_token(&other_sid, "pane-B", principal());
+    let tok_b = session_token::mint_session_token(&other_sid, "pane-B", principal(), session_token::CredMode::ApiKey, session_token::Provider::Anthropic);
     settle().await;
     let (status, _) = uds(
         &sock_a,

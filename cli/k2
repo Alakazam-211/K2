@@ -2943,6 +2943,41 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
 }
 
+# B3a (sandbox) — set/clear the PER-WORKSPACE Anthropic API key (BYO key).
+# Owner-only daemon route (`/cli/workspace/api-key`, POST). The key rides the
+# JSON BODY (never the URL/query) so it isn't logged by intermediaries. An
+# empty key CLEARS the stored value. The key is staged into a microVM-backed
+# sandbox cell's guest env at spawn (per-workspace scoping). NEVER printed back.
+cmd_workspace_set_api_key() {
+    local target="${1:-}"
+    local key="${2:-}"
+    [[ -z "$target" ]] && { echo "Usage: k2 workspace api-key <workspace> <api-key>   (empty key clears)" >&2; exit 1; }
+    local resolved_path
+    resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+    if [ -z "$resolved_path" ]; then
+        resolved_path="$target"
+    fi
+    # Build the JSON body with python3 so the key is escaped correctly and is
+    # never interpolated into a shell/URL context.
+    local body
+    body=$(K2_AK_PATH="$resolved_path" K2_AK_KEY="$key" python3 -c 'import json,os
+print(json.dumps({"project": os.environ["K2_AK_PATH"], "key": os.environ.get("K2_AK_KEY","")}))')
+    cli_post_json "/cli/workspace/api-key" "$body" \
+        | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    if "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("Workspace API key %s." % ("set" if d.get("keySet") else "cleared"))
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+}
+
 # ── Agent Skill Surface ─────────────────────────────────────────────
 
 cmd_checkin() {
@@ -7061,7 +7096,9 @@ EOF
             agent-name)        shift 2; cmd_workspace_get_agent_display_name "$@" ;;
             set-agent-name)    shift 2; cmd_workspace_set_agent_display_name "$@" ;;
             resume-chat-args)  shift 2; cmd_workspace_resume_chat_args "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|...> [args]" >&2; exit 1 ;;
+            # B3a (sandbox) — set/clear the per-workspace Anthropic API key.
+            api-key)           shift 2; cmd_workspace_set_api_key "$@" ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

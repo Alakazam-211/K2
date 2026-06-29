@@ -524,6 +524,12 @@ async fn handle_one_request(
             // 0.39.39 #676 — daemon-canonical tab title write (token_ok
             // auth in the isolated arm below).
             | "/cli/workspace/set-tab-title"
+            // B3a (sandbox) — set the PER-WORKSPACE Anthropic API key (BYO
+            // key). OWNER-ONLY (require_owner per-handler below) + POST so the
+            // key rides the JSON body, never the URL-logged query string. The
+            // key is staged into a microVM cell's guest env at spawn; never
+            // logged/echoed.
+            | "/cli/workspace/api-key"
             // 0.39.45 (#35/#37/#29) — live-msg POST form. Long message
             // text rides the form-encoded body instead of the query
             // string so it dodges the request-head cap. GET with query
@@ -2255,6 +2261,33 @@ async fn handle_one_request(
                 content_type: "application/json",
                 body: serde_json::json!({ "error": format!("worker join: {e}") })
                     .to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
+        // POST /cli/workspace/api-key — B3a (sandbox). Set/clear the
+        // PER-WORKSPACE Anthropic API key (BYO key). Body (JSON):
+        // `{"project": "<path>", "key": "<api key>"}` (empty `key` clears it).
+        // OWNER-ONLY: the key is the workspace's billable credential, so a
+        // connect-user session token is rejected (require_owner, not token_ok).
+        // POST + body so the secret is never URL-logged. The handler NEVER
+        // logs/echoes the key.
+        p if is_post && post_allowed && p == "/cli/workspace/api-key" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = tokio::task::spawn_blocking(move || {
+                crate::misc_routes::handle_set_workspace_api_key(&body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
             });
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;

@@ -974,3 +974,54 @@ pub(crate) fn emit_review_changed(workspace_path: &str, agent: Option<&str>) {
         agent: agent.map(|a| a.to_string()),
     });
 }
+
+/// B3a (sandbox) — set/clear the PER-WORKSPACE Anthropic API key (BYO key).
+///
+/// Body (JSON): `{"project": "<workspace path>", "key": "<api key>"}`. An
+/// empty/whitespace `key` CLEARS the stored key. The path is resolved to a
+/// `projects.id` server-side; an unregistered path fails LOUDLY.
+///
+/// The key is staged into a microVM-backed sandbox cell's guest env at spawn
+/// (per-workspace scoping → right key → right cell). This handler NEVER logs
+/// or echoes the key — the success body returns only `{ "success": true,
+/// "keySet": <bool> }`. OWNER-gated + POST-gated at the dispatcher arm.
+pub fn handle_set_workspace_api_key(body: &[u8]) -> crate::cli_response::CliResponse {
+    use crate::cli_response::CliResponse;
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    // Accept either `project` or `project_path` for the workspace path.
+    let project_path = v
+        .get("project")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.get("project_path").and_then(|x| x.as_str()))
+        .unwrap_or("")
+        .to_string();
+    if project_path.is_empty() {
+        return CliResponse::bad_request("missing 'project' (workspace path)");
+    }
+    // `key` may be absent/empty → that CLEARS the stored key.
+    let key = v.get("key").and_then(|x| x.as_str()).unwrap_or("").to_string();
+
+    // Resolve path → projects.id (server-side; the body never supplies an id).
+    let db = k2_core::db::shared();
+    let project_id = {
+        let conn = db.lock();
+        k2_core::workspace::agent_identity::resolve_project_id(&conn, &project_path)
+    };
+    let Some(project_id) = project_id else {
+        return CliResponse::bad_request(format!(
+            "workspace not registered: {project_path}"
+        ));
+    };
+
+    match k2_core::workspace::settings::set_workspace_api_key(&project_id, &key) {
+        // NEVER echo the key — only whether one is now set.
+        Ok(()) => CliResponse::ok_json(
+            serde_json::json!({ "success": true, "keySet": !key.trim().is_empty() })
+                .to_string(),
+        ),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}

@@ -402,9 +402,43 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
             workspace_uuid: scoped_principal_workspace(&req.agent_name, &req.cwd),
             agent_address: req.agent_name.clone(),
         };
-        if let Some(pairs) =
-            crate::session_token::cell_env_pairs(&session_id_for_response, &pane_id, principal)
-        {
+        // B3a — resolve the credential mode + per-workspace key HOST-SIDE.
+        // The cell NEVER chooses its mode/key. ApiKey is the only built mode
+        // (Subscription is a deferred no-op stub). The PER-WORKSPACE key is
+        // staged ONLY for a microVM-backed cell (the jail that isolates it);
+        // a non-microVM (passthrough) session resolves NO key → byte-identical
+        // default-OFF parity (no DB lookup, no env delta). On Mac / feature-off
+        // builds `resolve_sandbox` is always Passthrough, so this never fires.
+        let cred_mode = crate::session_token::CredMode::ApiKey;
+        let provider = crate::session_token::Provider::Anthropic;
+        let microvm_backed =
+            matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm);
+        let workspace_api_key: Option<String> = if microvm_backed {
+            let key = k2_core::workspace::settings::get_workspace_api_key(&req.cwd);
+            // NEVER log the key itself — only its presence.
+            if key.is_some() {
+                log_debug!(
+                    "[hook-scoped] B3a: staging per-workspace ANTHROPIC_API_KEY into microVM cell for session={}",
+                    session_id_for_response
+                );
+            } else {
+                log_debug!(
+                    "[hook-scoped] B3a: microVM session={} has NO per-workspace API key configured; cell will have no Anthropic cred",
+                    session_id_for_response
+                );
+            }
+            key
+        } else {
+            None
+        };
+        if let Some(pairs) = crate::session_token::cell_env_pairs(
+            &session_id_for_response,
+            &pane_id,
+            principal,
+            cred_mode,
+            provider,
+            workspace_api_key.as_deref(),
+        ) {
             for (k, v) in pairs {
                 cfg.env.insert(k, v);
             }

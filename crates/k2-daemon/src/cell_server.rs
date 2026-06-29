@@ -635,6 +635,8 @@ mod unix_impl {
                     workspace_uuid: "ws".to_string(),
                     agent_address: "a".to_string(),
                 },
+                cred_mode: crate::session_token::CredMode::default(),
+                provider: crate::session_token::Provider::default(),
             }
         }
 

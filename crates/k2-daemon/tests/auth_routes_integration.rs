@@ -1477,7 +1477,7 @@ async fn hook_revoke_all_is_owner_only_and_kills_scoped_tokens() {
             workspace_uuid: "ws-revoke".to_string(),
             agent_address: "agent-revoke".to_string(),
         };
-        let token = session_token::mint_session_token(&sid, "pane-1", principal);
+        let token = session_token::mint_session_token(&sid, "pane-1", principal, session_token::CredMode::ApiKey, session_token::Provider::Anthropic);
         assert!(
             session_token::validate_hook(&token).is_some(),
             "freshly minted scoped token validates"

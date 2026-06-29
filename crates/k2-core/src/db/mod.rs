@@ -409,6 +409,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // gate for agent-initiated cross-daemon sends (federation::handle_send
         // fails closed unless the source workspace has a row for the target).
         ("0055_workspace_remote_connections", include_str!("../../drizzle_sql/0055_workspace_remote_connections.sql")),
+        // 0056 (B3a sandbox): per-workspace Anthropic API key (BYO key) on
+        // `projects` (nullable TEXT, no default). Staged as ANTHROPIC_API_KEY
+        // into a microVM-backed cell's guest env at spawn so the in-cell
+        // Claude Code skips interactive auth. PLAINTEXT at rest (root-only box
+        // DB); at-rest encryption is a follow-up. Never logged.
+        ("0056_project_anthropic_api_key", include_str!("../../drizzle_sql/0056_project_anthropic_api_key.sql")),
     ];
 
     for (name, sql) in migrations {

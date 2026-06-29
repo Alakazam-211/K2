@@ -237,6 +237,66 @@ pub fn remote_instruct_allowed_for_path(project_path: &str) -> bool {
     get_allow_remote_instruct(project_path)
 }
 
+// ── B3a (sandbox) — per-workspace Anthropic API key (BYO key) ──────────
+//
+// A PER-WORKSPACE configured API key staged as `ANTHROPIC_API_KEY=<key>`
+// into a microVM-backed sandbox cell's guest env at spawn (see the daemon's
+// `session_token::scoped_cell_env_for_token` + `v2_spawn`). K2 is NOT in the
+// Anthropic API path — the in-cell Claude Code reads the env key + calls
+// Anthropic directly, skipping interactive auth.
+//
+// SECURITY: the value is a tenant's OWN key, scoped to their OWN workspace
+// (right key → right cell only); the microVM jail isolates cells. The
+// column is PLAINTEXT at rest in k2so.db (root-only box DB) — at-rest
+// encryption is a follow-up. NEVER log/echo this value.
+
+/// Read the PER-WORKSPACE Anthropic API key for `project_path`.
+///
+/// Returns `None` when the project isn't registered, the column reads NULL
+/// (the default — no key configured), or the stored value is blank. A
+/// blank/whitespace value is treated as absent so the spawn door never
+/// stages an empty `ANTHROPIC_API_KEY=` (which would mask the on-device
+/// fallback and confuse the in-cell agent). Never logs the key.
+pub fn get_workspace_api_key(project_path: &str) -> Option<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT anthropic_api_key FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten();
+    match raw {
+        Some(k) if !k.trim().is_empty() => Some(k.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// Set (or clear) the PER-WORKSPACE Anthropic API key for `project_id`
+/// (`projects.id`). Passing an empty/whitespace `key` CLEARS it (stores
+/// NULL) so a workspace can drop back to no-credential. Fails LOUDLY when
+/// the project id is unknown. Never logs the key.
+pub fn set_workspace_api_key(project_id: &str, key: &str) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    // Empty → NULL (clear); otherwise store the trimmed key.
+    let trimmed = key.trim();
+    let stored: Option<&str> = if trimmed.is_empty() { None } else { Some(trimmed) };
+    let rows = conn
+        .execute(
+            "UPDATE projects SET anthropic_api_key = ?1 WHERE id = ?2",
+            rusqlite::params![stored, project_id],
+        )
+        // Deliberately do NOT include the key in any error string.
+        .map_err(|e| format!("DB update failed: {}", e))?;
+    if rows == 0 {
+        return Err(format!("Project not found in DB: id={}", project_id));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     //! Phase 2 Tier 2.1 coverage for the workspace-settings DB wrappers.
@@ -436,6 +496,62 @@ mod tests {
             remote_instruct_allowed_for_path(&path),
             "app-level master must opt in every workspace (back-compat)",
         );
+    }
+
+    // ── B3a per-workspace Anthropic API key (BYO key) ──────────────
+
+    /// A fresh workspace has NO key (NULL → None); set-by-id round-trips
+    /// through the path-based getter; clearing (empty key) returns to None.
+    #[test]
+    fn workspace_api_key_defaults_none_and_round_trips() {
+        let path = unique_path("ws-api-key");
+        let pid = insert_project(&path);
+
+        // Fresh row: no key configured.
+        assert_eq!(get_workspace_api_key(&path), None);
+
+        // Set by project_id, read back by path.
+        set_workspace_api_key(&pid, "sk-ant-test-abc123").expect("set key");
+        assert_eq!(
+            get_workspace_api_key(&path).as_deref(),
+            Some("sk-ant-test-abc123"),
+        );
+
+        // Whitespace is trimmed on read.
+        set_workspace_api_key(&pid, "  sk-ant-padded  ").expect("set padded");
+        assert_eq!(get_workspace_api_key(&path).as_deref(), Some("sk-ant-padded"));
+
+        // Clear (empty key) → back to None (no empty string stored).
+        set_workspace_api_key(&pid, "").expect("clear key");
+        assert_eq!(get_workspace_api_key(&path), None);
+    }
+
+    /// A blank/whitespace stored value reads as None so the spawn door never
+    /// stages an empty `ANTHROPIC_API_KEY=`.
+    #[test]
+    fn workspace_api_key_blank_value_reads_none() {
+        let path = unique_path("ws-api-key-blank");
+        let pid = insert_project(&path);
+        set_workspace_api_key(&pid, "   ").expect("set blank");
+        assert_eq!(get_workspace_api_key(&path), None);
+    }
+
+    /// Setting against an unknown project id fails LOUDLY (never silently).
+    #[test]
+    fn set_workspace_api_key_fails_loudly_on_missing_project() {
+        let err = set_workspace_api_key("no-such-project-id", "sk-ant-x")
+            .expect_err("missing project must error");
+        assert!(
+            err.contains("Project not found"),
+            "expected 'Project not found' diagnostic, got {err:?}",
+        );
+    }
+
+    /// An unregistered workspace path reads None (never panics).
+    #[test]
+    fn get_workspace_api_key_none_for_unknown_path() {
+        let path = unique_path("ws-api-key-missing");
+        assert_eq!(get_workspace_api_key(&path), None);
     }
 
     // ── app_settings JSON accessors ────────────────────────────────

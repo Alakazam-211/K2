@@ -811,6 +811,27 @@ mod tests {
         assert_eq!(inv.guest_env, sorted, "guest_env must be deterministically sorted");
     }
 
+    /// B3a — a staged `ANTHROPIC_API_KEY` (the per-workspace key the daemon's
+    /// spawn door puts into `req.env`) is mirrored verbatim into `guest_env`,
+    /// reaching the in-cell Claude Code. `build_worker_invocation` only rewrites
+    /// `K2_HOOK_SOCK`, so the key passes through untouched — no change needed
+    /// here. This pins that contract.
+    #[test]
+    fn build_worker_invocation_carries_anthropic_api_key() {
+        let mut req = sentinel_request();
+        req.env.insert(
+            "ANTHROPIC_API_KEY".to_string(),
+            "sk-ant-workspace-key".to_string(),
+        );
+        let inv = build_worker_invocation(&req, &VmCaps::default());
+        assert!(
+            inv.guest_env
+                .iter()
+                .any(|(k, v)| k == "ANTHROPIC_API_KEY" && v == "sk-ant-workspace-key"),
+            "the staged per-workspace ANTHROPIC_API_KEY must reach the guest env verbatim",
+        );
+    }
+
     /// Sandbox B2: the guest `K2_HOOK_SOCK` is rewritten to the in-guest
     /// forwarder path, `K2_HOOK_TOKEN` is preserved verbatim, and the source
     /// `req.env` (the host-side staged env) is left unaffected.

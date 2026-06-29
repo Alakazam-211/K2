@@ -100,6 +100,54 @@ pub fn scoped_hooks_enabled() -> bool {
 // Principal + claims
 // ─────────────────────────────────────────────────────────────────────
 
+/// B3a — how the in-cell agent (Claude Code) obtains its model credential.
+///
+/// Resolved HOST-SIDE at the spawn door and STAMPED into the token claim;
+/// the cell NEVER chooses its own mode (a body-supplied mode would let one
+/// tenant pick another tenant's billing/credential path). Read from the
+/// VALIDATED token, never from a request body. `#[serde(default)]` → `ApiKey`
+/// so a record persisted before this field existed loads as the primary
+/// (tenant/server) path, not as the deferred subscription stub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CredMode {
+    /// B3a (PRIMARY — tenant/server). A PER-WORKSPACE configured API key is
+    /// staged into the cell's guest env (`<provider.key_env_var()>=<key>`);
+    /// the in-cell Claude Code picks it up and skips interactive auth.
+    #[default]
+    ApiKey,
+    /// B3b (DEFERRED — own-use). Reuse the on-device subscription creds by
+    /// bind-mounting them into the cell. NOT built in B3a — this arm is a
+    /// no-op stub here: it stages NO key (the env builder treats it the same
+    /// as "no key configured").
+    Subscription,
+}
+
+/// B3a — the model provider whose credential is embedded. Carries the env
+/// var the Claude-Code-compatible CLI reads its key from. Anthropic-only
+/// today; adding a provider later is ONE enum arm + its key env var, no
+/// architecture change. Resolved host-side + bound in the token claim; read
+/// from the VALIDATED token, never the request body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    #[default]
+    Anthropic,
+    // TODO(provider): OpenAI→OPENAI_API_KEY, Gemini→GEMINI_API_KEY
+}
+
+impl Provider {
+    /// The environment variable name the in-cell CLI reads the embedded key
+    /// from. (Anthropic → `ANTHROPIC_API_KEY`, which Claude Code honors to
+    /// skip login and call Anthropic directly.)
+    pub fn key_env_var(&self) -> &'static str {
+        match self {
+            Provider::Anthropic => "ANTHROPIC_API_KEY",
+            // TODO(provider): OpenAI → "OPENAI_API_KEY", Gemini → "GEMINI_API_KEY"
+        }
+    }
+}
+
 /// The capability principal a scoped token resolves to. **Derived from
 /// the spawn context, never trusted from a request body** (PRD §3.2: the
 /// body carries no identity). Broad reach != owner credential.
@@ -120,6 +168,11 @@ pub struct ValidatedHook {
     pub session_id: String,
     pub pane_id: String,
     pub principal: HookPrincipal,
+    /// B3a — the credential mode the cell was spawned under, surfaced from
+    /// the VALIDATED token (never the request body).
+    pub cred_mode: CredMode,
+    /// B3a — the model provider bound at mint.
+    pub provider: Provider,
 }
 
 /// A persisted scoped-token claim. The raw secret NEVER touches disk —
@@ -152,6 +205,15 @@ struct TokenRecord {
     /// The global hook epoch captured at mint. Validation rejects the
     /// record when it != the CURRENT global epoch (daemon-wide kill switch).
     global_epoch: u64,
+    /// B3a — credential mode stamped host-side at mint. `#[serde(default)]`
+    /// → `ApiKey` so records written before this field existed load as the
+    /// primary path. NOTE: the raw API KEY is NEVER persisted here — only the
+    /// MODE. The key lives solely in the (transient) cell guest env.
+    #[serde(default)]
+    cred_mode: CredMode,
+    /// B3a — model provider stamped host-side at mint (default `Anthropic`).
+    #[serde(default)]
+    provider: Provider,
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -202,6 +264,8 @@ impl SessionTokenRegistry {
         session_id: &SessionId,
         pane_id: &str,
         principal: HookPrincipal,
+        cred_mode: CredMode,
+        provider: Provider,
     ) -> String {
         let sid = session_id.to_string();
         let secret = new_secret();
@@ -218,6 +282,8 @@ impl SessionTokenRegistry {
             expires_at,
             session_epoch,
             global_epoch: self.global_epoch,
+            cred_mode,
+            provider,
         };
         self.records.insert(sid.clone(), record);
         format!("{sid}.{secret}")
@@ -280,6 +346,8 @@ impl SessionTokenRegistry {
             session_id: rec.session_id.clone(),
             pane_id: rec.pane_id.clone(),
             principal: rec.principal.clone(),
+            cred_mode: rec.cred_mode,
+            provider: rec.provider,
         })
     }
 
@@ -488,9 +556,11 @@ pub fn mint_session_token(
     session_id: &SessionId,
     pane_id: &str,
     principal: HookPrincipal,
+    cred_mode: CredMode,
+    provider: Provider,
 ) -> String {
     let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
-    let token = g.mint(session_id, pane_id, principal);
+    let token = g.mint(session_id, pane_id, principal, cred_mode, provider);
     save_to_disk(&g);
     token
 }
@@ -535,11 +605,22 @@ pub fn revoke_all() {
 /// socket path rides `K2_HOOK_SOCK` so `notify.sh` / the `k2` CLI can prefer
 /// the UDS. Both the canonical `K2_*` and the legacy `K2SO_*` aliases are
 /// emitted (0.40 rebrand dual-emit; `COMPAT-58` for the eventual cleanup).
+///
+/// **B3a credential staging:** when `cred_mode == ApiKey` AND a non-blank
+/// per-workspace `api_key` is supplied, the provider's key env var
+/// (`provider.key_env_var()`, e.g. `ANTHROPIC_API_KEY`) is appended so the
+/// in-cell Claude Code authenticates without interactive login. The key is
+/// PER-WORKSPACE (right key → right cell) and is NEVER logged. Absent key,
+/// blank key, or `Subscription` mode (deferred stub) → NOTHING is staged, so
+/// no empty `ANTHROPIC_API_KEY=` ever appears (default-OFF parity preserved).
 pub fn scoped_cell_env_for_token(
     sock_path: &str,
     scoped_token: &str,
     pane_id: &str,
     hook_port: u16,
+    cred_mode: CredMode,
+    provider: Provider,
+    api_key: Option<&str>,
 ) -> Vec<(String, String)> {
     let mut pairs = vec![
         // Scoped per-cell token (NOT the owner token) behind the same key
@@ -572,6 +653,18 @@ pub fn scoped_cell_env_for_token(
         pairs.push(("K2_PORT".to_string(), hook_port.to_string()));
         pairs.push(("K2SO_PORT".to_string(), hook_port.to_string()));
     }
+    // B3a — stage the PER-WORKSPACE model credential so the in-cell Claude
+    // Code skips interactive auth. Only in ApiKey mode (Subscription is a
+    // deferred no-op stub) and only when a non-blank key was resolved
+    // host-side — never stage an empty `<KEY_ENV>=`. The key is NEVER logged.
+    if matches!(cred_mode, CredMode::ApiKey) {
+        if let Some(k) = api_key {
+            let k = k.trim();
+            if !k.is_empty() {
+                pairs.push((provider.key_env_var().to_string(), k.to_string()));
+            }
+        }
+    }
     pairs
 }
 
@@ -582,15 +675,24 @@ pub fn scoped_cell_env_for_token(
 ///
 /// The minted token is bound to `(session_id, pane_id, principal)`; the
 /// socket path is the deterministic [`crate::cell_uds::cell_socket_path`].
+///
+/// **B3a:** `cred_mode` + `provider` are resolved HOST-SIDE at the spawn door
+/// (`v2_spawn`) and stamped into the token claim here; the optional
+/// `api_key` (a non-blank PER-WORKSPACE key, microVM cells only) is staged
+/// into the returned env. The key is forwarded ONLY into the (transient) cell
+/// env — it is NEVER persisted in the token record, and NEVER logged.
 pub fn cell_env_pairs(
     session_id: &SessionId,
     pane_id: &str,
     principal: HookPrincipal,
+    cred_mode: CredMode,
+    provider: Provider,
+    api_key: Option<&str>,
 ) -> Option<Vec<(String, String)>> {
     if !scoped_hooks_enabled() {
         return None;
     }
-    let token = mint_session_token(session_id, pane_id, principal);
+    let token = mint_session_token(session_id, pane_id, principal, cred_mode, provider);
     let sock = crate::cell_uds::cell_socket_path(session_id);
     // The daemon's actual loopback hook port — same source the normal-session
     // terminal env reads (`alacritty_backend.rs`). 0 before the hook server
@@ -601,6 +703,9 @@ pub fn cell_env_pairs(
         &token,
         pane_id,
         hook_port,
+        cred_mode,
+        provider,
+        api_key,
     ))
 }
 
@@ -671,7 +776,7 @@ mod tests {
     fn mint_then_validate_accepts_correct_secret() {
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
-        let token = reg.mint(&sid, "pane-1", principal());
+        let token = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
 
         // Format is selector.verifier and the selector is the session id.
         let (sel, secret) = token.split_once('.').expect("token has a dot");
@@ -690,7 +795,7 @@ mod tests {
     fn validate_rejects_tampered_secret() {
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
-        let token = reg.mint(&sid, "pane-1", principal());
+        let token = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
         // Flip the last hex char of the verifier.
         let mut bytes: Vec<char> = token.chars().collect();
         let last = bytes.len() - 1;
@@ -728,7 +833,7 @@ mod tests {
     fn revoke_invalidates_the_session_token() {
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
-        let token = reg.mint(&sid, "pane-1", principal());
+        let token = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
         assert!(reg.validate_hook(&token).is_some(), "valid pre-revoke");
 
         reg.revoke(&sid);
@@ -744,7 +849,7 @@ mod tests {
         // bumped underneath it) without relying on record removal.
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
-        let token = reg.mint(&sid, "pane-1", principal());
+        let token = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
         assert!(reg.validate_hook(&token).is_some());
 
         // Bump the CURRENT epoch but leave the (stale-stamped) record.
@@ -762,8 +867,8 @@ mod tests {
         let mut reg = SessionTokenRegistry::new();
         let a = SessionId::new();
         let b = SessionId::new();
-        let ta = reg.mint(&a, "pane-a", principal());
-        let tb = reg.mint(&b, "pane-b", principal());
+        let ta = reg.mint(&a, "pane-a", principal(), CredMode::ApiKey, Provider::Anthropic);
+        let tb = reg.mint(&b, "pane-b", principal(), CredMode::ApiKey, Provider::Anthropic);
         assert!(reg.validate_hook(&ta).is_some());
         assert!(reg.validate_hook(&tb).is_some());
 
@@ -778,7 +883,7 @@ mod tests {
     fn validate_rejects_expired_token() {
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
-        let token = reg.mint(&sid, "pane-1", principal());
+        let token = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
         // Force the stored record's expiry into the past.
         reg.records
             .get_mut(&sid.to_string())
@@ -838,7 +943,7 @@ mod tests {
         // sub-ms gap between the two `Utc::now()` reads).
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
-        let _ = reg.mint(&sid, "pane-1", principal());
+        let _ = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
         let rec = reg.records.get(&sid.to_string()).expect("record present");
         let span = rec.expires_at - rec.created_at;
         assert!(
@@ -853,7 +958,7 @@ mod tests {
         // 24h backstop keeps a 13h-old token live (≈11h remaining).
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
-        let token = reg.mint(&sid, "pane-1", principal());
+        let token = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
         let rec = reg
             .records
             .get_mut(&sid.to_string())
@@ -895,7 +1000,7 @@ mod tests {
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
         let owner_token = "owner-secret-deadbeef";
-        let scoped = reg.mint(&sid, "pane-1", principal());
+        let scoped = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
 
         assert_ne!(scoped, owner_token, "scoped != owner by construction");
 
@@ -921,7 +1026,7 @@ mod tests {
         std::env::remove_var("K2_HOOK_SCOPED");
         let sid = SessionId::new();
         assert!(
-            cell_env_pairs(&sid, &sid.to_string(), principal()).is_none(),
+            cell_env_pairs(&sid, &sid.to_string(), principal(), CredMode::ApiKey, Provider::Anthropic, None).is_none(),
             "flag OFF (default) MUST inject no scoped env (zero behavior change)",
         );
     }
@@ -933,7 +1038,15 @@ mod tests {
         // and the per-cell socket rides K2_HOOK_SOCK, with K2SO_* aliases.
         let sid = SessionId::new();
         let pane = sid.to_string();
-        let pairs = scoped_cell_env_for_token("/run/cells/x.sock", "sid.secretverifier", &pane, 54321);
+        let pairs = scoped_cell_env_for_token(
+            "/run/cells/x.sock",
+            "sid.secretverifier",
+            &pane,
+            54321,
+            CredMode::ApiKey,
+            Provider::Anthropic,
+            None,
+        );
         let map: std::collections::HashMap<_, _> = pairs.into_iter().collect();
 
         // The scoped token REPLACES the owner token behind the same key.
@@ -960,12 +1073,139 @@ mod tests {
         // (guest-unreachable) TCP fallback is absent.
         let sid = SessionId::new();
         let pane = sid.to_string();
-        let pairs = scoped_cell_env_for_token("/run/cells/x.sock", "sid.secret", &pane, 0);
+        let pairs = scoped_cell_env_for_token(
+            "/run/cells/x.sock",
+            "sid.secret",
+            &pane,
+            0,
+            CredMode::ApiKey,
+            Provider::Anthropic,
+            None,
+        );
         let map: std::collections::HashMap<_, _> = pairs.into_iter().collect();
         assert!(map.get("K2_PORT").is_none(), "K2_PORT must be omitted at port 0");
         assert!(map.get("K2SO_PORT").is_none(), "K2SO_PORT must be omitted at port 0");
         // The token/sock/pane env is still fully present.
         assert_eq!(map.get("K2_HOOK_SOCK").map(String::as_str), Some("/run/cells/x.sock"));
+    }
+
+    // ── B3a: per-workspace API-key env staging + cred_mode claim ─────
+
+    /// ApiKey mode + a non-blank key → `ANTHROPIC_API_KEY=<key>` is staged.
+    #[test]
+    fn scoped_cell_env_stages_api_key_in_apikey_mode() {
+        let sid = SessionId::new();
+        let pane = sid.to_string();
+        let pairs = scoped_cell_env_for_token(
+            "/run/cells/x.sock",
+            "sid.secret",
+            &pane,
+            0,
+            CredMode::ApiKey,
+            Provider::Anthropic,
+            Some("sk-ant-workspace-key"),
+        );
+        let map: std::collections::HashMap<_, _> = pairs.into_iter().collect();
+        assert_eq!(
+            map.get("ANTHROPIC_API_KEY").map(String::as_str),
+            Some("sk-ant-workspace-key"),
+            "the per-workspace key must be staged behind the provider's env var",
+        );
+    }
+
+    /// No key resolved (None) → NO `ANTHROPIC_API_KEY` at all (default-OFF
+    /// parity: a workspace without a configured key stages nothing).
+    #[test]
+    fn scoped_cell_env_omits_api_key_when_none() {
+        let sid = SessionId::new();
+        let pane = sid.to_string();
+        let pairs = scoped_cell_env_for_token(
+            "/run/cells/x.sock",
+            "sid.secret",
+            &pane,
+            0,
+            CredMode::ApiKey,
+            Provider::Anthropic,
+            None,
+        );
+        let map: std::collections::HashMap<_, _> = pairs.into_iter().collect();
+        assert!(
+            map.get("ANTHROPIC_API_KEY").is_none(),
+            "no key configured → ANTHROPIC_API_KEY must be absent (no empty assignment)",
+        );
+    }
+
+    /// A blank/whitespace key → NOTHING staged (never an empty
+    /// `ANTHROPIC_API_KEY=`).
+    #[test]
+    fn scoped_cell_env_omits_blank_api_key() {
+        let sid = SessionId::new();
+        let pane = sid.to_string();
+        let pairs = scoped_cell_env_for_token(
+            "/run/cells/x.sock",
+            "sid.secret",
+            &pane,
+            0,
+            CredMode::ApiKey,
+            Provider::Anthropic,
+            Some("   "),
+        );
+        let map: std::collections::HashMap<_, _> = pairs.into_iter().collect();
+        assert!(
+            map.get("ANTHROPIC_API_KEY").is_none(),
+            "a blank key must never produce an empty ANTHROPIC_API_KEY=",
+        );
+    }
+
+    /// Subscription mode is a DEFERRED no-op stub here: even WITH a key it
+    /// stages nothing (B3b will bind-mount the on-device creds instead).
+    #[test]
+    fn scoped_cell_env_omits_api_key_in_subscription_mode() {
+        let sid = SessionId::new();
+        let pane = sid.to_string();
+        let pairs = scoped_cell_env_for_token(
+            "/run/cells/x.sock",
+            "sid.secret",
+            &pane,
+            0,
+            CredMode::Subscription,
+            Provider::Anthropic,
+            Some("sk-ant-should-be-ignored"),
+        );
+        let map: std::collections::HashMap<_, _> = pairs.into_iter().collect();
+        assert!(
+            map.get("ANTHROPIC_API_KEY").is_none(),
+            "Subscription mode is a no-op stub in B3a — no key staged",
+        );
+    }
+
+    /// cred_mode + provider are stamped at mint and surfaced by validate_hook
+    /// (read from the VALIDATED token, never a body). Round-trips for both
+    /// modes; the key itself is NEVER part of the token record.
+    #[test]
+    fn cred_mode_and_provider_round_trip_through_validate() {
+        let mut reg = SessionTokenRegistry::new();
+
+        let sid_a = SessionId::new();
+        let tok_a = reg.mint(&sid_a, "pane-a", principal(), CredMode::ApiKey, Provider::Anthropic);
+        let v_a = reg.validate_hook(&tok_a).expect("apikey token validates");
+        assert_eq!(v_a.cred_mode, CredMode::ApiKey);
+        assert_eq!(v_a.provider, Provider::Anthropic);
+
+        let sid_b = SessionId::new();
+        let tok_b = reg.mint(&sid_b, "pane-b", principal(), CredMode::Subscription, Provider::Anthropic);
+        let v_b = reg.validate_hook(&tok_b).expect("subscription token validates");
+        assert_eq!(v_b.cred_mode, CredMode::Subscription);
+        assert_eq!(v_b.provider, Provider::Anthropic);
+    }
+
+    /// CredMode defaults to ApiKey (serde default) so a pre-B3a persisted
+    /// record loads on the primary path, and Provider maps to its env var.
+    #[test]
+    fn cred_mode_default_is_apikey_and_provider_env_var() {
+        assert_eq!(CredMode::default(), CredMode::ApiKey);
+        assert_eq!(Provider::default(), Provider::Anthropic);
+        assert_eq!(Provider::Anthropic.key_env_var(), "ANTHROPIC_API_KEY");
     }
 
     // ── Phase 1: dual-accept + pane scoping (flag-ON semantics) ──────
@@ -979,7 +1219,7 @@ mod tests {
         let owner = "owner-fixed-hex-token";
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
-        let scoped = reg.mint(&sid, &sid.to_string(), principal());
+        let scoped = reg.mint(&sid, &sid.to_string(), principal(), CredMode::ApiKey, Provider::Anthropic);
 
         // Owner token always passes its own constant-time compare.
         assert!(crate::routes::http::ct_eq_token(owner, owner));
@@ -994,7 +1234,7 @@ mod tests {
         // it was minted for; the same token with a different paneId → false.
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
-        let token = reg.mint(&sid, "pane-A", principal());
+        let token = reg.mint(&sid, "pane-A", principal(), CredMode::ApiKey, Provider::Anthropic);
 
         assert!(
             reg.scoped_hook_authorizes_pane(&token, "pane-A"),
@@ -1025,7 +1265,7 @@ mod tests {
         // FIRST, so an unknown token on a denied path is still None.)
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
-        let _scoped = reg.mint(&sid, "pane-1", principal());
+        let _scoped = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
         // require_hook consults the PROCESS registry, not `reg`, so we
         // assert the capability gate via is_agent_verb (the first guard).
         assert!(!is_agent_verb("/cli/users/set-role"));

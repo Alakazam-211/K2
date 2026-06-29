@@ -438,6 +438,33 @@ impl Default for VmCaps {
 /// Worker program name placed at `argv[0]` of a [`WorkerInvocation`].
 pub const WORKER_PROGRAM: &str = "k2-vmm-worker";
 
+/// Guest-side path of the per-cell hook socket (Sandbox B2). The HOST cell
+/// socket lives under `/run/k2/cells/<sid>.sock` and is unreachable from inside
+/// the guest; the worker bridges it in as a vsock→UDS forwarder listening at
+/// THIS in-guest path, so the guest's `K2_HOOK_SOCK` must point here (never at
+/// the host path). The in-guest `k2`/`claude` connect here; the forwarder
+/// relays each connection over `HOOK_PORT` (vsock 1024) to the host socket.
+pub const GUEST_HOOK_SOCK: &str = "/run/k2-hook.sock";
+
+/// Rewrite the guest-bound `K2_HOOK_SOCK` to the in-guest forwarder path
+/// ([`GUEST_HOOK_SOCK`]), leaving every other variable — crucially
+/// `K2_HOOK_TOKEN` (the per-cell scoped bearer) — untouched.
+///
+/// **Why (Sandbox B2):** `DaemonPtySession::spawn` stages `K2_HOOK_SOCK` as the
+/// HOST cell-socket path (so the bare-PTY hook path works). For a microVM cell
+/// that host path does not exist inside the guest, so the guest copy must be
+/// rewritten to the forwarder path before it is handed to the worker via the
+/// `K2_GUEST_ENV_FD` pipe. Pure + total (a no-op when the key is absent) so it
+/// is unit-testable on macOS without the libkrun path, and it touches ONLY the
+/// guest env — the host `worker_env` is assembled separately and is unaffected.
+fn rewrite_guest_hook_sock(guest_env: &mut [(String, String)]) {
+    for (k, v) in guest_env.iter_mut() {
+        if k == "K2_HOOK_SOCK" {
+            *v = GUEST_HOOK_SOCK.to_string();
+        }
+    }
+}
+
 /// A serialized invocation of the future (P2b, Linux) `k2-vmm-worker`.
 ///
 /// Pure data — no exec. Produced by [`build_worker_invocation`].
@@ -519,13 +546,17 @@ pub fn build_worker_invocation(req: &SpawnRequest, caps: &VmCaps) -> WorkerInvoc
         }
     }
 
-    // Guest env: forward everything the caller staged (including the guest-side
-    // K2_HOOK_SOCK). Sorted so the output is deterministic for tests.
+    // Guest env: forward everything the caller staged, but REWRITE
+    // `K2_HOOK_SOCK` to the in-guest forwarder path (Sandbox B2) — the staged
+    // value is the HOST cell-socket path, unreachable from inside the guest.
+    // `K2_HOOK_TOKEN` (the per-cell scoped bearer) is left untouched. Sorted so
+    // the output is deterministic for tests.
     let mut guest_env: Vec<(String, String)> = req
         .env
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    rewrite_guest_hook_sock(&mut guest_env);
     guest_env.sort();
 
     WorkerInvocation { argv, guest_env }
@@ -764,11 +795,13 @@ mod tests {
         assert_eq!(inv.argv.get(sep + 3).map(String::as_str), Some("-c"));
         assert_eq!(inv.argv.get(sep + 4).map(String::as_str), Some("claude"));
 
-        // Guest env carries the guest hook sock + sentinel var, sorted.
+        // Guest env carries the REWRITTEN guest hook sock (Sandbox B2 — the
+        // staged host path is replaced with the in-guest forwarder path) +
+        // the sentinel var, sorted.
         assert!(inv
             .guest_env
             .iter()
-            .any(|(k, v)| k == "K2_HOOK_SOCK" && v == "/guest/run/hook.sock"));
+            .any(|(k, v)| k == "K2_HOOK_SOCK" && v == GUEST_HOOK_SOCK));
         assert!(inv
             .guest_env
             .iter()
@@ -776,6 +809,62 @@ mod tests {
         let mut sorted = inv.guest_env.clone();
         sorted.sort();
         assert_eq!(inv.guest_env, sorted, "guest_env must be deterministically sorted");
+    }
+
+    /// Sandbox B2: the guest `K2_HOOK_SOCK` is rewritten to the in-guest
+    /// forwarder path, `K2_HOOK_TOKEN` is preserved verbatim, and the source
+    /// `req.env` (the host-side staged env) is left unaffected.
+    #[test]
+    fn build_worker_invocation_rewrites_guest_hook_sock_keeps_token() {
+        let mut env = HashMap::new();
+        // Staged with the HOST cell-socket path (what DaemonPtySession sets).
+        env.insert(
+            "K2_HOOK_SOCK".to_string(),
+            "/run/k2/cells/abc.sock".to_string(),
+        );
+        env.insert("K2_HOOK_TOKEN".to_string(), "scoped-bearer-xyz".to_string());
+        let req = SpawnRequest {
+            shell: None,
+            cwd: None,
+            env,
+            window_size: win(80, 24),
+            drain_on_exit: false,
+            cell_socket: Some(PathBuf::from("/run/k2/cells/abc.sock")),
+            workspace_root: None,
+            tool_roots: vec![],
+            session_id: None,
+        };
+
+        let inv = build_worker_invocation(&req, &VmCaps::default());
+
+        // Guest hook sock REWRITTEN to the in-guest forwarder path.
+        assert_eq!(
+            inv.guest_env
+                .iter()
+                .find(|(k, _)| k == "K2_HOOK_SOCK")
+                .map(|(_, v)| v.as_str()),
+            Some(GUEST_HOOK_SOCK),
+            "guest K2_HOOK_SOCK must be the in-guest forwarder path"
+        );
+        assert_eq!(GUEST_HOOK_SOCK, "/run/k2-hook.sock");
+
+        // Token carried through UNCHANGED.
+        assert_eq!(
+            inv.guest_env
+                .iter()
+                .find(|(k, _)| k == "K2_HOOK_TOKEN")
+                .map(|(_, v)| v.as_str()),
+            Some("scoped-bearer-xyz"),
+            "the per-cell scoped bearer must be preserved verbatim"
+        );
+
+        // Host-side source env is untouched (rewrite operates on the guest
+        // copy only) — the original host cell-socket path still stands.
+        assert_eq!(
+            req.env.get("K2_HOOK_SOCK").map(String::as_str),
+            Some("/run/k2/cells/abc.sock"),
+            "the source req.env (host side) must be unaffected by the rewrite"
+        );
     }
 
     #[test]

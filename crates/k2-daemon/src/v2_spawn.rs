@@ -441,7 +441,14 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
     if crate::session_token::scoped_hooks_enabled() {
         match crate::cell_uds::bind_cell_socket(&session_id_for_response) {
             Ok(listener) => {
-                crate::cell_server::serve_cell(session_id_for_response, listener);
+                // Sandbox B2 (option a): per-session tier gating. A
+                // microVM-backed cell additionally allows the dedicated
+                // `k2cell` peer uid (the VMM is the host-socket peer after
+                // priv-drop); a bare-PTY cell does not → the allowed peer-uid
+                // set stays `{daemon uid}`, default-OFF parity.
+                let microvm_backed =
+                    matches!(session.sandbox, k2_core::terminal::SandboxSpec::Microvm);
+                crate::cell_server::serve_cell(session_id_for_response, listener, microvm_backed);
                 log_debug!(
                     "[hook-scoped] bound + serving per-cell UDS for session={}",
                     session_id_for_response

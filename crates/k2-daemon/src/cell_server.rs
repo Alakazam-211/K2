@@ -64,12 +64,32 @@ mod unix_impl {
     /// footgun before the flag is ever flipped on.)
     const MAX_BODY: usize = 4 * 1024 * 1024;
 
+    /// The set of peer uids allowed to drive this cell's socket.
+    ///
+    /// **The peer-cred belt, widened by exactly ONE known uid for sandboxed
+    /// cells (Sandbox B2).** For a bare-PTY (non-microVM) cell the connecting
+    /// child runs as the daemon's own user, so the only allowed peer is
+    /// `self_uid` and `cell_uid` is `None` → byte-identical to pre-B2. For a
+    /// microVM-backed cell the in-guest `k2`/`claude` reaches us over the
+    /// VMM's vsock→UDS forwarder, so the peer on the host socket is the VMM
+    /// process AFTER it has dropped to the dedicated `k2cell` uid — that ONE
+    /// uid (`cell_uid`) is additionally allowed. Never an arbitrary uid: the
+    /// set is `{self_uid}` ∪ (`{cell_uid}` iff the cell is microVM-backed and
+    /// the dedicated user resolves). The structural defenses (scoped token
+    /// bound to this `session_id`, the capability allowlist, the Finding-1
+    /// operand pin) remain THE gate; this stays a belt.
+    fn peer_uid_allowed(peer_uid: u32, self_uid: u32, cell_uid: Option<u32>) -> bool {
+        peer_uid == self_uid || cell_uid == Some(peer_uid)
+    }
+
     /// Pure authorization decision for an accepted per-cell connection.
     ///
     /// `validated` is the output of `require_hook(bearer, "/hook/complete")`
     /// for this connection (so the capability allowlist already fired).
     /// Authorized iff, on top of that:
-    ///   1. the peer uid equals the daemon's own uid (peer-cred belt), AND
+    ///   1. the peer uid is in the allowed set (peer-cred belt —
+    ///      `{self_uid}` ∪ optional sandbox `cell_uid`; see
+    ///      [`peer_uid_allowed`]), AND
     ///   2. the token is bound to THIS cell's `session_id` (structural —
     ///      can't replay cell A's token on cell B's socket), AND
     ///   3. the request `paneId` is non-empty and equals the token's pane.
@@ -79,8 +99,9 @@ mod unix_impl {
         req_pane: &str,
         peer_uid: u32,
         self_uid: u32,
+        cell_uid: Option<u32>,
     ) -> bool {
-        if peer_uid != self_uid {
+        if !peer_uid_allowed(peer_uid, self_uid, cell_uid) {
             return false;
         }
         match validated {
@@ -98,7 +119,8 @@ mod unix_impl {
     /// `validated` is `require_hook(bearer, path)` for this connection — so
     /// the capability allowlist (msg / inbox / review / awareness-publish)
     /// already fired. Authorized iff, on top of that:
-    ///   1. the peer uid equals the daemon's own uid (peer-cred belt), AND
+    ///   1. the peer uid is in the allowed set (peer-cred belt — `{self_uid}`
+    ///      ∪ optional sandbox `cell_uid`; see [`peer_uid_allowed`]), AND
     ///   2. the token is bound to THIS cell's `session_id` (structural — a
     ///      token minted for cell A can't be replayed on cell B's socket).
     ///
@@ -110,8 +132,9 @@ mod unix_impl {
         this_session_id: &str,
         peer_uid: u32,
         self_uid: u32,
+        cell_uid: Option<u32>,
     ) -> bool {
-        if peer_uid != self_uid {
+        if !peer_uid_allowed(peer_uid, self_uid, cell_uid) {
             return false;
         }
         match validated {
@@ -212,11 +235,58 @@ mod unix_impl {
         unsafe { libc::geteuid() }
     }
 
+    /// Resolve the dedicated sandbox-cell uid (`k2cell`) the SAME way the
+    /// microVM worker's preflight does: an explicit `K2_SANDBOX_CELL_UID`
+    /// override first, then a passwd lookup by name. Returns `None` when
+    /// neither resolves — on a host without the dedicated user (macOS dev,
+    /// any flag-off box) the microVM peer-uid widening is simply a no-op and
+    /// the allowed set stays `{daemon uid}`.
+    ///
+    /// **Fail-closed:** a uid of 0 is REFUSED (mirrors the worker, which
+    /// refuses to "drop" to root) — we never widen the belt to root.
+    fn resolve_sandbox_cell_uid() -> Option<u32> {
+        if let Ok(s) = std::env::var("K2_SANDBOX_CELL_UID") {
+            return match s.trim().parse::<u32>() {
+                Ok(0) | Err(_) => None,
+                Ok(uid) => Some(uid),
+            };
+        }
+        // getpwnam("k2cell"): the daemon runs OUTSIDE any jail, so NSS is
+        // available here (unlike the worker's post-pivot drop, which is why it
+        // caches numerically). One lookup at serve time per microVM cell.
+        let name = std::ffi::CString::new("k2cell").ok()?;
+        // SAFETY: `name` is a valid NUL-terminated C string kept alive across
+        // the call; `getpwnam` returns a pointer into a static buffer (or
+        // null). We read `pw_uid` out immediately and copy it.
+        let pw = unsafe { libc::getpwnam(name.as_ptr()) };
+        if pw.is_null() {
+            return None;
+        }
+        let uid = unsafe { (*pw).pw_uid };
+        if uid == 0 {
+            None
+        } else {
+            Some(uid)
+        }
+    }
+
     /// Spawn the per-cell accept loop on the tokio runtime. `listener` was
     /// bound synchronously by `handle_v2_spawn` (so a bind failure surfaces
     /// there, before this is called). The loop runs until the socket file is
     /// removed (cell teardown) or the listener errors.
-    pub fn serve_cell(session_id: SessionId, listener: std::os::unix::net::UnixListener) {
+    ///
+    /// `microvm_backed` is per-session tier gating (Sandbox B2, option **a**):
+    /// the caller (`handle_v2_spawn`) knows this cell's backend
+    /// (`DaemonPtySession.sandbox`) at spawn time, so we resolve the allowed
+    /// peer-uid set ONCE here and capture it into the accept loop. A microVM
+    /// cell additionally allows the dedicated `k2cell` uid (the VMM is the
+    /// host-socket peer after priv-drop); a bare-PTY cell does not → the set
+    /// is `{daemon uid}`, byte-identical to pre-B2.
+    pub fn serve_cell(
+        session_id: SessionId,
+        listener: std::os::unix::net::UnixListener,
+        microvm_backed: bool,
+    ) {
         if let Err(e) = listener.set_nonblocking(true) {
             log_debug!("[hook-scoped] WARN set_nonblocking cell sock {session_id}: {e}");
             return;
@@ -231,6 +301,13 @@ mod unix_impl {
         let sid_str = session_id.to_string();
         let sock_path = crate::cell_uds::cell_socket_path(&session_id);
         let uid = self_uid();
+        // Per-session widening: ONLY a microVM-backed cell adds the dedicated
+        // sandbox uid; otherwise `None` keeps the belt at `{daemon uid}`.
+        let cell_uid = if microvm_backed {
+            resolve_sandbox_cell_uid()
+        } else {
+            None
+        };
 
         tokio::spawn(async move {
             // Periodic liveness check: when the cell tears down, the
@@ -245,7 +322,7 @@ mod unix_impl {
                             Ok((stream, _addr)) => {
                                 let sid = sid_str.clone();
                                 tokio::spawn(async move {
-                                    handle_conn(stream, sid, uid).await;
+                                    handle_conn(stream, sid, uid, cell_uid).await;
                                 });
                             }
                             Err(e) => {
@@ -341,7 +418,12 @@ mod unix_impl {
     /// (no stream-generalization; we touch `dispatcher.rs` zero times for the
     /// verb channel). Anything not on the scoped allowlist → 404 sentinel so
     /// the CLI falls back to loopback-TCP.
-    async fn handle_conn(mut stream: UnixStream, this_session_id: String, self_uid: u32) {
+    async fn handle_conn(
+        mut stream: UnixStream,
+        this_session_id: String,
+        self_uid: u32,
+        cell_uid: Option<u32>,
+    ) {
         // peer-cred belt (best-effort): read the connecting uid via the raw
         // fd, then carry on with the SAME tokio stream (no consume/rebuild).
         let peer_uid = peer_uid_of(&stream).unwrap_or(u32::MAX);
@@ -404,9 +486,16 @@ mod unix_impl {
         // Authorization: `/hook/complete` additionally pins the paneId; every
         // other verb is a normal CLI call gated on uid + session binding.
         let authorized = if path == "/hook/complete" {
-            cell_request_authorized(validated.as_ref(), &this_session_id, &req_pane, peer_uid, self_uid)
+            cell_request_authorized(
+                validated.as_ref(),
+                &this_session_id,
+                &req_pane,
+                peer_uid,
+                self_uid,
+                cell_uid,
+            )
         } else {
-            cell_verb_authorized(validated.as_ref(), &this_session_id, peer_uid, self_uid)
+            cell_verb_authorized(validated.as_ref(), &this_session_id, peer_uid, self_uid, cell_uid)
         };
         if !authorized {
             write_response(
@@ -577,7 +666,8 @@ mod unix_impl {
         #[test]
         fn authorized_when_uid_session_and_pane_all_match() {
             let v = vh("sid-1", "pane-1");
-            assert!(cell_request_authorized(Some(&v), "sid-1", "pane-1", 501, 501));
+            // Non-microVM cell → no extra cell uid; only the daemon uid passes.
+            assert!(cell_request_authorized(Some(&v), "sid-1", "pane-1", 501, 501, None));
         }
 
         #[test]
@@ -585,26 +675,56 @@ mod unix_impl {
             // peer-cred belt: a different uid is refused even with a valid
             // token bound to this cell + pane.
             let v = vh("sid-1", "pane-1");
-            assert!(!cell_request_authorized(Some(&v), "sid-1", "pane-1", 999, 501));
+            assert!(!cell_request_authorized(Some(&v), "sid-1", "pane-1", 999, 501, None));
         }
 
         #[test]
         fn rejected_when_token_bound_to_a_different_cell() {
             // Structural binding: cell B's token presented on cell A's socket.
             let v = vh("sid-OTHER", "pane-1");
-            assert!(!cell_request_authorized(Some(&v), "sid-1", "pane-1", 501, 501));
+            assert!(!cell_request_authorized(Some(&v), "sid-1", "pane-1", 501, 501, None));
         }
 
         #[test]
         fn rejected_on_pane_mismatch_or_empty() {
             let v = vh("sid-1", "pane-1");
-            assert!(!cell_request_authorized(Some(&v), "sid-1", "pane-2", 501, 501));
-            assert!(!cell_request_authorized(Some(&v), "sid-1", "", 501, 501));
+            assert!(!cell_request_authorized(Some(&v), "sid-1", "pane-2", 501, 501, None));
+            assert!(!cell_request_authorized(Some(&v), "sid-1", "", 501, 501, None));
         }
 
         #[test]
         fn rejected_when_token_did_not_validate() {
-            assert!(!cell_request_authorized(None, "sid-1", "pane-1", 501, 501));
+            assert!(!cell_request_authorized(None, "sid-1", "pane-1", 501, 501, None));
+        }
+
+        // ── Sandbox B2: per-session peer-uid widening (option a) ─────────────
+
+        #[test]
+        fn peer_uid_allowed_is_daemon_only_without_cell_uid() {
+            // Non-microVM cell (`cell_uid == None`): ONLY the daemon uid —
+            // byte-identical to pre-B2.
+            assert!(peer_uid_allowed(501, 501, None));
+            assert!(!peer_uid_allowed(999, 501, None));
+        }
+
+        #[test]
+        fn peer_uid_allowed_widens_to_exactly_the_cell_uid_for_microvm() {
+            // microVM cell: the daemon uid AND the one dedicated `k2cell` uid
+            // (999) pass; an unrelated uid (1000) still does NOT.
+            assert!(peer_uid_allowed(501, 501, Some(999)));
+            assert!(peer_uid_allowed(999, 501, Some(999)));
+            assert!(!peer_uid_allowed(1000, 501, Some(999)));
+        }
+
+        #[test]
+        fn microvm_cell_authorizes_the_dropped_vmm_uid() {
+            // The VMM (post priv-drop to k2cell=999) is the host-socket peer
+            // for an in-guest verb; with a valid token bound to this cell it is
+            // authorized when the cell is microVM-backed (cell_uid = Some(999)).
+            let v = vh("sid-1", "pane-1");
+            assert!(cell_request_authorized(Some(&v), "sid-1", "pane-1", 999, 501, Some(999)));
+            // …but only with the EXACT cell uid — a stray uid is still refused.
+            assert!(!cell_request_authorized(Some(&v), "sid-1", "pane-1", 1000, 501, Some(999)));
         }
 
         // ── generic-verb authorization (uid + session binding, no pane) ──
@@ -613,25 +733,38 @@ mod unix_impl {
         fn verb_authorized_on_uid_and_session_match() {
             let v = vh("sid-1", "pane-1");
             // No paneId needed for a generic verb; only uid + session bind.
-            assert!(cell_verb_authorized(Some(&v), "sid-1", 501, 501));
+            assert!(cell_verb_authorized(Some(&v), "sid-1", 501, 501, None));
         }
 
         #[test]
         fn verb_rejected_on_wrong_uid() {
             let v = vh("sid-1", "pane-1");
-            assert!(!cell_verb_authorized(Some(&v), "sid-1", 999, 501));
+            assert!(!cell_verb_authorized(Some(&v), "sid-1", 999, 501, None));
         }
 
         #[test]
         fn verb_rejected_on_wrong_session() {
             // A token minted for a different cell, replayed on this socket.
             let v = vh("sid-OTHER", "pane-1");
-            assert!(!cell_verb_authorized(Some(&v), "sid-1", 501, 501));
+            assert!(!cell_verb_authorized(Some(&v), "sid-1", 501, 501, None));
         }
 
         #[test]
         fn verb_rejected_when_token_did_not_validate() {
-            assert!(!cell_verb_authorized(None, "sid-1", 501, 501));
+            assert!(!cell_verb_authorized(None, "sid-1", 501, 501, None));
+        }
+
+        #[test]
+        fn verb_authorized_for_dropped_vmm_uid_on_microvm_cell() {
+            // Generic verb (msg/inbox/…) from the in-guest CLI: peer is the VMM
+            // dropped to k2cell=999; the cell uid widening lets it through with
+            // a session-bound token, but a stray uid is still refused.
+            let v = vh("sid-1", "pane-1");
+            assert!(cell_verb_authorized(Some(&v), "sid-1", 999, 501, Some(999)));
+            assert!(!cell_verb_authorized(Some(&v), "sid-1", 1000, 501, Some(999)));
+            // And the session binding still gates even the cell uid.
+            let other = vh("sid-OTHER", "pane-1");
+            assert!(!cell_verb_authorized(Some(&other), "sid-1", 999, 501, Some(999)));
         }
 
         // ── awareness body re-stamp (identity from principal, not body) ──

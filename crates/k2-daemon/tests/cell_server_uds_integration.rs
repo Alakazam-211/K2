@@ -65,7 +65,8 @@ fn mint_bind_serve(pane: &str) -> (SessionId, String, PathBuf) {
     let token = session_token::mint_session_token(&sid, pane, principal());
     let listener = cell_uds::bind_cell_socket(&sid).expect("bind cell socket");
     let sock = cell_uds::cell_socket_path(&sid);
-    cell_server::serve_cell(sid, listener);
+    // Non-microVM cell (no peer-uid widening) — exercises the same-uid belt.
+    cell_server::serve_cell(sid, listener, false);
     (sid, token, sock)
 }
 
@@ -118,7 +119,8 @@ fn mint_bind_serve_in_ws(pane: &str, ws_uuid: &str) -> (SessionId, String, PathB
     let token = session_token::mint_session_token(&sid, pane, principal_in_ws(ws_uuid));
     let listener = cell_uds::bind_cell_socket(&sid).expect("bind cell socket");
     let sock = cell_uds::cell_socket_path(&sid);
-    cell_server::serve_cell(sid, listener);
+    // Non-microVM cell (no peer-uid widening) — exercises the same-uid belt.
+    cell_server::serve_cell(sid, listener, false);
     (sid, token, sock)
 }
 

@@ -77,10 +77,12 @@ mod worker {
     // as `/`. Asserted-by-construction; verify on-box if libkrun bumps it.
     const KRUN_FS_ROOT_TAG: &str = "/dev/root";
 
-    // libkrun log enum ints — PINNED from libkrun.h. Verify on-box.
-    const KRUN_LOG_TARGET_DEFAULT: u32 = 0;
+    // libkrun log enum ints — PINNED from /opt/libkrun/include/libkrun.h
+    // (verified on-box 2026-06-29): target_fd is a SIGNED int and DEFAULT = -1
+    // (stderr); INFO = 3; STYLE_ALWAYS = 1 (2 is NEVER).
+    const KRUN_LOG_TARGET_DEFAULT: i32 = -1;
     const KRUN_LOG_LEVEL_INFO: u32 = 3;
-    const KRUN_LOG_STYLE_ALWAYS: u32 = 2;
+    const KRUN_LOG_STYLE_ALWAYS: u32 = 1;
 
     // Hook channel vsock port (cell UDS forwarder). Channel itself is DEFERRED
     // to M1+ (needs an in-guest userland forwarder); we only wire the port.
@@ -105,9 +107,15 @@ mod worker {
     // Hand-rolled, ONLY in this worker. Signatures PINNED from libkrun.h
     // (>= 1.18 — needs the virtiofs3 read-only flag). All return i32; <0 = fail.
     // Verify each signature against the installed header on-box before trust.
-    #[allow(non_snake_case)]
+    //
+    // `#[link(name = "krun")]` ties the link directly to this extern block so
+    // rustc positions `-lkrun` AFTER the referencing objects (past the default
+    // `--as-needed`, which silently drops a build-script `-l` placed too early).
+    // build.rs still supplies the search path + rpath (linux + feature only).
+    #[link(name = "krun")]
+    #[allow(non_snake_case, dead_code)]
     extern "C" {
-        fn krun_init_log(target: u32, level: u32, style: u32, options: u32) -> i32;
+        fn krun_init_log(target_fd: i32, level: u32, style: u32, options: u32) -> i32;
         fn krun_create_ctx() -> i32;
         fn krun_set_vm_config(ctx_id: u32, num_vcpus: u8, ram_mib: u32) -> i32;
         fn krun_add_virtiofs3(

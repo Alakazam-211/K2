@@ -26,8 +26,11 @@ fn main() {
     // LIBKRUN_LIBDIR constant in src/bin/k2-vmm-worker.rs.
     const LIBKRUN_LIBDIR: &str = "/usr/local/lib64";
 
+    // Search path so the linker finds libkrun.so. The actual `-lkrun` is
+    // emitted by the `#[link(name = "krun")]` attribute on the worker's extern
+    // block (which positions it correctly past the default `--as-needed`); a
+    // build-script `rustc-link-lib` lands too early and gets silently dropped.
     println!("cargo:rustc-link-search=native={LIBKRUN_LIBDIR}");
-    println!("cargo:rustc-link-lib=dylib=krun");
     // rpath so the worker resolves libkrun.so at runtime without env wiring.
     println!("cargo:rustc-link-arg=-Wl,-rpath,{LIBKRUN_LIBDIR}");
 }

@@ -16,6 +16,15 @@ path = "src/lib.rs"
 # Enable in src-tauri's [dev-dependencies] entry; NOT a runtime feature.
 test-util = []
 
+# Session-sandboxing P2a/P2b — gates the libkrun microVM backend body in
+# `terminal::sandbox`. Default OFF: the seam scaffolding (SandboxBackend,
+# SpawnRequest, SandboxSpec::Microvm, FailClosed, build_worker_invocation)
+# always compiles, but the real microVM `spawn` path (P2b, Linux-only) is only
+# reachable on a Linux build with this feature ON. On a default build,
+# `SandboxSpec::Microvm` resolves to the fail-closed backend — never a silent
+# Passthrough downgrade.
+sandbox-microvm = []
+
 # k2so-core's OWN integration tests (under `crates/k2so-core/tests/`) are
 # separate compilation units that don't see `cfg(test)` of the lib —
 # they only see features. Pull the lib back in as a dev-dependency with

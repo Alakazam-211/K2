@@ -41,7 +41,6 @@ use alacritty_terminal::event_loop::{EventLoop, Notifier};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Config as TermConfig;
-use alacritty_terminal::tty::Shell;
 use alacritty_terminal::Term;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
@@ -49,7 +48,9 @@ use tokio::sync::broadcast;
 use crate::log_debug;
 use crate::session::SessionId;
 use crate::terminal::login_path;
-use crate::terminal::sandbox::{SandboxSpec, SpawnRequest, SpawnedChild};
+use crate::terminal::sandbox::{
+    SandboxSpec, ShellSpec, SpawnRequest, SpawnedChild,
+};
 
 /// Scrollback depth (in rows) retained by the daemon-side Term.
 /// Matches `session_stream_pty.rs`'s value so v2 sessions inherit
@@ -363,10 +364,14 @@ impl DaemonPtySession {
         // session below — used by smart-launch's "is there a live
         // PTY for this --resume <session_id>?" check.
         let spawn_args = cfg.args.clone();
-        let shell = cfg
-            .program
-            .as_ref()
-            .map(|prog| Shell::new(prog.clone(), spawn_args.clone()));
+        // Sandbox P2a: carry program+args as a readable `ShellSpec` (the seam's
+        // `build_worker_invocation` needs to read them back; alacritty's `Shell`
+        // fields are pub(crate)). `Passthrough::spawn` maps this back into
+        // `tty::Shell::new` at the PTY open, so behavior is byte-identical.
+        let shell = cfg.program.as_ref().map(|prog| ShellSpec {
+            program: prog.clone(),
+            args: spawn_args.clone(),
+        });
 
         // Build the env we hand to alacritty's tty::new. Without an
         // explicit TERM/COLORTERM, child processes inherit alacritty's
@@ -423,6 +428,8 @@ impl DaemonPtySession {
             drain_on_exit: cfg.drain_on_exit,
             cell_socket: cfg.env.get("K2_HOOK_SOCK").map(PathBuf::from),
             workspace_root: cfg.cwd.clone(),
+            // P2a: ro tool mounts are a P2b concern; none plumbed here yet.
+            tool_roots: Vec::new(),
         };
         let backend = cfg.sandbox.backend();
 

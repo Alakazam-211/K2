@@ -48,7 +48,9 @@ pub use daemon_pty::{
 };
 
 pub use sandbox::{
-    Passthrough, SandboxBackend, SandboxSpec, SpawnRequest, SpawnedChild,
+    build_worker_invocation, FailClosed, Microvm, Passthrough, SandboxBackend,
+    SandboxSpec, ShellSpec, SpawnRequest, SpawnedChild, VmCaps,
+    WorkerInvocation, WORKER_PROGRAM,
 };
 
 /// Re-export alacritty's `Dimensions` trait so daemon + Tauri

@@ -597,17 +597,51 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
     }
 }
 
-/// Sandbox P1 selection. Maps a requested-bool to a [`SandboxSpec`]. In P1
-/// this is ALWAYS [`SandboxSpec::Passthrough`] (accept-and-mark — no real
-/// isolation yet); the real microVM backend lands in P2 behind a default-OFF
-/// `K2_SANDBOX` env and is unconstructible here. We never reject `--sandbox`.
+/// Runtime check for the `K2_SANDBOX` opt-in flag. Only compiled on a Linux
+/// build with the microVM backend feature — on every other build the sandbox is
+/// unavailable regardless of the env, so the check would be dead code.
+#[cfg(all(target_os = "linux", feature = "sandbox-microvm"))]
+fn k2_sandbox_enabled() -> bool {
+    std::env::var("K2_SANDBOX")
+        .map(|v| {
+            let v = v.trim();
+            !v.is_empty()
+                && v != "0"
+                && !v.eq_ignore_ascii_case("false")
+                && !v.eq_ignore_ascii_case("off")
+        })
+        .unwrap_or(false)
+}
+
+/// Sandbox selection (P2a). Maps a requested-bool to a [`SandboxSpec`].
+///
+/// The microVM jail only materializes on a Linux build compiled with
+/// `sandbox-microvm` AND with the `K2_SANDBOX` env flag enabled at runtime. On
+/// EVERY other build/platform — including this macOS build — a request degrades
+/// to [`SandboxSpec::Passthrough`] (NO isolation) and logs the downgrade.
+///
+/// We degrade LOUD, never SILENT, and never reject `--sandbox`: the response
+/// echoes the resolved backend name truthfully ("passthrough" when degraded),
+/// so the absence of isolation is visible rather than a fail. We never resolve
+/// to `Microvm` on a build that can't deliver it.
 fn resolve_sandbox(requested: bool) -> k2_core::terminal::SandboxSpec {
-    if requested {
-        log_debug!(
-            "[sandbox] requested=true resolved=passthrough (P1: no isolation yet)"
-        );
+    use k2_core::terminal::SandboxSpec;
+
+    if !requested {
+        return SandboxSpec::Passthrough;
     }
-    k2_core::terminal::SandboxSpec::Passthrough
+
+    #[cfg(all(target_os = "linux", feature = "sandbox-microvm"))]
+    {
+        if k2_sandbox_enabled() {
+            return SandboxSpec::Microvm;
+        }
+    }
+
+    log_debug!(
+        "[sandbox] requested but unavailable on this build/platform → passthrough, no isolation"
+    );
+    SandboxSpec::Passthrough
 }
 
 /// Pure decision for whether `/cli/sessions/v2/close` is allowed to
@@ -820,10 +854,29 @@ mod tests {
     #[test]
     fn resolve_sandbox_is_always_passthrough() {
         use k2_core::terminal::SandboxSpec;
-        // Accept-and-mark: requested or not, P1 resolves to Passthrough.
+        // Accept-and-mark: requested or not, this build resolves to Passthrough.
         assert_eq!(resolve_sandbox(false), SandboxSpec::Passthrough);
         assert_eq!(resolve_sandbox(true), SandboxSpec::Passthrough);
         assert_eq!(resolve_sandbox(true).backend().name(), "passthrough");
+    }
+
+    // ── Sandbox P2a — fail-closed selection matrix ───────────────────────
+
+    #[test]
+    fn resolve_sandbox_never_microvm_on_this_build() {
+        use k2_core::terminal::SandboxSpec;
+        // P2a fail-safe: on this (macOS, feature-off) build a sandbox request
+        // MUST degrade to Passthrough and MUST NEVER resolve to Microvm — we
+        // never report isolation we can't deliver. The truthful echo is
+        // therefore "passthrough", never "microvm".
+        let resolved = resolve_sandbox(true);
+        assert_ne!(
+            resolved,
+            SandboxSpec::Microvm,
+            "macOS/feature-off must NEVER resolve a spawn to Microvm"
+        );
+        assert_eq!(resolved, SandboxSpec::Passthrough);
+        assert_ne!(resolved.backend().name(), "microvm");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

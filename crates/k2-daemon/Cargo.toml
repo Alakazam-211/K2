@@ -17,6 +17,13 @@ path = "src/main.rs"
 name = "k2_daemon"
 path = "src/lib.rs"
 
+[features]
+# Session-sandboxing P2a/P2b — forwards k2-core's microVM backend feature so
+# `resolve_sandbox`'s Linux-only `SandboxSpec::Microvm` arm can compile. Default
+# OFF: on a default build, `resolve_sandbox` always degrades a sandbox request
+# to Passthrough (logged, no isolation).
+sandbox-microvm = ["k2-core/sandbox-microvm"]
+
 [dependencies]
 # Session Stream + Awareness Bus primitives are now always compiled
 # into k2so-core (the `session_stream` feature flag was retired in

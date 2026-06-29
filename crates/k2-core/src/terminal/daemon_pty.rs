@@ -216,6 +216,13 @@ pub struct DaemonPtySession {
     pub session_id: SessionId,
     pub cwd: Option<PathBuf>,
     pub program: Option<String>,
+    /// A2/B2: the backend tier this session was spawned under (SSOT).
+    /// Read by the daemon's reuse-echo (to report the resolved backend
+    /// name on a reattach) and by the ChildExit cleanup gate (to run the
+    /// authoritative microVM cgroup/NEWROOT teardown only for microVM
+    /// cells). `SandboxSpec` is `Copy`; for the default [`SandboxSpec::Passthrough`]
+    /// path this field is inert — zero behavior change.
+    pub sandbox: SandboxSpec,
     /// PID of the direct child process this PTY spawned. Captured at
     /// spawn time via alacritty's `Pty::child().id()` before the Pty
     /// is consumed by `EventLoop::new`. `None` only if capture is
@@ -430,9 +437,11 @@ impl DaemonPtySession {
             workspace_root: cfg.cwd.clone(),
             // P2a: ro tool mounts are a P2b concern; none plumbed here yet.
             tool_roots: Vec::new(),
-            // M3: let the microVM backend generate a unique per-cell id (the
-            // daemon may plumb its own session id here later).
-            session_id: None,
+            // A2/B1: thread the daemon's own session id so the microVM backend
+            // names the cell deterministically (UUID = `[A-Za-z0-9-]`, satisfies
+            // the worker's `[A-Za-z0-9._-]+` path-component gate). Passthrough
+            // ignores this field, so the default path stays byte-identical.
+            session_id: Some(cfg.session_id.to_string()),
         };
         let backend = cfg.sandbox.backend();
 
@@ -522,6 +531,7 @@ impl DaemonPtySession {
             session_id: cfg.session_id,
             cwd: cfg.cwd,
             program: cfg.program,
+            sandbox: cfg.sandbox,
             pid: child_pid,
             killed: std::sync::atomic::AtomicBool::new(false),
             args: spawn_args,

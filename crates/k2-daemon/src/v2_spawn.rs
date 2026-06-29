@@ -192,13 +192,21 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
             "[v2-perf] side=daemon SPAWN_SUMMARY session={} agent={} reused=true total_ms={:.3} lookup_ms={:.3} dpty_spawn_ms=0",
             session_id_str, req.agent_name, total_ms, lookup_ms
         );
-        let out = serde_json::json!({
+        let mut out = serde_json::json!({
             "sessionId": session_id_str,
             "agentName": req.agent_name,
             "cols": cols,
             "rows": rows,
             "reused": true,
         });
+        // A2/B3a — reuse-echo. Mirror the cold-spawn accept-and-mark rule:
+        // echo the EXISTING session's resolved backend name only when the
+        // caller asked for a sandbox. Absent ⇒ no field ⇒ response
+        // byte-identical to pre-seam (default-path regression guard).
+        if req.sandbox.is_some() {
+            out["sandbox"] =
+                serde_json::Value::String(existing.sandbox.backend().name().to_string());
+        }
         return HandlerResult {
             status: "200 OK",
             body: out.to_string(),
@@ -770,6 +778,16 @@ pub fn spawn_child_exit_observer(agent_name: String, session: std::sync::Arc<Dae
     // revoke the scoped token + remove the per-cell socket even if every
     // strong ref is gone by the time ChildExit lands (#58 Phase 1).
     let session_id = session.session_id;
+    // A2/B3b: capture the backend tier too, so the authoritative microVM
+    // cgroup/NEWROOT cleanup can run on ChildExit even if every strong ref
+    // is gone by then. Inert for the default Passthrough path. The variable
+    // is only read inside the linux+feature-gated cleanup block below, so
+    // it's unused on every other build — silence the warning there.
+    #[cfg_attr(
+        not(all(target_os = "linux", feature = "sandbox-microvm")),
+        allow(unused_variables)
+    )]
+    let is_microvm = matches!(session.sandbox, k2_core::terminal::SandboxSpec::Microvm);
     let weak = std::sync::Arc::downgrade(&session);
     drop(session);
     tokio::spawn(async move {
@@ -818,6 +836,26 @@ pub fn spawn_child_exit_observer(agent_name: String, session: std::sync::Arc<Dae
                             "[hook-scoped] revoked scoped token + removed UDS for session={}",
                             session_id
                         );
+                    }
+
+                    // A2/B3b — authoritative microVM teardown. The daemon is
+                    // the authority; the worker only cleans up best-effort as a
+                    // backstop. `cgroup.kill` (cgroup v2, kernel ≥5.14) atomically
+                    // kills any survivors = real crash-containment. Gated on
+                    // `is_microvm` so normal (Passthrough) sessions never stat
+                    // these paths on teardown (default-OFF parity). Best-effort /
+                    // ENOENT-tolerant throughout.
+                    #[cfg(all(target_os = "linux", feature = "sandbox-microvm"))]
+                    if is_microvm {
+                        let sid = session_id.to_string();
+                        let _ = std::fs::write(
+                            format!("/sys/fs/cgroup/k2cells/{sid}/cgroup.kill"),
+                            "1",
+                        );
+                        let _ = std::fs::remove_dir_all(format!(
+                            "/sys/fs/cgroup/k2cells/{sid}"
+                        ));
+                        let _ = std::fs::remove_dir(format!("/run/k2cell-{sid}"));
                     }
                     return;
                 }

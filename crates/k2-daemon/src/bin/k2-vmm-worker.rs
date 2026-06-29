@@ -178,6 +178,18 @@ mod worker {
         /// Guest env (NUL-delimited `KEY=VAL` arriving on fd 3). NEVER argv /
         /// environ (would leak same-uid via /proc/<pid>/{cmdline,environ}).
         guest_env: Vec<(String, String)>,
+
+        /// Numeric drop identity, resolved by NAME in `preflight` (as root,
+        /// BEFORE any unshare/mount/pivot_root — `/etc/passwd` + libnss are
+        /// reachable there). The §B-step-11 drop uses ONLY these cached numbers;
+        /// it must NOT call NSS (`getpwnam`/`getgrnam`) after `pivot_root`, where
+        /// the jailed root has no `/etc/passwd`/`/etc/group`/nsswitch/libnss.
+        /// `0` is a sentinel "unresolved" and is rejected fail-closed at drop.
+        unpriv_uid: u32,
+        unpriv_gid: u32,
+        /// The `kvm` group's gid — supplementary group kept at drop so 0660
+        /// `/dev/kvm` stays openable.
+        kvm_gid: u32,
     }
 
     /// One catch-all error. We never branch on the variant — every error is
@@ -208,8 +220,9 @@ mod worker {
         // Guest env rides fd 3 (NUL-delimited). Absent fd 3 ⇒ empty (hand tests).
         cfg.guest_env = read_guest_env_fd3();
 
-        // Preflight hard gates (each fail → nonzero exit, host untouched).
-        if let Err(e) = preflight(&cfg) {
+        // Preflight hard gates (each fail → nonzero exit, host untouched). Takes
+        // `&mut` to cache the numeric drop ids while NSS is still reachable.
+        if let Err(e) = preflight(&mut cfg) {
             eprintln!("k2-vmm-worker: preflight failed: {e}");
             std::process::exit(3);
         }
@@ -409,7 +422,11 @@ mod worker {
     }
 
     // ── A2 — preflight hard gates ───────────────────────────────────────────
-    fn preflight(cfg: &WorkerConfig) -> Result<(), WErr> {
+    // Takes `&mut` so it can CACHE the numeric drop ids it resolves by name
+    // here (as root, pre-pivot). The jail's §B-step-11 drop reads ONLY those
+    // cached numbers — never NSS — because after `pivot_root` the jailed root
+    // has no passwd/group/nsswitch/libnss and a name lookup would ENOENT.
+    fn preflight(cfg: &mut WorkerConfig) -> Result<(), WErr> {
         // /dev/kvm openable RW. CLOSE immediately — a dirfd/devfd kept open
         // across pivot_root would be a re-traversal handle to the host (§F).
         {
@@ -440,6 +457,8 @@ mod worker {
         }
 
         // Dedicated unprivileged uid/gid exist + uid is a member of `kvm`.
+        // Resolve by NAME here (root, pre-pivot) and CACHE the numeric ids on
+        // cfg — the drop step uses ONLY the cached numbers (no post-pivot NSS).
         let user = User::from_name(UNPRIV_USER)
             .map_err(|e| format!("lookup user {UNPRIV_USER}: {e}"))?
             .ok_or_else(|| format!("dedicated user {UNPRIV_USER} does not exist"))?;
@@ -450,6 +469,16 @@ mod worker {
         if !in_kvm {
             return fail(format!("{UNPRIV_USER} is not a member of the {KVM_GROUP} group"));
         }
+        // Fail-closed: the drop identity must NOT be root (a misconfigured
+        // k2cell=uid 0 would make the "drop" a no-op, leaving an escape on the
+        // owner). Reject before we ever build the jail.
+        if user.uid.as_raw() == 0 || user.gid.as_raw() == 0 {
+            return fail(format!("{UNPRIV_USER} resolves to uid/gid 0 — refusing to run"));
+        }
+        // Cache the NUMERIC ids for the post-pivot drop (no NSS in the jail).
+        cfg.unpriv_uid = user.uid.as_raw();
+        cfg.unpriv_gid = user.gid.as_raw();
+        cfg.kvm_gid = kvm.gid.as_raw();
 
         // libkrun >= 1.18: there is no runtime version symbol; the link itself
         // pins it (build.rs links the installed lib, and add_virtiofs3's
@@ -727,10 +756,10 @@ mod worker {
         //     setuid. setgroups MUST be exactly [kvm] (NOT [] — that loses the
         //     kvm group → 0660 /dev/kvm becomes unopenable). Drop BEFORE seccomp
         //     so seccomp can forbid the setuid family entirely.
-        drop_privileges()?;
+        drop_privileges(cfg)?;
 
         // 12. VERIFY the drop actually took (fail-closed if anything is wrong).
-        verify_drop()?;
+        verify_drop(cfg)?;
 
         // 13. seccomp-bpf LAST. Defense-in-depth; steps 1-9 are the primary
         //     boundary. See build_and_apply_seccomp for the allowlist + the
@@ -741,13 +770,19 @@ mod worker {
     }
 
     /// §B.11 — drop all capabilities then the uid/gid, in the safe order.
-    fn drop_privileges() -> Result<(), WErr> {
-        let user = User::from_name(UNPRIV_USER)
-            .map_err(|e| format!("lookup {UNPRIV_USER}: {e}"))?
-            .ok_or_else(|| format!("{UNPRIV_USER} missing at drop"))?;
-        let kvm = Group::from_name(KVM_GROUP)
-            .map_err(|e| format!("lookup {KVM_GROUP}: {e}"))?
-            .ok_or_else(|| format!("{KVM_GROUP} missing at drop"))?;
+    ///
+    /// Uses ONLY the numeric ids cached on `cfg` by `preflight` (resolved by
+    /// name while still root + pre-pivot). It deliberately does NOT call NSS
+    /// (`getpwnam`/`getgrnam`) — after `pivot_root` the jailed root has no
+    /// passwd/group/nsswitch/libnss, so a name lookup here would ENOENT and the
+    /// drop would fail (the exact bug this guards against).
+    fn drop_privileges(cfg: &WorkerConfig) -> Result<(), WErr> {
+        // Belt-and-braces: `preflight` already resolved these (and rejected
+        // uid/gid 0); refuse the sentinel "unresolved" 0 so a bypassed preflight
+        // can never silently make the drop a no-op.
+        if cfg.unpriv_uid == 0 || cfg.unpriv_gid == 0 || cfg.kvm_gid == 0 {
+            return fail("drop ids unresolved (preflight not run) — refusing to drop");
+        }
 
         // Drop every capability from the bounding set so nothing can be
         // re-acquired across the (already NNP-blocked) exec surface.
@@ -765,25 +800,23 @@ mod worker {
             }
         }
 
-        // Supplementary groups = EXACTLY [kvm].
-        setgroups(&[Gid::from_raw(kvm.gid.as_raw())])
+        // Supplementary groups = EXACTLY [kvm] (cached numeric gid).
+        setgroups(&[Gid::from_raw(cfg.kvm_gid)])
             .map_err(|e| format!("setgroups([kvm]): {e}"))?;
         // gid before uid (you can't setgid after dropping uid).
-        setgid(Gid::from_raw(user.gid.as_raw()))
+        setgid(Gid::from_raw(cfg.unpriv_gid))
             .map_err(|e| format!("setgid: {e}"))?;
-        setuid(Uid::from_raw(user.uid.as_raw()))
+        setuid(Uid::from_raw(cfg.unpriv_uid))
             .map_err(|e| format!("setuid: {e}"))?;
         Ok(())
     }
 
     /// §B.12 — assert the drop took: real+effective uid/gid are the unpriv id,
-    /// and a re-elevation attempt fails with EPERM.
-    fn verify_drop() -> Result<(), WErr> {
-        let user = User::from_name(UNPRIV_USER)
-            .map_err(|e| format!("verify lookup {UNPRIV_USER}: {e}"))?
-            .ok_or_else(|| format!("{UNPRIV_USER} missing at verify"))?;
-        let uid = user.uid.as_raw();
-        let gid = user.gid.as_raw();
+    /// and a re-elevation attempt fails with EPERM. Compares against the cached
+    /// numeric ids (no post-pivot NSS).
+    fn verify_drop(cfg: &WorkerConfig) -> Result<(), WErr> {
+        let uid = cfg.unpriv_uid;
+        let gid = cfg.unpriv_gid;
 
         let ruid = unsafe { libc::getuid() };
         let euid = unsafe { libc::geteuid() };

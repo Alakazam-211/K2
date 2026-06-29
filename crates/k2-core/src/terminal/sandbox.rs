@@ -192,26 +192,179 @@ impl SandboxBackend for Passthrough {
     }
 }
 
-/// libkrun microVM backend — placeholder (P2a).
+/// libkrun microVM backend (P2b).
 ///
-/// The real implementation (the `k2-vmm-worker` invoker + host jail) is P2b,
-/// Linux-only, and intentionally NOT built in this slice. This struct exists so
-/// the `Microvm` spec has a non-Passthrough thing to resolve to on a future
-/// Linux build; its `spawn()` errors until P2b lands. P2b's real `spawn()` will
-/// build its worker argv via [`build_worker_invocation`].
+/// On a Linux build with `sandbox-microvm`, `spawn()` is the bridge from this
+/// seam to the privilege-dropped `k2-vmm-worker` jail: it serializes the
+/// [`SpawnRequest`] into the worker's argv via [`build_worker_invocation`],
+/// hands the guest env to the worker on **fd 3** (so it never lands in the
+/// worker's argv/environ — see [`spawn_microvm`]), and opens the PTY on the
+/// worker process. On every other build the struct still exists (so the spec's
+/// `Microvm` arm has a non-`Passthrough` thing to resolve to) but `spawn()`
+/// fails closed — it NEVER runs the workload on the host.
 pub struct Microvm;
 
 impl SandboxBackend for Microvm {
-    fn spawn(&self, _req: SpawnRequest) -> io::Result<SpawnedChild> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "microvm backend not yet implemented (P2b)",
-        ))
+    fn spawn(&self, req: SpawnRequest) -> io::Result<SpawnedChild> {
+        #[cfg(all(target_os = "linux", feature = "sandbox-microvm"))]
+        {
+            spawn_microvm(req)
+        }
+        #[cfg(not(all(target_os = "linux", feature = "sandbox-microvm")))]
+        {
+            // Fail-closed placeholder: this arm is only ever reached on a build
+            // that selected `Microvm` but cannot deliver it. Drop `req` and Err
+            // — never a host spawn.
+            let _ = req;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "microvm backend not yet implemented (P2b)",
+            ))
+        }
     }
 
     fn name(&self) -> &'static str {
         "microvm"
     }
+}
+
+/// Open a PTY on the `k2-vmm-worker` jail for `req` (Linux + `sandbox-microvm`).
+///
+/// This is the "Wiring" section of the P2b spec — the bridge from the seam to
+/// the worker. It does NOT itself build the jail or touch libkrun (that is all
+/// inside the worker process, post privilege-drop); it only:
+///
+/// 1. serializes `req` → worker argv via [`build_worker_invocation`];
+/// 2. resolves the `k2-vmm-worker` binary path (alongside this daemon binary);
+/// 3. writes the guest env (NUL-delimited `KEY=VAL`) to a pipe whose read end
+///    the worker inherits as **fd 3** — keeping it out of the worker's
+///    argv/environ so a same-uid `/proc/<pid>/{cmdline,environ}` read can't
+///    leak it;
+/// 4. opens the PTY on the worker via alacritty's `tty::new`, exactly like
+///    [`Passthrough`], and captures the worker's direct child pid.
+///
+/// Every failure path Errs (fail-closed) — there is no host-exec fallback.
+#[cfg(all(target_os = "linux", feature = "sandbox-microvm"))]
+fn spawn_microvm(req: SpawnRequest) -> io::Result<SpawnedChild> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::io::RawFd;
+
+    // 1. Serialize the request into the worker's argv + guest env.
+    let caps = VmCaps::default();
+    let invocation = build_worker_invocation(&req, &caps);
+    // argv[0] is the worker program NAME (for the worker's own logging); the
+    // real exec path is resolved below. The flags + `-- <program> <args>` are
+    // argv[1..].
+    let worker_args: Vec<String> = invocation.argv[1..].to_vec();
+
+    // 2. Resolve the worker binary: it ships next to the daemon binary.
+    let worker_path = resolve_worker_path()?;
+
+    // 3. Guest env → fd 3. Build the NUL-delimited blob, create a pipe, and
+    //    place the read end at fd 3 (clearing CLOEXEC so it survives the
+    //    worker's exec). A short blob fits the pipe buffer (64 KiB); for safety
+    //    against a huge env we write from a detached thread so we never deadlock
+    //    on a full pipe before the worker drains it.
+    let mut blob: Vec<u8> = Vec::new();
+    for (k, v) in &invocation.guest_env {
+        blob.extend_from_slice(k.as_bytes());
+        blob.push(b'=');
+        blob.extend_from_slice(v.as_bytes());
+        blob.push(0);
+    }
+
+    // pipe2(0): neither end CLOEXEC initially; we set CLOEXEC on the write end
+    // (parent-only) and explicitly place the read end at fd 3 for the child.
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: fds is a valid 2-int buffer.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), 0) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let (read_fd, write_fd): (RawFd, RawFd) = (fds[0], fds[1]);
+
+    // Move the read end to fd 3 so the worker finds the guest env there. If a
+    // pre-existing fd 3 is open we dup2 over it (the worker owns fd 3 by
+    // contract); the original read_fd is then closed.
+    const GUEST_ENV_FD: RawFd = 3;
+    if read_fd != GUEST_ENV_FD {
+        // SAFETY: dup2 over fd 3 per the worker contract.
+        if unsafe { libc::dup2(read_fd, GUEST_ENV_FD) } < 0 {
+            let e = io::Error::last_os_error();
+            unsafe {
+                libc::close(read_fd);
+                libc::close(write_fd);
+            }
+            return Err(e);
+        }
+        // SAFETY: read_fd no longer needed after the dup2.
+        unsafe { libc::close(read_fd) };
+    }
+    // Clear CLOEXEC on fd 3 so it survives the worker's exec; set CLOEXEC on the
+    // parent-side write end so it does NOT leak into the worker.
+    // SAFETY: both fds are ours.
+    unsafe {
+        libc::fcntl(GUEST_ENV_FD, libc::F_SETFD, 0);
+        libc::fcntl(write_fd, libc::F_SETFD, libc::FD_CLOEXEC);
+    }
+
+    // Writer thread: push the blob then close, so the worker's fd-3 read sees
+    // EOF. Detached — it finishes on its own and never blocks spawn.
+    // SAFETY: we own write_fd; the thread takes sole ownership.
+    let mut writer = unsafe { std::fs::File::from_raw_fd(write_fd) };
+    std::thread::spawn(move || {
+        use std::io::Write;
+        let _ = writer.write_all(&blob);
+        let _ = writer.flush();
+        drop(writer); // closes write_fd → fd-3 reader sees EOF
+    });
+
+    // 4. Open the PTY on the worker process. Same shape as Passthrough — the
+    //    child the daemon supervises IS the worker (which then clones the jailed
+    //    VMM internally). The worker inherits fd 3 (the guest env) across exec.
+    let shell = Shell::new(worker_path, worker_args);
+    let pty_options = TtyOptions {
+        shell: Some(shell),
+        working_directory: None, // the worker sets the guest cwd, not the host
+        drain_on_exit: req.drain_on_exit,
+        env: HashMap::new(), // guest env rides fd 3, NOT the worker's environ
+        #[cfg(target_os = "windows")]
+        escape_args: false,
+    };
+    let pty = tty::new(&pty_options, req.window_size, 0).map_err(|e| {
+        // Best-effort: drop our fd-3 handle on failure so we don't leak it.
+        // SAFETY: GUEST_ENV_FD is ours; ignore close errors.
+        unsafe { let _ = std::fs::File::from_raw_fd(GUEST_ENV_FD); }
+        e
+    })?;
+
+    // Parent no longer needs fd 3 — the worker has its own inherited copy.
+    // SAFETY: take ownership back and drop to close.
+    unsafe {
+        let _ = std::fs::File::from_raw_fd(GUEST_ENV_FD);
+    }
+
+    let child_pid: Option<i32> = Some(pty.child().id() as i32);
+    Ok(SpawnedChild { pty, child_pid })
+}
+
+/// Resolve the `k2-vmm-worker` binary path: it is installed next to the running
+/// daemon binary (same `target/` dir in dev, same install dir in prod). Errs if
+/// the daemon's own path can't be determined or the worker is absent — never a
+/// silent fallback.
+#[cfg(all(target_os = "linux", feature = "sandbox-microvm"))]
+fn resolve_worker_path() -> io::Result<String> {
+    let exe = std::env::current_exe()?;
+    let dir = exe.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "daemon exe has no parent dir")
+    })?;
+    let worker = dir.join(WORKER_PROGRAM);
+    if !worker.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{WORKER_PROGRAM} not found next to daemon at {}", worker.display()),
+        ));
+    }
+    Ok(worker.to_string_lossy().into_owned())
 }
 
 /// Fail-closed backend.

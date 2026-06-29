@@ -9,6 +9,15 @@ description = "K2 persistent-agent daemon: launchd-managed device-local process 
 name = "k2-daemon"
 path = "src/main.rs"
 
+# Sandbox P2b — the privilege-dropped libkrun VMM jail. The real body is
+# linux+sandbox-microvm only and links libkrun (see build.rs); on every other
+# build it is the stub `main` that exits 1. `required-features` keeps it out of
+# a default `cargo build` entirely (it's only ever built with the feature on).
+[[bin]]
+name = "k2-vmm-worker"
+path = "src/bin/k2-vmm-worker.rs"
+required-features = ["sandbox-microvm"]
+
 # Thin library surface so integration tests (crates/k2so-daemon/tests/*)
 # can reach modules like `sessions_ws` directly. The daemon has always
 # been a binary — this lib entry just re-exports the internal modules
@@ -19,10 +28,12 @@ path = "src/lib.rs"
 
 [features]
 # Session-sandboxing P2a/P2b — forwards k2-core's microVM backend feature so
-# `resolve_sandbox`'s Linux-only `SandboxSpec::Microvm` arm can compile. Default
-# OFF: on a default build, `resolve_sandbox` always degrades a sandbox request
-# to Passthrough (logged, no isolation).
-sandbox-microvm = ["k2-core/sandbox-microvm"]
+# `resolve_sandbox`'s Linux-only `SandboxSpec::Microvm` arm can compile, and
+# pulls in the worker-only deps (`nix`, `seccompiler`) that build the host jail.
+# Default OFF: on a default build, `resolve_sandbox` always degrades a sandbox
+# request to Passthrough (logged, no isolation) and the worker is not built.
+# `dep:` keeps the optional deps from auto-creating implicit features.
+sandbox-microvm = ["k2-core/sandbox-microvm", "dep:nix", "dep:seccompiler"]
 
 [dependencies]
 # Session Stream + Awareness Bus primitives are now always compiled
@@ -129,6 +140,22 @@ base64 = "0.22"
 # signing keys ever live in the daemon — verify only.
 sha2 = "0.10"
 minisign-verify = "0.2"
+
+# Sandbox P2b worker — Linux-only deps for the host jail. Both are OPTIONAL and
+# pulled in ONLY by the `sandbox-microvm` feature (via `dep:`), so a default or
+# macOS build never compiles them. `nix` gives us the namespace / mount /
+# pivot_root / cred-drop / signal syscalls; `seccompiler` builds + applies the
+# seccomp-bpf allowlist. `libc` (prctl/pipe2/ioctl/FFI) is already a base dep.
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.29", default-features = false, features = [
+    "sched",
+    "mount",
+    "fs",
+    "user",
+    "process",
+    "signal",
+], optional = true }
+seccompiler = { version = "0.4", optional = true }
 
 [dev-dependencies]
 # Enable k2so-core's `test-util` feature for integration tests that

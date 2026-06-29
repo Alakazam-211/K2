@@ -57,7 +57,7 @@ mod worker {
     use nix::sys::signal::{self, Signal};
     use nix::sys::wait::{waitpid, WaitStatus};
     use nix::unistd::{
-        chdir, pivot_root, setgid, setgroups, setuid, Gid, Group, Pid, Uid, User,
+        chdir, chown, pivot_root, setgid, setgroups, setuid, Gid, Group, Pid, Uid, User,
     };
 
     // ── Pinned constants ────────────────────────────────────────────────────
@@ -208,6 +208,19 @@ mod worker {
     static BOOTED: AtomicBool = AtomicBool::new(false);
 
     pub fn main() {
+        // Belt-and-braces for libkrun's runtime dlopen of libkrunfw: ensure the
+        // libkrun libdir is on the dlopen search path. The rpath baked into the
+        // worker (build.rs) already points here, and §B step 7b binds the .so
+        // into the jail at this same path; this set_var covers the dlopen search
+        // regardless. Done at the very top while still single-threaded.
+        std::env::set_var("LD_LIBRARY_PATH", LIBKRUN_LIBDIR);
+
+        // Deterministic umask so the structural jail dirs we create are 0755
+        // (traversable by the dropped cell uid via other-x) regardless of the
+        // umask we inherited from launch. Inherited across clone() into the
+        // jailed child. Files keep their own bind-mounted perms.
+        unsafe { libc::umask(0o022) };
+
         // Parse first so a bad invocation never touches the host.
         let args: Vec<String> = std::env::args().skip(1).collect();
         let mut cfg = match parse_args(&args) {
@@ -711,6 +724,15 @@ mod worker {
         )
         .map_err(|e| format!("bind /dev/kvm node: {e}"))?;
 
+        // 7b. libkrunfw: libkrun dlopen()s `libkrunfw.so.5` at VM-start. The
+        //     WORKER's post-pivot `/` is NEWROOT (the guest image is a separate
+        //     mount at NEWROOT/guest), so the firmware lib must be reachable at
+        //     NEWROOT/usr/local/lib64. Bind ONLY the single resolved .so file
+        //     (RO,nosuid,nodev — same posture as the /dev/kvm node bind); never
+        //     the whole libdir. libkrun.so itself is already mmap'd into the
+        //     process pre-jail, so only the dlopen'd libkrunfw needs a path.
+        bind_libkrunfw_into_jail(&newroot)?;
+
         // 8. Cell socket → NEWROOT/cell.sock (M1 binds it; the channel itself is
         //    deferred — the in-guest forwarder + SO_PEERCRED adaptation land
         //    with the channel milestone, see §F).
@@ -752,6 +774,29 @@ mod worker {
         )
         .map_err(|e| format!("mount /proc: {e}"))?;
 
+        // 10b. Hand the cell's OWN throwaway root to the unprivileged cell uid so
+        //      the about-to-drop VMM can traverse it. The VMM runs as the dropped
+        //      uid and must, from inside this root, dlopen libkrunfw (§7b) and
+        //      serve the guest's virtio-fs (reads/writes of the overlay). The
+        //      tmpfs root is mode 0700 + root-owned, which would leave uid<cell>
+        //      unable to enter `/`. This does NOT widen the boundary: the tmpfs
+        //      lives in a CLONE_NEWNS private mount ns (invisible in the host
+        //      mount ns) and the guest never sees the worker's root (it sees only
+        //      the virtio-fs exports). Only the cell's own dropped uid gains
+        //      access to the cell's own root. Bind-mounted files/dirs (workspace,
+        //      /dev/kvm, libkrunfw, tools) keep THEIR source ownership — we chown
+        //      only the structural tmpfs nodes (root + overlay upper/work, the
+        //      latter so guest writes land).
+        let uid = Some(Uid::from_raw(cfg.unpriv_uid));
+        let gid = Some(Gid::from_raw(cfg.unpriv_gid));
+        chown("/", uid, gid).map_err(|e| format!("chown jail root: {e}"))?;
+        for d in ["/.overlay-upper", "/.overlay-work"] {
+            // Present only when the overlay root was built (always, step 4).
+            if Path::new(d).is_dir() {
+                chown(d, uid, gid).map_err(|e| format!("chown {d}: {e}"))?;
+            }
+        }
+
         // 11. DROP PRIVS, in order. capbset drop → setgroups([kvm]) → setgid →
         //     setuid. setgroups MUST be exactly [kvm] (NOT [] — that loses the
         //     kvm group → 0660 /dev/kvm becomes unopenable). Drop BEFORE seccomp
@@ -766,6 +811,91 @@ mod worker {
         //     LOG-first → KILL on-box derivation note.
         build_and_apply_seccomp()?;
 
+        Ok(())
+    }
+
+    /// §B step 7b — bind the host libkrunfw shared object into the worker jail
+    /// root so libkrun's runtime `dlopen` resolves it post-pivot.
+    ///
+    /// The worker's post-pivot `/` is NEWROOT (NOT the guest image, which is a
+    /// separate mount at NEWROOT/guest), so the firmware lib has to live at
+    /// NEWROOT/usr/local/lib64. We resolve the ONE real `.so` file (following
+    /// the `.so -> .so.N -> .so.N.M.P` symlink chain) and bind it RO,nosuid,nodev
+    /// under each `libkrunfw.so*` name the host libdir exposes — so a dlopen by
+    /// either the base name or the versioned soname (e.g. `libkrunfw.so.5`)
+    /// resolves. Only that single file is exposed; never the whole libdir.
+    fn bind_libkrunfw_into_jail(newroot: &Path) -> Result<(), WErr> {
+        let libdir = Path::new(LIBKRUN_LIBDIR);
+
+        // Resolve the real shared object (follow the symlink chain to the file).
+        let real = std::fs::canonicalize(libdir.join("libkrunfw.so"))
+            .or_else(|_| {
+                // Fall back to canonicalizing any libkrunfw.so* entry.
+                std::fs::read_dir(libdir)
+                    .ok()
+                    .and_then(|rd| {
+                        rd.filter_map(|e| e.ok())
+                            .map(|e| e.path())
+                            .find(|p| {
+                                p.file_name()
+                                    .map(|n| n.to_string_lossy().starts_with("libkrunfw.so"))
+                                    .unwrap_or(false)
+                            })
+                    })
+                    .and_then(|p| std::fs::canonicalize(p).ok())
+                    .ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::NotFound, "no libkrunfw.so*")
+                    })
+            })
+            .map_err(|e| format!("resolve real libkrunfw.so: {e}"))?;
+
+        // Mirror the libdir path inside the jail.
+        let jail_libdir = newroot.join("usr/local/lib64");
+        std::fs::create_dir_all(&jail_libdir)
+            .map_err(|e| format!("mkdir jail libdir: {e}"))?;
+
+        // Collect every libkrunfw.so* name the host libdir exposes (base soname
+        // + versioned soname symlinks + the real file). Bind the real file under
+        // each so a dlopen by any of those names succeeds post-pivot.
+        let mut names: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(libdir).map_err(|e| format!("read libdir: {e}"))? {
+            let entry = entry.map_err(|e| format!("read libdir entry: {e}"))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("libkrunfw.so") {
+                names.push(name);
+            }
+        }
+        if names.is_empty() {
+            return fail("no libkrunfw.so* entries to bind into the jail");
+        }
+
+        for name in names {
+            let target = jail_libdir.join(&name);
+            std::fs::File::create(&target)
+                .map_err(|e| format!("touch jail libkrunfw {name}: {e}"))?;
+            mount(
+                Some(real.as_path()),
+                &target,
+                None::<&str>,
+                MsFlags::MS_BIND,
+                None::<&str>,
+            )
+            .map_err(|e| format!("bind libkrunfw {name}: {e}"))?;
+            // Separate remount to actually apply ro,nosuid,nodev (the initial
+            // bind ignores them) — same RO posture as the tool-root binds.
+            mount(
+                None::<&str>,
+                &target,
+                None::<&str>,
+                MsFlags::MS_BIND
+                    | MsFlags::MS_REMOUNT
+                    | MsFlags::MS_RDONLY
+                    | MsFlags::MS_NOSUID
+                    | MsFlags::MS_NODEV,
+                None::<&str>,
+            )
+            .map_err(|e| format!("remount libkrunfw {name} ro: {e}"))?;
+        }
         Ok(())
     }
 

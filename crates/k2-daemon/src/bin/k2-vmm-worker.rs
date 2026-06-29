@@ -166,6 +166,13 @@ mod worker {
         ram_mib: u32,
         cols: u16,
         rows: u16,
+        /// Per-cell unique id (from `--session-id`, emitted by
+        /// `build_worker_invocation`). Used for BOTH the jail NEWROOT path and
+        /// the cgroup leaf so concurrent cells never collide. MUST be derived in
+        /// the supervisor (real pid), NOT in the cloned child where
+        /// `getpid()==1` (every cell would otherwise share `/run/k2cell-1`).
+        /// Validated to `[A-Za-z0-9._-]+` so it is a safe single path component.
+        session_id: String,
         drain_on_exit: bool,
         workspace_root: Option<PathBuf>,
         cell_socket: Option<PathBuf>,
@@ -233,6 +240,14 @@ mod worker {
         // Guest env rides fd 3 (NUL-delimited). Absent fd 3 ⇒ empty (hand tests).
         cfg.guest_env = read_guest_env_fd3();
 
+        // Session id default (M3): if the caller didn't pass --session-id, derive
+        // it from the SUPERVISOR's REAL pid HERE (pre-clone) — never inside the
+        // cloned child, where getpid()==1 and every cell would collide on
+        // /run/k2cell-1. The daemon normally passes an explicit unique id.
+        if cfg.session_id.is_empty() {
+            cfg.session_id = std::process::id().to_string();
+        }
+
         // Preflight hard gates (each fail → nonzero exit, host untouched). Takes
         // `&mut` to cache the numeric drop ids while NSS is still reachable.
         if let Err(e) = preflight(&mut cfg) {
@@ -268,6 +283,9 @@ mod worker {
         let flags = CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWPID;
         // 1 MiB child stack (the child does mounts + a blocking start_enter).
         let mut stack = vec![0u8; 1024 * 1024];
+        // Capture the session id before the config moves into the child, so the
+        // supervisor can clean up the NEWROOT mountpoint dir after the child exits.
+        let session_id = cfg.session_id.clone();
         let child_cfg = std::mem::take(&mut cfg);
         let child_status_w = status_w;
         let child = {
@@ -305,23 +323,36 @@ mod worker {
             // Reap so it isn't a zombie; the cgroup is released below.
         }
 
-        // Reap the child + propagate its exit status faithfully.
-        let exit_code = match waitpid(child, None) {
-            Ok(WaitStatus::Exited(_, code)) => code,
-            Ok(WaitStatus::Signaled(_, sig, _)) => 128 + sig as i32,
-            Ok(other) => {
-                eprintln!("k2-vmm-worker: unexpected wait status: {other:?}");
-                70
-            }
-            Err(e) => {
-                eprintln!("k2-vmm-worker: waitpid failed: {e}");
-                71
+        // Reap the child + propagate its exit status faithfully. Loop on EINTR
+        // (M2): a forwarded SIGTERM/INT/HUP interrupts waitpid; that must resume
+        // the wait, NOT be mistaken for a wait failure (which would exit the
+        // supervisor and orphan the VMM).
+        let exit_code = loop {
+            match waitpid(child, None) {
+                Ok(WaitStatus::Exited(_, code)) => break code,
+                Ok(WaitStatus::Signaled(_, sig, _)) => break 128 + sig as i32,
+                Ok(other) => {
+                    eprintln!("k2-vmm-worker: unexpected wait status: {other:?}");
+                    break 70;
+                }
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(e) => {
+                    eprintln!("k2-vmm-worker: waitpid failed: {e}");
+                    break 71;
+                }
             }
         };
 
         // Best-effort cgroup release (the daemon also rmdirs on ChildExit; this
         // is belt-and-braces — never fatal).
         let _ = std::fs::remove_dir_all(&cgroup_dir);
+
+        // Best-effort NEWROOT mountpoint cleanup. The child mkdir'd
+        // /run/k2cell-<sid> in the HOST /run (before it mounted its private tmpfs
+        // over it in its own ns), so an empty dir is left behind on the host once
+        // the child's mount ns is gone. `remove_dir` (NOT recursive) only removes
+        // it when empty — safe, and never fatal.
+        let _ = std::fs::remove_dir(format!("/run/k2cell-{session_id}"));
 
         std::process::exit(exit_code);
     }
@@ -377,6 +408,21 @@ mod worker {
                     cfg.rows = val!("--rows")
                         .parse()
                         .map_err(|_| "invalid --rows".to_string())?;
+                }
+                "--session-id" => {
+                    let sid = val!("--session-id");
+                    // Must be a safe single path component (it names NEWROOT +
+                    // the cgroup leaf). Fail-closed on anything else.
+                    if sid.is_empty()
+                        || !sid
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+                        || sid == "."
+                        || sid == ".."
+                    {
+                        return fail("invalid --session-id (need [A-Za-z0-9._-], not . or ..)");
+                    }
+                    cfg.session_id = sid.clone();
                 }
                 "--drain-on-exit" => cfg.drain_on_exit = true,
                 "--workspace-root" => {
@@ -524,12 +570,11 @@ mod worker {
     /// PARENT (so the cloned child inherits). Returns the leaf path; the daemon
     /// also rmdirs it on ChildExit (best-effort here on supervisor exit).
     ///
-    /// Leaf = `cell-<worker-pid>` (unique per worker). The daemon captures the
-    /// worker's child pid and derives the same path for its own rmdir.
-    /// TODO(on-box): consider an explicit `--session-id` so the daemon names
-    /// the cgroup deterministically rather than deriving from pid.
+    /// Leaf = `cell-<session-id>` (unique per cell). The daemon assigns the
+    /// session id, so it can name the same cgroup path for its own rmdir on
+    /// ChildExit deterministically (no pid-derivation needed).
     fn cgroup_create_and_join(cfg: &WorkerConfig) -> Result<PathBuf, WErr> {
-        let leaf = format!("cell-{}", std::process::id());
+        let leaf = format!("cell-{}", cfg.session_id);
         let parent = Path::new("/sys/fs/cgroup/k2cells");
         let dir = parent.join(&leaf);
 
@@ -604,7 +649,10 @@ mod worker {
 
         // 3. Fresh private tmpfs NEWROOT (nosuid,nodev,0700). Its size bounds
         //    the guest's writable disk/inode usage via the overlay upper.
-        let newroot = PathBuf::from(format!("/run/k2cell-{}", std::process::id()));
+        // NEWROOT keyed on the SESSION ID, NOT getpid() — inside CLONE_NEWPID
+        // getpid()==1 for every cell, so a pid-keyed path would collide across
+        // concurrent cells on /run/k2cell-1 (M3).
+        let newroot = PathBuf::from(format!("/run/k2cell-{}", cfg.session_id));
         std::fs::create_dir_all(&newroot)
             .map_err(|e| format!("mkdir NEWROOT: {e}"))?;
         // tmpfs size = guest ram budget (a generous ceiling for scratch);
@@ -1217,15 +1265,32 @@ mod worker {
     }
 
     // ── A6 — signals + cold-boot watchdog ───────────────────────────────────
-    /// Forward SIGTERM/SIGINT to the cloned child so a daemon teardown tears the
-    /// VM down cleanly. `libc::kill` is async-signal-safe.
-    extern "C" fn forward_signal(sig: libc::c_int) {
+    /// Tear the cell down on a termination signal by **SIGKILL-ing the child**
+    /// (the VMM). The child is PID 1 of its own PID namespace (`CLONE_NEWPID`),
+    /// and the kernel makes a namespace's init IGNORE any signal it has no
+    /// handler for — libkrun installs none, so a forwarded SIGTERM/INT/HUP is
+    /// silently dropped (the VM kept running = the lingering worker we saw).
+    /// SIGKILL from this ancestor namespace is the one signal that is always
+    /// honored: it kills the init and, with it, the whole cell namespace. The
+    /// supervisor itself survives (it has its own handler), so it still reaps +
+    /// releases the cgroup + NEWROOT. `libc::kill` is async-signal-safe.
+    extern "C" fn forward_signal(_sig: libc::c_int) {
         let pid = CHILD_PID.load(Ordering::SeqCst);
         if pid > 0 {
-            unsafe { libc::kill(pid, sig) };
+            unsafe { libc::kill(pid, libc::SIGKILL) };
         }
     }
 
+    /// Install termination-signal forwarding. **Includes SIGHUP** (M2): the
+    /// daemon spawns the worker under a PTY (alacritty `tty::new` → setsid +
+    /// controlling tty), so closing the cell's PTY delivers SIGHUP to the
+    /// worker. With no handler, default SIGHUP *killed the supervisor* while the
+    /// VMM child (PID 1 of its own namespace, reparented to host init) kept
+    /// running — the stray `k2-vmm-worker` we had to `pkill -9`. Handling SIGHUP
+    /// makes the supervisor survive the signal, SIGKILL the child to stop the VM
+    /// (see [`forward_signal`] for why SIGKILL specifically), and then reap →
+    /// exit. The status read + waitpid both EINTR-loop, so interrupting them
+    /// with these forwards is safe.
     fn install_signal_forwarding() {
         let handler = signal::SigHandler::Handler(forward_signal);
         let action = signal::SigAction::new(
@@ -1234,6 +1299,7 @@ mod worker {
             signal::SigSet::empty(),
         );
         unsafe {
+            let _ = signal::sigaction(Signal::SIGHUP, &action);
             let _ = signal::sigaction(Signal::SIGTERM, &action);
             let _ = signal::sigaction(Signal::SIGINT, &action);
         }
@@ -1281,13 +1347,27 @@ mod worker {
         Ok(())
     }
 
+    /// Blocking read of the single status byte. Returns `Some(b)` on a byte,
+    /// `None` ONLY on a genuine EOF (child closed the pipe = died in setup) or a
+    /// non-recoverable error. **Loops on `EINTR`** (M2): the SIGTERM/INT/HUP
+    /// forwarding handlers interrupt this `read`; conflating that interruption
+    /// with EOF used to force `booted=false` + disarm the watchdog while the
+    /// child was still alive → `waitpid` blocked forever (the hang).
     fn read_status_byte(fd: RawFd) -> Option<u8> {
-        let mut b = [0u8; 1];
-        let n = unsafe { libc::read(fd, b.as_mut_ptr() as *mut libc::c_void, 1) };
-        if n == 1 {
-            Some(b[0])
-        } else {
-            None // 0 = EOF (child died in setup); <0 = error
+        loop {
+            let mut b = [0u8; 1];
+            let n = unsafe { libc::read(fd, b.as_mut_ptr() as *mut libc::c_void, 1) };
+            if n == 1 {
+                return Some(b[0]);
+            }
+            if n == 0 {
+                return None; // genuine EOF — child closed the pipe (died in setup)
+            }
+            // n < 0: retry on EINTR (a forwarded signal interrupted us), else give up.
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return None;
         }
     }
 }

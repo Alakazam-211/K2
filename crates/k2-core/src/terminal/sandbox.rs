@@ -72,6 +72,13 @@ pub struct SpawnRequest {
     /// **Plumbed in P2a, consumed in P2b** (the microVM backend bind-mounts
     /// each as a ro mount). Empty for [`Passthrough`].
     pub tool_roots: Vec<PathBuf>,
+    /// Per-cell unique id for the microVM worker (M3). Emitted as
+    /// `--session-id` by [`build_worker_invocation`] and used by the worker for
+    /// BOTH the jail NEWROOT path and the cgroup leaf so concurrent cells never
+    /// collide (inside `CLONE_NEWPID` the worker's `getpid()` is always 1).
+    /// `None` ⇒ [`spawn_microvm`] generates a unique one. Unused by
+    /// [`Passthrough`].
+    pub session_id: Option<String>,
 }
 
 /// A spawned child + its captured direct-child PID. Returned from a backend's
@@ -248,6 +255,26 @@ impl SandboxBackend for Microvm {
 fn spawn_microvm(req: SpawnRequest) -> io::Result<SpawnedChild> {
     use std::os::fd::FromRawFd;
     use std::os::unix::io::RawFd;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    // C2: serialize the dup2(fd 3)→fork window. Two concurrent spawns both place
+    // their guest-env pipe at the fixed fd 3 and clear CLOEXEC before forking; a
+    // race would cross-wire their envs (one worker reads the other's env) or leak
+    // fd 3 into an unrelated fork. Holding this lock across the dup2→tty::new
+    // (fork) makes the window exclusive between sandbox spawns.
+    static SPAWN_FD3_LOCK: Mutex<()> = Mutex::new(());
+    // Per-daemon-process monotonic suffix for generated session ids.
+    static SPAWN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    // M3: ensure a unique session id so the worker's NEWROOT + cgroup leaf can't
+    // collide across concurrent cells (inside CLONE_NEWPID the worker is always
+    // pid 1, so it cannot self-generate a unique one).
+    let mut req = req;
+    if req.session_id.is_none() {
+        let seq = SPAWN_SEQ.fetch_add(1, Ordering::Relaxed);
+        req.session_id = Some(format!("{}-{}", std::process::id(), seq));
+    }
 
     // 1. Serialize the request into the worker's argv + guest env.
     let caps = VmCaps::default();
@@ -260,11 +287,10 @@ fn spawn_microvm(req: SpawnRequest) -> io::Result<SpawnedChild> {
     // 2. Resolve the worker binary: it ships next to the daemon binary.
     let worker_path = resolve_worker_path()?;
 
-    // 3. Guest env → fd 3. Build the NUL-delimited blob, create a pipe, and
-    //    place the read end at fd 3 (clearing CLOEXEC so it survives the
-    //    worker's exec). A short blob fits the pipe buffer (64 KiB); for safety
-    //    against a huge env we write from a detached thread so we never deadlock
-    //    on a full pipe before the worker drains it.
+    // 3. Guest env → fd 3. Build the NUL-delimited blob. A short blob fits the
+    //    pipe buffer (64 KiB); for safety against a huge env we write from a
+    //    detached thread so we never deadlock on a full pipe before the worker
+    //    drains it.
     let mut blob: Vec<u8> = Vec::new();
     for (k, v) in &invocation.guest_env {
         blob.extend_from_slice(k.as_bytes());
@@ -273,39 +299,17 @@ fn spawn_microvm(req: SpawnRequest) -> io::Result<SpawnedChild> {
         blob.push(0);
     }
 
-    // pipe2(0): neither end CLOEXEC initially; we set CLOEXEC on the write end
-    // (parent-only) and explicitly place the read end at fd 3 for the child.
+    // pipe2(0): the write end is set CLOEXEC immediately (it must NEVER reach the
+    // worker, and it is not part of the fd-3 window); the read end becomes fd 3
+    // inside the locked critical section below.
     let mut fds = [0 as libc::c_int; 2];
     // SAFETY: fds is a valid 2-int buffer.
     if unsafe { libc::pipe2(fds.as_mut_ptr(), 0) } != 0 {
         return Err(io::Error::last_os_error());
     }
     let (read_fd, write_fd): (RawFd, RawFd) = (fds[0], fds[1]);
-
-    // Move the read end to fd 3 so the worker finds the guest env there. If a
-    // pre-existing fd 3 is open we dup2 over it (the worker owns fd 3 by
-    // contract); the original read_fd is then closed.
-    const GUEST_ENV_FD: RawFd = 3;
-    if read_fd != GUEST_ENV_FD {
-        // SAFETY: dup2 over fd 3 per the worker contract.
-        if unsafe { libc::dup2(read_fd, GUEST_ENV_FD) } < 0 {
-            let e = io::Error::last_os_error();
-            unsafe {
-                libc::close(read_fd);
-                libc::close(write_fd);
-            }
-            return Err(e);
-        }
-        // SAFETY: read_fd no longer needed after the dup2.
-        unsafe { libc::close(read_fd) };
-    }
-    // Clear CLOEXEC on fd 3 so it survives the worker's exec; set CLOEXEC on the
-    // parent-side write end so it does NOT leak into the worker.
-    // SAFETY: both fds are ours.
-    unsafe {
-        libc::fcntl(GUEST_ENV_FD, libc::F_SETFD, 0);
-        libc::fcntl(write_fd, libc::F_SETFD, libc::FD_CLOEXEC);
-    }
+    // SAFETY: write_fd is ours.
+    unsafe { libc::fcntl(write_fd, libc::F_SETFD, libc::FD_CLOEXEC) };
 
     // Writer thread: push the blob then close, so the worker's fd-3 read sees
     // EOF. Detached — it finishes on its own and never blocks spawn.
@@ -318,30 +322,59 @@ fn spawn_microvm(req: SpawnRequest) -> io::Result<SpawnedChild> {
         drop(writer); // closes write_fd → fd-3 reader sees EOF
     });
 
-    // 4. Open the PTY on the worker process. Same shape as Passthrough — the
-    //    child the daemon supervises IS the worker (which then clones the jailed
-    //    VMM internally). The worker inherits fd 3 (the guest env) across exec.
-    let shell = Shell::new(worker_path, worker_args);
-    let pty_options = TtyOptions {
-        shell: Some(shell),
-        working_directory: None, // the worker sets the guest cwd, not the host
-        drain_on_exit: req.drain_on_exit,
-        env: HashMap::new(), // guest env rides fd 3, NOT the worker's environ
-        #[cfg(target_os = "windows")]
-        escape_args: false,
-    };
-    let pty = tty::new(&pty_options, req.window_size, 0).map_err(|e| {
-        // Best-effort: drop our fd-3 handle on failure so we don't leak it.
-        // SAFETY: GUEST_ENV_FD is ours; ignore close errors.
-        unsafe { let _ = std::fs::File::from_raw_fd(GUEST_ENV_FD); }
-        e
-    })?;
+    // Minimal host env for the WORKER process (not the guest): LD_LIBRARY_PATH so
+    // the dynamic linker resolves libkrunfw at libkrun's runtime dlopen — the
+    // launchd daemon won't have it, and alacritty inherits-then-augments (it does
+    // NOT clear), so we add it explicitly. The GUEST env never lands here; it
+    // rides fd 3 (kept out of the worker's argv/environ).
+    let mut worker_env = HashMap::new();
+    worker_env.insert("LD_LIBRARY_PATH".to_string(), "/usr/local/lib64".to_string());
 
-    // Parent no longer needs fd 3 — the worker has its own inherited copy.
-    // SAFETY: take ownership back and drop to close.
-    unsafe {
-        let _ = std::fs::File::from_raw_fd(GUEST_ENV_FD);
-    }
+    // 4. C2-critical section (global lock): place read_fd at the fixed fd 3
+    //    (non-CLOEXEC so it survives the worker's exec) and fork the worker. The
+    //    parent closes its fd 3 BEFORE releasing the lock, so the fd-3 slot + its
+    //    non-CLOEXEC state never outlive this window for a concurrent spawn.
+    const GUEST_ENV_FD: RawFd = 3;
+    let pty = {
+        let _guard = SPAWN_FD3_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if read_fd != GUEST_ENV_FD {
+            // SAFETY: dup2 over fd 3 per the worker contract.
+            if unsafe { libc::dup2(read_fd, GUEST_ENV_FD) } < 0 {
+                let e = io::Error::last_os_error();
+                // SAFETY: read_fd is ours; write_fd is owned by the writer thread.
+                unsafe { libc::close(read_fd) };
+                return Err(e);
+            }
+            // SAFETY: read_fd no longer needed after the dup2.
+            unsafe { libc::close(read_fd) };
+        }
+        // fd 3 must survive the worker's exec → clear CLOEXEC (only inside the
+        // lock). SAFETY: fd 3 is ours.
+        unsafe { libc::fcntl(GUEST_ENV_FD, libc::F_SETFD, 0) };
+
+        // The child the daemon supervises IS the worker (which then clones the
+        // jailed VMM internally). It inherits fd 3 (the guest env) across exec.
+        let shell = Shell::new(worker_path, worker_args);
+        let pty_options = TtyOptions {
+            shell: Some(shell),
+            working_directory: None, // the worker sets the guest cwd, not the host
+            drain_on_exit: req.drain_on_exit,
+            env: worker_env,
+            #[cfg(target_os = "windows")]
+            escape_args: false,
+        };
+        let result = tty::new(&pty_options, req.window_size, 0);
+        // Parent no longer needs fd 3 (the worker has its own inherited copy) —
+        // close it BEFORE releasing the lock, on BOTH the ok and err paths.
+        // SAFETY: GUEST_ENV_FD is ours.
+        unsafe {
+            let _ = std::fs::File::from_raw_fd(GUEST_ENV_FD);
+        }
+        result
+    }?;
 
     let child_pid: Option<i32> = Some(pty.child().id() as i32);
     Ok(SpawnedChild { pty, child_pid })
@@ -447,6 +480,13 @@ pub fn build_worker_invocation(req: &SpawnRequest, caps: &VmCaps) -> WorkerInvoc
         argv.push("--drain-on-exit".to_string());
     }
 
+    // Per-cell unique id → worker NEWROOT path + cgroup leaf (M3). Emitted when
+    // present; the worker falls back to its own (supervisor) pid otherwise.
+    if let Some(sid) = &req.session_id {
+        argv.push("--session-id".to_string());
+        argv.push(sid.clone());
+    }
+
     // Workspace root → read-WRITE mount inside the guest.
     if let Some(ws) = &req.workspace_root {
         argv.push("--workspace-root".to_string());
@@ -549,6 +589,7 @@ mod tests {
             cell_socket: None,
             workspace_root: None,
             tool_roots: vec![],
+            session_id: None,
         };
 
         let child = SandboxSpec::Passthrough
@@ -613,6 +654,7 @@ mod tests {
                 PathBuf::from("/sentinel/tool-a"),
                 PathBuf::from("/sentinel/tool-b"),
             ],
+            session_id: Some("sentinel-sid".to_string()),
         }
     }
 
@@ -689,6 +731,7 @@ mod tests {
         assert_eq!(flag_value(&inv.argv, "--ram-mib"), Some("4096"));
         assert_eq!(flag_value(&inv.argv, "--cols"), Some("111"));
         assert_eq!(flag_value(&inv.argv, "--rows"), Some("222"));
+        assert_eq!(flag_value(&inv.argv, "--session-id"), Some("sentinel-sid"));
         assert!(inv.argv.iter().any(|a| a == "--drain-on-exit"));
         assert_eq!(
             flag_value(&inv.argv, "--workspace-root"),
@@ -748,6 +791,7 @@ mod tests {
             cell_socket: None,
             workspace_root: None,
             tool_roots: vec![],
+            session_id: None,
         };
         let inv = build_worker_invocation(&req, &VmCaps::default());
         assert!(flag_value(&inv.argv, "--workspace-root").is_none());
@@ -756,6 +800,7 @@ mod tests {
         assert!(!inv.argv.iter().any(|a| a == "--tool-root"));
         assert!(!inv.argv.iter().any(|a| a == "--"));
         assert!(!inv.argv.iter().any(|a| a == "--drain-on-exit"));
+        assert!(flag_value(&inv.argv, "--session-id").is_none());
         assert_eq!(flag_value(&inv.argv, "--vcpus"), Some("1"));
         assert_eq!(flag_value(&inv.argv, "--ram-mib"), Some("1024"));
     }

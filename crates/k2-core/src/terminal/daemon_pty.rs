@@ -430,6 +430,9 @@ impl DaemonPtySession {
             workspace_root: cfg.cwd.clone(),
             // P2a: ro tool mounts are a P2b concern; none plumbed here yet.
             tool_roots: Vec::new(),
+            // M3: let the microVM backend generate a unique per-cell id (the
+            // daemon may plumb its own session id here later).
+            session_id: None,
         };
         let backend = cfg.sandbox.backend();
 

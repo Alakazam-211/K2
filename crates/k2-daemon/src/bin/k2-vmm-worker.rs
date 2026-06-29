@@ -237,8 +237,9 @@ mod worker {
                 std::process::exit(2);
             }
         };
-        // Guest env rides fd 3 (NUL-delimited). Absent fd 3 ⇒ empty (hand tests).
-        cfg.guest_env = read_guest_env_fd3();
+        // Guest env arrives on the fd named by K2_GUEST_ENV_FD (NUL-delimited).
+        // Absent / unreadable ⇒ empty (hand tests).
+        cfg.guest_env = read_guest_env();
 
         // Session id default (M3): if the caller didn't pass --session-id, derive
         // it from the SUPERVISOR's REAL pid HERE (pre-clone) — never inside the
@@ -344,8 +345,11 @@ mod worker {
         };
 
         // Best-effort cgroup release (the daemon also rmdirs on ChildExit; this
-        // is belt-and-braces — never fatal).
-        let _ = std::fs::remove_dir_all(&cgroup_dir);
+        // is belt-and-braces — never fatal). Use `remove_dir` (rmdir): a cgroup
+        // v2 dir is emptied by the child's exit and removed by rmdir, but
+        // `remove_dir_all` FAILS on it (it can't unlink the virtual control
+        // files like memory.max) and would leave the leaf behind.
+        let _ = std::fs::remove_dir(&cgroup_dir);
 
         // Best-effort NEWROOT mountpoint cleanup. The child mkdir'd
         // /run/k2cell-<sid> in the HOST /run (before it mounted its private tmpfs
@@ -455,17 +459,29 @@ mod worker {
         Ok(cfg)
     }
 
-    /// Read NUL-delimited `KEY=VAL` pairs from fd 3 (the guest env channel).
-    /// Absent / empty fd 3 ⇒ empty env (tolerated for hand tests). Malformed
-    /// entries (no `=`) are dropped, never fatal — env is not security state.
-    fn read_guest_env_fd3() -> Vec<(String, String)> {
+    /// Read NUL-delimited `KEY=VAL` pairs from the guest-env channel. The daemon
+    /// hands the channel as an inherited pipe and names its fd number in the
+    /// `K2_GUEST_ENV_FD` env var (the wiring no longer clobbers a fixed fd 3 —
+    /// that closed the daemon's tokio epoll, bug #1). Absent var / unreadable fd
+    /// ⇒ empty env (tolerated for hand tests). Malformed entries (no `=`) are
+    /// dropped, never fatal — env is not security state.
+    fn read_guest_env() -> Vec<(String, String)> {
         use std::io::Read;
-        // Is fd 3 actually open? fcntl(F_GETFD) fails with EBADF if not.
-        if unsafe { libc::fcntl(3, libc::F_GETFD) } < 0 {
+        // Which fd carries the guest env? Set by the daemon's spawn wiring.
+        let fd: RawFd = match std::env::var("K2_GUEST_ENV_FD")
+            .ok()
+            .and_then(|s| s.parse::<RawFd>().ok())
+        {
+            Some(fd) if fd >= 0 => fd,
+            _ => return Vec::new(),
+        };
+        // Is it actually open? fcntl(F_GETFD) fails with EBADF if not.
+        if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
             return Vec::new();
         }
-        // SAFETY: we own fd 3 by the worker contract; wrap to read then drop.
-        let mut f = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(3) };
+        // SAFETY: the daemon handed us sole ownership of this fd; wrap to read
+        // then drop (closing it — it is not needed past startup).
+        let mut f = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fd) };
         let mut buf = Vec::new();
         if f.read_to_end(&mut buf).is_err() {
             return Vec::new();
@@ -570,11 +586,13 @@ mod worker {
     /// PARENT (so the cloned child inherits). Returns the leaf path; the daemon
     /// also rmdirs it on ChildExit (best-effort here on supervisor exit).
     ///
-    /// Leaf = `cell-<session-id>` (unique per cell). The daemon assigns the
-    /// session id, so it can name the same cgroup path for its own rmdir on
-    /// ChildExit deterministically (no pid-derivation needed).
+    /// Leaf = `<session-id>` (unique per cell, NO prefix). MUST match the
+    /// daemon's authoritative B3b cleanup path `/sys/fs/cgroup/k2cells/<sid>`
+    /// (v2_spawn.rs) exactly — the daemon assigns the session id, the worker
+    /// names the cgroup with it bare, and the daemon's `cgroup.kill` +
+    /// `remove_dir_all` target the same `<sid>` leaf on ChildExit (bug #3).
     fn cgroup_create_and_join(cfg: &WorkerConfig) -> Result<PathBuf, WErr> {
-        let leaf = format!("cell-{}", cfg.session_id);
+        let leaf = cfg.session_id.clone();
         let parent = Path::new("/sys/fs/cgroup/k2cells");
         let dir = parent.join(&leaf);
 
@@ -1203,13 +1221,21 @@ mod worker {
             }
         }
 
-        // Working directory inside the guest.
-        let wd = cfg
-            .cwd
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "/workspace".to_string());
-        let wdc = cstr(&wd, &mut keep)?;
+        // Working directory inside the GUEST. The daemon's `--cwd` is a HOST
+        // path (the agent's workspace root, e.g. /tmp/wsA) which does NOT exist
+        // inside the guest — passing it verbatim made init.krun's chdir ENOENT
+        // and the VM stopped before the shell ran (bug #2). The guest only has
+        // its overlay root + the workspace mount at /workspace, so map: a cell
+        // WITH a workspace starts at /workspace; one without starts at /. (The
+        // host cwd's sub-path within the workspace is intentionally not mirrored
+        // yet — the workspace virtio-fs is mounted by a guest init that is a
+        // deferred item, so only /workspace itself is guaranteed to exist.)
+        let wd = if cfg.workspace_root.is_some() {
+            "/workspace"
+        } else {
+            "/"
+        };
+        let wdc = cstr(wd, &mut keep)?;
         let r = unsafe { krun_set_workdir(ctx, wdc) };
         if r < 0 {
             return fail(format!("krun_set_workdir: {r}"));

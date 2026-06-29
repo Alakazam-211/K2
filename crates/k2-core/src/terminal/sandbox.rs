@@ -258,11 +258,13 @@ fn spawn_microvm(req: SpawnRequest) -> io::Result<SpawnedChild> {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
 
-    // C2: serialize the dup2(fd 3)→fork window. Two concurrent spawns both place
-    // their guest-env pipe at the fixed fd 3 and clear CLOEXEC before forking; a
-    // race would cross-wire their envs (one worker reads the other's env) or leak
-    // fd 3 into an unrelated fork. Holding this lock across the dup2→tty::new
-    // (fork) makes the window exclusive between sandbox spawns.
+    // C2: serialize the clear-CLOEXEC(read_fd)→fork window. The env-pipe read
+    // end is CLOEXEC except for the brief window in which we clear it so THIS
+    // worker can inherit it across exec; holding this lock across that window →
+    // tty::new (fork) keeps any concurrent spawn / unrelated fork from inheriting
+    // it. (Each spawn now uses its OWN natural fd — no shared fixed-fd contract —
+    // so there is no cross-wire even without the lock; the lock just bounds the
+    // transient non-CLOEXEC leak window.)
     static SPAWN_FD3_LOCK: Mutex<()> = Mutex::new(());
     // Per-daemon-process monotonic suffix for generated session ids.
     static SPAWN_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -287,10 +289,10 @@ fn spawn_microvm(req: SpawnRequest) -> io::Result<SpawnedChild> {
     // 2. Resolve the worker binary: it ships next to the daemon binary.
     let worker_path = resolve_worker_path()?;
 
-    // 3. Guest env → fd 3. Build the NUL-delimited blob. A short blob fits the
-    //    pipe buffer (64 KiB); for safety against a huge env we write from a
-    //    detached thread so we never deadlock on a full pipe before the worker
-    //    drains it.
+    // 3. Guest env → a pipe whose read end the worker inherits. Build the
+    //    NUL-delimited blob. A short blob fits the pipe buffer (64 KiB); for
+    //    safety against a huge env we write from a detached thread so we never
+    //    deadlock on a full pipe before the worker drains it.
     let mut blob: Vec<u8> = Vec::new();
     for (k, v) in &invocation.guest_env {
         blob.extend_from_slice(k.as_bytes());
@@ -299,64 +301,62 @@ fn spawn_microvm(req: SpawnRequest) -> io::Result<SpawnedChild> {
         blob.push(0);
     }
 
-    // pipe2(0): the write end is set CLOEXEC immediately (it must NEVER reach the
-    // worker, and it is not part of the fd-3 window); the read end becomes fd 3
-    // inside the locked critical section below.
+    // pipe2(O_CLOEXEC): BOTH ends CLOEXEC by default so neither can leak into an
+    // unrelated fork. The write end NEVER reaches the worker; the read end's
+    // CLOEXEC is cleared only inside the locked fork window below so it survives
+    // exec into THIS worker (and no other).
+    //
+    // CRITICAL (bug #1): the previous design `dup2(read_fd, 3)` to hand the env
+    // on a FIXED fd 3 clobbered whatever the daemon already had at fd 3 — which
+    // is tokio's I/O-driver epoll instance (`anon_inode:[eventpoll]`). Replacing
+    // then closing it made the next `epoll_wait` return EBADF → tokio aborts the
+    // WHOLE daemon on cell exit. We now keep the pipe on its NATURAL fd (never
+    // dup2 over a fixed number) and tell the worker which fd via the
+    // `K2_GUEST_ENV_FD` env var — nothing in the daemon's fd table is touched.
     let mut fds = [0 as libc::c_int; 2];
     // SAFETY: fds is a valid 2-int buffer.
-    if unsafe { libc::pipe2(fds.as_mut_ptr(), 0) } != 0 {
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
         return Err(io::Error::last_os_error());
     }
     let (read_fd, write_fd): (RawFd, RawFd) = (fds[0], fds[1]);
-    // SAFETY: write_fd is ours.
-    unsafe { libc::fcntl(write_fd, libc::F_SETFD, libc::FD_CLOEXEC) };
 
-    // Writer thread: push the blob then close, so the worker's fd-3 read sees
-    // EOF. Detached — it finishes on its own and never blocks spawn.
+    // Writer thread: push the blob then close, so the worker's read sees EOF.
+    // Detached — it finishes on its own and never blocks spawn.
     // SAFETY: we own write_fd; the thread takes sole ownership.
     let mut writer = unsafe { std::fs::File::from_raw_fd(write_fd) };
     std::thread::spawn(move || {
         use std::io::Write;
         let _ = writer.write_all(&blob);
         let _ = writer.flush();
-        drop(writer); // closes write_fd → fd-3 reader sees EOF
+        drop(writer); // closes write_fd → reader sees EOF
     });
 
-    // Minimal host env for the WORKER process (not the guest): LD_LIBRARY_PATH so
-    // the dynamic linker resolves libkrunfw at libkrun's runtime dlopen — the
-    // launchd daemon won't have it, and alacritty inherits-then-augments (it does
-    // NOT clear), so we add it explicitly. The GUEST env never lands here; it
-    // rides fd 3 (kept out of the worker's argv/environ).
+    // Host env for the WORKER process (NOT the guest):
+    //  - LD_LIBRARY_PATH so the dynamic linker resolves libkrunfw at libkrun's
+    //    runtime dlopen (the launchd daemon won't have it, and alacritty
+    //    inherits-then-augments — it does NOT clear — so we add it explicitly);
+    //  - K2_GUEST_ENV_FD = the inherited read-end fd number the worker reads the
+    //    guest env from (kept out of the guest env, which rides that fd's bytes).
     let mut worker_env = HashMap::new();
     worker_env.insert("LD_LIBRARY_PATH".to_string(), "/usr/local/lib64".to_string());
+    worker_env.insert("K2_GUEST_ENV_FD".to_string(), read_fd.to_string());
 
-    // 4. C2-critical section (global lock): place read_fd at the fixed fd 3
-    //    (non-CLOEXEC so it survives the worker's exec) and fork the worker. The
-    //    parent closes its fd 3 BEFORE releasing the lock, so the fd-3 slot + its
-    //    non-CLOEXEC state never outlive this window for a concurrent spawn.
-    const GUEST_ENV_FD: RawFd = 3;
+    // 4. Fork the worker under a global lock that serializes the
+    //    clear-CLOEXEC(read_fd) → fork window, so a concurrent spawn (or any
+    //    other fork in the daemon during this window) can't inherit this env
+    //    pipe. The parent closes read_fd BEFORE releasing the lock.
     let pty = {
         let _guard = SPAWN_FD3_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        if read_fd != GUEST_ENV_FD {
-            // SAFETY: dup2 over fd 3 per the worker contract.
-            if unsafe { libc::dup2(read_fd, GUEST_ENV_FD) } < 0 {
-                let e = io::Error::last_os_error();
-                // SAFETY: read_fd is ours; write_fd is owned by the writer thread.
-                unsafe { libc::close(read_fd) };
-                return Err(e);
-            }
-            // SAFETY: read_fd no longer needed after the dup2.
-            unsafe { libc::close(read_fd) };
-        }
-        // fd 3 must survive the worker's exec → clear CLOEXEC (only inside the
-        // lock). SAFETY: fd 3 is ours.
-        unsafe { libc::fcntl(GUEST_ENV_FD, libc::F_SETFD, 0) };
+        // Clear CLOEXEC on the read end so it survives the worker's exec (only
+        // this worker inherits it; the lock bounds the window). SAFETY: ours.
+        unsafe { libc::fcntl(read_fd, libc::F_SETFD, 0) };
 
         // The child the daemon supervises IS the worker (which then clones the
-        // jailed VMM internally). It inherits fd 3 (the guest env) across exec.
+        // jailed VMM internally). It inherits read_fd; K2_GUEST_ENV_FD tells it
+        // which number to read.
         let shell = Shell::new(worker_path, worker_args);
         let pty_options = TtyOptions {
             shell: Some(shell),
@@ -367,12 +367,10 @@ fn spawn_microvm(req: SpawnRequest) -> io::Result<SpawnedChild> {
             escape_args: false,
         };
         let result = tty::new(&pty_options, req.window_size, 0);
-        // Parent no longer needs fd 3 (the worker has its own inherited copy) —
-        // close it BEFORE releasing the lock, on BOTH the ok and err paths.
-        // SAFETY: GUEST_ENV_FD is ours.
-        unsafe {
-            let _ = std::fs::File::from_raw_fd(GUEST_ENV_FD);
-        }
+        // Parent no longer needs read_fd (the worker has its own inherited copy)
+        // — close it BEFORE releasing the lock, on BOTH ok and err paths.
+        // SAFETY: read_fd is ours.
+        unsafe { libc::close(read_fd) };
         result
     }?;
 

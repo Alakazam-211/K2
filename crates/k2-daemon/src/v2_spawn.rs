@@ -847,14 +847,36 @@ pub fn spawn_child_exit_observer(agent_name: String, session: std::sync::Arc<Dae
                     // ENOENT-tolerant throughout.
                     #[cfg(all(target_os = "linux", feature = "sandbox-microvm"))]
                     if is_microvm {
+                        // The worker names its cgroup leaf + NEWROOT with the
+                        // bare session id (k2-vmm-worker.rs); match it EXACTLY.
                         let sid = session_id.to_string();
-                        let _ = std::fs::write(
-                            format!("/sys/fs/cgroup/k2cells/{sid}/cgroup.kill"),
-                            "1",
-                        );
-                        let _ = std::fs::remove_dir_all(format!(
-                            "/sys/fs/cgroup/k2cells/{sid}"
-                        ));
+                        let cg = format!("/sys/fs/cgroup/k2cells/{sid}");
+                        // Kill any survivors first (cgroup v2, kernel ≥5.14) =
+                        // real crash-containment, then rmdir the leaf. NOTE:
+                        // `remove_dir_all` does NOT work on a cgroup dir (it
+                        // tries to unlink the virtual control files and fails);
+                        // rmdir is the correct call, and it only succeeds once
+                        // the cgroup is empty. After a crash (`kill -9`) the
+                        // killed tasks vacate the cgroup ASYNCHRONOUSLY, so the
+                        // first rmdir can race with EBUSY — retry briefly until
+                        // it's empty (or already gone). Best-effort throughout.
+                        let _ = std::fs::write(format!("{cg}/cgroup.kill"), "1");
+                        for attempt in 0..20u32 {
+                            match std::fs::remove_dir(&cg) {
+                                Ok(_) => break,
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                                Err(_) => {
+                                    // re-assert the kill in case a task was mid-fork
+                                    let _ = std::fs::write(format!("{cg}/cgroup.kill"), "1");
+                                    if attempt < 19 {
+                                        tokio::time::sleep(
+                                            std::time::Duration::from_millis(100),
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
+                        }
                         let _ = std::fs::remove_dir(format!("/run/k2cell-{sid}"));
                     }
                     return;

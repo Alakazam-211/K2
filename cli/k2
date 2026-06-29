@@ -2978,6 +2978,87 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
 }
 
+# P3a (sandbox / K2-as-a-server) — OWNER-only API-key auth-tier management for
+# the external /v1/* surface. Subcommands:
+#   k2 api-key create [--label L] [--anthropic-key K]
+#   k2 api-key list
+#   k2 api-key revoke <id>
+# The RAW key is printed exactly ONCE on create ("store it now, not shown
+# again"); it is never re-printed. The associated Anthropic key (BYO LLM cred)
+# is never echoed back. All routes are owner-token gated at the daemon.
+cmd_api_key() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        create)
+            local label="" anthropic=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --label)        label="${2:-}"; shift 2 ;;
+                    --anthropic-key) anthropic="${2:-}"; shift 2 ;;
+                    *)              echo "Unknown flag: $1" >&2; exit 1 ;;
+                esac
+            done
+            # Build the JSON body via python3 so the (secret) anthropic key is
+            # escaped correctly and never interpolated into a shell/URL context.
+            local body
+            body=$(K2_AK_LABEL="$label" K2_AK_ANTH="$anthropic" python3 -c 'import json,os
+b={"label": os.environ.get("K2_AK_LABEL","")}
+k=os.environ.get("K2_AK_ANTH","")
+if k.strip(): b["anthropicKey"]=k
+print(json.dumps(b))')
+            cli_post_json "/cli/api-keys/create" "$body" \
+                | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+    if "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("API key created (id: %s)." % d.get("id",""))
+    print("")
+    print("  %s" % d.get("key",""))
+    print("")
+    print("STORE THIS KEY NOW — it is shown only once and cannot be retrieved again.")
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+            ;;
+        list)
+            cli_request "/cli/api-keys/list" \
+                | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+    if isinstance(d,dict) and "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    keys=d.get("keys",[])
+    if not keys:
+        print("No API keys."); sys.exit(0)
+    for k in keys:
+        state="revoked" if k.get("revokedAt") else "active"
+        anth="anthropic-key" if k.get("anthropicKeySet") else "no-anthropic-key"
+        print("%s  [%s]  %s  %s  scope=%s" % (k.get("id",""), state, (k.get("label") or "-"), anth, k.get("scope","")))
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+            ;;
+        revoke)
+            local id="${1:-}"
+            [[ -z "$id" ]] && { echo "Usage: k2 api-key revoke <id>" >&2; exit 1; }
+            local body
+            body=$(K2_AK_ID="$id" python3 -c 'import json,os; print(json.dumps({"id": os.environ["K2_AK_ID"]}))')
+            cli_post_json "/cli/api-keys/revoke" "$body" \
+                | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+    if "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("API key revoked." if d.get("success") else "No matching active key (unknown or already revoked).")
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+            ;;
+        *)
+            echo "Usage: k2 api-key <create [--label L] [--anthropic-key K]|list|revoke <id>>" >&2
+            exit 1 ;;
+    esac
+}
+
 # ── Agent Skill Surface ─────────────────────────────────────────────
 
 cmd_checkin() {
@@ -7284,6 +7365,10 @@ EOF
         ;;
     connections)
         shift; cmd_connections "$@"
+        ;;
+    api-key)
+        # P3a (sandbox) — owner-only API-key auth-tier management for /v1/*.
+        shift; cmd_api_key "$@"
         ;;
     connect)
         # K2 Connect account/Pro-subdomain management (calls the hosted

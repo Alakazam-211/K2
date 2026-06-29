@@ -53,6 +53,11 @@ pub mod connections;
 // + in-memory login sessions. The auth boundary for the PUBLIC K2 Connect
 // tunnel surface. See module docs.
 pub mod connect_users;
+// P3a (sandbox / K2-as-a-server): the first-class, owner-minted, revocable
+// API-key auth tier for the external `/v1/*` surface. Stores SHA-256 key
+// digests + an optional BYO Anthropic cred; resolves a presented key to an
+// `ApiPrincipal` for the P3b policy-resolver. See module docs.
+pub mod api_keys;
 // Headless-friendly daemon lifecycle abstractions (label, plist
 // generation, launchctl arg vectors). Shared between Tauri's
 // `daemon_install` / `daemon_restart` commands and K2 Connect's

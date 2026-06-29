@@ -1025,3 +1025,186 @@ pub fn handle_set_workspace_api_key(body: &[u8]) -> crate::cli_response::CliResp
         Err(e) => CliResponse::bad_request(e),
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// P3a (sandbox / K2-as-a-server) — API-key auth tier management + /v1/ping.
+// ─────────────────────────────────────────────────────────────────────
+
+/// True iff the external `/v1/*` sandbox API surface is enabled — gated on the
+/// `K2_SANDBOX_API` env flag (`1`/`true`/`yes`/`on`, case-insensitive).
+/// **Default OFF.** With it off, EVERY `/v1/*` path 404s as if it didn't exist
+/// (the dispatcher consults this before routing any `/v1/*` request), so the
+/// whole external surface is dark and flag-off is byte-identical to no surface.
+///
+/// (Mirrors `k2_core::federation::enabled`'s env-flag shape. The owner-gated
+/// `/cli/api-keys/*` MANAGEMENT routes are intentionally NOT gated on this — the
+/// owner can pre-mint keys before flipping the external surface live; minting is
+/// harmless while `/v1/*` is dark.)
+pub(crate) fn sandbox_api_enabled() -> bool {
+    std::env::var("K2_SANDBOX_API")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+/// OWNER-only: mint a new API key. Body (JSON): `{"label": "<tag>",
+/// "anthropicKey": "<sk-ant-…>"?}`. Returns `{"id": "<uuid>", "key":
+/// "k2sk_…"}` — **the RAW key is returned exactly ONCE here and is never
+/// recoverable afterward** (only its SHA-256 digest is stored). The owner must
+/// surface it to the caller now. NEVER logs the raw key or the anthropic key.
+pub fn handle_api_key_create(body: &[u8]) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        // An empty body is allowed (no label, no anthropic key).
+        Ok(v) => v,
+        Err(_) if body.iter().all(|b| b.is_ascii_whitespace()) => serde_json::json!({}),
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let label = v.get("label").and_then(|x| x.as_str()).unwrap_or("");
+    // Accept either `anthropicKey` (camel) or `anthropic_key` (snake).
+    let anthropic_key = v
+        .get("anthropicKey")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.get("anthropic_key").and_then(|x| x.as_str()));
+
+    match k2_core::api_keys::create_api_key(label, anthropic_key) {
+        // The ONLY place the raw key is ever returned. Not logged.
+        Ok((id, raw)) => {
+            CliResponse::ok_json(serde_json::json!({ "id": id, "key": raw }).to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// OWNER-only: revoke an API key by id. Body (JSON): `{"id": "<uuid>"}`.
+/// Returns `{"success": <bool>}` — `true` if a live key was just revoked,
+/// `false` for an unknown/already-revoked id (idempotent). Revocation is
+/// immediate: the key fails the `/v1/*` gate on its next use.
+pub fn handle_api_key_revoke(body: &[u8]) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    if id.is_empty() {
+        return CliResponse::bad_request("missing 'id'");
+    }
+    match k2_core::api_keys::revoke_api_key(&id) {
+        Ok(success) => CliResponse::ok_json(serde_json::json!({ "success": success }).to_string()),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// OWNER-only: list API keys as redacted metadata. NEVER returns the raw key
+/// (unrecoverable) or the anthropic key (only `anthropicKeySet`).
+pub fn handle_api_key_list() -> CliResponse {
+    match k2_core::api_keys::list_api_keys() {
+        Ok(keys) => {
+            let arr: Vec<serde_json::Value> = keys
+                .into_iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "id": m.id,
+                        "label": m.label,
+                        "scope": m.scope,
+                        "createdAt": m.created_at,
+                        "revokedAt": m.revoked_at,
+                        "keySet": m.key_set,
+                        "anthropicKeySet": m.anthropic_key_set,
+                    })
+                })
+                .collect();
+            CliResponse::ok_json(serde_json::json!({ "keys": arr }).to_string())
+        }
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+/// `GET /v1/ping` — the minimal P3a test route proving the auth tier resolves a
+/// principal. `principal_id` is the caller's NON-secret identity (`"owner"` or
+/// the API key's id). Carries no secret. P3b replaces the real `/v1/*` work.
+pub fn handle_v1_ping(principal_id: &str) -> CliResponse {
+    CliResponse::ok_json(serde_json::json!({ "ok": true, "principal": principal_id }).to_string())
+}
+
+#[cfg(test)]
+mod api_key_route_tests {
+    use super::*;
+
+    /// The `K2_SANDBOX_API` flag defaults OFF and only the canonical truthy
+    /// values flip it on (serialized via the crate env lock to avoid racing
+    /// other env-mutating tests).
+    #[test]
+    fn sandbox_api_flag_defaults_off() {
+        // Serialize this env-mutating test against itself across threads.
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = std::env::var_os("K2_SANDBOX_API");
+        std::env::remove_var("K2_SANDBOX_API");
+        assert!(!sandbox_api_enabled(), "K2_SANDBOX_API must default OFF");
+        std::env::set_var("K2_SANDBOX_API", "1");
+        assert!(sandbox_api_enabled(), "K2_SANDBOX_API=1 enables");
+        std::env::set_var("K2_SANDBOX_API", "off");
+        assert!(!sandbox_api_enabled(), "K2_SANDBOX_API=off disables");
+        std::env::set_var("K2_SANDBOX_API", "true");
+        assert!(sandbox_api_enabled(), "K2_SANDBOX_API=true enables");
+        match prev {
+            Some(v) => std::env::set_var("K2_SANDBOX_API", v),
+            None => std::env::remove_var("K2_SANDBOX_API"),
+        }
+    }
+
+    /// create → list shows the key (redacted); revoke flips it; the create
+    /// response carries the raw key but list NEVER does, nor the anthropic key.
+    #[test]
+    fn create_list_revoke_route_round_trip_redacts_secrets() {
+        let secret = "sk-ant-route-secret-qqq";
+        let body = serde_json::json!({ "label": "route-test", "anthropicKey": secret })
+            .to_string();
+        let resp = handle_api_key_create(body.as_bytes());
+        assert_eq!(resp.status, "200 OK");
+        let created: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        let id = created["id"].as_str().expect("id").to_string();
+        let raw = created["key"].as_str().expect("raw key").to_string();
+        assert!(raw.starts_with("k2sk_"));
+
+        // List: present, redacted, and NEITHER secret leaks.
+        let list = handle_api_key_list();
+        assert_eq!(list.status, "200 OK");
+        assert!(list.body.contains(&id), "list includes the id");
+        assert!(!list.body.contains(secret), "list must not leak the anthropic key");
+        let raw_body = raw.strip_prefix("k2sk_").unwrap();
+        assert!(!list.body.contains(raw_body), "list must not leak the raw key");
+        let parsed: serde_json::Value = serde_json::from_str(&list.body).expect("json");
+        let mine = parsed["keys"].as_array().unwrap().iter()
+            .find(|k| k["id"] == serde_json::json!(id)).expect("our key");
+        assert_eq!(mine["anthropicKeySet"], serde_json::json!(true));
+        assert_eq!(mine["revokedAt"], serde_json::Value::Null);
+
+        // Revoke → success true; second revoke → false (idempotent).
+        let rev = handle_api_key_revoke(serde_json::json!({ "id": id }).to_string().as_bytes());
+        assert_eq!(rev.status, "200 OK");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&rev.body).unwrap()["success"],
+            serde_json::json!(true),
+        );
+        let rev2 = handle_api_key_revoke(serde_json::json!({ "id": id }).to_string().as_bytes());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&rev2.body).unwrap()["success"],
+            serde_json::json!(false),
+        );
+    }
+
+    #[test]
+    fn revoke_missing_id_is_bad_request() {
+        let resp = handle_api_key_revoke(b"{}");
+        assert_eq!(resp.status, "400 Bad Request");
+    }
+
+    #[test]
+    fn ping_echoes_principal_and_no_secret() {
+        let resp = handle_v1_ping("owner");
+        assert_eq!(resp.status, "200 OK");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["ok"], serde_json::json!(true));
+        assert_eq!(v["principal"], serde_json::json!("owner"));
+    }
+}

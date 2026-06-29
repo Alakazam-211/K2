@@ -415,6 +415,16 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // Claude Code skips interactive auth. PLAINTEXT at rest (root-only box
         // DB); at-rest encryption is a follow-up. Never logged.
         ("0056_project_anthropic_api_key", include_str!("../../drizzle_sql/0056_project_anthropic_api_key.sql")),
+        // 0058 (P3a sandbox / K2-as-a-server): the `api_keys` table — the
+        // first-class, owner-minted, revocable API-key auth tier for the
+        // external `/v1/*` surface. Stores SHA-256(raw key) (NOT argon2 — the
+        // key is high-entropy CSPRNG, no dictionary to grind) + an optional BYO
+        // anthropic_api_key staged into the sessions this key spawns. scope
+        // column reserved for per-tenant (P4); revoked_at gives immediate,
+        // durable revocation. Raw key + anthropic key are never logged.
+        // (0057 is reserved for the P1/P2a sandbox-seam line; P3a slots in at
+        // 0058 so it rebases cleanly onto that work.)
+        ("0058_api_keys", include_str!("../../drizzle_sql/0058_api_keys.sql")),
     ];
 
     for (name, sql) in migrations {

@@ -481,6 +481,91 @@ pub(crate) async fn require_owner_or_admin(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// P3a (sandbox / K2-as-a-server) — the `/v1/*` API-key auth tier.
+// ─────────────────────────────────────────────────────────────────────
+//
+// The EXTERNAL security boundary. `/v1/*` routes authenticate with EITHER an
+// owner-minted API key (`k2sk_…`, presented as `Authorization: Bearer` —
+// preferred — or `?token=`) OR the on-box owner token (own-use convenience).
+// A valid credential maps to a [`V1Principal`]; the route layer gates on it.
+//
+// Credential precedence MIRRORS the `/hook/complete` call site: the Bearer
+// HEADER is preferred (keeps the secret out of the URL/query — which lands in
+// access logs + the recorded transcript), with `?token=` as the fallback so a
+// simple client can still authenticate. Empty creds never authorize.
+//
+// SECURITY: an API key resolves ONLY to a `/v1/*` principal. It can NEVER mint,
+// list, or revoke keys — that surface (`/cli/api-keys/*`) is gated on the OWNER
+// token, NOT on `v1_principal`.
+
+/// A resolved principal authorized for the external `/v1/*` surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum V1Principal {
+    /// The on-box owner token (own-use). Highest authority; no associated BYO
+    /// LLM cred (the owner's sessions resolve credentials by the existing
+    /// per-workspace / on-device paths).
+    Owner,
+    /// An owner-minted API key. Carries the resolved [`ApiPrincipal`] the P3b
+    /// policy-resolver consumes (id, optional BYO anthropic key, scope).
+    Api(k2_core::api_keys::ApiPrincipal),
+}
+
+impl V1Principal {
+    /// A stable, NON-secret identity string for logs / the `/v1/ping` echo:
+    /// `"owner"` for the owner token, else the API key's `api_keys.id`.
+    pub(crate) fn display_id(&self) -> String {
+        match self {
+            V1Principal::Owner => "owner".to_string(),
+            V1Principal::Api(p) => p.id.clone(),
+        }
+    }
+}
+
+/// Pick the credential a `/v1/*` request presents: the Bearer header (preferred)
+/// when non-empty, else `?token=`. Returns `None` when neither is present/empty.
+fn v1_credential<'a>(query: &'a str, bearer: Option<&'a str>) -> Option<&'a str> {
+    if let Some(b) = bearer {
+        let b = b.trim();
+        if !b.is_empty() {
+            return Some(b);
+        }
+    }
+    extract_token(query).filter(|t| !t.is_empty())
+}
+
+/// Resolve the presented credential to an API-key principal, or `None`. Used by
+/// the combined [`v1_principal`]; exposed separately so a future API-key-only
+/// route can gate on exactly the key tier (never the owner token).
+pub(crate) fn api_principal(
+    query: &str,
+    bearer: Option<&str>,
+) -> Option<k2_core::api_keys::ApiPrincipal> {
+    let cred = v1_credential(query, bearer)?;
+    k2_core::api_keys::resolve_api_key(cred)
+}
+
+/// The `/v1/*` auth gate. Returns a [`V1Principal`] when the request presents
+/// EITHER the owner token (→ [`V1Principal::Owner`], own-use convenience) OR a
+/// valid non-revoked API key (→ [`V1Principal::Api`]); `None` (→ 401) otherwise.
+///
+/// The owner token is checked FIRST (constant-time) so the owner never pays a
+/// DB lookup; a non-owner credential then falls through to the API-key
+/// resolver. Empty/missing/garbage → `None`.
+pub(crate) fn v1_principal(
+    query: &str,
+    bearer: Option<&str>,
+    owner_token: &str,
+) -> Option<V1Principal> {
+    let cred = v1_credential(query, bearer)?;
+    // Owner token wins (own-use); constant-time compare like every owner gate.
+    if ct_eq_token(cred, owner_token) {
+        return Some(V1Principal::Owner);
+    }
+    // Otherwise it must be a valid, non-revoked API key.
+    k2_core::api_keys::resolve_api_key(cred).map(V1Principal::Api)
+}
+
 /// Composer 1c (D4) — the capability decision for the session-scoped
 /// `POST /cli/terminal/send-message` route.
 ///
@@ -1208,5 +1293,83 @@ mod tests {
                 "revoked session must be Denied (no injection authorized)",
             );
         });
+    }
+
+    // ── v1_principal: the external /v1/* API-key auth gate (P3a) ────────
+    //
+    // Accepts the owner token (own-use) OR a valid non-revoked API key;
+    // rejects garbage. The API-key path hits the shared in-memory test DB
+    // (api_keys table) — no temp HOME needed (keys live in the DB, not a
+    // $HOME file). These assertions fail LOUDLY.
+
+    #[test]
+    fn v1_principal_accepts_owner_token() {
+        let owner = "owner-token-xyz";
+        // Owner via ?token=.
+        assert_eq!(
+            v1_principal(&format!("token={owner}"), None, owner),
+            Some(V1Principal::Owner),
+        );
+        // Owner via Bearer header (precedence: header wins over query).
+        assert_eq!(
+            v1_principal("token=garbage", Some(owner), owner),
+            Some(V1Principal::Owner),
+        );
+        assert_eq!(v1_principal("token=owner-token-xyz", None, owner).unwrap().display_id(), "owner");
+    }
+
+    #[test]
+    fn v1_principal_accepts_valid_api_key() {
+        let owner = "owner-token-xyz";
+        let (id, raw) =
+            k2_core::api_keys::create_api_key("v1-gate-test", Some("sk-ant-gate")).expect("mint key");
+
+        // Via Bearer header (the preferred transport).
+        let p = v1_principal("", Some(&raw), owner).expect("valid key authorizes");
+        match &p {
+            V1Principal::Api(ap) => {
+                assert_eq!(ap.id, id);
+                assert_eq!(ap.anthropic_key.as_deref(), Some("sk-ant-gate"));
+                assert_eq!(ap.scope, "owner");
+            }
+            other => panic!("expected Api principal, got {other:?}"),
+        }
+        assert_eq!(p.display_id(), id, "display id is the api-key id, not 'owner'");
+
+        // Via ?token= fallback (no Bearer).
+        assert!(
+            matches!(v1_principal(&format!("token={raw}"), None, owner), Some(V1Principal::Api(_))),
+            "?token= API key authorizes when no Bearer",
+        );
+    }
+
+    #[test]
+    fn v1_principal_rejects_garbage_and_revoked() {
+        let owner = "owner-token-xyz";
+        // Garbage / missing → None (→ 401).
+        assert_eq!(v1_principal("token=k2sk_not-real", None, owner), None);
+        assert_eq!(v1_principal("", Some("k2sk_not-real"), owner), None);
+        assert_eq!(v1_principal("", None, owner), None);
+        assert_eq!(v1_principal("token=", Some(""), owner), None);
+
+        // A revoked key no longer authorizes (immediate revocation).
+        let (id, raw) = k2_core::api_keys::create_api_key("v1-revoke", None).expect("mint");
+        assert!(v1_principal("", Some(&raw), owner).is_some(), "valid before revoke");
+        k2_core::api_keys::revoke_api_key(&id).expect("revoke");
+        assert_eq!(
+            v1_principal("", Some(&raw), owner),
+            None,
+            "revoked API key must be rejected at the v1 gate",
+        );
+    }
+
+    #[test]
+    fn api_principal_never_matches_owner_token() {
+        // The owner token is NOT an API key — api_principal (the key-only
+        // resolver) must return None for it (it only authorizes via the
+        // combined v1_principal's owner arm).
+        let owner = "owner-token-xyz";
+        assert_eq!(api_principal(&format!("token={owner}"), None), None);
+        assert_eq!(api_principal("", Some(owner)), None);
     }
 }

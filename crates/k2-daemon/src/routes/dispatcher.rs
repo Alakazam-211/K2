@@ -530,6 +530,13 @@ async fn handle_one_request(
             // key is staged into a microVM cell's guest env at spawn; never
             // logged/echoed.
             | "/cli/workspace/api-key"
+            // P3a (sandbox / K2-as-a-server) — API-key auth-tier MANAGEMENT
+            // (owner-only, always-on; the owner pre-mints keys before flipping
+            // the external /v1/* surface live). POST so the minted raw key
+            // (create) rides the JSON body/response, never a URL-logged query.
+            // Method- + owner-gated per-handler below. `list` is a GET.
+            | "/cli/api-keys/create"
+            | "/cli/api-keys/revoke"
             // 0.39.45 (#35/#37/#29) — live-msg POST form. Long message
             // text rides the form-encoded body instead of the query
             // string so it dodges the request-head cap. GET with query
@@ -2713,6 +2720,111 @@ async fn handle_one_request(
                 .to_string()
             });
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
+        }
+        // ── P3a (sandbox / K2-as-a-server) — API-key auth-tier MANAGEMENT.
+        //
+        // OWNER-ONLY (require_owner / token_is_owner) + ALWAYS-ON: minting,
+        // listing, and revoking keys is the owner's job, so a connect-user
+        // session token is rejected and an API key CANNOT manage keys (it never
+        // reaches here — these gate on the owner token, never v1_principal).
+        // Always-on so the owner can pre-create keys before flipping the
+        // external /v1/* surface live (harmless while /v1/* is dark). The two
+        // POSTs are method-gated per-handler (require_post); `list` is a GET.
+        // The minted RAW key is returned ONCE by create + never logged.
+        p if p.starts_with("/cli/api-keys/") => {
+            let r = match p {
+                "/cli/api-keys/create" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || crate::misc_routes::handle_api_key_create(&body))
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/api-keys/revoke" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || crate::misc_routes::handle_api_key_revoke(&body))
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/api-keys/list" => {
+                    // GET, OWNER-gated. Drain the peeked head then check owner.
+                    let _ = stream.read(&mut buf).await;
+                    if !super::http::token_is_owner(&query, state.token.as_str()) {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        tokio::task::spawn_blocking(crate::misc_routes::handle_api_key_list)
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                }
+                _ => {
+                    let _ = stream.read(&mut buf).await;
+                    crate::cli_response::CliResponse::not_found()
+                }
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // ── P3a (sandbox / K2-as-a-server) — the EXTERNAL `/v1/*` surface.
+        //
+        // DARK BY DEFAULT: with K2_SANDBOX_API OFF (the shipped default) EVERY
+        // `/v1/*` path 404s exactly as if the routes didn't exist — the whole
+        // external surface is absent and flag-off is byte-identical to no
+        // surface. When ON, each route gates on `v1_principal` (owner token OR a
+        // valid non-revoked API key, Bearer-preferred). `/v1/ping` is the
+        // minimal P3a test route (P3b adds the real POST /v1/sandboxes spawn).
+        p if p.starts_with("/v1/") => {
+            if !crate::misc_routes::sandbox_api_enabled() {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "404 Not Found",
+                    "application/json",
+                    r#"{"error":"not found"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            // Authenticate → V1Principal (owner token or a valid API key). The
+            // Bearer header is preferred (keeps the secret out of the URL);
+            // `?token=` is the fallback. None → 401.
+            let principal = super::http::v1_principal(
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            let Some(principal) = principal else {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "401 Unauthorized",
+                    "application/json",
+                    r#"{"error":"invalid or missing API key"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            };
+            let r = match p {
+                "/v1/ping" => {
+                    let _ = stream.read(&mut buf).await;
+                    crate::misc_routes::handle_v1_ping(&principal.display_id())
+                }
+                _ => {
+                    let _ = stream.read(&mut buf).await;
+                    crate::cli_response::CliResponse::not_found()
+                }
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // ── Federation V1 (prd-cross-server-agent-comms) — the ONE
         // dispatcher touch for the whole `/cli/federation/*` surface.

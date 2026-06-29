@@ -40,6 +40,15 @@ export interface SessionAddedEvent {
   args: string[]
   session_id: string
   isV2: boolean
+  /** P3c (D1) — the resolved sandbox backend name, present ONLY when the
+   *  daemon ran this session under a REAL sandbox (e.g. `'microvm'`); absent
+   *  (the field is `skip_serializing_if = None` daemon-side) for the default
+   *  passthrough / bare-PTY path. The generic tab-adoption consumer reads it
+   *  so an externally / API-spawned cell lights the D9 orange tab marker
+   *  immediately, without waiting for the spawn-response echo. Optional +
+   *  forward-compatible: older daemons omit it and the renderer treats the
+   *  absence as "not sandboxed". */
+  sandbox_backend?: string
 }
 
 export interface SessionRemovedEvent {

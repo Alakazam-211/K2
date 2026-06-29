@@ -21,6 +21,7 @@ import { getSelectedTab, setSelectedTab, resetSelectedTabs } from '@/stores/sele
 import {
   subscribeToWorkspaceSessionEvents,
   subscribeToWorkspaceTabEvents,
+  onSessionAddedApp,
   type SessionAddedEvent,
   type SessionRemovedEvent,
   type TabTitleChangedEvent,
@@ -4276,6 +4277,20 @@ function buildAdoptedTerminalTab(args: {
   command?: string
   args?: string[]
   sessionId?: string
+  /** P3c (D2) — override the agent_name TerminalPane uses on v2/spawn so it
+   *  ATTACHES to an existing daemon session (find-or-spawn returns reused:true)
+   *  instead of minting a fresh `tab-<paneGroupId>` PTY. Set for API-spawned
+   *  sandbox cells whose session is keyed under a host-minted `api-<...>` name,
+   *  not `tab-<...>`. Mirrors the heartbeat-surfaced attach mechanism. */
+  attachAgentName?: string
+  /** P3c (D2) — ask the daemon to (re)resolve a sandbox backend on the v2/spawn
+   *  attach, so the spawn response echoes the backend name (belt-and-suspenders
+   *  with the SessionAdded `sandbox_backend` field). */
+  sandbox?: boolean
+  /** P3c (D2) — the resolved sandbox backend name from the SessionAdded event,
+   *  stamped immediately so TabBar.tsx lights the D9 orange marker on adoption
+   *  rather than waiting for the spawn-response echo. */
+  sandboxBackend?: string
 }): Tab {
   const pg = makeTerminalPaneGroup(
     args.paneGroupId,
@@ -4288,6 +4303,16 @@ function buildAdoptedTerminalTab(args: {
   // close-as-minimize cross-references work without a refresh round-trip.
   if (args.sessionId && pg.items[0]?.type === 'terminal') {
     (pg.items[0].data as TerminalItemData).sessionId = args.sessionId
+  }
+  // P3c (D2) — thread the attach/sandbox fields onto the TerminalItemData so
+  // TerminalPane attaches to the existing cell (attachAgentName) + the orange
+  // marker lights immediately (sandboxBackend). Only stamped when provided, so
+  // the existing `tab-`-prefixed adoption path is byte-identical.
+  if (pg.items[0]?.type === 'terminal') {
+    const d = pg.items[0].data as TerminalItemData
+    if (args.attachAgentName) d.attachAgentName = args.attachAgentName
+    if (args.sandbox) d.sandbox = true
+    if (args.sandboxBackend) d.sandboxBackend = args.sandboxBackend
   }
   tabCounter++
   return {
@@ -4526,6 +4551,123 @@ function tearDownActiveWorkspaceSubscription(): void {
     }
     activeTabEventsUnsub = null
   }
+}
+
+// ── P3c (D2) — generic API-spawned-sandbox tab adoption ───────────────────
+//
+// The workspace-scoped `subscribeForActiveWorkspace.onAdded` consumer above
+// only adopts `tab-<paneGroupId>` sessions whose cwd lives under the ACTIVE
+// workspace path. An API-spawned sandbox cell (POST /v1/sandboxes) registers
+// under a host-minted `api-<principal>-<uuid>` agent_name with an EPHEMERAL
+// cwd (`~/.k2/sandbox-sessions/<uuid>`) that matches no registered workspace —
+// so it never reaches that consumer. The daemon DOES forward any absolute-cwd
+// `SessionAdded` to the APP-LEVEL (empty `?path=`) subscriber, which dispatches
+// to the `onSessionAddedApp` registry. This consumer rides that registry so an
+// externally-spawned cell surfaces as an orange cockpit tab in EVERY attached
+// window, regardless of which workspace is in view.
+//
+// Scope gate: act ONLY on events carrying a real `sandbox_backend` (D1). That
+// keeps this default-OFF and parity-safe — a non-sandbox `SessionAdded` carries
+// `sandbox_backend: undefined` and is ignored here, so normal locally-spawned
+// tabs are untouched (the workspace consumer still owns `tab-` adoption).
+
+/** True when a terminal item attached to (or spawned as) `agentName`, or
+ *  carrying `sessionId`, is ALREADY surfaced in any tab across all groups.
+ *  The de-dupe guard for API-sandbox adoption: the window that already adopted
+ *  this cell (or a re-delivered event) must NOT create a second tab. Mirrors
+ *  the AgentChatPane remount-guard's identity check (session_id) + the
+ *  `isPaneGroupSurfaced` "already represented" check, matched on the attach
+ *  agent_name since the API cell has no `tab-`-shaped paneGroupId. */
+function isApiSandboxSessionSurfaced(
+  state: { tabs: Tab[]; extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }> },
+  agentName: string,
+  sessionId: string,
+): boolean {
+  const matches = (tab: Tab): boolean => {
+    for (const pg of tab.paneGroups.values()) {
+      for (const item of pg.items) {
+        if (item.type !== 'terminal') continue
+        const d = item.data as TerminalItemData
+        if (d.attachAgentName === agentName) return true
+        if (sessionId && d.sessionId === sessionId) return true
+      }
+    }
+    return false
+  }
+  for (const tab of state.tabs) if (matches(tab)) return true
+  for (const group of state.extraGroups) {
+    for (const tab of group.tabs) if (matches(tab)) return true
+  }
+  return false
+}
+
+/** P3c (D2) — adopt an API-spawned sandbox session into a new cockpit tab.
+ *  Returns true when a tab was adopted, false when ignored (not a real
+ *  sandbox, or already surfaced — the de-dupe). Exported for unit testing.
+ *
+ *  The tab carries `attachAgentName = event.agent_name` so when its
+ *  `TerminalPane` mounts and issues the idempotent v2/spawn, find-or-spawn
+ *  returns the EXISTING daemon session (reused:true) — it ATTACHES via the
+ *  grid WS, it does NOT mint a duplicate PTY. `sandbox: true` asks the daemon
+ *  to re-echo the backend (belt-and-suspenders), and `sandboxBackend` is
+ *  stamped from the event so TabBar lights the D9 orange marker immediately.
+ *  The tab is appended WITHOUT switching the active tab — surfacing an
+ *  externally-spawned cell must never yank the user off their current tab. */
+export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
+  // Scope: only adopt REAL sandbox cells. Non-sandbox sessions carry no
+  // `sandbox_backend` and are owned by the workspace-scoped consumer (for
+  // `tab-` sessions) or simply not surfaced — parity-safe default-OFF.
+  const backend = event.sandbox_backend
+  if (!backend) return false
+  const agentName = event.agent_name
+  if (!agentName) return false
+
+  const state = useTabsStore.getState()
+  // De-dupe: the spawning/owning window (or a re-delivered event) already has
+  // it — do nothing. Prevents the double-adopt the PRD calls out.
+  if (isApiSandboxSessionSurfaced(state, agentName, event.session_id)) return false
+
+  // Use a fresh local paneGroup/terminal id — the cell is keyed daemon-side by
+  // `attachAgentName`, not by a `tab-`-shaped id, so the local id is purely the
+  // pane's own identity for the grid WS attach.
+  const paneGroupId = crypto.randomUUID()
+  const tab = buildAdoptedTerminalTab({
+    paneGroupId,
+    cwd: event.workspace_path || '',
+    command: event.command ?? undefined,
+    args: event.args.length > 0 ? event.args : undefined,
+    sessionId: event.session_id,
+    attachAgentName: agentName,
+    sandbox: true,
+    sandboxBackend: backend,
+  })
+  // alacritty-v2 is the daemon-owned renderer; makeTerminalPaneGroup stamps the
+  // user's current renderer preference, so force v2 explicitly — the daemon
+  // session it attaches to IS a v2 session.
+  const firstItem = [...tab.paneGroups.values()][0]?.items[0]
+  if (firstItem?.type === 'terminal') {
+    (firstItem.data as TerminalItemData).renderer = 'alacritty-v2'
+  }
+  console.warn(
+    `[tabs] api-sandbox adoption — surfacing cell agent=${agentName} backend=${backend} as a new tab`,
+  )
+  useTabsStore.setState((s) => ({ tabs: [...s.tabs, tab] }))
+  return true
+}
+
+/** Wire the app-level API-sandbox adoption consumer. Call ONCE at app boot.
+ *  Returns an unsubscribe fn. The `onSessionAddedApp` registry is module-level
+ *  and survives host switches, so a single registration covers the app
+ *  lifetime; on a host switch the new host's app-level WS feeds the same
+ *  registry. */
+export function initApiSandboxTabAdoption(): UnsubscribeFn {
+  return onSessionAddedApp((event) => {
+    try {
+      adoptApiSandboxSession(event)
+    } catch (err) {
+      console.warn('[tabs] api-sandbox adoption failed:', err)
+    }
+  })
 }
 
 // ── 0.39.39 (#676/#677) tab-title snapshot + remote-reorder re-fetch ───────

@@ -79,6 +79,18 @@ pub enum SessionEvent {
         /// post-cleanup phase that may add legacy events.
         #[serde(rename = "isV2")]
         is_v2: bool,
+        /// P3c (D1) — the resolved sandbox backend name, present ONLY when
+        /// this session runs under a REAL sandbox (e.g. `"microvm"`); `None`
+        /// for the default passthrough / bare-PTY path. This mirrors the
+        /// `v2/spawn` echo rule (only-surface-a-real-backend) so a non-sandbox
+        /// `SessionAdded` is byte-identical to pre-P3c (the renderer's generic
+        /// tab-adoption consumer reads it to light the D9 orange marker
+        /// immediately on an externally / API-spawned cell).
+        ///
+        /// **Additive + serde-optional.** Skipped from the wire when `None`
+        /// so older clients ignore it and the default path emits no new key.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sandbox_backend: Option<String>,
     },
     /// A session has been removed from the v2 map. Emitted from
     /// `v2_session_map::unregister` (which is the single chokepoint
@@ -727,6 +739,7 @@ mod tests {
             args: vec![],
             session_id: probe_id.clone(),
             is_v2: true,
+            sandbox_backend: None,
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         loop {
@@ -782,5 +795,46 @@ mod tests {
         // Trailing-slash tolerance.
         assert!(matches("/x/K2SO/", "/x/K2SO"));
         assert!(matches("/x/K2SO", "/x/K2SO/"));
+    }
+
+    /// P3c (D1) FROZEN WIRE CONTRACT: a `SessionAdded` for a REAL sandbox cell
+    /// carries `sandbox_backend: "microvm"` so the renderer's generic
+    /// tab-adoption consumer can light the D9 orange marker. A passthrough /
+    /// bare-PTY session omits the key entirely (`skip_serializing_if = None`),
+    /// keeping a normal `SessionAdded` byte-identical to pre-P3c (older clients
+    /// + the default path see no new field).
+    #[test]
+    fn session_added_sandbox_backend_serialization_contract() {
+        // Real sandbox cell → the key is present and equals "microvm".
+        let sandboxed = as_json(&SessionEvent::SessionAdded {
+            workspace_path: "/home/u/.k2/sandbox-sessions/abc".into(),
+            pane_group_id: None,
+            agent_name: "api-owner-uuid".into(),
+            command: Some("claude".into()),
+            args: vec!["--dangerously-skip-permissions".into()],
+            session_id: "sess-1".into(),
+            is_v2: true,
+            sandbox_backend: Some("microvm".into()),
+        });
+        assert_eq!(sandboxed["kind"], "session_added");
+        assert_eq!(sandboxed["sandbox_backend"], "microvm");
+        assert_eq!(sandboxed["isV2"], true);
+
+        // Passthrough / bare-PTY → the key is OMITTED entirely (default-OFF
+        // parity: no new wire key for a normal tab).
+        let plain = as_json(&SessionEvent::SessionAdded {
+            workspace_path: "/x/foo".into(),
+            pane_group_id: Some("pg-1".into()),
+            agent_name: "tab-pg-1".into(),
+            command: Some("zsh".into()),
+            args: vec![],
+            session_id: "sess-2".into(),
+            is_v2: true,
+            sandbox_backend: None,
+        });
+        assert!(
+            plain.get("sandbox_backend").is_none(),
+            "a non-sandbox SessionAdded must omit sandbox_backend (byte-identical to pre-P3c): {plain:?}",
+        );
     }
 }

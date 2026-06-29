@@ -22,7 +22,24 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use k2_core::log_debug;
 use k2_core::session::SessionId;
+use k2_core::terminal::sandbox::SandboxSpec;
 use k2_core::terminal::DaemonPtySession;
+
+/// P3c (D1) — resolve the `sandbox_backend` label that rides a `SessionAdded`
+/// event for a session spawned under `spec`. Returns `None` for the default
+/// [`SandboxSpec::Passthrough`] (every bare-PTY / non-sandbox spawn + every
+/// macOS / feature-off build) so a normal `SessionAdded` is byte-identical to
+/// pre-P3c; returns `Some(<resolved backend name>)` for any real sandbox spec
+/// (in practice only `Microvm`, which resolves to `"microvm"` on a Linux build
+/// with the `sandbox-microvm` feature — exactly where the renderer's D9 orange
+/// marker should light). Mirrors the v2/spawn echo's only-surface-a-real-backend
+/// rule.
+fn sandbox_backend_label(spec: SandboxSpec) -> Option<String> {
+    match spec {
+        SandboxSpec::Passthrough => None,
+        _ => Some(spec.backend().name().to_string()),
+    }
+}
 
 type AgentMap = Arc<Mutex<HashMap<String, Arc<DaemonPtySession>>>>;
 
@@ -72,6 +89,15 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
     let pane_group_id_opt = crate::session_events::pane_group_id_from_agent(&key);
+    // P3c (D1) — surface the resolved sandbox backend name ONLY for a REAL
+    // sandbox cell, mirroring the v2/spawn echo's only-surface-a-real-backend
+    // rule. The default `Passthrough` (every bare-PTY / non-sandbox spawn, and
+    // EVERY macOS / feature-off build) emits `None`, so a normal `SessionAdded`
+    // stays byte-identical to pre-P3c. In practice only `Microvm` ever reaches
+    // the `_ => Some(...)` branch — a `FailClosed` resolution Errs at spawn and
+    // never registers a session — so the value is `Some("microvm")` exactly
+    // where the D9 orange marker should light.
+    let sandbox_backend = sandbox_backend_label(session.sandbox);
     let _ = crate::session_events::emit(
         crate::session_events::SessionEvent::SessionAdded {
             workspace_path: cwd.clone(),
@@ -81,6 +107,7 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
             args: session.args.clone(),
             session_id: session.session_id.to_string(),
             is_v2: true,
+            sandbox_backend,
         },
     );
 
@@ -378,4 +405,33 @@ fn is_legacy_canonical_key(k: &str) -> bool {
         && bytes[18] == b'-'
         && bytes[23] == b'-'
         && bytes[36] == b':'
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P3c (D1) — the default passthrough spec carries NO sandbox backend, so a
+    /// normal `SessionAdded` is byte-identical to pre-P3c (no new wire key).
+    #[test]
+    fn sandbox_backend_label_is_none_for_passthrough() {
+        assert_eq!(sandbox_backend_label(SandboxSpec::Passthrough), None);
+    }
+
+    /// P3c (D1) — a real sandbox spec surfaces a backend label so the renderer's
+    /// generic tab-adoption consumer can light the D9 orange marker. The exact
+    /// name is platform-resolved (`"microvm"` on a Linux `sandbox-microvm`
+    /// build), so assert only that SOME label rides the event; the serialization
+    /// contract test in `session_events.rs` pins the `"microvm"` wire shape.
+    #[test]
+    fn sandbox_backend_label_is_some_for_real_sandbox() {
+        let label = sandbox_backend_label(SandboxSpec::Microvm);
+        assert!(
+            label.is_some(),
+            "a real sandbox spec must surface a backend label, got {label:?}",
+        );
+        // On a Linux microVM build it is exactly "microvm"; everywhere else the
+        // fail-closed backend name. Never the silent passthrough downgrade.
+        assert_ne!(label.as_deref(), Some("passthrough"));
+    }
 }

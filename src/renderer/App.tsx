@@ -43,7 +43,7 @@ import AgentOps from './components/AgentOps/AgentOps'
 import { useAgentOpsStore } from './stores/agent-ops'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
-import { useTabsStore } from './stores/tabs'
+import { useTabsStore, initApiSandboxTabAdoption } from './stores/tabs'
 import { useSidebarStore } from './stores/sidebar'
 import { useActiveAgentsStore, startAgentPolling, stopAgentPolling } from './stores/active-agents'
 import AgentCloseDialog from './components/AgentCloseDialog/AgentCloseDialog'
@@ -282,6 +282,14 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     let unsub = subscribeToActiveState()
     void refreshActiveSnapshot()
+    // P3c (D2) — generic API-spawned-sandbox tab adoption rides the SAME
+    // app-level session-events socket (via the module-level `onSessionAddedApp`
+    // registry, which survives host switches), so a single registration here
+    // covers the app lifetime. An externally / API-spawned sandbox cell then
+    // surfaces as an orange cockpit tab in this window. Default-OFF: it only
+    // acts on events carrying a real `sandbox_backend` (never fired on Mac /
+    // feature-off builds, which can't deliver a microVM).
+    const offSandboxAdoption = initApiSandboxTabAdoption()
     const offHostChange = onActiveHostChange(() => {
       // Host flipped: tear down the old host's WS, open one against the
       // new host, and pull its snapshot. onActiveHostChange fires AFTER
@@ -293,6 +301,7 @@ export default function App(): React.JSX.Element {
     })
     return () => {
       offHostChange()
+      offSandboxAdoption()
       unsub()
     }
   }, [])

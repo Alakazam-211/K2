@@ -297,6 +297,7 @@ mod tests {
             args: vec![],
             session_id: "00000000-0000-0000-0000-000000000000".into(),
             is_v2: true,
+            sandbox_backend: None,
         }
     }
 

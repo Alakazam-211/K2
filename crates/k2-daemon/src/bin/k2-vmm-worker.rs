@@ -63,7 +63,32 @@ mod worker {
     // ── Pinned constants ────────────────────────────────────────────────────
     // Filesystem locations of the pre-staged guest base + libkrun runtime.
     // Assembled once by the on-box bootstrap (`p2b-onbox-bootstrap.md` §5b).
-    const GUEST_BASE: &str = "/opt/k2/guest-base";
+    /// Base guest image dir (the RO overlay lowerdir). Overridable via
+    /// `K2_SANDBOX_GUEST_BASE` so a box can point at a freshly-built rootfs
+    /// (e.g. `/opt/k2/guest-base-v2`) without a rebuild; defaults to the
+    /// canonical path. An empty/whitespace override falls back to the default.
+    const GUEST_BASE_DEFAULT: &str = "/opt/k2/guest-base";
+    fn guest_base() -> String {
+        std::env::var("K2_SANDBOX_GUEST_BASE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| GUEST_BASE_DEFAULT.to_string())
+    }
+
+    /// In-guest init wrapper: mounts the workspace virtio-fs at `/workspace`,
+    /// starts the cell-channel vsock↔UDS forwarder, then `exec "$@"`s the real
+    /// shell. The worker execs THIS (libkrun sets argv[0]) and passes the real
+    /// program+args as its argv. Overridable via `K2_SANDBOX_GUEST_INIT`; set
+    /// to empty to exec the program directly (legacy / smoke rootfs that has no
+    /// init wrapper). The guest image (Sandbox B1) installs it at this path.
+    const GUEST_INIT_DEFAULT: &str = "/usr/local/bin/k2-guest-init";
+    fn guest_init() -> Option<String> {
+        match std::env::var("K2_SANDBOX_GUEST_INIT") {
+            Ok(s) if s.trim().is_empty() => None,
+            Ok(s) => Some(s),
+            Err(_) => Some(GUEST_INIT_DEFAULT.to_string()),
+        }
+    }
     const LIBKRUN_LIBDIR: &str = "/usr/local/lib64";
     const DEV_KVM: &str = "/dev/kvm";
     /// Dedicated unprivileged identity the jail drops to. An escape lands as
@@ -143,6 +168,11 @@ mod worker {
             out_fd: i32,
             err_fd: i32,
         ) -> i32;
+        // Enables the guest vsock DEVICE. MUST be called before any
+        // krun_add_vsock_port2 — without it libkrun's vsock_config is
+        // Disabled and port2 returns -19 ENODEV. tsi_features=0 = a plain
+        // vsock device with NO transparent-socket-impl hijack.
+        fn krun_add_vsock(ctx_id: u32, tsi_features: u32) -> i32;
         fn krun_add_vsock_port2(
             ctx_id: u32,
             port: u32,
@@ -527,8 +557,9 @@ mod worker {
         }
 
         // Base guest image dir present (the RO overlay lowerdir).
-        if !Path::new(GUEST_BASE).is_dir() {
-            return fail(format!("guest base image dir missing: {GUEST_BASE}"));
+        let gb = guest_base();
+        if !Path::new(&gb).is_dir() {
+            return fail(format!("guest base image dir missing: {gb}"));
         }
 
         // Dedicated unprivileged uid/gid exist + uid is a member of `kvm`.
@@ -697,7 +728,7 @@ mod worker {
         }
         let ov = format!(
             "lowerdir={},upperdir={},workdir={}",
-            GUEST_BASE,
+            guest_base(),
             upper.display(),
             work.display()
         );
@@ -1241,8 +1272,15 @@ mod worker {
             return fail(format!("krun_set_workdir: {r}"));
         }
 
-        // Cell socket → vsock port (forwarder = guest userland, DEFERRED M1).
+        // Cell socket → vsock port. The in-guest forwarder (Sandbox B1/B2)
+        // dials vsock CID-host:HOOK_PORT and proxies to /run/k2-hook.sock so
+        // the agent's `k2`/`claude` reach the daemon's cell_server.
         if cfg.cell_socket.is_some() {
+            // Enable the vsock device FIRST (else port2 → -19 ENODEV).
+            let r = unsafe { krun_add_vsock(ctx, 0) };
+            if r < 0 {
+                return fail(format!("krun_add_vsock: {r}"));
+            }
             let csock = cstr("/cell.sock", &mut keep)?;
             let r = unsafe { krun_add_vsock_port2(ctx, HOOK_PORT, csock, false) };
             if r < 0 {
@@ -1256,11 +1294,24 @@ mod worker {
             return fail(format!("krun_add_virtio_console_default: {r}"));
         }
 
-        // Exec: program + ARGS-ONLY (libkrun sets argv[0]=program) + guest env.
-        let exec = cstr(&cfg.program, &mut keep)?;
+        // Exec: run the in-guest init wrapper (mounts /workspace + starts the
+        // cell-channel forwarder, then `exec "$@"`) with the real program+args
+        // as ITS argv, so the guest comes up before the shell. With
+        // K2_SANDBOX_GUEST_INIT="" we exec the program directly (legacy / smoke
+        // rootfs). libkrun sets argv[0]=exec_path and takes ARGS-ONLY here.
+        let (exec_path, exec_argv): (String, Vec<String>) = match guest_init() {
+            Some(init) => {
+                let mut a = Vec::with_capacity(cfg.program_args.len() + 1);
+                a.push(cfg.program.clone());
+                a.extend(cfg.program_args.iter().cloned());
+                (init, a)
+            }
+            None => (cfg.program.clone(), cfg.program_args.clone()),
+        };
+        let exec = cstr(&exec_path, &mut keep)?;
         // argv: args only, NULL-terminated.
         let mut argv: Vec<*const libc::c_char> = Vec::new();
-        for a in &cfg.program_args {
+        for a in &exec_argv {
             argv.push(cstr(a, &mut keep)?);
         }
         argv.push(std::ptr::null());

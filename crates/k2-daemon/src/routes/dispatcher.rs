@@ -328,6 +328,11 @@ async fn handle_one_request(
             | "/cli/daemon/update/check"
             | "/cli/daemon/update/start"
             | "/cli/daemon/update/apply"
+            // #58 Phase-1 close — global scoped-hook-token kill switch.
+            // OWNER-ONLY (require_owner, NOT owner-or-admin) panic switch:
+            // bumps the global hook epoch so EVERY minted scoped token goes
+            // stale at once. Method-gated per-handler below.
+            | "/cli/daemon/hook-revoke-all"
             // K2SO 0.39.35 — Shape A phase-relay: the co-located Tauri app
             // POSTs its updater's phase back here so the daemon's
             // update/status poll surfaces it uniformly. Owner/admin-gated +
@@ -1343,6 +1348,34 @@ async fn handle_one_request(
                     let _ = tx.send(());
                 });
             }
+            return DispatchOutcome::Done;
+        }
+        // #58 Phase-1 close — POST /cli/daemon/hook-revoke-all. The global
+        // scoped-hook-token KILL SWITCH: bump the daemon-wide hook epoch so
+        // every already-minted scoped token (stamped with the old epoch) goes
+        // stale at once (instant + restart-surviving). OWNER-ONLY — this is a
+        // documented panic switch, NOT owner-or-admin: a connect-user (even an
+        // Admin) must not be able to mass-revoke the box's agent credentials.
+        // Method-gated (require_post) so a stray GET can't trip it
+        // (feedback_post_only_route_guards). Additive: this is the ONLY new
+        // arm in the core dispatcher for #58 — the verb channel touches this
+        // file zero times.
+        "/cli/daemon/hook-revoke-all" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            crate::session_token::revoke_all();
+            super::http::send_response(
+                &mut *stream,
+                "200 OK",
+                "application/json",
+                r#"{"ok":true,"revoked":"all-scoped-hook-tokens"}"#,
+            )
+            .await;
             return DispatchOutcome::Done;
         }
         // ── K2SO P3 — remote daemon self-UPDATE (binary-swap shape) ─────────

@@ -32,6 +32,8 @@ use std::net::TcpStream;
 use std::sync::Mutex as StdMutex;
 
 use k2_core::connect_users::{self, Role};
+use k2_core::session::SessionId;
+use k2_daemon::session_token::{self, HookPrincipal};
 use k2_daemon::test_harness;
 
 /// Serialize: connect-users sessions/lockouts (in-memory singletons),
@@ -1433,6 +1435,101 @@ async fn update_apply_unknown_job_passes_gate_then_400() {
         );
         assert!(r.body.contains("unknown job_id"), "body should explain; body={}", r.body);
         // Test process is STILL ALIVE — no swap, no restart fired.
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Group 10 — #58 Phase-1 close: owner-over-TCP /hook/complete parity (flag
+// ON) + the owner-only /cli/daemon/hook-revoke-all kill switch.
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hook_complete_owner_token_over_tcp_is_200_even_with_flag_on() {
+    let _g = lock();
+    with_temp_home(|| {
+        // Flag ON: the scoped machinery is live, but the OWNER arm of
+        // /hook/complete (ct_eq_token) is independent of it — Phase 1 is
+        // dual-accept, so the owner token keeps completing the hook over TCP.
+        std::env::set_var("K2_HOOK_SCOPED", "1");
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let r = http(
+            d.port,
+            "GET",
+            &format!("/hook/complete?token={OWNER_TOKEN}&paneId=p1&eventType=stop"),
+            None,
+        );
+        assert_eq!(
+            r.status, 200,
+            "owner token must still complete the hook over TCP with the scoped flag ON; body={}",
+            r.body
+        );
+        std::env::remove_var("K2_HOOK_SCOPED");
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hook_revoke_all_is_owner_only_and_kills_scoped_tokens() {
+    let _g = lock();
+    with_temp_home(|| {
+        // Mint a REAL scoped token via the process registry (under temp HOME).
+        let sid = SessionId::new();
+        let principal = HookPrincipal {
+            workspace_uuid: "ws-revoke".to_string(),
+            agent_address: "agent-revoke".to_string(),
+        };
+        let token = session_token::mint_session_token(&sid, "pane-1", principal);
+        assert!(
+            session_token::validate_hook(&token).is_some(),
+            "freshly minted scoped token validates"
+        );
+
+        let member = seed_user_session("revoke_member", "password123", Role::Member);
+        let admin = seed_user_session("revoke_admin", "password123", Role::Admin);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        // GET → 405 (POST-only kill switch; a stray GET must not trip it).
+        let r = http(
+            d.port,
+            "GET",
+            &format!("/cli/daemon/hook-revoke-all?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(r.status, 405, "GET hook-revoke-all must be 405; body={}", r.body);
+
+        // Member session → 403; Admin session → 403 (OWNER-ONLY, NOT
+        // owner-or-admin — a connect-user must not mass-revoke agent creds).
+        for (who, tok) in [("member", &member), ("admin", &admin)] {
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/daemon/hook-revoke-all?token={tok}"),
+                Some(""),
+            );
+            assert_eq!(r.status, 403, "{who} session must NOT revoke-all; body={}", r.body);
+        }
+        // The rejected calls did NOT fire revoke_all — the token still validates.
+        assert!(
+            session_token::validate_hook(&token).is_some(),
+            "scoped token survives the rejected (non-owner) revoke-all calls"
+        );
+
+        // Owner token → 200, and EVERY minted scoped token is now stale.
+        let r = http(
+            d.port,
+            "POST",
+            &format!("/cli/daemon/hook-revoke-all?token={OWNER_TOKEN}"),
+            Some(""),
+        );
+        assert_eq!(r.status, 200, "owner revoke-all must 200; body={}", r.body);
+        assert!(
+            r.body.contains("all-scoped-hook-tokens"),
+            "200 body acks the global kill switch; body={}",
+            r.body
+        );
+        assert!(
+            session_token::validate_hook(&token).is_none(),
+            "after the owner revoke-all the prior scoped token validates to None"
+        );
     });
 }
 

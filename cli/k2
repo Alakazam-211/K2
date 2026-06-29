@@ -18,6 +18,13 @@ set -euo pipefail
 PORT="${K2_PORT:-${K2SO_PORT:-}}"
 TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
 
+# #58 Phase-1 close — capture the per-cell SCOPED token NOW, before the
+# disk-owner inversion (below, ~:100) clobbers $TOKEN with the daemon owner
+# token. The scoped token is what the per-cell UDS arm authenticates with
+# (Bearer); the owner token rides the TCP fallback arm. Empty outside a
+# scoped cell (the UDS arm is then skipped — see cli_send).
+SCOPED_TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
+
 # Daemon home: ~/.k2 post-0.40 (the migration leaves ~/.k2so as a compat
 # symlink, so either resolves to the same files — prefer the new name,
 # fall back for a not-yet-migrated machine).
@@ -180,6 +187,80 @@ cli_post_form() {
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/x-www-form-urlencoded" \
         --data-raw "$body" 2>/dev/null
+}
+
+# ── #58 Phase-1 close: scoped per-cell UDS arms ──────────────────────────
+# These mirror cli_request / cli_post_form / cli_post_json but talk over the
+# per-cell Unix socket ($K2_HOOK_SOCK) with the SCOPED token as a Bearer
+# header. They deliberately OMIT `token=` (Bearer instead) and `project=` /
+# `from=` (the daemon stamps the sender identity + the agent's own-workspace
+# path SERVER-SIDE from the socket-bound principal — the body is never
+# trusted for identity). Recipient/routing args (`workspace=`, inbox `id=`,
+# etc.) are passed through by the caller exactly as for the TCP arms.
+_hook_sock() { echo "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"; }
+
+cli_request_uds() {
+    local endpoint="$1"; shift
+    local params=""
+    for param in "$@"; do params="${params}${params:+&}${param}"; done
+    curl -sG --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+        --connect-timeout 5 --max-time 30 \
+        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+        ${params:+-d "$params"} 2>/dev/null
+}
+
+cli_post_form_uds() {
+    local endpoint="$1"; shift
+    local body=""
+    for param in "$@"; do body="${body}${body:+&}${param}"; done
+    curl -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+        --connect-timeout 5 --max-time 30 \
+        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        --data-raw "$body" 2>/dev/null
+}
+
+cli_post_json_uds() {
+    local endpoint="$1"
+    local body="${2:-}"
+    if [ -z "$body" ]; then body="$(cat)"; fi
+    curl -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+        --connect-timeout 5 --max-time 30 \
+        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+        -H "Content-Type: application/json" \
+        --data-raw "$body" 2>/dev/null
+}
+
+# Verbs the scoped per-cell socket actually serves (the daemon allowlist).
+# Anything else stays on TCP+owner.
+_uds_eligible() {
+    case "$1" in
+        /cli/workspace/msg|/cli/awareness/publish) return 0 ;;
+        /cli/inbox/*|/cli/review-checklist/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# cli_send <tcp_fn> <endpoint> [args...] — channel selector.
+# When a per-cell scoped socket is present AND the endpoint is UDS-eligible,
+# try the matching `<tcp_fn>_uds` arm; on success (rc==0, non-empty, and NOT
+# the daemon's "route not served on cell socket" 404 sentinel) print + return.
+# Otherwise fall through to the TCP arm `<tcp_fn>` (owner token via the
+# disk-inversion) — so a flag-OFF / rolled-back daemon, a transport failure,
+# or an unserved route NEVER strands the verb. The UDS arm uses $SCOPED_TOKEN,
+# the TCP arm uses $TOKEN (the disk owner token).
+cli_send() {
+    local fn="$1" endpoint="$2"; shift 2
+    local sock; sock="$(_hook_sock)"
+    if [ -n "$sock" ] && [ -S "$sock" ] && _uds_eligible "$endpoint"; then
+        local out rc
+        out="$("${fn}_uds" "$endpoint" "$@")"; rc=$?
+        if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]]; then
+            printf '%s' "$out"
+            return 0
+        fi
+    fi
+    "$fn" "$endpoint" "$@"
 }
 
 # ── Remote target addressing (K2-as-a-server, 0.40.x) ────────────────
@@ -3148,12 +3229,14 @@ except Exception:
     [[ -n "$wake_timeout" ]] && params="${params}&wake_timeout=$(urlencode "$wake_timeout")"
 
     local response
-    response=$(cli_post_form "/cli/workspace/msg" "$params")
+    # #58 Phase-1 close: prefer the scoped per-cell UDS for msg (the daemon
+    # stamps `from` server-side); falls back to TCP+owner transparently.
+    response=$(cli_send cli_post_form "/cli/workspace/msg" "$params")
     local rc=$?
     # Back-compat: a pre-0.39.45 daemon 405s the POST form (route not
     # POST-allowlisted there). Retry once via the legacy GET query path.
     if echo "$response" | grep -q "method not allowed"; then
-        response=$(cli_request "/cli/workspace/msg" "$params")
+        response=$(cli_send cli_request "/cli/workspace/msg" "$params")
         rc=$?
     fi
     echo "$response"
@@ -3366,7 +3449,7 @@ print(json.dumps(signal))
 PY
 )
 
-    cli_post_json "/cli/awareness/publish" "$body"
+    cli_send cli_post_json "/cli/awareness/publish" "$body"
     echo
 }
 
@@ -5662,9 +5745,9 @@ cmd_inbox_list() {
     local params=""
     [[ -n "$folder" ]] && params="folder=$(urlencode "$folder")"
     if [[ -n "$params" ]]; then
-        cli_request "/cli/inbox/list" "$params" | format_inbox
+        cli_send cli_request "/cli/inbox/list" "$params" | format_inbox
     else
-        cli_request "/cli/inbox/list" | format_inbox
+        cli_send cli_request "/cli/inbox/list" | format_inbox
     fi
 }
 
@@ -5674,7 +5757,7 @@ cmd_inbox_read() {
         echo "Usage: k2 inbox read <id>" >&2
         exit 1
     fi
-    cli_request "/cli/inbox/read" "id=$(urlencode "$id")" | python3 -c "
+    cli_send cli_request "/cli/inbox/read" "id=$(urlencode "$id")" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -5712,7 +5795,7 @@ cmd_inbox_compose() {
     # 0.39.45 (#35/#37): real POST body. The old `curl -sG -X POST` put
     # everything on the URL, where the daemon's request-head cap silently
     # clipped bodies at ~2.7KB — corrupting the durable inbox record.
-    cli_post_form "/cli/inbox/compose" "$params"
+    cli_send cli_post_form "/cli/inbox/compose" "$params"
     echo
 }
 
@@ -5722,9 +5805,12 @@ cmd_inbox_respond() {
         echo "Usage: k2 inbox respond <id> \"text\"" >&2
         exit 1
     fi
-    curl -sG -X POST "${BASE_URL}/cli/inbox/respond" \
-        --connect-timeout 5 --max-time 30 \
-        -d "token=${TOKEN}&project=$(urlencode "$PROJECT")&id=$(urlencode "$id")&text=$(urlencode "$text")" 2>/dev/null
+    # #58 Phase-1 close: scoped UDS arm (daemon stamps identity + own-
+    # workspace path); transparent TCP+owner fallback. The mutating params
+    # ride the form body, which the daemon's inbox POST arm merges with the
+    # query — same contract as the prior raw `curl -sG -X POST`.
+    cli_send cli_post_form "/cli/inbox/respond" \
+        "id=$(urlencode "$id")" "text=$(urlencode "$text")"
     echo
 }
 
@@ -5734,9 +5820,8 @@ cmd_inbox_move() {
         echo "Usage: k2 inbox move <id> <folder>" >&2
         exit 1
     fi
-    curl -sG -X POST "${BASE_URL}/cli/inbox/move" \
-        --connect-timeout 5 --max-time 30 \
-        -d "token=${TOKEN}&project=$(urlencode "$PROJECT")&id=$(urlencode "$id")&folder=$(urlencode "$folder")" 2>/dev/null
+    cli_send cli_post_form "/cli/inbox/move" \
+        "id=$(urlencode "$id")" "folder=$(urlencode "$folder")"
     echo
 }
 
@@ -5746,9 +5831,7 @@ cmd_inbox_archive() {
         echo "Usage: k2 inbox archive <id>" >&2
         exit 1
     fi
-    curl -sG -X POST "${BASE_URL}/cli/inbox/archive" \
-        --connect-timeout 5 --max-time 30 \
-        -d "token=${TOKEN}&project=$(urlencode "$PROJECT")&id=$(urlencode "$id")" 2>/dev/null
+    cli_send cli_post_form "/cli/inbox/archive" "id=$(urlencode "$id")"
     echo
 }
 
@@ -5758,9 +5841,7 @@ cmd_inbox_delete() {
         echo "Usage: k2 inbox delete <id>" >&2
         exit 1
     fi
-    curl -sG -X POST "${BASE_URL}/cli/inbox/delete" \
-        --connect-timeout 5 --max-time 30 \
-        -d "token=${TOKEN}&project=$(urlencode "$PROJECT")&id=$(urlencode "$id")" 2>/dev/null
+    cli_send cli_post_form "/cli/inbox/delete" "id=$(urlencode "$id")"
     echo
 }
 
@@ -5770,11 +5851,11 @@ cmd_inbox_search() {
         echo "Usage: k2 inbox search \"query\"" >&2
         exit 1
     fi
-    cli_request "/cli/inbox/search" "q=$(urlencode "$q")" | format_inbox
+    cli_send cli_request "/cli/inbox/search" "q=$(urlencode "$q")" | format_inbox
 }
 
 cmd_inbox_folders() {
-    cli_request "/cli/inbox/folders" | python3 -c "
+    cli_send cli_request "/cli/inbox/folders" | python3 -c "
 import json, sys
 try:
     folders = json.loads(sys.stdin.read() or '[]')

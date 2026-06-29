@@ -67,15 +67,17 @@ use k2_core::session::SessionId;
 /// `connect_users::SESSION_RECORD_VERSION`.
 const STORE_VERSION: u32 = 1;
 
-/// Default token TTL — a **multi-hour, ~session-lifetime** window, NOT a
-/// short rotation. Per PRD §3.1 the security property rides EPOCH
-/// revocation (instant, restart-surviving), so the TTL is kept OFF the
-/// live critical path: a short TTL would strand every agent on the box
-/// each rotation cycle mid-client-work.
-const DEFAULT_TTL_HOURS: i64 = 12;
-
-/// Hard ceiling on a single token's lifetime regardless of TTL refreshes.
-const MAX_LIFETIME_HOURS: i64 = 24;
+/// Token lifetime — a **multi-hour, ~session-lifetime** window, NOT a short
+/// rotation. The security boundary is EPOCH revocation at cell teardown
+/// (instant + restart-surviving — `revoke_session` is called from the
+/// child-exit observer, `v2_spawn.rs`), so the TTL is deliberately kept OFF
+/// the live critical path and is only a generous backstop that DOES apply
+/// (a token older than this stops validating even if the daemon never saw
+/// the teardown). There is no live-path rotation / sliding re-mint: a
+/// running cell's env can't be mutated after spawn, so a short TTL would
+/// strand every agent on the box mid-client-work each rotation cycle. PRD
+/// §3.1/§6 de-risks the fixed TTL as non-load-bearing.
+const TOKEN_LIFETIME_HOURS: i64 = 24;
 
 // ─────────────────────────────────────────────────────────────────────
 // Feature flag
@@ -140,7 +142,8 @@ struct TokenRecord {
     /// constant-time-compared against this; the raw secret is never stored.
     token_digest: String,
     created_at: DateTime<Utc>,
-    /// `min(created_at + TTL, created_at + MAX_LIFETIME)`.
+    /// `created_at + TOKEN_LIFETIME_HOURS` — the generous backstop TTL
+    /// (epoch-revoke at teardown is the real boundary).
     expires_at: DateTime<Utc>,
     /// The session's epoch captured at mint. Validation rejects the record
     /// when it != the CURRENT `session_epochs[sid]` (mirror of
@@ -203,8 +206,7 @@ impl SessionTokenRegistry {
         let sid = session_id.to_string();
         let secret = new_secret();
         let now = Utc::now();
-        let expires_at = (now + Duration::hours(DEFAULT_TTL_HOURS))
-            .min(now + Duration::hours(MAX_LIFETIME_HOURS));
+        let expires_at = now + Duration::hours(TOKEN_LIFETIME_HOURS);
         let session_epoch = self.session_epochs.get(&sid).copied().unwrap_or(0);
         let record = TokenRecord {
             version: STORE_VERSION,
@@ -351,6 +353,11 @@ pub fn is_agent_verb(path: &str) -> bool {
     const ALLOW_EXACT: &[&str] = &[
         "/hook/complete",
         "/cli/workspace/msg",
+        // #58 Phase-1 close: awareness publish is the agent's peer-signal
+        // egress (status/reservation/presence). +1 allowlist delta this
+        // release. `subscribe` (a WS) is NOT here — read-only fan-out stays
+        // owner/connect-user over TCP.
+        "/cli/awareness/publish",
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
@@ -366,6 +373,12 @@ pub fn is_agent_verb(path: &str) -> bool {
 /// path is an allowed agent verb AND the token validates against the
 /// process registry. Returns the resolved [`ValidatedHook`] (so the caller
 /// can match `paneId` + attribute the principal) or `None` (→ 403).
+///
+/// The per-cell UDS server ([`crate::cell_server`]) uses the returned
+/// `principal` to STAMP the sender identity (`from` / `project_id` /
+/// awareness `from.*`) server-side: the request body is NEVER trusted for
+/// WHO is sending. The body's recipient/routing args (`workspace`/`target`)
+/// stay client-supplied — they are WHO you address, not WHO you are.
 ///
 /// Deliberately DISJOINT from the owner guards (`token_ok` /
 /// `token_is_owner`): a scoped token is structurally `<sid>.<secret>` and
@@ -756,6 +769,61 @@ mod tests {
         assert!(is_agent_verb("/cli/workspace/msg"));
         assert!(is_agent_verb("/cli/inbox/respond"));
         assert!(is_agent_verb("/cli/review-checklist/toggle"));
+    }
+
+    #[test]
+    fn is_agent_verb_allows_awareness_publish_only() {
+        // #58 Phase-1 close: publish is the +1 allowlist delta; subscribe
+        // (read-only WS) and resolve are NOT widened onto the scoped token.
+        assert!(is_agent_verb("/cli/awareness/publish"));
+        // The deliberate this-release DENIALS (PRD §B SCOPE HONESTY): these
+        // stay owner/connect-user over TCP.
+        for p in [
+            "/cli/awareness/subscribe",
+            "/cli/workspace/resolve",
+            "/cli/sessions/list-for-workspace",
+            "/cli/terminal/write",
+            "/cli/terminal/read",
+        ] {
+            assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
+        }
+    }
+
+    // ── TTL backstop (#58 Phase-1 close: fixed 24h, no clamp) ────────────
+
+    #[test]
+    fn minted_expiry_is_one_lifetime_window_from_creation() {
+        // The fixed TTL applies: expires_at ≈ created_at + 24h. Assert it
+        // lands inside [created+23h, created+25h] (loose bound tolerates the
+        // sub-ms gap between the two `Utc::now()` reads).
+        let mut reg = SessionTokenRegistry::new();
+        let sid = SessionId::new();
+        let _ = reg.mint(&sid, "pane-1", principal());
+        let rec = reg.records.get(&sid.to_string()).expect("record present");
+        let span = rec.expires_at - rec.created_at;
+        assert!(
+            span >= Duration::hours(23) && span <= Duration::hours(25),
+            "expiry must be ~24h after creation, got {span}",
+        );
+    }
+
+    #[test]
+    fn token_thirteen_hours_old_still_validates() {
+        // Under the OLD 12h DEFAULT_TTL this would have expired; the fixed
+        // 24h backstop keeps a 13h-old token live (≈11h remaining).
+        let mut reg = SessionTokenRegistry::new();
+        let sid = SessionId::new();
+        let token = reg.mint(&sid, "pane-1", principal());
+        let rec = reg
+            .records
+            .get_mut(&sid.to_string())
+            .expect("record present");
+        rec.created_at = Utc::now() - Duration::hours(13);
+        rec.expires_at = rec.created_at + Duration::hours(TOKEN_LIFETIME_HOURS);
+        assert!(
+            reg.validate_hook(&token).is_some(),
+            "a 13h-old token is still within the 24h backstop and must validate",
+        );
     }
 
     #[test]

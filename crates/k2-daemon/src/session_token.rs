@@ -539,8 +539,9 @@ pub fn scoped_cell_env_for_token(
     sock_path: &str,
     scoped_token: &str,
     pane_id: &str,
+    hook_port: u16,
 ) -> Vec<(String, String)> {
-    vec![
+    let mut pairs = vec![
         // Scoped per-cell token (NOT the owner token) behind the same key
         // the CLI + notify.sh already read.
         ("K2_HOOK_TOKEN".to_string(), scoped_token.to_string()),
@@ -554,7 +555,24 @@ pub fn scoped_cell_env_for_token(
         ("K2SO_PANE_ID".to_string(), pane_id.to_string()),
         ("K2_TAB_ID".to_string(), pane_id.to_string()),
         ("K2SO_TAB_ID".to_string(), pane_id.to_string()),
-    ]
+    ];
+    // BLOCKER 3 — the in-guest `k2` CLI's connection gate (`cli/k2` ~:130)
+    // refuses to dispatch ANY verb unless BOTH `K2_PORT` and a hook token are
+    // present in the env. The scoped UDS verbs actually transport over
+    // `K2_HOOK_SOCK` (curl `--unix-socket`), NOT TCP — so `K2_PORT` here is a
+    // pure PRESENCE-gate, never dialed from inside the guest (which has no
+    // host TCP reach). We stage the daemon's real loopback port so the gate
+    // passes; the verb then rides the cell socket. Mirrors the dual-name
+    // (`K2_PORT` + `K2SO_PORT`) pattern the normal-session terminal env uses
+    // (`alacritty_backend.rs`). Omitted when the hook server hasn't bound yet
+    // (port 0), exactly like the normal path's `if hook_port > 0` guard — the
+    // socket-bound hook verbs still work, only the TCP fallback is unavailable
+    // (and the guest can't reach TCP anyway).
+    if hook_port > 0 {
+        pairs.push(("K2_PORT".to_string(), hook_port.to_string()));
+        pairs.push(("K2SO_PORT".to_string(), hook_port.to_string()));
+    }
+    pairs
 }
 
 /// Phase 1 spawn entry point: when scoped hooks are ON, mint a per-cell
@@ -574,10 +592,15 @@ pub fn cell_env_pairs(
     }
     let token = mint_session_token(session_id, pane_id, principal);
     let sock = crate::cell_uds::cell_socket_path(session_id);
+    // The daemon's actual loopback hook port — same source the normal-session
+    // terminal env reads (`alacritty_backend.rs`). 0 before the hook server
+    // binds; `scoped_cell_env_for_token` then omits `K2_PORT` (see there).
+    let hook_port = k2_core::hook_config::get_port();
     Some(scoped_cell_env_for_token(
         &sock.to_string_lossy(),
         &token,
         pane_id,
+        hook_port,
     ))
 }
 
@@ -910,7 +933,7 @@ mod tests {
         // and the per-cell socket rides K2_HOOK_SOCK, with K2SO_* aliases.
         let sid = SessionId::new();
         let pane = sid.to_string();
-        let pairs = scoped_cell_env_for_token("/run/cells/x.sock", "sid.secretverifier", &pane);
+        let pairs = scoped_cell_env_for_token("/run/cells/x.sock", "sid.secretverifier", &pane, 54321);
         let map: std::collections::HashMap<_, _> = pairs.into_iter().collect();
 
         // The scoped token REPLACES the owner token behind the same key.
@@ -922,6 +945,27 @@ mod tests {
         // Pane/tab identity the hook script echoes back as paneId.
         assert_eq!(map.get("K2_PANE_ID").map(String::as_str), Some(pane.as_str()));
         assert_eq!(map.get("K2SO_TAB_ID").map(String::as_str), Some(pane.as_str()));
+        // BLOCKER 3 — the daemon's loopback port rides BOTH names so the
+        // in-guest `k2` CLI connection gate (which requires K2_PORT present)
+        // dispatches; the verb still transports over K2_HOOK_SOCK.
+        assert_eq!(map.get("K2_PORT").map(String::as_str), Some("54321"));
+        assert_eq!(map.get("K2SO_PORT").map(String::as_str), Some("54321"));
+    }
+
+    #[test]
+    fn scoped_cell_env_omits_port_when_hook_server_unbound() {
+        // Port 0 = the hook server hasn't bound yet. Mirror the normal-session
+        // env's `if hook_port > 0` guard: omit K2_PORT entirely rather than
+        // stage a bogus `:0`. The socket-bound hook verbs still work; only the
+        // (guest-unreachable) TCP fallback is absent.
+        let sid = SessionId::new();
+        let pane = sid.to_string();
+        let pairs = scoped_cell_env_for_token("/run/cells/x.sock", "sid.secret", &pane, 0);
+        let map: std::collections::HashMap<_, _> = pairs.into_iter().collect();
+        assert!(map.get("K2_PORT").is_none(), "K2_PORT must be omitted at port 0");
+        assert!(map.get("K2SO_PORT").is_none(), "K2SO_PORT must be omitted at port 0");
+        // The token/sock/pane env is still fully present.
+        assert_eq!(map.get("K2_HOOK_SOCK").map(String::as_str), Some("/run/cells/x.sock"));
     }
 
     // ── Phase 1: dual-accept + pane scoping (flag-ON semantics) ──────

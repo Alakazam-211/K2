@@ -448,6 +448,40 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
                 // set stays `{daemon uid}`, default-OFF parity.
                 let microvm_backed =
                     matches!(session.sandbox, k2_core::terminal::SandboxSpec::Microvm);
+                // Sandbox B2 (BLOCKER 2): the in-jail libkrun unix-proxy does
+                // the host-side connect() AS the dedicated `k2cell` uid (the
+                // VMM priv-dropped to it; no guest→host idmap), so a daemon-
+                // owned 0600 socket is EACCES → bytes silently dropped. For a
+                // microVM-backed cell ONLY, chown the socket inode to EXACTLY
+                // that uid (mode left 0600 → reachable by `k2cell` + root,
+                // never world). Fail-closed: if the dedicated user doesn't
+                // resolve, leave it daemon-only and log. A bare-PTY cell never
+                // enters this branch → socket stays 0600 daemon-only,
+                // byte-identical to pre-B2.
+                if microvm_backed {
+                    match crate::cell_uds::resolve_sandbox_cell_uid() {
+                        Some(cell_uid) => {
+                            if let Err(e) = crate::cell_uds::set_cell_socket_owner(
+                                &session_id_for_response,
+                                cell_uid,
+                            ) {
+                                log_debug!(
+                                    "[hook-scoped] WARN chown cell sock to k2cell uid {cell_uid} failed for session={}: {e}; socket stays daemon-only",
+                                    session_id_for_response
+                                );
+                            } else {
+                                log_debug!(
+                                    "[hook-scoped] chowned cell sock to k2cell uid {cell_uid} for microVM session={}",
+                                    session_id_for_response
+                                );
+                            }
+                        }
+                        None => log_debug!(
+                            "[hook-scoped] microVM session={}: k2cell uid unresolved; cell socket stays 0600 daemon-only (fail-closed)",
+                            session_id_for_response
+                        ),
+                    }
+                }
                 crate::cell_server::serve_cell(session_id_for_response, listener, microvm_backed);
                 log_debug!(
                     "[hook-scoped] bound + serving per-cell UDS for session={}",

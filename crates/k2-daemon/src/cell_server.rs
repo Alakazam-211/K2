@@ -235,41 +235,6 @@ mod unix_impl {
         unsafe { libc::geteuid() }
     }
 
-    /// Resolve the dedicated sandbox-cell uid (`k2cell`) the SAME way the
-    /// microVM worker's preflight does: an explicit `K2_SANDBOX_CELL_UID`
-    /// override first, then a passwd lookup by name. Returns `None` when
-    /// neither resolves — on a host without the dedicated user (macOS dev,
-    /// any flag-off box) the microVM peer-uid widening is simply a no-op and
-    /// the allowed set stays `{daemon uid}`.
-    ///
-    /// **Fail-closed:** a uid of 0 is REFUSED (mirrors the worker, which
-    /// refuses to "drop" to root) — we never widen the belt to root.
-    fn resolve_sandbox_cell_uid() -> Option<u32> {
-        if let Ok(s) = std::env::var("K2_SANDBOX_CELL_UID") {
-            return match s.trim().parse::<u32>() {
-                Ok(0) | Err(_) => None,
-                Ok(uid) => Some(uid),
-            };
-        }
-        // getpwnam("k2cell"): the daemon runs OUTSIDE any jail, so NSS is
-        // available here (unlike the worker's post-pivot drop, which is why it
-        // caches numerically). One lookup at serve time per microVM cell.
-        let name = std::ffi::CString::new("k2cell").ok()?;
-        // SAFETY: `name` is a valid NUL-terminated C string kept alive across
-        // the call; `getpwnam` returns a pointer into a static buffer (or
-        // null). We read `pw_uid` out immediately and copy it.
-        let pw = unsafe { libc::getpwnam(name.as_ptr()) };
-        if pw.is_null() {
-            return None;
-        }
-        let uid = unsafe { (*pw).pw_uid };
-        if uid == 0 {
-            None
-        } else {
-            Some(uid)
-        }
-    }
-
     /// Spawn the per-cell accept loop on the tokio runtime. `listener` was
     /// bound synchronously by `handle_v2_spawn` (so a bind failure surfaces
     /// there, before this is called). The loop runs until the socket file is
@@ -304,7 +269,7 @@ mod unix_impl {
         // Per-session widening: ONLY a microVM-backed cell adds the dedicated
         // sandbox uid; otherwise `None` keeps the belt at `{daemon uid}`.
         let cell_uid = if microvm_backed {
-            resolve_sandbox_cell_uid()
+            crate::cell_uds::resolve_sandbox_cell_uid()
         } else {
             None
         };

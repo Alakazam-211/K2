@@ -25,6 +25,10 @@
 #[cfg(unix)]
 pub use unix_impl::{bind_cell_socket, cell_socket_path, cells_dir, peer_cred, PeerCred};
 
+// Sandbox B2 (microVM cell socket perms) — internal to the daemon crate.
+#[cfg(unix)]
+pub(crate) use unix_impl::{resolve_sandbox_cell_uid, set_cell_socket_owner};
+
 #[cfg(unix)]
 mod unix_impl {
     use std::path::PathBuf;
@@ -72,9 +76,98 @@ mod unix_impl {
         }
 
         let listener = std::os::unix::net::UnixListener::bind(&path)?;
-        // 0600 on the socket — only this uid may connect.
+        // 0600 on the socket — only the daemon uid may connect. A microVM-
+        // backed cell additionally chowns this inode to the dedicated `k2cell`
+        // uid AFTER bind (see [`set_cell_socket_owner`]); a bare-PTY cell never
+        // does, so it stays daemon-only — byte-identical to pre-B2.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         Ok(listener)
+    }
+
+    /// Resolve the dedicated sandbox-cell uid (`k2cell`) the SAME way the
+    /// microVM worker's preflight + [`crate::cell_server`]'s peer-cred belt
+    /// do: an explicit `K2_SANDBOX_CELL_UID` override first, then a passwd
+    /// lookup by name. Returns `None` when neither resolves — on a host
+    /// without the dedicated user (macOS dev, any flag-off box) the socket
+    /// chown is simply skipped and the socket stays `0600` daemon-only.
+    ///
+    /// **Fail-closed:** a uid of 0 is REFUSED (mirrors the worker, which
+    /// refuses to "drop" to root) — we never chown the socket to root, which
+    /// would be a no-op widening rather than the intended scoping.
+    ///
+    /// This is the SINGLE shared resolver — `cell_server` calls it for its
+    /// peer-uid belt and `bind`/`set_cell_socket_owner` callers use it for the
+    /// inode owner, so the two can never diverge.
+    pub(crate) fn resolve_sandbox_cell_uid() -> Option<u32> {
+        if let Ok(s) = std::env::var("K2_SANDBOX_CELL_UID") {
+            return match s.trim().parse::<u32>() {
+                Ok(0) | Err(_) => None,
+                Ok(uid) => Some(uid),
+            };
+        }
+        // getpwnam("k2cell"): the daemon runs OUTSIDE any jail, so NSS is
+        // available here (unlike the worker's post-pivot drop, which is why it
+        // caches numerically). One lookup at serve time per microVM cell.
+        let name = std::ffi::CString::new("k2cell").ok()?;
+        // SAFETY: `name` is a valid NUL-terminated C string kept alive across
+        // the call; `getpwnam` returns a pointer into a static buffer (or
+        // null). We read `pw_uid` out immediately and copy it.
+        let pw = unsafe { libc::getpwnam(name.as_ptr()) };
+        if pw.is_null() {
+            return None;
+        }
+        let uid = unsafe { (*pw).pw_uid };
+        if uid == 0 {
+            None
+        } else {
+            Some(uid)
+        }
+    }
+
+    /// Sandbox B2: make a **microVM-backed** cell's socket connectable by
+    /// EXACTLY the dedicated `k2cell` uid (+ root) — scoped, never world.
+    ///
+    /// `bind_cell_socket` leaves the inode `0600` owned by the daemon (root).
+    /// libkrun's unix-proxy performs the host-side `connect()` AS `k2cell`
+    /// (the VMM priv-dropped to that uid; there is no guest→host idmap), so a
+    /// root-owned `0600` inode gives it EACCES and the proxy silently drops
+    /// bytes. We chown the inode to `cell_uid` while KEEPING mode `0600`: the
+    /// owner (`k2cell`) now passes the rw check on `connect()`, and root (the
+    /// daemon, which still holds the listener fd and runs `accept()`) bypasses
+    /// perms regardless. The scope stays exactly `{k2cell, root}` — we never
+    /// touch the mode bits, so this can never become a world/group widening.
+    ///
+    /// `cell_uid` MUST be the resolved dedicated uid from
+    /// [`resolve_sandbox_cell_uid`] (uid 0 already refused there — fail-closed:
+    /// the caller leaves the socket daemon-only when it doesn't resolve). The
+    /// group is left unchanged (gid `-1`).
+    ///
+    /// Unix-only but compiles everywhere `#[cfg(unix)]` (libc::chown is
+    /// portable across unixes); on macOS dev it is reachable only by an
+    /// on-box test with a real second uid.
+    pub(crate) fn set_cell_socket_owner(
+        session_id: &SessionId,
+        cell_uid: u32,
+    ) -> std::io::Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = cell_socket_path(session_id);
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
+        })?;
+        // SAFETY: `c_path` is a valid NUL-terminated path kept alive across the
+        // call. gid `-1` (cast from u32::MAX) means "don't change the group" —
+        // only the owner uid is set; the mode bits (0600) are untouched.
+        let rc = unsafe {
+            libc::chown(
+                c_path.as_ptr(),
+                cell_uid as libc::uid_t,
+                u32::MAX as libc::gid_t,
+            )
+        };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     /// The credential of the process on the other end of an accepted
@@ -241,6 +334,88 @@ mod unix_impl {
 
             drop(listener);
             // Restore HOME + clean up.
+            match prev {
+                Some(p) => std::env::set_var("HOME", p),
+                None => std::env::remove_var("HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+
+        #[test]
+        fn resolve_sandbox_cell_uid_honors_override_and_refuses_root() {
+            // The shared resolver (reused by both cell_server's peer-cred belt
+            // and the cell-socket chown) reads K2_SANDBOX_CELL_UID first.
+            let prev = std::env::var_os("K2_SANDBOX_CELL_UID");
+
+            // A concrete non-zero uid is taken verbatim.
+            std::env::set_var("K2_SANDBOX_CELL_UID", "9001");
+            assert_eq!(
+                resolve_sandbox_cell_uid(),
+                Some(9001),
+                "explicit override uid must be returned"
+            );
+
+            // uid 0 is REFUSED — never chown the socket to root (fail-closed).
+            std::env::set_var("K2_SANDBOX_CELL_UID", "0");
+            assert_eq!(
+                resolve_sandbox_cell_uid(),
+                None,
+                "uid 0 must be refused — never widen to root"
+            );
+
+            // Garbage parses to None (fail-closed), not a panic.
+            std::env::set_var("K2_SANDBOX_CELL_UID", "not-a-number");
+            assert_eq!(
+                resolve_sandbox_cell_uid(),
+                None,
+                "unparseable override must fail-closed to None"
+            );
+
+            match prev {
+                Some(p) => std::env::set_var("K2_SANDBOX_CELL_UID", p),
+                None => std::env::remove_var("K2_SANDBOX_CELL_UID"),
+            }
+        }
+
+        #[test]
+        fn set_cell_socket_owner_to_self_uid_is_a_noop_chown() {
+            // We can't chown to a *different* uid without privilege, but
+            // chowning the socket to our OWN euid is always permitted and
+            // exercises the real `libc::chown` path + leaves the 0600 mode
+            // bits untouched (the scope-preserving invariant). A real
+            // cross-uid `k2cell` chown is only assertable on-box (Linux, with
+            // the dedicated user) — noted in the report.
+            use std::os::unix::fs::PermissionsExt;
+            let prev = std::env::var_os("HOME");
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let tmp = std::path::PathBuf::from(format!(
+                "/tmp/k2c{}{}",
+                std::process::id(),
+                nanos % 100_000
+            ));
+            std::fs::create_dir_all(&tmp).expect("create temp HOME");
+            std::env::set_var("HOME", &tmp);
+
+            let sid = SessionId::new();
+            let listener = bind_cell_socket(&sid).expect("bind per-cell socket");
+            let path = cell_socket_path(&sid);
+
+            // SAFETY: geteuid is always safe.
+            let euid = unsafe { libc::geteuid() };
+            set_cell_socket_owner(&sid, euid).expect("chown socket to own euid");
+
+            // Mode bits MUST remain 0600 — the chown never widens perms.
+            let mode = std::fs::metadata(&path)
+                .expect("stat socket")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "chown must leave mode 0600, got {mode:o}");
+
+            drop(listener);
             match prev {
                 Some(p) => std::env::set_var("HOME", p),
                 None => std::env::remove_var("HOME"),

@@ -162,6 +162,10 @@ pub fn resolve_spawn(
         // FORCE sandbox on — the route refused already if it can't deliver.
         sandbox: Some(true),
         ephemeral_cwd: Some(cwd),
+        // P4-H4: the spawn DOOR (`handle_v1_sandboxes`) acquires the quota slot
+        // and stamps the principal key here AFTER resolve, so the child-exit
+        // observer can release it. The resolver leaves it `None`.
+        principal_key: None,
     })
 }
 

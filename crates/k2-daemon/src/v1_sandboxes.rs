@@ -24,7 +24,7 @@ pub mod policy;
 
 use crate::cli_response::CliResponse;
 use crate::routes::http::V1Principal;
-use crate::{stream_token, v2_spawn};
+use crate::{sandbox_quota, stream_token, v2_spawn};
 
 use policy::{resolve_spawn, ApiSandboxRequest};
 
@@ -54,11 +54,31 @@ pub fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse 
         }
     };
 
-    // (3) Run the POLICY-RESOLVER → host-trusted SpawnRequest. Fail-CLOSED: a
-    // provisioning failure 5xxs (NEVER a $HOME fallback).
-    let spawn_req = match resolve_spawn(principal, &api_req) {
+    // (3) P4-H4 — CONCURRENT-CELL CAP. ACQUIRE a quota slot BEFORE we provision
+    // anything (no ephemeral dir, no spawn) so a rejected request leaves ZERO
+    // side effects. Caps are resolved per-principal (owner = high own-use cap,
+    // api-key = standard cap) + the daemon-global ceiling — all env-overridable.
+    // At the limit → 429 with a machine-readable `code`. The matching RELEASE is
+    // the child-exit observer (authoritative; fires on clean exit AND crash) on
+    // the success path, or an explicit `release` on the early-failure paths
+    // below. This whole route is behind `K2_SANDBOX_API` (default OFF), so
+    // normal v2/spawn + cockpit sessions never reach this counter.
+    let principal_key = principal.display_id();
+    if let Err(qe) = sandbox_quota::try_acquire(&principal_key) {
+        return CliResponse {
+            status: "429 Too Many Requests",
+            content_type: "application/json",
+            body: serde_json::json!({ "error": qe.message(), "code": qe.code() }).to_string(),
+        };
+    }
+
+    // (4) Run the POLICY-RESOLVER → host-trusted SpawnRequest. Fail-CLOSED: a
+    // provisioning failure 5xxs (NEVER a $HOME fallback). On failure we RELEASE
+    // the slot we just acquired (no session ⇒ no observer ⇒ no auto-release).
+    let mut spawn_req = match resolve_spawn(principal, &api_req) {
         Ok(r) => r,
         Err(e) => {
+            sandbox_quota::release(&principal_key);
             return CliResponse {
                 status: e.status(),
                 content_type: "application/json",
@@ -66,14 +86,20 @@ pub fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse 
             }
         }
     };
+    // Stamp the principal key so the child-exit observer RELEASES this session's
+    // quota slot on teardown (the single point that fires on clean exit AND on
+    // crash/OOM/kill-9 — the counter can't leak once a session exists).
+    spawn_req.principal_key = Some(principal_key.clone());
     // Keep a handle to the ephemeral dir so we can clean up if the spawn itself
     // fails (no session ⇒ no child-exit observer ⇒ no automatic teardown).
     let ephemeral_cwd = spawn_req.ephemeral_cwd.clone();
 
-    // (4) Spawn through the PROVEN v2 internals (inherits B3a key-inject, scoped
-    // token/UDS, child-exit teardown incl. the ephemeral-dir rm).
+    // (5) Spawn through the PROVEN v2 internals (inherits B3a key-inject, scoped
+    // token/UDS, child-exit teardown incl. the ephemeral-dir rm + quota release).
     let result = v2_spawn::spawn_session(spawn_req);
     if result.status != "200 OK" {
+        // No session ⇒ no observer ⇒ release the slot we acquired ourselves.
+        sandbox_quota::release(&principal_key);
         cleanup_ephemeral(&ephemeral_cwd);
         // Surface the spawn's own status/body (already a JSON error envelope).
         return CliResponse {
@@ -83,7 +109,10 @@ pub fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse 
         };
     }
 
-    // (5) Parse the spawn response for the new session id + agent name.
+    // (6) Parse the spawn response for the new session id + agent name. NOTE:
+    // these are can't-happen internal errors AFTER a 200 spawn — a live session
+    // (and its child-exit observer) now exists, so the observer OWNS the quota
+    // release; we must NOT release here (that would double-decrement).
     let v: serde_json::Value = match serde_json::from_str(&result.body) {
         Ok(v) => v,
         Err(_) => {
@@ -102,7 +131,7 @@ pub fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse 
         return CliResponse::internal_error("spawn response sessionId was malformed");
     };
 
-    // (6) Mint a per-session STREAM token (bound to THIS session only) and build
+    // (7) Mint a per-session STREAM token (bound to THIS session only) and build
     // the grid/bytes stream URLs. The caller streams with this token — NEVER the
     // API key, which is never accepted on grid/bytes.
     let stream_tok = stream_token::mint(&sid);

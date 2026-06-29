@@ -232,8 +232,14 @@ pub fn spawn_agent_session_v2_blocking(
     // releases when the child PID dies — keeps the idempotency
     // check above accurate without a separate liveness probe.
     // No ephemeral workspace here (this is the canonical pinned-chat spawn, not
-    // a `/v1/sandboxes` API session) → `None` for the teardown dir.
-    crate::v2_spawn::spawn_child_exit_observer(canonical_key.clone(), session.clone(), None);
+    // a `/v1/sandboxes` API session) → `None` for the teardown dir AND `None`
+    // for the P4-H4 quota principal (no concurrent-cell slot was acquired).
+    crate::v2_spawn::spawn_child_exit_observer(
+        canonical_key.clone(),
+        session.clone(),
+        None,
+        None,
+    );
 
     // Drain any pending-live signals queued for this canonical key
     // so they become input to the fresh session. Awareness bus

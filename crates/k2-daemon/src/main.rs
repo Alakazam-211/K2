@@ -76,6 +76,8 @@ mod cell_uds;
 mod session_token;
 // P3b (sandbox / K2-as-a-server): stream tokens + POST /v1/sandboxes + policy.
 mod stream_token;
+// P4-H4: per-principal + global concurrent-cell cap (429); /v1/sandboxes only.
+mod sandbox_quota;
 mod v1_sandboxes;
 mod session_events;
 mod session_events_ws;

@@ -135,6 +135,16 @@ pub struct SpawnRequest {
     /// session, in which case the child-exit observer removes it.
     #[serde(skip)]
     pub ephemeral_cwd: Option<PathBuf>,
+    /// P4-H4: the `/v1/sandboxes` principal whose concurrent-cell quota slot
+    /// this session HOLDS. `#[serde(skip)]` so it NEVER arrives off the wire (a
+    /// caller can't spoof another principal's quota key). `None` for EVERY
+    /// non-API caller (normal v2/spawn + cockpit) → no acquire, no release, exact
+    /// default-OFF parity. `Some(<display_id>)` only when the P4-H4 spawn door
+    /// already `try_acquire`d a slot; the child-exit observer `release`s it on
+    /// teardown (the single authoritative point that fires on clean exit AND on
+    /// crash/OOM/kill-9, so the counter can never leak).
+    #[serde(skip)]
+    pub principal_key: Option<String>,
 }
 
 fn default_cwd() -> String {
@@ -670,7 +680,12 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     // eventually, but eventually-consistent stale data is the kind
     // of "feels haunted" UX we'd rather avoid. See
     // `heartbeat-active-session-tracking` PRD.
-    spawn_child_exit_observer(req.agent_name.clone(), session.clone(), req.ephemeral_cwd.clone());
+    spawn_child_exit_observer(
+        req.agent_name.clone(),
+        session.clone(),
+        req.ephemeral_cwd.clone(),
+        req.principal_key.clone(),
+    );
 
     // Drain any pending-live signals that were queued while this
     // agent was offline so they become input to the fresh session.
@@ -898,6 +913,7 @@ pub fn spawn_child_exit_observer(
     agent_name: String,
     session: std::sync::Arc<DaemonPtySession>,
     ephemeral_cwd: Option<PathBuf>,
+    principal_key: Option<String>,
 ) {
     use k2_core::terminal::AlacEvent;
     // Capture the session id BEFORE downgrading so the teardown path can
@@ -1035,6 +1051,21 @@ pub fn spawn_child_exit_observer(
                                 session_id
                             ),
                         }
+                    }
+
+                    // P4-H4 — return this session's concurrent-cell QUOTA slot.
+                    // This is the SINGLE authoritative teardown point: it fires
+                    // on clean exit AND on crash/OOM/kill-9 (ChildExit always
+                    // arrives), so a counted slot can never leak. `None` for
+                    // EVERY non-API caller (no acquire happened) → no-op,
+                    // default-OFF parity. Saturating in `sandbox_quota::release`.
+                    if let Some(pk) = principal_key.as_ref() {
+                        crate::sandbox_quota::release(pk);
+                        log_debug!(
+                            "[v1-sandbox] released concurrent-cell quota slot for principal={} session={}",
+                            pk,
+                            session_id
+                        );
                     }
                     return;
                 }

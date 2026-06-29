@@ -66,6 +66,9 @@ pub mod session_token;
 // P3b (sandbox / K2-as-a-server): per-session stream tokens + the public
 // `POST /v1/sandboxes` route + policy-resolver. Behind K2_SANDBOX_API (OFF).
 pub mod stream_token;
+// P4-H4 (sandbox hardening): per-principal + global concurrent-cell cap (429).
+// Reached ONLY via /v1/sandboxes (K2_SANDBOX_API, default OFF).
+pub mod sandbox_quota;
 pub mod v1_sandboxes;
 pub mod session_events;
 pub mod session_events_ws;

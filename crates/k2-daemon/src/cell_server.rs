@@ -610,6 +610,16 @@ mod unix_impl {
             body,
         );
         let _ = stream.write_all(resp.as_bytes()).await;
+        // Graceful half-close (SHUT_WR): flush the reply, then signal a clean
+        // EOF. A bare drop here races libkrun's vsock reverse path — an abrupt
+        // close can drop the buffered reply before the guest reads it, so the
+        // in-guest `k2`/proxy sees an empty response (and only the FIRST
+        // request per cell ever appeared to work). With the half-close the
+        // cell-channel carries unlimited sequential + concurrent requests
+        // (proven on-box: 5 sequential + 3 concurrent, all 8 delivered).
+        // libkrun itself has NO one-connection-per-cell limit; this was the
+        // whole of it. Centralized here so all write_response call sites get it.
+        let _ = stream.shutdown().await;
     }
 
     #[cfg(test)]

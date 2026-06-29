@@ -309,6 +309,29 @@ async fn case9_revoked_session_is_403() {
     assert_eq!(post, 403, "a revoked session token must 403 within one request");
 }
 
+/// #58 red-team (Finding 2): an attacker-declared oversized `Content-Length`
+/// must be REFUSED with 413 before the body is read/allocated — the host
+/// daemon must not be driveable toward OOM via a sealed cell's request body.
+/// We send only the head (huge declared length, no body) and assert 413 comes
+/// back without the server blocking to read the phantom body.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn case10_oversized_content_length_is_413() {
+    let _g = lock();
+    let _home = set_short_home();
+    let (_sid, token, sock) = mint_bind_serve("pane-1");
+    settle().await;
+    // 64 MiB declared (> MAX_BODY = 4 MiB), but we send ZERO body bytes — the
+    // server must reject on the declared length alone, not hang waiting for it.
+    let raw = format!(
+        "POST /cli/inbox/compose HTTP/1.1\r\nHost: localhost\r\n\
+         Authorization: Bearer {token}\r\n\
+         Content-Type: application/x-www-form-urlencoded\r\n\
+         Content-Length: 67108864\r\n\r\n"
+    );
+    let (status, _) = uds(&sock, &raw).await;
+    assert_eq!(status, 413, "an oversized declared body must be refused with 413");
+}
+
 /// Minimal query-string percent-encoding for a filesystem path.
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

@@ -52,6 +52,18 @@ mod unix_impl {
     /// Content-Length; the head itself (request line + headers) is tiny.
     const MAX_HEAD: usize = 16 * 1024;
 
+    /// Absolute cap on a request body, regardless of the declared
+    /// `Content-Length`. The legitimate large payloads here are inbox
+    /// compose/respond memos and msg text (kilobytes); 4 MiB is a generous
+    /// ceiling that never clips real traffic but refuses an attacker-declared
+    /// huge `Content-Length` outright (413) instead of allocating toward it.
+    /// Belt for the sandbox boundary: when a sealed cell is an untrusted
+    /// tenant, a request over this socket must not be able to drive the host
+    /// daemon toward OOM via the body length. (Same-uid own-fleet is already
+    /// inside the trust boundary, but this costs nothing and removes the
+    /// footgun before the flag is ever flipped on.)
+    const MAX_BODY: usize = 4 * 1024 * 1024;
+
     /// Pure authorization decision for an accepted per-cell connection.
     ///
     /// `validated` is the output of `require_hook(bearer, "/hook/complete")`
@@ -287,6 +299,11 @@ mod unix_impl {
                 }
             })
             .unwrap_or(0);
+
+        // Refuse an oversized declared body BEFORE allocating toward it.
+        if content_len > MAX_BODY {
+            return Err("413 Payload Too Large");
+        }
 
         let body_start = head_end + 4; // skip the \r\n\r\n
         let mut body: Vec<u8> = buf.get(body_start..).map(|s| s.to_vec()).unwrap_or_default();

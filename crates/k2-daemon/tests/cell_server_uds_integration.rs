@@ -69,6 +69,75 @@ fn mint_bind_serve(pane: &str) -> (SessionId, String, PathBuf) {
     (sid, token, sock)
 }
 
+// ── Sandbox P1 / Finding-1 helpers (principal resolves to a real workspace) ──
+
+/// A UUID-shaped string (8-4-4-4-12) so `workspace_msg::resolve_workspace`
+/// matches it against `projects.id`. Derived from the wall clock so each call
+/// is distinct within a test process.
+fn fresh_uuid() -> String {
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!(
+        "{:08x}-0000-4000-8000-{:012x}",
+        (n & 0xffff_ffff) as u32,
+        (n >> 16) as u64 & 0xffff_ffff_ffff
+    )
+}
+
+/// Create a real workspace (dir on disk + `projects` row) under `home` and
+/// return (uuid, path). A principal whose `workspace_uuid` is this uuid then
+/// resolves to this path, so the Finding-1 force pins every operand to it.
+fn mk_workspace(home: &Path, name: &str) -> (String, PathBuf) {
+    let path = home.join(name);
+    std::fs::create_dir_all(&path).expect("create workspace dir");
+    let uuid = fresh_uuid();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+        rusqlite::params![uuid, path.to_string_lossy().as_ref(), name],
+    )
+    .expect("insert workspace project row");
+    (uuid, path)
+}
+
+/// A principal bound to workspace `uuid` (resolvable via `mk_workspace`).
+fn principal_in_ws(uuid: &str) -> HookPrincipal {
+    HookPrincipal {
+        workspace_uuid: uuid.to_string(),
+        agent_address: "agent-c3".to_string(),
+    }
+}
+
+/// Like `mint_bind_serve`, but the principal's workspace resolves to a real
+/// path — so the Finding-1 force pins operands to it instead of failing closed.
+fn mint_bind_serve_in_ws(pane: &str, ws_uuid: &str) -> (SessionId, String, PathBuf) {
+    let sid = SessionId::new();
+    let token = session_token::mint_session_token(&sid, pane, principal_in_ws(ws_uuid));
+    let listener = cell_uds::bind_cell_socket(&sid).expect("bind cell socket");
+    let sock = cell_uds::cell_socket_path(&sid);
+    cell_server::serve_cell(sid, listener);
+    (sid, token, sock)
+}
+
+/// Count `.md` files under `dir` (recursively) — the inbox memo footprint.
+fn md_count(dir: &Path) -> usize {
+    let mut n = 0;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                n += md_count(&p);
+            } else if p.extension().and_then(|s| s.to_str()) == Some("md") {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 /// Fire one raw HTTP/1.1 request at the cell socket and return (status, body).
 /// One request per connection (the server reads one request then closes), so
 /// we read until EOF.
@@ -185,14 +254,14 @@ async fn case4_users_set_role_with_valid_bearer_is_403() {
 async fn case5_inbox_list_is_200_with_parseable_json() {
     let _g = lock();
     let home = set_short_home();
-    let (_sid, token, sock) = mint_bind_serve("pane-1");
-    // The agent's own-workspace path is passed explicitly here (the empty
-    // principal uuid doesn't resolve); the cell server keeps it.
-    let ws = home.join("ws");
-    std::fs::create_dir_all(&ws).expect("create ws dir");
+    // The principal owns workspace W; Finding-1 forces the operand to W.
+    let (ws_uuid, _ws) = mk_workspace(&home, "ws");
+    let (_sid, token, sock) = mint_bind_serve_in_ws("pane-1", &ws_uuid);
     settle().await;
-    let q = format!("/cli/inbox/list?project={}", urlencode(ws.to_str().unwrap()));
-    let (status, body) = uds(&sock, &get(&q, Some(&token))).await;
+    // `project=` is FORCED to the principal's own workspace; a bogus operand
+    // still yields a valid own-workspace listing (never a 400/foreign read).
+    let (status, body) =
+        uds(&sock, &get("/cli/inbox/list?project=/bogus-other-ws", Some(&token))).await;
     assert_eq!(status, 200, "inbox list over the cell socket must 200; body={body}");
     let _v: serde_json::Value =
         serde_json::from_str(&body).unwrap_or_else(|e| panic!("inbox list body must be JSON: {e}; body={body}"));
@@ -232,9 +301,9 @@ async fn case6_msg_is_200_and_from_is_stamped_not_forged() {
 async fn case6b_inbox_compose_stamps_principal_from_durably() {
     let _g = lock();
     let home = set_short_home();
-    let (_sid, token, sock) = mint_bind_serve("pane-1");
-    let ws = home.join("wsc");
-    std::fs::create_dir_all(&ws).expect("create ws dir");
+    // The principal owns workspace W; the operand is forced to it.
+    let (ws_uuid, ws) = mk_workspace(&home, "wsc");
+    let (_sid, token, sock) = mint_bind_serve_in_ws("pane-1", &ws_uuid);
     let proj = urlencode(ws.to_str().unwrap());
     settle().await;
 
@@ -293,10 +362,10 @@ async fn case8_no_bearer_no_token_is_403() {
 async fn case9_revoked_session_is_403() {
     let _g = lock();
     let home = set_short_home();
-    let (sid, token, sock) = mint_bind_serve("pane-1");
-    let ws = home.join("wsr");
-    std::fs::create_dir_all(&ws).expect("create ws dir");
-    let q = format!("/cli/inbox/list?project={}", urlencode(ws.to_str().unwrap()));
+    // The principal owns workspace W; the operand is forced to it.
+    let (ws_uuid, _ws) = mk_workspace(&home, "wsr");
+    let (sid, token, sock) = mint_bind_serve_in_ws("pane-1", &ws_uuid);
+    let q = "/cli/inbox/list?project=/bogus-other-ws".to_string();
     settle().await;
 
     // Pre-revoke: authorized → 200.
@@ -330,6 +399,66 @@ async fn case10_oversized_content_length_is_413() {
     );
     let (status, _) = uds(&sock, &raw).await;
     assert_eq!(status, 413, "an oversized declared body must be refused with 413");
+}
+
+/// Sandbox P1 — Finding 1 (e2e): a scoped request that addresses ANOTHER
+/// workspace (`project=<OTHER>`) operates on the PRINCIPAL's OWN workspace W,
+/// not OTHER. Compose addressed at OTHER lands under W; the list addressed at
+/// OTHER returns W's listing (which now holds the item); and on disk the memo
+/// is under W's inbox, never OTHER's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn case11_project_is_forced_to_principal_workspace() {
+    let _g = lock();
+    let home = set_short_home();
+
+    // W = the principal's own workspace; OTHER = a foreign workspace dir the
+    // attacker's body tries to address.
+    let (ws_uuid, w_path) = mk_workspace(&home, "W");
+    let other_path = home.join("OTHER");
+    std::fs::create_dir_all(&other_path).expect("create OTHER dir");
+    let (_sid, token, sock) = mint_bind_serve_in_ws("pane-1", &ws_uuid);
+    settle().await;
+
+    let marker = "FINDING1ForceMarker";
+    let other_proj = urlencode(other_path.to_str().unwrap());
+
+    // Compose addressed at OTHER — Finding 1 FORCES the operand to W.
+    let (status, body) = uds(
+        &sock,
+        &post_form(
+            "/cli/inbox/compose",
+            &token,
+            &format!("project={other_proj}&title={marker}&body=x"),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "compose must 200; body={body}");
+
+    // List addressed at OTHER — also forced to W → returns W's listing, which
+    // now contains the composed item.
+    let (lstatus, lbody) = uds(
+        &sock,
+        &get(&format!("/cli/inbox/list?project={other_proj}"), Some(&token)),
+    )
+    .await;
+    assert_eq!(lstatus, 200, "list must 200; body={lbody}");
+    assert!(
+        lbody.contains(marker),
+        "the composed item must appear in W's listing (operand forced to W); body={lbody}"
+    );
+
+    // On disk: the memo landed under W, and NOTHING landed under OTHER.
+    let w_inbox = k2_core::inbox::inbox_root(&w_path);
+    let other_inbox = k2_core::inbox::inbox_root(&other_path);
+    assert!(
+        md_count(&w_inbox) > 0,
+        "the composed memo must exist under W's inbox ({w_inbox:?})"
+    );
+    assert_eq!(
+        md_count(&other_inbox),
+        0,
+        "NO memo may land under OTHER's inbox ({other_inbox:?}) — the operand was forced to W"
+    );
 }
 
 /// Minimal query-string percent-encoding for a filesystem path.

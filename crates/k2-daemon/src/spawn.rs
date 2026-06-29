@@ -218,6 +218,9 @@ pub fn spawn_agent_session_v2_blocking(
         drain_on_exit: true,
         label: label_seed,
         label_source: k2_core::terminal::LabelSource::Locked,
+        // Daemon-internal spawns (heartbeat / canonical / wake) are never
+        // sandboxed in P1 — the seam is present but always Passthrough here.
+        sandbox: k2_core::terminal::SandboxSpec::Passthrough,
     };
     let session_id = cfg.session_id;
 

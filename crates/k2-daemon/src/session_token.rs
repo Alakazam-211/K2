@@ -361,7 +361,13 @@ pub fn is_agent_verb(path: &str) -> bool {
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
-        "/cli/review-checklist/",
+        // Sandbox P1 (Finding-1 follow-on): `/cli/review-checklist/` was
+        // DROPPED from the scoped allowlist. Its handlers take the raw `body`
+        // (not the params map) and so are NOT reached by the principal-pin in
+        // `cell_server::stamp_principal` — a sealed cell could drive them at
+        // another workspace. With the prefix removed these verbs fall back to
+        // TCP+owner (they're renderer/TCP-driven, never over the cell UDS).
+        // Re-admit in P2 with a body-restamp.
         // `memory` stays GATED: present as a recognized verb namespace but
         // not auto-allowed for writes (memory.write is owner/owner-gated).
         // Reads can be added here once the route exists.
@@ -768,7 +774,18 @@ mod tests {
         assert!(is_agent_verb("/hook/complete"));
         assert!(is_agent_verb("/cli/workspace/msg"));
         assert!(is_agent_verb("/cli/inbox/respond"));
-        assert!(is_agent_verb("/cli/review-checklist/toggle"));
+        assert!(is_agent_verb("/cli/awareness/publish"));
+    }
+
+    #[test]
+    fn is_agent_verb_denies_review_checklist_after_p1_drop() {
+        // Sandbox P1 (Finding-1 follow-on): review-checklist verbs were
+        // DROPPED from the scoped allowlist — they take the raw body (not the
+        // principal-pinned params) so they fall back to TCP+owner, never the
+        // scoped cell UDS. Re-admitted in P2 with a body-restamp.
+        assert!(!is_agent_verb("/cli/review-checklist/toggle"));
+        assert!(!is_agent_verb("/cli/review-checklist/write"));
+        assert!(!is_agent_verb("/cli/review-checklist/init"));
     }
 
     #[test]

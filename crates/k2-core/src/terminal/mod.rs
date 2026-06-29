@@ -14,6 +14,12 @@ mod font_renderer;
 // broadcast, no ring, no APC. Uses alacritty's built-in
 // EventLoop::spawn() rather than a custom reader.
 pub mod daemon_pty;
+// Sandbox P1 — SandboxBackend seam. Extracts the single backend-specific
+// step of `daemon_pty::spawn` (build tty::Options + open PTY + capture PID)
+// behind a trait so a future microVM backend can replace ONLY that step.
+// `SandboxSpec::default() == Passthrough` keeps every existing path
+// byte-identical.
+pub mod sandbox;
 // PATH enrichment for daemon-spawned children (issue #15). Computes
 // an augmented PATH (login-shell PATH ++ known install dirs ++
 // inherited launchd PATH) so agent CLIs in ~/.local/bin, homebrew,
@@ -39,6 +45,10 @@ pub use event_sink::TerminalEventSink;
 pub use daemon_pty::{
     AlacEvent, DaemonEventListener, DaemonPtyConfig, DaemonPtySession,
     LabelSource, SCROLLBACK_CAP,
+};
+
+pub use sandbox::{
+    Passthrough, SandboxBackend, SandboxSpec, SpawnRequest, SpawnedChild,
 };
 
 /// Re-export alacritty's `Dimensions` trait so daemon + Tauri

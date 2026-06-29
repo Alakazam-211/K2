@@ -586,7 +586,7 @@ cmd_heartbeat_action() {
 }
 
 cmd_terminal_spawn() {
-    local agent="" command="" title="" wait="" cwd=""
+    local agent="" command="" title="" wait="" cwd="" sandbox=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --title) title="$2"; shift 2 ;;
@@ -594,11 +594,17 @@ cmd_terminal_spawn() {
             --agent) agent="$2"; shift 2 ;;
             --cwd) cwd="$2"; shift 2 ;;
             --wait) wait="1"; shift ;;
+            # Sandbox P1 (accept-and-mark): request/decline a sandbox. In P1
+            # this resolves to the host-direct "passthrough" backend (no real
+            # isolation yet) and is never rejected. Default: omit the param
+            # entirely so the spawn body is byte-identical to pre-seam.
+            --sandbox) sandbox="true"; shift ;;
+            --no-sandbox) sandbox="false"; shift ;;
             *) shift ;;
         esac
     done
     if [ -z "$command" ]; then
-        echo "Usage: k2 terminal spawn --command \"...\" [--title \"...\"] [--agent <name>] [--wait]" >&2
+        echo "Usage: k2 terminal spawn --command \"...\" [--title \"...\"] [--agent <name>] [--wait] [--sandbox|--no-sandbox]" >&2
         exit 1
     fi
     local params="command=$(urlencode "$command")"
@@ -606,6 +612,7 @@ cmd_terminal_spawn() {
     [ -n "$agent" ] && params="${params}&agent=$(urlencode "$agent")"
     [ -n "$cwd" ] && params="${params}&cwd=$(urlencode "$cwd")"
     [ -n "$wait" ] && params="${params}&wait=1"
+    [ -n "$sandbox" ] && params="${params}&sandbox=${sandbox}"
     cli_request "/cli/terminal/spawn" "$params"
     echo "Terminal spawned: ${title:-$command}"
 }

@@ -116,6 +116,13 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
         /// tabs whose label is the session-derived friendly name.
         #[serde(default)]
         label_locked: Option<bool>,
+        /// Sandbox P1: opt-in request to sandbox this session. In P1 this is
+        /// ACCEPT-AND-MARK — `true` resolves to the host-direct Passthrough
+        /// backend (no real isolation yet) and is echoed back as the literal
+        /// backend NAME, never rejected. Absent ⇒ default path (response
+        /// unchanged, byte-identical to pre-seam).
+        #[serde(default)]
+        sandbox: Option<bool>,
     }
     fn default_cwd() -> String {
         std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
@@ -349,6 +356,14 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
     } else {
         k2_core::terminal::LabelSource::Pty
     };
+    // Sandbox P1 — accept-and-mark. `--sandbox`/`{"sandbox":true}` resolves to
+    // a backend NAME (Passthrough in P1, no real isolation yet); we echo that
+    // name in the response when the caller asked, and never reject. When the
+    // request omits `sandbox`, `sandbox_echo` stays `None` and the response is
+    // byte-identical to pre-seam (default-path regression guard).
+    let sandbox_spec = resolve_sandbox(req.sandbox.unwrap_or(false));
+    let sandbox_echo: Option<&'static str> =
+        req.sandbox.map(|_| sandbox_spec.backend().name());
     let mut cfg = DaemonPtyConfig {
         session_id: SessionId::new(),
         cols: req.cols,
@@ -360,6 +375,7 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
         drain_on_exit: true,
         label: seed_label,
         label_source,
+        sandbox: sandbox_spec,
     };
     let session_id_for_response = cfg.session_id;
 
@@ -561,17 +577,37 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
         pending_drained
     );
 
-    let out = serde_json::json!({
+    let mut out = serde_json::json!({
         "sessionId": session_id_for_response.to_string(),
         "agentName": req.agent_name,
         "cols": req.cols,
         "rows": req.rows,
         "reused": false,
     });
+    // Echo the resolved backend NAME only when the caller asked for a sandbox
+    // (accept-and-mark). Absent ⇒ no field ⇒ response byte-identical to
+    // pre-seam. The UI must render this literal name — it is NOT a bool, so
+    // `passthrough` can't be mistaken for real isolation.
+    if let Some(name) = sandbox_echo {
+        out["sandbox"] = serde_json::Value::String(name.to_string());
+    }
     HandlerResult {
         status: "200 OK",
         body: out.to_string(),
     }
+}
+
+/// Sandbox P1 selection. Maps a requested-bool to a [`SandboxSpec`]. In P1
+/// this is ALWAYS [`SandboxSpec::Passthrough`] (accept-and-mark — no real
+/// isolation yet); the real microVM backend lands in P2 behind a default-OFF
+/// `K2_SANDBOX` env and is unconstructible here. We never reject `--sandbox`.
+fn resolve_sandbox(requested: bool) -> k2_core::terminal::SandboxSpec {
+    if requested {
+        log_debug!(
+            "[sandbox] requested=true resolved=passthrough (P1: no isolation yet)"
+        );
+    }
+    k2_core::terminal::SandboxSpec::Passthrough
 }
 
 /// Pure decision for whether `/cli/sessions/v2/close` is allowed to
@@ -777,6 +813,67 @@ mod tests {
         let result = handle_v2_spawn(body);
         assert_eq!(result.status, "400 Bad Request");
         assert!(result.body.contains("agent_name required"));
+    }
+
+    // ── Sandbox P1 selection ─────────────────────────────────────────────
+
+    #[test]
+    fn resolve_sandbox_is_always_passthrough() {
+        use k2_core::terminal::SandboxSpec;
+        // Accept-and-mark: requested or not, P1 resolves to Passthrough.
+        assert_eq!(resolve_sandbox(false), SandboxSpec::Passthrough);
+        assert_eq!(resolve_sandbox(true), SandboxSpec::Passthrough);
+        assert_eq!(resolve_sandbox(true).backend().name(), "passthrough");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_with_sandbox_true_echoes_passthrough() {
+        // `{"sandbox":true}` is accepted (never rejected) and the response
+        // carries the literal backend NAME "passthrough". (async test: the
+        // spawn path's child-exit observer uses `tokio::spawn`.)
+        let _ = k2_core::db::init_for_tests();
+        let agent = uniq_agent_name();
+        let body = format!(
+            r#"{{"agent_name":"{agent}","cwd":"/tmp","command":"sleep","args":["30"],"sandbox":true}}"#
+        )
+        .into_bytes();
+        let result = handle_v2_spawn(&body);
+        // Clean up the spawned session before asserting so a failure can't
+        // leak the child/io-thread.
+        let session = crate::v2_session_map::unregister(&agent);
+        if let Some(ref s) = session {
+            s.kill();
+        }
+        assert_eq!(result.status, "200 OK", "body={}", result.body);
+        assert!(
+            result.body.contains(r#""sandbox":"passthrough""#),
+            "sandbox:true must echo the passthrough backend name; body={}",
+            result.body
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_without_sandbox_omits_the_field() {
+        // Default-path regression guard: when the request omits `sandbox`,
+        // the response must NOT carry a `sandbox` field (byte-identical to
+        // pre-seam behavior). (async test: child-exit observer uses tokio.)
+        let _ = k2_core::db::init_for_tests();
+        let agent = uniq_agent_name();
+        let body = format!(
+            r#"{{"agent_name":"{agent}","cwd":"/tmp","command":"sleep","args":["30"]}}"#
+        )
+        .into_bytes();
+        let result = handle_v2_spawn(&body);
+        let session = crate::v2_session_map::unregister(&agent);
+        if let Some(ref s) = session {
+            s.kill();
+        }
+        assert_eq!(result.status, "200 OK", "body={}", result.body);
+        assert!(
+            !result.body.contains("sandbox"),
+            "absent sandbox request must produce no sandbox field; body={}",
+            result.body
+        );
     }
 
     #[test]

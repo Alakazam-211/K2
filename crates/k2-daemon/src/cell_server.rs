@@ -121,27 +121,36 @@ mod unix_impl {
     }
 
     /// Stamp the SENDER identity into a query/form param map from the
-    /// connection's resolved principal — the body is NEVER trusted for WHO
-    /// is sending (PRD §3.2). `from` + `project_id` are OVERWRITTEN. The
-    /// agent's OWN workspace PATH (`project` / `project_path`) is resolved
-    /// from the principal and injected ONLY when the caller did not already
-    /// supply one — the scoped CLI omits it (it's identity-derived, not
-    /// forgeable), but an explicit recipient/target on a non-own-workspace
-    /// verb is never clobbered. Recipient args (`workspace`/`target`) are
-    /// left untouched.
+    /// connection's resolved principal — the body is NEVER trusted for WHO is
+    /// sending (PRD §3.2). `from` + `project_id` are OVERWRITTEN.
+    ///
+    /// Sandbox P1 — **Finding 1 fix (force + fail-closed).** The operand
+    /// workspace PATH (`project` / `project_path`) is FORCED to the
+    /// principal's own workspace, OVERWRITING any body-supplied value: a
+    /// hand-crafted raw UDS request can no longer set `project=<other-ws>` to
+    /// act on another workspace's inbox/data (cross-tenant once the sandbox
+    /// seals a cell). When the principal's workspace can't be resolved we
+    /// FAIL CLOSED — both keys are REMOVED so the downstream handler 400s
+    /// ("Missing project") rather than defaulting somewhere. Recipient args
+    /// (`workspace`/`target` = WHO you address) are left untouched — they
+    /// route the recipient, not the operand. (`review-checklist` + awareness
+    /// take the raw body, not this param map, so they are NOT pinned here —
+    /// review-checklist is dropped from the scoped allowlist in P1; awareness
+    /// re-stamps `from` via `restamp_awareness_from`.)
     pub(crate) fn stamp_principal(params: &mut HashMap<String, String>, principal: &HookPrincipal) {
         params.insert("from".to_string(), principal.agent_address.clone());
         params.insert("project_id".to_string(), principal.workspace_uuid.clone());
 
-        let needs_path = params
-            .get("project_path")
-            .or_else(|| params.get("project"))
-            .map(|s| s.is_empty())
-            .unwrap_or(true);
-        if needs_path {
-            if let Some(path) = resolve_principal_path(principal) {
+        match resolve_principal_path(principal) {
+            Some(path) => {
                 params.insert("project".to_string(), path.clone());
                 params.insert("project_path".to_string(), path);
+            }
+            None => {
+                // Fail closed: never let a body-supplied operand survive an
+                // unresolvable principal.
+                params.remove("project");
+                params.remove("project_path");
             }
         }
     }
@@ -690,6 +699,67 @@ mod unix_impl {
             assert_eq!(params.get("project_id").map(String::as_str), Some("ws-real-uuid"));
             // Recipient routing arg is NOT overwritten by identity stamping.
             assert_eq!(params.get("workspace").map(String::as_str), Some("recipient-ws"));
+        }
+
+        /// Sandbox P1 — Finding 1: the operand workspace is FORCED to the
+        /// principal's own workspace (overwriting a body-supplied `project`),
+        /// and an unresolvable principal FAILS CLOSED (both keys removed).
+        #[test]
+        fn stamp_forces_project_over_body() {
+            let _ = k2_core::db::init_for_tests();
+
+            // A real workspace W that the principal owns (resolvable by uuid).
+            let ws_uuid = "11111111-2222-3333-4444-555555555555";
+            let ws_path = "/tmp/k2-stamp-force-W";
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![ws_uuid, ws_path, "W"],
+                )
+                .expect("insert project W");
+            }
+            let owner = HookPrincipal {
+                workspace_uuid: ws_uuid.to_string(),
+                agent_address: "agent-W".to_string(),
+            };
+
+            // The body tries to operate on /evil — must be FORCED to W's path.
+            let mut params: HashMap<String, String> = HashMap::new();
+            params.insert("project".to_string(), "/evil-other-workspace".to_string());
+            params.insert("project_path".to_string(), "/evil-other-workspace".to_string());
+            stamp_principal(&mut params, &owner);
+            assert_eq!(
+                params.get("project").map(String::as_str),
+                Some(ws_path),
+                "body `project` must be FORCED to the principal's own workspace"
+            );
+            assert_eq!(
+                params.get("project_path").map(String::as_str),
+                Some(ws_path),
+                "body `project_path` must be FORCED to the principal's own workspace"
+            );
+            assert_eq!(params.get("from").map(String::as_str), Some("agent-W"));
+
+            // Fail-closed: an unresolvable principal REMOVES both keys even
+            // when the body supplied them.
+            let ghost = HookPrincipal {
+                workspace_uuid: "00000000-0000-0000-0000-000000000000".to_string(),
+                agent_address: "ghost".to_string(),
+            };
+            let mut p2: HashMap<String, String> = HashMap::new();
+            p2.insert("project".to_string(), "/evil".to_string());
+            p2.insert("project_path".to_string(), "/evil".to_string());
+            stamp_principal(&mut p2, &ghost);
+            assert!(
+                p2.get("project").is_none(),
+                "fail-closed must remove `project` for an unresolvable principal"
+            );
+            assert!(
+                p2.get("project_path").is_none(),
+                "fail-closed must remove `project_path` for an unresolvable principal"
+            );
         }
     }
 }

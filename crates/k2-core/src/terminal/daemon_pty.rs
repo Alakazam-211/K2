@@ -41,7 +41,7 @@ use alacritty_terminal::event_loop::{EventLoop, Notifier};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Config as TermConfig;
-use alacritty_terminal::tty::{self, Options as TtyOptions, Shell};
+use alacritty_terminal::tty::Shell;
 use alacritty_terminal::Term;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
@@ -49,6 +49,7 @@ use tokio::sync::broadcast;
 use crate::log_debug;
 use crate::session::SessionId;
 use crate::terminal::login_path;
+use crate::terminal::sandbox::{SandboxSpec, SpawnRequest, SpawnedChild};
 
 /// Scrollback depth (in rows) retained by the daemon-side Term.
 /// Matches `session_stream_pty.rs`'s value so v2 sessions inherit
@@ -176,6 +177,11 @@ pub struct DaemonPtyConfig {
     /// `label` but allowing PTY updates; set to `Locked` to pin the
     /// label so PTY events never overwrite it.
     pub label_source: LabelSource,
+    /// Which spawn backend opens this session's PTY (Sandbox P1 seam).
+    /// Defaults to [`SandboxSpec::Passthrough`] (host-direct, byte-identical
+    /// to pre-seam behavior); the real microVM backend (P2) lives behind a
+    /// default-OFF env and is unconstructible in P1.
+    pub sandbox: SandboxSpec,
 }
 
 impl Default for DaemonPtyConfig {
@@ -191,6 +197,7 @@ impl Default for DaemonPtyConfig {
             drain_on_exit: true,
             label: String::new(),
             label_source: LabelSource::Pty,
+            sandbox: SandboxSpec::default(),
         }
     }
 }
@@ -402,32 +409,28 @@ impl DaemonPtySession {
             .entry("TERM_PROGRAM".to_string())
             .or_insert_with(|| "K2".to_string());
 
-        let pty_options = TtyOptions {
+        // Sandbox P1 seam: the single backend-specific step — build
+        // `tty::Options`, open the PTY, capture the child PID — now lives
+        // behind `SandboxBackend::spawn`. The default `Passthrough` backend is
+        // a VERBATIM extraction of the original body, so this is byte-identical
+        // on every existing path. `cell_socket` / `workspace_root` are plumbed
+        // here but only consumed by the P2 microVM backend.
+        let req = SpawnRequest {
             shell,
-            working_directory: cfg.cwd.clone(),
-            drain_on_exit: cfg.drain_on_exit,
+            cwd: cfg.cwd.clone(),
             env: child_env,
-            #[cfg(target_os = "windows")]
-            escape_args: false,
+            window_size,
+            drain_on_exit: cfg.drain_on_exit,
+            cell_socket: cfg.env.get("K2_HOOK_SOCK").map(PathBuf::from),
+            workspace_root: cfg.cwd.clone(),
         };
+        let backend = cfg.sandbox.backend();
 
         // Window ID is used on macOS/Windows to associate the PTY
         // with a specific OS window for controlling-terminal
-        // semantics. The daemon has no window, so we pass 0.
+        // semantics. The daemon has no window, so the backend passes 0.
         let __t_pty = std::time::Instant::now();
-        let pty = tty::new(&pty_options, window_size, 0)?;
-
-        // Capture the direct child PID NOW, while we still own the Pty
-        // — `EventLoop::new` consumes it below. alacritty's `Pty`
-        // exposes `child() -> &std::process::Child`; `.id()` is the
-        // PID as a u32. This PID is what `kill()` forcefully reaps on
-        // teardown so agent-CLI children don't orphan. The child is a
-        // setsid() session leader (its own process group), so killpg
-        // on its pgid is daemon-safe.
-        #[cfg(unix)]
-        let child_pid: Option<i32> = Some(pty.child().id() as i32);
-        #[cfg(not(unix))]
-        let child_pid: Option<i32> = None;
+        let SpawnedChild { pty, child_pid } = backend.spawn(req)?;
 
         let pty_ms = __t_pty.elapsed().as_secs_f64() * 1000.0;
         log_debug!(
@@ -907,6 +910,16 @@ mod tests {
     }
 
     #[test]
+    fn spawn_uses_passthrough_by_default() {
+        // Sandbox P1 default-OFF proof: a default config selects the
+        // host-direct Passthrough backend, so every existing spawn path is
+        // byte-identical to pre-seam behavior.
+        let cfg = DaemonPtyConfig::default();
+        assert_eq!(cfg.sandbox, SandboxSpec::Passthrough);
+        assert_eq!(cfg.sandbox.backend().name(), "passthrough");
+    }
+
+    #[test]
     fn daemon_pty_config_default_label_state() {
         // Phase B: defaults are empty label + Pty source. PTY title
         // events fill the label.
@@ -945,6 +958,7 @@ mod tests {
             cols: 80,
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
+            sandbox: SandboxSpec::Passthrough,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -966,6 +980,7 @@ mod tests {
             cols: 80,
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
+            sandbox: SandboxSpec::Passthrough,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -989,6 +1004,7 @@ mod tests {
             cols: 80,
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
+            sandbox: SandboxSpec::Passthrough,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1014,6 +1030,7 @@ mod tests {
             cols: 80,
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
+            sandbox: SandboxSpec::Passthrough,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1040,6 +1057,7 @@ mod tests {
             cols: 80,
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
+            sandbox: SandboxSpec::Passthrough,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1073,6 +1091,7 @@ mod tests {
             cols: 80,
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
+            sandbox: SandboxSpec::Passthrough,
             // A 600s sleep: will not self-exit during the test, so if
             // the PID is gone afterwards it's because kill() killed it.
             program: Some("sleep".to_string()),
@@ -1151,6 +1170,7 @@ mod tests {
             cols: 80,
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
+            sandbox: SandboxSpec::Passthrough,
             program: Some("sleep".to_string()),
             args: vec!["600".to_string()],
             env: Default::default(),

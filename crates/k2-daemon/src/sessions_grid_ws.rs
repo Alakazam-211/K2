@@ -907,6 +907,7 @@ mod tests {
             drain_on_exit: true,
             label: String::new(),
             label_source: LabelSource::Pty,
+            sandbox: k2_core::terminal::SandboxSpec::Passthrough,
         };
         DaemonPtySession::spawn(cfg).expect("spawn cat")
     }

@@ -1759,6 +1759,7 @@ mod tests {
             drain_on_exit: true,
             label: String::new(),
             label_source: LabelSource::Pty,
+            sandbox: k2_core::terminal::SandboxSpec::Passthrough,
         };
         let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
         session_lookup::LiveSession(s)

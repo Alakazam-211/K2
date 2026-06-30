@@ -251,6 +251,37 @@ pub fn is_remote_target(target: &str) -> bool {
     target.contains('@')
 }
 
+/// 0.40.21: whether a **Trusted** federation peer is pinned that ROUTES to
+/// `host` (the right-hand side of a `<agent>@<host>` remote connection).
+///
+/// A remote connection row with NO matching trusted peer is a half-state: the
+/// connection exists but every cross-daemon send 404s at dial time because no
+/// peer resolves/routes for the host (the exact `ai@rpm.k2.dev` failure this
+/// surfaces). A peer's routing hint is its `subdomain` → `<subdomain>.k2.dev`,
+/// so a host matches a peer when `host == <subdomain>.k2.dev` (the canonical
+/// case) or `host == subdomain` (a peer pinned with the full host). Comparison
+/// is case-insensitive, mirroring the `<agent>@<host>` gate. Fails CLOSED — an
+/// unreadable peer store yields `false` so the operator is WARNED rather than
+/// told (wrongly) that the connection is wired.
+pub fn host_has_trusted_peer(host: &str) -> bool {
+    use crate::federation::{PeerStore, PeerTrust};
+    let host_lc = host.trim().to_lowercase();
+    if host_lc.is_empty() {
+        return false;
+    }
+    let store = match PeerStore::load() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    store.list().iter().any(|p| {
+        if p.trust != PeerTrust::Trusted {
+            return false;
+        }
+        let sub = p.subdomain.trim().to_lowercase();
+        !sub.is_empty() && (sub == host_lc || format!("{sub}.k2.dev") == host_lc)
+    })
+}
+
 /// Parse `<agent>@<host>` by splitting on the LAST `@` (so an agent token
 /// may itself contain `@`, though that's unusual). Returns
 /// `(agent, host)`. Both sides must be non-empty.
@@ -365,6 +396,14 @@ pub fn connections(
                 .map(|p| serde_json::to_value(p).unwrap_or(serde_json::Value::Null))
                 .collect();
             for r in remotes {
+                // 0.40.21: flag whether a trusted federation peer is actually
+                // paired for this remote connection's host. `paired:false`
+                // makes the connection-without-peer half-state visible in
+                // `connections list` instead of only at send-time as a silent
+                // 404. (`reachable` keeps its prior meaning — the row exists —
+                // so existing parsers are unchanged; `paired` is the new
+                // routing-readiness signal.)
+                let paired = host_has_trusted_peer(&r.host);
                 connections.push(serde_json::json!({
                     "remote": true,
                     "address": r.remote_addr,
@@ -372,6 +411,7 @@ pub fn connections(
                     "agent": r.agent,
                     "projectName": r.remote_addr,
                     "reachable": true,
+                    "paired": paired,
                     "relationTypes": [],
                 }));
             }
@@ -438,13 +478,31 @@ pub fn connections(
                     None,
                     Some(&format!("Connected to {} (remote)", remote_addr)),
                 );
-                return Ok(serde_json::json!({
+                // 0.40.21: a remote connection with NO trusted peer paired for
+                // its host is a half-state — the row exists but cross-daemon
+                // sends will 404 at dial time. Surface it (log + response)
+                // instead of letting the operator discover it as a silent
+                // send-time failure. Advisory only: the row is still created
+                // (auto-pair may add the connection BEFORE the SAS confirm).
+                let paired = host_has_trusted_peer(&host);
+                let mut resp = serde_json::json!({
                     "success": true,
                     "id": id,
                     "target": remote_addr,
                     "remote": true,
-                })
-                .to_string());
+                    "paired": paired,
+                });
+                if !paired {
+                    let warning = format!(
+                        "connection '{}' added but no trusted federation peer is paired for \
+                         host '{}' — pair it (cockpit add-remote / auto-pair) or messages to \
+                         it will fail to route",
+                        remote_addr, host
+                    );
+                    eprintln!("[connections] WARNING: {warning}");
+                    resp["warning"] = serde_json::Value::String(warning);
+                }
+                return Ok(resp.to_string());
             }
 
             // 0.39.45 (#32/#33): case-insensitive name fallback + a
@@ -1546,5 +1604,103 @@ mod tests {
             !is_remote_connection("/tmp/never-registered-ws-xyz", addr),
             "gate must fail closed for an unresolvable source workspace"
         );
+    }
+
+    // ── 0.40.21: connection-without-peer half-state surfaced as a WARNING ──
+
+    #[test]
+    fn add_remote_warns_and_flags_unpaired_when_no_trusted_peer() {
+        // Isolate ~/.k2 so the peer store is empty (no trusted peer for the
+        // host) — the remote add must still succeed but flag the half-state.
+        crate::tunnel::test_support::with_temp_home(|| {
+            let (src_path, _src_id) = make_project("WarnNoPeerSrc");
+            let resp =
+                connections(&src_path, "add", Some("ai@rpm.k2.dev"), None).expect("remote add ok");
+            let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
+            assert_eq!(parsed["success"], serde_json::json!(true));
+            assert_eq!(
+                parsed["paired"],
+                serde_json::json!(false),
+                "an unpaired remote host must report paired:false"
+            );
+            assert!(
+                parsed["warning"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("no trusted federation peer"),
+                "an unpaired remote add must carry a warning; got {parsed}"
+            );
+        });
+    }
+
+    #[test]
+    fn add_remote_no_warning_when_trusted_peer_paired_for_host() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            use crate::federation::{FederationPeer, PeerStore, PeerTrust};
+            let (src_path, _src_id) = make_project("PairedPeerSrc");
+
+            // Pin a TRUSTED peer whose subdomain ("rpm") routes to rpm.k2.dev.
+            let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let mut store = PeerStore::default();
+            let fp =
+                store.upsert(FederationPeer::pin("rpm-box", "rpm", key.public_key_pem()).unwrap());
+            store.set_trust(&fp, PeerTrust::Trusted);
+            store.save().unwrap();
+
+            let resp =
+                connections(&src_path, "add", Some("ai@rpm.k2.dev"), None).expect("remote add ok");
+            let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
+            assert_eq!(
+                parsed["paired"],
+                serde_json::json!(true),
+                "a host with a trusted peer must report paired:true"
+            );
+            assert!(
+                parsed.get("warning").is_none(),
+                "a paired remote add must NOT carry a warning; got {parsed}"
+            );
+
+            // `list` must reflect the paired state too.
+            let listed = connections(&src_path, "list", None, None).expect("list ok");
+            let lv: serde_json::Value = serde_json::from_str(&listed).expect("valid JSON");
+            let remote = lv["connections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["remote"] == serde_json::json!(true))
+                .expect("remote entry present");
+            assert_eq!(
+                remote["paired"],
+                serde_json::json!(true),
+                "list must mark the remote connection paired"
+            );
+        });
+    }
+
+    #[test]
+    fn host_has_trusted_peer_matches_subdomain_and_full_host_case_insensitively() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            use crate::federation::{FederationPeer, PeerStore, PeerTrust};
+            let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let mut store = PeerStore::default();
+            let fp =
+                store.upsert(FederationPeer::pin("box", "rpm", key.public_key_pem()).unwrap());
+            // A Pending peer must NOT count as routable.
+            store.save().unwrap();
+            assert!(
+                !host_has_trusted_peer("rpm.k2.dev"),
+                "a Pending peer must not satisfy the routability check"
+            );
+
+            // Promote → now the host routes (canonical <subdomain>.k2.dev,
+            // case-insensitive).
+            store.set_trust(&fp, PeerTrust::Trusted);
+            store.save().unwrap();
+            assert!(host_has_trusted_peer("rpm.k2.dev"));
+            assert!(host_has_trusted_peer("RPM.K2.DEV"));
+            // A different host stays unrouted.
+            assert!(!host_has_trusted_peer("other.k2.dev"));
+            assert!(!host_has_trusted_peer(""));
+        });
     }
 }

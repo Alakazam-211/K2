@@ -101,9 +101,30 @@ pub fn apply_pair_request(
     req: &PairRequest,
     local_fp: &str,
 ) -> Result<PairOutcome, String> {
+    // 0.40.21 FAIL-CLOSED: never pin a peer with an EMPTY/blank subdomain.
+    // The subdomain is this peer's routing hint → a cross-server send
+    // resolves the peer by `p.subdomain` and dials `https://<subdomain>.k2.dev`
+    // (see `federation_routes::handle_send` / `peer_base_url`). A peer pinned
+    // with a blank subdomain is therefore PERMANENTLY UNROUTABLE: it can never
+    // match an `<agent>@<host>` selector nor be dialed, and the only feedback
+    // is a silent 404 at send time. Reject the request rather than persist an
+    // unreachable peer — the caller (the renderer's add-remote / auto-pair)
+    // must supply the peer's tunnel subdomain (it derives it from the peer
+    // host when the peer's `pubkey` response omits one). We cannot derive it
+    // here: the pair-request HTTP arrives at THIS daemon, so the only host in
+    // scope is our own — the peer's subdomain is knowable only from the body.
+    let subdomain = req.subdomain.trim();
+    if subdomain.is_empty() {
+        return Err(
+            "pair request is missing the peer subdomain — refusing to pin an \
+             unroutable peer (fail-closed); supply the peer's <subdomain>.k2.dev"
+                .to_string(),
+        );
+    }
     // Re-derive the fingerprint from the presented key — the id can't
-    // disagree with the bytes it names.
-    let fresh = FederationPeer::pin(&req.label, &req.subdomain, &req.public_key_pem)?;
+    // disagree with the bytes it names. Store the TRIMMED subdomain so a
+    // padded value can't desync the routing-hint compare.
+    let fresh = FederationPeer::pin(&req.label, subdomain, &req.public_key_pem)?;
     let fp = fresh.fingerprint.clone();
     let sas = sas_code(local_fp, &fp);
 
@@ -214,6 +235,45 @@ mod tests {
         assert!(!out2.created);
         assert_eq!(out2.fingerprint, out.fingerprint);
         assert_eq!(store.list().len(), 1, "re-request must not duplicate");
+    }
+
+    #[test]
+    fn pair_request_rejects_empty_or_blank_subdomain() {
+        // A peer pinned with a blank subdomain is permanently unroutable —
+        // the request must fail closed and NOT create a peer row.
+        for blank in ["", "   ", "\t"] {
+            let mut store = PeerStore::default();
+            let req = PairRequest {
+                label: "p".into(),
+                subdomain: blank.into(),
+                public_key_pem: fresh_peer_pem(),
+            };
+            let err = apply_pair_request(&mut store, &req, "local-fp")
+                .expect_err("blank subdomain must be rejected");
+            assert!(err.contains("subdomain"), "error must name the cause; got: {err}");
+            assert!(
+                store.list().is_empty(),
+                "a rejected pair request must NOT pin an (unroutable) peer"
+            );
+        }
+    }
+
+    #[test]
+    fn pair_request_trims_subdomain_before_pinning() {
+        // A padded-but-non-empty subdomain is accepted and stored TRIMMED so
+        // it matches the `<agent>@<host>` routing-hint compare at send time.
+        let mut store = PeerStore::default();
+        let req = PairRequest {
+            label: "p".into(),
+            subdomain: "  rpm  ".into(),
+            public_key_pem: fresh_peer_pem(),
+        };
+        let out = apply_pair_request(&mut store, &req, "local-fp").expect("padded subdomain ok");
+        assert_eq!(
+            store.get(&out.fingerprint).unwrap().subdomain,
+            "rpm",
+            "subdomain must be persisted trimmed"
+        );
     }
 
     #[test]

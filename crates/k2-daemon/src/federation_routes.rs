@@ -487,12 +487,42 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
 
     // Dial the peer's E2E listener over the Connect tunnel + POST the envelope.
     match post_inbound(&peer_base_url(&peer.subdomain), &bytes) {
-        Ok(()) => {
+        Ok(resp_body) => {
+            // The transport succeeded and the message left this daemon, so the
+            // queued copy is consumed either way (a DECLINE is a terminal
+            // outcome, not a retryable failure — re-dialing would never flip an
+            // opt-out). But a 200 is NOT necessarily a delivery: the receive
+            // side returns `delivered:false` / `mode:"declined"` when the
+            // recipient has remote-instruction OFF. Surface that to the sender
+            // as `status:"declined"` (distinct from `"sent"`) so it isn't told
+            // a message landed when it did not.
             outbox::remove(&queued_path);
-            CliResponse::ok_json(
-                serde_json::json!({ "status": "sent", "msg_uuid": msg_uuid, "peer": peer.fingerprint })
+            let parsed: serde_json::Value =
+                serde_json::from_str(&resp_body).unwrap_or(serde_json::Value::Null);
+            let delivered = parsed.get("delivered").and_then(|v| v.as_bool());
+            if delivered == Some(false) {
+                let reason = parsed
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("declined_by_peer");
+                let target = format!("{agent}@{}", peer_host(&peer.subdomain));
+                CliResponse::ok_json(
+                    serde_json::json!({
+                        "status": "declined",
+                        "delivered": false,
+                        "reason": reason,
+                        "msg_uuid": msg_uuid,
+                        "peer": peer.fingerprint,
+                        "hint": format!("'{target}' declined the message: {reason}"),
+                    })
                     .to_string(),
-            )
+                )
+            } else {
+                CliResponse::ok_json(
+                    serde_json::json!({ "status": "sent", "msg_uuid": msg_uuid, "peer": peer.fingerprint })
+                        .to_string(),
+                )
+            }
         }
         Err(e) => CliResponse::ok_json(
             serde_json::json!({
@@ -534,8 +564,10 @@ fn peer_host(subdomain: &str) -> String {
 
 /// POST a sealed envelope to `<base>/cli/federation/inbound`. Blocking
 /// (reqwest::blocking). A non-2xx or transport error returns `Err` so the
-/// caller leaves the message queued for retry.
-pub fn post_inbound(base: &str, envelope_bytes: &[u8]) -> Result<(), String> {
+/// caller leaves the message queued for retry. On a 2xx the peer's RESPONSE
+/// BODY is returned so the caller can distinguish a real delivery from a
+/// receive-side DECLINE (a 200 with `delivered:false` / `mode:"declined"`).
+pub fn post_inbound(base: &str, envelope_bytes: &[u8]) -> Result<String, String> {
     let url = format!("{base}/cli/federation/inbound");
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
@@ -549,7 +581,9 @@ pub fn post_inbound(base: &str, envelope_bytes: &[u8]) -> Result<(), String> {
         .map_err(|e| format!("POST {url}: {e}"))?;
     let status = resp.status();
     if status.is_success() {
-        Ok(())
+        // Return the body (best-effort): an unreadable body is NOT a delivery
+        // failure — the transport succeeded — so fall back to empty.
+        Ok(resp.text().unwrap_or_default())
     } else {
         Err(format!("peer rejected inbound: HTTP {}", status.as_u16()))
     }
@@ -967,6 +1001,93 @@ mod tests {
             let _ = tx.send(body);
         });
         (port, rx)
+    }
+
+    /// Variant of [`spawn_inbound_stub`] that answers 200 with a CUSTOM JSON
+    /// body — used to simulate the receive-side DECLINE (200 `delivered:false`).
+    async fn spawn_inbound_stub_responding(resp_body: &'static str) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind stub");
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.expect("accept");
+            let mut buf = [0u8; 4096];
+            // Read until we see the header terminator; we don't need the body.
+            let mut acc: Vec<u8> = Vec::new();
+            loop {
+                match s.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        acc.extend_from_slice(&buf[..n]);
+                        if acc.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                resp_body.len(),
+                resp_body
+            );
+            let _ = s.write_all(resp.as_bytes()).await;
+            let _ = s.flush().await;
+        });
+        port
+    }
+
+    // ── P4 send: a receive-side DECLINE (200 `delivered:false`) must surface
+    //    to the SENDER as `status:"declined"`, NOT `"sent"`. Regression lock
+    //    for the 0.40.20 bug where a remote-instruction-OFF decline was
+    //    reported to the sender as a successful send.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_surfaces_peer_decline_as_declined_not_sent() {
+        let _home = crate::test_support::TempHome::new();
+
+        let port = spawn_inbound_stub_responding(
+            r#"{"delivered":false,"mode":"declined","reason":"remote_instruction_disabled"}"#,
+        )
+        .await;
+        let base = format!("http://127.0.0.1:{port}");
+
+        let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut store = PeerStore::default();
+        let fp = store.upsert(
+            FederationPeer::pin("teammate", "peer", peer_key.public_key_pem()).unwrap(),
+        );
+        store.set_trust(&fp, PeerTrust::Trusted);
+        store.grant(&fp, "inbound");
+        store.save().unwrap();
+
+        std::env::set_var("K2_FEDERATION_INBOUND_BASE", &base);
+        let send_body = body(serde_json::json!({ "to": "peer::ws-b::bob", "text": "are you in?" }));
+        let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
+            .await
+            .unwrap();
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        assert_eq!(resp.status, "200 OK", "send body: {}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(
+            v["status"], "declined",
+            "a peer decline must NOT be reported as sent; got {}",
+            resp.body
+        );
+        assert_eq!(v["delivered"], false, "declined send must report delivered:false");
+        assert_eq!(
+            v["reason"], "remote_instruction_disabled",
+            "decline must propagate the peer's reason"
+        );
+
+        // A decline is terminal — the queued copy is consumed (re-dialing
+        // would never flip the recipient's opt-out).
+        assert!(
+            outbox::list_for_peer(&fp).is_empty(),
+            "a clean decline must drain the queued copy (not retry forever)"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -62,6 +62,10 @@ pub mod routes;
 // Dormant superset, gated on K2_HOOK_SCOPED (default OFF).
 pub mod cell_server;
 pub mod cell_uds;
+// P4-H5 (sandbox hardening): host nft fail-closed egress allowlist for microVM
+// cells (default-DROP `skuid k2cell` + only 443/53). Reached ONLY from the
+// microVM spawn path (linux + sandbox-microvm + K2_SANDBOX); no-op otherwise.
+pub mod cell_egress;
 pub mod session_token;
 // P3b (sandbox / K2-as-a-server): per-session stream tokens + the public
 // `POST /v1/sandboxes` route + policy-resolver. Behind K2_SANDBOX_API (OFF).

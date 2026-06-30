@@ -113,6 +113,29 @@ mod worker {
     // to M1+ (needs an in-guest userland forwarder); we only wire the port.
     const HOOK_PORT: u32 = 1024;
 
+    // libkrun TSI (Transparent Socket Impersonation) feature flags — PINNED +
+    // VERIFIED on-box 2026-06-29 from /opt/libkrun/include/libkrun.h (lines
+    // 272-274):
+    //   #define KRUN_TSI_HIJACK_INET  (1 << 0)
+    //   #define KRUN_TSI_HIJACK_UNIX  (1 << 1)
+    // (and the `krun_add_vsock(ctx, tsi_features)` doc lines 867-880: "Use 0 to
+    //  add vsock without any TSI hijacking.")
+    //
+    // P4-H5 — egress. With HIJACK_INET set, libkrun transparently hijacks the
+    // guest's outbound INET `connect()`s and re-issues them on the HOST network
+    // stack from THIS process (the priv-dropped `k2cell` VMM) — there is no
+    // virtio-net device. That is what lets the guest's `claude` reach
+    // api.anthropic.com. tsi_features=0 (the prior value) left INET hijack OFF,
+    // so libkrun rejected ALL guest INET proxies (the cell had no internet).
+    //
+    // We enable INET ONLY (NOT HIJACK_UNIX): the guest needs the internet, not
+    // host-AF_UNIX impersonation. The cell-channel vsock PORT mapping
+    // (`krun_add_vsock_port2`, AF_VSOCK ⇄ host UDS) is independent of TSI and is
+    // kept intact below. The HOST-side nft allowlist (daemon-installed, `skuid
+    // k2cell` default-DROP + only 443/53) is the egress *control* layered on top
+    // of this reachability — see `cell_egress.rs`.
+    const KRUN_TSI_HIJACK_INET: u32 = 1 << 0;
+
     // RAM headroom over the guest's requested ram_mib for the VMM itself, and
     // the per-cell pids ceiling. Conservative.
     const CGROUP_RAM_HEADROOM_MIB: u64 = 128;
@@ -1276,8 +1299,13 @@ mod worker {
         // dials vsock CID-host:HOOK_PORT and proxies to /run/k2-hook.sock so
         // the agent's `k2`/`claude` reach the daemon's cell_server.
         if cfg.cell_socket.is_some() {
-            // Enable the vsock device FIRST (else port2 → -19 ENODEV).
-            let r = unsafe { krun_add_vsock(ctx, 0) };
+            // Enable the vsock device FIRST (else port2 → -19 ENODEV). Pass
+            // KRUN_TSI_HIJACK_INET so the SAME vsock device also gives the guest
+            // outbound INET via libkrun's TSI (host-side connect AS k2cell) —
+            // P4-H5 egress. The cell-channel port2 mapping below is unaffected
+            // (AF_VSOCK ⇄ UDS is not INET). The host nft allowlist is the
+            // egress control; here we only open the reachability path.
+            let r = unsafe { krun_add_vsock(ctx, KRUN_TSI_HIJACK_INET) };
             if r < 0 {
                 return fail(format!("krun_add_vsock: {r}"));
             }

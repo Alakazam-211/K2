@@ -73,6 +73,8 @@ mod routes;
 // Dormant superset, gated on K2_HOOK_SCOPED (default OFF).
 mod cell_server;
 mod cell_uds;
+// P4-H5: host nft fail-closed egress allowlist for microVM cells (see lib.rs).
+mod cell_egress;
 mod session_token;
 // P3b (sandbox / K2-as-a-server): stream tokens + POST /v1/sandboxes + policy.
 mod stream_token;

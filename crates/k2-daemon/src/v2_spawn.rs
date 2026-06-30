@@ -506,6 +506,59 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         }
     }
 
+    // P4-H5 — fail-closed egress lockdown, installed BEFORE the cell boots.
+    // The worker now enables libkrun TSI HIJACK_INET, so a microVM cell has REAL
+    // outbound internet (the guest's `claude` can reach api.anthropic.com). For
+    // an UNTRUSTED tenant that reachability MUST be policed: install the host
+    // nft allowlist that DEFAULT-DROPs the cell uid's (`k2cell`) outbound INET
+    // and ALLOWs only 443 + DNS to non-loopback. We do it PRE-spawn and
+    // fail-closed: if the lockdown can't be installed (nft missing/errors, or
+    // the cell uid won't resolve) we REFUSE to boot the cell rather than run a
+    // now-internet-capable cell with NO egress control. The policy is one shared
+    // idempotent table (all cells share k2cell today; H6 makes it per-session).
+    //
+    // Applied ALWAYS for microVM cells — `claude`'s only egress need is
+    // Anthropic + DNS, so the tightest policy is also sufficient for own-use,
+    // and there is no second "untrusted-only" mode to get wrong. Default-OFF:
+    // a non-microVM (passthrough) session never enters this branch → ZERO nft
+    // state touched, byte-identical. On Mac / feature-off builds `cfg.sandbox`
+    // is never `Microvm`, so this is dead there.
+    #[cfg(unix)]
+    if matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm) {
+        match crate::cell_uds::resolve_sandbox_cell_uid() {
+            Some(cell_uid) => {
+                if let Err(e) = crate::cell_egress::ensure_egress_policy(cell_uid) {
+                    log_debug!(
+                        "[sandbox] P4-H5 egress lockdown install FAILED for session={} uid={cell_uid}: {e}; REFUSING to boot cell (fail-closed)",
+                        session_id_for_response
+                    );
+                    return HandlerResult {
+                        status: "500 Internal Server Error",
+                        body: format!(
+                            r#"{{"error":"egress lockdown install failed; refusing to boot microVM cell with open egress: {}"}}"#,
+                            e.to_string().replace('"', "'")
+                        ),
+                    };
+                }
+                log_debug!(
+                    "[sandbox] P4-H5 egress allowlist installed (skuid {cell_uid}: default-DROP + 443/53) for session={}",
+                    session_id_for_response
+                );
+            }
+            None => {
+                log_debug!(
+                    "[sandbox] P4-H5: microVM session={} cell uid unresolved; REFUSING to boot (fail-closed — cannot scope egress)",
+                    session_id_for_response
+                );
+                return HandlerResult {
+                    status: "500 Internal Server Error",
+                    body: r#"{"error":"sandbox cell uid unresolved; refusing to boot microVM cell (fail-closed egress)"}"#
+                        .to_string(),
+                };
+            }
+        }
+    }
+
     let __t_spawn = std::time::Instant::now();
     let session = match DaemonPtySession::spawn(cfg) {
         Ok(s) => s,

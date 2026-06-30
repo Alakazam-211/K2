@@ -2003,7 +2003,7 @@ cmd_terminal_write() {
         exit 1
     fi
     local terminal_id
-    terminal_id=$(resolve_write_session_id "$resolve_target" "$agent") || exit 1
+    terminal_id=$(resolve_write_session_id "$target" "$agent") || exit 1
     cli_request "/cli/terminal/write" "id=$(urlencode "$terminal_id")&message=$(urlencode "$message")"
 }
 

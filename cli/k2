@@ -263,6 +263,44 @@ cli_send() {
     "$fn" "$endpoint" "$@"
 }
 
+# ── F2 (sandbox cell) — k2 respond ───────────────────────────────────
+# `k2 respond [--final] <message>` — the in-cell agent's RESPONSE egress.
+# Posts a curated line to THIS session's response log over the per-cell
+# UDS ($K2_HOOK_SOCK) with the scoped token; the external API caller
+# drains it via `GET /v1/sandboxes/<id>/messages`. The agent itself
+# decides how many times to respond and when (`--final` marks the turn's
+# last line) — multi-emit, like a person narrating progress.
+#
+# Cell-only BY CONSTRUCTION: the daemon serves `/cli/respond` ONLY on the
+# per-cell socket (there is no TCP/owner arm), so outside a sandbox cell
+# this errors loudly rather than silently falling back to TCP.
+cmd_respond() {
+    local final="0"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --final) final="1"; shift ;;
+            --help|-h)
+                echo "Usage: k2 respond [--final] <message>"
+                echo "  Send a response line from inside a sandbox cell to the API caller."
+                echo "  Call it as many times as you like as you work; --final marks the last."
+                return 0 ;;
+            --) shift; break ;;
+            *) break ;;
+        esac
+    done
+    local message="$*"
+    local sock; sock="$(_hook_sock)"
+    if [ -z "$sock" ] || [ ! -S "$sock" ]; then
+        echo "Error: 'k2 respond' is only available inside a sandbox cell (no per-cell socket)." >&2
+        return 1
+    fi
+    if [ -z "$message" ]; then
+        echo "Usage: k2 respond [--final] <message>" >&2
+        return 1
+    fi
+    cli_post_form_uds "/cli/respond" "message=$(urlencode "$message")" "final=${final}"
+}
+
 # ── Remote target addressing (K2-as-a-server, 0.40.x) ────────────────
 # `k2 talk <ws>@<subdomain>` / `k2 read <ws>@<host>` address a workspace
 # on a CONNECTED remote daemon over K2 Connect — the SAME model as local
@@ -7312,6 +7350,13 @@ EOF
         # drive-or-back-off HITL guidance, then delivers via the
         # existing `k2 msg` path. No new daemon route; `msg` untouched.
         shift; cmd_talk "$@"
+        ;;
+    respond)
+        # F2 (sandbox cell): the in-cell agent's response egress. Posts a
+        # curated line to THIS session's response log over the per-cell UDS;
+        # the external API caller drains it via GET /v1/sandboxes/<id>/messages.
+        # Cell-only — errors outside a sandbox (no per-cell socket).
+        shift; cmd_respond "$@"
         ;;
     whatsnew)
         # Phase 2.1: hard-deprecated spelling. Use whats-new.

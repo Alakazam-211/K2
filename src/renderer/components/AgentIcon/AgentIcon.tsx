@@ -18,6 +18,7 @@ import claudeSvg from '@/assets/llm-icons/claude.svg?raw'
 import codexSvg from '@/assets/llm-icons/codex.svg?raw'
 import geminiSvg from '@/assets/llm-icons/gemini.svg?raw'
 import copilotSvg from '@/assets/llm-icons/copilot.svg?raw'
+import grokSvg from '@/assets/llm-icons/grok.svg?raw'
 import cursorSvg from '@/assets/llm-icons/cursor.svg?raw'
 import gooseSvg from '@/assets/llm-icons/goose.svg?raw'
 import ollamaSvg from '@/assets/llm-icons/ollama.svg?raw'
@@ -43,6 +44,7 @@ const LOBE_ICON_RULES: Array<{ match: string | RegExp; svg: string }> = [
   { match: 'codex', svg: codexSvg },
   { match: 'gemini', svg: geminiSvg },
   { match: 'copilot', svg: copilotSvg },
+  { match: 'grok', svg: grokSvg },
   { match: 'cursor', svg: cursorSvg },
   { match: 'goose', svg: gooseSvg },
   { match: 'ollama', svg: ollamaSvg },

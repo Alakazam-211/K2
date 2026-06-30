@@ -546,15 +546,16 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456001", "Claude", "claude --dangerously-skip-permissions", "", 0),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex -c model_reasoning_effort=\"high\" --dangerously-bypass-approvals-and-sandbox", "", 1),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 2),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 3),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", "", 4),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", "", 5),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 6),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 7),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 8),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 9),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 10),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 11),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456014", "Grok", "grok --always-approve", "", 3),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 4),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", "", 5),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", "", 6),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 7),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 8),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 9),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 10),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 11),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 12),
     ];
 
     for (id, label, command, icon, sort_order) in presets {
@@ -587,6 +588,32 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
              WHERE is_built_in = 1 AND label != 'Hermes' \
                AND sort_order >= (SELECT sort_order FROM agent_presets \
                                   WHERE label = 'Hermes' AND is_built_in = 1)",
+            [],
+        )?;
+    }
+
+    // One-time ordering repair: on upgrade the `WHERE NOT EXISTS` insert places
+    // Grok at sort_order 3, but existing installs still had Cursor Agent at 3 —
+    // a tie that renders Grok adjacent-but-unordered against Cursor Agent. If
+    // Grok and Cursor Agent still share a slot, open a gap by bumping Cursor
+    // Agent (and everything at/after Grok's slot, except Grok) down by one, so
+    // Grok lands between Gemini (2) and Cursor Agent. Idempotent: once resolved
+    // this is a no-op, and it never fires on fresh installs (the seed already
+    // spaces them 2/3/4).
+    let grok_cursor_collision: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM agent_presets g, agent_presets c \
+         WHERE g.label = 'Grok' AND c.label = 'Cursor Agent' \
+           AND g.is_built_in = 1 AND c.is_built_in = 1 \
+           AND g.sort_order = c.sort_order",
+        [],
+        |r| r.get(0),
+    )?;
+    if grok_cursor_collision > 0 {
+        conn.execute(
+            "UPDATE agent_presets SET sort_order = sort_order + 1 \
+             WHERE is_built_in = 1 AND label != 'Grok' \
+               AND sort_order >= (SELECT sort_order FROM agent_presets \
+                                  WHERE label = 'Grok' AND is_built_in = 1)",
             [],
         )?;
     }

@@ -40,6 +40,7 @@ interface ProviderConfig {
 const PROVIDER_CONFIG: Record<string, ProviderConfig> = {
   claude: { command: 'claude', label: 'Claude', resumeFlag: '--resume' },
   cursor: { command: 'cursor-agent', label: 'Cursor', resumeFlag: '--resume' },
+  grok: { command: 'grok', label: 'Grok', resumeFlag: '--resume' },
   gemini: { command: 'gemini', label: 'Gemini', resumeFlag: '--resume' },
   pi: { command: 'pi', label: 'Pi', resumeFlag: '--session' },
   codex: { command: 'codex', label: 'Codex', resumeSubcommand: 'resume' },

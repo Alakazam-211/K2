@@ -26,6 +26,7 @@ export const EDITORS_AGENTS_MANIFEST: SettingEntry[] = [
   { id: 'editors-agents.cli-gemini', section: 'editors-agents', group: 'CLI Tools', label: 'Gemini CLI', description: 'Install instructions for the Gemini CLI', keywords: ['gemini', 'google', 'install', 'cli'] },
   { id: 'editors-agents.cli-copilot', section: 'editors-agents', group: 'CLI Tools', label: 'GitHub Copilot CLI', description: 'Install instructions for the Copilot CLI', keywords: ['copilot', 'github', 'install', 'cli'] },
   { id: 'editors-agents.cli-aider', section: 'editors-agents', group: 'CLI Tools', label: 'Aider', description: 'Install instructions for Aider', keywords: ['aider', 'install', 'cli', 'pip'] },
+  { id: 'editors-agents.cli-grok', section: 'editors-agents', group: 'CLI Tools', label: 'Grok', description: 'Install instructions for the xAI Grok CLI', keywords: ['grok', 'xai', 'install', 'cli'] },
   { id: 'editors-agents.cli-cursor-agent', section: 'editors-agents', group: 'CLI Tools', label: 'Cursor Agent', description: 'Install instructions for Cursor Agent', keywords: ['cursor', 'install', 'cli'] },
   { id: 'editors-agents.cli-opencode', section: 'editors-agents', group: 'CLI Tools', label: 'OpenCode', description: 'Install instructions for OpenCode', keywords: ['opencode', 'install', 'cli'] },
   { id: 'editors-agents.cli-goose', section: 'editors-agents', group: 'CLI Tools', label: 'Goose', description: 'Install instructions for Goose', keywords: ['goose', 'block', 'install', 'cli'] },
@@ -566,6 +567,13 @@ const CLI_INSTALL_ENTRIES: {
     installCommand: 'pip install aider-chat',
     docs: 'https://aider.chat/docs/install.html',
     notes: 'Requires Python 3.9+. Configure your API key for the model provider you want to use.'
+  },
+  {
+    name: 'Grok',
+    command: 'grok',
+    installCommand: 'curl -fsSL https://x.ai/cli/install.sh | bash',
+    docs: 'https://docs.x.ai/build',
+    notes: 'xAI\'s terminal coding agent. On first launch it opens a browser to sign in; for headless use set the XAI_API_KEY environment variable. Skip approval prompts ("yolo" mode) with "grok --always-approve".'
   },
   {
     name: 'Cursor Agent',

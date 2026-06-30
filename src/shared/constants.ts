@@ -61,6 +61,7 @@ export interface ResumableCliTool {
 export const RESUMABLE_CLI_TOOLS: Record<string, ResumableCliTool> = {
   'claude': { resumeFlag: '--resume', provider: 'claude' },
   'cursor-agent': { resumeFlag: '--resume', provider: 'cursor' },
+  'grok': { resumeFlag: '--resume', provider: 'grok' },
   'gemini': { resumeFlag: '--resume', provider: 'gemini' },
   // Pi uses `--session <uuid>` for deterministic resume â€” `--resume`
   // is its interactive picker (no id arg), so don't confuse them.
@@ -78,7 +79,7 @@ export const AGENT_IDLE_THRESHOLD_MS = 5000  // 5 seconds without grid output â†
 // is warned before closing the tab or quitting the app.
 export const KNOWN_AGENT_COMMANDS = new Set([
   // Cloud CLI agents
-  'claude', 'cursor-agent', 'codex', 'gemini', 'copilot',
+  'claude', 'cursor-agent', 'grok', 'codex', 'gemini', 'copilot',
   'aider', 'opencode', 'gpt', 'goose', 'pi',
   // Local/on-device LLM tools
   'ollama', 'llamafile', 'llama-cli', 'interpreter',

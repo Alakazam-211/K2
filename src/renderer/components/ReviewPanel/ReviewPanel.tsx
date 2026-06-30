@@ -288,7 +288,7 @@ export default function ReviewPanel(): React.JSX.Element {
   const handleResumeChat = useCallback((session: ChatSession) => {
     if (!workspacePath) return
     const tabsStore = useTabsStore.getState()
-    const command = session.provider === 'cursor' ? 'cursor-agent' : 'claude'
+    const command = session.provider === 'cursor' ? 'cursor-agent' : session.provider === 'grok' ? 'grok' : 'claude'
     // Include preset flags (e.g. --dangerously-skip-permissions) from user's agent preset
     const presetArgs: string[] = []
     const preset = usePresetsStore.getState().presets.find((p) => p.command.split(/\s+/)[0] === command && p.enabled)

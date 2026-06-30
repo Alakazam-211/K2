@@ -55,6 +55,15 @@ export const builtInAgentPresets: BuiltInAgentPreset[] = [
     sortOrder: 4
   },
   {
+    id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456014',
+    label: 'Grok',
+    command: 'grok --always-approve',
+    icon: null,
+    enabled: 1,
+    isBuiltIn: 1,
+    sortOrder: 3
+  },
+  {
     id: 'b0a1c2d3-e4f5-6789-abcd-ef0123456006',
     label: 'Cursor Agent',
     command: 'cursor-agent',

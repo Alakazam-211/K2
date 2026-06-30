@@ -131,6 +131,12 @@ pub fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse 
         return CliResponse::internal_error("spawn response sessionId was malformed");
     };
 
+    // F2: record THIS session's owning principal so a later
+    // `GET /v1/sandboxes/<id>/messages` can authorize (default-deny: a requester
+    // whose principal id != this owner is rejected by `handle_messages`). The id
+    // is the stable, non-secret `display_id()` ("owner" or the API-key UUID).
+    crate::sandbox_responses::record_owner(session_id, &principal_key);
+
     // (7) Mint a per-session STREAM token (bound to THIS session only) and build
     // the GRID stream URL. The caller streams with this token — NEVER the API
     // key, which is never accepted on grid/bytes.
@@ -154,6 +160,49 @@ pub fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse 
             // can_sandbox() was true above ⇒ resolve_sandbox(true) is Microvm.
             "sandbox": "microvm",
             "stream": { "grid": grid },
+        })
+        .to_string(),
+    )
+}
+
+/// Handle `GET /v1/sandboxes/<id>/messages?since=<seq>` (F2) — drain the in-cell
+/// agent's response log for ONE session.
+///
+/// AUTHZ (default-deny, the load-bearing check): the requesting [`V1Principal`]
+/// MUST own `session_id`. Ownership is the `principal.display_id()` recorded at
+/// create time in [`crate::sandbox_responses::record_owner`]. We compare the
+/// requester's `display_id()` against the recorded owner and return **404** (not
+/// 403) on any mismatch OR unknown session — a uniform "no such sandbox" so the
+/// route never even confirms the existence of another principal's session, let
+/// alone leaks its transcript. Owner identity comes from the host-resolved
+/// principal (the dispatcher's `/v1/*` auth gate), NEVER the request.
+///
+/// On success: `{"messages":[...],"latest_seq":<n>}` where `latest_seq` is the
+/// highest `seq` the caller now holds (its next-poll cursor) — the max of the
+/// returned slice, falling back to the requested `since` when the slice is empty.
+pub fn handle_messages(principal: &V1Principal, session_id: &str, since: u64) -> CliResponse {
+    // AUTHZ: the session must exist AND be owned by THIS principal. Unknown owner
+    // and owner-mismatch are BOTH 404 (no existence oracle across principals).
+    let requester = principal.display_id();
+    match crate::sandbox_responses::owner_of(session_id) {
+        Some(owner) if owner == requester => {}
+        _ => {
+            return CliResponse {
+                status: "404 Not Found",
+                content_type: "application/json",
+                body: r#"{"error":"no such sandbox"}"#.to_string(),
+            };
+        }
+    }
+
+    let messages = crate::sandbox_responses::since(session_id, since);
+    // The caller's new cursor: the highest seq it now holds. Empty slice ⇒ it
+    // already had everything up to `since`, so the cursor stays at `since`.
+    let latest_seq = messages.iter().map(|m| m.seq).max().unwrap_or(since);
+    CliResponse::ok_json(
+        serde_json::json!({
+            "messages": messages,
+            "latest_seq": latest_seq,
         })
         .to_string(),
     )
@@ -204,5 +253,63 @@ mod tests {
         });
         let resp = handle_v1_sandboxes(&principal, b"");
         assert_eq!(resp.status, "409 Conflict");
+    }
+
+    fn api(id: &str) -> V1Principal {
+        V1Principal::Api(k2_core::api_keys::ApiPrincipal {
+            id: id.to_string(),
+            anthropic_key: None,
+            scope: "owner".to_string(),
+        })
+    }
+
+    /// F2 AUTHZ: the owning principal can read its session's log; a DIFFERENT
+    /// principal and the owner sentinel both get a uniform 404 (no cross-principal
+    /// existence oracle), and an unknown session is 404 too.
+    #[test]
+    fn messages_authz_only_owner_reads_else_404() {
+        let sid = "f2-authz-sess";
+        crate::sandbox_responses::record_owner(sid, "key-owner");
+        crate::sandbox_responses::append(sid, "hello".to_string(), false);
+
+        // Owner reads its own log.
+        let ok = handle_messages(&api("key-owner"), sid, 0);
+        assert_eq!(ok.status, "200 OK", "owner must read its own log; body={}", ok.body);
+        assert!(ok.body.contains("hello"), "log line surfaced: {}", ok.body);
+        assert!(ok.body.contains("\"latest_seq\":1"), "cursor advanced: {}", ok.body);
+
+        // A different API principal is REFUSED (404, no leak).
+        let other = handle_messages(&api("key-attacker"), sid, 0);
+        assert_eq!(other.status, "404 Not Found", "cross-principal read must 404");
+        assert!(!other.body.contains("hello"), "must NOT leak the transcript");
+
+        // The owner-token principal does not match an api-key owner → 404.
+        let owner_tok = handle_messages(&V1Principal::Owner, sid, 0);
+        assert_eq!(owner_tok.status, "404 Not Found");
+
+        // Unknown session → 404 (uniform with the mismatch case).
+        let unknown = handle_messages(&api("key-owner"), "no-such-session-xyz", 0);
+        assert_eq!(unknown.status, "404 Not Found");
+    }
+
+    /// `since` is a real cursor: a second poll past the last seq returns empty and
+    /// holds the cursor at `since`.
+    #[test]
+    fn messages_since_cursor_drains_incrementally() {
+        let sid = "f2-cursor-sess";
+        crate::sandbox_responses::record_owner(sid, "key-c");
+        crate::sandbox_responses::append(sid, "one".to_string(), false);
+        crate::sandbox_responses::append(sid, "two".to_string(), true);
+
+        // since=1 returns only the second line.
+        let r = handle_messages(&api("key-c"), sid, 1);
+        assert_eq!(r.status, "200 OK");
+        assert!(r.body.contains("two") && !r.body.contains("\"one\""), "body={}", r.body);
+        assert!(r.body.contains("\"latest_seq\":2"), "body={}", r.body);
+
+        // since=2 (caller is caught up) → empty, cursor stays at 2.
+        let r2 = handle_messages(&api("key-c"), sid, 2);
+        assert!(r2.body.contains("\"messages\":[]"), "empty slice; body={}", r2.body);
+        assert!(r2.body.contains("\"latest_seq\":2"), "cursor held; body={}", r2.body);
     }
 }

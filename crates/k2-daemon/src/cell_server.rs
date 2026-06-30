@@ -485,10 +485,16 @@ mod unix_impl {
 
         let path_owned = path.to_string();
         let method_owned = method.to_string();
+        // F2: the `/cli/respond` arm pins the response to THIS session — the body
+        // never names a session, so a cell can only ever write its OWN log. Clone
+        // the bound session id into the worker (the other moved vars own their data).
+        let sid_for_dispatch = this_session_id.clone();
         // The pure handlers lock the DB / sleep across inject windows, so run
         // them on the blocking pool exactly like the TCP dispatcher does.
         let (status, ctype, out): (String, &'static str, String) =
-            tokio::task::spawn_blocking(move || dispatch_cell_verb(&method_owned, &path_owned, &params, &body, &principal))
+            tokio::task::spawn_blocking(move || {
+                dispatch_cell_verb(&method_owned, &path_owned, &params, &body, &principal, &sid_for_dispatch)
+            })
                 .await
                 .unwrap_or_else(|e| {
                     (
@@ -511,6 +517,7 @@ mod unix_impl {
         params: &HashMap<String, String>,
         body: &[u8],
         principal: &HookPrincipal,
+        this_session_id: &str,
     ) -> (String, &'static str, String) {
         let is_post = method.eq_ignore_ascii_case("POST");
         match path {
@@ -520,6 +527,31 @@ mod unix_impl {
                 k2_core::agent_hooks::handle_hook_complete(params).to_string(),
             ),
             "/cli/workspace/msg" => from_cli(crate::cli::dispatch(path, params)),
+            // F2 (sandbox API): the in-cell agent's RESPONSE egress. Append the
+            // message text to THIS session's response log (pinned to
+            // `this_session_id` — the body can't name another session). The text
+            // is read from `message` (fallback `text`); `final` ("1"/"true") marks
+            // the turn's last line. Drained by `GET /v1/sandboxes/<id>/messages`.
+            "/cli/respond" if is_post => {
+                let text = params
+                    .get("message")
+                    .or_else(|| params.get("text"))
+                    .cloned()
+                    .unwrap_or_default();
+                let final_ = params
+                    .get("final")
+                    .map(|v| {
+                        let v = v.trim();
+                        v == "1" || v.eq_ignore_ascii_case("true")
+                    })
+                    .unwrap_or(false);
+                let seq = crate::sandbox_responses::append(this_session_id, text, final_);
+                (
+                    "200 OK".to_string(),
+                    "application/json",
+                    serde_json::json!({ "ok": true, "seq": seq }).to_string(),
+                )
+            }
             "/cli/awareness/publish" => {
                 let restamped = restamp_awareness_from(body, principal);
                 let r = crate::awareness_ws::handle_publish(&restamped);

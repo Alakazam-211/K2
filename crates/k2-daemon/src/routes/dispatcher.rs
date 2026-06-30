@@ -2855,6 +2855,31 @@ async fn handle_one_request(
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     crate::v1_sandboxes::handle_v1_sandboxes(&principal, &body)
                 }
+                // F2 — GET /v1/sandboxes/<id>/messages?since=<seq>: drain the
+                // in-cell agent's response log. GET-only (a POST to this path is
+                // not POST-allowlisted, so the top-level guard 405s it before
+                // here). AUTHZ is inside `handle_messages` (default-deny: the
+                // requesting principal must OWN the session, else 404). The exact
+                // `match p` above can't catch the `<id>` segment, so this guard
+                // arm matches the prefix+suffix and parses the id + `since`.
+                _ if p.starts_with("/v1/sandboxes/") && p.ends_with("/messages") => {
+                    let _ = stream.read(&mut buf).await;
+                    let id = p
+                        .strip_prefix("/v1/sandboxes/")
+                        .and_then(|s| s.strip_suffix("/messages"))
+                        .unwrap_or("");
+                    let since = super::http::parse_params(&path, &query)
+                        .get("since")
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    // A multi-segment / empty id is never a real session id —
+                    // 404 without an ownership probe.
+                    if id.is_empty() || id.contains('/') {
+                        crate::cli_response::CliResponse::not_found()
+                    } else {
+                        crate::v1_sandboxes::handle_messages(&principal, id, since)
+                    }
+                }
                 _ => {
                     let _ = stream.read(&mut buf).await;
                     crate::cli_response::CliResponse::not_found()

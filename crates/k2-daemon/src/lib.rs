@@ -79,6 +79,10 @@ pub mod stream_token;
 // Reached ONLY via /v1/sandboxes (K2_SANDBOX_API, default OFF).
 pub mod sandbox_quota;
 pub mod v1_sandboxes;
+// F2 (sandbox): per-session agent response log + principal→session ownership map
+// backing GET /v1/sandboxes/<id>/messages. Reached ONLY via the K2_SANDBOX_API
+// surface (default OFF) + the scoped /cli/respond cell verb.
+pub mod sandbox_responses;
 pub mod session_events;
 pub mod session_events_ws;
 pub mod session_lookup;

@@ -83,6 +83,8 @@ mod stream_token;
 // P4-H4: per-principal + global concurrent-cell cap (429); /v1/sandboxes only.
 mod sandbox_quota;
 mod v1_sandboxes;
+// F2 (sandbox): per-session agent response log + ownership map (GET .../messages).
+mod sandbox_responses;
 mod session_events;
 mod session_events_ws;
 mod session_lookup;

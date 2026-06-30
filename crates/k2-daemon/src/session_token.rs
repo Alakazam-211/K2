@@ -426,6 +426,13 @@ pub fn is_agent_verb(path: &str) -> bool {
         // release. `subscribe` (a WS) is NOT here — read-only fan-out stays
         // owner/connect-user over TCP.
         "/cli/awareness/publish",
+        // F2 (sandbox API): the in-cell agent's RESPONSE egress. `/cli/respond`
+        // appends a line to this session's response log (drained by the external
+        // `GET /v1/sandboxes/<id>/messages`). Pure params-driven write; carries
+        // no escalation — it is NOT under any DENY_PREFIX (users/fs/clone/tunnel/
+        // daemon/sessions/terminal). The cell server pins it to THIS session id
+        // (the body never names the session), so a cell can only write its own log.
+        "/cli/respond",
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
@@ -903,6 +910,29 @@ mod tests {
         assert!(is_agent_verb("/cli/workspace/msg"));
         assert!(is_agent_verb("/cli/inbox/respond"));
         assert!(is_agent_verb("/cli/awareness/publish"));
+    }
+
+    #[test]
+    fn is_agent_verb_allows_respond_but_not_the_deny_surface() {
+        // F2 (sandbox API): the in-cell agent's response egress is allowlisted.
+        assert!(is_agent_verb("/cli/respond"), "/cli/respond is the agent response verb");
+        // And the +1 must NOT have widened the escalation surface — the deny
+        // prefixes still default-deny (belt-and-braces against an allowlist edit
+        // accidentally crossing a DENY_PREFIX).
+        for p in [
+            "/cli/users/set-role",
+            "/cli/fs/write-file",
+            "/cli/clone/bundle",
+            "/cli/tunnel/start",
+            "/cli/daemon/restart",
+            "/cli/sessions/v2/spawn",
+            "/cli/terminal/create",
+        ] {
+            assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
+        }
+        // Near-miss: a `respond`-prefixed sub-path is NOT auto-allowed (exact match
+        // only — `/cli/respond` is in ALLOW_EXACT, not ALLOW_PREFIXES).
+        assert!(!is_agent_verb("/cli/respond/anything"), "respond is exact-match only");
     }
 
     #[test]

@@ -80,6 +80,18 @@ impl PolicyError {
 /// fresh `--session-id` for conversation persistence.
 const STANDARD_CLAUDE_ARGS: &[&str] = &["--dangerously-skip-permissions"];
 
+/// In-cell scratch tmpdir staged as `CLAUDE_CODE_TMPDIR` (F2 cell-recipe). A
+/// single easy-to-change constant: the box must confirm claude-as-guest-root can
+/// create a 0-owned dir here; fallback `/run/cc-tmp` needs a guest-init tmpfs
+/// mount. (We validate on the box later — the seam is just this constant.)
+const CELL_TMPDIR: &str = "/dev/shm/cc";
+
+/// Git identity DEFAULTS staged into the cell env (F2) so an in-cell `git init`
+/// + commit works without a global gitconfig (the ephemeral cwd has none). Used
+/// for BOTH author and committer name/email.
+const CELL_GIT_NAME: &str = "K2 Sandbox";
+const CELL_GIT_EMAIL: &str = "sandbox@k2.local";
+
 /// Resolve the untrusted body + authenticated principal into a host-trusted
 /// [`SpawnRequest`]. See the module note for the full invariant list. The
 /// returned request carries `ephemeral_cwd = Some(<the provisioned dir>)` so the
@@ -138,14 +150,43 @@ pub fn resolve_spawn(
         }
     }
 
+    // (3b) F2 cell-recipe — stage the in-cell agent's self-sufficiency env. ALL
+    // of these are DEFAULTS: `or_insert_with` means a value already present in
+    // the host-curated env WINS (defends the "caller value wins" rule even though
+    // the caller's env is dropped wholesale above — nothing here clobbers the
+    // principal key either). These ONLY run on the sandbox-API spawn path.
+    // - IS_SANDBOX=1 lets claude run --dangerously-skip-permissions as guest-root.
+    // - CLAUDE_CODE_TMPDIR points Claude Code at the cell scratch tmpdir.
+    // - GIT_* give `git init`+commit a working identity with no global config.
+    env.entry("IS_SANDBOX".to_string()).or_insert_with(|| "1".to_string());
+    env.entry("CLAUDE_CODE_TMPDIR".to_string())
+        .or_insert_with(|| CELL_TMPDIR.to_string());
+    env.entry("GIT_AUTHOR_NAME".to_string())
+        .or_insert_with(|| CELL_GIT_NAME.to_string());
+    env.entry("GIT_COMMITTER_NAME".to_string())
+        .or_insert_with(|| CELL_GIT_NAME.to_string());
+    env.entry("GIT_AUTHOR_EMAIL".to_string())
+        .or_insert_with(|| CELL_GIT_EMAIL.to_string());
+    env.entry("GIT_COMMITTER_EMAIL".to_string())
+        .or_insert_with(|| CELL_GIT_EMAIL.to_string());
+
     // (4) Dimensions are hints only — clamp to sane bounds.
     let cols = clamp_dim(req.cols, 80, 16, 500);
     let rows = clamp_dim(req.rows, 24, 4, 300);
 
-    // Prompt: explicitly IGNORED for v1 (never forwarded as argv). Touch it so
-    // the drop is intentional + visible, not an oversight.
-    if req.prompt.is_some() {
-        log_debug!("[v1-sandbox] caller prompt is ignored in v1 (not forwarded as argv)");
+    // Prompt: UN-DROPPED (F2). Stage the caller's prompt into the cell env as
+    // `K2_REQUEST_PROMPT` (only when non-empty) so a FUTURE guest-side launcher
+    // can read the request text — it is NOT forwarded as argv, and its VALUE is
+    // NEVER logged (it may carry secrets). `or_insert_with` keeps a pre-existing
+    // value (defensive). Empty/whitespace prompt → behavior identical to before.
+    if let Some(p) = req.prompt.as_deref() {
+        if !p.trim().is_empty() {
+            env.entry("K2_REQUEST_PROMPT".to_string())
+                .or_insert_with(|| p.to_string());
+            log_debug!(
+                "[v1-sandbox] staged caller prompt into cell env as K2_REQUEST_PROMPT (value NOT logged)"
+            );
+        }
     }
 
     Ok(SpawnRequest {
@@ -265,13 +306,28 @@ mod tests {
             spawn.args.as_deref(),
             Some(&["--dangerously-skip-permissions".to_string()][..])
         );
-        // env carries ONLY the host-staged principal key (caller env dropped).
+        // env carries the host-staged principal key (caller env dropped) PLUS the
+        // F2 cell-recipe defaults. No caller-supplied env ever appears.
         let env = spawn.env.as_ref().expect("env present");
         assert_eq!(
             env.get("ANTHROPIC_API_KEY").map(String::as_str),
             Some("sk-ant-principal-key"),
         );
-        assert_eq!(env.len(), 1, "env must be host-curated ONLY (one key)");
+        // F2 cell-recipe is staged.
+        assert_eq!(env.get("IS_SANDBOX").map(String::as_str), Some("1"));
+        assert_eq!(env.get("CLAUDE_CODE_TMPDIR").map(String::as_str), Some("/dev/shm/cc"));
+        assert_eq!(env.get("GIT_AUTHOR_NAME").map(String::as_str), Some("K2 Sandbox"));
+        assert_eq!(env.get("GIT_COMMITTER_NAME").map(String::as_str), Some("K2 Sandbox"));
+        assert_eq!(env.get("GIT_AUTHOR_EMAIL").map(String::as_str), Some("sandbox@k2.local"));
+        assert_eq!(env.get("GIT_COMMITTER_EMAIL").map(String::as_str), Some("sandbox@k2.local"));
+        // F2: a non-empty prompt is UN-DROPPED into K2_REQUEST_PROMPT (not argv).
+        assert_eq!(
+            env.get("K2_REQUEST_PROMPT").map(String::as_str),
+            Some("ignored prompt"),
+            "non-empty prompt is staged verbatim into K2_REQUEST_PROMPT",
+        );
+        // Exactly the host-curated set: principal key + 6 recipe vars + prompt.
+        assert_eq!(env.len(), 8, "env must be host-curated ONLY (no caller env)");
         // cwd is a fresh ephemeral dir, NEVER $HOME.
         assert_ne!(
             Some(PathBuf::from(&spawn.cwd)),
@@ -315,7 +371,15 @@ mod tests {
             env.get("ANTHROPIC_API_KEY").is_none(),
             "a keyless principal stages NO Anthropic key",
         );
-        assert!(env.is_empty(), "keyless principal → fully empty host-curated env");
+        // F2: no key, but the cell-recipe defaults are still staged (6 vars).
+        assert_eq!(env.get("IS_SANDBOX").map(String::as_str), Some("1"));
+        assert_eq!(env.get("CLAUDE_CODE_TMPDIR").map(String::as_str), Some("/dev/shm/cc"));
+        assert_eq!(env.len(), 6, "keyless principal → exactly the 6 recipe vars");
+        // Default request (no prompt) stages NO K2_REQUEST_PROMPT.
+        assert!(
+            env.get("K2_REQUEST_PROMPT").is_none(),
+            "empty prompt must not stage K2_REQUEST_PROMPT (behavior unchanged)",
+        );
         assert_ne!(Some(PathBuf::from(&spawn.cwd)), dirs::home_dir());
         assert_eq!(spawn.command.as_deref(), Some("claude"));
     }

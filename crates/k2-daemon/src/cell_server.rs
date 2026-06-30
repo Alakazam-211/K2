@@ -240,17 +240,16 @@ mod unix_impl {
     /// there, before this is called). The loop runs until the socket file is
     /// removed (cell teardown) or the listener errors.
     ///
-    /// `microvm_backed` is per-session tier gating (Sandbox B2, option **a**):
-    /// the caller (`handle_v2_spawn`) knows this cell's backend
-    /// (`DaemonPtySession.sandbox`) at spawn time, so we resolve the allowed
-    /// peer-uid set ONCE here and capture it into the accept loop. A microVM
-    /// cell additionally allows the dedicated `k2cell` uid (the VMM is the
-    /// host-socket peer after priv-drop); a bare-PTY cell does not → the set
-    /// is `{daemon uid}`, byte-identical to pre-B2.
+    /// `cell_uid` is per-session tier gating (Sandbox B2 / P4-H6): the caller
+    /// (`spawn_session`) allocated the cell's PER-SESSION worker uid and passes
+    /// it here, so the allowed peer-uid set is resolved ONCE and captured into
+    /// the accept loop. A microVM cell allows EXACTLY its own per-session uid (the
+    /// VMM is the host-socket peer after priv-drop to that uid); a bare-PTY cell
+    /// passes `None` → the set stays `{daemon uid}`, byte-identical to pre-B2.
     pub fn serve_cell(
         session_id: SessionId,
         listener: std::os::unix::net::UnixListener,
-        microvm_backed: bool,
+        cell_uid: Option<u32>,
     ) {
         if let Err(e) = listener.set_nonblocking(true) {
             log_debug!("[hook-scoped] WARN set_nonblocking cell sock {session_id}: {e}");
@@ -266,13 +265,6 @@ mod unix_impl {
         let sid_str = session_id.to_string();
         let sock_path = crate::cell_uds::cell_socket_path(&session_id);
         let uid = self_uid();
-        // Per-session widening: ONLY a microVM-backed cell adds the dedicated
-        // sandbox uid; otherwise `None` keeps the belt at `{daemon uid}`.
-        let cell_uid = if microvm_backed {
-            crate::cell_uds::resolve_sandbox_cell_uid()
-        } else {
-            None
-        };
 
         tokio::spawn(async move {
             // Periodic liveness check: when the cell tears down, the

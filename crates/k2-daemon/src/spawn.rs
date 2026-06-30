@@ -221,6 +221,9 @@ pub fn spawn_agent_session_v2_blocking(
         // Daemon-internal spawns (heartbeat / canonical / wake) are never
         // sandboxed in P1 — the seam is present but always Passthrough here.
         sandbox: k2_core::terminal::SandboxSpec::Passthrough,
+        // P4-H6: daemon-internal spawns are never microVM-backed, so no
+        // per-session uid is allocated for them.
+        cell_uid: None,
     };
     let session_id = cfg.session_id;
 
@@ -238,6 +241,9 @@ pub fn spawn_agent_session_v2_blocking(
         canonical_key.clone(),
         session.clone(),
         None,
+        None,
+        // P4-H6: daemon-internal spawns are never microVM-backed → no per-session
+        // uid was allocated → nothing to free.
         None,
     );
 

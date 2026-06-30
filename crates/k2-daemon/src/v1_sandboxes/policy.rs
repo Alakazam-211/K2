@@ -20,7 +20,7 @@
 //!   `Provider → key_env_var` mapping.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use k2_core::log_debug;
 
@@ -197,68 +197,25 @@ fn sandbox_sessions_root() -> PathBuf {
         .join("sandbox-sessions")
 }
 
-/// Provision a fresh, EMPTY per-session workspace dir and hand it to the
-/// sandbox-cell uid so the priv-dropped `k2cell` worker can mount + write it.
+/// Provision a fresh, EMPTY per-session workspace dir for the cell.
 ///
-/// Fail-CLOSED: any failure (mkdir or — on a real sandbox box — chown to the
-/// cell uid) returns [`PolicyError`]; the caller NEVER falls back to `$HOME`. On
-/// macOS / any host without the dedicated `k2cell` user the uid is unresolved,
-/// so the chown is skipped (the dir stays daemon-owned — harmless there, since
-/// `/v1/sandboxes` 409s before spawn on a non-microVM build anyway).
+/// **P4-H6 — the chown moved to the spawn door.** Through H5 this function
+/// chowned the dir to the shared `k2cell` uid. With per-session uids the cell's
+/// drop uid is ALLOCATED by the spawn door (`v2_spawn::spawn_session`), which is
+/// the only place that knows it — so the door does the `chown <ephemeral> →
+/// <per-session uid>` (fail-closed there) right before it boots the cell. Here
+/// we only MINT the empty dir (daemon-owned). Fail-CLOSED on mkdir; the caller
+/// NEVER falls back to `$HOME`.
 fn provision_ephemeral_workspace() -> Result<PathBuf, PolicyError> {
     let dir = sandbox_sessions_root().join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(&dir).map_err(|e| {
         PolicyError::NoEphemeralWorkspace(format!("mkdir {}: {e}", dir.display()))
     })?;
-
-    #[cfg(unix)]
-    {
-        if let Some(uid) = crate::cell_uds::resolve_sandbox_cell_uid() {
-            if let Err(e) = chown_dir_to_uid(&dir, uid) {
-                // Fail-CLOSED: on a real sandbox box, a cell that can't own its
-                // workspace can't mount it — refuse rather than spawn broken, and
-                // clean up the half-provisioned dir.
-                let _ = std::fs::remove_dir_all(&dir);
-                return Err(PolicyError::NoEphemeralWorkspace(format!(
-                    "chown {} to cell uid {uid}: {e}",
-                    dir.display()
-                )));
-            }
-            log_debug!(
-                "[v1-sandbox] provisioned ephemeral workspace {} (chowned to cell uid {uid})",
-                dir.display()
-            );
-        } else {
-            log_debug!(
-                "[v1-sandbox] provisioned ephemeral workspace {} (no k2cell uid; chown skipped)",
-                dir.display()
-            );
-        }
-    }
-
+    log_debug!(
+        "[v1-sandbox] provisioned ephemeral workspace {} (per-session chown deferred to the spawn door — P4-H6)",
+        dir.display()
+    );
     Ok(dir)
-}
-
-/// `chown(path, uid, -1)` — set owner uid, leave group + mode untouched. Mirrors
-/// `cell_uds::set_cell_socket_owner`'s libc call for a directory inode.
-#[cfg(unix)]
-fn chown_dir_to_uid(path: &Path, uid: u32) -> std::io::Result<()> {
-    use std::os::unix::ffi::OsStrExt;
-    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    // SAFETY: `c_path` is a valid NUL-terminated path kept alive across the call;
-    // gid `-1` (cast from u32::MAX) means "don't change the group".
-    let rc = unsafe {
-        libc::chown(
-            c_path.as_ptr(),
-            uid as libc::uid_t,
-            u32::MAX as libc::gid_t,
-        )
-    };
-    if rc != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

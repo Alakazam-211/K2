@@ -157,6 +157,29 @@ fn default_rows() -> u16 {
     24
 }
 
+/// P4-H6: `chown(path, uid, uid)` — set BOTH owner and group to the per-session
+/// uid, mode untouched. The worker drops to `uid:uid` (per-session uid == gid),
+/// so the ephemeral workspace must be owned `uid:uid` for the priv-dropped VMM
+/// to mount + write it. Mirrors `cell_uds::set_cell_socket_owner`'s libc call but
+/// also sets the group (the socket leaves the group as `-1`; here we want the
+/// per-session gid so a future per-cell group bit can't leak access to another
+/// cell). Only ever called on a daemon-MINTED ephemeral path, never a caller one.
+#[cfg(unix)]
+fn chown_path_to_uid(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    // SAFETY: `c_path` is a valid NUL-terminated path kept alive across the call;
+    // owner uid AND group gid are both set to the per-session id.
+    let rc = unsafe {
+        libc::chown(c_path.as_ptr(), uid as libc::uid_t, uid as libc::gid_t)
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Whether THIS daemon can deliver a real microVM-isolated cell: a Linux build
 /// compiled with `sandbox-microvm` AND with `K2_SANDBOX` enabled at runtime —
 /// the EXACT condition under which [`resolve_sandbox`] resolves `Microvm` (this
@@ -441,6 +464,10 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         label: seed_label,
         label_source,
         sandbox: sandbox_spec,
+        // P4-H6: stamped below (the per-session uid the door allocates for a
+        // microVM cell, threaded into the worker as the drop target). `None`
+        // here; set just before `DaemonPtySession::spawn` for microVM cells only.
+        cell_uid: None,
     };
     let session_id_for_response = cfg.session_id;
 
@@ -506,63 +533,105 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         }
     }
 
-    // P4-H5 — fail-closed egress lockdown, installed BEFORE the cell boots.
-    // The worker now enables libkrun TSI HIJACK_INET, so a microVM cell has REAL
-    // outbound internet (the guest's `claude` can reach api.anthropic.com). For
-    // an UNTRUSTED tenant that reachability MUST be policed: install the host
-    // nft allowlist that DEFAULT-DROPs the cell uid's (`k2cell`) outbound INET
-    // and ALLOWs only 443 + DNS to non-loopback. We do it PRE-spawn and
-    // fail-closed: if the lockdown can't be installed (nft missing/errors, or
-    // the cell uid won't resolve) we REFUSE to boot the cell rather than run a
-    // now-internet-capable cell with NO egress control. The policy is one shared
-    // idempotent table (all cells share k2cell today; H6 makes it per-session).
-    //
-    // Applied ALWAYS for microVM cells — `claude`'s only egress need is
-    // Anthropic + DNS, so the tightest policy is also sufficient for own-use,
-    // and there is no second "untrusted-only" mode to get wrong. Default-OFF:
-    // a non-microVM (passthrough) session never enters this branch → ZERO nft
-    // state touched, byte-identical. On Mac / feature-off builds `cfg.sandbox`
-    // is never `Microvm`, so this is dead there.
+    // P4-H6 — PER-SESSION worker uid + fail-closed PER-SESSION egress, set up
+    // BEFORE the cell boots. Each microVM cell now drops to its OWN distinct uid
+    // (allocated here from the reserved range) instead of the shared `k2cell`, so
+    // guest-written files are host-owned by a per-session uid (true multi-tenant
+    // fs isolation) and the egress nft rule is per-tenant. Three steps, every one
+    // fail-closed:
+    //   (a) ALLOCATE a distinct uid — exhausted → 503 (a second concurrency bound
+    //       on top of H4); we NEVER boot two cells under one uid.
+    //   (b) hand the daemon-minted EPHEMERAL workspace to that uid (so the VMM can
+    //       write it) — never a caller path; a chown failure frees the uid +
+    //       refuses.
+    //   (c) install THIS uid's per-session egress allowlist (default-DROP + only
+    //       443/53) — a failure frees the uid + refuses.
+    // Then thread the uid into the worker (drop target), the socket chown, the
+    // peer-cred belt, and the authoritative teardown. `per_session_uid` is the
+    // single carrier; `None` ⇒ no allocation happened (every non-microVM spawn) →
+    // default-OFF parity. On Mac / feature-off builds `cfg.sandbox` is never
+    // `Microvm`, so this whole block is dead there.
+    let mut per_session_uid: Option<u32> = None;
     #[cfg(unix)]
     if matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm) {
-        match crate::cell_uds::resolve_sandbox_cell_uid() {
-            Some(cell_uid) => {
-                if let Err(e) = crate::cell_egress::ensure_egress_policy(cell_uid) {
-                    log_debug!(
-                        "[sandbox] P4-H5 egress lockdown install FAILED for session={} uid={cell_uid}: {e}; REFUSING to boot cell (fail-closed)",
-                        session_id_for_response
-                    );
-                    return HandlerResult {
-                        status: "500 Internal Server Error",
-                        body: format!(
-                            r#"{{"error":"egress lockdown install failed; refusing to boot microVM cell with open egress: {}"}}"#,
-                            e.to_string().replace('"', "'")
-                        ),
-                    };
-                }
-                log_debug!(
-                    "[sandbox] P4-H5 egress allowlist installed (skuid {cell_uid}: default-DROP + 443/53) for session={}",
-                    session_id_for_response
-                );
-            }
+        // (a) allocate a DISTINCT per-session uid.
+        let cell_uid = match crate::cell_uid_pool::alloc() {
+            Some(u) => u,
             None => {
                 log_debug!(
-                    "[sandbox] P4-H5: microVM session={} cell uid unresolved; REFUSING to boot (fail-closed — cannot scope egress)",
+                    "[sandbox] P4-H6: uid pool EXHAUSTED for session={}; REFUSING to boot (fail-closed)",
+                    session_id_for_response
+                );
+                return HandlerResult {
+                    status: "503 Service Unavailable",
+                    body: r#"{"error":"sandbox uid pool exhausted; refusing to boot microVM cell","code":"uid-pool-exhausted"}"#
+                        .to_string(),
+                };
+            }
+        };
+
+        // (b) hand the ephemeral workspace to THIS uid. Only the daemon-MINTED
+        // ephemeral dir is chowned (never a caller path); a v2-cockpit microVM
+        // cell has no ephemeral dir (`ephemeral_cwd` None) → skip, matching
+        // pre-H6 (its real workspace is not chowned). Fail-closed.
+        if let Some(ws) = req.ephemeral_cwd.as_ref() {
+            if let Err(e) = chown_path_to_uid(ws, cell_uid) {
+                crate::cell_uid_pool::free(cell_uid);
+                log_debug!(
+                    "[sandbox] P4-H6 chown ephemeral workspace {} to cell uid {cell_uid} FAILED for session={}: {e}; REFUSING (fail-closed)",
+                    ws.display(),
                     session_id_for_response
                 );
                 return HandlerResult {
                     status: "500 Internal Server Error",
-                    body: r#"{"error":"sandbox cell uid unresolved; refusing to boot microVM cell (fail-closed egress)"}"#
-                        .to_string(),
+                    body: format!(
+                        r#"{{"error":"could not hand ephemeral workspace to sandbox cell uid: {}"}}"#,
+                        e.to_string().replace('"', "'")
+                    ),
                 };
             }
         }
+
+        // (c) install THIS uid's per-session fail-closed egress lockdown.
+        if let Err(e) = crate::cell_egress::ensure_egress_policy(cell_uid) {
+            crate::cell_uid_pool::free(cell_uid);
+            log_debug!(
+                "[sandbox] P4-H6 egress lockdown install FAILED for session={} uid={cell_uid}: {e}; REFUSING to boot cell (fail-closed)",
+                session_id_for_response
+            );
+            return HandlerResult {
+                status: "500 Internal Server Error",
+                body: format!(
+                    r#"{{"error":"egress lockdown install failed; refusing to boot microVM cell with open egress: {}"}}"#,
+                    e.to_string().replace('"', "'")
+                ),
+            };
+        }
+        log_debug!(
+            "[sandbox] P4-H6 per-session uid {cell_uid} allocated + egress allowlist installed (skuid {cell_uid}: default-DROP + 443/53) for session={}",
+            session_id_for_response
+        );
+
+        // Thread the uid into the worker (drop target) + carry it forward.
+        cfg.cell_uid = Some(cell_uid);
+        per_session_uid = Some(cell_uid);
     }
 
     let __t_spawn = std::time::Instant::now();
     let session = match DaemonPtySession::spawn(cfg) {
         Ok(s) => s,
         Err(e) => {
+            // P4-H6: the cell never booted → free the per-session uid + tear down
+            // its egress table HERE (no child-exit observer will fire). `None`
+            // for every non-microVM spawn → no-op. Best-effort egress remove.
+            if let Some(uid) = per_session_uid {
+                let _ = crate::cell_egress::remove_egress_policy(uid);
+                crate::cell_uid_pool::free(uid);
+                log_debug!(
+                    "[sandbox] P4-H6 spawn failed for session={}; freed per-session uid {uid} + removed egress",
+                    session_id_for_response
+                );
+            }
             return HandlerResult {
                 status: "500 Internal Server Error",
                 body: format!(
@@ -585,48 +654,40 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     if crate::session_token::scoped_hooks_enabled() {
         match crate::cell_uds::bind_cell_socket(&session_id_for_response) {
             Ok(listener) => {
-                // Sandbox B2 (option a): per-session tier gating. A
-                // microVM-backed cell additionally allows the dedicated
-                // `k2cell` peer uid (the VMM is the host-socket peer after
-                // priv-drop); a bare-PTY cell does not → the allowed peer-uid
-                // set stays `{daemon uid}`, default-OFF parity.
-                let microvm_backed =
-                    matches!(session.sandbox, k2_core::terminal::SandboxSpec::Microvm);
-                // Sandbox B2 (BLOCKER 2): the in-jail libkrun unix-proxy does
-                // the host-side connect() AS the dedicated `k2cell` uid (the
-                // VMM priv-dropped to it; no guest→host idmap), so a daemon-
-                // owned 0600 socket is EACCES → bytes silently dropped. For a
-                // microVM-backed cell ONLY, chown the socket inode to EXACTLY
-                // that uid (mode left 0600 → reachable by `k2cell` + root,
-                // never world). Fail-closed: if the dedicated user doesn't
-                // resolve, leave it daemon-only and log. A bare-PTY cell never
-                // enters this branch → socket stays 0600 daemon-only,
-                // byte-identical to pre-B2.
-                if microvm_backed {
-                    match crate::cell_uds::resolve_sandbox_cell_uid() {
-                        Some(cell_uid) => {
-                            if let Err(e) = crate::cell_uds::set_cell_socket_owner(
-                                &session_id_for_response,
-                                cell_uid,
-                            ) {
-                                log_debug!(
-                                    "[hook-scoped] WARN chown cell sock to k2cell uid {cell_uid} failed for session={}: {e}; socket stays daemon-only",
-                                    session_id_for_response
-                                );
-                            } else {
-                                log_debug!(
-                                    "[hook-scoped] chowned cell sock to k2cell uid {cell_uid} for microVM session={}",
-                                    session_id_for_response
-                                );
-                            }
-                        }
-                        None => log_debug!(
-                            "[hook-scoped] microVM session={}: k2cell uid unresolved; cell socket stays 0600 daemon-only (fail-closed)",
+                // Sandbox B2 / P4-H6: per-session tier gating. A microVM-backed
+                // cell additionally allows EXACTLY its per-session peer uid (the
+                // VMM is the host-socket peer after priv-drop to that uid); a
+                // bare-PTY cell does not → the allowed peer-uid set stays
+                // `{daemon uid}`, default-OFF parity. `per_session_uid` is `Some`
+                // iff this is a microVM cell the door allocated for.
+                //
+                // BLOCKER 2: the in-jail libkrun unix-proxy does the host-side
+                // connect() AS the VMM's per-session uid (no guest→host idmap),
+                // so a daemon-owned 0600 socket is EACCES → bytes silently
+                // dropped. For a microVM cell, chown the socket inode to EXACTLY
+                // that per-session uid (mode left 0600 → reachable by that uid +
+                // root, never world). Fail-closed: if the uid is absent (no
+                // allocation), leave it daemon-only + log. A bare-PTY cell never
+                // enters this branch → socket stays 0600 daemon-only.
+                if let Some(cell_uid) = per_session_uid {
+                    if let Err(e) = crate::cell_uds::set_cell_socket_owner(
+                        &session_id_for_response,
+                        cell_uid,
+                    ) {
+                        log_debug!(
+                            "[hook-scoped] WARN chown cell sock to per-session uid {cell_uid} failed for session={}: {e}; socket stays daemon-only",
                             session_id_for_response
-                        ),
+                        );
+                    } else {
+                        log_debug!(
+                            "[hook-scoped] chowned cell sock to per-session uid {cell_uid} for microVM session={}",
+                            session_id_for_response
+                        );
                     }
                 }
-                crate::cell_server::serve_cell(session_id_for_response, listener, microvm_backed);
+                // The peer-cred belt allows EXACTLY this cell's per-session uid
+                // (None for a bare-PTY cell → `{daemon uid}` only).
+                crate::cell_server::serve_cell(session_id_for_response, listener, per_session_uid);
                 log_debug!(
                     "[hook-scoped] bound + serving per-cell UDS for session={}",
                     session_id_for_response
@@ -738,6 +799,12 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         session.clone(),
         req.ephemeral_cwd.clone(),
         req.principal_key.clone(),
+        // P4-H6: the per-session uid this cell holds. The observer is the SINGLE
+        // authoritative teardown — it frees the uid + removes the per-session
+        // egress table on ChildExit (fires on clean exit AND crash/OOM/kill-9),
+        // so neither the uid nor the nft rule can ever leak. `None` for every
+        // non-microVM session → no-op.
+        per_session_uid,
     );
 
     // Drain any pending-live signals that were queued while this
@@ -967,6 +1034,12 @@ pub fn spawn_child_exit_observer(
     session: std::sync::Arc<DaemonPtySession>,
     ephemeral_cwd: Option<PathBuf>,
     principal_key: Option<String>,
+    // P4-H6: the per-session worker uid this cell holds (`Some` only for a
+    // microVM cell the door allocated for). Freed back to the pool + its
+    // per-session egress table removed in the ChildExit arm — the SINGLE
+    // authoritative teardown point (fires on clean exit AND crash/OOM/kill-9), so
+    // the uid + nft rule can never leak. `None` for every non-microVM session.
+    cell_uid: Option<u32>,
 ) {
     use k2_core::terminal::AlacEvent;
     // Capture the session id BEFORE downgrading so the teardown path can
@@ -1117,6 +1190,25 @@ pub fn spawn_child_exit_observer(
                         log_debug!(
                             "[v1-sandbox] released concurrent-cell quota slot for principal={} session={}",
                             pk,
+                            session_id
+                        );
+                    }
+
+                    // P4-H6 — FREE the per-session worker uid back to the pool +
+                    // REMOVE its per-session egress table. SAME authoritative
+                    // point as the quota release / cgroup kill above: fires on
+                    // clean exit AND on crash/OOM/kill-9, so the uid + nft rule
+                    // can never leak, and the freed uid is reusable by the next
+                    // spawn. `None` for every non-microVM session → no-op. Both
+                    // are idempotent/saturating (the pool free is range-checked;
+                    // the egress remove is `add table; delete table`), so a
+                    // double-fire is harmless. Egress remove is best-effort —
+                    // never block teardown on it.
+                    if let Some(uid) = cell_uid {
+                        let _ = crate::cell_egress::remove_egress_policy(uid);
+                        crate::cell_uid_pool::free(uid);
+                        log_debug!(
+                            "[sandbox] P4-H6 freed per-session uid {uid} + removed egress table for session={}",
                             session_id
                         );
                     }

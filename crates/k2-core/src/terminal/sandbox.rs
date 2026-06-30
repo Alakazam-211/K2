@@ -79,6 +79,14 @@ pub struct SpawnRequest {
     /// `None` ⇒ [`spawn_microvm`] generates a unique one. Unused by
     /// [`Passthrough`].
     pub session_id: Option<String>,
+    /// P4-H6: the daemon-allocated per-session uid the worker must drop to
+    /// (instead of the shared `k2cell`). Emitted as `--cell-uid <n>` by
+    /// [`build_worker_invocation`]; the worker uses it as BOTH the drop uid and
+    /// gid (per-session fs isolation) while keeping the kvm supplementary group.
+    /// `None` (every non-microVM spawn, and any microVM spawn the daemon didn't
+    /// allocate for) ⇒ no `--cell-uid` is emitted and the worker falls back to
+    /// resolving `k2cell`. Unused by [`Passthrough`].
+    pub cell_uid: Option<u32>,
 }
 
 /// A spawned child + its captured direct-child PID. Returned from a backend's
@@ -512,6 +520,15 @@ pub fn build_worker_invocation(req: &SpawnRequest, caps: &VmCaps) -> WorkerInvoc
         argv.push(sid.clone());
     }
 
+    // P4-H6: the daemon-allocated per-session drop uid. Emitted when present so
+    // the worker drops to THIS uid (its own host identity) instead of the shared
+    // `k2cell`. Absent ⇒ no flag → the worker falls back to `k2cell` (legacy /
+    // hand-test path). The daemon's microVM spawn door always passes it.
+    if let Some(uid) = req.cell_uid {
+        argv.push("--cell-uid".to_string());
+        argv.push(uid.to_string());
+    }
+
     // Workspace root → read-WRITE mount inside the guest.
     if let Some(ws) = &req.workspace_root {
         argv.push("--workspace-root".to_string());
@@ -619,6 +636,7 @@ mod tests {
             workspace_root: None,
             tool_roots: vec![],
             session_id: None,
+            cell_uid: None,
         };
 
         let child = SandboxSpec::Passthrough
@@ -684,6 +702,7 @@ mod tests {
                 PathBuf::from("/sentinel/tool-b"),
             ],
             session_id: Some("sentinel-sid".to_string()),
+            cell_uid: Some(60042),
         }
     }
 
@@ -761,6 +780,8 @@ mod tests {
         assert_eq!(flag_value(&inv.argv, "--cols"), Some("111"));
         assert_eq!(flag_value(&inv.argv, "--rows"), Some("222"));
         assert_eq!(flag_value(&inv.argv, "--session-id"), Some("sentinel-sid"));
+        // P4-H6: the per-session drop uid is emitted as --cell-uid.
+        assert_eq!(flag_value(&inv.argv, "--cell-uid"), Some("60042"));
         assert!(inv.argv.iter().any(|a| a == "--drain-on-exit"));
         assert_eq!(
             flag_value(&inv.argv, "--workspace-root"),
@@ -854,6 +875,7 @@ mod tests {
             workspace_root: None,
             tool_roots: vec![],
             session_id: None,
+            cell_uid: None,
         };
 
         let inv = build_worker_invocation(&req, &VmCaps::default());
@@ -900,6 +922,7 @@ mod tests {
             workspace_root: None,
             tool_roots: vec![],
             session_id: None,
+            cell_uid: None,
         };
         let inv = build_worker_invocation(&req, &VmCaps::default());
         assert!(flag_value(&inv.argv, "--workspace-root").is_none());
@@ -909,6 +932,7 @@ mod tests {
         assert!(!inv.argv.iter().any(|a| a == "--"));
         assert!(!inv.argv.iter().any(|a| a == "--drain-on-exit"));
         assert!(flag_value(&inv.argv, "--session-id").is_none());
+        assert!(flag_value(&inv.argv, "--cell-uid").is_none());
         assert_eq!(flag_value(&inv.argv, "--vcpus"), Some("1"));
         assert_eq!(flag_value(&inv.argv, "--ram-mib"), Some("1024"));
     }

@@ -75,6 +75,8 @@ mod cell_server;
 mod cell_uds;
 // P4-H5: host nft fail-closed egress allowlist for microVM cells (see lib.rs).
 mod cell_egress;
+// P4-H6: per-session worker-uid allocator (see lib.rs).
+mod cell_uid_pool;
 mod session_token;
 // P3b (sandbox / K2-as-a-server): stream tokens + POST /v1/sandboxes + policy.
 mod stream_token;

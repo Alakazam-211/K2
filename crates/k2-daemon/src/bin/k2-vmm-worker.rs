@@ -91,9 +91,12 @@ mod worker {
     }
     const LIBKRUN_LIBDIR: &str = "/usr/local/lib64";
     const DEV_KVM: &str = "/dev/kvm";
-    /// Dedicated unprivileged identity the jail drops to. An escape lands as
-    /// THIS uid (powerless), never as the daemon/owner. Must exist on the box
+    /// LEGACY shared unprivileged identity the jail drops to when the daemon did
+    /// NOT pass a per-session `--cell-uid` (P4-H6). An escape lands as THIS uid
+    /// (powerless), never as the daemon/owner. When used it must exist on the box
     /// AND be a member of the `kvm` group (so 0660 `/dev/kvm` stays openable).
+    /// In the normal H6 path the daemon allocates a DISTINCT per-session uid and
+    /// passes it as `--cell-uid`, and this name is never resolved.
     const UNPRIV_USER: &str = "k2cell";
     const KVM_GROUP: &str = "kvm";
 
@@ -250,7 +253,23 @@ mod worker {
         /// The `kvm` group's gid — supplementary group kept at drop so 0660
         /// `/dev/kvm` stays openable.
         kvm_gid: u32,
+        /// P4-H6: the daemon-allocated PER-SESSION drop uid (`--cell-uid <n>`).
+        /// When present, `preflight` uses it as BOTH `unpriv_uid` and
+        /// `unpriv_gid` (a per-session raw uid/gid — no `/etc/passwd` row needed;
+        /// chowns + setuid/setgid to a raw id work as root) instead of resolving
+        /// the shared `k2cell` user. The kvm supplementary group is still
+        /// resolved + kept independently. `None` ⇒ legacy `k2cell` fallback (hand
+        /// tests / a daemon that didn't allocate). Validated `> CELL_UID_FLOOR`
+        /// and `!= 0` fail-closed before it is ever used.
+        cell_uid: Option<u32>,
     }
+
+    /// Fail-closed floor for a daemon-passed `--cell-uid`. The daemon's allocator
+    /// reserves a high range (default `60000..`), so a per-session uid is always
+    /// far above this; we refuse anything at/below it (root = 0, system/login
+    /// users) so a malformed/hostile `--cell-uid` can never make the drop land on
+    /// a real account. Mirrors the daemon-side `cell_uid_pool::UID_FLOOR`.
+    const CELL_UID_FLOOR: u32 = 30000;
 
     /// One catch-all error. We never branch on the variant — every error is
     /// fatal and fail-closed; the string is for the log only.
@@ -494,6 +513,16 @@ mod worker {
                 "--cwd" => {
                     cfg.cwd = Some(PathBuf::from(val!("--cwd")));
                 }
+                "--cell-uid" => {
+                    // P4-H6: the daemon-allocated per-session drop uid. Parse it
+                    // here; preflight validates the floor + non-zero fail-closed
+                    // and uses it as the drop uid/gid.
+                    let raw = val!("--cell-uid");
+                    let uid: u32 = raw
+                        .parse()
+                        .map_err(|_| format!("invalid --cell-uid: {raw}"))?;
+                    cfg.cell_uid = Some(uid);
+                }
                 other => return fail(format!("unknown flag: {other}")),
             }
             i += 1;
@@ -585,29 +614,74 @@ mod worker {
             return fail(format!("guest base image dir missing: {gb}"));
         }
 
-        // Dedicated unprivileged uid/gid exist + uid is a member of `kvm`.
-        // Resolve by NAME here (root, pre-pivot) and CACHE the numeric ids on
-        // cfg — the drop step uses ONLY the cached numbers (no post-pivot NSS).
-        let user = User::from_name(UNPRIV_USER)
-            .map_err(|e| format!("lookup user {UNPRIV_USER}: {e}"))?
-            .ok_or_else(|| format!("dedicated user {UNPRIV_USER} does not exist"))?;
+        // The `kvm` group — its gid is the supplementary group kept at drop so
+        // 0660 `/dev/kvm` stays openable. Resolved by NAME here (root, pre-pivot)
+        // and cached numerically; the post-pivot drop NEVER calls NSS. This is
+        // independent of WHICH uid we drop to — /dev/kvm access rides the kvm
+        // SUPPLEMENTARY group, not the uid — so it is resolved the same way for
+        // both the per-session-uid (H6) and the legacy `k2cell` path.
         let kvm = Group::from_name(KVM_GROUP)
             .map_err(|e| format!("lookup group {KVM_GROUP}: {e}"))?
             .ok_or_else(|| format!("group {KVM_GROUP} does not exist"))?;
-        let in_kvm = user.gid == kvm.gid || kvm.mem.iter().any(|m| m == UNPRIV_USER);
-        if !in_kvm {
-            return fail(format!("{UNPRIV_USER} is not a member of the {KVM_GROUP} group"));
+        if kvm.gid.as_raw() == 0 {
+            return fail(format!("{KVM_GROUP} resolves to gid 0 — refusing to run"));
         }
-        // Fail-closed: the drop identity must NOT be root (a misconfigured
-        // k2cell=uid 0 would make the "drop" a no-op, leaving an escape on the
-        // owner). Reject before we ever build the jail.
-        if user.uid.as_raw() == 0 || user.gid.as_raw() == 0 {
-            return fail(format!("{UNPRIV_USER} resolves to uid/gid 0 — refusing to run"));
-        }
-        // Cache the NUMERIC ids for the post-pivot drop (no NSS in the jail).
-        cfg.unpriv_uid = user.uid.as_raw();
-        cfg.unpriv_gid = user.gid.as_raw();
         cfg.kvm_gid = kvm.gid.as_raw();
+
+        // P4-H6 — resolve the DROP IDENTITY. Two paths:
+        //
+        //  (a) `--cell-uid <n>` passed (the daemon allocated a PER-SESSION uid):
+        //      drop to THAT raw uid AND gid. No `/etc/passwd`/`/etc/group` row is
+        //      needed — `chown`/`setgid`/`setuid` to a raw id all work as root,
+        //      and `verify_drop`'s `setuid(0)→EPERM` holds for any non-zero uid.
+        //      This gives each cell its OWN host identity → true multi-tenant fs
+        //      isolation (cell A's guest-written files are owned by a uid cell B
+        //      can't read). Fail-closed: refuse 0 / anything at-or-below the
+        //      floor (would risk colliding with a real account).
+        //
+        //  (b) no `--cell-uid` (hand test / a daemon that didn't allocate): fall
+        //      back to the legacy shared `k2cell` user, resolved by name + its
+        //      kvm membership checked, exactly as before H6.
+        match cfg.cell_uid {
+            Some(uid) => {
+                // Fail-closed validation of the daemon-passed per-session uid.
+                if uid == 0 || uid <= CELL_UID_FLOOR {
+                    return fail(format!(
+                        "--cell-uid {uid} is 0 or <= floor {CELL_UID_FLOOR} — refusing to run"
+                    ));
+                }
+                // Per-session uid == gid (a per-session gid, raw). Documented:
+                // files written by the guest land owned uid:gid = <cell>:<cell>,
+                // and the 0700 jail/overlay dirs (chowned to the same id below)
+                // keep another cell's uid OUT even via the group bit.
+                cfg.unpriv_uid = uid;
+                cfg.unpriv_gid = uid;
+            }
+            None => {
+                // Legacy shared-uid fallback: dedicated `k2cell` user must exist
+                // and be a member of `kvm` (the H5 posture).
+                let user = User::from_name(UNPRIV_USER)
+                    .map_err(|e| format!("lookup user {UNPRIV_USER}: {e}"))?
+                    .ok_or_else(|| format!("dedicated user {UNPRIV_USER} does not exist"))?;
+                let in_kvm =
+                    user.gid == kvm.gid || kvm.mem.iter().any(|m| m == UNPRIV_USER);
+                if !in_kvm {
+                    return fail(format!(
+                        "{UNPRIV_USER} is not a member of the {KVM_GROUP} group"
+                    ));
+                }
+                // Fail-closed: the drop identity must NOT be root (a misconfigured
+                // k2cell=uid 0 would make the "drop" a no-op, leaving an escape on
+                // the owner). Reject before we ever build the jail.
+                if user.uid.as_raw() == 0 || user.gid.as_raw() == 0 {
+                    return fail(format!(
+                        "{UNPRIV_USER} resolves to uid/gid 0 — refusing to run"
+                    ));
+                }
+                cfg.unpriv_uid = user.uid.as_raw();
+                cfg.unpriv_gid = user.gid.as_raw();
+            }
+        }
 
         // libkrun >= 1.18: there is no runtime version symbol; the link itself
         // pins it (build.rs links the installed lib, and add_virtiofs3's

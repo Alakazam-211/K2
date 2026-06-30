@@ -28,15 +28,29 @@
 //! are unaffected. The vsock cell-channel is AF_VSOCK/AF_UNIX, not INET, so this
 //! OUTPUT hook never touches it (`k2 msg`/inbox keep working).
 //!
-//! ## Shape + lifecycle
+//! ## Shape + lifecycle (P4-H6 — per-session)
 //!
-//! All cells currently share the single `k2cell` uid, so this is ONE shared
-//! static policy (a dedicated `inet k2sandbox` table) — installed idempotently
-//! and atomically by the daemon (root) BEFORE it boots a microVM cell, and
-//! REFUSED-closed if it can't be installed (we never boot a now-internet-capable
-//! cell with no egress lockdown). When no cell is running there is no k2cell
-//! traffic, so the rule is inert; it is harmless to leave installed. H6
-//! (per-session uids) will make this a per-session policy + per-cell teardown.
+//! With H6 each cell's VMM drops to its OWN per-session uid (see
+//! [`crate::cell_uid_pool`]), so the policy is now PER-SESSION: a dedicated
+//! `inet k2sandbox_<uid>` table per live cell, each with one base chain hooking
+//! `output` and scoping ONLY that cell's `skuid`. It is installed idempotently +
+//! atomically by the daemon (root) BEFORE it boots the cell, REFUSED-closed if
+//! it can't be installed (we never boot a now-internet-capable cell with no
+//! egress lockdown), and TORN DOWN per cell on `ChildExit` (the authoritative
+//! observer calls [`remove_egress_policy`] with the same uid). No shared-policy
+//! compromise: cell A's table is removed when cell A exits without touching cell
+//! B's.
+//!
+//! ## Multiple base chains compose correctly (the H6 key property)
+//!
+//! Every per-uid table registers one base chain at `hook output priority 0`.
+//! netfilter evaluates ALL base chains at a hook: a terminal `accept` in one
+//! chain does NOT prevent another chain from `drop`ping the packet, and the
+//! packet is delivered only if NO chain drops it. Each chain's first rule
+//! (`meta skuid != <uid> accept`) passes every OTHER uid's traffic untouched, so
+//! cell A's packet is policed by chain A (default-DROP unless 443/53) while
+//! chain B simply accepts it — the per-uid tables stack without interfering, and
+//! the daemon/owner/root (no per-uid table targets them) are never policed.
 //!
 //! ## Default-OFF
 //!
@@ -46,25 +60,30 @@
 //! non-Linux the functions are no-ops (nft is Linux-only; the branch is dead
 //! there anyway because `resolve_sandbox` never returns `Microvm`).
 
-/// The dedicated table we own. Namespaced so we never collide with a box's
-/// existing firewall and so teardown can target exactly our state.
-#[cfg(target_os = "linux")]
-const TABLE: &str = "k2sandbox";
+/// The per-session base-chain name (one base chain per per-uid table).
 #[cfg(target_os = "linux")]
 const CHAIN: &str = "cell_egress";
 
-/// Install (idempotently + atomically) the fail-closed egress allowlist for the
-/// sandbox cell uid. Safe to call on every microVM spawn — the script
-/// `add table; delete table; table {…}` replaces the whole table atomically, so
-/// concurrent cells (which share `cell_uid` today) converge on the same policy.
+/// The PER-SESSION table name for `cell_uid` — `k2sandbox_<uid>`. Namespaced so
+/// we never collide with a box's existing firewall, and per-uid so install +
+/// teardown target EXACTLY this cell's state without touching any other cell.
+#[cfg(target_os = "linux")]
+fn table_name(cell_uid: u32) -> String {
+    format!("k2sandbox_{cell_uid}")
+}
+
+/// Install (idempotently + atomically) the fail-closed egress allowlist for THIS
+/// cell's per-session `cell_uid`. Safe to call on every microVM spawn — the
+/// script `add table; delete table; table {…}` replaces this cell's OWN table
+/// atomically; other live cells' per-uid tables are untouched.
 ///
 /// **Fail-closed:** returns `Err` if `nft` is missing, errors, or is killed —
 /// the caller MUST refuse to boot the cell rather than run it with open egress.
 #[cfg(target_os = "linux")]
 pub(crate) fn ensure_egress_policy(cell_uid: u32) -> std::io::Result<()> {
-    // Refuse a nonsense/root uid defensively (the resolver already refuses 0,
-    // but this is the security boundary — never install a policy keyed on uid 0,
-    // which would scope the daemon/root itself).
+    // Refuse a nonsense/root uid defensively (the allocator floor already keeps
+    // uids far above 0, but this is the security boundary — never install a
+    // policy keyed on uid 0, which would scope the daemon/root itself).
     if cell_uid == 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -75,26 +94,29 @@ pub(crate) fn ensure_egress_policy(cell_uid: u32) -> std::io::Result<()> {
     run_nft(&build_ruleset(cell_uid))
 }
 
-/// Build the atomic idempotent install ruleset for `cell_uid`. `add table`
-/// makes the subsequent `delete table` safe whether or not it already existed;
-/// then we (re)define the whole table in one `nft -f` transaction.
+/// Build the atomic idempotent install ruleset for `cell_uid`'s per-session
+/// table. `add table` makes the subsequent `delete table` safe whether or not it
+/// already existed; then we (re)define the whole `k2sandbox_<uid>` table in one
+/// `nft -f` transaction.
 ///
-/// Rule order (k2cell ONLY — every other uid is accepted untouched by the first
-/// rule, so the daemon/owner/root are never affected):
-///   1. non-k2cell        → accept (pass through, do NOT police)
-///   2. loopback dst       → drop  (no host-local services, incl. the daemon's
+/// Rule order (THIS cell's uid ONLY — every other uid is accepted untouched by
+/// the first rule, so the daemon/owner/root AND other cells are never affected;
+/// each other cell has its OWN per-uid table that polices it):
+///   1. non-this-uid       → accept (pass through, do NOT police)
+///   2. loopback dst        → drop  (no host-local services, incl. the daemon's
 ///                                  loopback TCP listener)
-///   3. tcp dport 443      → accept (Anthropic / LLM, TLS) to non-loopback
-///   4. udp/tcp dport 53   → accept (DNS) to non-loopback
-///   5. (fall-through)     → drop  (fail-closed: all other k2cell egress)
+///   3. tcp dport 443       → accept (Anthropic / LLM, TLS) to non-loopback
+///   4. udp/tcp dport 53    → accept (DNS) to non-loopback
+///   5. (fall-through)      → drop  (fail-closed: all other cell egress)
 /// The chain policy is `accept` ONLY so rule 1 can pass NON-cell traffic; a
-/// k2cell packet never reaches the policy — it always hits 2/3/4/5.
+/// packet from this cell's uid never reaches the policy — it always hits 2/3/4/5.
 #[cfg(target_os = "linux")]
 fn build_ruleset(cell_uid: u32) -> String {
+    let table = table_name(cell_uid);
     format!(
-        "add table inet {TABLE}\n\
-         delete table inet {TABLE}\n\
-         table inet {TABLE} {{\n\
+        "add table inet {table}\n\
+         delete table inet {table}\n\
+         table inet {table} {{\n\
          \tchain {CHAIN} {{\n\
          \t\ttype filter hook output priority 0; policy accept;\n\
          \t\tmeta skuid != {uid} accept\n\
@@ -106,23 +128,24 @@ fn build_ruleset(cell_uid: u32) -> String {
          \t\tcounter drop\n\
          \t}}\n\
          }}\n",
-        TABLE = TABLE,
+        table = table,
         CHAIN = CHAIN,
         uid = cell_uid,
     )
 }
 
-/// Remove our egress table. Idempotent (the `add table` makes the `delete`
-/// safe when absent), so it always "leaves clean". Not called per-cell (the
-/// policy is shared across concurrent cells); exposed for a daemon-level
-/// teardown / the on-box test's clean-slate check.
+/// Remove THIS cell's per-session egress table. Idempotent (the `add table`
+/// makes the `delete` safe when absent), so it always "leaves clean". Called
+/// per-cell on `ChildExit` by the authoritative teardown observer with the SAME
+/// `cell_uid` the spawn allocated — removing only this cell's table, never a
+/// concurrent cell's.
 #[cfg(target_os = "linux")]
-#[allow(dead_code)]
-pub(crate) fn remove_egress_policy() -> std::io::Result<()> {
+pub(crate) fn remove_egress_policy(cell_uid: u32) -> std::io::Result<()> {
+    let table = table_name(cell_uid);
     let ruleset = format!(
-        "add table inet {TABLE}\n\
-         delete table inet {TABLE}\n",
-        TABLE = TABLE,
+        "add table inet {table}\n\
+         delete table inet {table}\n",
+        table = table,
     );
     run_nft(&ruleset)
 }
@@ -170,7 +193,7 @@ pub(crate) fn ensure_egress_policy(_cell_uid: u32) -> std::io::Result<()> {
 
 #[cfg(not(target_os = "linux"))]
 #[allow(dead_code)]
-pub(crate) fn remove_egress_policy() -> std::io::Result<()> {
+pub(crate) fn remove_egress_policy(_cell_uid: u32) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -202,8 +225,30 @@ mod tests {
         assert!(!rs.contains("dport 80 "), "must not allow port 80");
         // OUTPUT hook (egress control).
         assert!(rs.contains("hook output"), "must hook output");
-        // Idempotent: add-then-delete-then-define.
-        assert!(rs.starts_with("add table inet k2sandbox\ndelete table inet k2sandbox\n"));
+        // Idempotent + PER-SESSION: add-then-delete-then-define the per-uid table.
+        assert!(rs.starts_with("add table inet k2sandbox_999\ndelete table inet k2sandbox_999\n"));
+    }
+
+    #[test]
+    fn per_session_tables_are_distinct_per_uid() {
+        // Two cells with distinct uids get DISTINCT tables — so teardown of one
+        // never removes the other's policy (no shared-policy compromise).
+        let a = build_ruleset(60000);
+        let b = build_ruleset(60001);
+        assert!(a.contains("table inet k2sandbox_60000"));
+        assert!(b.contains("table inet k2sandbox_60001"));
+        assert!(!a.contains("k2sandbox_60001"), "cell A must not touch cell B's table");
+        assert!(!b.contains("k2sandbox_60000"), "cell B must not touch cell A's table");
+        // Each chain scopes ONLY its own uid; all other uids pass untouched.
+        assert!(a.contains("meta skuid != 60000 accept"));
+        assert!(b.contains("meta skuid != 60001 accept"));
+    }
+
+    #[test]
+    fn remove_targets_only_this_uids_table() {
+        // The teardown ruleset names exactly this cell's per-uid table.
+        let table = table_name(60042);
+        assert_eq!(table, "k2sandbox_60042");
     }
 
     #[test]

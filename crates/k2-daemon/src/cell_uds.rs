@@ -26,8 +26,14 @@
 pub use unix_impl::{bind_cell_socket, cell_socket_path, cells_dir, peer_cred, PeerCred};
 
 // Sandbox B2 (microVM cell socket perms) — internal to the daemon crate.
+// P4-H6: `resolve_sandbox_cell_uid` is no longer the live path (the spawn door
+// allocates a PER-SESSION uid from `cell_uid_pool` and passes it in); it is kept
+// (the worker still has a legacy shared-`k2cell` fallback, and its own unit tests
+// pin the resolver) but no longer re-exported, since nothing in the daemon
+// resolves a shared cell uid anymore. `set_cell_socket_owner` still chowns the
+// cell socket — now to the per-session uid.
 #[cfg(unix)]
-pub(crate) use unix_impl::{resolve_sandbox_cell_uid, set_cell_socket_owner};
+pub(crate) use unix_impl::set_cell_socket_owner;
 
 #[cfg(unix)]
 mod unix_impl {
@@ -95,9 +101,10 @@ mod unix_impl {
     /// refuses to "drop" to root) — we never chown the socket to root, which
     /// would be a no-op widening rather than the intended scoping.
     ///
-    /// This is the SINGLE shared resolver — `cell_server` calls it for its
-    /// peer-uid belt and `bind`/`set_cell_socket_owner` callers use it for the
-    /// inode owner, so the two can never diverge.
+    /// P4-H6: superseded by the per-session [`crate::cell_uid_pool`] allocator —
+    /// kept as the legacy shared-`k2cell` resolver (worker fallback parity + the
+    /// unit tests below) but no longer on any live daemon path.
+    #[allow(dead_code)]
     pub(crate) fn resolve_sandbox_cell_uid() -> Option<u32> {
         if let Ok(s) = std::env::var("K2_SANDBOX_CELL_UID") {
             return match s.trim().parse::<u32>() {

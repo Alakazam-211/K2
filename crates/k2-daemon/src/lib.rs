@@ -66,6 +66,11 @@ pub mod cell_uds;
 // cells (default-DROP `skuid k2cell` + only 443/53). Reached ONLY from the
 // microVM spawn path (linux + sandbox-microvm + K2_SANDBOX); no-op otherwise.
 pub mod cell_egress;
+// P4-H6 (sandbox hardening): per-session worker-uid allocator over a reserved
+// high uid range. Each microVM cell's VMM drops to a DISTINCT uid → true
+// multi-tenant fs isolation + per-session egress. Reached ONLY from the microVM
+// spawn path (linux + sandbox-microvm + K2_SANDBOX); inert otherwise.
+pub mod cell_uid_pool;
 pub mod session_token;
 // P3b (sandbox / K2-as-a-server): per-session stream tokens + the public
 // `POST /v1/sandboxes` route + policy-resolver. Behind K2_SANDBOX_API (OFF).

@@ -183,6 +183,13 @@ pub struct DaemonPtyConfig {
     /// to pre-seam behavior); the real microVM backend (P2) lives behind a
     /// default-OFF env and is unconstructible in P1.
     pub sandbox: SandboxSpec,
+    /// P4-H6: the daemon-allocated per-session uid the microVM worker drops to
+    /// (instead of the shared `k2cell`). `None` for EVERY non-microVM spawn
+    /// (Passthrough ignores it) → default-OFF parity. The daemon's spawn door
+    /// allocates it from [`crate::cell_uid_pool`](the `k2-daemon` allocator) and
+    /// stamps it here; [`crate::terminal::sandbox::build_worker_invocation`]
+    /// emits it as `--cell-uid <n>` so the worker drops to THIS uid.
+    pub cell_uid: Option<u32>,
 }
 
 impl Default for DaemonPtyConfig {
@@ -199,6 +206,7 @@ impl Default for DaemonPtyConfig {
             label: String::new(),
             label_source: LabelSource::Pty,
             sandbox: SandboxSpec::default(),
+            cell_uid: None,
         }
     }
 }
@@ -442,6 +450,10 @@ impl DaemonPtySession {
             // the worker's `[A-Za-z0-9._-]+` path-component gate). Passthrough
             // ignores this field, so the default path stays byte-identical.
             session_id: Some(cfg.session_id.to_string()),
+            // P4-H6: the per-session worker uid the daemon allocated (microVM
+            // only). Passthrough ignores it; the microVM backend emits it as
+            // `--cell-uid` so the worker drops to THIS uid, not shared `k2cell`.
+            cell_uid: cfg.cell_uid,
         };
         let backend = cfg.sandbox.backend();
 
@@ -979,6 +991,7 @@ mod tests {
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
+            cell_uid: None,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1001,6 +1014,7 @@ mod tests {
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
+            cell_uid: None,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1025,6 +1039,7 @@ mod tests {
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
+            cell_uid: None,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1051,6 +1066,7 @@ mod tests {
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
+            cell_uid: None,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1078,6 +1094,7 @@ mod tests {
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
+            cell_uid: None,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1112,6 +1129,7 @@ mod tests {
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
+            cell_uid: None,
             // A 600s sleep: will not self-exit during the test, so if
             // the PID is gone afterwards it's because kill() killed it.
             program: Some("sleep".to_string()),
@@ -1191,6 +1209,7 @@ mod tests {
             rows: 24,
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
+            cell_uid: None,
             program: Some("sleep".to_string()),
             args: vec!["600".to_string()],
             env: Default::default(),

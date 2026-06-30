@@ -132,11 +132,20 @@ pub fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse 
     };
 
     // (7) Mint a per-session STREAM token (bound to THIS session only) and build
-    // the grid/bytes stream URLs. The caller streams with this token — NEVER the
-    // API key, which is never accepted on grid/bytes.
+    // the GRID stream URL. The caller streams with this token — NEVER the API
+    // key, which is never accepted on grid/bytes.
+    //
+    // GRID ONLY (P3 follow-up): a v2/sandbox session is a `DaemonPtySession`,
+    // which is single-subscriber-by-design with NO raw-byte broadcast — only the
+    // structured grid (Snapshot/Delta) stream via `grid_emitter`. The
+    // `/cli/sessions/bytes` WS looks sessions up in the LEGACY
+    // `k2_core::session::registry` (not `v2_session_map`), so it 400s for a v2
+    // session even after the stream-token authorizes. So we DON'T advertise a
+    // bytes URL that can't work — grid is the canonical v2 stream. Raw-PTY bytes
+    // for v2 sessions would need a new byte-broadcast on DaemonPtySession (a
+    // real feature) — deferred.
     let stream_tok = stream_token::mint(&sid);
     let grid = format!("/cli/sessions/grid?session={session_id}&token={stream_tok}");
-    let bytes = format!("/cli/sessions/bytes?session={session_id}&token={stream_tok}");
 
     CliResponse::ok_json(
         serde_json::json!({
@@ -144,7 +153,7 @@ pub fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse 
             "agentName": agent_name,
             // can_sandbox() was true above ⇒ resolve_sandbox(true) is Microvm.
             "sandbox": "microvm",
-            "stream": { "grid": grid, "bytes": bytes },
+            "stream": { "grid": grid },
         })
         .to_string(),
     )

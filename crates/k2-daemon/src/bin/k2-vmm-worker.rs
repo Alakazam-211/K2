@@ -145,6 +145,32 @@ mod worker {
     const CGROUP_PIDS_MAX: u64 = 256;
     const CPU_PERIOD_US: u64 = 100_000;
 
+    /// P4-H3 — inode ceiling for the per-cell NEWROOT tmpfs (the overlay UPPER
+    /// where ALL guest writes to the rootfs land). `size=` already caps BYTES,
+    /// but NOT inode count: an untrusted agent doing `for i in $(seq 5e6); do
+    /// :>f$i; done` exhausts the host's tmpfs inode pool (millions of empty
+    /// files fit well under the byte cap) → a DoS. tmpfs honors `nr_inodes=<N>`;
+    /// once hit, further creates fail ENOSPC and are CONTAINED to this cell.
+    ///
+    /// Cap is chosen GENEROUS so real workloads are never clipped: a fresh
+    /// `node_modules` is routinely 100k–300k files, and `claude`+`git`+a real
+    /// repo+`python` venvs add more. 1,048,576 (1Mi) inodes leaves comfortable
+    /// headroom for legitimate use while still stopping a millions-of-files
+    /// flood. Overridable via `K2_SANDBOX_TMPFS_INODES` for tuning on-box.
+    const SANDBOX_TMPFS_INODES_DEFAULT: u64 = 1_048_576;
+
+    /// Resolve the NEWROOT tmpfs inode cap (P4-H3). `K2_SANDBOX_TMPFS_INODES`
+    /// overrides the default; an unset/garbage/zero value falls back to the
+    /// documented default (a zero or unparsable cap must never silently mean
+    /// "unbounded").
+    fn sandbox_tmpfs_inodes() -> u64 {
+        std::env::var("K2_SANDBOX_TMPFS_INODES")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(SANDBOX_TMPFS_INODES_DEFAULT)
+    }
+
     /// Cold-boot watchdog. Real boot is ~100-200ms; if the child has not
     /// signaled "jail+config OK" within this window it is wedged → SIGKILL.
     const COLD_BOOT_WATCHDOG_SECS: u64 = 30;
@@ -803,7 +829,14 @@ mod worker {
             .map_err(|e| format!("mkdir NEWROOT: {e}"))?;
         // tmpfs size = guest ram budget (a generous ceiling for scratch);
         // TODO(on-box): tune independently of ram if cells need bigger scratch.
-        let tmpfs_opts = format!("size={}m,mode=0700", cfg.ram_mib);
+        // P4-H3: `nr_inodes=` bounds the inode COUNT too (size= caps bytes only),
+        // so a millions-of-tiny-files flood hits ENOSPC and stays contained to
+        // this cell instead of exhausting the host tmpfs inode pool.
+        let tmpfs_opts = format!(
+            "size={}m,nr_inodes={},mode=0700",
+            cfg.ram_mib,
+            sandbox_tmpfs_inodes()
+        );
         mount(
             Some("tmpfs"),
             &newroot,

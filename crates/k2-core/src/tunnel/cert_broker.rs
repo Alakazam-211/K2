@@ -316,7 +316,28 @@ pub fn provision_via_broker(subdomain: &str) -> Result<(String, String), BrokerE
         ));
     }
 
-    let cert_pem = request_cert(&csr_pem, sub, token.trim())?;
+    // `request_cert` uses `reqwest::blocking`, which spins up — and on return
+    // DROPS — its own tokio runtime. The tunnel-start path drives this whole
+    // function inside a `block_on` (an ENTERED runtime context), where dropping
+    // that inner runtime panics: "Cannot drop a runtime in a context where
+    // blocking is not allowed." Run the blocking HTTP on a fresh OS thread that
+    // has NO ambient tokio context, so the inner runtime is created + dropped
+    // cleanly. (First-cert-provision on a fresh subdomain is the path that hits
+    // this; a cached cert short-circuits before here.)
+    let cert_pem = {
+        let csr = csr_pem.clone();
+        let sub_owned = sub.to_string();
+        let token_owned = token.trim().to_string();
+        let joined = std::thread::Builder::new()
+            .name("k2-cert-broker".to_string())
+            .spawn(move || request_cert(&csr, &sub_owned, &token_owned))
+            .map_err(|e| BrokerError::Protocol(format!("spawn cert-broker thread: {e}")))?
+            .join()
+            .map_err(|_| {
+                BrokerError::Protocol("cert-broker request thread panicked".to_string())
+            })?;
+        joined?
+    };
 
     // Sanity: the chain must actually parse as X.509 before we install it —
     // installing garbage would brick the listener on next load.

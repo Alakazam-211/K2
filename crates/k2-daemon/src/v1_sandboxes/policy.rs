@@ -211,6 +211,19 @@ fn provision_ephemeral_workspace() -> Result<PathBuf, PolicyError> {
     std::fs::create_dir_all(&dir).map_err(|e| {
         PolicyError::NoEphemeralWorkspace(format!("mkdir {}: {e}", dir.display()))
     })?;
+    // P4-H6 hardening: force 0700 — `create_dir_all` honors umask (often 022 →
+    // 0755), and once the spawn door chowns this dir to the per-session cell
+    // uid, 0700 means NO other cell's uid can traverse/read it host-side
+    // (defense-in-depth on top of the pivot_root primary isolation, which
+    // already prevents a cell from seeing any dir but its own bind-mounted one).
+    // Root (the worker, pre-drop) still binds it in regardless.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
+            PolicyError::NoEphemeralWorkspace(format!("chmod 0700 {}: {e}", dir.display()))
+        })?;
+    }
     log_debug!(
         "[v1-sandbox] provisioned ephemeral workspace {} (per-session chown deferred to the spawn door — P4-H6)",
         dir.display()

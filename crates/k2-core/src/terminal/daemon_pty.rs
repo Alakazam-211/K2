@@ -49,7 +49,7 @@ use crate::log_debug;
 use crate::session::SessionId;
 use crate::terminal::login_path;
 use crate::terminal::sandbox::{
-    SandboxSpec, ShellSpec, SpawnRequest, SpawnedChild,
+    OverlaySpec, SandboxSpec, ShellSpec, SpawnRequest, SpawnedChild,
 };
 
 /// Scrollback depth (in rows) retained by the daemon-side Term.
@@ -190,6 +190,14 @@ pub struct DaemonPtyConfig {
     /// stamps it here; [`crate::terminal::sandbox::build_worker_invocation`]
     /// emits it as `--cell-uid <n>` so the worker drops to THIS uid.
     pub cell_uid: Option<u32>,
+    /// Sandbox v2 (PRD §B) — the WORKSPACE-SCOPED overlay mount spec, threaded
+    /// from the daemon's policy-resolver to `build_worker_invocation`. `Some`
+    /// ONLY for a workspace-scoped API session; `None` for every other spawn
+    /// (default-OFF parity). **Plumbed in SLICE 2, consumed by the worker in
+    /// SLICE 3.** When `Some`, [`DaemonPtySession::spawn`] sets the terminal
+    /// [`SpawnRequest::workspace_root`] to `None` (the overlay supersedes the
+    /// single-dir RW mount) and hands this spec through instead.
+    pub overlay: Option<OverlaySpec>,
 }
 
 impl Default for DaemonPtyConfig {
@@ -207,6 +215,7 @@ impl Default for DaemonPtyConfig {
             label_source: LabelSource::Pty,
             sandbox: SandboxSpec::default(),
             cell_uid: None,
+            overlay: None,
         }
     }
 }
@@ -442,7 +451,16 @@ impl DaemonPtySession {
             window_size,
             drain_on_exit: cfg.drain_on_exit,
             cell_socket: cfg.env.get("K2_HOOK_SOCK").map(PathBuf::from),
-            workspace_root: cfg.cwd.clone(),
+            // Sandbox v2 (PRD §B): a workspace-scoped overlay session carries its
+            // RW mount in `overlay` (RO base + persistent upper/work), so the
+            // legacy single-dir RW `workspace_root` is suppressed — the two must
+            // never both appear (see `build_worker_invocation`). Every other
+            // spawn keeps the historical `workspace_root = cwd` behavior.
+            workspace_root: if cfg.overlay.is_some() {
+                None
+            } else {
+                cfg.cwd.clone()
+            },
             // P2a: ro tool mounts are a P2b concern; none plumbed here yet.
             tool_roots: Vec::new(),
             // A2/B1: thread the daemon's own session id so the microVM backend
@@ -454,6 +472,9 @@ impl DaemonPtySession {
             // only). Passthrough ignores it; the microVM backend emits it as
             // `--cell-uid` so the worker drops to THIS uid, not shared `k2cell`.
             cell_uid: cfg.cell_uid,
+            // Sandbox v2 (PRD §B): the workspace-scoped overlay mount spec.
+            // SLICE 3: the microVM backend consumes it; Passthrough ignores it.
+            overlay: cfg.overlay.clone(),
         };
         let backend = cfg.sandbox.backend();
 
@@ -992,6 +1013,7 @@ mod tests {
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
             cell_uid: None,
+            overlay: None,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1015,6 +1037,7 @@ mod tests {
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
             cell_uid: None,
+            overlay: None,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1040,6 +1063,7 @@ mod tests {
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
             cell_uid: None,
+            overlay: None,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1067,6 +1091,7 @@ mod tests {
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
             cell_uid: None,
+            overlay: None,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1095,6 +1120,7 @@ mod tests {
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
             cell_uid: None,
+            overlay: None,
             program: Some("cat".to_string()),
             args: vec![],
             env: Default::default(),
@@ -1130,6 +1156,7 @@ mod tests {
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
             cell_uid: None,
+            overlay: None,
             // A 600s sleep: will not self-exit during the test, so if
             // the PID is gone afterwards it's because kill() killed it.
             program: Some("sleep".to_string()),
@@ -1210,6 +1237,7 @@ mod tests {
             cwd: Some(PathBuf::from("/tmp")),
             sandbox: SandboxSpec::Passthrough,
             cell_uid: None,
+            overlay: None,
             program: Some("sleep".to_string()),
             args: vec!["600".to_string()],
             env: Default::default(),

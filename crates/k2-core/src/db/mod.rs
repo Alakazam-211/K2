@@ -434,6 +434,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // bypass the grant (owner = all). Slugs are non-secret (the list route
         // may surface them); unlike the anthropic key, nothing here is hidden.
         ("0059_api_key_workspace_grant", include_str!("../../drizzle_sql/0059_api_key_workspace_grant.sql")),
+        // 0060 (sandbox v2 / workspace-scoped sessions, PRD §G2 #1): per-workspace
+        // FS MODE column `sandbox_fs_mode` on `projects` (nullable TEXT).
+        // 'overlay' (default) vs 'ro+scratch'. NULL/absent/unknown → 'overlay'
+        // at read time (`FsMode::from_setting`) — fail-safe to the RO-base
+        // default; the write path validates the exact enum before storing.
+        ("0060_project_sandbox_fs_mode", include_str!("../../drizzle_sql/0060_project_sandbox_fs_mode.sql")),
     ];
 
     for (name, sql) in migrations {

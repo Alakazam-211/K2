@@ -224,6 +224,7 @@ pub fn spawn_agent_session_v2_blocking(
         // P4-H6: daemon-internal spawns are never microVM-backed, so no
         // per-session uid is allocated for them.
         cell_uid: None,
+        overlay: None,
     };
     let session_id = cfg.session_id;
 

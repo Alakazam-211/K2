@@ -1761,6 +1761,7 @@ mod tests {
             label_source: LabelSource::Pty,
             sandbox: k2_core::terminal::SandboxSpec::Passthrough,
             cell_uid: None,
+            overlay: None,
         };
         let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
         session_lookup::LiveSession(s)

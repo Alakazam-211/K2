@@ -35,9 +35,20 @@ pub fn update_project_setting(
         // (default 0/OFF, fail-closed). Gates the composer's connect-user
         // path for THIS workspace; see `remote_instruct_allowed_for_path`.
         "allow_remote_instruct",
+        // Sandbox v2 (PRD §G2 #1) — per-workspace sandbox FS mode. Values:
+        // 'overlay' | 'ro+scratch' (default 'overlay'). See `get_workspace_fs_mode`.
+        "sandbox_fs_mode",
     ];
     if !allowed.contains(&field) {
         return Err(format!("Unknown setting: {}", field));
+    }
+    // Sandbox v2: validate the FS mode is exactly one of the two first-class
+    // values so a typo can never be STORED (read-side fails safe to 'overlay',
+    // but we still reject a bad WRITE loudly rather than silently coercing).
+    if field == "sandbox_fs_mode" && value != "overlay" && value != "ro+scratch" {
+        return Err(format!(
+            "sandbox_fs_mode must be 'overlay' or 'ro+scratch', got {value:?}"
+        ));
     }
     // Validate the per-workspace remote-instruct flag so a typo can't
     // silently leave a security gate in an undefined state. Stored as a
@@ -272,6 +283,26 @@ pub fn get_workspace_api_key(project_path: &str) -> Option<String> {
         Some(k) if !k.trim().is_empty() => Some(k.trim().to_string()),
         _ => None,
     }
+}
+
+/// Read the PER-WORKSPACE sandbox FS mode for `project_path` (Sandbox v2, PRD
+/// §G2 #1). Fail-SAFE: an unregistered project, a NULL column (the default —
+/// existing rows backfill to NULL), a blank value, an unknown string, OR a DB
+/// error ALL decode to the PRD LOCKED default [`FsMode::Overlay`] via
+/// [`FsMode::from_setting`] — a workspace never silently loses its RO-base
+/// overlay guarantee, and a momentary DB hiccup can't downgrade the mode.
+pub fn get_workspace_fs_mode(project_path: &str) -> crate::terminal::sandbox::FsMode {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT sandbox_fs_mode FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten();
+    crate::terminal::sandbox::FsMode::from_setting(raw.as_deref())
 }
 
 /// Set (or clear) the PER-WORKSPACE Anthropic API key for `project_id`

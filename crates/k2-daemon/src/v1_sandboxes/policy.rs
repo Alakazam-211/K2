@@ -23,6 +23,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use k2_core::log_debug;
+use k2_core::session::SessionId;
+use k2_core::terminal::sandbox::OverlaySpec;
 
 use crate::routes::http::V1Principal;
 use crate::session_token::Provider;
@@ -52,6 +54,11 @@ pub struct ApiSandboxRequest {
 pub enum PolicyError {
     /// No ephemeral workspace could be provisioned/handed to the cell uid.
     NoEphemeralWorkspace(String),
+    /// Sandbox v2 (PRD §B/§C): the PERSISTENT per-session overlay layer
+    /// (`~/.k2/sandbox-overlays/<ws>/<sid>/{upper,work}`) could not be
+    /// provisioned (mkdir/chmod/containment failure). Fail-CLOSED: the route
+    /// 5xxs; we NEVER fall back to `$HOME` or a throwaway dir.
+    NoPersistentLayer(String),
 }
 
 impl PolicyError {
@@ -60,6 +67,7 @@ impl PolicyError {
     pub fn status(&self) -> &'static str {
         match self {
             PolicyError::NoEphemeralWorkspace(_) => "503 Service Unavailable",
+            PolicyError::NoPersistentLayer(_) => "503 Service Unavailable",
         }
     }
 
@@ -68,6 +76,9 @@ impl PolicyError {
         match self {
             PolicyError::NoEphemeralWorkspace(e) => {
                 format!("could not provision sandbox workspace: {e}")
+            }
+            PolicyError::NoPersistentLayer(e) => {
+                format!("could not provision persistent session layer: {e}")
             }
         }
     }
@@ -121,73 +132,15 @@ pub fn resolve_spawn(
         uuid::Uuid::new_v4()
     );
 
-    // (3) Host-curated env — the caller's env is DROPPED ENTIRELY. Stage the
-    // Anthropic key from the validated PRINCIPAL (never the body), reusing B3a's
-    // `Provider → key_env_var` mapping. The key is NEVER logged.
-    let mut env: HashMap<String, String> = HashMap::new();
-    match principal {
-        V1Principal::Api(p) => match p.anthropic_key.as_deref().map(str::trim) {
-            Some(key) if !key.is_empty() => {
-                env.insert(Provider::Anthropic.key_env_var().to_string(), key.to_string());
-                log_debug!(
-                    "[v1-sandbox] staged principal Anthropic key into ephemeral session env (principal={})",
-                    p.id
-                );
-            }
-            _ => log_debug!(
-                "[v1-sandbox] principal={} has no usable Anthropic key; cell will have no model credential",
-                p.id
-            ),
-        },
-        V1Principal::Owner => {
-            // FOLLOW-UP: there is no app-level Anthropic key source for the owner
-            // principal yet, so own-use spawns stage no key. Own-use validation
-            // runs on-box with a key-bearing API key; an app-level fallback can
-            // slot in here later without touching the invariant.
-            log_debug!(
-                "[v1-sandbox] owner principal: no app-level Anthropic key fallback (follow-up); none staged"
-            );
-        }
-    }
-
-    // (3b) F2 cell-recipe — stage the in-cell agent's self-sufficiency env. ALL
-    // of these are DEFAULTS: `or_insert_with` means a value already present in
-    // the host-curated env WINS (defends the "caller value wins" rule even though
-    // the caller's env is dropped wholesale above — nothing here clobbers the
-    // principal key either). These ONLY run on the sandbox-API spawn path.
-    // - IS_SANDBOX=1 lets claude run --dangerously-skip-permissions as guest-root.
-    // - CLAUDE_CODE_TMPDIR points Claude Code at the cell scratch tmpdir.
-    // - GIT_* give `git init`+commit a working identity with no global config.
-    env.entry("IS_SANDBOX".to_string()).or_insert_with(|| "1".to_string());
-    env.entry("CLAUDE_CODE_TMPDIR".to_string())
-        .or_insert_with(|| CELL_TMPDIR.to_string());
-    env.entry("GIT_AUTHOR_NAME".to_string())
-        .or_insert_with(|| CELL_GIT_NAME.to_string());
-    env.entry("GIT_COMMITTER_NAME".to_string())
-        .or_insert_with(|| CELL_GIT_NAME.to_string());
-    env.entry("GIT_AUTHOR_EMAIL".to_string())
-        .or_insert_with(|| CELL_GIT_EMAIL.to_string());
-    env.entry("GIT_COMMITTER_EMAIL".to_string())
-        .or_insert_with(|| CELL_GIT_EMAIL.to_string());
+    // (3) Host-curated env — the caller's env is DROPPED ENTIRELY; the Anthropic
+    // key is staged from the validated PRINCIPAL (never the body) + the F2
+    // cell-recipe defaults + the (un-logged) prompt. Shared with the
+    // workspace-scoped resolver so both doors curate an IDENTICAL cell env.
+    let env = build_cell_env(principal, req);
 
     // (4) Dimensions are hints only — clamp to sane bounds.
     let cols = clamp_dim(req.cols, 80, 16, 500);
     let rows = clamp_dim(req.rows, 24, 4, 300);
-
-    // Prompt: UN-DROPPED (F2). Stage the caller's prompt into the cell env as
-    // `K2_REQUEST_PROMPT` (only when non-empty) so a FUTURE guest-side launcher
-    // can read the request text — it is NOT forwarded as argv, and its VALUE is
-    // NEVER logged (it may carry secrets). `or_insert_with` keeps a pre-existing
-    // value (defensive). Empty/whitespace prompt → behavior identical to before.
-    if let Some(p) = req.prompt.as_deref() {
-        if !p.trim().is_empty() {
-            env.entry("K2_REQUEST_PROMPT".to_string())
-                .or_insert_with(|| p.to_string());
-            log_debug!(
-                "[v1-sandbox] staged caller prompt into cell env as K2_REQUEST_PROMPT (value NOT logged)"
-            );
-        }
-    }
 
     Ok(SpawnRequest {
         agent_name,
@@ -207,6 +160,11 @@ pub fn resolve_spawn(
         // and stamps the principal key here AFTER resolve, so the child-exit
         // observer can release it. The resolver leaves it `None`.
         principal_key: None,
+        // The ephemeral `/v1/sandboxes` path is NOT workspace-scoped: no overlay
+        // mount, and the session id is minted by the spawn (no persistent layer
+        // to key). Both are `Some` only on the workspace-scoped door below.
+        overlay: None,
+        forced_session_id: None,
     })
 }
 
@@ -270,6 +228,297 @@ fn provision_ephemeral_workspace() -> Result<PathBuf, PolicyError> {
         dir.display()
     );
     Ok(dir)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sandbox v2 (PRD §B/§C/§G2) — WORKSPACE-SCOPED persistent session provisioning.
+//
+// `resolve_workspace_session` is the workspace analogue of `resolve_spawn`: it
+// produces a host-trusted [`SpawnRequest`] that carries the RO canonical
+// workspace base + a PERSISTENT per-(workspace, session) writable layer, instead
+// of a throwaway ephemeral dir. SLICE 2 = this provisioning + threading; the
+// worker MOUNT of the overlay is SLICE 3.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// The in-guest mount point a workspace-scoped cell lands in (PRD §B). SLICE 3
+/// mounts the merged overlay(RO base, upper, work) here; the cell's cwd is set
+/// to it. It is a GUEST path (never a host path, never `$HOME`).
+const GUEST_WORKSPACE_MOUNT: &str = "/workspace";
+
+/// Build the HOST-CURATED cell env shared by BOTH sandbox doors (ephemeral
+/// `resolve_spawn` and workspace-scoped `resolve_workspace_session`) so the two
+/// curate an IDENTICAL environment. The caller's env is DROPPED ENTIRELY; the
+/// Anthropic key is staged from the validated PRINCIPAL (never the body), the
+/// F2 cell-recipe defaults are seeded, and a non-empty prompt is staged
+/// (un-logged) into `K2_REQUEST_PROMPT`. Neither the key nor the prompt VALUE is
+/// ever logged.
+fn build_cell_env(principal: &V1Principal, req: &ApiSandboxRequest) -> HashMap<String, String> {
+    let mut env: HashMap<String, String> = HashMap::new();
+    // Anthropic key — from the PRINCIPAL only (reuses B3a's Provider mapping).
+    match principal {
+        V1Principal::Api(p) => match p.anthropic_key.as_deref().map(str::trim) {
+            Some(key) if !key.is_empty() => {
+                env.insert(Provider::Anthropic.key_env_var().to_string(), key.to_string());
+                log_debug!(
+                    "[v1-sandbox] staged principal Anthropic key into session env (principal={})",
+                    p.id
+                );
+            }
+            _ => log_debug!(
+                "[v1-sandbox] principal={} has no usable Anthropic key; cell will have no model credential",
+                p.id
+            ),
+        },
+        V1Principal::Owner => {
+            log_debug!(
+                "[v1-sandbox] owner principal: no app-level Anthropic key fallback (follow-up); none staged"
+            );
+        }
+    }
+
+    // F2 cell-recipe DEFAULTS (`or_insert_with` — a pre-set value wins; nothing
+    // here clobbers the principal key). IS_SANDBOX lets claude run headless as
+    // guest-root; CLAUDE_CODE_TMPDIR points at the cell scratch; GIT_* give
+    // `git init`+commit a working identity with no global config.
+    env.entry("IS_SANDBOX".to_string()).or_insert_with(|| "1".to_string());
+    env.entry("CLAUDE_CODE_TMPDIR".to_string())
+        .or_insert_with(|| CELL_TMPDIR.to_string());
+    env.entry("GIT_AUTHOR_NAME".to_string())
+        .or_insert_with(|| CELL_GIT_NAME.to_string());
+    env.entry("GIT_COMMITTER_NAME".to_string())
+        .or_insert_with(|| CELL_GIT_NAME.to_string());
+    env.entry("GIT_AUTHOR_EMAIL".to_string())
+        .or_insert_with(|| CELL_GIT_EMAIL.to_string());
+    env.entry("GIT_COMMITTER_EMAIL".to_string())
+        .or_insert_with(|| CELL_GIT_EMAIL.to_string());
+
+    // Prompt: UN-DROPPED (F2), staged into the cell env (only when non-empty),
+    // never as argv, VALUE never logged.
+    if let Some(p) = req.prompt.as_deref() {
+        if !p.trim().is_empty() {
+            env.entry("K2_REQUEST_PROMPT".to_string())
+                .or_insert_with(|| p.to_string());
+            log_debug!(
+                "[v1-sandbox] staged caller prompt into cell env as K2_REQUEST_PROMPT (value NOT logged)"
+            );
+        }
+    }
+    env
+}
+
+/// The root under which per-(workspace, session) PERSISTENT overlay layers live:
+/// `~/.k2/sandbox-overlays`. Derived ONLY from the daemon's home dir (never a
+/// caller path), mirroring [`sandbox_sessions_root`].
+fn sandbox_overlays_root() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".k2")
+        .join("sandbox-overlays")
+}
+
+/// Re-assert (defense in depth) that a path SEGMENT — the `<ws-slug>` or
+/// `<session-id>` we key the persistent layer by — is safe to use as a single
+/// path component. Slice 1's [`super::decode_and_validate_segment`] already
+/// validated these off the wire, but a path built from them must NEVER escape
+/// `~/.k2/sandbox-overlays/`, so we re-check HERE at the point of path
+/// construction: reject empty, any `/`/`\` separator, `\0`, the traversal
+/// tokens `.`/`..` (and any `..` substring), and any control char. What passes
+/// is a single, printable, separator-free component.
+fn assert_safe_path_segment(seg: &str) -> Result<(), PolicyError> {
+    let bad = seg.is_empty()
+        || seg.contains('/')
+        || seg.contains('\\')
+        || seg.contains('\0')
+        || seg == "."
+        || seg == ".."
+        || seg.contains("..")
+        || seg.chars().any(|c| c.is_control());
+    if bad {
+        return Err(PolicyError::NoPersistentLayer(format!(
+            "unsafe path segment {seg:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// The provisioned PERSISTENT layer for a `(workspace, session)` pair.
+struct PersistentLayer {
+    /// `~/.k2/sandbox-overlays/<ws>/<sid>/upper` (0700, chowned to the cell uid
+    /// at the spawn door). The session's durable writable layer.
+    upper: PathBuf,
+    /// `~/.k2/sandbox-overlays/<ws>/<sid>/work` (0700). The overlayfs workdir.
+    work: PathBuf,
+}
+
+/// Create (idempotently) the PERSISTENT per-`(ws_slug, session_id)` writable
+/// layer and return its `{upper, work}` dirs. Security-critical:
+///
+/// - The path is built ONLY from the daemon HOME dir + the two RE-ASSERTED
+///   segments — never a caller path. `..`/`/`/control chars can't reach here.
+/// - After construction we assert the leaf `<ws>/<sid>` dir starts_with the
+///   overlays root LEXICALLY (no `fs::canonicalize`, which would follow
+///   symlinks — we respect the P4 TOCTOU posture and never follow a symlink
+///   into the layer). Combined with the segment re-assert, the layer can never
+///   escape `~/.k2/sandbox-overlays/`.
+/// - `upper`/`work` are forced to 0700 (create_dir_all honors umask). The spawn
+///   door then chowns them to the per-session cell uid (P4-H6) → cross-tenant
+///   unreadable. Idempotent: re-provisioning an existing layer (a resume)
+///   re-creates nothing but re-asserts perms.
+/// - FAIL-CLOSED: any mkdir/chmod/containment failure returns
+///   [`PolicyError::NoPersistentLayer`]; the caller 5xxs and NEVER falls back to
+///   `$HOME` or an ephemeral dir.
+fn provision_persistent_layer(
+    ws_slug: &str,
+    session_id: &str,
+) -> Result<PersistentLayer, PolicyError> {
+    // (1) RE-ASSERT both segments before they touch a path (defense in depth).
+    assert_safe_path_segment(ws_slug)?;
+    assert_safe_path_segment(session_id)?;
+
+    // (2) Build the leaf path from HOME + validated segments ONLY.
+    let root = sandbox_overlays_root();
+    let leaf = root.join(ws_slug).join(session_id);
+
+    // (3) CONTAINMENT assertion (lexical, symlink-free). Every component of the
+    // leaf beyond the root must be a plain `Normal` component (no `..`, no root,
+    // no prefix), and the leaf must start_with the root. This can't be tricked
+    // because the segments are already `..`/separator-free, but we assert it as
+    // the load-bearing invariant rather than trusting the callers.
+    if !leaf.starts_with(&root) {
+        return Err(PolicyError::NoPersistentLayer(format!(
+            "constructed layer path {} escapes overlays root {}",
+            leaf.display(),
+            root.display()
+        )));
+    }
+    for comp in leaf.strip_prefix(&root).unwrap_or(&leaf).components() {
+        if !matches!(comp, std::path::Component::Normal(_)) {
+            return Err(PolicyError::NoPersistentLayer(format!(
+                "constructed layer path {} contains a non-normal component",
+                leaf.display()
+            )));
+        }
+    }
+
+    let upper = leaf.join("upper");
+    let work = leaf.join("work");
+
+    // (4) Create the layer dirs idempotently, fail-CLOSED on any error.
+    for dir in [&upper, &work] {
+        std::fs::create_dir_all(dir).map_err(|e| {
+            PolicyError::NoPersistentLayer(format!("mkdir {}: {e}", dir.display()))
+        })?;
+        // Force 0700 (create_dir_all honors umask → often 0755). After the spawn
+        // door chowns to the per-session uid, 0700 keeps the layer private to
+        // that cell host-side (P4-H6 defense-in-depth atop the pivot_root jail).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
+                PolicyError::NoPersistentLayer(format!("chmod 0700 {}: {e}", dir.display()))
+            })?;
+        }
+    }
+
+    log_debug!(
+        "[v1-sandbox/ws] provisioned persistent layer upper={} work={} (0700; per-session chown deferred to the spawn door — P4-H6)",
+        upper.display(),
+        work.display()
+    );
+    Ok(PersistentLayer { upper, work })
+}
+
+/// Resolve a WORKSPACE-SCOPED session into a host-trusted [`SpawnRequest`] that
+/// carries the RO canonical workspace + the PERSISTENT per-session overlay layer
+/// (PRD §B/§C). The workspace analogue of [`resolve_spawn`]:
+///
+/// - `ws_path` = the HOST-RESOLVED, AUTHORIZED workspace absolute path (a
+///   `projects.path` from `resolve_authorized_workspace` — NEVER a caller path).
+///   It becomes the overlay RO LOWER (mounted read-only in SLICE 3).
+/// - `ws_slug` + `session_id` key the persistent layer (both re-asserted safe).
+/// - `session_id` is the HOST-DECIDED id (a fresh mint for new/fork, or the
+///   validated addressed id) — it is FORCED into the spawn so the returned /
+///   addressable `sessionId` equals the layer key (resume can re-find it).
+/// - `cwd` = [`GUEST_WORKSPACE_MOUNT`] (`/workspace`) — the guest mount point,
+///   never `$HOME`, never a raw host path (the `$HOME`-narrowing invariant is
+///   preserved + debug-asserted).
+/// - FAIL-CLOSED: a layer-provision failure returns `Err` → the route 5xxs;
+///   we NEVER fall back to `$HOME` or an ephemeral dir. `ephemeral_cwd` is left
+///   `None` so the child-exit observer does NOT delete the layer (persistence).
+pub fn resolve_workspace_session(
+    ws_path: &str,
+    ws_slug: &str,
+    session_id: &SessionId,
+    principal: &V1Principal,
+    req: &ApiSandboxRequest,
+) -> Result<SpawnRequest, PolicyError> {
+    // (1) Provision (or reuse) the persistent per-session writable layer.
+    //     Fail-CLOSED: no `$HOME`/ephemeral fallback.
+    let layer = provision_persistent_layer(ws_slug, &session_id.to_string())?;
+
+    // (2) cwd = the GUEST mount point the overlay lands at (SLICE 3), NEVER
+    //     `$HOME`, NEVER a raw host path. Preserve the $HOME-narrowing invariant.
+    let cwd = GUEST_WORKSPACE_MOUNT.to_string();
+    debug_assert!(
+        dirs::home_dir().map(|h| h.to_string_lossy().into_owned()) != Some(cwd.clone()),
+        "workspace-scoped cwd must NEVER be $HOME",
+    );
+
+    // (3) Read the per-workspace FS mode (default 'overlay'; fail-safe).
+    let fs_mode = k2_core::workspace::settings::get_workspace_fs_mode(ws_path);
+
+    // (4) Host-minted agent name (same anti-hijack namespace as `resolve_spawn`).
+    let agent_name = format!(
+        "api-{}-{}",
+        sanitize_id(&principal.display_id()),
+        uuid::Uuid::new_v4()
+    );
+
+    // (5) Host-curated env (shared with the ephemeral door).
+    let env = build_cell_env(principal, req);
+
+    let cols = clamp_dim(req.cols, 80, 16, 500);
+    let rows = clamp_dim(req.rows, 24, 4, 300);
+
+    // (6) The workspace-scoped overlay mount spec — carried to the worker
+    //     (SLICE 3). RO base = the canonical workspace; upper/work = the
+    //     persistent layer; mode = the per-workspace setting.
+    let overlay = OverlaySpec {
+        workspace_ro_base: PathBuf::from(ws_path),
+        overlay_upper: layer.upper,
+        overlay_work: layer.work,
+        fs_mode,
+    };
+
+    log_debug!(
+        "[v1-sandbox/ws] resolved workspace session id={} ws_slug={} ws_path={} fs_mode={} cwd={} (RO base + persistent upper/work; worker mount is SLICE 3)",
+        session_id,
+        ws_slug,
+        ws_path,
+        fs_mode.as_flag(),
+        cwd,
+    );
+
+    Ok(SpawnRequest {
+        agent_name,
+        cwd,
+        command: Some("claude".to_string()),
+        args: Some(STANDARD_CLAUDE_ARGS.iter().map(|s| s.to_string()).collect()),
+        cols,
+        rows,
+        env: Some(env),
+        label: None,
+        label_locked: None,
+        sandbox: Some(true),
+        // PERSISTENT layer: NOT ephemeral. Leave `ephemeral_cwd = None` so the
+        // child-exit observer NEVER deletes the layer (PRD §C — resume needs it).
+        ephemeral_cwd: None,
+        principal_key: None,
+        overlay: Some(overlay),
+        // FORCE the host-decided session id so the returned/addressable id
+        // equals the persistent-layer key.
+        forced_session_id: Some(*session_id),
+    })
 }
 
 #[cfg(test)]
@@ -434,5 +683,154 @@ mod tests {
         assert_eq!(sanitize_id("abc-123_DEF"), "abc-123_DEF");
         assert_eq!(sanitize_id("a/b c"), "a-b-c");
         assert_eq!(sanitize_id(""), "anon");
+    }
+
+    // ── Sandbox v2 (PRD §B/§C/§G2) — WORKSPACE-SCOPED provisioning ─────────
+
+    use k2_core::terminal::sandbox::FsMode;
+
+    /// Best-effort cleanup of a provisioned persistent layer's workspace dir.
+    fn cleanup_overlay_ws(ws_slug: &str) {
+        let _ = std::fs::remove_dir_all(sandbox_overlays_root().join(ws_slug));
+    }
+
+    /// PATH-ESCAPE REJECTION (load-bearing): the segment re-assert rejects every
+    /// traversal / separator / control token, so a path built from a segment can
+    /// never escape `~/.k2/sandbox-overlays/`. A benign name passes.
+    #[test]
+    fn segment_reassert_rejects_escapes() {
+        assert!(assert_safe_path_segment("ai").is_ok());
+        assert!(assert_safe_path_segment("a-b_9").is_ok());
+        for bad in ["", "..", ".", "a..b", "a/b", "a\\b", "a\0b", "\n", "../etc"] {
+            assert!(
+                assert_safe_path_segment(bad).is_err(),
+                "must reject unsafe segment {bad:?}",
+            );
+        }
+    }
+
+    /// A crafted unsafe slug / session id can NEVER escape the overlays root:
+    /// `provision_persistent_layer` fails-closed (NoPersistentLayer) rather than
+    /// building an escaping path.
+    #[test]
+    fn provision_persistent_layer_rejects_escape_attempts() {
+        assert!(matches!(
+            provision_persistent_layer("../etc", "sid"),
+            Err(PolicyError::NoPersistentLayer(_)),
+        ));
+        assert!(matches!(
+            provision_persistent_layer("ws", "../../root"),
+            Err(PolicyError::NoPersistentLayer(_)),
+        ));
+        assert!(matches!(
+            provision_persistent_layer("a/b", "sid"),
+            Err(PolicyError::NoPersistentLayer(_)),
+        ));
+    }
+
+    /// The layer is created idempotently: upper + work dirs exist UNDER the
+    /// overlays root, are 0700, and a second call on the same key succeeds
+    /// (re-provision / resume) without error.
+    #[test]
+    fn provision_persistent_layer_creates_0700_dirs_idempotently() {
+        let ws = format!("v1ws-layer-{}", uuid::Uuid::new_v4());
+        let sid = uuid::Uuid::new_v4().to_string();
+
+        let layer = provision_persistent_layer(&ws, &sid).expect("provision");
+        // Both dirs exist and are contained under the overlays root.
+        assert!(layer.upper.is_dir(), "upper must exist");
+        assert!(layer.work.is_dir(), "work must exist");
+        assert!(layer.upper.starts_with(sandbox_overlays_root()));
+        assert!(layer.upper.ends_with("upper"));
+        assert!(layer.work.ends_with("work"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for d in [&layer.upper, &layer.work] {
+                let mode = std::fs::metadata(d).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o700, "{} must be 0700, got {:o}", d.display(), mode);
+            }
+        }
+        // Idempotent: a second provision on the same key succeeds + returns the
+        // same paths (resume re-uses the layer, never errors).
+        let again = provision_persistent_layer(&ws, &sid).expect("re-provision");
+        assert_eq!(again.upper, layer.upper);
+        assert_eq!(again.work, layer.work);
+
+        cleanup_overlay_ws(&ws);
+    }
+
+    /// FS-MODE read + default: an unregistered/NULL workspace reads the PRD
+    /// default `overlay`; a workspace with `sandbox_fs_mode='ro+scratch'` reads
+    /// `RoScratch`.
+    #[test]
+    fn fs_mode_default_overlay_and_ro_scratch_read() {
+        // Unknown path → default overlay.
+        assert_eq!(
+            k2_core::workspace::settings::get_workspace_fs_mode("/tmp/k2-v1ws-fsmode-none"),
+            FsMode::Overlay,
+        );
+        // Registered workspace with ro+scratch set → RoScratch.
+        let path = "/tmp/k2-v1ws-fsmode-ro";
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, sandbox_fs_mode) VALUES (?1, ?2, ?3, 'ro+scratch')",
+                rusqlite::params![id, "v1ws-fsmode-ro", path],
+            )
+            .expect("insert project");
+        }
+        assert_eq!(
+            k2_core::workspace::settings::get_workspace_fs_mode(path),
+            FsMode::RoScratch,
+        );
+    }
+
+    /// `resolve_workspace_session` produces a host-trusted spec that carries the
+    /// RIGHT fields: RO base = the workspace path, upper/work under the overlays
+    /// root, fs_mode from the setting, cwd = `/workspace` (never $HOME), a FORCED
+    /// session id equal to the layer key, sandbox forced on, headless claude, and
+    /// `ephemeral_cwd = None` (the layer PERSISTS — never torn down on exit).
+    #[test]
+    fn resolve_workspace_session_carries_overlay_spec() {
+        let ws_slug = format!("v1ws-resolve-{}", uuid::Uuid::new_v4());
+        let ws_path = "/tmp/k2-v1ws-resolve-base";
+        let sid = SessionId::new();
+
+        let spawn = resolve_workspace_session(
+            ws_path,
+            &ws_slug,
+            &sid,
+            &V1Principal::Owner,
+            &ApiSandboxRequest::default(),
+        )
+        .expect("resolve workspace session");
+
+        // cwd = the guest mount point, NEVER $HOME / a host path.
+        assert_eq!(spawn.cwd, "/workspace");
+        assert_ne!(Some(PathBuf::from(&spawn.cwd)), dirs::home_dir());
+        // sandbox forced on; host-fixed headless claude.
+        assert_eq!(spawn.sandbox, Some(true));
+        assert_eq!(spawn.command.as_deref(), Some("claude"));
+        // FORCED session id == the layer key (so the returned id can be resumed).
+        assert_eq!(spawn.forced_session_id, Some(sid));
+        // PERSISTENT: no ephemeral teardown handle.
+        assert!(spawn.ephemeral_cwd.is_none(), "persistent layer must NOT be torn down");
+        // The overlay spec carries the RO base + the persistent upper/work under
+        // the overlays root, with the (default) overlay fs mode.
+        let ov = spawn.overlay.as_ref().expect("overlay spec present");
+        assert_eq!(ov.workspace_ro_base, PathBuf::from(ws_path));
+        assert!(ov.overlay_upper.starts_with(sandbox_overlays_root()));
+        assert!(ov.overlay_upper.to_string_lossy().contains(&ws_slug));
+        assert!(ov.overlay_upper.to_string_lossy().contains(&sid.to_string()));
+        assert!(ov.overlay_upper.ends_with("upper"));
+        assert!(ov.overlay_work.ends_with("work"));
+        assert_eq!(ov.fs_mode, FsMode::Overlay, "unset workspace → default overlay");
+        // agent name is host-namespaced (anti-hijack).
+        assert!(spawn.agent_name.starts_with("api-"));
+
+        cleanup_overlay_ws(&ws_slug);
     }
 }

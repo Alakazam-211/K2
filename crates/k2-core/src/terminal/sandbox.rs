@@ -43,6 +43,85 @@ pub struct ShellSpec {
     pub args: Vec<String>,
 }
 
+/// Per-workspace FILESYSTEM MODE (Sandbox v2, PRD §G2 #1 — the per-workspace
+/// boolean the workspace owner picks). Governs how the RO canonical workspace
+/// and the persistent per-session writable layer are assembled by the worker
+/// (SLICE 3). Carried in an [`OverlaySpec`] and emitted as `--fs-mode` by
+/// [`build_worker_invocation`]; the daemon reads it from the `projects` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsMode {
+    /// **overlay** (PRD default): the canonical workspace is the overlay LOWER
+    /// (RO); the agent edits workspace files in place and every write is
+    /// captured (copy-up) into the per-session RW UPPER. Enables the F5
+    /// promote-back flywheel (diff upper vs base).
+    Overlay,
+    /// **ro+scratch**: the canonical workspace is mounted strictly READ-ONLY;
+    /// the agent cannot edit workspace files in place — it writes into a
+    /// SEPARATE persistent RW scratch (`/work`, backed by the same per-session
+    /// upper dir). Simpler isolation; no copy-up semantics.
+    RoScratch,
+}
+
+impl Default for FsMode {
+    /// PRD §G2 #1 LOCKED default = `overlay`.
+    fn default() -> Self {
+        FsMode::Overlay
+    }
+}
+
+impl FsMode {
+    /// The `--fs-mode` argv token emitted to the worker (SLICE 3 consumes it).
+    /// `+` is avoided in argv, so `ro+scratch` (the stored/PRD spelling) maps to
+    /// the flag `ro-scratch`.
+    pub const fn as_flag(self) -> &'static str {
+        match self {
+            FsMode::Overlay => "overlay",
+            FsMode::RoScratch => "ro-scratch",
+        }
+    }
+
+    /// Parse a STORED per-workspace setting (`projects.sandbox_fs_mode`) into a
+    /// mode. Fail-SAFE to the PRD default (`Overlay`) for `NULL`/absent/unknown
+    /// — a workspace never silently loses its RO-base guarantee, and a typo
+    /// can't leave the mode undefined. Accepts both the DB spelling `ro+scratch`
+    /// and the argv spelling `ro-scratch`.
+    pub fn from_setting(raw: Option<&str>) -> Self {
+        match raw.map(str::trim) {
+            Some("ro+scratch") | Some("ro-scratch") => FsMode::RoScratch,
+            _ => FsMode::Overlay,
+        }
+    }
+}
+
+/// Sandbox v2 (PRD §B) — the WORKSPACE-SCOPED overlay mount spec threaded from
+/// the daemon's policy-resolver, through [`DaemonPtyConfig`](crate::terminal::daemon_pty::DaemonPtyConfig)
+/// and this [`SpawnRequest`], into the worker argv. It carries the three host
+/// paths the worker (SLICE 3) will assemble into the merged `/workspace` view
+/// plus the per-workspace [`FsMode`]. Grouped into ONE struct so adding the
+/// workspace-scoped plumbing touches exactly one optional field on each config
+/// (instead of four), and so the four values can never be threaded apart.
+///
+/// SECURITY: every path here is HOST-RESOLVED by the daemon (the RO base is a
+/// registered `projects.path`; the upper/work are daemon-minted under
+/// `~/.k2/sandbox-overlays/<ws>/<sid>/`) — NONE is a caller path. The upper +
+/// work dirs are chowned to the per-session cell uid at the spawn door (P4-H6);
+/// the RO base is NEVER chowned (it stays owned by the workspace).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlaySpec {
+    /// The RO lowerdir — the canonical workspace, mounted read-only in SLICE 3
+    /// so the cell reads real files/skills but can never corrupt the source.
+    pub workspace_ro_base: PathBuf,
+    /// The persistent RW upperdir — where the session's copy-up writes (overlay)
+    /// or `/work` scratch (ro+scratch) land; keyed by `(workspace, session)` and
+    /// restored on resume (NOT deleted on ChildExit).
+    pub overlay_upper: PathBuf,
+    /// The overlay workdir (an overlayfs implementation requirement) — sits
+    /// beside the upper under the same per-session layer.
+    pub overlay_work: PathBuf,
+    /// The per-workspace filesystem mode (overlay vs ro+scratch).
+    pub fs_mode: FsMode,
+}
+
 /// Everything a backend needs to open a child process attached to a PTY. The
 /// fields are the env-enriched / login-shell-resolved values computed by
 /// `DaemonPtySession::spawn` BEFORE this seam — the trait owns only the PTY
@@ -87,6 +166,13 @@ pub struct SpawnRequest {
     /// allocate for) ⇒ no `--cell-uid` is emitted and the worker falls back to
     /// resolving `k2cell`. Unused by [`Passthrough`].
     pub cell_uid: Option<u32>,
+    /// Sandbox v2 (PRD §B) — the WORKSPACE-SCOPED overlay mount spec. `Some`
+    /// only for a workspace-scoped API session (the `/v1/w/<ws>/sessions` door);
+    /// `None` for EVERY other spawn (cockpit, ephemeral `/v1/sandboxes`, plain
+    /// v2) ⇒ default-OFF parity. **Plumbed in SLICE 2, CONSUMED in SLICE 3**
+    /// (the microVM worker assembles `overlay(lower=ro_base, upper, work)` and
+    /// mounts the merged view at the guest cwd). [`Passthrough`] ignores it.
+    pub overlay: Option<OverlaySpec>,
 }
 
 /// A spawned child + its captured direct-child PID. Returned from a backend's
@@ -529,10 +615,30 @@ pub fn build_worker_invocation(req: &SpawnRequest, caps: &VmCaps) -> WorkerInvoc
         argv.push(uid.to_string());
     }
 
-    // Workspace root → read-WRITE mount inside the guest.
+    // Workspace root → read-WRITE mount inside the guest. (Ephemeral / legacy
+    // single-dir RW mount. A workspace-scoped overlay session supersedes this
+    // with `--workspace-ro-base` + `--overlay-*` below, and `daemon_pty` sets
+    // `workspace_root = None` in that case so the two never both appear.)
     if let Some(ws) = &req.workspace_root {
         argv.push("--workspace-root".to_string());
         argv.push(ws.to_string_lossy().into_owned());
+    }
+
+    // Sandbox v2 (PRD §B) — the WORKSPACE-SCOPED overlay mount. Emitted only for
+    // a workspace-scoped session; the three host paths + the per-workspace mode.
+    // SLICE 3: the worker CONSUMES these to assemble `overlay(lower=ro_base,
+    // upper, work)` (fs_mode=overlay) or a RO base + separate RW `/work`
+    // (fs_mode=ro+scratch) and mount the merged view at `--cwd`. Until then the
+    // flags are plumbed + tested but the worker does not act on them.
+    if let Some(ov) = &req.overlay {
+        argv.push("--workspace-ro-base".to_string());
+        argv.push(ov.workspace_ro_base.to_string_lossy().into_owned());
+        argv.push("--overlay-upper".to_string());
+        argv.push(ov.overlay_upper.to_string_lossy().into_owned());
+        argv.push("--overlay-work".to_string());
+        argv.push(ov.overlay_work.to_string_lossy().into_owned());
+        argv.push("--fs-mode".to_string());
+        argv.push(ov.fs_mode.as_flag().to_string());
     }
 
     // Per-cell hook socket host path → bind-mounted into the guest.
@@ -637,6 +743,7 @@ mod tests {
             tool_roots: vec![],
             session_id: None,
             cell_uid: None,
+            overlay: None,
         };
 
         let child = SandboxSpec::Passthrough
@@ -703,6 +810,7 @@ mod tests {
             ],
             session_id: Some("sentinel-sid".to_string()),
             cell_uid: Some(60042),
+            overlay: None,
         }
     }
 
@@ -832,6 +940,55 @@ mod tests {
         assert_eq!(inv.guest_env, sorted, "guest_env must be deterministically sorted");
     }
 
+    /// Sandbox v2 (PRD §B) — when a workspace-scoped [`OverlaySpec`] is present,
+    /// the three host paths + the fs-mode are emitted as `--workspace-ro-base`,
+    /// `--overlay-upper`, `--overlay-work`, `--fs-mode`; absent ⇒ none appear
+    /// (default-OFF parity, proven by the sentinel test which sets `overlay:
+    /// None`).
+    #[test]
+    fn build_worker_invocation_emits_overlay_spec_flags() {
+        let mut req = sentinel_request();
+        req.overlay = Some(OverlaySpec {
+            workspace_ro_base: PathBuf::from("/home/svc/ai"),
+            overlay_upper: PathBuf::from("/home/svc/.k2/sandbox-overlays/ai/sid/upper"),
+            overlay_work: PathBuf::from("/home/svc/.k2/sandbox-overlays/ai/sid/work"),
+            fs_mode: FsMode::RoScratch,
+        });
+        let inv = build_worker_invocation(&req, &VmCaps::default());
+        assert_eq!(flag_value(&inv.argv, "--workspace-ro-base"), Some("/home/svc/ai"));
+        assert_eq!(
+            flag_value(&inv.argv, "--overlay-upper"),
+            Some("/home/svc/.k2/sandbox-overlays/ai/sid/upper"),
+        );
+        assert_eq!(
+            flag_value(&inv.argv, "--overlay-work"),
+            Some("/home/svc/.k2/sandbox-overlays/ai/sid/work"),
+        );
+        // ro+scratch → the argv token `ro-scratch` (no `+` in argv).
+        assert_eq!(flag_value(&inv.argv, "--fs-mode"), Some("ro-scratch"));
+
+        // Absent overlay ⇒ NO overlay flags (default-OFF parity).
+        let bare = build_worker_invocation(&sentinel_request(), &VmCaps::default());
+        assert!(!bare.argv.iter().any(|a| a == "--workspace-ro-base"));
+        assert!(!bare.argv.iter().any(|a| a == "--fs-mode"));
+    }
+
+    /// [`FsMode`] default is `overlay` (PRD §G2 #1); the stored-setting parser
+    /// fails safe to it and accepts both the DB (`ro+scratch`) and argv
+    /// (`ro-scratch`) spellings of the read-only mode.
+    #[test]
+    fn fs_mode_default_and_parse() {
+        assert_eq!(FsMode::default(), FsMode::Overlay);
+        assert_eq!(FsMode::Overlay.as_flag(), "overlay");
+        assert_eq!(FsMode::RoScratch.as_flag(), "ro-scratch");
+        assert_eq!(FsMode::from_setting(None), FsMode::Overlay, "NULL → default");
+        assert_eq!(FsMode::from_setting(Some("")), FsMode::Overlay, "blank → default");
+        assert_eq!(FsMode::from_setting(Some("overlay")), FsMode::Overlay);
+        assert_eq!(FsMode::from_setting(Some("ro+scratch")), FsMode::RoScratch);
+        assert_eq!(FsMode::from_setting(Some(" ro-scratch ")), FsMode::RoScratch);
+        assert_eq!(FsMode::from_setting(Some("garbage")), FsMode::Overlay, "unknown → default");
+    }
+
     /// B3a — a staged `ANTHROPIC_API_KEY` (the per-workspace key the daemon's
     /// spawn door puts into `req.env`) is mirrored verbatim into `guest_env`,
     /// reaching the in-cell Claude Code. `build_worker_invocation` only rewrites
@@ -876,6 +1033,7 @@ mod tests {
             tool_roots: vec![],
             session_id: None,
             cell_uid: None,
+            overlay: None,
         };
 
         let inv = build_worker_invocation(&req, &VmCaps::default());
@@ -923,6 +1081,7 @@ mod tests {
             tool_roots: vec![],
             session_id: None,
             cell_uid: None,
+            overlay: None,
         };
         let inv = build_worker_invocation(&req, &VmCaps::default());
         assert!(flag_value(&inv.argv, "--workspace-root").is_none());
@@ -933,6 +1092,9 @@ mod tests {
         assert!(!inv.argv.iter().any(|a| a == "--drain-on-exit"));
         assert!(flag_value(&inv.argv, "--session-id").is_none());
         assert!(flag_value(&inv.argv, "--cell-uid").is_none());
+        // No overlay ⇒ no overlay flags (default-OFF parity).
+        assert!(flag_value(&inv.argv, "--workspace-ro-base").is_none());
+        assert!(flag_value(&inv.argv, "--fs-mode").is_none());
         assert_eq!(flag_value(&inv.argv, "--vcpus"), Some("1"));
         assert_eq!(flag_value(&inv.argv, "--ram-mib"), Some("1024"));
     }

@@ -1,0 +1,19 @@
+-- Sandbox v2 (workspace-scoped sessions, PRD §G2 #1) — per-workspace FS MODE.
+--
+-- The per-workspace BOOLEAN the workspace OWNER picks for how a sandbox
+-- session's filesystem is assembled (PRD §B/§F):
+--   'overlay'    — the canonical workspace is the overlay LOWER (RO); the agent
+--                  edits workspace files in place and every write is captured
+--                  (copy-up) into the per-session RW upper. Enables the F5
+--                  promote-back flywheel.
+--   'ro+scratch' — the canonical workspace is mounted strictly READ-ONLY; the
+--                  agent writes only into a SEPARATE persistent RW scratch.
+--
+-- Nullable, NO DEFAULT: an absent value reads NULL → decoded to the PRD LOCKED
+-- default 'overlay' at read time (`FsMode::from_setting`), so existing rows
+-- backfill to NULL and behave as 'overlay' without a data migration. A typo /
+-- unknown value ALSO decodes to 'overlay' (fail-safe: a workspace never
+-- silently loses its RO-base guarantee). The write path
+-- (`update_project_setting`) validates the value is exactly 'overlay' or
+-- 'ro+scratch' so a bad value can never be STORED.
+ALTER TABLE projects ADD COLUMN sandbox_fs_mode TEXT;

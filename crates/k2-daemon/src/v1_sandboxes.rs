@@ -26,7 +26,9 @@ use crate::cli_response::CliResponse;
 use crate::routes::http::V1Principal;
 use crate::{sandbox_quota, stream_token, v2_spawn};
 
-use policy::{resolve_spawn, ApiSandboxRequest};
+use policy::{resolve_spawn, resolve_workspace_session, ApiSandboxRequest};
+
+use k2_core::session::SessionId;
 
 /// Handle `POST /v1/sandboxes`. The caller is ALREADY authenticated to a
 /// [`V1Principal`] by the dispatcher's `/v1/*` gate; this never re-checks creds,
@@ -560,32 +562,152 @@ fn parse_fork_from(body: &[u8]) -> ForkFrom {
     }
 }
 
-/// SLICE 1 delegate — thread the host-trusted [`WorkspaceSessionRequest`] into
-/// the spawn, then (for now) run the EXISTING ephemeral path.
+/// SLICE 2 — WORKSPACE-SCOPED spawn. Replaces the slice-1 ephemeral delegate:
+/// provisions the PERSISTENT per-session overlay layer via
+/// [`resolve_workspace_session`] and spawns through the PROVEN v2 internals,
+/// mirroring [`handle_v1_sandboxes`]'s door discipline (refuse-if-can't,
+/// quota-first, fail-closed, per-session stream token, F2 owner record).
 ///
-/// TODO(sandbox v2 slices 2-3, PRD §C/§E): replace this ephemeral delegate with
-/// `policy::resolve_workspace_session(workspace_path, session-id, principal)` —
-/// mount the RO canonical workspace lower + the PERSISTENT per-(workspace,
-/// session) upper, set `cwd = workspace_path`, and route the `op`
-/// (new/fork/address) through the F3 liveness router. For SLICE 1 the front
-/// door (route + slug resolution + per-key authz + canonical guard) is
-/// COMPLETE, but the cell still spawns EPHEMERALLY via [`handle_v1_sandboxes`]
-/// (provisioning UNCHANGED) — the workspace is NOT yet mounted. The resolved
-/// `req` is logged (never a secret — slug + path + op only) so the intent is
-/// observable until slices 2-3 consume it.
+/// SESSION ID per op (PRD §G2 #3): `New`/`Fork` mint a FRESH id (the layer +
+/// the returned/addressable id are keyed by it); `Address` uses the URL id
+/// (parsed to a real `SessionId`, else 400). The id is FORCED into the spawn so
+/// the returned `sessionId` equals the persistent-layer key — resume can
+/// re-find it.
+///
+/// SLICE 3: the worker mounts `overlay(RO ws, upper)` at `/workspace`.
+/// SLICE 4: `Fork` must COW-copy the source session's layer into the new id's
+/// layer, and `Address` must run the F3 LIVENESS router (deliver-into-live vs
+/// `claude --resume` + re-mount). For SLICE 2 all three provision + spawn with
+/// their (minted or given) id + a fresh/reused layer; the fork COW-copy and the
+/// live-delivery routing are NOT yet implemented (flagged below).
 fn spawn_for_workspace_slice1(
     principal: &V1Principal,
     req: WorkspaceSessionRequest,
     body: &[u8],
 ) -> CliResponse {
-    k2_core::log_debug!(
-        "[v1-sandbox/ws] SLICE1 intent workspace_slug={} workspace_path={} op={:?} \
-         (ephemeral spawn; workspace mount deferred to slices 2-3)",
-        req.workspace_slug,
-        req.workspace_path,
-        req.op,
-    );
-    handle_v1_sandboxes(principal, body)
+    // (1) REFUSE if this daemon cannot deliver a real microVM (never degrade to
+    // an unsandboxed cell) — identical to the ephemeral door.
+    if !v2_spawn::can_sandbox() {
+        return CliResponse {
+            status: "409 Conflict",
+            content_type: "application/json",
+            body: r#"{"error":"this daemon cannot sandbox (microVM backend unavailable)"}"#
+                .to_string(),
+        };
+    }
+
+    // (2) Parse the UNTRUSTED body into hints (prompt/dims). Empty → defaults.
+    // The `fork_from` field was already parsed + validated by the caller into
+    // `req.op`; here we only need the prompt/dim hints.
+    let api_req: ApiSandboxRequest = if body.iter().all(|b| b.is_ascii_whitespace()) {
+        ApiSandboxRequest::default()
+    } else {
+        match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+        }
+    };
+
+    // (3) Decide the HOST session id from the op (fresh mint vs the addressed
+    // id). SLICE 4 will branch here on live-vs-cold for `Address` and COW the
+    // source layer for `Fork`; SLICE 2 just keys the layer by this id.
+    let session_id: SessionId = match &req.op {
+        WsSessionOp::New => SessionId::new(),
+        WsSessionOp::Fork { from } => {
+            // SLICE 4: COW-copy `<from>`'s persistent layer into the new id's
+            // layer (branch its files). SLICE 2 provisions a FRESH empty layer.
+            k2_core::log_debug!(
+                "[v1-sandbox/ws] fork_from={} — fresh layer for now (COW-copy is SLICE 4)",
+                from
+            );
+            SessionId::new()
+        }
+        WsSessionOp::Address { session_id } => match SessionId::parse(session_id) {
+            Some(sid) => sid,
+            // A validated-but-non-UUID segment can't key a real session/layer.
+            None => return uniform_ws_404(),
+        },
+    };
+
+    // (4) P4-H4 CONCURRENT-CELL CAP — acquire the quota slot BEFORE we provision
+    // the layer, so a rejected request leaves ZERO side effects (no dir mkdir,
+    // no spawn). Released by the child-exit observer on the success path, or
+    // explicitly on the early-failure paths below.
+    let principal_key = principal.display_id();
+    if let Err(qe) = sandbox_quota::try_acquire(&principal_key) {
+        return CliResponse {
+            status: "429 Too Many Requests",
+            content_type: "application/json",
+            body: serde_json::json!({ "error": qe.message(), "code": qe.code() }).to_string(),
+        };
+    }
+
+    // (5) Resolve → host-trusted SpawnRequest carrying the RO workspace base +
+    // the PERSISTENT per-session layer. Fail-CLOSED: a provisioning failure
+    // 5xxs (NEVER a $HOME/ephemeral fallback); release the slot we acquired.
+    let mut spawn_req = match resolve_workspace_session(
+        &req.workspace_path,
+        &req.workspace_slug,
+        &session_id,
+        principal,
+        &api_req,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            sandbox_quota::release(&principal_key);
+            return CliResponse {
+                status: e.status(),
+                content_type: "application/json",
+                body: serde_json::json!({ "error": e.message() }).to_string(),
+            };
+        }
+    };
+    spawn_req.principal_key = Some(principal_key.clone());
+
+    // (6) Spawn through the PROVEN v2 internals (per-session uid + P4-H6 chown of
+    // the persistent layer, egress, child-exit teardown). NOTE: unlike the
+    // ephemeral path we do NOT clean up any dir on failure — the persistent
+    // layer is meant to survive (a later resume re-uses it); only the quota slot
+    // is released (no session ⇒ no observer).
+    let result = v2_spawn::spawn_session(spawn_req);
+    if result.status != "200 OK" {
+        sandbox_quota::release(&principal_key);
+        return CliResponse {
+            status: result.status,
+            content_type: "application/json",
+            body: result.body,
+        };
+    }
+
+    // (7) Parse the spawn response; record the F2 owner; mint a per-session
+    // stream token. A live session (+ its observer) now exists, so the observer
+    // OWNS the quota release — we must NOT release here.
+    let v: serde_json::Value = match serde_json::from_str(&result.body) {
+        Ok(v) => v,
+        Err(_) => return CliResponse::internal_error("spawn response was not JSON"),
+    };
+    let session_id_str = v.get("sessionId").and_then(|x| x.as_str()).unwrap_or("");
+    let agent_name = v.get("agentName").and_then(|x| x.as_str()).unwrap_or("");
+    if session_id_str.is_empty() {
+        return CliResponse::internal_error("spawn response carried no sessionId");
+    }
+    let Some(sid) = k2_core::session::SessionId::parse(session_id_str) else {
+        return CliResponse::internal_error("spawn response sessionId was malformed");
+    };
+    crate::sandbox_responses::record_owner(session_id_str, &principal_key);
+
+    let stream_tok = stream_token::mint(&sid);
+    let grid = format!("/cli/sessions/grid?session={session_id_str}&token={stream_tok}");
+    CliResponse::ok_json(
+        serde_json::json!({
+            "sessionId": session_id_str,
+            "agentName": agent_name,
+            "workspace": req.workspace_slug,
+            "sandbox": "microvm",
+            "stream": { "grid": grid },
+        })
+        .to_string(),
+    )
 }
 
 #[cfg(test)]

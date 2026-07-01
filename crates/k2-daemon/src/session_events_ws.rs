@@ -73,13 +73,16 @@ pub async fn serve_session_events_connection(
     let token = params.get("token").cloned().unwrap_or_default();
 
     // 0.39.7: stream borrowed (was owned). See events.rs.
-    let workspace_path = match params.get("path").map(String::as_str) {
-        Some(p) if !p.is_empty() => p.to_string(),
-        _ => {
-            send_error_then_close(stream, "missing 'path' query param").await;
-            return;
-        }
-    };
+    // Empty / missing `path` = the APP-LEVEL subscriber (0.39.39 #675). It is
+    // NOT an error: `event_matches_workspace` treats an empty workspace_path as
+    // the `/`-prefix rule, so the subscriber receives every app-level event
+    // (llm/agent/tunnel/active_changed/projects) AND every absolute-cwd event
+    // (session_added/removed) — exactly what the renderer's `subscribeToActiveState`
+    // consumer (which connects with `?path=`) needs. Rejecting it here silently
+    // broke app-level events over K2 Connect (the local `daemon_events` Tauri
+    // channel masked it on localhost, but that channel is 127.0.0.1-only, so a
+    // remote host got nothing — no active-state, no ⌘J list, no sandbox orange-tab).
+    let workspace_path = params.get("path").cloned().unwrap_or_default();
 
     let ws = match tokio_tungstenite::accept_async(stream).await {
         Ok(ws) => ws,

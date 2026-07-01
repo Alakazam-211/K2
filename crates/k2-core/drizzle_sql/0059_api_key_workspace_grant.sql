@@ -1,0 +1,23 @@
+-- Sandbox v2 (workspace-scoped sessions, PRD §G2 #4) — PER-KEY WORKSPACE GRANT.
+--
+-- The tenancy seam for the workspace-addressed `/v1/w/<workspace>/...` surface.
+-- An API key now carries an EXPLICIT set of workspaces it may address; the
+-- front door 404s (uniform "no such workspace", no existence oracle) any
+-- `<workspace>` the key was not granted. Owner-token principals bypass this
+-- (owner = all workspaces); the grant applies ONLY to `api_keys` rows.
+--
+-- Column shape (TEXT, nullable):
+--   • NULL          → NO grant. FAIL-CLOSED: the key authorizes ZERO
+--                     workspaces. This is the value EXISTING rows (minted
+--                     before this migration) backfill to, so a pre-existing
+--                     key can never silently reach a workspace it was never
+--                     scoped to. It must be re-minted (or, later, re-granted)
+--                     with an explicit grant to gain access.
+--   • "*"           → ALL workspaces (wildcard; the convenience own-use grant).
+--   • JSON array    → e.g. `["ai","docs"]` — the explicit set of authorized
+--                     workspace slugs. Membership is exact-match on the slug.
+--
+-- Anything else / malformed JSON is treated as NO grant (fail-closed) by the
+-- resolver. The value is NOT a secret (workspace slugs are non-sensitive), so
+-- unlike the anthropic key it MAY be surfaced by the redacted key list.
+ALTER TABLE api_keys ADD COLUMN allowed_workspaces TEXT;

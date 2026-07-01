@@ -425,6 +425,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // (0057 is reserved for the P1/P2a sandbox-seam line; P3a slots in at
         // 0058 so it rebases cleanly onto that work.)
         ("0058_api_keys", include_str!("../../drizzle_sql/0058_api_keys.sql")),
+        // 0059 (sandbox v2 / workspace-scoped sessions, PRD §G2 #4): the
+        // per-key WORKSPACE GRANT column `allowed_workspaces` on `api_keys`.
+        // The tenancy seam — a key can be scoped to an explicit set of
+        // workspace slugs (or `"*"` for all). FAIL-CLOSED: NULL (the value
+        // existing rows backfill to) = NO grant, so a key never silently
+        // reaches a workspace it was never scoped to. Owner-token principals
+        // bypass the grant (owner = all). Slugs are non-secret (the list route
+        // may surface them); unlike the anthropic key, nothing here is hidden.
+        ("0059_api_key_workspace_grant", include_str!("../../drizzle_sql/0059_api_key_workspace_grant.sql")),
     ];
 
     for (name, sql) in migrations {

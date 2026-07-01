@@ -1322,7 +1322,7 @@ mod tests {
     fn v1_principal_accepts_valid_api_key() {
         let owner = "owner-token-xyz";
         let (id, raw) =
-            k2_core::api_keys::create_api_key("v1-gate-test", Some("sk-ant-gate")).expect("mint key");
+            k2_core::api_keys::create_api_key("v1-gate-test", Some("sk-ant-gate"), None).expect("mint key");
 
         // Via Bearer header (the preferred transport).
         let p = v1_principal("", Some(&raw), owner).expect("valid key authorizes");
@@ -1353,7 +1353,7 @@ mod tests {
         assert_eq!(v1_principal("token=", Some(""), owner), None);
 
         // A revoked key no longer authorizes (immediate revocation).
-        let (id, raw) = k2_core::api_keys::create_api_key("v1-revoke", None).expect("mint");
+        let (id, raw) = k2_core::api_keys::create_api_key("v1-revoke", None, None).expect("mint");
         assert!(v1_principal("", Some(&raw), owner).is_some(), "valid before revoke");
         k2_core::api_keys::revoke_api_key(&id).expect("revoke");
         assert_eq!(

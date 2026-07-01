@@ -69,6 +69,48 @@ pub struct ApiPrincipal {
     pub anthropic_key: Option<String>,
     /// Authorization scope. `"owner"` today; per-tenant scopes are P4.
     pub scope: String,
+    /// Sandbox v2 (PRD §G2 #4) — the per-key WORKSPACE GRANT, the raw
+    /// `allowed_workspaces` TEXT column verbatim. Interpretation (see
+    /// [`ApiPrincipal::authorizes_workspace`]): `None` (NULL) = NO grant
+    /// (FAIL-CLOSED — authorizes zero workspaces), `Some("*")` = all
+    /// workspaces, `Some(json_array)` = the explicit set of authorized slugs.
+    /// NOT a secret (slugs are non-sensitive); safe to keep on the principal.
+    pub allowed_workspaces: Option<String>,
+}
+
+impl ApiPrincipal {
+    /// Sandbox v2 (PRD §G2 #4) — does THIS key's workspace grant authorize the
+    /// workspace `slug`? The tenancy check the `/v1/w/<workspace>/...` door
+    /// runs (owner-token principals bypass it entirely — owner = all).
+    ///
+    /// **FAIL-CLOSED at every ambiguity:**
+    /// - `None` (NULL column — the value existing pre-migration rows carry) →
+    ///   `false`. A key with no grant reaches no workspace.
+    /// - `Some("*")` (after trim) → `true` (the wildcard own-use grant).
+    /// - `Some(json_array_of_slugs)` → `true` iff `slug` is an EXACT member
+    ///   (or the array itself contains `"*"`). Exact match only — no prefix /
+    ///   case-folding / path games.
+    /// - Any malformed / non-array / empty JSON → `false` (never fail-open on a
+    ///   grant we can't parse).
+    ///
+    /// `slug` is expected already-validated (percent-decoded, no `/`, no `..`,
+    /// non-empty) by the caller; this method makes no path assumptions and
+    /// only ever does string equality, so it cannot be tricked into a wider
+    /// grant by a hostile slug.
+    pub fn authorizes_workspace(&self, slug: &str) -> bool {
+        match self.allowed_workspaces.as_deref().map(str::trim) {
+            None => false,
+            Some("") => false,
+            Some("*") => true,
+            Some(raw) => match serde_json::from_str::<Vec<String>>(raw) {
+                Ok(list) => list.iter().any(|w| {
+                    let w = w.trim();
+                    w == "*" || w == slug
+                }),
+                Err(_) => false,
+            },
+        }
+    }
 }
 
 /// Redacted metadata about a stored API key — safe to return over the wire.
@@ -87,6 +129,12 @@ pub struct ApiKeyMeta {
     pub key_set: bool,
     /// Whether an associated Anthropic key is stored (NEVER the value).
     pub anthropic_key_set: bool,
+    /// Sandbox v2 (PRD §G2 #4) — the raw per-key workspace grant
+    /// (`allowed_workspaces`): `None` = no grant (fail-closed), `Some("*")` =
+    /// all, `Some(json_array)` = the explicit slug set. NOT a secret (slugs are
+    /// non-sensitive), so unlike the anthropic key its VALUE is surfaced here
+    /// so the owner can audit which workspaces a key can address.
+    pub allowed_workspaces: Option<String>,
 }
 
 /// Hex `SHA-256` of `s`. Used for both the stored `key_hash` and the lookup of
@@ -147,7 +195,19 @@ fn now_secs() -> i64 {
 ///
 /// `label` is a human tag (may be empty). A blank `anthropic_key` is stored as
 /// NULL (no credential). NEVER logs the raw key or the anthropic key.
-pub fn create_api_key(label: &str, anthropic_key: Option<&str>) -> Result<(String, String), String> {
+///
+/// `allowed_workspaces` (sandbox v2, PRD §G2 #4) is the raw per-key WORKSPACE
+/// GRANT stored verbatim in the `allowed_workspaces` TEXT column: pass `None`
+/// (or a blank string) for NO grant (FAIL-CLOSED — the key reaches zero
+/// workspaces), `"*"` for all, or a JSON array of slugs (e.g. `["ai","docs"]`)
+/// for an explicit set. The caller (`misc_routes::handle_api_key_create`)
+/// normalizes the owner's request into this string; a blank value stores NULL
+/// so a key minted without a grant is fail-closed by default.
+pub fn create_api_key(
+    label: &str,
+    anthropic_key: Option<&str>,
+    allowed_workspaces: Option<&str>,
+) -> Result<(String, String), String> {
     let id = uuid::Uuid::new_v4().to_string();
     let raw = generate_raw_key();
     let key_hash = sha256_hex(&raw);
@@ -159,14 +219,20 @@ pub fn create_api_key(label: &str, anthropic_key: Option<&str>) -> Result<(Strin
         Some(k) if !k.trim().is_empty() => Some(k.trim()),
         _ => None,
     };
+    // A blank grant stores NULL → fail-closed (no workspace access). Only a
+    // non-blank grant ("*" or a JSON slug array) is persisted.
+    let workspaces_stored: Option<&str> = match allowed_workspaces {
+        Some(w) if !w.trim().is_empty() => Some(w.trim()),
+        _ => None,
+    };
 
     let db = crate::db::shared();
     let conn = db.lock();
     conn.execute(
-        "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at) \
-         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL)",
+        "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at, allowed_workspaces) \
+         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6)",
         // Deliberately keep the raw key + anthropic key OUT of any error string.
-        rusqlite::params![id, key_hash, label_stored, anthropic_stored, now_secs()],
+        rusqlite::params![id, key_hash, label_stored, anthropic_stored, now_secs(), workspaces_stored],
     )
     .map_err(|e| format!("DB insert failed: {e}"))?;
     Ok((id, raw))
@@ -197,7 +263,8 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, label, scope, created_at, revoked_at, \
-                    (anthropic_api_key IS NOT NULL AND TRIM(anthropic_api_key) <> '') \
+                    (anthropic_api_key IS NOT NULL AND TRIM(anthropic_api_key) <> ''), \
+                    allowed_workspaces \
              FROM api_keys ORDER BY created_at DESC, id DESC",
         )
         .map_err(|e| format!("DB prepare failed: {e}"))?;
@@ -212,6 +279,8 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
                 // Every persisted row has a key hash on file.
                 key_set: true,
                 anthropic_key_set: row.get::<_, i64>(5)? != 0,
+                // Non-secret (slugs) — surface the raw grant for owner audit.
+                allowed_workspaces: row.get::<_, Option<String>>(6)?,
             })
         })
         .map_err(|e| format!("DB query failed: {e}"))?;
@@ -242,18 +311,22 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
     let db = crate::db::shared();
     let conn = db.lock();
     conn.query_row(
-        "SELECT id, anthropic_api_key, scope FROM api_keys \
+        "SELECT id, anthropic_api_key, scope, allowed_workspaces FROM api_keys \
          WHERE key_hash = ?1 AND revoked_at IS NULL",
         rusqlite::params![key_hash],
         |row| {
             let id: String = row.get(0)?;
             let anthropic: Option<String> = row.get(1)?;
             let scope: String = row.get(2)?;
+            let allowed_workspaces: Option<String> = row.get(3)?;
             Ok(ApiPrincipal {
                 id,
                 // Treat a blank stored value as absent (parity with B3a).
                 anthropic_key: anthropic.filter(|k| !k.trim().is_empty()),
                 scope,
+                // Raw grant verbatim; interpreted by `authorizes_workspace`
+                // (NULL = fail-closed no grant).
+                allowed_workspaces,
             })
         },
     )
@@ -269,7 +342,8 @@ mod tests {
     /// (b) the anthropic key flows through to the principal.
     #[test]
     fn create_then_resolve_round_trips() {
-        let (id, raw) = create_api_key("ci-roundtrip", Some("sk-ant-roundtrip-1")).expect("create");
+        let (id, raw) =
+            create_api_key("ci-roundtrip", Some("sk-ant-roundtrip-1"), Some("[\"ai\"]")).expect("create");
         assert!(raw.starts_with(API_KEY_PREFIX), "raw key must carry the k2sk_ prefix");
         assert_eq!(
             raw.len(),
@@ -285,24 +359,32 @@ mod tests {
             Some("sk-ant-roundtrip-1"),
             "the BYO anthropic key flows through to the principal",
         );
+        // The per-key workspace grant flows through verbatim and authorizes
+        // exactly the granted slug (and nothing else).
+        assert_eq!(principal.allowed_workspaces.as_deref(), Some("[\"ai\"]"));
+        assert!(principal.authorizes_workspace("ai"), "granted slug authorized");
+        assert!(!principal.authorizes_workspace("other"), "non-granted slug denied");
     }
 
     /// A key minted with no anthropic key resolves to a principal with `None`.
     #[test]
     fn create_without_anthropic_key_resolves_none_cred() {
-        let (_id, raw) = create_api_key("ci-no-cred", None).expect("create");
+        let (_id, raw) = create_api_key("ci-no-cred", None, None).expect("create");
         let principal = resolve_api_key(&raw).expect("resolves");
         assert_eq!(principal.anthropic_key, None);
+        // No grant → fail-closed: authorizes NO workspace.
+        assert_eq!(principal.allowed_workspaces, None);
+        assert!(!principal.authorizes_workspace("ai"), "ungranted key reaches no workspace");
 
         // A blank anthropic key is also stored as absent.
-        let (_id2, raw2) = create_api_key("ci-blank-cred", Some("   ")).expect("create blank");
+        let (_id2, raw2) = create_api_key("ci-blank-cred", Some("   "), None).expect("create blank");
         assert_eq!(resolve_api_key(&raw2).expect("resolves").anthropic_key, None);
     }
 
     /// Revocation is immediate: after revoke, the SAME raw key resolves to None.
     #[test]
     fn revoke_then_resolve_is_none() {
-        let (id, raw) = create_api_key("ci-revoke", None).expect("create");
+        let (id, raw) = create_api_key("ci-revoke", None, None).expect("create");
         assert!(resolve_api_key(&raw).is_some(), "valid before revoke");
 
         assert!(revoke_api_key(&id).expect("revoke"), "first revoke flips the row");
@@ -328,7 +410,7 @@ mod tests {
     #[test]
     fn list_never_contains_raw_or_anthropic_key() {
         let secret_anthropic = "sk-ant-list-secret-zzz";
-        let (id, raw) = create_api_key("ci-list", Some(secret_anthropic)).expect("create");
+        let (id, raw) = create_api_key("ci-list", Some(secret_anthropic), Some("*")).expect("create");
 
         let metas = list_api_keys().expect("list");
         let mine = metas.iter().find(|m| m.id == id).expect("our key is listed");
@@ -337,6 +419,8 @@ mod tests {
         assert!(mine.key_set, "key_set reported");
         assert!(mine.anthropic_key_set, "anthropic_key_set reported true");
         assert!(mine.revoked_at.is_none(), "fresh key is not revoked");
+        // The (non-secret) workspace grant is surfaced for owner audit.
+        assert_eq!(mine.allowed_workspaces.as_deref(), Some("*"));
 
         // Serialize the whole list and assert NEITHER secret appears anywhere.
         let json = serde_json::to_string(&metas).expect("serialize metas");
@@ -352,11 +436,48 @@ mod tests {
         );
     }
 
+    /// Sandbox v2 (PRD §G2 #4) — the per-key workspace grant is interpreted
+    /// FAIL-CLOSED at every branch: no grant / blank / malformed → deny; `"*"`
+    /// (or a `"*"` array member) → allow-all; a JSON array → exact-membership.
+    /// This is a PURE unit test (no DB) so it pins the authz semantics directly.
+    #[test]
+    fn authorizes_workspace_is_fail_closed() {
+        fn p(grant: Option<&str>) -> ApiPrincipal {
+            ApiPrincipal {
+                id: "k".to_string(),
+                anthropic_key: None,
+                scope: "owner".to_string(),
+                allowed_workspaces: grant.map(str::to_string),
+            }
+        }
+        // NULL / blank grant → NO workspace (the existing-row backfill case).
+        assert!(!p(None).authorizes_workspace("ai"), "NULL grant denies");
+        assert!(!p(Some("")).authorizes_workspace("ai"), "blank grant denies");
+        assert!(!p(Some("   ")).authorizes_workspace("ai"), "whitespace grant denies");
+        // Wildcard → any workspace.
+        assert!(p(Some("*")).authorizes_workspace("ai"));
+        assert!(p(Some("*")).authorizes_workspace("anything-else"));
+        assert!(p(Some(" * ")).authorizes_workspace("ai"), "wildcard trims");
+        // Explicit array → exact membership only.
+        assert!(p(Some("[\"ai\",\"docs\"]")).authorizes_workspace("ai"));
+        assert!(p(Some("[\"ai\",\"docs\"]")).authorizes_workspace("docs"));
+        assert!(!p(Some("[\"ai\",\"docs\"]")).authorizes_workspace("secret"));
+        // No prefix / substring games — exact match required.
+        assert!(!p(Some("[\"ai\"]")).authorizes_workspace("ai-staging"));
+        assert!(!p(Some("[\"ai\"]")).authorizes_workspace("a"));
+        // A `"*"` member inside the array is still allow-all.
+        assert!(p(Some("[\"*\"]")).authorizes_workspace("anything"));
+        // Malformed / non-array JSON → fail-closed (never fail-open).
+        assert!(!p(Some("not json")).authorizes_workspace("ai"));
+        assert!(!p(Some("{\"ai\":true}")).authorizes_workspace("ai"));
+        assert!(!p(Some("[]")).authorizes_workspace("ai"), "empty array grants nothing");
+    }
+
     /// Two minted keys are distinct (CSPRNG) and resolve to distinct principals.
     #[test]
     fn minted_keys_are_unique() {
-        let (id1, raw1) = create_api_key("u1", None).expect("create 1");
-        let (id2, raw2) = create_api_key("u2", None).expect("create 2");
+        let (id1, raw1) = create_api_key("u1", None, None).expect("create 1");
+        let (id2, raw2) = create_api_key("u2", None, None).expect("create 2");
         assert_ne!(raw1, raw2, "two CSPRNG keys must differ");
         assert_ne!(id1, id2, "ids differ");
         assert_eq!(resolve_api_key(&raw1).unwrap().id, id1);

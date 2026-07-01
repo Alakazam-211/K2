@@ -1065,7 +1065,36 @@ pub fn handle_api_key_create(body: &[u8]) -> CliResponse {
         .and_then(|x| x.as_str())
         .or_else(|| v.get("anthropic_key").and_then(|x| x.as_str()));
 
-    match k2_core::api_keys::create_api_key(label, anthropic_key) {
+    // Sandbox v2 (PRD §G2 #4) — normalize the optional per-key WORKSPACE GRANT
+    // from the body into the raw TEXT column stored by `create_api_key`.
+    // Accepts `workspaces` (or `allowedWorkspaces`/`allowed_workspaces`) as
+    // EITHER the string `"*"` (all) OR an array of slugs (`["ai","docs"]`).
+    // ABSENT / unrecognized → `None`, which stores NULL → the minted key is
+    // FAIL-CLOSED (reaches no workspace) until it is re-minted with a grant.
+    let grant_val = v
+        .get("workspaces")
+        .or_else(|| v.get("allowedWorkspaces"))
+        .or_else(|| v.get("allowed_workspaces"));
+    let workspaces_grant: Option<String> = match grant_val {
+        Some(serde_json::Value::String(s)) if s.trim() == "*" => Some("*".to_string()),
+        Some(serde_json::Value::Array(a)) => {
+            let slugs: Vec<String> = a
+                .iter()
+                .filter_map(|x| x.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            // An empty/all-blank array stays None (fail-closed), never `[]`.
+            if slugs.is_empty() {
+                None
+            } else {
+                Some(serde_json::to_string(&slugs).unwrap_or_default())
+            }
+        }
+        _ => None,
+    };
+
+    match k2_core::api_keys::create_api_key(label, anthropic_key, workspaces_grant.as_deref()) {
         // The ONLY place the raw key is ever returned. Not logged.
         Ok((id, raw)) => {
             CliResponse::ok_json(serde_json::json!({ "id": id, "key": raw }).to_string())
@@ -1109,6 +1138,10 @@ pub fn handle_api_key_list() -> CliResponse {
                         "revokedAt": m.revoked_at,
                         "keySet": m.key_set,
                         "anthropicKeySet": m.anthropic_key_set,
+                        // Non-secret (slugs) — surface the raw workspace grant
+                        // so the owner can audit which workspaces the key can
+                        // address (null = fail-closed, no grant).
+                        "allowedWorkspaces": m.allowed_workspaces,
                     })
                 })
                 .collect();

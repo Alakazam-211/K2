@@ -293,8 +293,9 @@ async fn handle_one_request(
     // Most routes are GET. Specific POST-accepting routes are
     // allowlisted here so non-GET hits other paths get a clean 405.
     let is_post = method == "POST";
+    let post_path = path_and_query.split_once('?').map(|(p, _)| p).unwrap_or(path_and_query);
     let post_allowed = matches!(
-        path_and_query.split_once('?').map(|(p, _)| p).unwrap_or(path_and_query),
+        post_path,
         "/cli/awareness/publish"
             | "/cli/sessions/v2/spawn"
             | "/cli/sessions/v2/close"
@@ -578,7 +579,16 @@ async fn handle_one_request(
             // top-level 405 guard never short-circuits it (without this entry
             // POST /v1/sandboxes 405s before ever reaching the /v1/ arm).
             | "/v1/sandboxes"
-    );
+    )
+        // Sandbox v2 (PRD §A) — the workspace-scoped session routes carry
+        // dynamic `<workspace>` / `<session-id>` segments, so they cannot be
+        // exact-listed above. POST is valid on `/v1/w/<ws>/sessions` (new /
+        // fork) and `/v1/w/<ws>/sessions/<id>` (address); allow the whole
+        // `/v1/w/` prefix here so the top-level 405 guard never short-circuits
+        // them before the `/v1/` arm runs (that arm + the per-route `is_post`
+        // branch below do the real method gating). The surface stays DARK
+        // unless K2_SANDBOX_API is on (checked inside the `/v1/` arm).
+        || post_path.starts_with("/v1/w/");
     if method != "GET" && !(is_post && post_allowed) {
         let _ = stream.read(&mut buf).await;
         super::http::send_response(
@@ -2878,6 +2888,60 @@ async fn handle_one_request(
                         crate::cli_response::CliResponse::not_found()
                     } else {
                         crate::v1_sandboxes::handle_messages(&principal, id, since)
+                    }
+                }
+                // ── Sandbox v2 (PRD §A) — WORKSPACE-SCOPED session front door:
+                //   POST /v1/w/<ws>/sessions                    → new (or fork
+                //        when body carries `fork_from`) session in <ws>
+                //   POST /v1/w/<ws>/sessions/<id>               → address an
+                //        existing sandbox session (message/resume intent)
+                //   GET  /v1/w/<ws>/sessions/<id>/messages?since=<n> → drain
+                //   GET  /v1/w/<ws>/sessions                    → list <ws>'s
+                //        sandbox sessions (audit; empty in slice 1)
+                //
+                // The exact `match p` above can't catch the `<ws>`/`<id>`
+                // segments, so this guard arm parses them manually (mirrors the
+                // `/v1/sandboxes/.../messages` guard) and branches on `is_post`.
+                // Every path is behind the same default-OFF gate + `v1_principal`
+                // auth resolved above; slug resolution + per-key workspace authz
+                // + the canonical-off-limits guard live inside the handlers.
+                _ if p.starts_with("/v1/w/") => {
+                    // Segments AFTER the `/v1/w/` prefix. A trailing `/` or an
+                    // empty segment yields an empty element → the shape checks
+                    // below reject it (uniform 404, never a 500 / oracle).
+                    let rest = p.strip_prefix("/v1/w/").unwrap_or("");
+                    let segs: Vec<&str> = rest.split('/').collect();
+                    match (segs.as_slice(), is_post) {
+                        // POST /v1/w/<ws>/sessions — new / fork.
+                        ([ws, "sessions"], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::v1_sandboxes::handle_v1_ws_new(&principal, ws, &body)
+                        }
+                        // GET /v1/w/<ws>/sessions — list (audit).
+                        ([ws, "sessions"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::v1_sandboxes::handle_v1_ws_list(&principal, ws)
+                        }
+                        // POST /v1/w/<ws>/sessions/<id> — address a session.
+                        ([ws, "sessions", sid], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::v1_sandboxes::handle_v1_ws_address(&principal, ws, sid, &body)
+                        }
+                        // GET /v1/w/<ws>/sessions/<id>/messages?since=<n>.
+                        ([ws, "sessions", sid, "messages"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            let since = super::http::parse_params(&path, &query)
+                                .get("since")
+                                .and_then(|s| s.parse::<u64>().ok())
+                                .unwrap_or(0);
+                            crate::v1_sandboxes::handle_v1_ws_messages(&principal, ws, sid, since)
+                        }
+                        // Anything else under `/v1/w/` (wrong shape, wrong
+                        // method, extra segments) → uniform 404, drain first.
+                        _ => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::cli_response::CliResponse::not_found()
+                        }
                     }
                 }
                 _ => {

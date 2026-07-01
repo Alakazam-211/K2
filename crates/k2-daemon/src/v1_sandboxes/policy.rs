@@ -285,6 +285,7 @@ mod tests {
             id: "key-uuid-1".to_string(),
             anthropic_key: Some("sk-ant-principal-key".to_string()),
             scope: "owner".to_string(),
+            allowed_workspaces: Some("*".to_string()),
         });
         let req = ApiSandboxRequest {
             prompt: Some("ignored prompt".to_string()),
@@ -391,6 +392,7 @@ mod tests {
             id: "key-uuid-2".to_string(),
             anthropic_key: Some("   ".to_string()),
             scope: "owner".to_string(),
+            allowed_workspaces: Some("*".to_string()),
         });
         let spawn = resolve_spawn(&principal, &ApiSandboxRequest::default())
             .expect("resolve must succeed");

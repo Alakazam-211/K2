@@ -98,6 +98,16 @@ pub struct CellRun {
     pub dim: bool,
     /// SGR 9 — strikeout (line-through).
     pub strikeout: bool,
+    /// Set to `Some(true)` on a row's LAST run when the row soft-wraps
+    /// into the next one (alacritty's WRAPLINE flag on the final
+    /// cell). Lets the client's copy handler rejoin wrapped lines
+    /// without hard newlines. Optional + absent-when-false so the
+    /// wire stays byte-identical for non-wrapped rows and both sides
+    /// tolerate a peer that predates the field (older daemon → the
+    /// client treats every row as unwrapped; older client → ignores
+    /// the extra key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapped: Option<bool>,
 }
 
 impl CellRun {
@@ -230,14 +240,27 @@ pub fn cell_to_run(cell: &Cell) -> CellRun {
         inverse: flags.contains(Flags::INVERSE),
         dim: flags.contains(Flags::DIM),
         strikeout: flags.contains(Flags::STRIKEOUT),
+        wrapped: None,
     }
 }
 
+/// Whether a run of SPACE characters would be visually distinguishable
+/// from the terminal's default background. Foreground-only styling
+/// (fg color, bold, italic, dim) paints nothing on a blank cell;
+/// background, inverse, underline and strikeout do.
+fn run_decorates_blanks(run: &CellRun) -> bool {
+    run.bg.is_some() || run.inverse || run.underline || run.strikeout
+}
+
 /// Build one row's run list by coalescing adjacent style-equal
-/// cells. Trailing blank runs are retained so the row's cell width
-/// stays addressable on the client side — trimming them would
-/// break column alignment for subsequent content dropping back
-/// into the row.
+/// cells, then drop the invisible padding tail: trailing spaces
+/// whose style paints nothing (no background, inverse, underline
+/// or strikeout). Rows are whole-row replaced on the client (never
+/// patched in place), so trimming can't break column alignment —
+/// while the padded form made every native selection drag in
+/// dozens of phantom trailing spaces and inflated each frame by
+/// up-to-`cols` characters per row. Decorated trailing runs (a TUI
+/// painting its background to the edge) are retained verbatim.
 pub fn encode_row_runs(grid: &Grid<Cell>, line: Line, cols: usize) -> Vec<CellRun> {
     let mut out: Vec<CellRun> = Vec::new();
     for c in 0..cols {
@@ -248,6 +271,34 @@ pub fn encode_row_runs(grid: &Grid<Cell>, line: Line, cols: usize) -> Vec<CellRu
                 last.text.push_str(&run.text);
             }
             _ => out.push(run),
+        }
+    }
+    // Soft-wrap marker: alacritty flags the row's final cell with
+    // WRAPLINE when the logical line continues onto the next row.
+    // Captured before trimming (a wrapped row's last cell is real
+    // content, but read it while the geometry is still full-width).
+    let wrapped = cols > 0
+        && grid[Point::new(line, Column(cols - 1))]
+            .flags
+            .contains(Flags::WRAPLINE);
+    // Trim the invisible tail. Adjacent runs can differ only by
+    // fg/bold/etc (invisible on spaces), so keep popping while the
+    // tail stays undecorated blank.
+    while let Some(last) = out.last_mut() {
+        if run_decorates_blanks(last) {
+            break;
+        }
+        let trimmed_len = last.text.trim_end_matches(' ').len();
+        if trimmed_len == 0 {
+            out.pop();
+        } else {
+            last.text.truncate(trimmed_len);
+            break;
+        }
+    }
+    if wrapped {
+        if let Some(last) = out.last_mut() {
+            last.wrapped = Some(true);
         }
     }
     out
@@ -506,6 +557,7 @@ mod tests {
             inverse: false,
             dim: false,
             strikeout: false,
+            wrapped: None,
         };
         let b = CellRun {
             text: "b".to_string(), // text differs — should still match
@@ -546,5 +598,80 @@ mod tests {
         assert!(!state.has_emitted);
         assert_eq!(state.version, 0);
         assert_eq!(state.last_history_size, 0);
+    }
+
+    // ── encode_row_runs against a real Term ─────────────────────
+
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::term::Config as TermConfig;
+
+    struct TestSize {
+        cols: usize,
+        rows: usize,
+    }
+
+    impl Dimensions for TestSize {
+        fn total_lines(&self) -> usize {
+            self.rows
+        }
+        fn screen_lines(&self) -> usize {
+            self.rows
+        }
+        fn columns(&self) -> usize {
+            self.cols
+        }
+    }
+
+    fn term_with(cols: usize, rows: usize, bytes: &[u8]) -> Term<VoidListener> {
+        let size = TestSize { cols, rows };
+        let mut term = Term::new(TermConfig::default(), &size, VoidListener);
+        let mut parser: vte::ansi::Processor = vte::ansi::Processor::new();
+        parser.advance(&mut term, bytes);
+        term
+    }
+
+    fn row_text(runs: &[CellRun]) -> String {
+        runs.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    #[test]
+    fn encode_trims_invisible_trailing_padding() {
+        let term = term_with(20, 4, b"hi");
+        let runs = encode_row_runs(term.grid(), Line(0), 20);
+        assert_eq!(row_text(&runs), "hi");
+    }
+
+    #[test]
+    fn encode_emits_empty_for_blank_row() {
+        let term = term_with(20, 4, b"hi");
+        let runs = encode_row_runs(term.grid(), Line(1), 20);
+        assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn encode_retains_decorated_trailing_blanks() {
+        // "ab" then three red-background spaces — a TUI painting its
+        // chrome to the right must survive the trim.
+        let term = term_with(20, 4, b"ab\x1b[41m   ");
+        let runs = encode_row_runs(term.grid(), Line(0), 20);
+        let text = row_text(&runs);
+        assert_eq!(text, "ab   ");
+        let last = runs.last().unwrap();
+        assert!(last.bg.is_some());
+    }
+
+    #[test]
+    fn encode_flags_soft_wrapped_rows() {
+        // 10 chars into an 8-col grid: row 0 soft-wraps into row 1.
+        let term = term_with(8, 4, b"abcdefghij");
+        let wrapped_row = encode_row_runs(term.grid(), Line(0), 8);
+        let continuation = encode_row_runs(term.grid(), Line(1), 8);
+        assert_eq!(row_text(&wrapped_row), "abcdefgh");
+        assert_eq!(wrapped_row.last().unwrap().wrapped, Some(true));
+        assert_eq!(row_text(&continuation), "ij");
+        assert!(continuation
+            .last()
+            .map(|r| r.wrapped.is_none())
+            .unwrap_or(true));
     }
 }

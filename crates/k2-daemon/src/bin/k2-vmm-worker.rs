@@ -235,6 +235,23 @@ mod worker {
     }
 
     // ── Config + errors ─────────────────────────────────────────────────────
+    /// Per-workspace FILESYSTEM MODE (Sandbox v2, PRD §G2 #1). The worker-side
+    /// mirror of `k2-core`'s `sandbox::FsMode`; arrives as the `--fs-mode` argv
+    /// token (`overlay` | `ro-scratch`, emitted by `build_worker_invocation`).
+    /// Governs how SLICE 3 assembles `/workspace`. Default = `Overlay` (matches
+    /// the PRD §G2 #1 LOCKED default + the producer side), so an absent/unset
+    /// mode never silently loses the overlay semantics.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    enum FsModeArg {
+        /// Canonical workspace = overlay LOWER (RO); per-session persistent
+        /// UPPER captures copy-up writes. Merged view at `/workspace`.
+        #[default]
+        Overlay,
+        /// Canonical workspace mounted strictly READ-ONLY at `/workspace`; a
+        /// SEPARATE persistent RW scratch at `/work` (the persistent upper).
+        RoScratch,
+    }
+
     /// Parsed worker invocation (see `build_worker_invocation` in
     /// `k2-core/.../sandbox.rs`, the EXACT producer of our argv).
     ///
@@ -257,6 +274,25 @@ mod worker {
         session_id: String,
         drain_on_exit: bool,
         workspace_root: Option<PathBuf>,
+        /// Sandbox v2 (PRD §B, SLICE 3) — WORKSPACE-SCOPED overlay mount. The RO
+        /// lowerdir = the canonical workspace (`--workspace-ro-base`). Present
+        /// ONLY for a workspace-scoped API session; MUTUALLY EXCLUSIVE with
+        /// `workspace_root` (asserted in `parse_args`). When present the worker
+        /// assembles `/workspace` per `fs_mode` (host-side overlay or RO+scratch)
+        /// instead of the legacy single RW bind. `None` ⇒ default-OFF, the
+        /// ephemeral/legacy path is byte-identical.
+        workspace_ro_base: Option<PathBuf>,
+        /// The persistent RW upperdir (`--overlay-upper`): overlay copy-up target
+        /// (overlay mode) or the `/work` scratch source (ro-scratch mode). A
+        /// daemon-minted host path under `~/.k2/sandbox-overlays/<ws>/<sid>/upper`,
+        /// chowned to the cell uid AT THE SPAWN DOOR (slice 2, P4-H6) — NOT here.
+        overlay_upper: Option<PathBuf>,
+        /// The overlay workdir (`--overlay-work`): an overlayfs requirement, on
+        /// the same fs as `overlay_upper`. Unused in ro-scratch mode.
+        overlay_work: Option<PathBuf>,
+        /// Per-workspace FS mode (`--fs-mode`). Only meaningful when
+        /// `workspace_ro_base` is present. Default `Overlay` (PRD §G2 #1).
+        fs_mode: FsModeArg,
         cell_socket: Option<PathBuf>,
         tool_roots: Vec<PathBuf>,
         cwd: Option<PathBuf>,
@@ -338,6 +374,12 @@ mod worker {
         // Guest env arrives on the fd named by K2_GUEST_ENV_FD (NUL-delimited).
         // Absent / unreadable ⇒ empty (hand tests).
         cfg.guest_env = read_guest_env();
+
+        // SLICE 3 §G2#3 (LOAD-BEARING ENABLER). For a workspace-scoped session,
+        // force the in-guest agent's HOME + CLAUDE_CONFIG_DIR into the PERSISTENT
+        // writable layer so Claude's session `.jsonl` survives cell teardown →
+        // `--resume`/`--fork` (slice 4) work. No-op for the ephemeral/legacy path.
+        apply_durable_session_env(&mut cfg);
 
         // Session id default (M3): if the caller didn't pass --session-id, derive
         // it from the SUPERVISOR's REAL pid HERE (pre-clone) — never inside the
@@ -530,6 +572,26 @@ mod worker {
                 "--workspace-root" => {
                     cfg.workspace_root = Some(PathBuf::from(val!("--workspace-root")));
                 }
+                // Sandbox v2 (SLICE 3) — the WORKSPACE-SCOPED overlay flags.
+                // Emitted only by the workspace-scoped spawn door; validated as a
+                // complete set (all-or-none) after the scan.
+                "--workspace-ro-base" => {
+                    cfg.workspace_ro_base = Some(PathBuf::from(val!("--workspace-ro-base")));
+                }
+                "--overlay-upper" => {
+                    cfg.overlay_upper = Some(PathBuf::from(val!("--overlay-upper")));
+                }
+                "--overlay-work" => {
+                    cfg.overlay_work = Some(PathBuf::from(val!("--overlay-work")));
+                }
+                "--fs-mode" => {
+                    let m = val!("--fs-mode");
+                    cfg.fs_mode = match m.as_str() {
+                        "overlay" => FsModeArg::Overlay,
+                        "ro-scratch" => FsModeArg::RoScratch,
+                        other => return fail(format!("invalid --fs-mode: {other}")),
+                    };
+                }
                 "--cell-socket" => {
                     cfg.cell_socket = Some(PathBuf::from(val!("--cell-socket")));
                 }
@@ -563,6 +625,30 @@ mod worker {
         }
         if cfg.program.is_empty() {
             return fail("no program after `--`");
+        }
+
+        // SLICE 3 — the workspace-scoped overlay flags are an ALL-OR-NONE set.
+        // If any of the three paths is present, all three must be (a partial set
+        // is a malformed invocation → fail-closed, matching the scanner's stance
+        // on missing values). And `--workspace-ro-base` is mutually exclusive
+        // with the legacy `--workspace-root` (the producer sets `workspace_root =
+        // None` for a workspace-scoped session; both present is ambiguous).
+        let ws_scoped_any = cfg.workspace_ro_base.is_some()
+            || cfg.overlay_upper.is_some()
+            || cfg.overlay_work.is_some();
+        if ws_scoped_any {
+            if cfg.workspace_ro_base.is_none()
+                || cfg.overlay_upper.is_none()
+                || cfg.overlay_work.is_none()
+            {
+                return fail(
+                    "workspace-scoped mount needs ALL of --workspace-ro-base, \
+                     --overlay-upper, --overlay-work",
+                );
+            }
+            if cfg.workspace_root.is_some() {
+                return fail("--workspace-root and --workspace-ro-base are mutually exclusive");
+            }
         }
         Ok(cfg)
     }
@@ -602,6 +688,51 @@ mod worker {
                     .map(|(k, v)| (k.to_string(), v.to_string()))
             })
             .collect()
+    }
+
+    /// SLICE 3 §G2#3 — point the in-guest agent's config + home at the PERSISTENT
+    /// writable layer so its session store (Claude's `~/.claude` /
+    /// `$CLAUDE_CONFIG_DIR` `.jsonl`) is DURABLE across cell teardown → the
+    /// respawn-and-`--resume`/`--fork` path (slice 4) can rehydrate it. This is
+    /// the addendum's "same key" enabler: the `.jsonl` and the FS upper share one
+    /// per-session layer.
+    ///
+    /// Path choice (documented, per PRD §G2#3):
+    ///   - **overlay**   → `/workspace/.k2-sandbox-home` — the merged `/workspace`
+    ///     IS backed by the persistent upper (any write copies-up into it), so a
+    ///     path under `/workspace` is durable. A dot-prefixed, distinctively-named
+    ///     dir so it does NOT collide with the canonical `.k2/` tree and the F5
+    ///     review can trivially ignore it.
+    ///   - **ro-scratch**→ `/work` — the persistent RW scratch mount itself (the
+    ///     workspace is RO, so the store cannot live there).
+    ///
+    /// Applied ONLY for a workspace-scoped session (`workspace_ro_base` present);
+    /// a no-op otherwise so the ephemeral/legacy env is byte-identical. Overrides
+    /// (upserts) any inherited HOME/CLAUDE_CONFIG_DIR — the persistent-layer
+    /// location is authoritative for a sandbox session.
+    fn apply_durable_session_env(cfg: &mut WorkerConfig) {
+        if cfg.workspace_ro_base.is_none() {
+            return;
+        }
+        let (home, config_dir) = match cfg.fs_mode {
+            FsModeArg::Overlay => (
+                "/workspace/.k2-sandbox-home".to_string(),
+                "/workspace/.k2-sandbox-home/.claude".to_string(),
+            ),
+            FsModeArg::RoScratch => ("/work".to_string(), "/work/.claude".to_string()),
+        };
+        upsert_env(&mut cfg.guest_env, "HOME", home);
+        upsert_env(&mut cfg.guest_env, "CLAUDE_CONFIG_DIR", config_dir);
+    }
+
+    /// Replace the value for `key` in the (NUL-parsed) guest env, or append it if
+    /// absent. Keeps the pair list a simple `Vec` (matching `read_guest_env`).
+    fn upsert_env(env: &mut Vec<(String, String)>, key: &str, val: String) {
+        if let Some(slot) = env.iter_mut().find(|(k, _)| k == key) {
+            slot.1 = val;
+        } else {
+            env.push((key.to_string(), val));
+        }
     }
 
     // ── A2 — preflight hard gates ───────────────────────────────────────────
@@ -720,6 +851,24 @@ mod worker {
         if let Some(ws) = &cfg.workspace_root {
             if !ws.is_dir() {
                 return fail(format!("workspace-root not a dir: {}", ws.display()));
+            }
+        }
+        // SLICE 3 — the workspace-scoped layers must all be real dirs (cleaner
+        // failure here than mid-jail). The RO base is the canonical workspace;
+        // upper/work are the daemon-minted persistent layer.
+        if let Some(base) = &cfg.workspace_ro_base {
+            if !base.is_dir() {
+                return fail(format!("workspace-ro-base not a dir: {}", base.display()));
+            }
+        }
+        if let Some(up) = &cfg.overlay_upper {
+            if !up.is_dir() {
+                return fail(format!("overlay-upper not a dir: {}", up.display()));
+            }
+        }
+        if let Some(wk) = &cfg.overlay_work {
+            if !wk.is_dir() {
+                return fail(format!("overlay-work not a dir: {}", wk.display()));
             }
         }
         for t in &cfg.tool_roots {
@@ -903,6 +1052,134 @@ mod worker {
                 None::<&str>,
             )
             .map_err(|e| format!("remount workspace nosuid,nodev: {e}"))?;
+        }
+
+        // 5b. WORKSPACE-SCOPED `/workspace` (Sandbox v2 §B, SLICE 3). Present only
+        //     when the daemon emitted `--workspace-ro-base` (+ `--overlay-upper`/
+        //     `-work`); MUTUALLY EXCLUSIVE with step-5's `--workspace-root`
+        //     (asserted in `parse_args`, so this and step 5 never both run). We
+        //     ASSEMBLE the guest's `/workspace` HOST-SIDE per `fs_mode`, then let
+        //     `run_libkrun` hand the result to the guest over the SAME
+        //     `workspace`/`work` virtiofs tags. RO base is genuinely read-only to
+        //     the cell in BOTH modes: overlay never writes the lower (copy-up →
+        //     upper), ro-scratch binds it MS_RDONLY.
+        //
+        //     P4/TOCTOU posture mirrors steps 4–6: canonicalize + leaf-assert
+        //     every source; the upper/work are used ONLY as mount SOURCES (no host
+        //     dirfd is retained — after pivot_root they are unreachable, exactly
+        //     like the guest-base lowerdir of step 4). The upper/work were chowned
+        //     to the cell uid by the SPAWN DOOR (slice 2, P4-H6); we do NOT chown
+        //     them here (they are outside NEWROOT).
+        if let Some(base) = &cfg.workspace_ro_base {
+            let base = base
+                .canonicalize()
+                .map_err(|e| format!("canonicalize workspace-ro-base: {e}"))?;
+            if !base.is_dir() {
+                return fail("workspace-ro-base is not a directory after canonicalize");
+            }
+            // Both present by parse_args's all-or-none gate; re-assert fail-closed.
+            let upper = cfg
+                .overlay_upper
+                .as_ref()
+                .ok_or_else(|| "overlay-upper missing (bug)".to_string())?
+                .canonicalize()
+                .map_err(|e| format!("canonicalize overlay-upper: {e}"))?;
+            let work = cfg
+                .overlay_work
+                .as_ref()
+                .ok_or_else(|| "overlay-work missing (bug)".to_string())?
+                .canonicalize()
+                .map_err(|e| format!("canonicalize overlay-work: {e}"))?;
+            if !upper.is_dir() || !work.is_dir() {
+                return fail("overlay-upper/work not a directory after canonicalize");
+            }
+
+            match cfg.fs_mode {
+                FsModeArg::Overlay => {
+                    // MIRRORS the guest-root overlay (step 4) EXACTLY — same
+                    // `mount("overlay", …, MS_NOSUID|MS_NODEV,
+                    // "lowerdir=…,upperdir=…,workdir=…")` shape — only the dirs
+                    // differ: lower = the canonical workspace (RO), upper+work =
+                    // the daemon-minted PERSISTENT layer (vs step 4's throwaway
+                    // tmpfs dirs). The merged view is exposed to the guest via the
+                    // `workspace` virtiofs tag; the lower is exposed ONLY through
+                    // this merged mount (never separately bound/virtiofs'd), so the
+                    // cell can never write the canonical workspace — all mutation
+                    // is copy-up into the persistent upper.
+                    let merged = newroot.join("workspace-merged");
+                    std::fs::create_dir_all(&merged)
+                        .map_err(|e| format!("mkdir workspace-merged: {e}"))?;
+                    let ov = format!(
+                        "lowerdir={},upperdir={},workdir={}",
+                        base.display(),
+                        upper.display(),
+                        work.display()
+                    );
+                    mount(
+                        Some("overlay"),
+                        &merged,
+                        Some("overlay"),
+                        MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+                        Some(ov.as_str()),
+                    )
+                    .map_err(|e| format!("mount overlay /workspace: {e}"))?;
+                }
+                FsModeArg::RoScratch => {
+                    // Base → NEWROOT/workspace-src, READ-ONLY. MIRRORS the
+                    // tool-root RO bind (step 6): an initial bind (which SILENTLY
+                    // IGNORES MS_RDONLY) followed by a SEPARATE remount that
+                    // actually applies ro,nosuid,nodev — so RO genuinely takes.
+                    let ws_dst = newroot.join("workspace-src");
+                    std::fs::create_dir_all(&ws_dst)
+                        .map_err(|e| format!("mkdir workspace-src (ro): {e}"))?;
+                    mount(
+                        Some(base.as_path()),
+                        &ws_dst,
+                        None::<&str>,
+                        MsFlags::MS_BIND | MsFlags::MS_REC,
+                        None::<&str>,
+                    )
+                    .map_err(|e| format!("bind workspace-ro-base: {e}"))?;
+                    mount(
+                        None::<&str>,
+                        &ws_dst,
+                        None::<&str>,
+                        MsFlags::MS_BIND
+                            | MsFlags::MS_REMOUNT
+                            | MsFlags::MS_RDONLY
+                            | MsFlags::MS_NOSUID
+                            | MsFlags::MS_NODEV,
+                        None::<&str>,
+                    )
+                    .map_err(|e| format!("remount workspace-ro-base ro: {e}"))?;
+
+                    // Persistent upper → NEWROOT/work-src, READ-WRITE. MIRRORS the
+                    // workspace RW bind (step 5): bind + a nosuid,nodev remount,
+                    // NO MS_RDONLY. All the agent's writes land here (durable).
+                    let work_dst = newroot.join("work-src");
+                    std::fs::create_dir_all(&work_dst)
+                        .map_err(|e| format!("mkdir work-src: {e}"))?;
+                    mount(
+                        Some(upper.as_path()),
+                        &work_dst,
+                        None::<&str>,
+                        MsFlags::MS_BIND | MsFlags::MS_REC,
+                        None::<&str>,
+                    )
+                    .map_err(|e| format!("bind /work: {e}"))?;
+                    mount(
+                        None::<&str>,
+                        &work_dst,
+                        None::<&str>,
+                        MsFlags::MS_BIND
+                            | MsFlags::MS_REMOUNT
+                            | MsFlags::MS_NOSUID
+                            | MsFlags::MS_NODEV,
+                        None::<&str>,
+                    )
+                    .map_err(|e| format!("remount /work nosuid,nodev: {e}"))?;
+                }
+            }
         }
 
         // 6. Tool roots → NEWROOT/tools/<i>, READ-ONLY. Initial bind ignores
@@ -1362,8 +1639,47 @@ mod worker {
             return fail(format!("krun_add_virtiofs3 root: {r}"));
         }
 
-        // Workspace = RW virtiofs, tag "workspace", jail-relative source.
-        if cfg.workspace_root.is_some() {
+        // Workspace virtiofs (tag "workspace"). Three shapes, all jail-relative:
+        //  - WORKSPACE-SCOPED overlay (SLICE 3): the host-assembled merged view at
+        //    `/workspace-merged`, RW (read_only=false) — the guest writes, which
+        //    copy-up into the persistent upper; the guest init mounts tag
+        //    "workspace" at /workspace (unchanged).
+        //  - WORKSPACE-SCOPED ro-scratch (SLICE 3): `/workspace-src` RO
+        //    (read_only=true, same posture as tool-roots) PLUS a second tag "work"
+        //    (`/work-src`) RW for the persistent scratch. NOTE (on-box dep): the
+        //    guest init must ALSO mount the "work" tag at /work in ro-scratch mode
+        //    (it already mounts "workspace"); overlay mode needs NO guest change.
+        //  - LEGACY ephemeral (`--workspace-root`): the single RW bind at
+        //    `/workspace-src`, exactly as before.
+        if cfg.workspace_ro_base.is_some() {
+            match cfg.fs_mode {
+                FsModeArg::Overlay => {
+                    let wtag = cstr("workspace", &mut keep)?;
+                    let wsrc = cstr("/workspace-merged", &mut keep)?;
+                    let r = unsafe { krun_add_virtiofs3(ctx, wtag, wsrc, 0, false) };
+                    if r < 0 {
+                        return fail(format!("krun_add_virtiofs3 workspace(overlay): {r}"));
+                    }
+                }
+                FsModeArg::RoScratch => {
+                    // Workspace READ-ONLY (read_only=true — the cell cannot write
+                    // the canonical ws through virtiofs either).
+                    let wtag = cstr("workspace", &mut keep)?;
+                    let wsrc = cstr("/workspace-src", &mut keep)?;
+                    let r = unsafe { krun_add_virtiofs3(ctx, wtag, wsrc, 0, true) };
+                    if r < 0 {
+                        return fail(format!("krun_add_virtiofs3 workspace(ro): {r}"));
+                    }
+                    // Persistent scratch READ-WRITE at tag "work" → guest /work.
+                    let ktag = cstr("work", &mut keep)?;
+                    let ksrc = cstr("/work-src", &mut keep)?;
+                    let r = unsafe { krun_add_virtiofs3(ctx, ktag, ksrc, 0, false) };
+                    if r < 0 {
+                        return fail(format!("krun_add_virtiofs3 work: {r}"));
+                    }
+                }
+            }
+        } else if cfg.workspace_root.is_some() {
             let wtag = cstr("workspace", &mut keep)?;
             let wsrc = cstr("/workspace-src", &mut keep)?;
             let r = unsafe { krun_add_virtiofs3(ctx, wtag, wsrc, 0, false) };
@@ -1391,7 +1707,10 @@ mod worker {
         // host cwd's sub-path within the workspace is intentionally not mirrored
         // yet — the workspace virtio-fs is mounted by a guest init that is a
         // deferred item, so only /workspace itself is guaranteed to exist.)
-        let wd = if cfg.workspace_root.is_some() {
+        // A workspace-scoped session (either fs_mode) also starts at /workspace —
+        // that is where the agent reads real context; ro-scratch writes go to the
+        // durable /work (via CLAUDE_CONFIG_DIR/HOME, see apply_durable_session_env).
+        let wd = if cfg.workspace_root.is_some() || cfg.workspace_ro_base.is_some() {
             "/workspace"
         } else {
             "/"

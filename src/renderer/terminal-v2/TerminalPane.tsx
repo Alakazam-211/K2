@@ -71,6 +71,11 @@ interface CellRun {
   inverse: boolean
   dim: boolean
   strikeout: boolean
+  /** Present (true) on a row's LAST run when the row soft-wraps into
+   *  the next one. Daemons that predate the field never send it —
+   *  the copy handler then treats every row as unwrapped, which
+   *  matches the old behavior. */
+  wrapped?: boolean
 }
 
 interface CursorSnapshot {
@@ -117,6 +122,15 @@ interface TermGridDelta {
   version: number
   displayOffset: number
 }
+
+/** One snapshot/delta WS message queued for the next animation-frame
+ *  flush. Applying frames per-rAF instead of per-message coalesces a
+ *  burst (e.g. `cat` of a big file → hundreds of deltas) into one
+ *  React render per display refresh. Legacy v1 had the same batching
+ *  (`scheduleRender`); v2 dropped it and re-rendered per message. */
+type PendingFrame =
+  | { kind: 'snapshot'; payload: TermGridSnapshot }
+  | { kind: 'delta'; payload: TermGridDelta }
 
 type OutboundMsg =
   | { event: 'snapshot'; payload: TermGridSnapshot }
@@ -200,12 +214,69 @@ function renderRowRuns(
   return spans
 }
 
+/** One rendered terminal row. Memoized so a delta frame only
+ *  re-renders the rows it actually damaged: `mergeDelta` preserves
+ *  the array identity of untouched rows (grid rows are copied by
+ *  reference, scrollback rows are concatenated, never rebuilt), so
+ *  the shallow prop compare skips every clean row. Full snapshots
+ *  rebuild every row array and legitimately re-render everything.
+ *  `data-abs-row` is the copy handler's DOM→model row anchor. */
+const TerminalRow = React.memo(function TerminalRow({
+  row,
+  absRow,
+  defaultFg,
+  defaultBg,
+}: {
+  row: CellRun[]
+  absRow: number
+  defaultFg: string
+  defaultBg: string
+}): React.JSX.Element {
+  return (
+    <div data-abs-row={absRow}>
+      {renderRowRuns(row, absRow, defaultFg, defaultBg)}
+    </div>
+  )
+})
+
 /** Join all run text in a row into a single plain string. Used
  *  for link detection (which operates on raw text). */
 function rowToText(row: CellRun[]): string {
   let out = ''
   for (const run of row) out += run.text
   return out
+}
+
+/** Whether a row soft-wraps into the next one (daemon marks the
+ *  last run). Absent on frames from older daemons → unwrapped. */
+function isRowWrapped(row: CellRun[]): boolean {
+  return row.length > 0 && row[row.length - 1].wrapped === true
+}
+
+/** Nearest enclosing rendered-row element for a DOM node inside the
+ *  grid, or null when the node isn't inside a row (e.g. the
+ *  selection boundary sits on the pane container). */
+function rowDivFor(node: Node | null): HTMLElement | null {
+  if (!node) return null
+  const el =
+    node.nodeType === Node.ELEMENT_NODE
+      ? (node as Element)
+      : node.parentElement
+  return (el?.closest('[data-abs-row]') as HTMLElement | null) ?? null
+}
+
+/** Text-column offset of a DOM boundary (node, offset) measured from
+ *  the start of a row div. Range.toString() walks the row's text
+ *  nodes for us, so this stays correct however the runs are split. */
+function colWithin(rowDiv: Element, node: Node, offset: number): number {
+  const r = document.createRange()
+  r.selectNodeContents(rowDiv)
+  try {
+    r.setEnd(node, offset)
+  } catch {
+    return 0
+  }
+  return r.toString().length
 }
 
 /** Shell-escape a path for safe paste into a terminal input line.
@@ -474,7 +545,54 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     phaseRef.current = phase
   }, [phase])
   const [snapshot, setSnapshot] = useState<TermGridSnapshot | null>(null)
+  // Latest snapshot as a ref, for handlers that need the current
+  // grid without re-binding on every frame (wheel listener, copy
+  // handler). Same mirror pattern as `phaseRef`.
+  const snapshotRef = useRef<TermGridSnapshot | null>(null)
+  useEffect(() => {
+    snapshotRef.current = snapshot
+  }, [snapshot])
   const [viewportOffset, setViewportOffset] = useState(0)
+
+  // ── rAF frame coalescing ──────────────────────────────────────
+  // WS snapshot/delta messages queue here and apply once per
+  // animation frame (one setSnapshot per display refresh, however
+  // many messages arrived). A queued full snapshot supersedes
+  // everything before it. The size cap flushes synchronously if rAF
+  // is starved (occluded window) so the queue can't grow unbounded.
+  const pendingFramesRef = useRef<PendingFrame[]>([])
+  const frameFlushRafRef = useRef<number | null>(null)
+  const flushPendingFrames = useCallback(() => {
+    frameFlushRafRef.current = null
+    const pending = pendingFramesRef.current
+    if (pending.length === 0) return
+    pendingFramesRef.current = []
+    setSnapshot((prev) => {
+      let next: TermGridSnapshot | null = prev
+      for (const f of pending) {
+        next = f.kind === 'snapshot' ? f.payload : mergeDelta(next, f.payload)
+      }
+      return next
+    })
+  }, [])
+  const enqueueFrame = useCallback(
+    (frame: PendingFrame) => {
+      const pending = pendingFramesRef.current
+      if (frame.kind === 'snapshot') pending.length = 0
+      pending.push(frame)
+      if (pending.length >= 60) {
+        if (frameFlushRafRef.current !== null) {
+          cancelAnimationFrame(frameFlushRafRef.current)
+        }
+        flushPendingFrames()
+        return
+      }
+      if (frameFlushRafRef.current === null) {
+        frameFlushRafRef.current = requestAnimationFrame(flushPendingFrames)
+      }
+    },
+    [flushPendingFrames],
+  )
   const [isFocused, setIsFocused] = useState<boolean>(() =>
     typeof document !== 'undefined' ? document.hasFocus() : false,
   )
@@ -1096,7 +1214,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
                 scrollback: parsed.payload.scrollback.length,
               })
             }
-            setSnapshot(parsed.payload)
+            enqueueFrame({ kind: 'snapshot', payload: parsed.payload })
             // Activity detection runs in a snapshot-driven useEffect
             // below, NOT inline here. ws.onmessage is captured in the
             // boot effect's closure and does not re-bind across Vite
@@ -1104,11 +1222,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             // means HMR'd code wouldn't take effect on existing
             // sessions. Driving it from setSnapshot's downstream
             // effect avoids that whole class of bug.
-            setPhase({ kind: 'ready', sessionId })
+            //
+            // Functional update returning the SAME object when phase
+            // is already ready — full snapshots recur (any full-
+            // damage frame), and rebuilding the phase object each
+            // time forced a redundant re-render per snapshot.
+            setPhase((prev) =>
+              prev.kind === 'ready' && prev.sessionId === sessionId
+                ? prev
+                : { kind: 'ready', sessionId },
+            )
             break
           }
           case 'delta':
-            setSnapshot((prev) => mergeDelta(prev, parsed.payload))
+            enqueueFrame({ kind: 'delta', payload: parsed.payload })
             break
           case 'title': {
             // Mirror legacy's `terminal:title:<id>` handling. Claude
@@ -1277,7 +1404,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           setReconnectAttempt((n) => n + 1)
         }, delayMs)
       }
-  }, [terminalId, perfLog, reconnectAttempt])
+  }, [terminalId, perfLog, reconnectAttempt, enqueueFrame])
 
   // Keep the ref pointing at the latest `openGridWs` so the grid-WS
   // lifecycle effect (which doesn't take the big closure as a dep) always
@@ -1357,6 +1484,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const ws = wsRef.current
       if (ws && ws.readyState !== WebSocket.CLOSED) ws.close()
       wsRef.current = null
+      if (frameFlushRafRef.current !== null) {
+        cancelAnimationFrame(frameFlushRafRef.current)
+        frameFlushRafRef.current = null
+      }
+      pendingFramesRef.current = []
     }
   }, [])
 
@@ -2076,6 +2208,64 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     [linkClickMode, hoveredLink, tabId, paneGroupId],
   )
 
+  // ── Copy: rebuild selected text from the grid model ───────────
+  // Native selection stays (the DOM rows are the selection surface),
+  // but the copied TEXT is reconstructed from the CellRun model:
+  //   - per-line trailing whitespace is trimmed (the padded-row wire
+  //     format used to hand every selection dozens of phantom
+  //     trailing spaces per line),
+  //   - empty rows contribute a bare newline instead of the
+  //     placeholder the renderer paints,
+  //   - soft-wrapped rows join WITHOUT a newline (daemon marks them
+  //     via the `wrapped` run flag), so a long command copies as one
+  //     line the way iTerm/xterm.js do.
+  // Selections that reach outside the row grid fall through to the
+  // browser's default copy.
+  const handleCopy = useCallback((e: React.ClipboardEvent) => {
+    const snap = snapshotRef.current
+    if (!snap || !e.clipboardData) return
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
+    const range = sel.getRangeAt(0)
+    const container = containerRef.current
+    if (!container || !container.contains(range.commonAncestorContainer)) {
+      return
+    }
+    const startDiv = rowDivFor(range.startContainer)
+    const endDiv = rowDivFor(range.endContainer)
+    if (!startDiv || !endDiv) return
+    const startAbs = Number(startDiv.dataset.absRow)
+    const endAbs = Number(endDiv.dataset.absRow)
+    if (!Number.isFinite(startAbs) || !Number.isFinite(endAbs)) return
+    const startCol = colWithin(startDiv, range.startContainer, range.startOffset)
+    const endCol = colWithin(endDiv, range.endContainer, range.endOffset)
+
+    const modelRow = (abs: number): CellRun[] => {
+      if (abs < 0) return []
+      if (abs < snap.scrollback.length) return snap.scrollback[abs] ?? []
+      return snap.grid[abs - snap.scrollback.length] ?? []
+    }
+
+    let out = ''
+    for (let abs = startAbs; abs <= endAbs; abs++) {
+      const row = modelRow(abs)
+      const text = rowToText(row)
+      const from = abs === startAbs ? startCol : 0
+      const to = abs === endAbs ? endCol : text.length
+      const seg = text.slice(from, Math.max(from, to))
+      if (abs < endAbs && isRowWrapped(row)) {
+        // Soft-wrap continuation — no newline, no trim (the break
+        // is mid-content).
+        out += seg
+      } else {
+        out += seg.replace(/\s+$/, '')
+        if (abs < endAbs) out += '\n'
+      }
+    }
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', out)
+  }, [])
+
   // ── Drag + drop of files (from Finder or K2 files tab) ──────
   //
   // V2 needs TWO drop entry points because Tauri intercepts external
@@ -2236,8 +2426,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   }, [phase.kind, cellMetrics.width, cellMetrics.height, sendResize])
 
   // ── Wheel scroll (client-side viewport offset) ────────────────
+  // Reads the grid through `snapshotRef` (not the `snapshot` state)
+  // so the listener binds once per font/config change instead of
+  // re-attaching on every frame — under heavy output the old
+  // snapshot-keyed effect tore down and re-added the wheel listener
+  // (and cancelled its pending flush timer) many times per second,
+  // which is part of why scrolling felt dead while an agent was
+  // streaming.
   const scrollAccumRef = useRef(0)
-  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scrollRafRef = useRef<number | null>(null)
   // Mouse-reporting (fullscreen TUI) wheel: accumulate + throttle so a
   // trackpad's momentum-event flood doesn't fire a storm of SGR notches.
   const mouseWheelAccumRef = useRef(0)
@@ -2246,9 +2443,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
+    // PTY-bound SGR notches stay on a 50ms timer — that throttle is
+    // flood control for the child app (and the wire, which may be a
+    // long-distance K2 Connect link), not render pacing.
     const FLUSH_MS = 50
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY === 0) return
+      const snap = snapshotRef.current
 
       // ── Mouse-reporting apps (e.g. Claude `/tui fullscreen`) ────
       // When the child has DECSET mouse reporting on, it paints its
@@ -2259,7 +2460,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // (Claude uses ?1006h); legacy X10 wheel is left to local
       // scroll below (see commit note) since we can't reliably emit
       // the high-bit byte form over the JSON text-input channel.
-      if (snapshot?.mouseReport && snapshot?.sgrMouse) {
+      if (snap?.mouseReport && snap?.sgrMouse) {
         const cw = cellMetrics.width
         const ch2 = cellMetrics.height
         if (cw > 0 && ch2 > 0) {
@@ -2276,16 +2477,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             Math.floor((e.clientY - rect.top - 4) / ch2) + 1,
           )
           mouseWheelPosRef.current = { col, row }
-          // Accumulate signed pixel movement and flush on a timer, just
-          // like the local-scroll path below. WHY: a trackpad fires a
-          // flood of momentum wheel events; emitting SGR notches per-
-          // event made fullscreen TUIs scroll wildly fast. Throttling to
-          // one batch per FLUSH_MS + a cells-per-notch divisor tames it.
+          // Accumulate signed pixel movement and flush on a timer.
+          // WHY: a trackpad fires a flood of momentum wheel events;
+          // emitting SGR notches per-event made fullscreen TUIs
+          // scroll wildly fast. Throttling to one batch per FLUSH_MS
+          // + a cells-per-notch divisor tames it.
           const pixelDelta =
             e.deltaMode === WheelEvent.DOM_DELTA_LINE
               ? e.deltaY * ch2
               : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
-                ? e.deltaY * ch2 * (snapshot?.rows ?? 24)
+                ? e.deltaY * ch2 * (snap?.rows ?? 24)
                 : e.deltaY
           mouseWheelAccumRef.current += pixelDelta
           if (!mouseWheelTimerRef.current) {
@@ -2317,41 +2518,48 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         }
       }
 
+      // ── Local viewport scroll ────────────────────────────────
+      // Flushes once per animation frame instead of the old 50ms
+      // timer, which hard-capped scrolling at 20Hz — the single
+      // biggest "low refresh rate" feel. Consumed pixels are
+      // subtracted (not zeroed) so slow trackpad scrolls keep their
+      // sub-line remainder instead of losing it every flush.
       e.preventDefault()
       const cellH = cellMetrics.height || 20
       const pixelDelta =
         e.deltaMode === WheelEvent.DOM_DELTA_LINE
           ? e.deltaY * cellH
           : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
-            ? e.deltaY * cellH * (snapshot?.rows ?? 24)
+            ? e.deltaY * cellH * (snap?.rows ?? 24)
             : e.deltaY
       scrollAccumRef.current += pixelDelta
-      if (!scrollTimerRef.current) {
-        scrollTimerRef.current = setTimeout(() => {
-          scrollTimerRef.current = null
+      if (scrollRafRef.current === null) {
+        scrollRafRef.current = requestAnimationFrame(() => {
+          scrollRafRef.current = null
           const accum = scrollAccumRef.current
-          scrollAccumRef.current = 0
           if (accum === 0) return
-          const lines = Math.round(
+          const lines = Math.trunc(
             (accum * config.scrolling.multiplier) / cellH,
           )
           if (lines === 0) return
-          const maxOffset = snapshot?.scrollback.length ?? 0
+          scrollAccumRef.current =
+            accum - (lines * cellH) / config.scrolling.multiplier
+          const maxOffset = snapshotRef.current?.scrollback.length ?? 0
           setViewportOffset((o) => {
             const next = o - lines
             if (next <= 0) return 0
             if (next >= maxOffset) return maxOffset
             return next
           })
-        }, FLUSH_MS)
+        })
       }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => {
       el.removeEventListener('wheel', onWheel)
-      if (scrollTimerRef.current) {
-        clearTimeout(scrollTimerRef.current)
-        scrollTimerRef.current = null
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current)
+        scrollRafRef.current = null
       }
       if (mouseWheelTimerRef.current) {
         clearTimeout(mouseWheelTimerRef.current)
@@ -2362,7 +2570,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     config.scrolling.multiplier,
     cellMetrics.height,
     cellMetrics.width,
-    snapshot,
     sendInput,
   ])
 
@@ -2701,6 +2908,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         }
       }}
       onClick={handleClick}
+      onCopy={handleCopy}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
@@ -2727,9 +2935,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       {visibleRows.map((row, rowIdx) => {
         const absRow = visibleRowAbsRows[rowIdx] ?? rowIdx
         return (
-          <div key={`abs-${absRow}`}>
-            {renderRowRuns(row, absRow, defaultFgCss, defaultBgCss)}
-          </div>
+          <TerminalRow
+            key={`abs-${absRow}`}
+            row={row}
+            absRow={absRow}
+            defaultFg={defaultFgCss}
+            defaultBg={defaultBgCss}
+          />
         )
       })}
       {cursorOverlay && (

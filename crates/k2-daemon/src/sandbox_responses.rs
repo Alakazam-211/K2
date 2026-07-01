@@ -107,6 +107,25 @@ pub fn owner_of(session_id: &str) -> Option<String> {
     map.get(session_id).cloned()
 }
 
+/// Drop BOTH maps' entries for `session_id` — called from the authoritative
+/// cell-teardown point (`v2_spawn` ChildExit, which fires on clean exit AND
+/// crash/kill). Without this the `RESPONSES`/`OWNERS` key sets grow for the
+/// life of the daemon (the per-session vec is capped, but the number of keys
+/// is not). In-memory no-op for the vast majority of sessions that never
+/// spawned a sandbox cell, so it's safe to call unconditionally on teardown.
+/// A late `GET .../messages` after eviction reads as a uniform 404 (unknown
+/// owner) — correct: the cell is gone, its transcript is not retained.
+pub fn evict(session_id: &str) {
+    RESPONSES
+        .lock()
+        .expect("sandbox responses mutex poisoned")
+        .remove(session_id);
+    OWNERS
+        .lock()
+        .expect("sandbox owners mutex poisoned")
+        .remove(session_id);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +186,17 @@ mod tests {
         assert_eq!(owner_of(sid), None, "unknown session has no owner");
         record_owner(sid, "key-abc");
         assert_eq!(owner_of(sid).as_deref(), Some("key-abc"));
+    }
+
+    #[test]
+    fn evict_drops_both_maps_and_a_later_read_is_denied() {
+        let sid = "test-sess-evict";
+        record_owner(sid, "key-e");
+        append(sid, "line".to_string(), false);
+        assert!(owner_of(sid).is_some() && !since(sid, 0).is_empty());
+        evict(sid);
+        // Both maps forget the session: no owner (→ 404 at the route) and no log.
+        assert_eq!(owner_of(sid), None, "owner entry evicted");
+        assert!(since(sid, 0).is_empty(), "response log evicted");
     }
 }

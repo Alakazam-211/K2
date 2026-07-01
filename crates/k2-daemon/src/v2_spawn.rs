@@ -1095,6 +1095,15 @@ pub fn spawn_child_exit_observer(
                     // majority of sessions that never minted one).
                     crate::stream_token::revoke_for_session(&session_id);
 
+                    // F2 (sandbox API) — evict this session's response log +
+                    // ownership entry so the in-memory maps don't accrete a key
+                    // per spawn for the daemon's lifetime. In-memory no-op for
+                    // any session that never spawned a sandbox cell.
+                    // `session_id` is a SessionId here; the F2 maps key on its
+                    // canonical string form (the same `sessionId` string
+                    // `record_owner` stored at create time — SessionId::Display).
+                    crate::sandbox_responses::evict(&session_id.to_string());
+
                     // COMPAT-58 (#58 Phase 1) — flag-gated teardown. Revoke the
                     // cell's scoped token (epoch bump → next call 403, no
                     // restart) and remove its per-cell socket so the accept

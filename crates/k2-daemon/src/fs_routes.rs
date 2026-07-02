@@ -268,6 +268,11 @@ struct UploadChunkBody {
     base64: String,
     /// `true` on the final chunk → finalize (atomic rename into place).
     is_last: bool,
+    /// Full expected transfer size, sent with the offset-0 chunk (0.40.22).
+    /// Lets the daemon reject over-ceiling / won't-fit-on-disk transfers up
+    /// front; optional for wire-compat with pre-0.40.22 clients.
+    #[serde(default)]
+    total_bytes: Option<u64>,
 }
 
 /// Streaming counterpart to [`handle_upload_binary`]: decode ONE chunk and
@@ -293,6 +298,7 @@ pub fn handle_upload_chunk(body: &[u8]) -> CliResponse {
         parsed.offset,
         &bytes,
         parsed.is_last,
+        parsed.total_bytes,
     ) {
         Ok(Some(path)) => CliResponse::ok_json(
             serde_json::json!({ "path": path.to_string_lossy(), "done": true }).to_string(),

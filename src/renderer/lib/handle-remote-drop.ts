@@ -24,6 +24,7 @@
 import { uploadToRemote } from './upload-to-remote'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useToastStore } from '@/stores/toast'
+import { useTransferProgressStore } from '@/stores/transfer-progress'
 
 /** What the drop landed on (hit-tested at the drop position). */
 export type DropTarget =
@@ -130,17 +131,35 @@ export async function executeRemoteDrop(
 
   const toast = useToastStore.getState()
   const noun = localPaths.length === 1 ? 'file' : `${localPaths.length} files`
-  toast.addToast(`Uploading ${noun} to the host…`, 'info', 4000)
 
   const remotePaths: string[] = []
   try {
     for (const local of localPaths) {
-      // Sequential: keeps memory bounded (each upload base64s a whole file)
-      // and preserves drop order in the injected payload.
-      const remote = await uploadToRemote(local, destDir)
-      remotePaths.push(remote)
+      // Sequential: keeps memory bounded (one file's bytes in flight at a
+      // time) and preserves drop order in the injected payload. Each file
+      // gets its own progress card (filename + percent + Cancel); the loop
+      // polls the card's cancel flag between chunks.
+      const label = local.split(/[/\\]/).pop() || local
+      const transfers = useTransferProgressStore.getState()
+      const tid = transfers.begin('upload', label)
+      try {
+        const remote = await uploadToRemote(local, destDir, {
+          onProgress: (sent, total) =>
+            useTransferProgressStore.getState().update(tid, total > 0 ? sent / total : 1),
+          isCancelled: () => useTransferProgressStore.getState().isCancelRequested(tid),
+        })
+        remotePaths.push(remote)
+      } finally {
+        useTransferProgressStore.getState().end(tid)
+      }
     }
   } catch (err) {
+    // Duck-typed (not instanceof) so a mocked upload substrate in tests
+    // doesn't need to export the error class.
+    if ((err as { cancelled?: boolean })?.cancelled === true) {
+      toast.addToast('Upload cancelled', 'info', 3000)
+      return null
+    }
     toast.addToast(
       `Upload failed: ${err instanceof Error ? err.message : String(err)}`,
       'error',

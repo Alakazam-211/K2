@@ -307,16 +307,10 @@ export async function cloneWorkspaceTo(
 
 /**
  * Stream a large local bundle to the destination host in ordered chunks via
- * `fs/upload-chunk`, returning the finalized remote bundle path. Each chunk is
- * read from local disk and POSTed in turn, so neither the client nor the
- * daemon ever holds the whole (multi-GB) file in memory — the fix for GH #3.
- * The daemon appends each chunk to a temp `.part` and atomically renames it
- * into place on the final chunk.
- *
- * `offset` advances by the REQUESTED chunk length: the bundle is a freshly
- * built, stable file of known `size`, so a non-final read always returns a
- * full chunk. If reality ever diverges, the daemon's ordered-append check
- * rejects the next chunk LOUDLY rather than silently corrupting the bundle.
+ * `fs/upload-chunk`, returning the finalized remote bundle path — the fix
+ * for GH #3. The loop itself is the SHARED `uploadFileChunked` (0.40.22:
+ * drag-drop uploads stream through the same seam), fed clone-to's injected
+ * deps so the mock-based sequencing tests keep driving the real loop.
  */
 async function uploadBundleChunked(
   deps: CloneDeps,
@@ -324,39 +318,19 @@ async function uploadBundleChunked(
   size: number,
   opts: { dir: string; filename: string; onProgress?: (fraction: number) => void },
 ): Promise<string> {
-  // Unique per-transfer id so a stale/abandoned `.part` can never be appended
-  // to by a different clone (it only needs to be collision-free among recent
-  // uploads, not cryptographic).
-  const uploadId = `clone-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-  let offset = 0
-  let finalPath: string | undefined
-  while (offset < size) {
-    const len = Math.min(CLONE_UPLOAD_CHUNK_BYTES, size - offset)
-    const isLast = offset + len >= size
-    const base64 = await deps.readLocalFileRange(localPath, offset, len)
-    const resp = await deps.daemonCliPost<{ path?: string; done?: boolean }>('fs/upload-chunk', {
-      upload_id: uploadId,
+  const { uploadFileChunked } = await import('./upload-to-remote')
+  return uploadFileChunked(
+    { daemonCliPost: deps.daemonCliPost, readLocalFileRange: deps.readLocalFileRange },
+    localPath,
+    size,
+    {
       dir: opts.dir,
       filename: opts.filename,
-      offset,
-      base64,
-      is_last: isLast,
-    })
-    offset += len
-    opts.onProgress?.(offset / size)
-    if (isLast) {
-      if (!resp?.path) {
-        throw new Error('Chunked upload returned no remote path.')
-      }
-      finalPath = resp.path
-    }
-  }
-  if (finalPath === undefined) {
-    // size === 0 → the loop never ran. A clone bundle is never empty, but
-    // guard loudly rather than hand back a bogus path.
-    throw new Error('Chunked upload sent no data (empty bundle).')
-  }
-  return finalPath
+      idPrefix: 'clone',
+      chunkBytes: CLONE_UPLOAD_CHUNK_BYTES,
+      onProgress: (sent, total) => opts.onProgress?.(sent / total),
+    },
+  )
 }
 
 /**

@@ -320,8 +320,9 @@ fn map_io_err(e: std::io::Error) -> String {
 /// limit for `/cli/fs/upload-binary`. The renderer enforces a parallel
 /// cap before it base64-encodes (Tauri `read_local_file_base64`), but
 /// this is the authoritative gate: a remote client could call the route
-/// directly. Larger transfers belong on a streaming endpoint (future
-/// work), not a single base64 JSON body.
+/// directly. Larger transfers belong on the chunked route
+/// (`write_upload_chunk`, capped at [`MAX_TRANSFER_SIZE`] total), not a
+/// single base64 JSON body — the renderer picks the path by file size.
 pub const MAX_UPLOAD_SIZE: u64 = 100 * 1024 * 1024;
 
 /// Ensure `<workspace_path>/.k2so/downloads/` exists and return its path.
@@ -435,6 +436,36 @@ pub fn write_upload(dir: &str, filename: &str, bytes: &[u8]) -> Result<PathBuf, 
 /// (8 MB chunks); the headroom tolerates a larger client chunk.
 pub const MAX_UPLOAD_CHUNK_SIZE: u64 = 16 * 1024 * 1024;
 
+/// Total-transfer ceiling for a chunked upload (0.40.22). The chunked route
+/// exists precisely to dodge the 100 MB single-shot cap, but "no cap" is not
+/// a policy: a runaway or malicious client must not be able to fill the
+/// host's disk one 16 MB chunk at a time. 10 GiB covers every sanctioned use
+/// (workspace bundles, media, model weights) with room to spare; raise the
+/// constant deliberately if a real transfer ever hits it.
+pub const MAX_TRANSFER_SIZE: u64 = 10 * 1024 * 1024 * 1024;
+
+/// Free bytes available to unprivileged writes on the filesystem containing
+/// `path` (`statvfs` `f_bavail * f_frsize`). `None` when the probe fails or
+/// the platform has no statvfs — callers MUST treat unknown as "don't
+/// block" (a probe failure is not evidence of a full disk).
+pub fn free_disk_space(path: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
+        Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 /// Reduce an `upload_id` to filename-safe characters so it can never inject
 /// a path separator into — or escape — the `.part` temp name. Keeps ASCII
 /// alphanumerics, `-`, and `_`; drops everything else. Falls back to `anon`
@@ -469,6 +500,13 @@ fn sanitize_upload_id(id: &str) -> String {
 /// any stale part; any other gap, overlap, or a chunk for an `upload_id` whose
 /// part is the wrong length is an error — so a dropped/duplicated/reordered
 /// chunk surfaces instead of corrupting the assembled bundle.
+/// `total_bytes` (0.40.22, optional for wire-compat with pre-0.40.22
+/// clients): the transfer's full expected size, sent with the offset-0
+/// chunk. It lets the daemon reject a doomed transfer UP FRONT — over the
+/// [`MAX_TRANSFER_SIZE`] ceiling or larger than the destination volume's
+/// free space — instead of after gigabytes of chunks. The running
+/// `offset + len` ceiling check below is the authoritative backstop, so an
+/// omitted (or dishonest) `total_bytes` still can't exceed the cap.
 pub fn write_upload_chunk(
     dir: &str,
     filename: &str,
@@ -476,12 +514,21 @@ pub fn write_upload_chunk(
     offset: u64,
     bytes: &[u8],
     is_last: bool,
+    total_bytes: Option<u64>,
 ) -> Result<Option<PathBuf>, String> {
     use std::io::{Seek, SeekFrom, Write};
     if bytes.len() as u64 > MAX_UPLOAD_CHUNK_SIZE {
         return Err(format!(
             "Upload chunk too large ({} bytes > {MAX_UPLOAD_CHUNK_SIZE} max)",
             bytes.len()
+        ));
+    }
+    // Running ceiling — authoritative regardless of what (if anything) the
+    // client declared in `total_bytes`.
+    if offset.saturating_add(bytes.len() as u64) > MAX_TRANSFER_SIZE {
+        return Err(format!(
+            "Transfer exceeds the {} GiB ceiling",
+            MAX_TRANSFER_SIZE / (1024 * 1024 * 1024)
         ));
     }
     if dir.is_empty() {
@@ -494,6 +541,27 @@ pub fn write_upload_chunk(
     if !dir_path.is_dir() {
         return Err(format!("Destination is not a directory: {dir}"));
     }
+    // Up-front viability checks on the FIRST chunk of a declared-size
+    // transfer: ceiling, then free disk. Both fail the transfer before any
+    // meaningful bytes move.
+    if offset == 0 {
+        if let Some(total) = total_bytes {
+            if total > MAX_TRANSFER_SIZE {
+                return Err(format!(
+                    "Transfer of {total} bytes exceeds the {} GiB ceiling",
+                    MAX_TRANSFER_SIZE / (1024 * 1024 * 1024)
+                ));
+            }
+            if let Some(free) = free_disk_space(&dir_path) {
+                if total > free {
+                    return Err(format!(
+                        "Not enough free disk space: transfer needs {total} bytes, volume has {free}"
+                    ));
+                }
+            }
+        }
+    }
+
     let part_path = dir_path.join(format!(".k2-upload-{}.part", sanitize_upload_id(upload_id)));
 
     // Enforce ordered, gap-free appends. A missing part counts as length 0.
@@ -517,7 +585,10 @@ pub fn write_upload_chunk(
     f.write_all(bytes).map_err(map_io_err)?;
 
     if is_last {
-        f.flush().map_err(map_io_err)?;
+        // fsync BEFORE the rename: the atomic rename must only ever publish
+        // fully-durable bytes (a crash between rename and a lazy flush would
+        // leave a complete-looking but truncated file at the final name).
+        f.sync_all().map_err(map_io_err)?;
         drop(f);
         let safe_name = sanitize_filename(filename);
         let target = collision_free_path(&dir_path, &safe_name);
@@ -1341,15 +1412,15 @@ mod tests {
         let id = "xfer-1";
         // Three ordered chunks; only the last finalizes (returns the path).
         assert_eq!(
-            write_upload_chunk(&tmp.s(), "bundle.tar.gz", id, 0, b"AAAA", false).expect("c0"),
+            write_upload_chunk(&tmp.s(), "bundle.tar.gz", id, 0, b"AAAA", false, None).expect("c0"),
             None
         );
         assert_eq!(
-            write_upload_chunk(&tmp.s(), "bundle.tar.gz", id, 4, b"BBBB", false).expect("c1"),
+            write_upload_chunk(&tmp.s(), "bundle.tar.gz", id, 4, b"BBBB", false, None).expect("c1"),
             None
         );
         let final_path =
-            write_upload_chunk(&tmp.s(), "bundle.tar.gz", id, 8, b"CC", true).expect("c2 final");
+            write_upload_chunk(&tmp.s(), "bundle.tar.gz", id, 8, b"CC", true, None).expect("c2 final");
         let final_path = final_path.expect("is_last returns the assembled path");
         assert_eq!(final_path, canon.join("bundle.tar.gz"));
         assert_eq!(fs::read(&final_path).unwrap(), b"AAAABBBBCC");
@@ -1361,7 +1432,7 @@ mod tests {
     fn upload_chunk_single_chunk_finalizes() {
         let tmp = TempDir::new("chunk-single");
         let canon = tmp.path().canonicalize().unwrap();
-        let path = write_upload_chunk(&tmp.s(), "one.bin", "solo", 0, b"only", true)
+        let path = write_upload_chunk(&tmp.s(), "one.bin", "solo", 0, b"only", true, None)
             .expect("single chunk")
             .expect("is_last path");
         assert_eq!(path, canon.join("one.bin"));
@@ -1371,10 +1442,10 @@ mod tests {
     #[test]
     fn upload_chunk_rejects_out_of_order_offset() {
         let tmp = TempDir::new("chunk-gap");
-        write_upload_chunk(&tmp.s(), "b.bin", "g", 0, b"AAAA", false).expect("c0");
+        write_upload_chunk(&tmp.s(), "b.bin", "g", 0, b"AAAA", false, None).expect("c0");
         // A gap (expected offset 4, got 7) must reject LOUDLY, not silently
         // pad or overwrite — a dropped chunk can't corrupt the bundle.
-        let err = write_upload_chunk(&tmp.s(), "b.bin", "g", 7, b"X", false)
+        let err = write_upload_chunk(&tmp.s(), "b.bin", "g", 7, b"X", false, None)
             .expect_err("gap must reject");
         assert!(err.contains("out of order"), "got: {err}");
         assert!(err.contains("expected offset 4"), "got: {err}");
@@ -1384,7 +1455,7 @@ mod tests {
     fn upload_chunk_rejects_oversize_chunk() {
         let tmp = TempDir::new("chunk-oversize");
         let big = vec![0u8; (MAX_UPLOAD_CHUNK_SIZE + 1) as usize];
-        let err = write_upload_chunk(&tmp.s(), "b.bin", "o", 0, &big, false)
+        let err = write_upload_chunk(&tmp.s(), "b.bin", "o", 0, &big, false, None)
             .expect_err("over per-chunk cap must reject");
         assert!(err.contains("Upload chunk too large"), "got: {err}");
         // Nothing was written — no stray .part.
@@ -1392,14 +1463,64 @@ mod tests {
     }
 
     #[test]
+    fn upload_chunk_rejects_declared_total_over_ceiling() {
+        let tmp = TempDir::new("chunk-total-ceiling");
+        // A declared total above MAX_TRANSFER_SIZE fails on the FIRST chunk,
+        // before any bytes accumulate.
+        let err = write_upload_chunk(
+            &tmp.s(),
+            "b.bin",
+            "t",
+            0,
+            b"AAAA",
+            false,
+            Some(MAX_TRANSFER_SIZE + 1),
+        )
+        .expect_err("over-ceiling declared total must reject");
+        assert!(err.contains("ceiling"), "got: {err}");
+        assert!(!tmp.path().join(".k2-upload-t.part").exists());
+    }
+
+    #[test]
+    fn upload_chunk_rejects_running_length_over_ceiling() {
+        let tmp = TempDir::new("chunk-run-ceiling");
+        // The running offset+len cap is authoritative even with NO declared
+        // total — a client that lies (or a pre-0.40.22 client) still can't
+        // write past MAX_TRANSFER_SIZE. The check fires before the
+        // ordered-append comparison, so a bare over-cap offset probes it.
+        let err = write_upload_chunk(&tmp.s(), "b.bin", "r", MAX_TRANSFER_SIZE, b"X", false, None)
+            .expect_err("running length past the ceiling must reject");
+        assert!(err.contains("ceiling"), "got: {err}");
+    }
+
+    #[test]
+    fn upload_chunk_accepts_declared_total_that_fits() {
+        let tmp = TempDir::new("chunk-total-ok");
+        // An honest, in-ceiling total passes the up-front viability check
+        // (incl. the free-disk probe against the real volume).
+        let path = write_upload_chunk(&tmp.s(), "b.bin", "ok", 0, b"DATA", true, Some(4))
+            .expect("declared-total transfer")
+            .expect("finalized path");
+        assert_eq!(fs::read(&path).unwrap(), b"DATA");
+    }
+
+    #[test]
+    fn free_disk_space_reports_nonzero_on_a_real_volume() {
+        // The probe must work on the platform the daemon ships on (unix) —
+        // a silent None there would disable the disk-viability gate.
+        let free = free_disk_space(Path::new("/")).expect("statvfs on / must succeed on unix");
+        assert!(free > 0, "free space on / reported as 0");
+    }
+
+    #[test]
     fn upload_chunk_offset_zero_restarts_stale_part() {
         let tmp = TempDir::new("chunk-restart");
         // A prior, abandoned transfer left a longer part under the same id.
-        write_upload_chunk(&tmp.s(), "b.bin", "r", 0, b"STALEXXXXXXXX", false).expect("stale");
+        write_upload_chunk(&tmp.s(), "b.bin", "r", 0, b"STALEXXXXXXXX", false, None).expect("stale");
         // Restarting at offset 0 truncates it, so the final bytes are ONLY
         // the new transfer — no leftover tail from the abandoned one.
-        write_upload_chunk(&tmp.s(), "b.bin", "r", 0, b"NEW", false).expect("restart c0");
-        let path = write_upload_chunk(&tmp.s(), "b.bin", "r", 3, b"!", true)
+        write_upload_chunk(&tmp.s(), "b.bin", "r", 0, b"NEW", false, None).expect("restart c0");
+        let path = write_upload_chunk(&tmp.s(), "b.bin", "r", 3, b"!", true, None)
             .expect("restart final")
             .expect("path");
         assert_eq!(fs::read(&path).unwrap(), b"NEW!");
@@ -1410,8 +1531,8 @@ mod tests {
         let tmp = TempDir::new("chunk-collide");
         // An existing file with the target name must not be clobbered — the
         // finalize uses the same numbered-suffix scheme as write_upload.
-        write_upload_chunk(&tmp.s(), "dup.bin", "a", 0, b"first", true).expect("first");
-        let p2 = write_upload_chunk(&tmp.s(), "dup.bin", "b", 0, b"second", true)
+        write_upload_chunk(&tmp.s(), "dup.bin", "a", 0, b"first", true, None).expect("first");
+        let p2 = write_upload_chunk(&tmp.s(), "dup.bin", "b", 0, b"second", true, None)
             .expect("second")
             .expect("path");
         assert!(p2.ends_with("dup (1).bin"), "got: {}", p2.display());
@@ -1424,7 +1545,7 @@ mod tests {
         let tmp = TempDir::new("chunk-idsanitize");
         // A malicious upload_id with separators must not escape `dir`; it's
         // reduced to safe chars, so the .part lands inside the tempdir.
-        write_upload_chunk(&tmp.s(), "b.bin", "../../evil", 0, b"x", false).expect("sanitized id");
+        write_upload_chunk(&tmp.s(), "b.bin", "../../evil", 0, b"x", false, None).expect("sanitized id");
         // No traversal happened: the parent dir got no stray .part file.
         let parent = tmp.path().parent().unwrap();
         let strays: Vec<_> = fs::read_dir(parent)

@@ -30,6 +30,7 @@ import MemoryWatcher from './components/MemoryWatcher/MemoryWatcher'
 import HeartbeatScheduleDialog from './components/HeartbeatScheduleDialog/HeartbeatScheduleDialog'
 import MergeDialog from './components/MergeDialog/MergeDialog'
 import Toast from './components/Toast/Toast'
+import TransferProgress from './components/TransferProgress/TransferProgress'
 import AssistantBar from './components/WorkspaceAssistant/AssistantBar'
 import { useProjectsStore } from './stores/projects'
 import { useConnectHostStore } from './stores/connect-host'
@@ -225,6 +226,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
       <HeartbeatScheduleDialog />
       <MergeDialog />
       <Toast />
+      <TransferProgress />
       <AssistantBar />
       <CountdownOverlay />
       <MemoDialog />
@@ -823,6 +825,7 @@ export default function App(): React.JSX.Element {
         <HeartbeatScheduleDialog />
       <MergeDialog />
         <Toast />
+        <TransferProgress />
         <AssistantBar />
         <CountdownOverlay />
         <MemoDialog />
@@ -881,6 +884,7 @@ export default function App(): React.JSX.Element {
       <HeartbeatScheduleDialog />
       <MergeDialog />
       <Toast />
+      <TransferProgress />
       <AssistantBar />
       <CountdownOverlay />
       <MemoDialog />

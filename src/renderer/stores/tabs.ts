@@ -280,12 +280,37 @@ if (typeof window !== 'undefined') {
 
 /**
  * Close a terminal session on the appropriate backend for its
- * renderer. Called on every deliberate tab-close path in the
- * store (removeTab, removePaneFromTab, closeItemInPaneGroup,
- * clearAllTabs). Kessel requires this explicit call
- * because its component unmount cleanup intentionally does NOT
- * close the daemon session — that's what makes workspace swap +
- * Tauri restart retain sessions.
+ * renderer. This is the A6 contract (.k2so/prds/alacritty-v2.md):
+ * a DELIBERATE tab close closes the daemon session. Kessel requires
+ * this explicit call because its component unmount cleanup
+ * intentionally does NOT close the daemon session — that's what
+ * makes workspace swap + Tauri restart retain sessions.
+ *
+ * Close-semantics table (2026-07-02 PTY-leak incident audit —
+ * pinned by tabs-close-contract.test.ts):
+ *
+ *   CLOSES the daemon session (routes here):
+ *     - removeTab            (X-click / Cmd+W / context-menu Close /
+ *                             Close Others / Close All — all via
+ *                             removeTabFromGroup, incl. split columns)
+ *     - removePaneFromTab    (pane close inside a tab)
+ *     - closeItemInPaneGroup (item close inside a pane group)
+ *
+ *   DOES NOT close (by design — never routes here):
+ *     - workspace switch / stash (`clearAllTabs` is view-clear only;
+ *       see its 0.38.0 commit-5 comment)
+ *     - app quit / TerminalPane unmount (detached-session design)
+ *     - pinned system agent tabs (`removeTab` early-returns on
+ *       `isSystemAgent`; the canonical workspace chat session persists)
+ *     - remote `session_removed` push (daemon already closed it; the
+ *       handler only drops the local view)
+ *     - retained-chat eviction (pure view retention; unmount path)
+ *
+ *   Routes here but deliberately KEEPS the PTY alive:
+ *     - heartbeat-surfaced tabs (close-as-minimize, paths (a)/(b) below)
+ *     - API-sandbox cockpit tabs (attachAgentName ≠ `tab-<id>`; the
+ *       v2 close targets the tab-scoped name, so the tenant-owned cell
+ *       is never killed by closing its cockpit view)
  *
  * Fire-and-forget: close failures are logged but don't block the
  * UI, matching the pattern already used for terminal_kill.
@@ -350,7 +375,9 @@ function closeTerminalForRenderer(data: TerminalItemData): void {
     case 'alacritty':
       // Phase 2 Unit 3 — PTY now lives in the daemon. The terminal
       // survives Tauri quit; explicit close happens via the daemon's
-      // /cli/terminal/kill route.
+      // /cli/terminal/kill route. (A MISSING renderer stamp lands
+      // here too — matches PaneGroupView's render dispatch, where an
+      // unstamped item hosts the legacy Alacritty view.)
       terminalKill(data.terminalId).catch((e) =>
         console.warn('[tabs] terminal/kill failed:', e),
       )
@@ -360,6 +387,20 @@ function closeTerminalForRenderer(data: TerminalItemData): void {
       // Daemon-owned PTY; unregister from v2_session_map so the
       // last Arc drops and DaemonPtySession tears down the child
       // + PTY master. See .k2so/prds/alacritty-v2.md phase A6.
+      closeV2Session(`tab-${data.terminalId}`)
+      break
+    default:
+      // Drift guard (2026-07-02 PTY-leak incident). This switch used
+      // to fall through SILENTLY for any renderer value it didn't
+      // know, which turns a future renderer rename/addition into a
+      // permanent daemon-session leak: a daemon-owned PTY that misses
+      // its A6 close outlives every client and no reaper covers bare
+      // tab sessions. Fail TOWARD closing — the modern stacks are all
+      // daemon-hosted, and a v2 close for a name the daemon doesn't
+      // know is a logged no-op, while a missed close leaks forever.
+      console.error(
+        `[tabs] closeTerminalForRenderer: unknown renderer '${String(renderer)}' — issuing v2 close anyway (add the case!)`,
+      )
       closeV2Session(`tab-${data.terminalId}`)
       break
   }
@@ -4806,14 +4847,21 @@ async function applyTabTitlesSnapshot(projectId: string): Promise<void> {
  *  saved ID", tabs.ts:2839), but the tab's own `id` is re-minted on restore.
  *  So a tab's signature is its sorted, joined paneGroupId set — this matches a
  *  serialized tab to the live `Tab` that owns the same panes regardless of the
- *  re-minted tab id. */
+ *  re-minted tab id.
+ *
+ *  The joiner is written as the ESCAPE sequence backslash-u0000, never a raw NUL byte: a
+ *  raw NUL makes grep/rg classify this whole FILE as binary and silently skip
+ *  it, which turned the 2026-07-02 PTY-leak forensics into a false "removeTab
+ *  no longer calls /cli/sessions/v2/close" finding (the call was here all
+ *  along — the audit tools just couldn't see into the file). Same runtime
+ *  string, text-searchable source. */
 function serializedTabSignature(t: SerializedTab): string {
   const pgIds = t.paneGroups ? Object.keys(t.paneGroups) : []
-  return pgIds.slice().sort().join(' ')
+  return pgIds.slice().sort().join('\u0000')
 }
 
 function liveTabSignature(t: Tab): string {
-  return Array.from(t.paneGroups.keys()).slice().sort().join(' ')
+  return Array.from(t.paneGroups.keys()).slice().sort().join('\u0000')
 }
 
 /** per-client-view-state.md (Phase 2) — resolve the active (selected) tab for a
@@ -5228,6 +5276,14 @@ async function initWorkspaceOpsListeners(): Promise<void> {
             terminalId: paneId,
             cwd,
             command,
+            // 2026-07-02 — this was the one terminal-creation path
+            // that skipped the renderer stamp (PaneGroupView's dev
+            // warning flags exactly this), so its items rendered AND
+            // closed on the legacy Alacritty path. Stamp like every
+            // other creation path (makeTerminalPaneGroup /
+            // paneDataToItem) so render + A6 close both dispatch to
+            // the daemon-hosted stack.
+            renderer: currentRenderer(),
           },
         }
         state.addItemToPaneGroup(tabId, paneId, newItem)

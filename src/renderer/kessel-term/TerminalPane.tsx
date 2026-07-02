@@ -74,6 +74,13 @@ import {
   type SelectionPoint,
 } from './webgl/selection'
 import {
+  cellChanged,
+  encodeSgrMouse,
+  mouseRoute,
+  sgrButtonCode,
+  type Cell,
+} from './sgrMouse'
+import {
   buildCopyText,
   copySelectionText,
   modelRowAt,
@@ -2586,6 +2593,218 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     [],
   )
 
+  // ── SGR mouse-button forwarding (mouse-reporting TUIs) ────────
+  // When the child has ?1000/?1002 + ?1006 active (claude fullscreen),
+  // plain press/drag/release belongs to the APP: forward it as SGR
+  // reports over the same input channel the wheel branch proved out.
+  // Shift/Option-drag bypasses forwarding for K2-native selection and
+  // cmd-click stays the local link gesture — precedence lives in
+  // `mouseRoute` (sgrMouse.ts). Both bits false (claude's normal
+  // mode) ⇒ every path below is inert and K2 selection is untouched.
+  //
+  // Gesture state for a forwarded press→drag→release. Null when no
+  // forwarded button is held. `lastCol/lastRow` = the cell most
+  // recently reported (press or flushed motion) — the cell-change
+  // gate's anchor.
+  const sgrDragRef = useRef<{
+    button: number
+    lastCol: number
+    lastRow: number
+  } | null>(null)
+  // Latest unsent drag cell (+ its ctrl state at event time). Motion
+  // is idempotent-latest — unlike wheel notches — so coalescing to
+  // the newest cell per flush tick is lossless.
+  const sgrPendingMotionRef = useRef<(Cell & { ctrl: boolean }) | null>(null)
+  const sgrMotionRafRef = useRef<number | null>(null)
+  const sgrMotionWindowStartRef = useRef(0)
+  const sgrMotionBudgetRef = useRef(0)
+  // True while the in-flight click gesture was forwarded to the app.
+  // `handleClick` consults it so a forwarded plain click never ALSO
+  // activates a hovered link (cmd-click is never forwarded, so the
+  // local link path keeps working).
+  const gestureForwardedRef = useRef(false)
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    // Same flood ceiling as the wheel bucket: ≤8 motion reports per
+    // 50ms window; between flushes the latest cell wins.
+    const MOTION_WINDOW_MS = 50
+    const MOTIONS_PER_WINDOW = 8
+
+    // Pointer → 1-based SGR cell. Same scale-aware math as the wheel
+    // branch (including the scrollPx subtraction — identity on the
+    // alt screen, where mouse-report mode virtually always lives),
+    // plus an upper clamp so a drag that leaves the pane keeps
+    // reporting the nearest edge cell instead of coordinates past
+    // the grid (alacritty clamps its reports the same way).
+    const sgrCellAt = (clientX: number, clientY: number): Cell | null => {
+      const snap = snapshotRef.current
+      if (!snap) return null
+      const { width: cw, height: ch } = cellMetricsRef.current
+      if (!cw || !ch) return null
+      const pos = toGridXY(clientX, clientY)
+      if (!pos) return null
+      const col = Math.min(
+        Math.max(1, Math.floor(pos.x / cw) + 1),
+        Math.max(1, snap.cols),
+      )
+      const row = Math.min(
+        Math.max(1, Math.floor((pos.y - scrollPxRef.current) / ch) + 1),
+        Math.max(1, snap.rows),
+      )
+      return { col, row }
+    }
+
+    const stopMotionFlush = (): void => {
+      if (sgrMotionRafRef.current !== null) {
+        cancelAnimationFrame(sgrMotionRafRef.current)
+        sgrMotionRafRef.current = null
+      }
+      sgrPendingMotionRef.current = null
+    }
+
+    const flushMotion = (): void => {
+      sgrMotionRafRef.current = null
+      const drag = sgrDragRef.current
+      const pending = sgrPendingMotionRef.current
+      if (!drag || !pending) return
+      const now = performance.now()
+      if (now - sgrMotionWindowStartRef.current >= MOTION_WINDOW_MS) {
+        sgrMotionWindowStartRef.current = now
+        sgrMotionBudgetRef.current = MOTIONS_PER_WINDOW
+      }
+      if (sgrMotionBudgetRef.current === 0) {
+        // Window budget exhausted; keep the latest cell and re-check
+        // next frame (a fresh 50ms window refills the bucket).
+        sgrMotionRafRef.current = requestAnimationFrame(flushMotion)
+        return
+      }
+      // Re-check the cell gate at flush time — the pointer may have
+      // circled back onto the last-reported cell while parked.
+      if (!cellChanged({ col: drag.lastCol, row: drag.lastRow }, pending)) {
+        sgrPendingMotionRef.current = null
+        return
+      }
+      sgrMotionBudgetRef.current -= 1
+      drag.lastCol = pending.col
+      drag.lastRow = pending.row
+      sgrPendingMotionRef.current = null
+      sendInput(
+        encodeSgrMouse(drag.button, 'motion', pending.ctrl, pending.col, pending.row),
+      )
+    }
+
+    const onDragMove = (ev: MouseEvent): void => {
+      const drag = sgrDragRef.current
+      if (!drag) return
+      const cell = sgrCellAt(ev.clientX, ev.clientY)
+      if (!cell) return
+      // Cell-change gate (all three reference emulators do this): a
+      // same-cell pixel wiggle never even schedules a flush, and a
+      // pointer returning to the last-reported cell cancels the
+      // stale intermediate (latest-cell-wins).
+      if (!cellChanged({ col: drag.lastCol, row: drag.lastRow }, cell)) {
+        sgrPendingMotionRef.current = null
+        return
+      }
+      sgrPendingMotionRef.current = { ...cell, ctrl: ev.ctrlKey }
+      if (sgrMotionRafRef.current === null) {
+        sgrMotionRafRef.current = requestAnimationFrame(flushMotion)
+      }
+    }
+
+    const onDragUp = (ev: MouseEvent): void => {
+      const drag = sgrDragRef.current
+      if (!drag) return
+      sgrDragRef.current = null
+      // The release report carries the final cell itself — a pending
+      // intermediate motion is superseded, drop it. Press/release
+      // always send immediately and never coalesce.
+      stopMotionFlush()
+      const cell = sgrCellAt(ev.clientX, ev.clientY) ?? {
+        col: drag.lastCol,
+        row: drag.lastRow,
+      }
+      sendInput(
+        encodeSgrMouse(drag.button, 'release', ev.ctrlKey, cell.col, cell.row),
+      )
+      window.removeEventListener('mousemove', onDragMove)
+      window.removeEventListener('mouseup', onDragUp)
+    }
+
+    const onDown = (ev: MouseEvent): void => {
+      const snap = snapshotRef.current
+      const route = mouseRoute(
+        { mouseReport: snap?.mouseReport, sgrMouse: snap?.sgrMouse },
+        {
+          shift: ev.shiftKey,
+          alt: ev.altKey,
+          ctrl: ev.ctrlKey,
+          meta: ev.metaKey,
+        },
+      )
+      if (route !== 'forward') {
+        gestureForwardedRef.current = false
+        return
+      }
+      // The overlay scrollbar owns its own drag gesture.
+      if (
+        (ev.target as HTMLElement | null)?.closest?.(
+          '[data-terminal-scrollbar]',
+        )
+      ) {
+        gestureForwardedRef.current = false
+        return
+      }
+      const cell = sgrCellAt(ev.clientX, ev.clientY)
+      if (!cell) {
+        gestureForwardedRef.current = false
+        return
+      }
+      // Forwarded gesture: the app owns it. preventDefault stops the
+      // browser from starting a text selection underneath the TUI's
+      // own highlight — which also suppresses the container's
+      // focus-on-mousedown, so focus the shadow textarea directly
+      // (no native selection can exist for a forwarded gesture, so
+      // the mouseDownInPaneRef mid-drag focus guard is moot here and
+      // typing keeps landing in this pane after a TUI click).
+      ev.preventDefault()
+      gestureForwardedRef.current = true
+      if (
+        shadowInputRef.current &&
+        document.activeElement !== shadowInputRef.current
+      ) {
+        shadowInputRef.current.focus({ preventScroll: true })
+      }
+      const button = sgrButtonCode(ev.button)
+      sgrDragRef.current = { button, lastCol: cell.col, lastRow: cell.row }
+      // Fresh bucket per gesture so a new drag never starts starved
+      // by the previous one.
+      sgrMotionWindowStartRef.current = performance.now()
+      sgrMotionBudgetRef.current = MOTIONS_PER_WINDOW
+      sendInput(encodeSgrMouse(button, 'press', ev.ctrlKey, cell.col, cell.row))
+      // Window-level listeners so a drag that leaves the pane keeps
+      // reporting (same pattern as the canvas-selection drag).
+      window.addEventListener('mousemove', onDragMove)
+      window.addEventListener('mouseup', onDragUp)
+    }
+
+    // Capture phase: the routing decision must precede the canvas-
+    // selection mousedown (bubble phase) regardless of effect order.
+    // No stopPropagation — React's synthetic handlers (link tracking,
+    // mouseDownInPaneRef) still see the event; the canvas-selection
+    // handler applies the same `mouseRoute` gate independently.
+    el.addEventListener('mousedown', onDown, true)
+    return () => {
+      el.removeEventListener('mousedown', onDown, true)
+      stopMotionFlush()
+      sgrDragRef.current = null
+      window.removeEventListener('mousemove', onDragMove)
+      window.removeEventListener('mouseup', onDragUp)
+    }
+  }, [sendInput, toGridXY])
+
   // ── Canvas selection (webgl painter only) ─────────────────────
   // Native selection cannot exist over a canvas, so a grid-coordinate
   // model drives the painter's selection pass instead. Pixel→cell
@@ -2691,6 +2910,25 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
     const onMouseDown = (ev: MouseEvent): void => {
       if (ev.button !== 0) return
+      // Mouse-report gating: a plain gesture belongs to the TUI (the
+      // SGR forwarding effect owns it); shift/option-drag keeps K2's
+      // canvas selection per the universal override convention. Same
+      // `mouseRoute` predicate as the forwarding effect so the two
+      // can never both claim a gesture.
+      const snapGate = snapshotRef.current
+      if (
+        mouseRoute(
+          { mouseReport: snapGate?.mouseReport, sgrMouse: snapGate?.sgrMouse },
+          {
+            shift: ev.shiftKey,
+            alt: ev.altKey,
+            ctrl: ev.ctrlKey,
+            meta: ev.metaKey,
+          },
+        ) === 'forward'
+      ) {
+        return
+      }
       // The overlay scrollbar owns its own drag gesture.
       if (
         (ev.target as HTMLElement | null)?.closest?.(
@@ -2866,6 +3104,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
+      // A forwarded gesture belongs to the TUI — never double-handle
+      // it as a link activation. cmd-click is never forwarded
+      // (mouseRoute routes meta to 'local'), so the cmd-click link
+      // path below is unaffected in mouse-report mode.
+      if (gestureForwardedRef.current) return
       if (linkClickMode === 'cmd-click' && !e.metaKey) return
       if (!hoveredLink) return
       // Validate: mouse-down must have been on the same link so a
@@ -3644,7 +3887,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // link). Matches v1's affordance.
   const finalContainerStyle: React.CSSProperties = {
     ...containerStyle,
-    cursor: hoveredLink ? 'pointer' : 'text',
+    // Mouse-report mode shows the arrow cursor (alacritty's cursor-
+    // icon convention: I-beam only when a local selection applies) —
+    // plain clicks/drags belong to the app there.
+    cursor: hoveredLink
+      ? 'pointer'
+      : snapshot?.mouseReport && snapshot?.sgrMouse
+        ? 'default'
+        : 'text',
     // Canvas mode: no DOM text to select — suppress native selection
     // so stray drags over overlay text (HUD, cursor char) can't fight
     // the model selection. DOM mode keeps native selection.

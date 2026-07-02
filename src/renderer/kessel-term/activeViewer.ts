@@ -62,16 +62,26 @@ export interface GridWsInputs {
   visible: boolean
   /** The session's child process has exited — nothing left to stream. */
   exited: boolean
+  /** Pinned-canonical-chat exemption (pinned-chat background retention):
+   *  hold the grid-WS even while hidden, so switching back to this pane
+   *  repaints from live in-memory state instead of re-paying the
+   *  spawn/WS/snapshot chain. Only the pinned canonical Chat pane of an
+   *  ACTIVE workspace ever sets this (AgentChatPane, daemon-owned path);
+   *  every other consumer omits it — byte-identical to the pre-retention
+   *  predicate. `exited` still wins: a dead child is never streamed,
+   *  retained or not. */
+  retainWhileHidden?: boolean
 }
 
 /**
  * Whether this pane should currently hold an open grid-WS streaming the
- * session's live grid. True iff the pane is visible AND its child hasn't
- * exited. A hidden pane (background tab, off-screen heartbeat spawn)
- * holds no grid-WS — its daemon PTY survives untouched.
+ * session's live grid. True iff the pane is visible (or exempted via
+ * `retainWhileHidden`) AND its child hasn't exited. A hidden,
+ * non-retained pane (background tab, off-screen heartbeat spawn) holds
+ * no grid-WS — its daemon PTY survives untouched.
  */
 export function shouldHoldGridWs(inputs: GridWsInputs): boolean {
-  return inputs.visible && !inputs.exited
+  return (inputs.visible || inputs.retainWhileHidden === true) && !inputs.exited
 }
 
 // 0.39.43 (PRD `daemon-multi-client-arbitration.md` Issue A) —

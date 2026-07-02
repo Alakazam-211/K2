@@ -67,6 +67,9 @@ const h = vi.hoisted(() => {
     // mounts a fresh instance, incrementing this. A no-op (no key change)
     // leaves it untouched. Lets the tests prove the attachNonce guard.
     terminalMountCount: { value: 0 },
+    // Pinned-chat retention — controllable canonical-Active mirror. The
+    // daemon-owned path derives `retainWhileHidden` from membership here.
+    activeIds: { value: new Set<string>() },
   }
 })
 
@@ -104,6 +107,7 @@ vi.mock('@/kessel-term/TerminalPane', () => ({
         data-command={props.command === undefined ? 'NONE' : String(props.command)}
         data-args={props.args ? JSON.stringify(props.args) : 'NONE'}
         data-has-onexit={props.onChildExit ? 'yes' : 'no'}
+        data-retain={String(props.retainWhileHidden === true)}
       />
     )
   },
@@ -116,6 +120,13 @@ vi.mock('@/stores/projects', () => ({
 }))
 vi.mock('@/stores/active-agents', () => ({
   useActiveAgentsStore: { getState: () => ({ bindPaneProject: vi.fn() }) },
+}))
+// Pinned-chat retention — mocked (rather than the real tiny store) because
+// the real module imports `@/stores/settings`, whose module-init fetch graph
+// is far heavier than this component test needs.
+vi.mock('@/stores/active', () => ({
+  useActiveStore: (selector: (s: { activeProjectIds: Set<string> }) => unknown) =>
+    selector({ activeProjectIds: h.activeIds.value }),
 }))
 vi.mock('@/stores/tabs', () => ({
   useTabsStore: { getState: () => ({ stampAgentSessionId: vi.fn() }) },
@@ -157,6 +168,7 @@ beforeEach(() => {
   h.sessionHandlers.current = null
   h.terminalProps.current = null
   h.terminalMountCount.value = 0
+  h.activeIds.value = new Set()
 })
 
 function ensureBodies(): Array<Record<string, unknown>> {
@@ -196,6 +208,22 @@ describe('#683 daemon-owned path — mount → ensure-pinned-chat → attach', (
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     const body = lastEnsureCall()
     expect(body?.restoredSessionId).toBe('hint-9')
+  })
+})
+
+describe('pinned-chat retention — retainWhileHidden threading', () => {
+  it('workspace in the canonical Active set → TerminalPane gets retainWhileHidden=true', async () => {
+    h.activeIds.value = new Set(['proj-1'])
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-retain')).toBe('true')
+  })
+
+  it('workspace NOT in the Active set → retainWhileHidden=false (park-on-hidden preserved)', async () => {
+    h.activeIds.value = new Set(['some-other-proj'])
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-retain')).toBe('false')
   })
 })
 

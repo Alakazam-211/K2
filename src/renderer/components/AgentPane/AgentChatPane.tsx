@@ -10,6 +10,7 @@ import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { agentDisplayName, resumeChatArgs, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
 import { useActiveAgentsStore } from '@/stores/active-agents'
+import { useActiveStore } from '@/stores/active'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { subscribeToWorkspaceSessionEvents } from '@/stores/session-events'
 import {
@@ -404,6 +405,17 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // re-runs its idempotent spawn POST and binds to the NEW PTY.
   const [attachNonce, setAttachNonce] = useState(0)
 
+  // Pinned-chat background retention — hold the grid-WS while this pane
+  // is hidden IFF the workspace is in the canonical Active section
+  // (daemon mirror, #672). Ties the exemption to the same membership the
+  // daemon's reaper spares: while Active the canonical session is
+  // effectively immortal, so a retained hidden attachment can never pin
+  // a session past its Active window (there is no attach gate — see
+  // active_reaper.rs). Leaving Active flips this false live and the
+  // pane parks exactly as today. On a daemon without `canonical-active`
+  // the mirror is empty ⇒ false ⇒ today's behavior.
+  const retainWhileHidden = useActiveStore((s) => s.activeProjectIds.has(projectId))
+
   // #689 — the session id TerminalPane is currently attached to. The
   // remount-guard: a SessionAdded broadcast only forces a re-attach
   // (attachNonce bump) when it represents a GENUINE change — a session id
@@ -626,6 +638,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           attachAgentName={projectId}
           seedLabel={displayName}
           lockLabel={true}
+          // Retention exemption (daemon-owned path ONLY — the legacy
+          // fallback keeps park-on-hidden, per the capability gate).
+          retainWhileHidden={retainWhileHidden}
           // 0.39.39: NO onChildExit breaker wiring on the daemon-owned
           // path. Exit is observed by the DAEMON, which broadcasts
           // SessionRemoved → the subscription above flips us to idle. No

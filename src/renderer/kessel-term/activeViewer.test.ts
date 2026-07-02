@@ -54,33 +54,75 @@ describe('computeDesiredActive', () => {
 // (their daemon PTY survives untouched); an exited session has nothing
 // left to stream.
 describe('shouldHoldGridWs', () => {
+  // Full truth table including the pinned-chat retention exemption
+  // (`retainWhileHidden`). Invariants pinned here:
+  //   - `retainWhileHidden` OMITTED ⇒ byte-identical to the pre-retention
+  //     predicate (visible AND !exited) — every non-chat consumer passes
+  //     nothing and must see zero behavior change.
+  //   - `retainWhileHidden: true` lifts ONLY the visibility gate; `exited`
+  //     always wins (a dead child is never streamed, retained or not).
   const cases: Array<{
     visible: boolean
     exited: boolean
+    retainWhileHidden?: boolean
     expected: boolean
   }> = [
+    // Legacy 2-input table (retainWhileHidden omitted).
     { visible: false, exited: false, expected: false },
     { visible: false, exited: true, expected: false },
     { visible: true, exited: false, expected: true },
     { visible: true, exited: true, expected: false },
+    // retainWhileHidden: false — explicit false ≡ omitted.
+    { visible: false, exited: false, retainWhileHidden: false, expected: false },
+    { visible: false, exited: true, retainWhileHidden: false, expected: false },
+    { visible: true, exited: false, retainWhileHidden: false, expected: true },
+    { visible: true, exited: true, retainWhileHidden: false, expected: false },
+    // retainWhileHidden: true — the exemption. Hidden+alive now streams;
+    // exited still never does.
+    { visible: false, exited: false, retainWhileHidden: true, expected: true },
+    { visible: false, exited: true, retainWhileHidden: true, expected: false },
+    { visible: true, exited: false, retainWhileHidden: true, expected: true },
+    { visible: true, exited: true, retainWhileHidden: true, expected: false },
   ]
 
   for (const c of cases) {
-    it(`visible=${c.visible} exited=${c.exited} -> ${c.expected}`, () => {
-      expect(shouldHoldGridWs({ visible: c.visible, exited: c.exited })).toBe(
-        c.expected,
-      )
+    it(`visible=${c.visible} exited=${c.exited} retain=${String(c.retainWhileHidden)} -> ${c.expected}`, () => {
+      expect(
+        shouldHoldGridWs({
+          visible: c.visible,
+          exited: c.exited,
+          ...(c.retainWhileHidden === undefined
+            ? {}
+            : { retainWhileHidden: c.retainWhileHidden }),
+        }),
+      ).toBe(c.expected)
     })
   }
 
-  it('holds the grid-WS only for a visible, not-yet-exited pane', () => {
-    const trueCount = cases.filter((c) => c.expected).length
-    expect(trueCount).toBe(1)
+  it('without the exemption, holds only for a visible, not-yet-exited pane', () => {
+    const trueCount = cases.filter(
+      (c) => c.expected && c.retainWhileHidden !== true,
+    ).length
+    expect(trueCount).toBe(2) // the omitted + explicit-false visible/alive rows
   })
 
-  it('a hidden pane never holds a grid-WS regardless of exit state', () => {
+  it('a hidden non-retained pane never holds a grid-WS regardless of exit state', () => {
     expect(shouldHoldGridWs({ visible: false, exited: false })).toBe(false)
     expect(shouldHoldGridWs({ visible: false, exited: true })).toBe(false)
+  })
+
+  it('retention never resurrects an exited session', () => {
+    expect(shouldHoldGridWs({ visible: false, exited: true, retainWhileHidden: true })).toBe(false)
+    expect(shouldHoldGridWs({ visible: true, exited: true, retainWhileHidden: true })).toBe(false)
+  })
+
+  it('the active-viewer claim predicate is unaffected by retention (hidden panes never claim)', () => {
+    // `retainWhileHidden` is a GridWsInputs-only input; computeDesiredActive
+    // has no such field, so a retained hidden pane still computes
+    // desired=false and releases/never claims the active slot.
+    expect(
+      computeDesiredActive({ visible: false, paneFocused: true, windowFocused: true }),
+    ).toBe(false)
   })
 })
 

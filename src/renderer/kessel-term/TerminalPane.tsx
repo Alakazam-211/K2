@@ -452,6 +452,19 @@ export interface TerminalPaneProps {
    *  STOP auto-respawning instead of piling up `claude` processes.
    *  Optional — most consumers don't need it. */
   onChildExit?: (exitCode: number | null) => void
+  /** Pinned-chat background retention — hold the grid-WS while HIDDEN.
+   *  Set only by the pinned canonical Chat pane (AgentChatPane,
+   *  daemon-owned path) when its workspace is in the Active section, so
+   *  switching back paints from live in-memory state instead of
+   *  re-paying spawn POST + WS handshake + full-snapshot transfer.
+   *  Threads into `shouldHoldGridWs` (activeViewer.ts) at the three
+   *  gates that consult it: the grid-WS lifecycle effect, the
+   *  `ws.onclose` reconnect gate, and `openGridWs`'s mid-handshake
+   *  staleness check. Never affects the active-viewer claim — a hidden
+   *  retained pane still sends `set_active:false` and the daemon
+   *  ignores its resizes. Omitted/false ⇒ byte-identical park-on-hidden
+   *  behavior for every other consumer. */
+  retainWhileHidden?: boolean
 }
 
 type Phase =
@@ -505,6 +518,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     seedLabel,
     lockLabel,
     sandbox,
+    retainWhileHidden,
   } = props
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
@@ -828,6 +842,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     tabVisibleRef.current = isTabVisible
   }, [isTabVisible])
+  // Pinned-chat retention — same ref-mirror pattern: `ws.onclose` and
+  // `openGridWs.isStale` (both bound inside long-lived closures) must
+  // read the LATEST retention flag without re-subscribing the socket.
+  const retainWhileHiddenRef = useRef(false)
+  useEffect(() => {
+    retainWhileHiddenRef.current = retainWhileHidden === true
+  }, [retainWhileHidden])
 
   // ── A7.5 perf instrumentation (DEV-only) ─────────────────────
   // mountT0 is captured once via lazy useRef init so re-renders
@@ -1245,10 +1266,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // Staleness guard re-checked at every await point: if the pane went
     // hidden, the session changed, or unmounted while we were mid-
     // handshake, abandon this connect attempt so we never open a socket
-    // for a pane that no longer wants to stream.
+    // for a pane that no longer wants to stream. A hidden-but-RETAINED
+    // pane (pinned-chat retention) still wants the stream — the retain
+    // ref keeps a mid-handshake connect alive across a hide.
     const isStale = () =>
       sessionIdRef.current !== sessionId ||
-      appliedVisibleRef.current !== true
+      (appliedVisibleRef.current !== true && !retainWhileHiddenRef.current)
 
     let creds: DaemonWsAvailable | null = null
     try {
@@ -1611,10 +1634,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         //     phaseRef-synchronous fix prevents resurrecting it).
         //   - hidden ⇒ don't reconnect (we deliberately closed the WS
         //     on hide; the grid-WS effect reopens on the next show, and
-        //     reconnecting a stream nobody watches is the #8 pile-up).
+        //     reconnecting a stream nobody watches is the #8 pile-up)
+        //     — UNLESS this is a retained pinned chat (retention exists
+        //     precisely to keep the hidden stream warm, so a genuine
+        //     mid-flight drop on a retained hidden pane reconnects).
         if (!shouldHoldGridWs({
           visible: tabVisibleRef.current,
           exited: phaseRef.current.kind === 'exited',
+          retainWhileHidden: retainWhileHiddenRef.current,
         })) {
           return
         }
@@ -1661,10 +1688,17 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     const visible = isTabVisible
     const haveSession = sessionIdRef.current !== null
     // Whether we should be streaming right now. `exited` is read from
-    // the live phase ref so an exited pane never (re)opens.
+    // the live phase ref so an exited pane never (re)opens. A retained
+    // pinned chat (retainWhileHidden) streams while hidden; a retention
+    // flip (workspace left Active) re-runs this effect and closes the
+    // socket exactly like a hide.
     const wantOpen =
       haveSession &&
-      shouldHoldGridWs({ visible, exited: phaseRef.current.kind === 'exited' })
+      shouldHoldGridWs({
+        visible,
+        exited: phaseRef.current.kind === 'exited',
+        retainWhileHidden,
+      })
 
     appliedVisibleRef.current = visible
 
@@ -1703,7 +1737,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // No cleanup that closes the socket: closing is driven by the
     // reconcile above (on a real hide) and by the unmount effect below.
     // Closing in cleanup would tear the WS down on every benign re-run.
-  }, [spawnGeneration, isTabVisible])
+  }, [spawnGeneration, isTabVisible, retainWhileHidden])
 
   // ── Grid-WS unmount teardown (0.39.13) ────────────────────────
   // Real unmount only ([] deps): close the WS (PTY survives — never

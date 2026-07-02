@@ -352,6 +352,57 @@ describe('split-into-columns lifecycle', () => {
     expect(state.extraGroups[0].tabs[0].mosaicTree).toBe('pg-split')
   })
 
+  // 2026-07-02 PTY-leak regression — two clients on one daemon exchanged
+  // TabOrderChanged broadcasts all morning; each refetch+rebuild re-minted
+  // the split column's pane-group id (pre-fix `crypto.randomUUID()` in
+  // restoreLayout's extraGroups branch), and every fresh id became a
+  // `tab-<uuid>` bare-shell spawn nothing ever attached to — one leaked
+  // login/zsh per cycle until the box exhausted kern.tty.ptmx_max (511).
+  // A split layout always takes the FULL rebuild in
+  // refetchLayoutForRemoteReorder (tryReorderTabsInPlace defers when
+  // extraGroups exist), so this drives the exact loop: N remote revisions,
+  // N rebuilds — and pins that the terminal identity set NEVER changes.
+  // Pre-b339c70 the split id re-mints on the first cycle and this fails.
+  it('repeated remote TabOrderChanged rebuilds never mint fresh terminal ids (PTY-leak regression)', async () => {
+    seedLayout(key, { extraPgId: 'pg-split' })
+    const { useTabsStore } = await loadWorkspace()
+
+    const allPgIds = (s: ReturnType<typeof useTabsStore.getState>): string[] =>
+      [
+        ...group0PgIds(s),
+        ...s.extraGroups.flatMap((g) => g.tabs.flatMap((t) => [...t.paneGroups.keys()])),
+      ].sort()
+    expect(allPgIds(useTabsStore.getState())).toEqual(['pg-main', 'pg-split'])
+
+    // The other client saves ahead of our base revision, N times. Same
+    // structure each time (its ids are stable too once fixed) — but the
+    // handler can't know that until it refetches and rebuilds.
+    for (let cycle = 0; cycle < 5; cycle++) {
+      daemon.revisionCounter += 1
+      const revision = daemon.revisionCounter
+      const current = daemon.layouts.get(key)!
+      daemon.layouts.set(key, { json: current.json, revision })
+      for (const sub of ev.tabSubs) {
+        sub.handlers.onTabOrderChanged?.({ project: projectId, workspace: workspaceId, revision })
+      }
+      await flush(16)
+    }
+    // Let any debounced autosave (and its echo) settle too — a mint loop
+    // sustains itself through exactly that save/broadcast round-trip.
+    await new Promise((r) => setTimeout(r, 1100))
+    await flush(16)
+
+    const final = useTabsStore.getState()
+    // The terminal identity set is EXACTLY the seeded pair: nothing
+    // re-minted (no fresh `tab-<uuid>` spawn possible), nothing adopted
+    // as a duplicate, nothing dropped.
+    expect(allPgIds(final)).toEqual(['pg-main', 'pg-split'])
+    expect(final.tabs).toHaveLength(1)
+    expect(final.extraGroups).toHaveLength(1)
+    expect(final.extraGroups[0].tabs).toHaveLength(1)
+    expect(final.splitCount).toBe(2)
+  }, 20000)
+
   it('reconcile does not re-adopt a live split-column terminal into the main column', async () => {
     seedLayout(key, { extraPgId: 'pg-split' })
     // The daemon still holds live PTYs for BOTH pane groups (the normal

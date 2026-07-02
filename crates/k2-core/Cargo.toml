@@ -114,6 +114,11 @@ encoding_rs = "0.8"
 tar = "0.4"
 flate2 = "1"
 
+# Server-side folder -> .zip compression (fs_compress, 0.40.22). Streaming
+# ZipWriter only; deflate via the flate2 backend already in the tree, no
+# time/aes/etc. extras.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 # Terminal backend — VT-compliant parser + PTY management + reflow.
 alacritty_terminal = "0.26.0-rc1"
 portable-pty = "0.8"

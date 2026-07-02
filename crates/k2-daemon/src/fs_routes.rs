@@ -311,6 +311,185 @@ pub fn handle_upload_chunk(body: &[u8]) -> CliResponse {
     }
 }
 
+// ── compress (server-side folder → zip, 0.40.22) ──────────────────────
+//
+// Zipping a big tree takes minutes, and every `/cli/*` response is a
+// single buffered body — so compress is an ASYNC JOB, the same
+// start-then-poll shape as the daemon self-update (`update_routes`):
+// `POST fs/compress` returns a job_id immediately, a worker thread
+// streams the zip, `GET fs/compress-status?job_id=` snapshots progress,
+// `POST fs/compress-cancel` raises the worker's cooperative cancel flag.
+
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// A compress job's observable state; `status` snapshots it. The cancel
+/// flag rides along (skipped in serialization) so cancel needs no second
+/// registry.
+#[derive(Clone, serde::Serialize)]
+pub struct CompressJob {
+    pub job_id: String,
+    /// `running` → `done` | `failed`. Terminal states stay in the map so a
+    /// poll that races completion still sees the outcome (jobs are removed
+    /// only when a new job starts — see `insert_compress_job`).
+    pub phase: &'static str,
+    /// Entries written / entries planned (the denominator is exact — the
+    /// worker plans the walk before writing).
+    pub done: u64,
+    pub total: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zip_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip)]
+    cancel: Arc<AtomicBool>,
+}
+
+fn compress_jobs() -> &'static Mutex<HashMap<String, CompressJob>> {
+    static JOBS: OnceLock<Mutex<HashMap<String, CompressJob>>> = OnceLock::new();
+    JOBS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Insert a fresh job, evicting finished ones so the map can't grow
+/// unbounded across a long daemon lifetime (in-flight jobs are kept).
+fn insert_compress_job(job: CompressJob) {
+    let mut map = compress_jobs().lock().unwrap_or_else(|e| e.into_inner());
+    map.retain(|_, j| j.phase == "running");
+    map.insert(job.job_id.clone(), job);
+}
+
+fn update_compress_job<F: FnOnce(&mut CompressJob)>(job_id: &str, f: F) {
+    if let Some(job) = compress_jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(job_id)
+    {
+        f(job);
+    }
+}
+
+fn get_compress_job(job_id: &str) -> Option<CompressJob> {
+    compress_jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(job_id)
+        .cloned()
+}
+
+/// Short collision-resistant job id (random hex via getrandom — same
+/// scheme as `update_routes::new_job_id`).
+fn new_compress_job_id() -> String {
+    let mut bytes = [0u8; 16];
+    if getrandom::getrandom(&mut bytes).is_err() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        return format!("zip-{nanos:x}");
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[derive(Deserialize)]
+struct CompressBody {
+    path: String,
+}
+
+/// Start a compress job for the folder (or file) at `path`. Validation
+/// that would make the job fail instantly (missing path) happens HERE so
+/// the caller gets a 400 instead of a job that flips to `failed`; the
+/// deep work streams on a worker thread. Returns `{ job_id }`.
+pub fn handle_compress(body: &[u8]) -> CliResponse {
+    let parsed: CompressBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    if let Err(e) = k2_core::fs_commands::validate_path(&parsed.path) {
+        return CliResponse::bad_request(e);
+    }
+
+    let job_id = new_compress_job_id();
+    let cancel = Arc::new(AtomicBool::new(false));
+    insert_compress_job(CompressJob {
+        job_id: job_id.clone(),
+        phase: "running",
+        done: 0,
+        total: 0,
+        zip_path: None,
+        error: None,
+        cancel: cancel.clone(),
+    });
+
+    let src = parsed.path;
+    let worker_job_id = job_id.clone();
+    std::thread::spawn(move || {
+        let progress_id = worker_job_id.clone();
+        let result = k2_core::fs_compress::compress_to_zip(
+            &src,
+            &move |done, total| {
+                update_compress_job(&progress_id, |j| {
+                    j.done = done;
+                    j.total = total;
+                });
+            },
+            &cancel,
+        );
+        match result {
+            Ok(path) => update_compress_job(&worker_job_id, |j| {
+                j.phase = "done";
+                j.zip_path = Some(path.to_string_lossy().to_string());
+            }),
+            Err(e) => {
+                k2_core::log_debug!(
+                    "[daemon] fs/compress — job {worker_job_id} FAILED: {e}"
+                );
+                update_compress_job(&worker_job_id, |j| {
+                    j.phase = "failed";
+                    j.error = Some(e);
+                });
+            }
+        }
+    });
+
+    CliResponse::ok_json(serde_json::json!({ "job_id": job_id }).to_string())
+}
+
+/// Snapshot a compress job (GET, `?job_id=`).
+pub fn handle_compress_status(params: &HashMap<String, String>) -> CliResponse {
+    let job_id = match params.get("job_id") {
+        Some(id) if !id.is_empty() => id,
+        _ => return CliResponse::bad_request("Missing 'job_id' parameter"),
+    };
+    match get_compress_job(job_id) {
+        Some(job) => CliResponse::ok_json(
+            serde_json::to_string(&job).unwrap_or_else(|_| "{}".to_string()),
+        ),
+        None => CliResponse::bad_request(format!("unknown job_id: {job_id}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct CompressCancelBody {
+    job_id: String,
+}
+
+/// Raise a running job's cooperative cancel flag. The worker notices
+/// between entries, removes its `.part`, and flips the job to `failed`
+/// ("Compression cancelled") — the status poll surfaces that terminally.
+pub fn handle_compress_cancel(body: &[u8]) -> CliResponse {
+    let parsed: CompressCancelBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    match get_compress_job(&parsed.job_id) {
+        Some(job) => {
+            job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        None => CliResponse::bad_request(format!("unknown job_id: {}", parsed.job_id)),
+    }
+}
+
 #[derive(Deserialize)]
 struct DuplicateBody {
     path: String,
@@ -362,6 +541,70 @@ pub fn handle_open_external(body: &[u8]) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compress_rejects_missing_path_before_creating_a_job() {
+        let resp = handle_compress(br#"{"path":"/nonexistent/definitely-not-here-k2"}"#);
+        assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+    }
+
+    #[test]
+    fn compress_status_rejects_unknown_job_id() {
+        let resp = handle_compress_status(&HashMap::from([(
+            "job_id".to_string(),
+            "no-such-job".to_string(),
+        )]));
+        assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+    }
+
+    #[test]
+    fn compress_cancel_rejects_unknown_job_id() {
+        let resp = handle_compress_cancel(br#"{"job_id":"no-such-job"}"#);
+        assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+    }
+
+    #[test]
+    fn compress_job_runs_to_done_and_status_reports_zip_path() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let src = std::env::temp_dir().join(format!("k2-fs-routes-compress-{nanos}"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("f.txt"), b"data").unwrap();
+
+        let body = serde_json::json!({ "path": src.to_string_lossy() }).to_string();
+        let resp = handle_compress(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        let job_id = v["job_id"].as_str().expect("job_id").to_string();
+
+        // Poll to a terminal phase (tiny tree → fast; 5s is generous).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let params = HashMap::from([("job_id".to_string(), job_id)]);
+        let final_status = loop {
+            let s = handle_compress_status(&params);
+            assert_eq!(s.status, "200 OK", "body: {}", s.body);
+            let j: serde_json::Value = serde_json::from_str(&s.body).unwrap();
+            match j["phase"].as_str() {
+                Some("running") => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "compress job never finished"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                _ => break j,
+            }
+        };
+        assert_eq!(final_status["phase"].as_str(), Some("done"), "{final_status}");
+        let zip_path = final_status["zip_path"].as_str().expect("zip_path");
+        assert!(std::path::Path::new(zip_path).exists(), "zip missing: {zip_path}");
+        assert!(zip_path.ends_with(".zip"), "got: {zip_path}");
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_file(zip_path);
+    }
 
     #[test]
     fn info_returns_home_separator_and_os() {

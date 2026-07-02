@@ -404,6 +404,11 @@ async fn handle_one_request(
             // carries one ordered chunk so a multi-GB transfer never buffers
             // whole and dodges the 100MB single-shot cap.
             | "/cli/fs/upload-chunk"
+            // 0.40.22 large-file transfers — server-side folder → zip as a
+            // start-then-poll job (status is a GET via misc_routes). Both
+            // POSTs are re-asserted with require_post in their arm below.
+            | "/cli/fs/compress"
+            | "/cli/fs/compress-cancel"
             // K2 Connect "Clone to" P2 — workspace migration. `bundle`
             // runs on the SOURCE daemon (build the scrubbed tar.gz +
             // capture K2 settings); `unpack` runs on the DESTINATION daemon
@@ -2485,6 +2490,36 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let result = crate::fs_routes::handle_upload_chunk(&body_bytes);
+            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+                .await;
+        }
+        // 0.40.22 — POST /cli/fs/compress + /cli/fs/compress-cancel.
+        // Server-side folder → zip as an async job (worker thread streams
+        // the archive; `GET /cli/fs/compress-status` polls it). Matched on
+        // path ALONE (no is_post guard) so a stray GET hits require_post's
+        // explicit 405 per feedback_post_only_route_guards. Same isolated
+        // `token_ok` gate as upload-binary (one-line swap to tighten).
+        p if p == "/cli/fs/compress" || p == "/cli/fs/compress-cancel" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = if p == "/cli/fs/compress" {
+                crate::fs_routes::handle_compress(&body_bytes)
+            } else {
+                crate::fs_routes::handle_compress_cancel(&body_bytes)
+            };
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }

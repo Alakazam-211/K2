@@ -14,6 +14,7 @@ import { useFileUndoStore } from '@/stores/file-undo'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { executeRemoteDrop } from '@/lib/handle-remote-drop'
+import { compressFolder } from '@/lib/fs-transfer'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -1281,6 +1282,11 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         ? [{ id: 'rename', label: 'Rename' }]
         : []),
       { id: 'duplicate', label: `Duplicate${!isSingle ? ` (${paths.length})` : ''}` },
+      // Compress runs server-side on the ACTIVE daemon (streaming zip job),
+      // so it's offered host-agnostically — same route locally and remote.
+      ...(isDir && isSingle
+        ? [{ id: 'compress', label: 'Compress' }]
+        : []),
       { id: 'delete', label: `Move to Trash${!isSingle ? ` (${paths.length})` : ''}` },
       { id: 'separator-util', label: '', type: 'separator' },
       { id: 'open-finder', label: 'Open in Finder' },
@@ -1299,6 +1305,11 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       await handleDelete(paths)
     } else if (clickedId === 'duplicate') {
       await handleDuplicate(paths)
+    } else if (clickedId === 'compress') {
+      // The sibling zip lands next to the folder — refresh its parent so
+      // the new archive appears without a manual reload.
+      const zipPath = await compressFolder(entry.path)
+      if (zipPath) await loadDir(parentDir(entry.path))
     } else if (clickedId === 'copy-items') {
       useFileClipboardStore.getState().copy(paths)
       useToastStore.getState().addToast(`Copied ${paths.length} item(s)`, 'success')

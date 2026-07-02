@@ -825,6 +825,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/fs/read-file" => crate::fs_routes::handle_read_file(params),
         "/cli/fs/read-binary" => crate::fs_routes::handle_read_binary(params),
         "/cli/fs/clipboard-paths" => crate::fs_routes::handle_clipboard_paths(params),
+        // 0.40.22 — poll a server-side compress job (start = POST
+        // /cli/fs/compress in the dispatcher).
+        "/cli/fs/compress-status" => crate::fs_routes::handle_compress_status(params),
 
         // ── Phase 2 Unit 6: chat history (GET) ────────────────────
         "/cli/chat/list" => crate::chat_routes::handle_list(params),

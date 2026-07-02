@@ -233,6 +233,26 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
         }
     };
 
+    // The sender just proved it is online (the envelope verified against its
+    // pinned key) — kick a background drain of anything WE have queued for
+    // it. This is the "peer became reachable" trigger of the outbox drain;
+    // fire-and-forget so it never extends this request.
+    crate::federation_drain::note_peer_reachable(&ingested.peer_fingerprint);
+
+    // ── IDEMPOTENCY GATE — durable per-peer msg_uuid dedupe ──
+    // The outbox drain is at-least-once: a delivery whose RESPONSE was lost
+    // gets re-dialed (possibly re-sealed with a fresh nonce, so the
+    // in-memory replay LRU can't catch it — and that cache resets on
+    // restart anyway). The signed msg_uuid is stable across re-seals, so a
+    // uuid we already terminally handled is a duplicate: 409 WITHOUT
+    // touching the chat. The drain maps this reject to "already delivered".
+    if k2_core::federation::seen::already_seen(&ingested.peer_fingerprint, &ingested.msg_uuid) {
+        return json_err(
+            "409 Conflict",
+            format!("duplicate message (already delivered): {}", ingested.msg_uuid),
+        );
+    }
+
     // ── STAGE 2: DELIVERY (the gate has passed) ──
     let signal = ingested.signal;
 
@@ -297,6 +317,13 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
             true,
             workspace_msg::DEFAULT_WAKE_TIMEOUT,
         );
+        // Terminal SUCCESS → remember the msg_uuid so a drain redelivery
+        // (lost-response race) dedupes instead of injecting twice. A FAILED
+        // live delivery is deliberately NOT recorded — it is still owed, and
+        // the sender's drain keeps it queued for retry.
+        if result.success {
+            k2_core::federation::seen::record(&ingested.peer_fingerprint, &ingested.msg_uuid);
+        }
         CliResponse::ok_json(
             serde_json::json!({
                 "delivered": result.success,
@@ -315,6 +342,11 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
         // inbox is where un-instructed remote messages will belong). The dial
         // still succeeds (200) so the sender can distinguish a clean decline
         // from a transport/security failure — but `delivered:false`.
+        //
+        // A decline is TERMINAL (senders dead-letter it; re-dialing can
+        // never flip an opt-out) — record the msg_uuid so a redelivery
+        // dedupes here too.
+        k2_core::federation::seen::record(&ingested.peer_fingerprint, &ingested.msg_uuid);
         CliResponse::ok_json(
             serde_json::json!({
                 "delivered": false,
@@ -485,6 +517,29 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         Err(e) => return json_err("500 Internal Server Error", format!("enqueue outbox: {e}")),
     };
 
+    // IN-ORDER GUARD: when this peer already has OLDER messages queued, a
+    // direct dial would deliver the new message ahead of them. Hand the whole
+    // queue (including this message) to the single-flight drain instead —
+    // it delivers oldest-first — and report "queued" honestly.
+    let queued_ahead = outbox::list_for_peer(&peer.fingerprint)
+        .iter()
+        .filter(|i| i.msg_uuid != msg_uuid)
+        .count();
+    if queued_ahead > 0 {
+        crate::federation_drain::kick(&peer.fingerprint);
+        return CliResponse::ok_json(
+            serde_json::json!({
+                "status": "queued",
+                "msg_uuid": msg_uuid,
+                "peer": peer.fingerprint,
+                "hint": format!(
+                    "{queued_ahead} earlier message(s) queued for this peer — delivering in order"
+                ),
+            })
+            .to_string(),
+        );
+    }
+
     // Dial the peer's E2E listener over the Connect tunnel + POST the envelope.
     match post_inbound(&peer_base_url(&peer.subdomain), &bytes) {
         Ok(resp_body) => {
@@ -539,7 +594,8 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
 /// Resolve a peer's inbound base URL. Defaults to its `<subdomain>.k2.dev`
 /// HTTPS endpoint (the relay carries only ciphertext; B terminates TLS).
 /// `K2_FEDERATION_INBOUND_BASE` overrides it for local/loopback testing.
-fn peer_base_url(subdomain: &str) -> String {
+/// `pub(crate)` so the outbox drain dials the SAME target a direct send would.
+pub(crate) fn peer_base_url(subdomain: &str) -> String {
     if let Ok(base) = std::env::var("K2_FEDERATION_INBOUND_BASE") {
         if !base.trim().is_empty() {
             return base.trim().trim_end_matches('/').to_string();
@@ -651,6 +707,59 @@ pub fn handle_peers() -> CliResponse {
         })
         .collect();
     CliResponse::ok_json(serde_json::json!({ "peers": peers }).to_string())
+}
+
+/// `GET /cli/federation/outbox` — OWNER-gated (dispatcher enforces). The
+/// truthful-surface companion of the outbox drain: per peer, how many
+/// messages are QUEUED (with the oldest message's age) and how many are
+/// DEAD-LETTERED (terminal failures kept for inspection, with their
+/// reasons). Covers every fingerprint that has outbox state, joined against
+/// the pinned-peer store for label/subdomain when known.
+pub fn handle_outbox() -> CliResponse {
+    let store = PeerStore::load().unwrap_or_default();
+    let now = chrono::Utc::now();
+
+    // Every fingerprint with any outbox presence (queued OR dead).
+    let mut fps: std::collections::BTreeSet<String> = outbox::peers_with_queued().into_iter().collect();
+    for p in store.list() {
+        if !outbox::list_dead_for_peer(&p.fingerprint).is_empty() {
+            fps.insert(p.fingerprint.clone());
+        }
+    }
+
+    let mut total_queued = 0usize;
+    let peers: Vec<serde_json::Value> = fps
+        .iter()
+        .map(|fp| {
+            let queued = outbox::list_for_peer_ordered(fp);
+            total_queued += queued.len();
+            let oldest_age_secs = queued
+                .first()
+                .map(|i| (now - i.signal_at).num_seconds().max(0));
+            let dead = outbox::list_dead_for_peer(fp);
+            let peer = store.get(fp);
+            serde_json::json!({
+                "fingerprint": fp,
+                "label": peer.map(|p| p.label.clone()).unwrap_or_default(),
+                "subdomain": peer.map(|p| p.subdomain.clone()).unwrap_or_default(),
+                "queued": queued.len(),
+                "oldest_age_secs": oldest_age_secs,
+                "dead": dead.len(),
+                "dead_letters": dead
+                    .iter()
+                    .map(|d| serde_json::json!({
+                        "msg_uuid": d.msg_uuid,
+                        "reason": d.reason,
+                        "dead_at": d.dead_at.to_rfc3339(),
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    CliResponse::ok_json(
+        serde_json::json!({ "peers": peers, "total_queued": total_queued }).to_string(),
+    )
 }
 
 /// `GET /cli/federation/peer-roster?peer=<selector>` — OWNER-gated (dispatcher
@@ -934,6 +1043,44 @@ mod tests {
             // The LIVE path was taken — nothing was written to the inbox.
             let items = k2_core::inbox::list_root(Path::new(&ws_path));
             assert!(items.is_empty(), "opt-in ON must NOT write an inbox file");
+        });
+    }
+
+    // ── P3 receive: durable msg_uuid dedupe. The outbox drain is
+    //    at-least-once — a redelivery of an already-handled envelope (same
+    //    SIGNED msg_uuid, possibly re-sealed with a fresh nonce so the
+    //    in-memory replay LRU can't catch it) must 409 as a duplicate
+    //    instead of driving the chat / decline path twice. The drain maps
+    //    that 409 back to "already delivered".
+    #[test]
+    fn inbound_redelivery_of_handled_msg_uuid_is_409_duplicate() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let ws_path = temp_ws_path();
+            let ws_id = register_project(&ws_path); // opt-in OFF → decline (terminal)
+
+            let key = pin_trusted_peer("peer");
+            let bytes = seal_msg_to(&ws_id, &key, "peer", "deliver once");
+            let first = handle_inbound(&bytes);
+            assert_eq!(first.status, "200 OK", "first delivery: {}", first.body);
+            let v: serde_json::Value = serde_json::from_str(&first.body).unwrap();
+            assert_eq!(v["mode"], "declined", "opt-in OFF declines (terminal)");
+
+            // Redeliver the SAME message RE-SEALED (fresh nonce + at — the
+            // exact thing the drain does for stale envelopes), so only the
+            // durable msg_uuid store can catch it.
+            let resealed = federation::reseal(&bytes, &key).expect("reseal");
+            let second = handle_inbound(&resealed);
+            assert_eq!(
+                second.status, "409 Conflict",
+                "redelivered msg_uuid must dedupe: {}",
+                second.body
+            );
+            assert!(
+                second.body.contains("duplicate message"),
+                "the dedupe reject must carry the drain's marker: {}",
+                second.body
+            );
         });
     }
 

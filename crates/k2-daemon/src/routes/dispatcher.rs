@@ -3189,6 +3189,20 @@ async fn handle_one_request(
                             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                     }
                 }
+                "/cli/federation/outbox" => {
+                    // GET, OWNER-or-ADMIN-gated. Truthful surface for the
+                    // outbox drain: per-peer queued count + oldest age +
+                    // dead-letters (`k2 fed outbox`). A Member session must
+                    // NOT see queued cross-server traffic.
+                    let _ = stream.read(&mut buf).await;
+                    if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        tokio::task::spawn_blocking(crate::federation_routes::handle_outbox)
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                }
                 "/cli/federation/peer-roster" => {
                     // GET, OWNER-gated. The LOCAL daemon dials a PAIRED peer's
                     // signed roster GET and returns its agent projection so the

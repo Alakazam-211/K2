@@ -6919,6 +6919,7 @@ cmd_update_v2() {
 #
 #   k2 fed pubkey [--pem|--fingerprint|--json]   export THIS box's SPKI pubkey
 #   k2 fed send <peer>::<workspace>::<agent> "message"
+#   k2 fed outbox                                queued + dead-lettered per peer
 #   k2 fed pair-request --pubkey <spki.pem> [--label L] [--subdomain S]
 #   k2 fed confirm <fingerprint> <sas-code>
 #
@@ -7052,10 +7053,45 @@ try:
 except Exception:
     sys.stderr.write('k2 fed status: unexpected response from /cli/settings/get\n'); sys.exit(1)"
             ;;
+        outbox)
+            # The truthful surface for the outbox drain: per peer, how many
+            # cross-server messages are still QUEUED (waiting for the peer to
+            # become reachable — the drain retries with backoff) and what got
+            # DEAD-LETTERED (terminal failures kept for inspection).
+            if [ -z "$owner_token" ]; then
+                echo "k2 fed outbox: no owner token (need $_tok_file)" >&2
+                exit 1
+            fi
+            curl -s "${BASE_URL}/cli/federation/outbox?token=${owner_token}" \
+                --connect-timeout 5 --max-time 30 2>/dev/null \
+                | python3 -c "import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.stderr.write('k2 fed outbox: unexpected response (is federation on?)\n'); sys.exit(1)
+if 'error' in d:
+    sys.stderr.write('k2 fed outbox: ' + str(d['error']) + '\n'); sys.exit(1)
+peers = d.get('peers', [])
+if not peers:
+    print('outbox: empty (no queued or dead-lettered cross-server messages)')
+    sys.exit(0)
+for p in peers:
+    who = p.get('label') or p.get('subdomain') or p.get('fingerprint','')[:12]
+    line = f\"{who}: {p.get('queued',0)} queued\"
+    age = p.get('oldest_age_secs')
+    if age is not None:
+        line += f' (oldest {age}s)'
+    line += f\", {p.get('dead',0)} dead-lettered\"
+    print(line)
+    for dl in p.get('dead_letters', [])[:5]:
+        print(f\"  dead {dl.get('msg_uuid','')[:8]}… — {dl.get('reason','')}\")
+print(f\"total queued: {d.get('total_queued',0)}\")"
+            ;;
         *)
-            echo "usage: k2 fed <enable|disable|status|pubkey|send|pair-request|confirm> ..." >&2
+            echo "usage: k2 fed <enable|disable|status|pubkey|send|outbox|pair-request|confirm> ..." >&2
             echo "  enable/disable/status: flip the persisted federation switch (headless-friendly)" >&2
-            echo "  send/pair-request/confirm need federation ON; pubkey works anytime" >&2
+            echo "  send/outbox/pair-request/confirm need federation ON; pubkey works anytime" >&2
+            echo "  outbox: queued + dead-lettered cross-server messages per peer" >&2
             exit 2
             ;;
     esac

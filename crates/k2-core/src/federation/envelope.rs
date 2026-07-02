@@ -155,6 +155,50 @@ pub fn seal(
     serde_json::to_vec(&envelope).map_err(|e| FederationError::Encode(e.to_string()))
 }
 
+/// Re-sign a previously-sealed envelope with a FRESH `at` timestamp and a
+/// FRESH `nonce`, preserving everything else — **`msg_uuid` above all** (the
+/// end-to-end idempotency key the receive-side dedupe keys on). This is the
+/// outbox drain's answer to the skew window: a queued envelope older than
+/// [`super::ingress::DEFAULT_SKEW_SECS`] would be rejected as stale on
+/// delivery, so the drain re-seals it just before the dial. Only the original
+/// sender can do this (it needs the signing key), so a re-sealed envelope is
+/// exactly as authentic as the first seal. Pure — no I/O beyond the CSPRNG.
+pub fn reseal(envelope_bytes: &[u8], my_key: &KeyPair) -> Result<Vec<u8>, FederationError> {
+    let envelope: FederationEnvelope =
+        serde_json::from_slice(envelope_bytes).map_err(|e| FederationError::Decode(e.to_string()))?;
+    let mut payload = envelope.payload;
+
+    // Refuse to re-sign someone else's envelope: the stored bytes must claim
+    // OUR fingerprint (an outbox only ever holds envelopes we sealed, but the
+    // check keeps the primitive safe for any caller).
+    let my_fp = super::peers::fingerprint_of_spki_der(&my_key.public_key_der());
+    if payload.from_fingerprint != my_fp {
+        return Err(FederationError::FingerprintMismatch {
+            claimed: payload.from_fingerprint,
+            pinned: my_fp,
+        });
+    }
+
+    payload.nonce = Uuid::new_v4().to_string();
+    payload.at = Utc::now();
+
+    let bytes = canonical(&payload)?;
+    let pkcs8 = my_key.serialize_der();
+    let signing = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &pkcs8)
+        .map_err(|e| FederationError::Encode(format!("load signing key: {e}")))?;
+    let rng = SystemRandom::new();
+    let sig = signing
+        .sign(&rng, &bytes)
+        .map_err(|e| FederationError::Encode(format!("sign: {e}")))?;
+    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.as_ref());
+
+    let envelope = FederationEnvelope {
+        payload,
+        sig: sig_b64,
+    };
+    serde_json::to_vec(&envelope).map_err(|e| FederationError::Encode(e.to_string()))
+}
+
 /// Verify `bytes` as a [`FederationEnvelope`] against `sender_pinned_pubkey_pem`
 /// (a pinned P-256 SPKI PEM) and return the inner [`AgentSignal`].
 ///
@@ -226,6 +270,46 @@ mod tests {
             let bytes = seal(&signal, &my_key, "rosson", 8).expect("seal");
             let opened = open(&bytes, &my_pem).expect("open against pinned key");
             assert_eq!(opened, signal, "round-tripped signal must be identical");
+        });
+    }
+
+    #[test]
+    fn reseal_preserves_msg_uuid_and_signal_with_fresh_nonce_and_at() {
+        with_temp_home(|| {
+            let my_key = load_or_generate_keypair().expect("keypair");
+            let my_pem = my_key.public_key_pem();
+            let signal = sample_signal();
+
+            let first = seal(&signal, &my_key, "rosson", 8).expect("seal");
+            let old: FederationEnvelope = serde_json::from_slice(&first).unwrap();
+
+            let second = reseal(&first, &my_key).expect("reseal");
+            let new: FederationEnvelope = serde_json::from_slice(&second).unwrap();
+
+            // The idempotency key + signal survive; freshness fields rotate.
+            assert_eq!(new.payload.msg_uuid, old.payload.msg_uuid, "msg_uuid must be preserved");
+            assert_eq!(new.payload.signal, old.payload.signal, "signal must be preserved");
+            assert_ne!(new.payload.nonce, old.payload.nonce, "nonce must rotate");
+            assert!(new.payload.at >= old.payload.at, "at must be re-stamped");
+
+            // And the re-signed envelope verifies against the same key.
+            let opened = open(&second, &my_pem).expect("resealed envelope must open");
+            assert_eq!(opened, signal);
+        });
+    }
+
+    #[test]
+    fn reseal_rejects_foreign_envelope() {
+        with_temp_home(|| {
+            let my_key = load_or_generate_keypair().expect("keypair");
+            let bytes = seal(&sample_signal(), &my_key, "rosson", 8).expect("seal");
+            let other = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
+                .expect("other key");
+            let err = reseal(&bytes, &other).expect_err("must not re-sign a foreign envelope");
+            assert!(
+                matches!(err, FederationError::FingerprintMismatch { .. }),
+                "got: {err}"
+            );
         });
     }
 

@@ -39,10 +39,11 @@ pub mod outbox;
 pub mod pairing;
 pub mod peers;
 pub mod roster;
+pub mod seen;
 
-pub use envelope::{open, seal, FederationEnvelope, FederationError, SignedPayload};
+pub use envelope::{open, reseal, seal, FederationEnvelope, FederationError, SignedPayload};
 pub use ingress::{ingest, IngressError, NonceCache, CAP_INBOUND, DEFAULT_SKEW_SECS};
-pub use outbox::{OutboxItem};
+pub use outbox::{DeadLetter, OutboxItem};
 pub use roster::{
     build_local_roster, sign_roster_request, verify_roster_request, LocalRoster, RosterAgent,
     RosterAuthError, CAP_ROSTER, DEFAULT_ROSTER_SKEW_SECS,

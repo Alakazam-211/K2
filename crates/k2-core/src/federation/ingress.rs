@@ -181,6 +181,11 @@ pub struct Ingested {
     pub signal: AgentSignal,
     /// The authenticated sender peer fingerprint (verified, not claimed).
     pub peer_fingerprint: String,
+    /// The envelope's `msg_uuid` — the SIGNED end-to-end idempotency key
+    /// (stable across a sender-side re-seal, unlike the nonce). The caller
+    /// consults the durable `federation::seen` store with it so an outbox
+    /// redelivery can't drive the canonical chat twice.
+    pub msg_uuid: String,
 }
 
 /// Ingest a raw inbound federation envelope — the PURE SECURITY GATE. See
@@ -255,6 +260,7 @@ pub fn ingest(
     Ok(Ingested {
         signal,
         peer_fingerprint: claimed_fp,
+        msg_uuid: envelope.payload.msg_uuid.clone(),
     })
 }
 

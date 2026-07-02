@@ -43,6 +43,7 @@ pub mod companion_routes;
 pub mod connect_users_routes;
 pub mod db_routes;
 pub mod events;
+pub mod federation_drain;
 pub mod federation_routes;
 pub mod fs_routes;
 pub mod grid_emitter;

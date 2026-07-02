@@ -54,6 +54,7 @@ mod companion_routes;
 mod connect_users_routes;
 mod db_routes;
 mod events;
+mod federation_drain;
 mod federation_routes;
 mod fs_routes;
 mod grid_emitter;
@@ -749,6 +750,13 @@ async fn async_main() {
     // been idle past its per-request `timeout_secs` (default 180). Replaces the
     // guest-init `sleep 86400` observability hack. No-op until a cell registers.
     let _sandbox_reaper_handle = sandbox_reaper::spawn();
+
+    // Federation outbox drain (audit finding #5 — the retry loop the durable
+    // outbox promised). Sweeps queued cross-server messages to reachable
+    // peers with per-peer exponential backoff; its FIRST pass is the boot
+    // trigger for messages queued before a restart. No-op every tick while
+    // federation is off or every queue is empty.
+    let _federation_drain_handle = federation_drain::spawn();
 
     // K2 Connect E2E (PRD `k2-connect-e2e-encryption.md` §4 Option A) —
     // when `K2_E2E` is on, stand up a SECOND listener that terminates TLS

@@ -251,6 +251,186 @@ fn bundle_handler_rejects_invalid_json() {
     assert_eq!(resp.status, "400 Bad Request");
 }
 
+// ── 0.40.22 pull-pack job ("Clone to this computer") ──────────────────
+
+/// The pack-job map is process-global and `insert_pack_job` evicts
+/// finished jobs — tests that insert/read jobs must serialize or a
+/// parallel insert can evict another test's just-finished job.
+static PACK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn pack_lock() -> std::sync::MutexGuard<'static, ()> {
+    PACK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[test]
+fn pack_handler_rejects_invalid_json() {
+    let resp = super::handle_clone_pack(b"not json");
+    assert_eq!(resp.status, "400 Bad Request");
+}
+
+/// The pull-pack gate: a path that exists but is NOT a registered
+/// workspace must 400 before any job is created.
+#[test]
+fn pack_rejects_unregistered_workspace() {
+    let root = TempDir::new("k2so-pack-unregistered");
+    let body = serde_json::json!({ "project_path": root.path().to_string_lossy() })
+        .to_string();
+    let resp = super::handle_clone_pack(body.as_bytes());
+    assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+    assert!(
+        resp.body.contains("not a registered workspace"),
+        "must say WHY it was rejected, got: {}",
+        resp.body
+    );
+}
+
+/// Nonexistent path → the shared `validate_path` 400, not a failed job.
+#[test]
+fn pack_rejects_nonexistent_path() {
+    let resp = super::handle_clone_pack(
+        br#"{"project_path":"/nonexistent/definitely-not-here-k2/ws"}"#,
+    );
+    assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+}
+
+/// Worker happy path, hermetic: the bundle lands under `<home>/.k2/
+/// clone-tmp/`, the job flips to `done` with a path + summary fields, and
+/// `pack-cleanup` then removes the bundle (idempotently).
+#[test]
+fn pack_job_builds_bundle_and_cleanup_removes_it() {
+    let _g = pack_lock();
+    let root = TempDir::new("k2so-pack-ok");
+    let project = root.path().join("Pack WS");
+    let home = root.path().join("home");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    write(&project.join("README.md"), "# Pack WS\n");
+
+    let job_id = "pack-test-ok".to_string();
+    super::insert_pack_job(super::PackJob {
+        job_id: job_id.clone(),
+        phase: "running",
+        bundle_path: None,
+        size_bytes: None,
+        entry_count: None,
+        scrubbed_secret_count: None,
+        error: None,
+    });
+    let opts = clone::CloneOptions {
+        home_override: Some(home.clone()),
+        ..Default::default()
+    };
+    super::run_pack_job(
+        &job_id,
+        &project.to_string_lossy(),
+        &opts,
+        &home,
+        k2_core::fs_commands::MAX_TRANSFER_SIZE,
+    );
+
+    let job = super::get_pack_job(&job_id).expect("job stays in the map");
+    assert_eq!(job.phase, "done", "error: {:?}", job.error);
+    let bundle_path = job.bundle_path.expect("done job carries bundle_path");
+    let bundle = Path::new(&bundle_path);
+    assert!(bundle.is_file(), "bundle missing at {bundle_path}");
+    assert!(
+        bundle.starts_with(home.join(".k2").join("clone-tmp")),
+        "bundle must land in <home>/.k2/clone-tmp, got {bundle_path}"
+    );
+    assert_eq!(job.size_bytes, Some(fs::metadata(bundle).unwrap().len()));
+    assert!(job.entry_count.unwrap_or(0) >= 1, "README must be bundled");
+
+    // Cleanup removes the bundle; a second call is a no-op success.
+    let body = serde_json::json!({ "job_id": job_id }).to_string();
+    let resp = super::handle_clone_pack_cleanup(body.as_bytes());
+    assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+    assert!(!bundle.exists(), "cleanup must delete the bundle");
+    let resp = super::handle_clone_pack_cleanup(body.as_bytes());
+    assert_eq!(resp.status, "200 OK", "idempotent; body: {}", resp.body);
+}
+
+/// A bundle over the transfer ceiling flips the job to `failed` AND is
+/// deleted from disk — no terminal "success" the download would refuse.
+#[test]
+fn pack_job_enforces_transfer_ceiling() {
+    let _g = pack_lock();
+    let root = TempDir::new("k2so-pack-oversize");
+    let project = root.path().join("Big WS");
+    let home = root.path().join("home");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    write(&project.join("README.md"), "# Big WS — bigger than 1 byte\n");
+
+    let job_id = "pack-test-oversize".to_string();
+    super::insert_pack_job(super::PackJob {
+        job_id: job_id.clone(),
+        phase: "running",
+        bundle_path: None,
+        size_bytes: None,
+        entry_count: None,
+        scrubbed_secret_count: None,
+        error: None,
+    });
+    let opts = clone::CloneOptions {
+        home_override: Some(home.clone()),
+        ..Default::default()
+    };
+    // 1-byte ceiling: any real bundle is over it.
+    super::run_pack_job(&job_id, &project.to_string_lossy(), &opts, &home, 1);
+
+    let job = super::get_pack_job(&job_id).expect("job stays in the map");
+    assert_eq!(job.phase, "failed");
+    assert!(
+        job.error.as_deref().unwrap_or("").contains("transfer ceiling"),
+        "error must name the ceiling, got {:?}",
+        job.error
+    );
+    assert!(job.bundle_path.is_none(), "failed job must not expose a path");
+    let leftovers: Vec<_> = fs::read_dir(home.join(".k2").join("clone-tmp"))
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().to_string_lossy().ends_with(".tar.gz"))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        leftovers.is_empty(),
+        "over-ceiling bundle must be deleted, found {leftovers:?}"
+    );
+}
+
+#[test]
+fn pack_status_rejects_unknown_job_id() {
+    let params = std::collections::HashMap::from([(
+        "job_id".to_string(),
+        "no-such-job".to_string(),
+    )]);
+    let resp = super::handle_clone_pack_status(&params);
+    assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+}
+
+#[test]
+fn pack_cleanup_rejects_unknown_job_and_running_job() {
+    let _g = pack_lock();
+    let resp = super::handle_clone_pack_cleanup(br#"{"job_id":"no-such-job"}"#);
+    assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+
+    super::insert_pack_job(super::PackJob {
+        job_id: "pack-test-running".to_string(),
+        phase: "running",
+        bundle_path: None,
+        size_bytes: None,
+        entry_count: None,
+        scrubbed_secret_count: None,
+        error: None,
+    });
+    let resp = super::handle_clone_pack_cleanup(br#"{"job_id":"pack-test-running"}"#);
+    assert_eq!(
+        resp.status, "400 Bad Request",
+        "running job must not be cleanable; body: {}",
+        resp.body
+    );
+}
+
 // ── #655 disk-leak cleanup ────────────────────────────────────────────
 
 /// A successfully-unpacked bundle file must be deleted on the destination

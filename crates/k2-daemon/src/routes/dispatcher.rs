@@ -418,6 +418,11 @@ async fn handle_one_request(
             // they're never URL-logged.
             | "/cli/clone/bundle"
             | "/cli/clone/unpack"
+            // 0.40.22 "Clone to this computer" — pull-pack as a start-then-
+            // poll job (status is a GET via misc_routes). Both POSTs are
+            // re-asserted with require_post in their arm below.
+            | "/cli/clone/pack"
+            | "/cli/clone/pack-cleanup"
             | "/cli/fs/move"
             | "/cli/fs/copy"
             | "/cli/fs/delete"
@@ -2519,6 +2524,37 @@ async fn handle_one_request(
                 crate::fs_routes::handle_compress(&body_bytes)
             } else {
                 crate::fs_routes::handle_compress_cancel(&body_bytes)
+            };
+            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+                .await;
+        }
+        // 0.40.22 "Clone to this computer" — POST /cli/clone/pack +
+        // /cli/clone/pack-cleanup. Pull-pack as an async job (worker thread
+        // builds the bundle; `GET /cli/clone/pack-status` polls it;
+        // `cleanup` reclaims the bundle after the client's download).
+        // Matched on path ALONE (no is_post guard) so a stray GET hits
+        // require_post's explicit 405 per feedback_post_only_route_guards.
+        // Same isolated `token_ok` gate as the clone bundle/unpack arm.
+        p if p == "/cli/clone/pack" || p == "/cli/clone/pack-cleanup" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = if p == "/cli/clone/pack" {
+                crate::clone_routes::handle_clone_pack(&body_bytes)
+            } else {
+                crate::clone_routes::handle_clone_pack_cleanup(&body_bytes)
             };
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;

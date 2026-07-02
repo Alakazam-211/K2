@@ -11,9 +11,24 @@
 //!   as a project, and APPLY the manifest's settings so the migrated
 //!   workspace appears fully configured.
 //!
-//! Both are gated by `token_ok` in the dispatcher (the same isolated-gate
-//! pattern as `fs/upload-binary`), so these handlers assume the caller is
-//! already authenticated.
+//! 0.40.22 adds the PULL half ("Clone to this computer"): a renderer that is
+//! remotely signed into this daemon asks it to pack a workspace, downloads
+//! the bundle over `fs/read-range`, and unpacks on ITS OWN local daemon.
+//! Packing a big workspace over a tunneled request can outlive an HTTP
+//! round-trip, so the pull pack is an ASYNC JOB (the same start-then-poll
+//! shape as `fs/compress`):
+//! - `POST /cli/clone/pack` starts the job (project must be a REGISTERED
+//!   workspace — a pull may only take what this server actually manages)
+//!   and returns `{ job_id }`; a worker thread builds the same bundle the
+//!   push route does, then enforces the `MAX_TRANSFER_SIZE` ceiling.
+//! - `GET  /cli/clone/pack-status?job_id=` snapshots the job.
+//! - `POST /cli/clone/pack-cleanup` deletes a finished job's bundle after
+//!   the client has downloaded it (job-id-keyed — the route never takes a
+//!   path, so it can only ever delete a bundle THIS daemon packed).
+//!
+//! All POSTs are gated by `token_ok` in the dispatcher (the same
+//! isolated-gate pattern as `fs/upload-binary`), so these handlers assume
+//! the caller is already authenticated.
 
 use crate::cli_response::CliResponse;
 use k2_core::clone;
@@ -40,49 +55,49 @@ struct BundleBody {
     carry_secrets: bool,
 }
 
-/// `POST /cli/clone/bundle` — build the bundle on the SOURCE daemon.
-///
-/// Inventories the three state locations, captures the source workspace's
-/// K2 settings from the projects DB row, tar.gz's everything to
-/// `~/.k2so/clone-tmp/<name>-<ts>.tar.gz`, and returns the bundle path + a
-/// summary (entry count, scrubbed-secret count, byte size).
-pub fn handle_clone_bundle(body: &[u8]) -> CliResponse {
-    let b: BundleBody = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
-    };
+/// How a bundle build failed — carried out of [`build_workspace_bundle`]
+/// so the synchronous push route can keep its exact 400-vs-500 mapping
+/// while the async pack job flattens both into a failed-job message.
+enum BundleError {
+    /// Caller-supplied input was wrong (bad path, inventory failure).
+    BadRequest(String),
+    /// The daemon itself couldn't do the work (home/dir/tar failures).
+    Internal(String),
+}
 
-    let opts = clone::CloneOptions {
-        include_all_history: !b.live_only,
-        carry_secrets: b.carry_secrets,
-        home_override: None,
-    };
+/// A successfully built bundle on this daemon's disk.
+struct BundleOutcome {
+    bundle_path: std::path::PathBuf,
+    size_bytes: u64,
+    entry_count: usize,
+    scrubbed_count: usize,
+}
 
-    let inv = match clone::inventory(&b.project_path, opts.clone()) {
-        Ok(i) => i,
-        Err(e) => return CliResponse::bad_request(format!("inventory failed: {e}")),
-    };
+/// Build a workspace clone bundle into `<home>/.k2/clone-tmp/` — the shared
+/// engine behind the synchronous push route (`handle_clone_bundle`) and the
+/// async pull-pack job (`handle_clone_pack`). `home`-parameterized (like
+/// `unpack_and_register`) so the pack-job tests run against a temp HOME.
+fn build_workspace_bundle(
+    project_path: &str,
+    opts: &clone::CloneOptions,
+    home: &std::path::Path,
+) -> Result<BundleOutcome, BundleError> {
+    let inv = clone::inventory(project_path, opts.clone())
+        .map_err(|e| BundleError::BadRequest(format!("inventory failed: {e}")))?;
 
     // Capture the source workspace's K2 settings (graceful: None if the
     // path isn't a registered project).
     let settings = {
         let db = db::shared();
         let conn = db.lock();
-        match clone::capture_settings(&conn, &inv.project_path) {
-            Ok(s) => s,
-            Err(e) => return CliResponse::internal_error(format!("settings capture: {e}")),
-        }
+        clone::capture_settings(&conn, &inv.project_path)
+            .map_err(|e| BundleError::Internal(format!("settings capture: {e}")))?
     };
 
     // Temp bundle path: ~/.k2so/clone-tmp/<name>-<ts>.tar.gz
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => return CliResponse::internal_error("cannot resolve home directory"),
-    };
     let tmp_dir = home.join(".k2").join("clone-tmp");
-    if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
-        return CliResponse::internal_error(format!("create clone-tmp dir: {e}"));
-    }
+    std::fs::create_dir_all(&tmp_dir)
+        .map_err(|e| BundleError::Internal(format!("create clone-tmp dir: {e}")))?;
 
     // Self-heal accumulated clone bundles (task #655): prune any stale
     // `*.tar.gz` in this exact dir before writing the fresh one. This
@@ -129,19 +144,55 @@ pub fn handle_clone_bundle(body: &[u8]) -> CliResponse {
         );
     }
 
-    if let Err(e) = clone::build_bundle(&inv, &opts, created_at, settings, &bundle_path) {
-        return CliResponse::internal_error(format!("build bundle: {e}"));
-    }
+    clone::build_bundle(&inv, opts, created_at, settings, &bundle_path)
+        .map_err(|e| BundleError::Internal(format!("build bundle: {e}")))?;
 
     let size = std::fs::metadata(&bundle_path).map(|m| m.len()).unwrap_or(0);
 
+    Ok(BundleOutcome {
+        bundle_path,
+        size_bytes: size,
+        entry_count,
+        scrubbed_count,
+    })
+}
+
+/// `POST /cli/clone/bundle` — build the bundle on the SOURCE daemon.
+///
+/// Inventories the three state locations, captures the source workspace's
+/// K2 settings from the projects DB row, tar.gz's everything to
+/// `~/.k2so/clone-tmp/<name>-<ts>.tar.gz`, and returns the bundle path + a
+/// summary (entry count, scrubbed-secret count, byte size).
+pub fn handle_clone_bundle(body: &[u8]) -> CliResponse {
+    let b: BundleBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+
+    let opts = clone::CloneOptions {
+        include_all_history: !b.live_only,
+        carry_secrets: b.carry_secrets,
+        home_override: None,
+    };
+
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return CliResponse::internal_error("cannot resolve home directory"),
+    };
+
+    let out = match build_workspace_bundle(&b.project_path, &opts, &home) {
+        Ok(o) => o,
+        Err(BundleError::BadRequest(e)) => return CliResponse::bad_request(e),
+        Err(BundleError::Internal(e)) => return CliResponse::internal_error(e),
+    };
+
     CliResponse::ok_json(
         serde_json::json!({
-            "bundle_path": bundle_path.to_string_lossy(),
+            "bundle_path": out.bundle_path.to_string_lossy(),
             "manifest_summary": {
-                "entry_count": entry_count,
-                "scrubbed_secret_count": scrubbed_count,
-                "size_bytes": size,
+                "entry_count": out.entry_count,
+                "scrubbed_secret_count": out.scrubbed_count,
+                "size_bytes": out.size_bytes,
                 "include_all_history": !b.live_only,
                 "carry_secrets": b.carry_secrets,
             }
@@ -282,6 +333,271 @@ pub fn unpack_and_register(
     }
 
     Ok((project, dest_path))
+}
+
+// ── pull pack job (0.40.22 "Clone to this computer") ──────────────────
+//
+// Packing a workspace can take minutes and the pull client sits on the
+// far side of a tunnel, so the pack is an ASYNC JOB — the same
+// start-then-poll shape as `fs/compress` (`fs_routes::handle_compress`):
+// `POST clone/pack` returns a job_id immediately, a worker thread builds
+// the bundle, `GET clone/pack-status?job_id=` snapshots it, and
+// `POST clone/pack-cleanup` reclaims the bundle once downloaded.
+
+use std::sync::{Mutex, OnceLock};
+
+/// A pack job's observable state; `pack-status` snapshots it. On `done`
+/// it carries the bundle path (for the `fs/read-range` download loop) +
+/// the same manifest-summary fields the push bundle route returns.
+#[derive(Clone, serde::Serialize)]
+pub struct PackJob {
+    pub job_id: String,
+    /// `running` → `done` | `failed`. Terminal states stay in the map so a
+    /// poll that races completion still sees the outcome (jobs are removed
+    /// only when a new job starts — see `insert_pack_job`).
+    pub phase: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scrubbed_secret_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn pack_jobs() -> &'static Mutex<std::collections::HashMap<String, PackJob>> {
+    static JOBS: OnceLock<Mutex<std::collections::HashMap<String, PackJob>>> = OnceLock::new();
+    JOBS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Insert a fresh job, evicting finished ones so the map can't grow
+/// unbounded across a long daemon lifetime (in-flight jobs are kept).
+fn insert_pack_job(job: PackJob) {
+    let mut map = pack_jobs().lock().unwrap_or_else(|e| e.into_inner());
+    map.retain(|_, j| j.phase == "running");
+    map.insert(job.job_id.clone(), job);
+}
+
+fn update_pack_job<F: FnOnce(&mut PackJob)>(job_id: &str, f: F) {
+    if let Some(job) = pack_jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(job_id)
+    {
+        f(job);
+    }
+}
+
+fn get_pack_job(job_id: &str) -> Option<PackJob> {
+    pack_jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(job_id)
+        .cloned()
+}
+
+/// Short collision-resistant job id (random hex via getrandom — same
+/// scheme as `fs_routes::new_compress_job_id`).
+fn new_pack_job_id() -> String {
+    let mut bytes = [0u8; 16];
+    if getrandom::getrandom(&mut bytes).is_err() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        return format!("pack-{nanos:x}");
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `POST /cli/clone/pack` — start a pull-pack job. Body is the same shape
+/// as `clone/bundle` (`project_path` + `live_only` + `carry_secrets`).
+/// Validation that would make the job fail instantly happens HERE so the
+/// caller gets a 400 instead of a job that flips to `failed`; the deep
+/// work runs on a worker thread. Returns `{ job_id }`.
+pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
+    let b: BundleBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+
+    // Path validation, same chokepoint as the fs routes (empty / traversal
+    // relative paths / nonexistent → 400, and the path is canonicalized so
+    // the registered-workspace comparison below can't be dodged with `..`).
+    let canonical = match k2_core::fs_commands::validate_path(&b.project_path) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+
+    // Pull-pack only serves REGISTERED workspaces: a remote viewer may take
+    // home what this server manages as a workspace, not arbitrary trees the
+    // token could otherwise name (the push `clone/bundle` route stays as-is
+    // — its caller is the machine's own renderer bundling its own disk).
+    if !is_registered_workspace(&canonical) {
+        return CliResponse::bad_request(format!(
+            "not a registered workspace on this server: {}",
+            canonical.display()
+        ));
+    }
+
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return CliResponse::internal_error("cannot resolve home directory"),
+    };
+
+    let opts = clone::CloneOptions {
+        include_all_history: !b.live_only,
+        carry_secrets: b.carry_secrets,
+        home_override: None,
+    };
+
+    let job_id = new_pack_job_id();
+    insert_pack_job(PackJob {
+        job_id: job_id.clone(),
+        phase: "running",
+        bundle_path: None,
+        size_bytes: None,
+        entry_count: None,
+        scrubbed_secret_count: None,
+        error: None,
+    });
+
+    let project_path = canonical.to_string_lossy().to_string();
+    let worker_job_id = job_id.clone();
+    std::thread::spawn(move || {
+        run_pack_job(
+            &worker_job_id,
+            &project_path,
+            &opts,
+            &home,
+            k2_core::fs_commands::MAX_TRANSFER_SIZE,
+        );
+    });
+
+    CliResponse::ok_json(serde_json::json!({ "job_id": job_id }).to_string())
+}
+
+/// `canonical` equals a registered project's path? Registered paths are
+/// canonicalized too (best-effort; a stale row whose dir vanished simply
+/// never matches) so symlinked spellings of the same workspace compare
+/// equal.
+fn is_registered_workspace(canonical: &std::path::Path) -> bool {
+    let projects = match pops::projects_list() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    projects.iter().any(|p| {
+        std::fs::canonicalize(&p.path)
+            .map(|reg| reg == canonical)
+            .unwrap_or(false)
+    })
+}
+
+/// Pack-job worker body: build the bundle, then enforce the transfer
+/// ceiling. Split out (and `home`/`max_bytes`-parameterized) so it's
+/// hermetically testable without spawning the route's thread.
+fn run_pack_job(
+    job_id: &str,
+    project_path: &str,
+    opts: &clone::CloneOptions,
+    home: &std::path::Path,
+    max_bytes: u64,
+) {
+    match build_workspace_bundle(project_path, opts, home) {
+        Ok(out) => {
+            // Transfer ceiling: a bundle the download machinery would refuse
+            // to move must not linger on disk as a terminal "success".
+            if out.size_bytes > max_bytes {
+                let _ = std::fs::remove_file(&out.bundle_path);
+                k2_core::log_debug!(
+                    "[daemon/clone] pack job {job_id} FAILED: bundle {} bytes exceeds \
+                     the {} GiB transfer ceiling",
+                    out.size_bytes,
+                    max_bytes / (1024 * 1024 * 1024),
+                );
+                update_pack_job(job_id, |j| {
+                    j.phase = "failed";
+                    j.error = Some(format!(
+                        "bundle is {} bytes — over the {} GiB transfer ceiling",
+                        out.size_bytes,
+                        max_bytes / (1024 * 1024 * 1024)
+                    ));
+                });
+                return;
+            }
+            update_pack_job(job_id, |j| {
+                j.phase = "done";
+                j.bundle_path = Some(out.bundle_path.to_string_lossy().to_string());
+                j.size_bytes = Some(out.size_bytes);
+                j.entry_count = Some(out.entry_count as u64);
+                j.scrubbed_secret_count = Some(out.scrubbed_count as u64);
+            });
+        }
+        Err(BundleError::BadRequest(e)) | Err(BundleError::Internal(e)) => {
+            k2_core::log_debug!("[daemon/clone] pack job {job_id} FAILED: {e}");
+            update_pack_job(job_id, |j| {
+                j.phase = "failed";
+                j.error = Some(e);
+            });
+        }
+    }
+}
+
+/// `GET /cli/clone/pack-status?job_id=` — snapshot a pack job.
+pub fn handle_clone_pack_status(
+    params: &std::collections::HashMap<String, String>,
+) -> CliResponse {
+    let job_id = match params.get("job_id") {
+        Some(id) if !id.is_empty() => id,
+        _ => return CliResponse::bad_request("Missing 'job_id' parameter"),
+    };
+    match get_pack_job(job_id) {
+        Some(job) => CliResponse::ok_json(
+            serde_json::to_string(&job).unwrap_or_else(|_| "{}".to_string()),
+        ),
+        None => CliResponse::bad_request(format!("unknown job_id: {job_id}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct PackCleanupBody {
+    job_id: String,
+}
+
+/// `POST /cli/clone/pack-cleanup` — delete a finished pack job's bundle
+/// once the client has downloaded it. Keyed by job_id (never a path), so
+/// it can only delete a bundle THIS daemon packed; an already-gone file is
+/// fine (idempotent). A still-running job is a 400 — the client must wait
+/// for a terminal phase. The hourly stale-prune in `handle_clone_bundle`
+/// remains the backstop if the client dies before calling this.
+pub fn handle_clone_pack_cleanup(body: &[u8]) -> CliResponse {
+    let parsed: PackCleanupBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let job = match get_pack_job(&parsed.job_id) {
+        Some(j) => j,
+        None => {
+            return CliResponse::bad_request(format!("unknown job_id: {}", parsed.job_id))
+        }
+    };
+    if job.phase == "running" {
+        return CliResponse::bad_request("pack job is still running".to_string());
+    }
+    if let Some(path) = &job.bundle_path {
+        if let Err(e) = std::fs::remove_file(path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return CliResponse::internal_error(format!(
+                    "could not remove packed bundle: {e}"
+                ));
+            }
+        }
+        update_pack_job(&parsed.job_id, |j| j.bundle_path = None);
+    }
+    CliResponse::ok_json(r#"{"success":true}"#.to_string())
 }
 
 /// How old a `clone-tmp/*.tar.gz` must be before the stale-prune deletes it.

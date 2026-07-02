@@ -830,6 +830,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/fs/compress-status" => crate::fs_routes::handle_compress_status(params),
         // 0.40.22 — ranged file read; the download-to-local stream loops it.
         "/cli/fs/read-range" => crate::fs_routes::handle_read_range(params),
+        // 0.40.22 — poll a "Clone to this computer" pull-pack job (start =
+        // POST /cli/clone/pack in the dispatcher).
+        "/cli/clone/pack-status" => crate::clone_routes::handle_clone_pack_status(params),
 
         // ── Phase 2 Unit 6: chat history (GET) ────────────────────
         "/cli/chat/list" => crate::chat_routes::handle_list(params),

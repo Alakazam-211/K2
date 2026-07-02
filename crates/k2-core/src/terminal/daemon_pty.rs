@@ -328,9 +328,17 @@ fn elect_on_detach(
 /// Typically stored inside an `Arc` so multiple subsystems
 /// (session_map, registry, WS handler) can share one handle.
 ///
-/// Dropping the last Arc closes the PTY channel, which causes
-/// alacritty's IO thread to exit naturally. The thread handle is
-/// NOT stored — we let it clean up itself on channel close.
+/// The PTY **master fd lives in alacritty's IO thread** (the
+/// `EventLoop` owns the `Pty`; `spawn()` discards the JoinHandle), so
+/// the fd's lifetime is the IO thread's lifetime — NOT this struct's.
+/// The thread exits on exactly two triggers: it observes the child's
+/// exit itself (its own `try_wait` wins the reap), or it receives an
+/// explicit `Msg::Shutdown`. Dropping the last Arc does NEITHER —
+/// alacritty's `drain_recv_channel` treats a disconnected channel as
+/// "no messages" (keeps looping) and a dropped `Sender` never calls
+/// `poller.notify()`, so the thread just stays parked. That is why
+/// `kill()` sends `Msg::Shutdown` explicitly (2026-07-02 PTY-master
+/// leak fix); Drop then rides on `kill()`'s idempotent gate.
 pub struct DaemonPtySession {
     pub session_id: SessionId,
     pub cwd: Option<PathBuf>,
@@ -378,9 +386,11 @@ pub struct DaemonPtySession {
     /// heavy IO-thread contention.
     term: Arc<FairMutex<Term<DaemonEventListener>>>,
 
-    /// Notifier for writing input bytes + signaling resize. The
-    /// Notifier wraps the alacritty event loop's sender channel;
-    /// dropping it closes the channel and shuts the IO thread down.
+    /// Notifier for writing input bytes + signaling resize, and — via
+    /// `kill()` — for the explicit `Msg::Shutdown` that makes the IO
+    /// thread exit and drop the PTY (closing the master fd). NOTE:
+    /// merely dropping this does NOT shut the IO thread down (see the
+    /// struct doc); teardown must go through `kill()`.
     /// Guarded by a `Mutex` so concurrent `write()` + `resize()`
     /// calls serialize (Notifier::notify needs `&self` but
     /// on_resize needs `&mut self`).
@@ -702,9 +712,12 @@ impl DaemonPtySession {
         );
 
         // Spawn the IO thread. The handle is `JoinHandle<(EventLoop, State)>`
-        // — we intentionally don't store it. When the last `Arc<Self>`
-        // drops, `pty_notifier` drops, the EventLoopSender closes,
-        // the IO thread sees the Shutdown variant and exits on its own.
+        // — we intentionally don't store it. The thread's return value
+        // owns the EventLoop (and therefore the PTY master fd); when the
+        // thread finishes, the detached JoinHandle's packet drops it and
+        // the fd closes. The thread finishes when it observes the child
+        // exit itself OR when `kill()` sends the explicit `Msg::Shutdown`
+        // (a dropped sender alone never wakes it — see the struct doc).
         // Not joining means thread cleanup happens implicitly via
         // OS reaping; acceptable for a daemon.
         let _io_thread = event_loop.spawn();
@@ -1259,16 +1272,15 @@ impl DaemonPtySession {
             return;
         }
 
-        // Close the event-loop channel first so alacritty's IO thread
-        // begins shutting down (its own Pty::Drop SIGHUPs the child as
-        // a bonus). We don't rely on it for the kill — the explicit
-        // sequence below is authoritative.
-        // (pty_notifier is dropped when `self` drops; nothing to do
-        // here — the kill sequence stands on its own.)
-
         let pid = match self.pid {
             Some(p) if p > 0 => p,
-            _ => return,
+            _ => {
+                // No PID captured — nothing to kill/reap, but the IO
+                // thread (and the master fd it owns) must still be shut
+                // down explicitly; see release_pty_master below.
+                self.release_pty_master();
+                return;
+            }
         };
 
         #[cfg(unix)]
@@ -1322,7 +1334,42 @@ impl DaemonPtySession {
             }
         }
 
+        // 2026-07-02 PTY-master leak fix — release the master fd NOW.
+        // AFTER the reap on purpose: the IO thread's `Pty::Drop` runs a
+        // blocking `child.wait()`, which is instant (ECHILD) once the
+        // child is reaped but would park the dying thread indefinitely
+        // behind a SIGHUP-ignoring child if we shut down first.
+        self.release_pty_master();
+
         log_debug!("[v2-kill] session={} reaped child pid={}", self.session_id, pid);
+    }
+
+    /// Make alacritty's IO thread exit so it drops the `Pty` — closing
+    /// the PTY **master fd** — promptly and unconditionally.
+    ///
+    /// **Why this must be explicit.** The master fd is owned by the
+    /// `EventLoop` inside the detached IO thread, and that thread exits
+    /// on exactly two triggers: its own `try_wait` observes the child's
+    /// exit, or it receives `Msg::Shutdown`. Neither is implied by
+    /// teardown: dropping the last `Arc<Self>` only disconnects the
+    /// channel, which alacritty's `drain_recv_channel` treats as "no
+    /// messages" (no exit) and which never `poller.notify()`s the
+    /// parked thread. And the try_wait trigger is LOST whenever
+    /// `kill()`'s raw `waitpid` wins the reap race — `next_child_event`
+    /// swallows the resulting ECHILD and returns `None`, so the loop
+    /// never breaks. Every leaked path converged on the same picture:
+    /// child gone, IO thread parked forever, `/dev/ptmx` master held
+    /// until daemon exit — ~500 of them exhausted the box's PTY pool.
+    ///
+    /// The v1 backend always did this (`alacritty_backend::kill` sends
+    /// `Msg::Shutdown`); v2 dropped it, same as the pid-reap regression
+    /// documented on `pid`. Send failure is the GOOD case — the IO
+    /// thread already exited on its own and closed the fd — so it is
+    /// deliberately ignored. The Term (grid content, scrollback) is
+    /// untouched: exited-session UX reads the Term, never the fd.
+    fn release_pty_master(&self) {
+        use alacritty_terminal::event_loop::Msg;
+        let _ = self.pty_notifier.lock().0.send(Msg::Shutdown);
     }
 
     /// PID of the direct child process, if captured. Exposed for
@@ -1987,6 +2034,136 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    /// Count this process's open PTY master fds via lsof. On macOS a
+    /// master opened through posix_openpt shows up as `/dev/ptmx`.
+    /// Loud on failure — a missing/broken lsof must fail the test,
+    /// never report a fake 0.
+    #[cfg(unix)]
+    fn count_ptmx_fds() -> usize {
+        let pid = std::process::id();
+        let out = std::process::Command::new("lsof")
+            .args(["-p", &pid.to_string()])
+            .output()
+            .expect("lsof must be runnable");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.contains("/dev/ptmx"))
+            .count()
+    }
+
+    /// PTY-master leak regression (path 1: child exits ON ITS OWN).
+    /// The session Arc is still held — as the daemon's session map /
+    /// WS handlers hold theirs — and the master fd must be released
+    /// anyway: the fd's lifetime is the IO thread's, not the Arc's.
+    /// Here the IO thread's own `try_wait` wins the reap, sees
+    /// `ChildEvent::Exited`, breaks its loop, and drops the Pty.
+    #[cfg(unix)]
+    #[test]
+    fn child_self_exit_releases_pty_master_fd() {
+        let baseline = count_ptmx_fds();
+        let cfg = DaemonPtyConfig {
+            cwd: Some(PathBuf::from("/tmp")),
+            program: Some("/bin/sh".to_string()),
+            args: vec!["-c".to_string(), "exit 0".to_string()],
+            ..Default::default()
+        };
+        let s = DaemonPtySession::spawn(cfg).expect("spawn sh");
+        let pid = s.child_pid().expect("pid captured");
+
+        // Wait for the child to fully disappear (exit + reap).
+        let mut gone = false;
+        for _ in 0..250 {
+            if unsafe { libc::kill(pid, 0) } == -1
+                && std::io::Error::last_os_error().raw_os_error()
+                    == Some(libc::ESRCH)
+            {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(gone, "child pid={pid} must exit+reap on its own (sh -c 'exit 0')");
+
+        // The Arc is STILL held here. The master must close anyway.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut now_count = count_ptmx_fds();
+        while now_count > baseline && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+            now_count = count_ptmx_fds();
+        }
+        assert!(
+            now_count <= baseline,
+            "PTY master leaked after child self-exit: baseline={baseline} now={now_count} \
+             (Arc still held — the fd's lifetime must not be anchored to the session object)"
+        );
+        drop(s);
+    }
+
+    /// PTY-master leak regression (path 2: teardown via `kill()` when
+    /// the IO thread LOST the reap race). Before the fix this leaked
+    /// the master fd until daemon exit: an external `waitpid` reaps the
+    /// child first, so alacritty's `try_wait` gets ECHILD and
+    /// `next_child_event` swallows it (no loop break), and with Arcs
+    /// still retained (session map / WS handler / emitter) nothing else
+    /// ever woke the parked thread. `kill()` must now release the fd
+    /// explicitly via `Msg::Shutdown` — with the Arcs STILL held.
+    #[cfg(unix)]
+    #[test]
+    fn kill_releases_pty_master_fd_with_arc_retained() {
+        let baseline = count_ptmx_fds();
+        let cfg = DaemonPtyConfig {
+            cwd: Some(PathBuf::from("/tmp")),
+            program: Some("sleep".to_string()),
+            args: vec!["600".to_string()],
+            ..Default::default()
+        };
+        let s = DaemonPtySession::spawn(cfg).expect("spawn sleep");
+        let retained = Arc::clone(&s); // simulated WS-handler/emitter holder
+        let pid = s.child_pid().expect("pid captured");
+
+        // Deterministically lose the race for the IO thread: reap the
+        // child HERE (the test process is the parent) before kill()
+        // runs. The IO thread's try_wait can now only ever see ECHILD.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            let mut status: i32 = 0;
+            let r = libc::waitpid(pid, &mut status, 0);
+            // A blocking waitpid parked in the kernel beats the IO
+            // thread's kqueue→pipe→try_wait chain in practice; but if
+            // the IO thread somehow reaped first (ECHILD here), the
+            // post-condition below still pins the contract — the fd
+            // must be released with Arcs retained either way.
+            assert!(
+                r == pid
+                    || (r == -1
+                        && std::io::Error::last_os_error().raw_os_error()
+                            == Some(libc::ECHILD)),
+                "waitpid(pid={pid}) returned {r} (expected the pid, or \
+                 -1/ECHILD if alacritty's IO thread won the reap race)"
+            );
+        }
+
+        // The teardown chokepoint every path funnels through
+        // (unregister / close route / reaper / Drop).
+        s.kill();
+
+        // Both Arcs are STILL held. The master must close anyway.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut now_count = count_ptmx_fds();
+        while now_count > baseline && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+            now_count = count_ptmx_fds();
+        }
+        assert!(
+            now_count <= baseline,
+            "PTY master leaked after kill() with retained Arcs: \
+             baseline={baseline} now={now_count} — kill() must shut the \
+             IO thread down explicitly, not wait for the last Arc drop"
+        );
+        drop(retained);
+        drop(s);
     }
 
     /// `kill()` is idempotent: calling it twice must not panic, must

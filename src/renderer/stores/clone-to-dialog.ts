@@ -35,8 +35,14 @@ interface CloneToDialogState {
   projectPath: string | null
   /** Source workspace display name (for the header). */
   projectName: string | null
-  /** Destination K2 Connect host. */
+  /** Destination K2 Connect host. Null for a PULL run (the destination is
+   *  this computer — no ConnectHost models it). */
   host: ConnectHost | null
+  /** PULL run ("Clone to this computer", 0.40.22): the source workspace
+   *  lives on the ACTIVE REMOTE host and the destination is the local
+   *  machine. Flips the modal's step list + header direction; the push
+   *  flow leaves it false. */
+  pull: boolean
   /** "Include secrets" toggle — default true (include). Read at confirm time
    *  and threaded into `cloneWorkspaceTo` → `clone/bundle` as carry_secrets. */
   carrySecrets: boolean
@@ -57,11 +63,13 @@ interface CloneToDialogState {
    *  button can kick off the run without re-plumbing deps through the UI. */
   onConfirm: ((carrySecrets: boolean, includeAllHistory: boolean) => void) | null
 
-  /** Open the modal at the 'options' phase for a given source + host. */
+  /** Open the modal at the 'options' phase for a given source + host.
+   *  `host: null` + `pull: true` is the "Clone to this computer" run. */
   start: (args: {
     projectPath: string
     projectName: string
-    host: ConnectHost
+    host: ConnectHost | null
+    pull?: boolean
     onConfirm: (carrySecrets: boolean, includeAllHistory: boolean) => void
   }) => void
   /** Toggle the "Include secrets" checkbox (options phase only). */
@@ -92,6 +100,7 @@ const RESET = {
   projectPath: null,
   projectName: null,
   host: null,
+  pull: false,
   carrySecrets: true,
   includeAllHistory: true,
   stage: 'bundling' as CloneStage,
@@ -104,7 +113,7 @@ const RESET = {
 export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
   ...RESET,
 
-  start: ({ projectPath, projectName, host, onConfirm }) =>
+  start: ({ projectPath, projectName, host, pull, onConfirm }) =>
     set({
       ...RESET,
       isOpen: true,
@@ -112,6 +121,7 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
       projectPath,
       projectName,
       host,
+      pull: pull ?? false,
       carrySecrets: true,
       includeAllHistory: true,
       onConfirm,
@@ -121,9 +131,11 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
   setIncludeAllHistory: (includeAllHistory) => set({ includeAllHistory }),
 
   confirm: () => {
-    const { phase, onConfirm, carrySecrets, includeAllHistory } = get()
+    const { phase, pull, onConfirm, carrySecrets, includeAllHistory } = get()
     if (phase !== 'options') return
-    set({ phase: 'running', stage: 'bundling' })
+    // A pull opens on ITS first stage (packing on the server); the
+    // orchestration's first onStage overwrites either way.
+    set({ phase: 'running', stage: pull ? 'packing' : 'bundling' })
     onConfirm?.(carrySecrets, includeAllHistory)
   },
 

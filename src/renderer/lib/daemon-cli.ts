@@ -14,7 +14,7 @@
 // existing `try/catch` blocks around the old `invoke(...)` calls keep
 // working unchanged.
 
-import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, type DaemonWsAvailable } from '@/kessel/daemon-ws'
+import { getDaemonWs, getLocalDaemonWs, invalidateDaemonWs, daemonHttpBase, type DaemonWsAvailable } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
@@ -150,6 +150,32 @@ export async function daemonCliPost<T = unknown>(
       body: body !== undefined ? JSON.stringify(body) : undefined,
     },
   }))
+  return parseDaemonResponse<T>(res, text)
+}
+
+/**
+ * POST /cli/<route> against the LOCAL daemon, regardless of the active
+ * host. The pull half of clone-to ("Clone to this computer") runs its
+ * unpack + cleanup on the local daemon WHILE the remote host stays
+ * active, so it can't go through the active-host `daemonCliPost`.
+ * Same connection-retry + response parsing as `daemonCliPost`; the
+ * remote-session revival step is intentionally absent (revival is a
+ * remote-host recovery — the local daemon's token never goes stale
+ * within an app session, and a restart invalidates via `withConnRetry`).
+ */
+export async function localDaemonCliPost<T = unknown>(
+  route: string,
+  body?: unknown,
+): Promise<T> {
+  const { res, text } = await withConnRetry(async () => {
+    const creds = await getLocalDaemonWs()
+    const res = await fetch(`${daemonHttpBase(creds)}/cli/${route}?token=${creds.token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+    return { res, text: await res.text() }
+  })
   return parseDaemonResponse<T>(res, text)
 }
 

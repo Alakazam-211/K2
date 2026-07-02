@@ -14,7 +14,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { showContextMenu } from '../../lib/context-menu'
 import { pickWorkspaceFolder } from '../../lib/pick-workspace-folder'
 import { useConnectHostStore } from '../../stores/connect-host'
-import { startCloneTo } from '../../lib/start-clone-to'
+import { startCloneTo, startCloneToThisComputer } from '../../lib/start-clone-to'
 import ProjectAvatar from './ProjectAvatar'
 
 const RAIL_WIDTH = 48
@@ -223,12 +223,17 @@ export default function IconRail(): React.JSX.Element {
       // "Clone to <host>" — migrate this LOCAL workspace onto a connected K2
       // Connect host. Only offered when we're currently on the local daemon
       // (the orchestration bundles + reads from the local machine first).
+      // On a REMOTE host the direction flips: "Clone to This Computer"
+      // pulls the remote workspace home (0.40.22, clone-pull.ts).
       const { activeHost, hosts } = useConnectHostStore.getState()
       if (activeHost === 'local' && hosts.length > 0) {
         menuItems.push({ id: 'separator-clone', label: '', type: 'separator' })
         for (const host of hosts) {
           menuItems.push({ id: `clone-to:${host.id}`, label: `Clone to ${host.label}` })
         }
+      } else if (activeHost !== 'local') {
+        menuItems.push({ id: 'separator-clone', label: '', type: 'separator' })
+        menuItems.push({ id: 'clone-here', label: 'Clone to This Computer' })
       }
 
       menuItems.push(
@@ -240,6 +245,8 @@ export default function IconRail(): React.JSX.Element {
 
       if (clickedId === 'settings') {
         useSettingsStore.getState().openSettings('projects', projectId)
+      } else if (clickedId === 'clone-here') {
+        startCloneToThisComputer(project.path, project.name)
       } else if (clickedId?.startsWith('clone-to:')) {
         const hostId = clickedId.replace('clone-to:', '')
         const host = useConnectHostStore.getState().hosts.find((h) => h.id === hostId)

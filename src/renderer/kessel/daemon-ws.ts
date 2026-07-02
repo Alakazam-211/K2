@@ -96,6 +96,15 @@ export function getDaemonWs(): Promise<DaemonWsAvailable> {
       secure: active.secure,
     })
   }
+  return getLocalDaemonWs()
+}
+
+/** Resolve the LOCAL daemon's creds regardless of the active host — the
+ *  cached `daemon_ws_url` path `getDaemonWs` takes when local is active.
+ *  Call sites that must reach the local daemon while a REMOTE host is
+ *  active (e.g. the "Clone to this computer" pull's local unpack) use
+ *  this directly instead of switching hosts mid-flow. */
+export function getLocalDaemonWs(): Promise<DaemonWsAvailable> {
   if (cached) return cached
   cached = (async () => {
     let res: RawResponse

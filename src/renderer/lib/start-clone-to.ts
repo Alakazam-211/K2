@@ -13,10 +13,18 @@
 import {
   cloneWorkspaceTo,
   defaultCloneDeps,
+  CloneCancelledError,
   type CloneDeps,
+  type CloneStage,
 } from './clone-to'
+import {
+  cloneWorkspaceToThisComputer,
+  defaultClonePullDeps,
+  type ClonePullDeps,
+} from './clone-pull'
 import { useCloneToDialogStore } from '@/stores/clone-to-dialog'
 import { useProjectsStore } from '@/stores/projects'
+import { useToastStore } from '@/stores/toast'
 import type { ConnectHost } from '@/stores/connect-host'
 
 /**
@@ -41,6 +49,95 @@ export function startCloneTo(
       void runClone(projectPath, host, deps, carrySecrets, includeAllHistory)
     },
   })
+}
+
+/**
+ * Open the "Clone to" modal for a PULL run — "Clone to this computer"
+ * (0.40.22). The source workspace lives on the ACTIVE REMOTE host; the
+ * renderer orchestrates pack-on-remote → download → unpack-on-local (see
+ * clone-pull.ts). Same deferred-run shape as {@link startCloneTo}: the
+ * options panel shows first, Clone starts the run.
+ *
+ * PRECONDITION (enforced by the menu entry points): the active host is
+ * remote — that's the only context where the entry is offered.
+ */
+export function startCloneToThisComputer(
+  projectPath: string,
+  projectName: string,
+  deps: ClonePullDeps = defaultClonePullDeps(),
+): void {
+  const store = useCloneToDialogStore.getState()
+  store.start({
+    projectPath,
+    projectName,
+    host: null,
+    pull: true,
+    onConfirm: (carrySecrets, includeAllHistory) => {
+      void runPull(projectPath, projectName, deps, carrySecrets, includeAllHistory)
+    },
+  })
+}
+
+/** Human-readable name of a pull stage, for the fail-loud toast. */
+const PULL_STAGE_LABELS: Partial<Record<CloneStage, string>> = {
+  packing: 'packing on the server',
+  'choosing-folder': 'choosing the destination folder',
+  downloading: 'downloading the bundle',
+  unpacking: 'unpacking on this computer',
+}
+
+/** Drive the PULL orchestration once the user has confirmed the options
+ *  panel. Toasts the outcome (success with the local workspace name;
+ *  failure names the stage that failed) on top of the modal's own
+ *  done/error screens — the transfer overlay card is only visible during
+ *  the download, so the toast is the durable signal. */
+async function runPull(
+  projectPath: string,
+  projectName: string,
+  deps: ClonePullDeps,
+  carrySecrets: boolean,
+  includeAllHistory: boolean,
+): Promise<void> {
+  let lastStage: CloneStage = 'packing'
+  try {
+    const result = await cloneWorkspaceToThisComputer(
+      projectPath,
+      projectName,
+      deps,
+      {
+        onStage: (stage) => {
+          if (stage !== 'error') lastStage = stage
+          useCloneToDialogStore.getState().setStage(stage)
+        },
+        onBundled: (summary) => useCloneToDialogStore.getState().setSummary(summary),
+        onDone: (r) => useCloneToDialogStore.getState().setDone(r),
+        onError: (message) => useCloneToDialogStore.getState().setError(message),
+      },
+      carrySecrets,
+      includeAllHistory,
+    )
+    const localName = result.project?.name ?? projectName
+    useToastStore.getState().addToast(
+      `Cloned “${localName}” to this computer — it's in your workspace list when you switch to This Computer.`,
+      'success',
+      6000,
+    )
+  } catch (err) {
+    if (err instanceof CloneCancelledError) {
+      // User-driven abort: the modal already shows the message; close it
+      // and confirm the abort quietly.
+      useCloneToDialogStore.getState().close()
+      useToastStore.getState().addToast('Clone cancelled', 'info', 3000)
+      return
+    }
+    // The modal shows the message via onError → setError; the toast names
+    // the STAGE for fail-loud visibility even if the modal was dismissed.
+    const message = err instanceof Error ? err.message : String(err)
+    useToastStore.getState().addToast(
+      `Clone to this computer failed while ${PULL_STAGE_LABELS[lastStage] ?? lastStage}: ${message}`,
+      'error',
+    )
+  }
 }
 
 /** Drive the orchestration once the user has confirmed the options panel. */

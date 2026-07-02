@@ -9,14 +9,21 @@ import type { CloneStage } from '../../lib/clone-to'
 // chrome). The modal stays open through 'done' / 'error' so the user reads
 // the result + the re-supply checklist, then closes it manually.
 
-// Ordered stage list for the little step tracker. 'done' / 'error' are
-// terminal and rendered separately.
-const STEPS: { stage: CloneStage; label: string }[] = [
+// Ordered stage lists for the little step tracker. 'done' / 'error' are
+// terminal and rendered separately. PUSH is the original local→host
+// migration; PULL is "Clone to this computer" (0.40.22 — remote→local).
+const PUSH_STEPS: { stage: CloneStage; label: string }[] = [
   { stage: 'bundling', label: 'Bundling workspace' },
   { stage: 'connecting', label: 'Connecting to host' },
   { stage: 'choosing-folder', label: 'Choosing destination folder' },
   { stage: 'uploading', label: 'Uploading bundle' },
   { stage: 'unpacking', label: 'Unpacking on host' },
+]
+const PULL_STEPS: { stage: CloneStage; label: string }[] = [
+  { stage: 'packing', label: 'Packing workspace on the server' },
+  { stage: 'choosing-folder', label: 'Choosing destination folder' },
+  { stage: 'downloading', label: 'Downloading bundle' },
+  { stage: 'unpacking', label: 'Unpacking on this computer' },
 ]
 
 function formatBytes(n: number): string {
@@ -31,6 +38,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
   const phase = useCloneToDialogStore((s) => s.phase)
   const projectName = useCloneToDialogStore((s) => s.projectName)
   const host = useCloneToDialogStore((s) => s.host)
+  const pull = useCloneToDialogStore((s) => s.pull)
   const carrySecrets = useCloneToDialogStore((s) => s.carrySecrets)
   const setCarrySecrets = useCloneToDialogStore((s) => s.setCarrySecrets)
   const includeAllHistory = useCloneToDialogStore((s) => s.includeAllHistory)
@@ -64,7 +72,11 @@ export default function CloneToDialog(): React.JSX.Element | null {
 
   if (!isOpen) return null
 
-  const activeIdx = STEPS.findIndex((s) => s.stage === stage)
+  const steps = pull ? PULL_STEPS : PUSH_STEPS
+  // Destination shown in the header: the K2 Connect host for a push,
+  // "This computer" for a pull.
+  const destLabel = host?.label ?? (pull ? 'This computer' : null)
+  const activeIdx = steps.findIndex((s) => s.stage === stage)
 
   return (
     <div
@@ -89,10 +101,10 @@ export default function CloneToDialog(): React.JSX.Element | null {
           </h2>
           <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
             <span className="text-[var(--color-text-secondary)]">{projectName ?? 'workspace'}</span>
-            {host ? (
+            {destLabel ? (
               <>
                 {' → '}
-                <span className="text-[var(--color-text-secondary)]">{host.label}</span>
+                <span className="text-[var(--color-text-secondary)]">{destLabel}</span>
               </>
             ) : null}
           </p>
@@ -129,7 +141,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
               </label>
               <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed pl-[22px]">
                 Carried securely over the encrypted connection between your machines.
-                Uncheck to scrub them — you’ll re-add them on the host.
+                Uncheck to scrub them — you’ll re-add them on {pull ? 'this computer' : 'the host'}.
               </p>
 
               <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
@@ -165,7 +177,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
               message). */}
           {!isOptions && stage !== 'error' && (
             <div className="border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-3 py-3 space-y-1.5">
-              {STEPS.map((step, i) => {
+              {steps.map((step, i) => {
                 const isCurrent = i === activeIdx && stage !== 'done'
                 const isComplete = stage === 'done' || i < activeIdx
                 return (
@@ -232,7 +244,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
                 {summary?.scrubbed_secrets && summary.scrubbed_secrets.length > 0 ? (
                   <div className="mb-2">
                     <p className="text-[10px] text-[var(--color-text-muted)] mb-1">
-                      Secrets scrubbed — re-supply these on the host:
+                      Secrets scrubbed — re-supply these on {pull ? 'this computer' : 'the host'}:
                     </p>
                     <ul className="list-disc list-inside space-y-0.5">
                       {summary.scrubbed_secrets.map((p) => (
@@ -245,15 +257,19 @@ export default function CloneToDialog(): React.JSX.Element | null {
                 ) : summary && summary.scrubbed_secret_count > 0 ? (
                   <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
                     {summary.scrubbed_secret_count} secret file(s) were scrubbed from the bundle.
-                    Re-supply them on the host (the per-file list isn’t returned yet — open the
-                    cloned workspace and re-add your <span className="font-mono">.env</span> /
-                    auth files).
+                    Re-supply them on {pull ? 'this computer' : 'the host'} (the per-file list
+                    isn’t returned yet — open the cloned workspace and re-add your{' '}
+                    <span className="font-mono">.env</span> / auth files).
                   </p>
                 ) : null}
                 <ul className="list-disc list-inside space-y-0.5 text-[10px] text-[var(--color-text-secondary)]">
                   <li>Re-authenticate any MCP servers (creds/config aren’t carried).</li>
                   <li>Re-grant OS-permission-gated tooling (e.g. Full Disk Access / Automation).</li>
-                  <li>The host needs its own Claude Code auth — sign in there.</li>
+                  <li>
+                    {pull
+                      ? 'The cloned workspace uses this computer’s Claude Code auth — sign in here if you haven’t.'
+                      : 'The host needs its own Claude Code auth — sign in there.'}
+                  </li>
                 </ul>
               </div>
             </div>

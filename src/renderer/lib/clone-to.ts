@@ -69,13 +69,17 @@ export interface CloneFsInfo {
 }
 
 /** The stages the progress UI moves through. Kept in this module so the
- *  modal + orchestration share one vocabulary. */
+ *  modal + orchestration share one vocabulary. `packing`/`downloading`
+ *  are PULL-only ("Clone to this computer" — see clone-pull.ts); the
+ *  push flow never emits them. */
 export type CloneStage =
   | 'bundling'
   | 'connecting'
   | 'choosing-folder'
   | 'uploading'
   | 'unpacking'
+  | 'packing'
+  | 'downloading'
   | 'done'
   | 'error'
 

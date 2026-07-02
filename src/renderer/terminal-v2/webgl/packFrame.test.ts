@@ -1,7 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { FrameBuffers, packFrame, RowCache, RectList } from './packFrame'
+import {
+  FrameBuffers,
+  GLYPH_FLOATS,
+  packFrame,
+  RowCache,
+  RectList,
+} from './packFrame'
 import type { PainterFrame } from './painterTypes'
 import type { WireCellRun } from '../gridWire'
+import type { GlyphSource } from './glyphAtlas'
 
 const THEME = { fg: 0xe0e0e0, bg: 0x0a0a0a, selection: 0x444444 }
 
@@ -34,8 +41,32 @@ function frame(
   }
 }
 
+// Deterministic stub atlas: texX = first code point, texY encodes
+// style, quad = widthCells×cell. Honest stand-in for GlyphAtlas —
+// the painter never introspects slots beyond copying them.
+function stubGlyphs(epoch = 0): GlyphSource {
+  return {
+    epoch,
+    get(text, bold, italic, widthCells) {
+      const cp = text.codePointAt(0) ?? 0
+      return {
+        texX: cp,
+        texY: (bold ? 1000 : 0) + (italic ? 2000 : 0),
+        w: widthCells * 10,
+        h: 20,
+        color: cp >= 0x1f300,
+      }
+    },
+  }
+}
+
 // Device grid: 10×20 px cells at dpr 2 (css cell 5×10).
-function pack(f: PainterFrame, cache = new RowCache(), buffers = new FrameBuffers()) {
+function pack(
+  f: PainterFrame,
+  cache = new RowCache(),
+  buffers = new FrameBuffers(),
+  glyphs: GlyphSource = stubGlyphs(),
+) {
   return packFrame({
     frame: f,
     cssCellH: 10,
@@ -44,6 +75,7 @@ function pack(f: PainterFrame, cache = new RowCache(), buffers = new FrameBuffer
     dpr: 2,
     cache,
     buffers,
+    glyphs,
   })
 }
 
@@ -123,6 +155,102 @@ describe('packFrame — background rects', () => {
     const p2 = pack(f, cache, buffers)
     expect(p2.bg.data).toBe(data1)
     expect(p2.bg.count).toBe(1)
+  })
+})
+
+describe('packFrame — glyph instances', () => {
+  it('packs exact per-cell floats for a tiny grid', () => {
+    // 2 cols × 1 row: 'A' (cp 65) then a blank cell.
+    const f = frame([[run('A', { fg: 0xff8000, dim: true })]], [], 0, 2)
+    const p = pack(f)
+    expect(p.glyphCount).toBe(2)
+    const cell0 = Array.from(p.glyphData.subarray(0, GLYPH_FLOATS))
+    const cell1 = Array.from(
+      p.glyphData.subarray(GLYPH_FLOATS, 2 * GLYPH_FLOATS),
+    )
+    expect(cell0).toEqual([
+      0, 0, // offset within cell
+      10, 20, // quad size (1 cell)
+      65, 0, // atlas px origin (stub: cp, style)
+      1, Math.fround(128 / 255), 0, // fg rgb
+      Math.fround(0.6), // dim alpha
+      0, // monochrome
+      0, // reserved
+    ])
+    expect(cell1).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+  })
+
+  it('wide glyphs occupy one instance sized two cells; spacer stays blank', () => {
+    const f = frame([[run('日', { cols: 2 })]], [], 0, 3)
+    const p = pack(f)
+    const cell0 = Array.from(p.glyphData.subarray(0, GLYPH_FLOATS))
+    expect(cell0[2]).toBe(20) // 2 cells wide
+    expect(cell0[4]).toBe(0x65e5) // '日'
+    // Spacer cell (col 1) and col 2 are zeroed.
+    expect(
+      Array.from(p.glyphData.subarray(GLYPH_FLOATS, 3 * GLYPH_FLOATS)),
+    ).toEqual(new Array(2 * GLYPH_FLOATS).fill(0))
+  })
+
+  it('flags emoji as color glyphs', () => {
+    const f = frame([[run('😀', { cols: 2 })]], [], 0, 2)
+    const p = pack(f)
+    expect(p.glyphData[10]).toBe(1)
+  })
+
+  it('zero-fills stale buffer contents for blank rows', () => {
+    const buffers = new FrameBuffers()
+    const cache = new RowCache()
+    // Frame A: row full of glyphs. Frame C reuses A's buffer (double
+    // buffering alternates A→B→A) with an EMPTY row — stale floats
+    // must not leak through.
+    const fA = frame([[run('ZZ')]], [], 0, 2)
+    const pA = pack(fA, cache, buffers)
+    expect(pA.glyphData[4]).toBe(90)
+    pack(frame([[run('Y')]], [], 0, 2), cache, buffers)
+    const pC = pack(frame([[]], [], 0, 2), cache, buffers)
+    expect(pC.glyphData).toBe(pA.glyphData)
+    expect(
+      Array.from(pC.glyphData.subarray(0, 2 * GLYPH_FLOATS)),
+    ).toEqual(new Array(2 * GLYPH_FLOATS).fill(0))
+  })
+
+  it('alternates glyph upload buffers across frames (double buffering)', () => {
+    const buffers = new FrameBuffers()
+    const cache = new RowCache()
+    const f = frame([[run('a')]], [], 0, 2)
+    const p1 = pack(f, cache, buffers)
+    const p2 = pack(f, cache, buffers)
+    expect(p2.glyphData).not.toBe(p1.glyphData)
+  })
+})
+
+describe('RowCache — slab reuse', () => {
+  it('returns the same slab reference for an unchanged row', () => {
+    const cache = new RowCache()
+    const glyphs = stubGlyphs()
+    const row = [run('ab')]
+    const s1 = cache.slabFor(row, THEME, 4, glyphs)
+    const s2 = cache.slabFor(row, THEME, 4, glyphs)
+    expect(s2).toBe(s1)
+  })
+
+  it('re-packs when the grid width changes', () => {
+    const cache = new RowCache()
+    const glyphs = stubGlyphs()
+    const row = [run('ab')]
+    const s1 = cache.slabFor(row, THEME, 4, glyphs)
+    const s2 = cache.slabFor(row, THEME, 6, glyphs)
+    expect(s2).not.toBe(s1)
+    expect(s2.length).toBe(6 * GLYPH_FLOATS)
+  })
+
+  it('re-packs when the atlas epoch changes (page cleared)', () => {
+    const cache = new RowCache()
+    const row = [run('ab')]
+    const s1 = cache.slabFor(row, THEME, 4, stubGlyphs(0))
+    const s2 = cache.slabFor(row, THEME, 4, stubGlyphs(1))
+    expect(s2).not.toBe(s1)
   })
 })
 

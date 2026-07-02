@@ -14,6 +14,26 @@ import { computeStripLayout } from '../scrollMath'
 import type { WireCellRun } from '../gridWire'
 import type { PainterFrame, PainterTheme } from './painterTypes'
 import { expandRow, type ExpandedRow } from './expandRow'
+import type { GlyphSource } from './glyphAtlas'
+
+/** Floats per glyph instance (48 B). Layout (documented choice: dim
+ *  is packed as fg alpha, 4-component color — brief §2.3 left it to
+ *  the build agent):
+ *    0-1  a_geom.xy — glyph offset within the cell, device px
+ *         (always 0 in the fixed-slot atlas; kept for a future
+ *         trimmed-glyph atlas)
+ *    2-3  a_geom.zw — quad + texture size, device px (0 ⇒ blank
+ *         cell, degenerate quad, no fragments)
+ *    4-5  a_tex     — atlas origin, PIXELS (shader normalizes by a
+ *         texture-size uniform so atlas growth never invalidates
+ *         cached slabs)
+ *    6-9  a_color   — fg rgb 0-1 + alpha (dim premultiplied)
+ *    10   a_flags   — 1 ⇒ color glyph (emoji): sample untinted
+ *    11   reserved (pads the stride to 48 B)
+ *  Cell position is NOT stored: the vertex shader derives col/row
+ *  from gl_InstanceID + u_cols (saves 8 B/cell vs xterm's a_cellpos
+ *  and removes the resize re-init loop). */
+export const GLYPH_FLOATS = 12
 
 /** Growable Float32Array of rect instances: 8 floats per rect —
  *  x, y, w, h (device px), r, g, b, a (0–1). Reused across frames;
@@ -54,9 +74,52 @@ export class RectList {
   }
 }
 
-/** Per-frame CPU buffers, allocated once per painter. */
+/** Per-frame CPU buffers, allocated once per painter. Glyph uploads
+ *  alternate between two arrays (xterm's double-buffering — the GPU
+ *  may still be reading last frame's upload source). */
 export class FrameBuffers {
   readonly bg = new RectList()
+  private glyphA = new Float32Array(0)
+  private glyphB = new Float32Array(0)
+  private useA = false
+
+  nextGlyphBuffer(floats: number): Float32Array {
+    this.useA = !this.useA
+    if (this.useA) {
+      if (this.glyphA.length < floats) this.glyphA = new Float32Array(floats)
+      return this.glyphA
+    }
+    if (this.glyphB.length < floats) this.glyphB = new Float32Array(floats)
+    return this.glyphB
+  }
+}
+
+/** Build a row's packed glyph slab: `cols × GLYPH_FLOATS`, blank
+ *  cells zeroed. Atlas coordinates are baked in — valid until the
+ *  atlas EPOCH changes (clear) or metrics change (cache dropped
+ *  wholesale by the painter). */
+function buildSlab(
+  er: ExpandedRow,
+  cols: number,
+  glyphs: GlyphSource,
+): Float32Array {
+  const slab = new Float32Array(cols * GLYPH_FLOATS)
+  for (const g of er.glyphs) {
+    if (g.col >= cols) break
+    const slot = glyphs.get(g.text, g.bold, g.italic, g.widthCells)
+    if (!slot) continue
+    const o = g.col * GLYPH_FLOATS
+    slab[o + 2] = slot.w
+    slab[o + 3] = slot.h
+    slab[o + 4] = slot.texX
+    slab[o + 5] = slot.texY
+    slab[o + 6] = ((g.fg >> 16) & 0xff) / 255
+    slab[o + 7] = ((g.fg >> 8) & 0xff) / 255
+    slab[o + 8] = (g.fg & 0xff) / 255
+    slab[o + 9] = g.alpha
+    slab[o + 10] = slot.color ? 1 : 0
+  }
+  return slab
 }
 
 /** Expanded-row cache keyed on ROW ARRAY REFERENCE identity —
@@ -64,41 +127,78 @@ export class FrameBuffers {
  *  cache miss IS the damage signal. LRU-capped so memory stays
  *  O(visited window), not O(history). Theme defaults are baked into
  *  expansions, so a theme change clears the cache wholesale. */
+interface RowEntry {
+  er: ExpandedRow
+  /** Packed glyph floats; rebuilt lazily when cols or the atlas
+   *  epoch drift. */
+  slab: Float32Array | null
+  slabEpoch: number
+}
+
 export class RowCache {
-  private expanded = new Map<WireCellRun[], ExpandedRow>()
+  private rows = new Map<WireCellRun[], RowEntry>()
   private themeFg = -1
   private themeBg = -1
 
   constructor(public capacity: number = 1024) {}
 
-  get(row: WireCellRun[], theme: PainterTheme): ExpandedRow {
+  private entry(row: WireCellRun[], theme: PainterTheme): RowEntry {
     if (theme.fg !== this.themeFg || theme.bg !== this.themeBg) {
-      this.expanded.clear()
+      this.rows.clear()
       this.themeFg = theme.fg
       this.themeBg = theme.bg
     }
-    const hit = this.expanded.get(row)
+    const hit = this.rows.get(row)
     if (hit) {
       // Refresh recency (Map preserves insertion order).
-      this.expanded.delete(row)
-      this.expanded.set(row, hit)
+      this.rows.delete(row)
+      this.rows.set(row, hit)
       return hit
     }
-    const er = expandRow(row, theme)
-    this.expanded.set(row, er)
-    if (this.expanded.size > this.capacity) {
-      const oldest = this.expanded.keys().next().value
-      if (oldest !== undefined) this.expanded.delete(oldest)
+    const entry: RowEntry = {
+      er: expandRow(row, theme),
+      slab: null,
+      slabEpoch: -1,
     }
-    return er
+    this.rows.set(row, entry)
+    if (this.rows.size > this.capacity) {
+      const oldest = this.rows.keys().next().value
+      if (oldest !== undefined) this.rows.delete(oldest)
+    }
+    return entry
+  }
+
+  get(row: WireCellRun[], theme: PainterTheme): ExpandedRow {
+    return this.entry(row, theme).er
+  }
+
+  /** Cached packed slab for a row (the memcpy source of the per-frame
+   *  glyph pack). Re-packs only when the row was re-expanded
+   *  (damage), the grid width changed, or the atlas was cleared. */
+  slabFor(
+    row: WireCellRun[],
+    theme: PainterTheme,
+    cols: number,
+    glyphs: GlyphSource,
+  ): Float32Array {
+    const e = this.entry(row, theme)
+    if (
+      !e.slab ||
+      e.slab.length !== cols * GLYPH_FLOATS ||
+      e.slabEpoch !== glyphs.epoch
+    ) {
+      e.slab = buildSlab(e.er, cols, glyphs)
+      e.slabEpoch = glyphs.epoch
+    }
+    return e.slab
   }
 
   get size(): number {
-    return this.expanded.size
+    return this.rows.size
   }
 
   clear(): void {
-    this.expanded.clear()
+    this.rows.clear()
   }
 }
 
@@ -111,6 +211,7 @@ export interface PackInput {
   dpr: number
   cache: RowCache
   buffers: FrameBuffers
+  glyphs: GlyphSource
 }
 
 export interface PackedFrame {
@@ -125,6 +226,10 @@ export interface PackedFrame {
    *  many pixels. */
   fractionDevice: number
   bg: RectList
+  /** Fixed-slot glyph instances: `rowCount × cols`, GLYPH_FLOATS
+   *  each; instance i sits at cell (i % cols, i / cols). */
+  glyphData: Float32Array
+  glyphCount: number
 }
 
 function rowAt(
@@ -138,8 +243,16 @@ function rowAt(
 }
 
 export function packFrame(input: PackInput): PackedFrame {
-  const { frame, cssCellH, deviceCellW, deviceCellH, dpr, cache, buffers } =
-    input
+  const {
+    frame,
+    cssCellH,
+    deviceCellW,
+    deviceCellH,
+    dpr,
+    cache,
+    buffers,
+    glyphs,
+  } = input
   const snap = frame.snapshot
   const totalRows = snap.scrollback.length + snap.grid.length
   const layout = computeStripLayout(
@@ -153,11 +266,17 @@ export function packFrame(input: PackInput): PackedFrame {
 
   const { bg } = buffers
   bg.reset()
+  const rowFloats = snap.cols * GLYPH_FLOATS
+  const glyphData = buffers.nextGlyphBuffer(layout.rowCount * rowFloats)
 
   for (let i = 0; i < layout.rowCount; i++) {
     const abs = layout.stripStart + i
     const row = rowAt(frame, abs)
-    if (!row || row.length === 0) continue
+    const rowBase = i * rowFloats
+    if (!row || row.length === 0) {
+      glyphData.fill(0, rowBase, rowBase + rowFloats)
+      continue
+    }
     const er = cache.get(row, frame.theme)
     const y = i * deviceCellH - fractionDevice
     for (const s of er.bgSpans) {
@@ -170,6 +289,7 @@ export function packFrame(input: PackInput): PackedFrame {
         1,
       )
     }
+    glyphData.set(cache.slabFor(row, frame.theme, snap.cols, glyphs), rowBase)
   }
 
   return {
@@ -177,5 +297,7 @@ export function packFrame(input: PackInput): PackedFrame {
     rowCount: layout.rowCount,
     fractionDevice,
     bg,
+    glyphData,
+    glyphCount: layout.rowCount * snap.cols,
   }
 }

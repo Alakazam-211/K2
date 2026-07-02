@@ -18,6 +18,7 @@ import {
   type PainterBackend,
 } from './glBackend'
 import { FrameBuffers, packFrame, RowCache } from './packFrame'
+import { GlyphAtlas } from './glyphAtlas'
 
 /** Known clear color for the mount-time pixel-readback sanity probe
  *  (brief §7.7: WKWebView's WebGL history demands a rendered-pixels
@@ -45,6 +46,8 @@ export function createWebglPainter(
   let disposed = false
   let fatalFired = false
   let fatalCb: ((reason: string) => void) | null = null
+  let atlas: GlyphAtlas | null = null
+  let uploadedAtlasVersion = -1
 
   const cache = new RowCache()
   const buffers = new FrameBuffers()
@@ -107,6 +110,20 @@ export function createWebglPainter(
       // height, so glyphs land on whole device pixels.
       deviceCellW = Math.max(1, Math.floor(m.cssCellW * m.dpr))
       deviceCellH = Math.max(1, Math.round(m.cssCellH * m.dpr))
+      // Font/DPR change ⇒ new atlas; every cached slab holds stale
+      // atlas coordinates → drop the row cache wholesale. Theme
+      // changes deliberately do NOT land here (color is
+      // per-instance; the atlas is colorless — brief §1.3's win over
+      // xterm's rebuild-on-theme).
+      atlas = new GlyphAtlas({
+        deviceCellW,
+        deviceCellH,
+        fontFamily: m.fontFamily,
+        fontDevicePx: Math.round(m.fontSize * m.dpr),
+      })
+      atlas.warmUp()
+      uploadedAtlasVersion = -1
+      cache.clear()
       // Force a canvas re-size on the next render.
       canvasW = 0
       canvasH = 0
@@ -114,6 +131,7 @@ export function createWebglPainter(
 
     render(frame: PainterFrame): void {
       if (disposed || fatalFired || !backend || !canvas || !metrics) return
+      if (!atlas) return
       const t0 = diagEnabled ? performance.now() : 0
 
       const { cols, rows } = frame.snapshot
@@ -138,10 +156,26 @@ export function createWebglPainter(
         dpr: metrics.dpr,
         cache,
         buffers,
+        glyphs: atlas,
       })
+
+      // Packing may have rasterized new glyphs — re-upload the page
+      // once per frame at most, keyed off the atlas version.
+      if (atlas.version !== uploadedAtlasVersion) {
+        backend.uploadAtlas(atlas.canvas)
+        uploadedAtlasVersion = atlas.version
+      }
 
       backend.beginFrame(frame.theme.bg)
       backend.drawRects(packed.bg.data, packed.bg.count)
+      backend.drawGlyphs(packed.glyphData, packed.glyphCount, {
+        cols: frame.snapshot.cols,
+        cellW: deviceCellW,
+        cellH: deviceCellH,
+        scrollY: packed.fractionDevice,
+        texW: atlas.size,
+        texH: atlas.size,
+      })
 
       if (diagEnabled) {
         diagMs += performance.now() - t0
@@ -149,7 +183,9 @@ export function createWebglPainter(
           // eslint-disable-next-line no-console
           console.info(
             `[webgl-diag] frames=${diagFrames} avg=${(diagMs / diagFrames).toFixed(2)}ms ` +
-              `bgRects=${packed.bg.count} rows=${packed.rowCount} cacheRows=${cache.size}`,
+              `glyphInstances=${packed.glyphCount} bgRects=${packed.bg.count} ` +
+              `rows=${packed.rowCount} cacheRows=${cache.size} ` +
+              `atlas=${atlas.size}px/${atlas.glyphCount} glyphs`,
           )
           diagFrames = 0
           diagMs = 0

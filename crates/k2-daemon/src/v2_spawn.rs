@@ -494,6 +494,53 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         }
     }
 
+    // 2026-07-02 PTY-leak breaker — refuse to HOLD unbounded abandoned
+    // bare shells for one workspace. The split-pane restore re-mint loop
+    // (client bug, fixed in b339c70; shipped broken since 0.39.39 so
+    // released clients still carry it) minted a fresh `tab-<uuid>`
+    // agent_name every layout-echo cycle; each landed here with no
+    // command, became a bare login/zsh nothing ever attached to, and the
+    // box eventually ran out of PTYs (kern.tty.ptmx_max). Defense in
+    // depth: cap the number of live NEVER-ATTACHED bare-shell `tab-*`
+    // sessions per cwd. Scope is deliberately the leak's exact shape —
+    // ad-hoc `tab-*` spawns with NO command. Recovered/claude/heartbeat/
+    // pinned spawns (command present) are untouched, and tabs a client
+    // ever streamed (`ever_attached`) never count, so a user with many
+    // idle-but-viewed terminals is unaffected. 4xx is surfaced
+    // immediately by TerminalPane (no client retry loop).
+    if command.is_none() && req.agent_name.starts_with("tab-") {
+        let cap: usize = std::env::var("K2_V2_BARE_TAB_CAP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(32);
+        let req_cwd = std::path::PathBuf::from(&req.cwd);
+        let unwatched_bare = v2_session_map::snapshot()
+            .into_iter()
+            .filter(|(key, s)| {
+                key.starts_with("tab-")
+                    && s.program.is_none()
+                    && s.is_child_alive()
+                    && !s
+                        .ever_attached
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    && s.cwd.as_ref() == Some(&req_cwd)
+            })
+            .count();
+        if unwatched_bare >= cap {
+            log_debug!(
+                "[v2-spawn] bare-tab cap: REFUSING fresh spawn agent={} cwd={} — {} live never-attached bare shells (cap {})",
+                req.agent_name, req.cwd, unwatched_bare, cap
+            );
+            return HandlerResult {
+                status: "429 Too Many Requests",
+                body: format!(
+                    r#"{{"error":"workspace already holds {} never-attached bare-shell sessions (cap {}) — refusing to spawn another; close or attach existing tabs","code":"bare_tab_cap"}}"#,
+                    unwatched_bare, cap
+                ),
+            };
+        }
+    }
+
     // Spawn a fresh session.
     // Phase B: pick the label seed + source. Caller-supplied label
     // (with optional lock) takes priority; otherwise we leave the

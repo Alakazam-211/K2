@@ -503,6 +503,13 @@ pub async fn serve_session_grid_connection(
         session.session_id,
         pane_id
     );
+    // 2026-07-02 PTY-leak breaker — latch "a client actually looked at
+    // this session" (never cleared). `v2_spawn`'s never-attached
+    // bare-shell cap consults this so once-viewed tabs never count
+    // against it.
+    session
+        .ever_attached
+        .store(true, std::sync::atomic::Ordering::Relaxed);
 
     // Re-auth heartbeat: every 5s, confirm the token that opened this
     // socket is still valid. When an owner disables/removes/role-changes a

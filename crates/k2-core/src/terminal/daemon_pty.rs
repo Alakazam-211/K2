@@ -421,6 +421,17 @@ pub struct DaemonPtySession {
     /// focus change, not per-frame).
     pub active_subscriber: std::sync::atomic::AtomicU64,
 
+    /// 2026-07-02 PTY-leak breaker — latched true (never cleared) by the
+    /// grid-WS handler the first time ANY subscriber attaches to this
+    /// session. Distinguishes a session a client actually looked at from
+    /// one that was spawned and abandoned: the split-pane restore
+    /// re-mint loop (fixed client-side in b339c70) minted a fresh
+    /// `tab-<uuid>` bare-shell spawn every cycle that nothing ever
+    /// attached to, until the box ran out of PTYs. `v2_spawn`'s
+    /// per-workspace cap counts only never-attached bare shells, so
+    /// real (once-viewed) tabs never count against it.
+    pub ever_attached: std::sync::atomic::AtomicBool,
+
     /// 0.39.43 (PRD `daemon-multi-client-arbitration.md` Issue A) —
     /// the active viewer's viewport dimensions, captured on the
     /// `SetActive { active:true, cols, rows }` claim. When a viewer
@@ -723,6 +734,7 @@ impl DaemonPtySession {
             events_tx,
             child_exited: std::sync::atomic::AtomicBool::new(false),
             active_subscriber: std::sync::atomic::AtomicU64::new(0),
+            ever_attached: std::sync::atomic::AtomicBool::new(false),
             active_cols: std::sync::atomic::AtomicU16::new(0),
             active_rows: std::sync::atomic::AtomicU16::new(0),
             viewports: Mutex::new(HashMap::new()),

@@ -58,6 +58,12 @@ import {
 } from '@/lib/file-drag'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { executeRemoteDrop } from '@/lib/handle-remote-drop'
+import {
+  clampScrollPx,
+  computeScrollbarThumb,
+  computeStripLayout,
+  scrollPxFromThumbTopFrac,
+} from './scrollMath'
 
 // ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
 
@@ -552,7 +558,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     snapshotRef.current = snapshot
   }, [snapshot])
-  const [viewportOffset, setViewportOffset] = useState(0)
+  // Scroll position in PIXELS above the bottom of the buffer. 0 =
+  // pinned to the live grid (the heavy-output path — every input
+  // handler snaps here); max = scrollback.length * cellHeight. Pixel
+  // precision (not whole lines) is what lets the row strip translate
+  // sub-row instead of jumping in cellHeight quanta; all row-unit
+  // consumers derive their window via `computeStripLayout`.
+  const [scrollPx, setScrollPx] = useState(0)
+  // Current scroll position for handlers that must read it without
+  // re-binding per frame (scrollbar drag). Same mirror pattern as
+  // `phaseRef` / `snapshotRef`.
+  const scrollPxRef = useRef(0)
+  useEffect(() => {
+    scrollPxRef.current = scrollPx
+  }, [scrollPx])
 
   // ── rAF frame coalescing ──────────────────────────────────────
   // WS snapshot/delta messages queue here and apply once per
@@ -1892,7 +1911,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const natural = naturalTextEditingSequence(e)
       if (natural !== null) {
         e.preventDefault()
-        setViewportOffset(0)
+        setScrollPx(0)
         sendInput(natural)
         // Clear so the textarea never accumulates.
         if (shadowInputRef.current) shadowInputRef.current.value = ''
@@ -1901,14 +1920,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const seq = keyEventToSequence(e, 0)
       if (seq === null) return
       e.preventDefault()
-      setViewportOffset(0)
+      setScrollPx(0)
       sendInput(seq)
       if (shadowInputRef.current) shadowInputRef.current.value = ''
     }
     const onPaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData('text') ?? ''
       e.preventDefault()
-      setViewportOffset(0)
+      setScrollPx(0)
 
       // Finder's Cmd+C copies file refs via NSFilenamesPboardType,
       // which WKWebView doesn't expose through the web clipboard
@@ -1943,7 +1962,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (composingRef.current) return
       const text = el.value
       if (text.length === 0) return
-      setViewportOffset(0)
+      setScrollPx(0)
       sendInput(text)
       el.value = ''
     }
@@ -2004,7 +2023,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         sendInput('\x7f'.repeat(prevLen))
       }
       if (committed) {
-        setViewportOffset(0)
+        setScrollPx(0)
         sendInput(committed)
       }
       compositionLastLengthRef.current = 0
@@ -2028,15 +2047,33 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     }
   }, [phase.kind, sendInput])
 
-  // ── Compose visible rows ──────────────────────────────────────
+  // ── Compose the row strip ─────────────────────────────────────
   //
   // Declared before the link-detection handlers below because
-  // `handleMouseMove` closes over `visibleRows` and JS temporal-
+  // `handleMouseMove` closes over `stripRows` and JS temporal-
   // dead-zone rules reject the closure at render time if the
   // `const` is declared later. (Same class of fix as the
   // cellMetrics hoist that happened earlier in the Kessel-T0
   // work.)
-  // Visible rows + their absolute (scrollback-anchored) row indices.
+  //
+  // Vertical quantum for every px↔row conversion in this component.
+  // The 20px fallback (metrics not measured yet) matches the wheel
+  // handler's; snapshot is normally still null at that point.
+  const cellHeightPx = cellMetrics.height || 20
+  // Where the strip sits for the current pixel scroll position:
+  // which absolute row it starts at, how many rows it holds
+  // (viewport + overscan, clamped at the buffer edges), and the
+  // translateY that puts the sub-row fraction on screen. Recomputed
+  // every scroll frame — but `stripStart`/`rowCount` only change on
+  // a row-boundary crossing, so the row-slice memo below (and with
+  // it every row element) stays cache-hit during sub-row scrolls.
+  const stripLayout = useMemo(() => {
+    const totalRows = snapshot
+      ? snapshot.scrollback.length + snapshot.grid.length
+      : 0
+    return computeStripLayout(scrollPx, totalRows, snapshot?.rows ?? 0, cellHeightPx)
+  }, [scrollPx, snapshot, cellHeightPx])
+  // Strip rows + their absolute (scrollback-anchored) row indices.
   // Keying the rendered row divs by absolute index — instead of by
   // visual 0..N position — keeps the same DOM node attached to the
   // same logical row across scrolls. The browser's text selection is
@@ -2044,25 +2081,24 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // (just move position), native selection follows the content as
   // expected. Without this, scrolling reused row divs with new
   // content and the highlight visually "stayed" while text moved.
-  const { visibleRows, visibleRowAbsRows } = useMemo(() => {
+  // (The copy handler's `data-abs-row` mapping rides on the same
+  // keys, so overscan rows resolve to their model rows too.)
+  const { stripRows, stripAbsRows } = useMemo(() => {
     if (!snapshot) {
-      return { visibleRows: [] as CellRun[][], visibleRowAbsRows: [] as number[] }
+      return { stripRows: [] as CellRun[][], stripAbsRows: [] as number[] }
     }
-    const { scrollback, grid, rows: r } = snapshot
-    const totalLen = scrollback.length + grid.length
-    const windowEnd = totalLen - viewportOffset
-    const windowStart = windowEnd - r
+    const { scrollback, grid } = snapshot
     const rows: CellRun[][] = []
     const abs: number[] = []
-    for (let i = 0; i < r; i++) {
-      const a = windowStart + i
+    for (let i = 0; i < stripLayout.rowCount; i++) {
+      const a = stripLayout.stripStart + i
       abs.push(a)
       if (a < 0) rows.push([])
       else if (a < scrollback.length) rows.push(scrollback[a])
-      else rows.push(grid[a - scrollback.length])
+      else rows.push(grid[a - scrollback.length] ?? [])
     }
-    return { visibleRows: rows, visibleRowAbsRows: abs }
-  }, [viewportOffset, snapshot])
+    return { stripRows: rows, stripAbsRows: abs }
+  }, [snapshot, stripLayout.stripStart, stripLayout.rowCount])
 
   // ── Link detection: Cmd key tracking ──────────────────────────
   useEffect(() => {
@@ -2110,10 +2146,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const { width: cw, height: ch } = cellMetrics
       if (cw === 0 || ch === 0) return
       // The 4px padding on the container biases cell positions —
-      // subtract before dividing.
-      const row = Math.floor((e.clientY - rect.top - 4) / ch)
+      // subtract before dividing. Rows live in a strip translated by
+      // -(fraction + overscanTop·cellH); adding `fraction` back and
+      // offsetting by `overscanTop` inverts that transform, so `row`
+      // indexes into `stripRows`.
+      const row =
+        stripLayout.overscanTop +
+        Math.floor((e.clientY - rect.top - 4 + stripLayout.fraction) / ch)
       const col = Math.floor((e.clientX - rect.left - 4) / cw)
-      const visibleRow = visibleRows[row]
+      const visibleRow = stripRows[row]
       if (!visibleRow) {
         if (hoveredLink) setHoveredLink(null)
         return
@@ -2137,7 +2178,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         setHoveredLink(null)
       }
     },
-    [linkClickMode, hoveredLink, cellMetrics, snapshot, visibleRows, cwd],
+    [linkClickMode, hoveredLink, cellMetrics, snapshot, stripLayout, stripRows, cwd],
   )
 
   const handleMouseLeave = useCallback(() => {
@@ -2468,13 +2509,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           const rect = el.getBoundingClientRect()
           // Same 0-based cell math as the link/hover handler; SGR
           // mouse coordinates are 1-based, so add 1 and clamp to ≥1.
+          // SGR rows address GRID cells: with the local viewport
+          // scrolled up, grid rows sit `scrollPx` px lower on screen,
+          // so subtract it. (Mouse-report mode virtually always means
+          // alt screen ⇒ no scrollback ⇒ scrollPx re-clamped to 0 ⇒
+          // identity.)
           const col = Math.max(
             1,
             Math.floor((e.clientX - rect.left - 4) / cw) + 1,
           )
           const row = Math.max(
             1,
-            Math.floor((e.clientY - rect.top - 4) / ch2) + 1,
+            Math.floor(
+              (e.clientY - rect.top - 4 - scrollPxRef.current) / ch2,
+            ) + 1,
           )
           mouseWheelPosRef.current = { col, row }
           // Accumulate signed pixel movement and flush on a timer.
@@ -2521,9 +2569,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // ── Local viewport scroll ────────────────────────────────
       // Flushes once per animation frame instead of the old 50ms
       // timer, which hard-capped scrolling at 20Hz — the single
-      // biggest "low refresh rate" feel. Consumed pixels are
-      // subtracted (not zeroed) so slow trackpad scrolls keep their
-      // sub-line remainder instead of losing it every flush.
+      // biggest "low refresh rate" feel. Deltas accumulate between
+      // frames and apply as PIXELS (the strip renders fractional
+      // positions), so nothing is quantized away per flush.
       e.preventDefault()
       const cellH = cellMetrics.height || 20
       const pixelDelta =
@@ -2537,20 +2585,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         scrollRafRef.current = requestAnimationFrame(() => {
           scrollRafRef.current = null
           const accum = scrollAccumRef.current
+          scrollAccumRef.current = 0
           if (accum === 0) return
-          const lines = Math.trunc(
-            (accum * config.scrolling.multiplier) / cellH,
-          )
-          if (lines === 0) return
-          scrollAccumRef.current =
-            accum - (lines * cellH) / config.scrolling.multiplier
-          const maxOffset = snapshotRef.current?.scrollback.length ?? 0
-          setViewportOffset((o) => {
-            const next = o - lines
-            if (next <= 0) return 0
-            if (next >= maxOffset) return maxOffset
-            return next
-          })
+          const deltaPx = accum * config.scrolling.multiplier
+          const scrollbackLen = snapshotRef.current?.scrollback.length ?? 0
+          // deltaY > 0 scrolls toward the bottom (scrollPx → 0).
+          setScrollPx((px) => clampScrollPx(px - deltaPx, scrollbackLen, cellH))
         })
       }
     }
@@ -2573,15 +2613,112 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     sendInput,
   ])
 
-  // ── Re-clamp viewport offset on snapshot change ───────────────
+  // ── Re-clamp scroll position on snapshot change ───────────────
   // A smaller-scrollback resend (resize / restart / alt-screen
-  // switch) can strand `viewportOffset` past the new scrollback
-  // length, which would freeze the viewport on a blank window.
-  // Clamp it down whenever the scrollback shrinks below the offset.
+  // switch) can strand `scrollPx` past the new scrollback length,
+  // which would freeze the viewport on a blank window. Clamp it
+  // down whenever the scrollback shrinks below the position.
+  // `clampScrollPx` is identity for in-range values, so the
+  // functional update bails without a re-render on the common path.
   useEffect(() => {
-    const maxOffset = snapshot?.scrollback.length ?? 0
-    setViewportOffset((o) => (o > maxOffset ? maxOffset : o))
-  }, [snapshot])
+    const scrollbackLen = snapshot?.scrollback.length ?? 0
+    setScrollPx((px) => clampScrollPx(px, scrollbackLen, cellHeightPx))
+  }, [snapshot, cellHeightPx])
+
+  // ── Overlay scrollbar ─────────────────────────────────────────
+  // Thin right-edge overlay: proportional thumb, positioned from the
+  // pixel scroll state. Shown while the position is changing, while
+  // the pointer is over the bar, or during a thumb drag; fades out
+  // ~1s after the last movement (CSS opacity transition). The track
+  // is the ONLY element that takes pointer events, so terminal
+  // selection is unaffected outside its 8px column.
+  const scrollbarTrackRef = useRef<HTMLDivElement>(null)
+  const [scrollbarActive, setScrollbarActive] = useState(false)
+  const [scrollbarHover, setScrollbarHover] = useState(false)
+  const [scrollbarDragging, setScrollbarDragging] = useState(false)
+  const scrollbarHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const prevScrollPxRef = useRef(0)
+  useEffect(() => {
+    // Only genuine position CHANGES arm the bar — a re-run with the
+    // same value (mount, unrelated re-render) keeps it hidden.
+    if (prevScrollPxRef.current === scrollPx) return
+    prevScrollPxRef.current = scrollPx
+    setScrollbarActive(true)
+    if (scrollbarHideTimerRef.current) clearTimeout(scrollbarHideTimerRef.current)
+    scrollbarHideTimerRef.current = setTimeout(() => {
+      scrollbarHideTimerRef.current = null
+      setScrollbarActive(false)
+    }, 1000)
+  }, [scrollPx])
+  useEffect(
+    () => () => {
+      if (scrollbarHideTimerRef.current) {
+        clearTimeout(scrollbarHideTimerRef.current)
+        scrollbarHideTimerRef.current = null
+      }
+    },
+    [],
+  )
+
+  // Null when there's nothing to scroll — the bar doesn't render at
+  // all, so a fresh shell / alt-screen TUI never shows a phantom bar.
+  const scrollbarThumb = useMemo(() => {
+    if (!snapshot) return null
+    return computeScrollbarThumb(
+      scrollPx,
+      snapshot.scrollback.length,
+      snapshot.scrollback.length + snapshot.grid.length,
+      snapshot.rows,
+      cellHeightPx,
+    )
+  }, [snapshot, scrollPx, cellHeightPx])
+
+  // Mousedown anywhere on the track owns the gesture: a hit inside
+  // the thumb drags from the grabbed point; a hit on bare track
+  // centers the thumb on the pointer (jump) and continues as a drag.
+  // Listeners go on window so the drag survives leaving the pane.
+  const handleScrollbarMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const track = scrollbarTrackRef.current
+      const snap = snapshotRef.current
+      if (!track || !snap) return
+      const ch = cellMetrics.height || 20
+      const scrollbackLen = snap.scrollback.length
+      const thumb = computeScrollbarThumb(
+        scrollPxRef.current,
+        scrollbackLen,
+        scrollbackLen + snap.grid.length,
+        snap.rows,
+        ch,
+      )
+      if (!thumb) return
+      const rect = track.getBoundingClientRect()
+      if (rect.height <= 0) return
+      const yFrac = (e.clientY - rect.top) / rect.height
+      const onThumb =
+        yFrac >= thumb.topFrac && yFrac <= thumb.topFrac + thumb.heightFrac
+      const grabFrac = onThumb ? yFrac - thumb.topFrac : thumb.heightFrac / 2
+      const apply = (clientY: number) => {
+        const topFrac = (clientY - rect.top) / rect.height - grabFrac
+        setScrollPx(
+          scrollPxFromThumbTopFrac(topFrac, thumb.heightFrac, scrollbackLen, ch),
+        )
+      }
+      apply(e.clientY)
+      setScrollbarDragging(true)
+      const onMove = (ev: MouseEvent) => apply(ev.clientY)
+      const onUp = () => {
+        setScrollbarDragging(false)
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [cellMetrics.height],
+  )
 
   // ── Styles ────────────────────────────────────────────────────
   const containerStyle: React.CSSProperties = useMemo(
@@ -2639,9 +2776,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const next: React.CSSProperties = {
         position: 'absolute',
         left: `${4 + cellMetrics.width * snapshot.cursor.col}px`,
-        top: `${
-          4 + cellMetrics.height * (snapshot.cursor.row + viewportOffset)
-        }px`,
+        // The cursor cell lives in the grid (bottom of the buffer);
+        // scrolling up moves it DOWN the screen by exactly the
+        // pixel scroll position.
+        top: `${4 + cellMetrics.height * snapshot.cursor.row + scrollPx}px`,
         width: `${cellMetrics.width}px`,
         height: `${cellMetrics.height}px`,
         lineHeight: `${cellMetrics.height}px`,
@@ -2669,7 +2807,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     snapshot?.cursor.row,
     cellMetrics.width,
     cellMetrics.height,
-    viewportOffset,
+    scrollPx,
   ])
 
   const cursorOverlay: {
@@ -2682,9 +2820,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // Scenario A — DECTCEM on (regular shell): overlay a block at
     // alacritty's reported cursor position. Focused = solid fill,
     // unfocused = hollow outline. No character needed; the cell
-    // span underneath already renders it.
-    if (snapshot.cursor.visible && viewportOffset === 0) {
-      const cursorVisibleRow = snapshot.cursor.row + viewportOffset
+    // span underneath already renders it. Gated on the exact bottom
+    // (scrollPx === 0): any pixel of scroll shifts the grid rows, so
+    // an anchored overlay would float off its cell.
+    if (snapshot.cursor.visible && scrollPx === 0) {
+      const cursorVisibleRow = snapshot.cursor.row
       if (cursorVisibleRow >= 0 && cursorVisibleRow < snapshot.rows) {
         const baseStyle: React.CSSProperties = {
           position: 'absolute',
@@ -2727,7 +2867,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // visually flips from solid-block-with-inverted-char to
     // outlined-rect-with-normal-char. Skip when focused — the
     // TUI's bright solid block is the cursor we want to see.
-    if (!isFocused && !snapshot.cursor.visible && viewportOffset === 0) {
+    if (!isFocused && !snapshot.cursor.visible && scrollPx === 0) {
       let found: { row: number; col: number; char: string } | null = null
       for (let r = 0; r < snapshot.grid.length && !found; r++) {
         const row = snapshot.grid[r]
@@ -2781,7 +2921,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     }
 
     return null
-  }, [snapshot, cellMetrics, viewportOffset, isFocused, defaultBgCss, defaultFgCss])
+  }, [snapshot, cellMetrics, scrollPx, isFocused, defaultBgCss, defaultFgCss])
 
   // ── Render ────────────────────────────────────────────────────
   if (phase.kind === 'error') {
@@ -2932,18 +3072,81 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         aria-multiline="false"
         style={shadowInputStyle}
       />
-      {visibleRows.map((row, rowIdx) => {
-        const absRow = visibleRowAbsRows[rowIdx] ?? rowIdx
-        return (
-          <TerminalRow
-            key={`abs-${absRow}`}
-            row={row}
-            absRow={absRow}
-            defaultFg={defaultFgCss}
-            defaultBg={defaultBgCss}
+      {/* Rows render into a strip translated by the sub-row scroll
+          fraction (+ top-overscan compensation), inside a viewport
+          pinned to the container's content box (`inset: 4px` matches
+          the 4px padding) that clips the overscan rows. A scroll that
+          stays within one row changes ONLY the strip's transform — a
+          compositor-side translation; the memoized rows don't
+          re-render. Row keys stay `abs-<n>` (absolute buffer row) and
+          each div keeps `data-abs-row`, the anchors that native
+          selection and the copy handler depend on. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 4,
+          right: 4,
+          bottom: 4,
+          left: 4,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            transform: `translateY(${stripLayout.translateY}px)`,
+            willChange: 'transform',
+          }}
+        >
+          {stripRows.map((row, rowIdx) => {
+            const absRow = stripAbsRows[rowIdx] ?? rowIdx
+            return (
+              <TerminalRow
+                key={`abs-${absRow}`}
+                row={row}
+                absRow={absRow}
+                defaultFg={defaultFgCss}
+                defaultBg={defaultBgCss}
+              />
+            )
+          })}
+        </div>
+      </div>
+      {scrollbarThumb && (
+        <div
+          ref={scrollbarTrackRef}
+          data-terminal-scrollbar=""
+          onMouseEnter={() => setScrollbarHover(true)}
+          onMouseLeave={() => setScrollbarHover(false)}
+          onMouseDown={handleScrollbarMouseDown}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            top: 4,
+            bottom: 4,
+            right: 2,
+            width: 8,
+            zIndex: 20,
+            opacity:
+              scrollbarActive || scrollbarHover || scrollbarDragging ? 1 : 0,
+            transition: 'opacity 250ms ease',
+            cursor: 'default',
+          }}
+        >
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: `${scrollbarThumb.topFrac * 100}%`,
+              height: `${scrollbarThumb.heightFrac * 100}%`,
+              borderRadius: 4,
+              backgroundColor: scrollbarDragging
+                ? 'rgba(255,255,255,0.4)'
+                : 'rgba(255,255,255,0.25)',
+            }}
           />
-        )
-      })}
+        </div>
+      )}
       {cursorOverlay && (
         <div aria-hidden="true" style={cursorOverlay.style}>
           {cursorOverlay.char ?? ''}
@@ -2973,7 +3176,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           {' '}· phase:{phase.kind}
           {' '}cells:{snapshot?.cols ?? '?'}x{snapshot?.rows ?? '?'}
           {' '}cursor:{snapshot?.cursor.col ?? 0},{snapshot?.cursor.row ?? 0}
-          {' '}off:{viewportOffset}
+          {' '}offPx:{Math.round(scrollPx)}
           {' '}scr:{snapshot?.scrollback.length ?? 0}
           {' '}v:{snapshot?.version ?? 0}
           {!isReady && phase.kind !== 'idle' && ' · loading'}

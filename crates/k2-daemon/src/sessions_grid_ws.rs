@@ -109,6 +109,19 @@ pub(crate) enum Outbound<'a> {
     /// this as a definitive "idle, waiting" transition signal,
     /// independent of any viewport-text scan.
     Bell,
+    /// OSC 52 clipboard STORE from the child app (`ESC]52;c;…`),
+    /// `text` already base64-decoded by alacritty. Sent to EVERY
+    /// viewer of the session — the daemon doesn't guess focus; each
+    /// client applies it to ITS OS clipboard only while it is the
+    /// active viewer (wezterm's attached-client model, deliberately
+    /// not tmux's stomp-every-client). Copy direction ONLY: the
+    /// read-back/query form is a clipboard-exfiltration primitive,
+    /// is denied by alacritty's default `Osc52::OnlyCopy` policy,
+    /// and the daemon never writes a response. Payloads over
+    /// [`CLIPBOARD_MAX_BYTES`] are dropped whole (see
+    /// [`clipboard_frame`]). Rides the JSON event channel like
+    /// title/bell — the k1 binary wire is unaffected.
+    Clipboard { text: String },
     /// Pre-handshake or handshake-time fatal error. Client should
     /// treat as terminal and may retry once.
     Error { message: String },
@@ -168,6 +181,22 @@ const UNACKED_FRAMES_MAX: usize = 32;
 /// a full snapshot with scrollback — at the worst time), it gets a
 /// quiet gap and ONE authoritative snapshot when it catches up.
 const UNACKED_BYTES_MAX: usize = 2 * 1024 * 1024;
+
+/// Ceiling on a forwarded OSC 52 payload (decoded bytes). Anything a
+/// human meaningfully copies fits far under this; vte's std build
+/// buffers OSC payloads UNBOUNDED (`osc_raw: Vec<u8>`,
+/// vte-0.15.0/src/lib.rs:64), so without this cap a hostile/buggy
+/// child could push multi-MB strings at every attached viewer.
+const CLIPBOARD_MAX_BYTES: usize = 1024 * 1024;
+
+/// Gate an OSC 52 store into an outbound frame. `None` = drop the
+/// payload WHOLE — a silently-truncated clipboard is worse than none.
+fn clipboard_frame(text: String) -> Option<Outbound<'static>> {
+    if text.len() > CLIPBOARD_MAX_BYTES {
+        return None;
+    }
+    Some(Outbound::Clipboard { text })
+}
 
 /// 0.37.11 — monotonically-increasing subscriber id generator.
 /// Each WS accept claims the next value; the id is passed to the
@@ -720,10 +749,41 @@ pub async fn serve_session_grid_connection(
                         // notifications.
                         let _ = send_outbound(&mut write, &Outbound::Bell).await;
                     }
+                    Ok(AlacEvent::ClipboardStore(_, text)) => {
+                        // OSC 52 copy — forward to this viewer (every
+                        // attached WS runs this same arm, so the frame
+                        // reaches ALL viewers; the client applies it
+                        // only when active — see Outbound::Clipboard).
+                        // The load/query form never reaches here:
+                        // alacritty's default OnlyCopy policy denies
+                        // it, and no response bytes are ever written
+                        // back to the PTY.
+                        let len = text.len();
+                        match clipboard_frame(text) {
+                            Some(frame) => {
+                                if send_outbound(&mut write, &frame)
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            None => {
+                                log_debug!(
+                                    "[daemon/sessions_grid_ws] OSC52 payload \
+                                     ({len}B) over {CLIPBOARD_MAX_BYTES}B cap — \
+                                     dropped (session {})",
+                                    session.session_id
+                                );
+                            }
+                        }
+                    }
                     Ok(_other) => {
-                        // ClipboardStore / ColorRequest / etc.
+                        // ClipboardLoad / ColorRequest / etc.
                         // Ignored for v2 — not part of the minimal
-                        // grid-rendering contract.
+                        // grid-rendering contract (and ClipboardLoad
+                        // must NEVER be answered — see
+                        // Outbound::Clipboard).
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         // 0.39.46: grid frames ride frames_rx now (its
@@ -1261,6 +1321,68 @@ mod tests {
         let outcome = apply_set_active(&s, 7, false, None, None);
         assert_eq!(outcome, SetActiveOutcome::Release);
         assert_eq!(s.active_subscriber.load(Relaxed), 0, "claim cleared on release");
+    }
+
+    // OSC 52 clipboard egress (copy direction only). Pins the wire
+    // shape the client's `case 'clipboard'` handler parses, the
+    // drop-whole cap semantics, and — end-to-end through a real PTY +
+    // alacritty Term — that a child's OSC 52 STORE surfaces on the
+    // session event broadcast with the payload base64-DECODED.
+
+    #[test]
+    fn clipboard_frame_serializes_to_the_clipboard_event() {
+        let frame = clipboard_frame("hello-osc52".to_string())
+            .expect("small payload must forward");
+        let json = serde_json::to_string(&frame).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"event":"clipboard","payload":{"text":"hello-osc52"}}"#
+        );
+    }
+
+    #[test]
+    fn clipboard_frame_drops_oversize_whole_and_keeps_cap_exact() {
+        // Exactly at the cap forwards…
+        let at_cap = "x".repeat(CLIPBOARD_MAX_BYTES);
+        assert!(clipboard_frame(at_cap).is_some(), "cap is inclusive");
+        // …one byte over drops the WHOLE payload (never truncates).
+        let over = "x".repeat(CLIPBOARD_MAX_BYTES + 1);
+        assert!(clipboard_frame(over).is_none(), "oversize must drop");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn osc52_store_surfaces_decoded_on_the_event_broadcast() {
+        let s = spawn_test_session(); // `cat` echoes stdin → PTY out
+        let mut rx = s.subscribe_events();
+        // Write the OSC 52 STORE as input; `cat` writes it back
+        // through the PTY, alacritty parses it (default OnlyCopy
+        // admits stores), base64-decodes the payload and broadcasts
+        // ClipboardStore. aGVsbG8tb3NjNTI= == "hello-osc52". The
+        // trailing \n matters twice: the PTY is in canonical mode, so
+        // `cat` doesn't read the line until a newline arrives — and
+        // the tty driver's own ECHO mangles ESC to caret notation
+        // (`^[`), so only cat's verbatim output carries a real ESC
+        // byte the parser can dispatch.
+        s.write(b"\x1b]52;c;aGVsbG8tb3NjNTI=\x07\n".to_vec());
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match rx.try_recv() {
+                Ok(AlacEvent::ClipboardStore(_, text)) => {
+                    assert_eq!(text, "hello-osc52", "payload must arrive decoded");
+                    return;
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    if std::time::Instant::now() >= deadline {
+                        panic!("no ClipboardStore event within 5s");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => panic!("event broadcast died: {e}"),
+            }
+        }
     }
 
     #[cfg(unix)]

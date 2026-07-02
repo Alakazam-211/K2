@@ -85,6 +85,7 @@ import {
   copySelectionText,
   modelRowAt,
 } from './copyText'
+import { shouldApplyOsc52 } from './oscClipboard'
 
 // ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
 
@@ -172,6 +173,10 @@ type OutboundMsg =
   | { event: 'child_exit'; payload: { exit_code: number | null } }
   | { event: 'title'; payload: { title: string } }
   | { event: 'bell'; payload: null }
+  // OSC 52 clipboard STORE from the child app, base64-decoded and
+  // size-capped daemon-side. Broadcast to every viewer; each pane
+  // applies it locally only while it is the active viewer.
+  | { event: 'clipboard'; payload: { text: string } }
   | { event: 'error'; payload: { message: string } }
   // 0.37.4 Phase B — daemon-owned label events.
   | { event: 'label_initial'; payload: { label: string } }
@@ -797,6 +802,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // (re)connect; the daemon's per-connection pacing state resets with
   // the socket too.
   const k1WireActiveRef = useRef(false)
+  // Last OSC 52 payload this pane actually wrote to the OS clipboard.
+  // The `clipboard` WS event dedupes against it (claude re-emits the
+  // same OSC 52 on every repaint while a selection stays live), and
+  // only an APPLIED payload updates it — a frame skipped for being
+  // non-active must not poison the baseline.
+  const lastOsc52AppliedRef = useRef<string | null>(null)
   const isTabVisible = useIsTabVisible()
 
   // Issue #8 — mirror the two render-derived inputs to the
@@ -1521,6 +1532,24 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             }
             lastSeenWorkingAtRef.current = 0
             useActiveAgentsStore.getState().recordTitleActivity(terminalId, false)
+            break
+          }
+          case 'clipboard': {
+            // OSC 52 copy from the child app (payload decoded and
+            // size-capped daemon-side; read-back is never
+            // implemented). Apply to the OS clipboard only while
+            // this pane holds the ACTIVE-viewer claim — wezterm's
+            // attached-client model rather than tmux's stomp-every-
+            // client, so a passive second window / phone viewing the
+            // same session never has its clipboard replaced. Dedupe
+            // against the last APPLIED value via shouldApplyOsc52.
+            const text = parsed.payload.text ?? ''
+            if (lastSentActiveRef.current !== true) break
+            if (!shouldApplyOsc52(lastOsc52AppliedRef.current, text)) break
+            lastOsc52AppliedRef.current = text
+            navigator.clipboard.writeText(text).catch((err) =>
+              console.warn('[kessel-term/osc52] clipboard write failed:', err),
+            )
             break
           }
           case 'child_exit': {

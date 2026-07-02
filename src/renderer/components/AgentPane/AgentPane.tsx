@@ -8,7 +8,7 @@ import { addNavWorktree } from '@/components/Sidebar/Sidebar'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { agentChatId } from '@/lib/terminal-id'
 import { AgentInboxPane } from './AgentInboxPane'
-import { AgentChatPane } from './AgentChatPane'
+import { PinnedChatGate } from './PinnedChatRetainer'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -43,7 +43,10 @@ export function AgentPane({ agentName, projectPath, section, restoredSessionId }
   }
 
   if (section === 'chat') {
-    return <AgentChatPane agentName={agentName} projectPath={projectPath} restoredSessionId={restoredSessionId} />
+    // Pinned-chat retention: the gate renders a portal slot for the
+    // retainer-owned instance when the workspace is exempt (daemon-owned
+    // chat ∧ Active), or the inline AgentChatPane (today's path) otherwise.
+    return <PinnedChatGate agentName={agentName} projectPath={projectPath} restoredSessionId={restoredSessionId} />
   }
 
   // Default to inbox for legacy serialized rows that have no section field.

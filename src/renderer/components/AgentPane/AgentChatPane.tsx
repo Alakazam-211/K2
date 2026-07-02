@@ -42,6 +42,14 @@ interface AgentChatPaneProps {
    *  whenever it's reachable. It only drives the renderer's resolve loop
    *  in the capability-gated FALLBACK path. */
   restoredSessionId?: string
+  /** Pinned-chat retention — fired when the DAEMON broadcasts
+   *  SessionRemoved for this workspace's canonical session (daemon-owned
+   *  path only; fires after the pane flips to its idle state). The
+   *  PinnedChatRetainer uses it to evict a BACKGROUNDED retained
+   *  instance so the next visit remounts fresh and re-runs
+   *  ensure-pinned-chat's find-or-spawn — preserving today's
+   *  revisit-respawns behavior instead of parking an idle pane. */
+  onDaemonSessionRemoved?: () => void
 }
 
 /**
@@ -70,7 +78,7 @@ interface AgentChatPaneProps {
  * guard + circuit breaker intact (the band-aids still protect the only
  * code path that can still loop).
  */
-export function AgentChatPane({ agentName, projectPath, restoredSessionId }: AgentChatPaneProps): React.JSX.Element {
+export function AgentChatPane({ agentName, projectPath, restoredSessionId, onDaemonSessionRemoved }: AgentChatPaneProps): React.JSX.Element {
   // Resolve project id synchronously from the projects store; the chat tab
   // will not render until a real id is available so the legacy collision
   // bug can never reappear via this surface.
@@ -113,6 +121,7 @@ export function AgentChatPane({ agentName, projectPath, restoredSessionId }: Age
       projectId={projectId}
       projectPath={projectPath}
       restoredSessionId={restoredSessionId}
+      onDaemonSessionRemoved={onDaemonSessionRemoved}
     />
   ) : (
     <AgentChatTerminalLegacy
@@ -130,6 +139,8 @@ interface AgentChatTerminalProps {
   projectId: string
   projectPath: string
   restoredSessionId?: string
+  /** Daemon-owned path only — see AgentChatPaneProps. */
+  onDaemonSessionRemoved?: () => void
 }
 
 // ── Shared header: display name, history dropdown, refresh button ─────────
@@ -376,7 +387,7 @@ async function ensurePinnedChat(
  * creating a new one — that's the "attach". A bumped `attachNonce` forces
  * a clean re-attach after a forceRespawn / SessionAdded.
  */
-function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSessionId }: AgentChatTerminalProps): React.JSX.Element {
+function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSessionId, onDaemonSessionRemoved }: AgentChatTerminalProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalIdRef = useRef(agentChatId(projectId, agentName))
   const displayName = useDisplayName(projectPath, agentName)
@@ -427,6 +438,15 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // side-effect" class as #682. `ensure()` and `onAdded` both stamp this ref
   // with the session they settled on, so the echo for that session no-ops.
   const attachedSessionIdRef = useRef<string | null>(null)
+
+  // Latest onDaemonSessionRemoved in a ref so the session-events
+  // subscription (deps: projectPath/projectId) fires the CURRENT
+  // consumer without re-subscribing per render — the retainer passes an
+  // inline closure. Same pattern as TerminalPane's onChildExitRef.
+  const onDaemonSessionRemovedRef = useRef(onDaemonSessionRemoved)
+  useEffect(() => {
+    onDaemonSessionRemovedRef.current = onDaemonSessionRemoved
+  }, [onDaemonSessionRemoved])
 
   // The claude session id currently pinned (from the last ensure / the
   // SessionAdded event). Drives the dropdown highlight + title lookup.
@@ -516,6 +536,10 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         // re-attaches.
         attachedSessionIdRef.current = null
         setPhase({ kind: 'idle' })
+        // Pinned-chat retention — let the retainer evict a backgrounded
+        // instance (fires AFTER the idle flip so a kept-mounted pane —
+        // foreground workspace — already shows the idle state).
+        onDaemonSessionRemovedRef.current?.()
       },
     })
     return unsubscribe

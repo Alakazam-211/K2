@@ -33,6 +33,12 @@ import Toast from './components/Toast/Toast'
 import AssistantBar from './components/WorkspaceAssistant/AssistantBar'
 import { useProjectsStore } from './stores/projects'
 import { useConnectHostStore } from './stores/connect-host'
+// Pinned-chat retention — per-window host that keeps exempt workspaces'
+// pinned chats mounted (attached + rendering) while hidden. Rendered as
+// the FIRST child of every top-level layout branch below so React's
+// index-based reconciliation preserves the instance (and its retained
+// panes) across default/focus/settings switches.
+import { PinnedChatRetainer } from './components/AgentPane/PinnedChatRetainer'
 import { executeRemoteDrop } from './lib/handle-remote-drop'
 import { usePanelsStore } from './stores/panels'
 import { useSettingsStore } from './stores/settings'
@@ -782,6 +788,7 @@ export default function App(): React.JSX.Element {
   if (settingsOpen) {
     return (
       <>
+        <PinnedChatRetainer />
         <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg)]">
           {/* Settings renders its OWN top-bar (traffic-light spacer + "K2
               <Server>" + switcher, #686). No separate empty drag strip here —
@@ -827,12 +834,16 @@ export default function App(): React.JSX.Element {
   // Focus mode: workspace header above sidebar tabs, no primary sidebar
   if (focusProjectId) {
     return (
-      <FocusModeContent activeProject={activeProject} cwd={cwd} />
+      <>
+        <PinnedChatRetainer />
+        <FocusModeContent activeProject={activeProject} cwd={cwd} />
+      </>
     )
   }
 
   return (
     <>
+      <PinnedChatRetainer />
       <Layout
         sidebar={<Sidebar />}
         leftPanel={<LeftPanelContent rootPath={activeWorkspace?.worktreePath ?? activeProject?.path} />}

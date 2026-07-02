@@ -85,6 +85,7 @@ export const SELECTION_ALPHA = 0.45
 export class FrameBuffers {
   readonly bg = new RectList()
   readonly selection = new RectList()
+  readonly deco = new RectList()
   private glyphA = new Float32Array(0)
   private glyphB = new Float32Array(0)
   private useA = false
@@ -218,6 +219,9 @@ export interface PackInput {
   cache: RowCache
   buffers: FrameBuffers
   glyphs: GlyphSource
+  /** Underline/strikethrough bar thickness, device px — the painter
+   *  computes `max(1, floor(fontSize·dpr/15))` (xterm's rule). */
+  decoThickness: number
 }
 
 export interface PackedFrame {
@@ -233,6 +237,7 @@ export interface PackedFrame {
   fractionDevice: number
   bg: RectList
   selection: RectList
+  deco: RectList
   /** Fixed-slot glyph instances: `rowCount × cols`, GLYPH_FLOATS
    *  each; instance i sits at cell (i % cols, i / cols). */
   glyphData: Float32Array
@@ -259,6 +264,7 @@ export function packFrame(input: PackInput): PackedFrame {
     cache,
     buffers,
     glyphs,
+    decoThickness,
   } = input
   const snap = frame.snapshot
   const totalRows = snap.scrollback.length + snap.grid.length
@@ -271,9 +277,15 @@ export function packFrame(input: PackInput): PackedFrame {
   )
   const fractionDevice = Math.round(layout.fraction * dpr)
 
-  const { bg, selection } = buffers
+  const { bg, selection, deco } = buffers
   bg.reset()
   selection.reset()
+  deco.reset()
+  // Bar placement (xterm's y-math, simplified for K2's single
+  // boolean styles): underline hugs the cell bottom with a
+  // thickness-sized gap; strikethrough centers on the cell.
+  const underlineOffset = deviceCellH - 2 * decoThickness
+  const strikeoutOffset = Math.round((deviceCellH - decoThickness) / 2)
   const rowFloats = snap.cols * GLYPH_FLOATS
   const glyphData = buffers.nextGlyphBuffer(layout.rowCount * rowFloats)
   const sel = frame.selection
@@ -314,6 +326,16 @@ export function packFrame(input: PackInput): PackedFrame {
         1,
       )
     }
+    for (const d of er.decoSpans) {
+      deco.push(
+        d.col * deviceCellW,
+        y + (d.kind === 'underline' ? underlineOffset : strikeoutOffset),
+        d.width * deviceCellW,
+        decoThickness,
+        d.color,
+        d.alpha,
+      )
+    }
     glyphData.set(cache.slabFor(row, frame.theme, snap.cols, glyphs), rowBase)
   }
 
@@ -323,6 +345,7 @@ export function packFrame(input: PackInput): PackedFrame {
     fractionDevice,
     bg,
     selection,
+    deco,
     glyphData,
     glyphCount: layout.rowCount * snap.cols,
   }

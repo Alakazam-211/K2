@@ -76,6 +76,7 @@ function pack(
     cache,
     buffers,
     glyphs,
+    decoThickness: 2,
   })
 }
 
@@ -175,6 +176,32 @@ describe('packFrame — background rects', () => {
     const p2 = pack(f, cache, buffers)
     expect(p2.bg.data).toBe(data1)
     expect(p2.bg.count).toBe(1)
+  })
+})
+
+describe('packFrame — decoration rects', () => {
+  it('underline hugs the cell bottom, strikeout centers, dim alpha carried', () => {
+    const g = [
+      [run('ab', { underline: true })],
+      [run('c', { strikeout: true, dim: true, fg: 0xff0000 })],
+    ]
+    const p = pack(frame(g))
+    expect(rects(p.deco)).toEqual([
+      // underline: y = 0 + (20 - 2*2) = 16, thickness 2
+      [0, 16, 20, 2, Math.fround(0xe0 / 255), Math.fround(0xe0 / 255), Math.fround(0xe0 / 255), 1],
+      // strikeout: y = 20 + round((20-2)/2) = 29
+      [0, 29, 10, 2, 1, 0, 0, Math.fround(0.6)],
+    ])
+  })
+
+  it('deco y shifts with the scroll fraction like every other pass', () => {
+    const sb = [[run('s')], [run('t')]]
+    const g = [[run('a', { underline: true })], [run('b')]]
+    const p = pack(frame(g, sb, 4)) // fractionDevice 12
+    // 'a' is strip index 1 → y = 20 - 12 + 16 = 24.
+    expect(rects(p.deco)).toEqual([
+      [0, 24, 10, 2, Math.fround(0xe0 / 255), Math.fround(0xe0 / 255), Math.fround(0xe0 / 255), 1],
+    ])
   })
 })
 

@@ -50,6 +50,7 @@ export function createWebglPainter(
   let fatalCb: ((reason: string) => void) | null = null
   let atlas: GlyphAtlas | null = null
   let uploadedAtlasVersion = -1
+  let decoThickness = 1
   /** Last frame drawn — replayed after a successful context restore
    *  (nothing upstream re-renders until the next snapshot/scroll). */
   let lastFrame: PainterFrame | null = null
@@ -101,6 +102,7 @@ export function createWebglPainter(
       cache,
       buffers,
       glyphs: atlas,
+      decoThickness,
     })
 
     // Packing may have rasterized new glyphs — re-upload the page
@@ -122,6 +124,10 @@ export function createWebglPainter(
       texW: atlas.size,
       texH: atlas.size,
     })
+    // Decorations LAST: underline/strikethrough bars draw over their
+    // glyphs (pass order per brief §2.2; the block cursor stays a DOM
+    // overlay above the whole canvas — §5).
+    backend.drawRects(packed.deco.data, packed.deco.count)
 
     if (diagEnabled) {
       diagMs += performance.now() - t0
@@ -196,7 +202,12 @@ export function createWebglPainter(
         Math.abs(px[2] - (SANITY_COLOR & 0xff)) <= 2
       if (!ok) {
         fatal('webgl2-sanity-readback-failed')
+        return
       }
+      // Collapse the probe buffer so no colored speck shows before
+      // the first real frame sizes the canvas.
+      canvas.width = 0
+      canvas.height = 0
     },
 
     setMetrics(m: PainterMetrics): void {
@@ -205,6 +216,8 @@ export function createWebglPainter(
       // height, so glyphs land on whole device pixels.
       deviceCellW = Math.max(1, Math.floor(m.cssCellW * m.dpr))
       deviceCellH = Math.max(1, Math.round(m.cssCellH * m.dpr))
+      // xterm's bar-thickness rule (TextureAtlas underline math).
+      decoThickness = Math.max(1, Math.floor((m.fontSize * m.dpr) / 15))
       // Font/DPR change ⇒ new atlas; every cached slab holds stale
       // atlas coordinates → drop the row cache wholesale. Theme
       // changes deliberately do NOT land here (color is

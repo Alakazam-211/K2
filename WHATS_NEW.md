@@ -3,6 +3,59 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.22 — Kessel: a first-class terminal
+
+Meet **Kessel** — K2's terminal, rebuilt to feel first-class. It's the same
+engine that already let one session be watched from many screens at once; this
+release makes it *smooth*.
+
+- **Buttery scrolling.** Terminal scrolling is now pixel-smooth with a real
+  overlay scrollbar, and it keeps pace with your display instead of stuttering.
+  Fullscreen agent UIs (like Claude's) scroll at full frame rate too.
+- **Resizing no longer flashes black.** Resizing a terminal — or a whole window
+  — now dissolves from the old size to the new one instead of blanking to black
+  mid-reflow.
+- **Click, select, and copy inside fullscreen agents.** In a fullscreen agent
+  UI you can now click to move the cursor, drag to select, and copy — and the
+  copy lands on your clipboard as the app intended it, clean. Hold Shift or
+  Option while dragging for K2's own text selection instead.
+- **Copy that respects real line breaks.** Copying wrapped lines rejoins them
+  into one line, wide characters (CJK/emoji) line up correctly, and there's no
+  more stray trailing space.
+- **Instant workspace switching.** The pinned chat for each of your active
+  workspaces stays warm in the background, so hopping between workspaces — even
+  on a remote server — is instant instead of reloading each time.
+- **An experimental GPU renderer.** Settings → Terminal → Terminal Painter →
+  WebGL turns on a GPU-accelerated painter for the terminal. Off by default.
+
+## 0.40.22 also includes
+
+- **Send and receive files of any size.** Sending files to a server is no
+  longer capped at 100 MB — large files stream with a progress bar. Right-click
+  a folder on a remote server to **compress** it, and right-click a file to
+  **download** it back to your computer, at any size.
+- **Clone a workspace back to your computer.** When you're working on a remote
+  server, "Clone to This Computer" pulls a whole workspace — files, chats, and
+  history — down to your local machine, even if that server has never heard of
+  your computer.
+- **Reconnecting to updated servers, finished.** Updating or restarting a
+  server now recovers cleanly even when your saved login expired during the
+  update: K2 shows "restarting…", re-authenticates on its own, and only sends
+  you to the sign-in screen if your credentials genuinely no longer work — no
+  more relaunching the app to reconnect.
+- **The busy spinner clears when an agent is done.** Fixed a case where a
+  workspace's activity spinner could spin forever after you switched away from
+  it mid-task.
+- **Federation settings in one place.** "Enable federation" and "Let remote
+  users message agents" now sit together under Remote access in K2 Connect,
+  and both are restricted to Owner and Admin — a Member can no longer change
+  them. Messages queued for an offline server now actually deliver when it comes
+  back, instead of silently waiting forever.
+- **Stability: terminal sessions no longer leak.** Fixed a long-standing issue
+  where closed terminals and split-column layouts could pile up unused sessions
+  on a server — and, with two apps or windows on one server, exhaust it. Closing
+  a tab now reliably ends its session.
+
 ## 0.40.21 — Agents by API, smoother terminals, federation fixes
 
 - **Run coding agents on your K2 server by API.** Authenticated API calls can

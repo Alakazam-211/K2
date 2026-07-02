@@ -24,7 +24,7 @@ export interface ColRun {
  *  joined text and its column range. Zero-width chars are folded
  *  into the preceding cluster (they render with it and can never be
  *  hit independently). */
-interface Cluster {
+export interface Cluster {
   utf16Start: number
   utf16End: number
   colStart: number
@@ -41,7 +41,7 @@ interface Cluster {
 // column of hit-test bias inside that run, never a render break —
 // the run's total width comes from the wire, not from this table.
 
-function isZeroWidthCp(cp: number): boolean {
+export function isZeroWidthCp(cp: number): boolean {
   return (
     (cp >= 0x0300 && cp <= 0x036f) || // combining diacriticals
     (cp >= 0x0483 && cp <= 0x0489) || // Cyrillic combining
@@ -60,7 +60,7 @@ function isZeroWidthCp(cp: number): boolean {
   )
 }
 
-function isWideCp(cp: number): boolean {
+export function isWideCp(cp: number): boolean {
   return (
     (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
     (cp >= 0x2e80 && cp <= 0x303e) || // CJK radicals, punctuation
@@ -103,8 +103,10 @@ export function rowColSpan(row: ColRun[]): number {
   return total
 }
 
-/** Build the per-cluster placement list for a row. */
-function rowClusters(row: ColRun[]): Cluster[] {
+/** Build the per-cluster placement list for a row. Exported for the
+ *  WebGL painter's selection/word math (webgl/selection.ts), which
+ *  needs cluster granularity, not just index mapping. */
+export function rowClusters(row: ColRun[]): Cluster[] {
   const out: Cluster[] = []
   let col = 0
   let u16 = 0

@@ -2,7 +2,7 @@ import React from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import type { TerminalSettings } from '@/stores/settings'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
-import type { LinkClickMode, TerminalRenderer } from '@/stores/terminal-settings'
+import type { LinkClickMode, TerminalPainterKind, TerminalRenderer } from '@/stores/terminal-settings'
 import { SettingRow } from '../controls/SettingControls'
 import { SettingDropdown } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
@@ -16,6 +16,7 @@ export const TERMINAL_MANIFEST: SettingEntry[] = [
   { id: 'terminal.link-click-mode', section: 'terminal', label: 'Link Click Mode', description: 'Click vs Cmd+Click to activate links', keywords: ['link', 'url', 'click'] },
   { id: 'terminal.open-links-in-split', section: 'terminal', label: 'Open Links in Split Pane', description: 'Open file links in a sibling pane when splits are active', keywords: ['link', 'split', 'pane'] },
   { id: 'terminal.renderer', section: 'terminal', label: 'Terminal Renderer', description: 'Alacritty (default)', keywords: ['renderer', 'engine', 'alacritty', 'v2', 'session stream', 'legacy'] },
+  { id: 'terminal.painter', section: 'terminal', label: 'Terminal Painter', description: 'DOM (default) or WebGL (experimental)', keywords: ['painter', 'webgl', 'gpu', 'canvas', 'rendering', 'experimental'] },
 ]
 
 export function TerminalSection(): React.JSX.Element {
@@ -27,6 +28,8 @@ export function TerminalSection(): React.JSX.Element {
   const setOpenLinksInSplitPane = useTerminalSettingsStore((s) => s.setOpenLinksInSplitPane)
   const renderer = useTerminalSettingsStore((s) => s.renderer)
   const setRenderer = useTerminalSettingsStore((s) => s.setRenderer)
+  const painter = useTerminalSettingsStore((s) => s.painter)
+  const setPainter = useTerminalSettingsStore((s) => s.setPainter)
 
   return (
     <div className="max-w-xl">
@@ -154,6 +157,29 @@ export function TerminalSection(): React.JSX.Element {
               { value: 'alacritty-v2', label: 'Alacritty' },
             ]}
             onChange={(v) => setRenderer(v as TerminalRenderer)}
+          />
+        </SettingRow>
+
+        {/* Terminal Painter.
+         *
+         *  How the v2 grid is drawn: the proven DOM row strip
+         *  (default) or the experimental WebGL2 instanced painter.
+         *  The WebGL painter falls back to DOM per-pane on context
+         *  loss / missing WebGL2 support, so flipping this is safe —
+         *  but it is explicitly experimental until it has soaked.
+         */}
+        <SettingRow settingId="terminal.painter" label={
+          <span title="How terminal cells are drawn. WebGL is experimental (GPU-accelerated); DOM is the proven default. Changing this only affects NEW terminals.">
+            Terminal Painter
+          </span>
+        }>
+          <SettingDropdown
+            value={painter}
+            options={[
+              { value: 'dom', label: 'DOM' },
+              { value: 'webgl', label: 'WebGL (Experimental)' },
+            ]}
+            onChange={(v) => setPainter(v as TerminalPainterKind)}
           />
         </SettingRow>
 

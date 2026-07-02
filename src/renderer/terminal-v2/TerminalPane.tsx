@@ -66,6 +66,8 @@ import {
 } from './scrollMath'
 import { decodeGridFrame, type WireFrame } from './gridWire'
 import { colToTextIndex, runColSpan } from './runCols'
+import { createWebglPainter } from './webgl/webglPainter'
+import type { TerminalPainter } from './webgl/painterTypes'
 
 // ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
 
@@ -497,6 +499,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const storeFontSize = useTerminalSettingsStore((s) => s.fontSize)
   const fontSize = props.fontSize ?? storeFontSize
   const linkClickMode = useTerminalSettingsStore((s) => s.linkClickMode)
+
+  // ── WebGL painter flag ────────────────────────────────────────
+  // Read ONCE at mount (the same affects-new-panes contract as
+  // `renderer`): a store change mid-session never rebuilds a live
+  // pane. `painterFatal` demotes THIS pane instance to the DOM strip
+  // permanently — missing WebGL2, failed sanity readback, or an
+  // unrestored context loss all land there. The DOM path below is
+  // byte-identical when the flag is 'dom' (the default).
+  const storePainter = useTerminalSettingsStore((s) => s.painter)
+  const [painterKind] = useState(storePainter)
+  const [painterFatal, setPainterFatal] = useState<string | null>(null)
+  const useWebgl = painterKind === 'webgl' && painterFatal === null
 
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   // Issue #5: mid-flight WS drops (TCP reset, WebKit Networking
@@ -1744,6 +1758,71 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       height: Math.ceil(fontSize * config.font.lineHeightMultiplier),
     })
   }, [fontSize, config.font.family, config.font.lineHeightMultiplier])
+
+  // ── WebGL painter lifecycle (useWebgl only) ───────────────────
+  // The painter is a pure consumer downstream of the rAF coalescer:
+  // it sees the same merged `snapshot` + `scrollPx` the DOM strip
+  // renders, once per commit, and owns nothing else — WS, merge,
+  // input, overlays all stay with the pane. All three effects are
+  // layout effects in dependency order (create → metrics → render)
+  // so the first snapshot paints in the same commit that mounts the
+  // canvas.
+  const webglCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const painterRef = useRef<TerminalPainter | null>(null)
+  const painterTheme = useMemo(
+    () => ({
+      fg: config.colors.foreground,
+      bg: config.colors.background,
+      selection: config.colors.selection.background,
+    }),
+    [
+      config.colors.foreground,
+      config.colors.background,
+      config.colors.selection.background,
+    ],
+  )
+  useLayoutEffect(() => {
+    if (!useWebgl) return
+    const canvas = webglCanvasRef.current
+    if (!canvas) return
+    const painter = createWebglPainter()
+    painter.onFatal((reason) => {
+      // Permanent per-pane demotion. The canvas unmounts and the DOM
+      // strip (the proven path) takes over on the next render.
+      setPainterFatal(reason)
+    })
+    painter.mount(canvas)
+    painterRef.current = painter
+    return () => {
+      painterRef.current = null
+      painter.dispose()
+    }
+  }, [useWebgl])
+  useLayoutEffect(() => {
+    if (!useWebgl) return
+    const painter = painterRef.current
+    if (!painter) return
+    if (!cellMetrics.width || !cellMetrics.height) return
+    painter.setMetrics({
+      cssCellW: cellMetrics.width,
+      cssCellH: cellMetrics.height,
+      dpr: window.devicePixelRatio || 1,
+      fontFamily: config.font.family,
+      fontSize,
+    })
+  }, [useWebgl, cellMetrics, config.font.family, fontSize])
+  useLayoutEffect(() => {
+    if (!useWebgl) return
+    const painter = painterRef.current
+    if (!painter || !snapshot) return
+    if (!cellMetrics.width || !cellMetrics.height) return
+    painter.render({
+      snapshot,
+      scrollPx,
+      selection: null,
+      theme: painterTheme,
+    })
+  }, [useWebgl, snapshot, scrollPx, painterTheme, cellMetrics])
 
   // ── Send input / resize ───────────────────────────────────────
   const sendInput = useCallback((text: string) => {
@@ -3391,6 +3470,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             transition: 'transform 120ms ease-out',
           }}
         >
+        {useWebgl ? (
+          /* WebGL painter host. Replaces ONLY the row strip: it sits
+             inside the same clipping viewport + scale wrapper, so
+             passive scale-to-fit and the resize hold apply as CSS
+             transforms over the canvas exactly as they do over the
+             DOM rows. Scrolling is painted internally (fraction
+             uniform), not via translateY. pointer-events stay on the
+             container — the canvas is inert like the row divs. */
+          <canvas
+            ref={webglCanvasRef}
+            data-terminal-webgl-canvas=""
+            style={{ display: 'block', pointerEvents: 'none' }}
+          />
+        ) : (
         <div
           style={{
             transform: `translateY(${stripLayout.translateY}px)`,
@@ -3410,6 +3503,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             )
           })}
         </div>
+        )}
         </div>
       </div>
       {/* Passive-view affordance: this pane is watching a grid sized
@@ -3501,6 +3595,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           }}
         >
           <strong style={{ color: '#fff' }}>Alacritty</strong>
+          {painterKind === 'webgl' && (
+            <span style={{ color: painterFatal ? '#f66' : '#6f6' }}>
+              {' '}
+              · {painterFatal ? `dom(webgl:${painterFatal})` : 'webgl'}
+            </span>
+          )}
           {' '}· phase:{phase.kind}
           {' '}cells:{snapshot?.cols ?? '?'}x{snapshot?.rows ?? '?'}
           {' '}cursor:{snapshot?.cursor.col ?? 0},{snapshot?.cursor.row ?? 0}

@@ -37,12 +37,29 @@ export type ShortcutModifierLayout = 'cmd-active-cmdshift-pinned' | 'cmd-pinned-
  */
 export type TerminalRenderer = 'alacritty' | 'alacritty-v2'
 
+/**
+ * How the v2 terminal paints its grid (the CellRun rows inside
+ * TerminalPane). Orthogonal to `renderer` (which selects the PTY
+ * engine/wire): both painters consume the same daemon snapshots.
+ *
+ * - `dom` (default): the memoized `<span>` row strip. The proven
+ *   path — stays byte-identical regardless of this flag's existence.
+ * - `webgl`: experimental WebGL2 instanced painter
+ *   (`terminal-v2/webgl/`). Falls back to `dom` per-pane on context
+ *   loss / missing WebGL2. Design: `.k2/notes/webgl-painter-brief.md`.
+ *
+ * Like `renderer`, the value is read at pane mount — changing it only
+ * affects NEW terminal panes.
+ */
+export type TerminalPainterKind = 'dom' | 'webgl'
+
 interface TerminalSettingsState {
   fontSize: number
   linkClickMode: LinkClickMode
   openLinksInSplitPane: boolean
   shortcutLayout: ShortcutModifierLayout
   renderer: TerminalRenderer
+  painter: TerminalPainterKind
   incrementFontSize: () => void
   decrementFontSize: () => void
   resetFontSize: () => void
@@ -50,6 +67,7 @@ interface TerminalSettingsState {
   setOpenLinksInSplitPane: (enabled: boolean) => void
   setShortcutLayout: (layout: ShortcutModifierLayout) => void
   setRenderer: (renderer: TerminalRenderer) => void
+  setPainter: (painter: TerminalPainterKind) => void
 }
 
 // Persisted via zustand's persist middleware so the user's
@@ -70,6 +88,9 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       // users keep their persisted choice via zustand's persist
       // middleware — only fresh installs land on v2 by default.
       renderer: 'alacritty-v2' as TerminalRenderer,
+      // WebGL painter is opt-in (experimental); `dom` is the proven
+      // default and the permanent fallback path.
+      painter: 'dom' as TerminalPainterKind,
 
       incrementFontSize: () => {
         set((state) => ({
@@ -110,6 +131,13 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
         // value and snap it back.
         const normalized = renderer === 'alacritty-v2' ? renderer : 'alacritty-v2'
         set({ renderer: normalized })
+      },
+
+      setPainter: (painter: TerminalPainterKind) => {
+        // Same defensive normalization as setRenderer: any unknown
+        // value (hand-edited localStorage, stale future flag) snaps
+        // back to the safe default.
+        set({ painter: painter === 'webgl' ? 'webgl' : 'dom' })
       }
     }),
     {
@@ -123,8 +151,9 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
         openLinksInSplitPane: state.openLinksInSplitPane,
         shortcutLayout: state.shortcutLayout,
         renderer: state.renderer,
+        painter: state.painter,
       }),
-      version: 3,
+      version: 4,
       // 0.37.0 (v1 → v2): force-migrate users who had the persisted
       // renderer set to 'alacritty' (Legacy) onto 'alacritty-v2'.
       // The legacy option is removed from the Settings UI and the
@@ -137,15 +166,23 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       // cleanup. Any persisted 'kessel' value is migrated forward
       // to 'alacritty-v2' so users land on the only remaining
       // supported renderer on next launch.
+      // 0.40.x (v3 → v4): the `painter` field was added (WebGL2
+      // instanced painter, experimental, default 'dom'). Pre-v4
+      // persisted blobs lack the key; stamp the default explicitly so
+      // every stored shape is self-describing.
       migrate: (persisted: unknown, version: number) => {
         if (persisted && typeof persisted === 'object') {
-          const ps = persisted as { renderer?: string }
+          let ps = persisted as { renderer?: string; painter?: string }
           if (version < 2 && ps.renderer === 'alacritty') {
-            return { ...ps, renderer: 'alacritty-v2' }
+            ps = { ...ps, renderer: 'alacritty-v2' }
           }
           if (version < 3 && ps.renderer === 'kessel') {
-            return { ...ps, renderer: 'alacritty-v2' }
+            ps = { ...ps, renderer: 'alacritty-v2' }
           }
+          if (version < 4 && ps.painter === undefined) {
+            ps = { ...ps, painter: 'dom' }
+          }
+          return ps as Partial<TerminalSettingsState>
         }
         return persisted as Partial<TerminalSettingsState>
       },

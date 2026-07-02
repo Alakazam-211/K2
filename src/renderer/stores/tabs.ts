@@ -212,6 +212,55 @@ function recordLayoutRevision(key: string, revision: unknown): void {
   if (revision > prev) layoutRevisions.set(key, revision)
 }
 
+// In-flight `workspace-layouts/save` requests per workspace key. The daemon
+// emits `TabOrderChanged` BEFORE it writes the save's HTTP response, so our
+// OWN save's broadcast can reach `onTabOrderChanged` while `layoutRevisions`
+// still holds the pre-save base — which made the handler misread the echo as
+// a REMOTE write and refetch+apply the canonical layout. That layout is
+// stale relative to any structural change made since the save was
+// serialized: clicking "Split into columns" while a save was in flight had
+// the split column wiped by the rebuild (and the split terminal's
+// `session_added` then adopted it into the MAIN group — the reported
+// "column disappears and merges back"). The handler now settles these
+// in-flight saves before deciding, so a self-echo dissolves against the
+// recorded base and only a genuinely-newer remote revision refetches.
+const pendingLayoutSaves = new Map<string, Set<Promise<void>>>()
+
+/** Register an in-flight `workspace-layouts/save` POST for `key`. The stored
+ *  promise is a settle-only view (never rejects); callers keep owning error
+ *  handling on the original promise. */
+function trackPendingLayoutSave(key: string, save: Promise<unknown>): void {
+  let set = pendingLayoutSaves.get(key)
+  if (!set) {
+    set = new Set()
+    pendingLayoutSaves.set(key, set)
+  }
+  const inFlight = set
+  const settled: Promise<void> = save.then(
+    () => undefined,
+    () => undefined,
+  )
+  inFlight.add(settled)
+  void settled.then(() => {
+    inFlight.delete(settled)
+    if (inFlight.size === 0 && pendingLayoutSaves.get(key) === inFlight) {
+      pendingLayoutSaves.delete(key)
+    }
+  })
+}
+
+/** Resolve once every save currently in flight for `key` has settled —
+ *  including saves issued while waiting (each carries a base-advancing
+ *  revision the caller must see before judging a broadcast). Resolves
+ *  immediately when nothing is in flight. */
+async function settlePendingLayoutSaves(key: string): Promise<void> {
+  for (;;) {
+    const set = pendingLayoutSaves.get(key)
+    if (!set || set.size === 0) return
+    await Promise.all([...set])
+  }
+}
+
 // Best-effort cleanup on window unload — the WS would close on its own
 // when the page unmounts, but explicit close gives the daemon a clean
 // disconnect notification instead of a TCP RST.
@@ -3239,7 +3288,14 @@ export const useTabsStore = create<TabsState>((set, get) => ({
             ?? convertLegacyPanes((serializedTab as any).panes)
           if (serializedPaneGroups && typeof serializedPaneGroups === 'object') {
             for (const [oldPgId, serializedPg] of Object.entries(serializedPaneGroups)) {
-              const newPgId = crypto.randomUUID()
+              // Reuse the saved ID (same rule as the group-0 restore above):
+              // the daemon's `tab-<paneGroupId>` session for a split-column
+              // terminal is keyed by this ID, so reusing it makes the
+              // restored pane RE-ATTACH to the live PTY. Re-minting here
+              // orphaned every split terminal on restore — the fresh ID
+              // spawned a duplicate PTY and the orphaned session was then
+              // adopted into the MAIN group by reconcile/hello.
+              const newPgId = oldPgId
               idMap.set(oldPgId, newPgId)
               const rawItems = Array.isArray(serializedPg?.items) ? serializedPg.items : []
               const items: Item[] = rawItems.map((si) => {
@@ -3357,15 +3413,17 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // Persist to SQLite via the host-aware daemon route. Capture the
     // monotonic `revision` (#677.3) so a later remote reorder's broadcast
     // can be compared against our base and a stale local write skipped.
-    daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
+    const save = daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
       projectId,
       workspaceId,
       layoutJson: JSON.stringify(layout),
+    }).then((res) => recordLayoutRevision(key, res?.revision))
+    // Registered BEFORE the daemon can broadcast the save's
+    // `TabOrderChanged`, so the handler's settle step always sees it.
+    trackPendingLayoutSave(key, save)
+    save.catch((err) => {
+      console.error('[tabs] Failed to persist workspace layout:', err)
     })
-      .then((res) => recordLayoutRevision(key, res?.revision))
-      .catch((err) => {
-        console.error('[tabs] Failed to persist workspace layout:', err)
-      })
   },
 
   loadLayoutForWorkspace: async (projectId: string, workspaceId: string, cwd: string): Promise<void> => {
@@ -3420,9 +3478,17 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       }
 
       const state = get()
+      // Surfaced = every pane group across group 0 AND the split columns
+      // (same rule as `isPaneGroupSurfaced`). Scanning only `state.tabs`
+      // here re-adopted live split-column terminals into the MAIN group.
       const surfacedPgIds = new Set<string>()
       for (const tab of state.tabs) {
         tab.paneGroups.forEach((_, pgId) => surfacedPgIds.add(pgId))
+      }
+      for (const group of state.extraGroups) {
+        for (const tab of group.tabs) {
+          tab.paneGroups.forEach((_, pgId) => surfacedPgIds.add(pgId))
+        }
       }
 
       // 0.38.0 v2 — refresh existing terminal items with daemon-owned
@@ -4051,13 +4117,15 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       const key = state.activeWorkspaceKey
       const [projectId, workspaceId] = key.split(':')
       if (projectId && workspaceId) {
-        daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
+        const save = daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
           projectId,
           workspaceId,
           layoutJson: JSON.stringify(layout),
-        })
-          .then((res) => recordLayoutRevision(key, res?.revision))
-          .catch((err) => console.error('[tabs] Auto-save failed:', err))
+        }).then((res) => recordLayoutRevision(key, res?.revision))
+        // Same self-echo guard as saveLayoutForWorkspace: the broadcast
+        // handler settles this before treating a revision as remote.
+        trackPendingLayoutSave(key, save)
+        save.catch((err) => console.error('[tabs] Auto-save failed:', err))
       }
     }, 1000)
   },
@@ -4418,10 +4486,24 @@ function subscribeForActiveWorkspace(
           recordLayoutRevision(key, event.revision)
           return
         }
-        // A remote client reordered ahead of our base — re-fetch the
-        // canonical layout and adopt it (no silent last-write-wins clobber).
-        recordLayoutRevision(key, event.revision)
-        void refetchLayoutForRemoteReorder(key, projectId, workspaceId, cwd)
+        void (async () => {
+          // The daemon emits this broadcast BEFORE writing the save
+          // response, so OUR OWN in-flight save's echo can outrun the
+          // response that advances `layoutRevisions`. Settle in-flight
+          // saves first, then re-judge: a self-echo dissolves against
+          // the recorded base (refetching here applied a layout that
+          // was STALE relative to post-save local changes — it wiped a
+          // just-created split column). Only a revision still ahead of
+          // the settled base is a genuine remote write.
+          await settlePendingLayoutSaves(key)
+          if (useTabsStore.getState().activeWorkspaceKey !== key) return
+          const settledBase = layoutRevisions.get(key) ?? 0
+          if (event.revision <= settledBase) return
+          // A remote client reordered ahead of our base — re-fetch the
+          // canonical layout and adopt it (no silent last-write-wins clobber).
+          recordLayoutRevision(key, event.revision)
+          void refetchLayoutForRemoteReorder(key, projectId, workspaceId, cwd)
+        })()
       },
       onHello: () => {
         if (useTabsStore.getState().activeWorkspaceKey !== key) return

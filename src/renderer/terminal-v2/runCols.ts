@@ -1,0 +1,168 @@
+// Terminal-column ↔ text-offset math for CellRun rows.
+//
+// The daemon skips alacritty's WIDE_CHAR_SPACER cells when building
+// runs, so a run's text has NO phantom columns — but a double-width
+// char (CJK/emoji) still occupies TWO terminal columns while being
+// ONE char, and zero-width chars (combining accents, ZWJ) occupy
+// ZERO columns. Runs whose column span differs from their char count
+// carry it explicitly as `cols` (see grid_snapshot.rs::CellRun);
+// runs without the field are one-column-per-char by contract.
+//
+// Everything here is pure so the mapping is unit-testable
+// (runCols.test.ts) without DOM or wire plumbing. Text offsets are
+// UTF-16 indices into the row's joined text — the unit JS string
+// slicing and `detectLinks` ranges use.
+
+/** The subset of a wire CellRun this module needs. */
+export interface ColRun {
+  text: string
+  /** Terminal-column span; absent ⇒ one column per char. */
+  cols?: number
+}
+
+/** One code point's placement in a row: its UTF-16 range in the
+ *  joined text and its column range. Zero-width chars are folded
+ *  into the preceding cluster (they render with it and can never be
+ *  hit independently). */
+interface Cluster {
+  utf16Start: number
+  utf16End: number
+  colStart: number
+  width: number
+}
+
+// ── Per-code-point width classifier ─────────────────────────────────
+//
+// Only consulted for runs that CARRY a `cols` annotation (i.e. the
+// daemon told us the run contains non-single-width content); plain
+// runs take the exact one-per-char fast path. This mirrors the
+// dominant ranges of Rust's unicode-width (what alacritty used to
+// set WIDE_CHAR): a divergence on an exotic code point costs one
+// column of hit-test bias inside that run, never a render break —
+// the run's total width comes from the wire, not from this table.
+
+function isZeroWidthCp(cp: number): boolean {
+  return (
+    (cp >= 0x0300 && cp <= 0x036f) || // combining diacriticals
+    (cp >= 0x0483 && cp <= 0x0489) || // Cyrillic combining
+    (cp >= 0x0591 && cp <= 0x05bd) || // Hebrew points
+    (cp >= 0x0610 && cp <= 0x061a) || // Arabic marks
+    (cp >= 0x064b && cp <= 0x065f) ||
+    (cp >= 0x1ab0 && cp <= 0x1aff) || // combining extended
+    (cp >= 0x1dc0 && cp <= 0x1dff) || // combining supplement
+    (cp >= 0x20d0 && cp <= 0x20ff) || // combining for symbols
+    (cp >= 0xfe00 && cp <= 0xfe0f) || // variation selectors
+    (cp >= 0xfe20 && cp <= 0xfe2f) || // combining half marks
+    cp === 0x200b || // ZWSP
+    cp === 0x200c || // ZWNJ
+    cp === 0x200d || // ZWJ
+    cp === 0xfeff // BOM/ZWNBSP
+  )
+}
+
+function isWideCp(cp: number): boolean {
+  return (
+    (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
+    (cp >= 0x2e80 && cp <= 0x303e) || // CJK radicals, punctuation
+    (cp >= 0x3041 && cp <= 0x33ff) || // Hiragana..CJK compat
+    (cp >= 0x3400 && cp <= 0x4dbf) || // CJK ext A
+    (cp >= 0x4e00 && cp <= 0x9fff) || // CJK unified
+    (cp >= 0xa000 && cp <= 0xa4cf) || // Yi
+    (cp >= 0xa960 && cp <= 0xa97f) || // Hangul Jamo ext A
+    (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul syllables
+    (cp >= 0xf900 && cp <= 0xfaff) || // CJK compat ideographs
+    (cp >= 0xfe30 && cp <= 0xfe4f) || // CJK compat forms
+    (cp >= 0xff00 && cp <= 0xff60) || // fullwidth forms
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1f300 && cp <= 0x1f64f) || // emoji: misc + emoticons
+    (cp >= 0x1f680 && cp <= 0x1f6ff) || // emoji: transport
+    (cp >= 0x1f900 && cp <= 0x1f9ff) || // emoji: supplemental
+    (cp >= 0x1fa00 && cp <= 0x1faff) || // emoji: extended A
+    (cp >= 0x20000 && cp <= 0x3fffd) // CJK ext B+
+  )
+}
+
+/** Char count of a run in code points (what the wire's `cols`
+ *  contract compares against). */
+function codePointCount(text: string): number {
+  let n = 0
+  for (const _ of text) n++
+  return n
+}
+
+/** Column span of one run: explicit wire `cols` when present, else
+ *  its code-point count (the daemon omits the field iff equal). */
+export function runColSpan(run: ColRun): number {
+  return run.cols ?? codePointCount(run.text)
+}
+
+/** Total terminal-column span of a row. */
+export function rowColSpan(row: ColRun[]): number {
+  let total = 0
+  for (const run of row) total += runColSpan(run)
+  return total
+}
+
+/** Build the per-cluster placement list for a row. */
+function rowClusters(row: ColRun[]): Cluster[] {
+  const out: Cluster[] = []
+  let col = 0
+  let u16 = 0
+  for (const run of row) {
+    // Fast path: unannotated run ⇒ every code point is one column.
+    const annotated = run.cols !== undefined
+    for (const ch of run.text) {
+      const cp = ch.codePointAt(0) ?? 0
+      const w = annotated ? (isZeroWidthCp(cp) ? 0 : isWideCp(cp) ? 2 : 1) : 1
+      if (w === 0 && out.length > 0) {
+        // Zero-width: extend the previous cluster's UTF-16 range.
+        out[out.length - 1].utf16End += ch.length
+        u16 += ch.length
+        continue
+      }
+      out.push({
+        utf16Start: u16,
+        utf16End: u16 + ch.length,
+        colStart: col,
+        width: Math.max(w, 1),
+      })
+      u16 += ch.length
+      col += Math.max(w, 1)
+    }
+  }
+  return out
+}
+
+/** Map a terminal column to the UTF-16 index (into the row's joined
+ *  text) of the char occupying it. Either half of a double-width
+ *  char maps to that char. Columns past the row's content map to the
+ *  text length (so range comparisons find nothing). */
+export function colToTextIndex(row: ColRun[], col: number): number {
+  const clusters = rowClusters(row)
+  for (const c of clusters) {
+    if (col >= c.colStart && col < c.colStart + c.width) return c.utf16Start
+  }
+  const last = clusters[clusters.length - 1]
+  return last ? last.utf16End : 0
+}
+
+/** Slice a row's joined text by terminal-column range [startCol,
+ *  endCol). A double-width char is included when ANY of its columns
+ *  fall in the range; zero-width followers ride their base char. */
+export function sliceRowByCols(
+  row: ColRun[],
+  startCol: number,
+  endCol: number,
+): string {
+  if (endCol <= startCol) return ''
+  const clusters = rowClusters(row)
+  let text = ''
+  for (const run of row) text += run.text
+  let out = ''
+  for (const c of clusters) {
+    if (c.colStart + c.width > startCol && c.colStart < endCol) {
+      out += text.slice(c.utf16Start, c.utf16End)
+    }
+  }
+  return out
+}

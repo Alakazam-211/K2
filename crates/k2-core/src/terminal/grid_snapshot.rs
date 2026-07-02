@@ -108,6 +108,17 @@ pub struct CellRun {
     /// the extra key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrapped: Option<bool>,
+    /// Terminal-column span of this run, set ONLY when it differs
+    /// from the run's char count — i.e. the run contains double-width
+    /// (CJK/emoji) or zero-width (combining/ZWJ) chars. Lets the
+    /// client (a) pin the run's rendered width to the grid instead of
+    /// trusting the webfont's CJK advance and (b) map pixel columns ↔
+    /// text offsets for link hit-testing. Same absent-when-default
+    /// compat contract as `wrapped`: older peers on either side
+    /// degrade to char-count columns, which matches their pre-field
+    /// behavior exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cols: Option<u16>,
 }
 
 impl CellRun {
@@ -241,6 +252,7 @@ pub fn cell_to_run(cell: &Cell) -> CellRun {
         dim: flags.contains(Flags::DIM),
         strikeout: flags.contains(Flags::STRIKEOUT),
         wrapped: None,
+        cols: None,
     }
 }
 
@@ -263,14 +275,44 @@ fn run_decorates_blanks(run: &CellRun) -> bool {
 /// painting its background to the edge) are retained verbatim.
 pub fn encode_row_runs(grid: &Grid<Cell>, line: Line, cols: usize) -> Vec<CellRun> {
     let mut out: Vec<CellRun> = Vec::new();
+    // Column span per run, parallel to `out`. Tracked outside the run
+    // so trimming can adjust it before the differs-from-char-count
+    // normalization at the end.
+    let mut run_cols: Vec<usize> = Vec::new();
     for c in 0..cols {
         let cell = &grid[Point::new(line, Column(c))];
-        let run = cell_to_run(cell);
+        // WIDE_CHAR_SPACER is the placeholder cell alacritty stores
+        // after a double-width char. It carries no glyph of its own —
+        // emitting it (as legacy pre-fix code did) wired "日本" as
+        // "日 本 ", pushing every later column right by one in the DOM
+        // and inserting phantom columns into text-offset math. The
+        // legacy renderer's `alacritty_backend.rs` skipped it the same
+        // way. (LEADING_WIDE_CHAR_SPACER — the pad cell before a wide
+        // char that wrapped — holds a real blank column and stays.)
+        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            continue;
+        }
+        let mut run = cell_to_run(cell);
+        // Zero-width chars (combining accents, ZWJ) live in the cell's
+        // extra storage, not in `cell.c`. Append them to the run text
+        // — they consume no columns.
+        if let Some(zw) = cell.zerowidth() {
+            run.text.extend(zw);
+        }
+        let cell_cols = if cell.flags.contains(Flags::WIDE_CHAR) {
+            2
+        } else {
+            1
+        };
         match out.last_mut() {
             Some(last) if last.style_eq(&run) => {
                 last.text.push_str(&run.text);
+                *run_cols.last_mut().expect("run_cols tracks out") += cell_cols;
             }
-            _ => out.push(run),
+            _ => {
+                out.push(run);
+                run_cols.push(cell_cols);
+            }
         }
     }
     // Soft-wrap marker: alacritty flags the row's final cell with
@@ -283,7 +325,9 @@ pub fn encode_row_runs(grid: &Grid<Cell>, line: Line, cols: usize) -> Vec<CellRu
             .contains(Flags::WRAPLINE);
     // Trim the invisible tail. Adjacent runs can differ only by
     // fg/bold/etc (invisible on spaces), so keep popping while the
-    // tail stays undecorated blank.
+    // tail stays undecorated blank. Trimmed chars are always plain
+    // spaces (1 byte = 1 char = 1 column), so the parallel span
+    // shrinks by exactly the byte count removed.
     while let Some(last) = out.last_mut() {
         if run_decorates_blanks(last) {
             break;
@@ -291,9 +335,20 @@ pub fn encode_row_runs(grid: &Grid<Cell>, line: Line, cols: usize) -> Vec<CellRu
         let trimmed_len = last.text.trim_end_matches(' ').len();
         if trimmed_len == 0 {
             out.pop();
+            run_cols.pop();
         } else {
+            let removed = last.text.len() - trimmed_len;
             last.text.truncate(trimmed_len);
+            *run_cols.last_mut().expect("run_cols tracks out") -= removed;
             break;
+        }
+    }
+    // Stamp the column span only where it differs from the char count
+    // (wide or zero-width content) — keeps the wire byte-identical
+    // for plain-ASCII rows, same contract as `wrapped`.
+    for (run, &span) in out.iter_mut().zip(run_cols.iter()) {
+        if run.text.chars().count() != span {
+            run.cols = Some(span.min(u16::MAX as usize) as u16);
         }
     }
     if wrapped {
@@ -558,6 +613,7 @@ mod tests {
             dim: false,
             strikeout: false,
             wrapped: None,
+            cols: None,
         };
         let b = CellRun {
             text: "b".to_string(), // text differs — should still match
@@ -673,5 +729,61 @@ mod tests {
             .last()
             .map(|r| r.wrapped.is_none())
             .unwrap_or(true));
+    }
+
+    // ── Wide-char / zero-width correctness ───────────────────────
+
+    #[test]
+    fn encode_skips_wide_char_spacers_and_stamps_cols() {
+        // "ab日本cd" = 6 chars spanning 8 terminal columns (each CJK
+        // char is WIDE_CHAR + a WIDE_CHAR_SPACER cell). The spacers
+        // must NOT wire as phantom spaces, and the run must carry its
+        // real column span.
+        let term = term_with(20, 4, "ab\u{65e5}\u{672c}cd".as_bytes());
+        let runs = encode_row_runs(term.grid(), Line(0), 20);
+        assert_eq!(row_text(&runs), "ab日本cd");
+        assert_eq!(runs.len(), 1, "same-style row coalesces to one run");
+        assert_eq!(runs[0].cols, Some(8), "6 chars over 8 columns");
+    }
+
+    #[test]
+    fn encode_omits_cols_for_single_width_rows() {
+        // Pure ASCII: char count == column span ⇒ the field is absent
+        // (wire stays byte-identical to the pre-field format).
+        let term = term_with(20, 4, b"hello");
+        let runs = encode_row_runs(term.grid(), Line(0), 20);
+        assert_eq!(row_text(&runs), "hello");
+        assert!(runs.iter().all(|r| r.cols.is_none()));
+    }
+
+    #[test]
+    fn encode_appends_zerowidth_without_advancing_cols() {
+        // "e" + combining acute (U+0301): 2 chars, 1 column. The
+        // combining char rides the run text; cols reflects the single
+        // grid cell.
+        let term = term_with(20, 4, "e\u{0301}x".as_bytes());
+        let runs = encode_row_runs(term.grid(), Line(0), 20);
+        assert_eq!(row_text(&runs), "e\u{0301}x");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].cols, Some(2), "3 chars over 2 columns");
+    }
+
+    #[test]
+    fn encode_trims_trailing_spaces_after_wide_content() {
+        // Wide char + explicit trailing spaces: trim must shrink the
+        // tracked span in lockstep so cols stays exact.
+        let term = term_with(20, 4, "\u{65e5}   ".as_bytes());
+        let runs = encode_row_runs(term.grid(), Line(0), 20);
+        assert_eq!(row_text(&runs), "日");
+        assert_eq!(runs[0].cols, Some(2));
+    }
+
+    #[test]
+    fn encode_emoji_is_two_columns() {
+        let term = term_with(20, 4, "ok \u{1f600}!".as_bytes());
+        let runs = encode_row_runs(term.grid(), Line(0), 20);
+        assert_eq!(row_text(&runs), "ok 😀!");
+        // 5 chars over 6 columns (emoji is double-width).
+        assert_eq!(runs[0].cols, Some(6));
     }
 }

@@ -28,7 +28,10 @@
 //!            (bit0 bold · bit1 italic · bit2 underline ·
 //!             bit3 inverse · bit4 dim · bit5 strikeout ·
 //!             bit6 wrapped — set iff `wrapped == Some(true)`;
-//!             the encoder never produces `Some(false)`)
+//!             the encoder never produces `Some(false)` ·
+//!             bit7 has-cols — a trailing u16 column span follows
+//!             the style byte, present iff `cols == Some(n)`) ·
+//!            [u16 cols — only when bit7 set]
 //! row      : u16 run-count · runs
 //! rows     : u32 row-count · rows
 //! cursor   : u16 row · u16 col · u8 visible (0/1)
@@ -70,6 +73,12 @@ const STYLE_INVERSE: u8 = 1 << 3;
 const STYLE_DIM: u8 = 1 << 4;
 const STYLE_STRIKEOUT: u8 = 1 << 5;
 const STYLE_WRAPPED: u8 = 1 << 6;
+/// bit7 — a u16 column span trails the style byte (run contains
+/// wide/zero-width chars so `cols != char count`). A flag bit rather
+/// than a version bump: JSON stays the default transport, and k1
+/// daemon+client ship together, so an in-band optional field keeps
+/// the frame layout self-describing.
+const STYLE_HAS_COLS: u8 = 1 << 7;
 
 const MODE_MOUSE_REPORT: u8 = 1 << 0;
 const MODE_SGR_MOUSE: u8 = 1 << 1;
@@ -169,11 +178,26 @@ fn put_row(buf: &mut Vec<u8>, row: &[CellRun]) {
     let mut n: u16 = 0;
     for run in row {
         let bits = style_bits(run);
+        // A split run's column span can't be attributed to individual
+        // chunks (that would need per-cell data). The split path is
+        // defensive-only — real runs are bounded by grid width — so a
+        // split run degrades to char-count columns.
+        let cols = if run.text.len() > u16::MAX as usize {
+            None
+        } else {
+            run.cols
+        };
         for chunk in utf8_chunks(&run.text) {
             put_str(buf, chunk);
             put_color(buf, run.fg);
             put_color(buf, run.bg);
-            buf.push(bits);
+            match cols {
+                Some(c) => {
+                    buf.push(bits | STYLE_HAS_COLS);
+                    put_u16(buf, c);
+                }
+                None => buf.push(bits),
+            }
             n = n.saturating_add(1);
         }
     }
@@ -319,6 +343,11 @@ impl<'a> Reader<'a> {
         let fg = self.color()?;
         let bg = self.color()?;
         let bits = self.u8()?;
+        let cols = if bits & STYLE_HAS_COLS != 0 {
+            Some(self.u16()?)
+        } else {
+            None
+        };
         Ok(CellRun {
             text,
             fg,
@@ -330,6 +359,7 @@ impl<'a> Reader<'a> {
             dim: bits & STYLE_DIM != 0,
             strikeout: bits & STYLE_STRIKEOUT != 0,
             wrapped: (bits & STYLE_WRAPPED != 0).then_some(true),
+            cols,
         })
     }
 
@@ -444,6 +474,7 @@ mod tests {
             dim: false,
             strikeout: false,
             wrapped: None,
+            cols: None,
         }
     }
 
@@ -472,6 +503,7 @@ mod tests {
                         dim: false,
                         strikeout: false,
                         wrapped: None,
+                        cols: None,
                     },
                     CellRun {
                         text: "🐍中文".to_string(),
@@ -484,6 +516,10 @@ mod tests {
                         dim: false,
                         strikeout: false,
                         wrapped: Some(true),
+                        // 3 chars over 6 columns — exercises the
+                        // bit7 + trailing-u16 encoding in the
+                        // cross-language fixture.
+                        cols: Some(6),
                     },
                 ],
                 vec![],
@@ -498,6 +534,7 @@ mod tests {
                     dim: true,
                     strikeout: true,
                     wrapped: None,
+                    cols: None,
                 }],
                 vec![run("tail")],
             ],
@@ -534,6 +571,7 @@ mod tests {
                         dim: false,
                         strikeout: false,
                         wrapped: None,
+                        cols: None,
                     }],
                 },
                 DamagedRow {
@@ -573,6 +611,7 @@ mod tests {
                     dim: false,
                     strikeout: false,
                     wrapped: None,
+                    cols: None,
                 }],
             }],
             scrollback_appended: vec![],
@@ -687,6 +726,7 @@ mod tests {
                 && self.dim == other.dim
                 && self.strikeout == other.strikeout
                 && self.wrapped == other.wrapped
+                && self.cols == other.cols
         }
     }
 

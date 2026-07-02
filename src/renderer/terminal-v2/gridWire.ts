@@ -22,7 +22,10 @@
 //   run      : str text · color fg · color bg · u8 style bits
 //              (bit0 bold · bit1 italic · bit2 underline ·
 //               bit3 inverse · bit4 dim · bit5 strikeout ·
-//               bit6 wrapped)
+//               bit6 wrapped · bit7 has-cols) ·
+//              [u16 cols — only when bit7 set; the run's terminal-
+//               column span, present iff it differs from the char
+//               count (wide/zero-width content)]
 //   row      : u16 run-count · runs
 //   rows     : u32 row-count · rows
 //   cursor   : u16 row · u16 col · u8 visible (0/1)
@@ -50,6 +53,10 @@ export interface WireCellRun {
   dim: boolean
   strikeout: boolean
   wrapped?: boolean
+  /** Terminal-column span, present only when it differs from the
+   *  run's char count (double-width CJK/emoji or zero-width
+   *  combining chars). Absent ⇒ one column per char. */
+  cols?: number
 }
 
 export interface WireCursorSnapshot {
@@ -106,6 +113,7 @@ const STYLE_INVERSE = 1 << 3
 const STYLE_DIM = 1 << 4
 const STYLE_STRIKEOUT = 1 << 5
 const STYLE_WRAPPED = 1 << 6
+const STYLE_HAS_COLS = 1 << 7
 
 const MODE_MOUSE_REPORT = 1 << 0
 const MODE_SGR_MOUSE = 1 << 1
@@ -180,6 +188,9 @@ class Reader {
     const fg = this.color()
     const bg = this.color()
     const bits = this.u8()
+    // The trailing u16 must be consumed BEFORE building the object —
+    // it sits in the byte stream whenever bit7 is set.
+    const cols = (bits & STYLE_HAS_COLS) !== 0 ? this.u16() : null
     const run: WireCellRun = {
       text,
       fg,
@@ -191,10 +202,11 @@ class Reader {
       dim: (bits & STYLE_DIM) !== 0,
       strikeout: (bits & STYLE_STRIKEOUT) !== 0,
     }
-    // Key only present when wrapped — matches serde's
+    // Keys only present when set — matches serde's
     // skip_serializing_if on the JSON path, so deep-equality between
     // the two transports holds.
     if ((bits & STYLE_WRAPPED) !== 0) run.wrapped = true
+    if (cols !== null) run.cols = cols
     return run
   }
 

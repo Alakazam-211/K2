@@ -65,6 +65,7 @@ import {
   scrollPxFromThumbTopFrac,
 } from './scrollMath'
 import { decodeGridFrame, type WireFrame } from './gridWire'
+import { colToTextIndex, runColSpan } from './runCols'
 
 // ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
 
@@ -83,6 +84,13 @@ interface CellRun {
    *  the copy handler then treats every row as unwrapped, which
    *  matches the old behavior. */
   wrapped?: boolean
+  /** Terminal-column span, present only when it differs from the
+   *  run's char count (double-width CJK/emoji, zero-width combining
+   *  chars). Drives (a) an explicit rendered width so grid alignment
+   *  doesn't depend on the webfont's CJK advance and (b) pixel-col ↔
+   *  text-offset mapping (runCols.ts). Absent ⇒ one column per char
+   *  — daemons that predate the field behave exactly as before. */
+  cols?: number
 }
 
 interface CursorSnapshot {
@@ -199,6 +207,18 @@ function runStyle(
     style.textDecoration = 'line-through'
   }
   if (run.dim) style.opacity = 0.6
+  // Wide/zero-width content: pin the run to its terminal-column span
+  // so alignment is grid-true regardless of the webfont's CJK/emoji
+  // advance (a font whose 日 is 1.9ch would otherwise drift every
+  // column to its right). `ch` is the monospace cell width, matching
+  // the cellMetrics math used for cursor/hit-test positioning.
+  // No overflow:hidden — it would move the inline-block baseline to
+  // its bottom margin edge and misalign the row.
+  if (run.cols !== undefined) {
+    style.display = 'inline-block'
+    style.width = `${run.cols}ch`
+    style.verticalAlign = 'top'
+  }
   return style
 }
 
@@ -2226,7 +2246,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         return
       }
       const links = detectLinks(text, cwd)
-      const hit = links.find((l) => col >= l.start && col < l.end)
+      // Terminal column → UTF-16 text offset before comparing against
+      // detectLinks ranges (string indices): a wide char occupies two
+      // columns but one text position, so raw column compare would
+      // skew every hit right of CJK/emoji content.
+      const textIdx = colToTextIndex(visibleRow, col)
+      const hit = links.find((l) => textIdx >= l.start && textIdx < l.end)
       if (hit) {
         if (
           !hoveredLink ||
@@ -2323,6 +2348,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   //     line the way iTerm/xterm.js do.
   // Selections that reach outside the row grid fall through to the
   // browser's default copy.
+  //
+  // Wide-char safety: the boundaries here are TEXT offsets, not
+  // terminal columns — `colWithin` measures Range.toString().length
+  // (UTF-16 units of the DOM text) and the model rows are sliced in
+  // the same unit. With WIDE_CHAR_SPACER cells excluded from the wire
+  // the DOM text IS the model text, so this path needs no column
+  // mapping; column↔offset conversion (runCols.ts) is only for
+  // pixel-derived positions (link hit-testing).
   const handleCopy = useCallback((e: React.ClipboardEvent) => {
     const snap = snapshotRef.current
     if (!snap || !e.clipboardData) return
@@ -2945,7 +2978,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             }
             break
           }
-          cellCol += run.text.length
+          // Column position, not char count — wide runs span more
+          // columns than chars (runCols.ts).
+          cellCol += runColSpan(run)
         }
       }
       if (found) {

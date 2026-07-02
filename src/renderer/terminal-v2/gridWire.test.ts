@@ -15,10 +15,10 @@ import { decodeGridFrame } from './gridWire'
 // TS decode → deep-equal what JSON.parse of the JSON frame yields.
 
 const SNAPSHOT_HEX =
-  '6b0101070070616e652dcf800c000400efbeadde0000000003000000020005000105040000000200070068c3a96c6c6f200088ff00ffffffff010a00f09f908de4b8ade69687ffffffffff000000460000010001007e00000000ffffff0038010004007461696cffffffffffffffff00020000000000010007006f6c6420726f77ffffffffffffffff00'
+  '6b0101070070616e652dcf800c000400efbeadde0000000003000000020005000105040000000200070068c3a96c6c6f200088ff00ffffffff010a00f09f908de4b8ade69687ffffffffff000000c606000000010001007e00000000ffffff0038010004007461696cffffffffffffffff00020000000000010007006f6c6420726f77ffffffffffffffff00'
 
 const SNAPSHOT_JSON =
-  '{"paneId":"pane-π","cols":12,"rows":4,"grid":[[{"text":"héllo ","fg":16746496,"bg":null,"bold":true,"italic":false,"underline":false,"inverse":false,"dim":false,"strikeout":false},{"text":"🐍中文","fg":null,"bg":255,"bold":false,"italic":true,"underline":true,"inverse":false,"dim":false,"strikeout":false,"wrapped":true}],[],[{"text":"~","fg":0,"bg":16777215,"bold":false,"italic":false,"underline":false,"inverse":true,"dim":true,"strikeout":true}],[{"text":"tail","fg":null,"bg":null,"bold":false,"italic":false,"underline":false,"inverse":false,"dim":false,"strikeout":false}]],"scrollback":[[],[{"text":"old row","fg":null,"bg":null,"bold":false,"italic":false,"underline":false,"inverse":false,"dim":false,"strikeout":false}]],"cursor":{"row":2,"col":5,"visible":true},"version":3735928559,"displayOffset":3,"mouseReport":true,"sgrMouse":false,"altScreen":true}'
+  '{"paneId":"pane-π","cols":12,"rows":4,"grid":[[{"text":"héllo ","fg":16746496,"bg":null,"bold":true,"italic":false,"underline":false,"inverse":false,"dim":false,"strikeout":false},{"text":"🐍中文","fg":null,"bg":255,"bold":false,"italic":true,"underline":true,"inverse":false,"dim":false,"strikeout":false,"wrapped":true,"cols":6}],[],[{"text":"~","fg":0,"bg":16777215,"bold":false,"italic":false,"underline":false,"inverse":true,"dim":true,"strikeout":true}],[{"text":"tail","fg":null,"bg":null,"bold":false,"italic":false,"underline":false,"inverse":false,"dim":false,"strikeout":false}]],"scrollback":[[],[{"text":"old row","fg":null,"bg":null,"bold":false,"italic":false,"underline":false,"inverse":false,"dim":false,"strikeout":false}]],"cursor":{"row":2,"col":5,"visible":true},"version":3735928559,"displayOffset":3,"mouseReport":true,"sgrMouse":false,"altScreen":true}'
 
 const DELTA_HEX =
   '6b0102070070616e652dcf800c000400f0beadde0000000000000000010004000002000000010001000500ce94726f7700ff0000ffffffff00030000000100000001000c007363726f6c6c656420e29ca8ffffffffffffffff00'
@@ -55,6 +55,15 @@ describe('gridWire k1 decoder', () => {
     const [first, second] = frame.payload.grid[0]
     expect(Object.prototype.hasOwnProperty.call(first, 'wrapped')).toBe(false)
     expect(second.wrapped).toBe(true)
+  })
+
+  it('omits the cols key on single-width runs and decodes the trailing u16 on wide ones', () => {
+    const frame = decodeGridFrame(hexToArrayBuffer(SNAPSHOT_HEX))
+    if (frame.kind !== 'snapshot') throw new Error('expected snapshot')
+    const [first, second] = frame.payload.grid[0]
+    expect(Object.prototype.hasOwnProperty.call(first, 'cols')).toBe(false)
+    // "\u{1F40D}\u4E2D\u6587" = 3 chars spanning 6 terminal columns.
+    expect(second.cols).toBe(6)
   })
 
   it('rejects bad magic, unsupported version, unknown kind and truncation', () => {

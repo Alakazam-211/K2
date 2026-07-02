@@ -3015,18 +3015,30 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   }, [useWebgl, toGridXY])
 
   // ── Link detection: Cmd key tracking ──────────────────────────
+  // Also tracks Shift/Option as STATE (not a ref): in mouse-report
+  // mode the pointer is an arrow because plain clicks belong to the
+  // app — but holding the local-selection override must flip it back
+  // to the I-beam so the pointer always tells the truth about who
+  // owns the click (alacritty/xterm.js do the same). That flip is a
+  // render concern, hence state; key events are low-frequency.
+  const [selectionOverrideHeld, setSelectionOverrideHeld] = useState(false)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Meta') cmdHeldRef.current = true
+      if (e.key === 'Shift' || e.key === 'Alt') setSelectionOverrideHeld(true)
     }
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Meta') {
         cmdHeldRef.current = false
         if (linkClickMode === 'cmd-click') setHoveredLink(null)
       }
+      if (e.key === 'Shift' || e.key === 'Alt') {
+        setSelectionOverrideHeld(e.shiftKey || e.altKey)
+      }
     }
     const onBlur = () => {
       cmdHeldRef.current = false
+      setSelectionOverrideHeld(false)
       setHoveredLink(null)
     }
     document.addEventListener('keydown', onKeyDown)
@@ -3918,10 +3930,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     ...containerStyle,
     // Mouse-report mode shows the arrow cursor (alacritty's cursor-
     // icon convention: I-beam only when a local selection applies) —
-    // plain clicks/drags belong to the app there.
+    // plain clicks/drags belong to the app there. Holding the
+    // Shift/Option override flips back to the I-beam, since that
+    // gesture IS a local selection.
     cursor: hoveredLink
       ? 'pointer'
-      : snapshot?.mouseReport && snapshot?.sgrMouse
+      : snapshot?.mouseReport && snapshot?.sgrMouse && !selectionOverrideHeld
         ? 'default'
         : 'text',
     // Canvas mode: no DOM text to select — suppress native selection

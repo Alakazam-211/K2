@@ -23,6 +23,16 @@ interface ChatSession {
 
 type DateGroup = 'Pinned' | 'Today' | 'Yesterday' | 'This Week' | 'This Month' | 'Older'
 
+// A sandbox chat = an API-triggered session that ran INSIDE a hardened cell in
+// this workspace. Listed from the daemon's sandbox index; clicking re-launches
+// it in its sandbox (audit-resume) — it surfaces as its orange tab.
+interface SandboxChat {
+  sessionId: string
+  title: string
+  timestamp: number
+  messageCount: number
+}
+
 // ── CLI tool config ─────────────────────────────────────────────────
 
 // Per-provider resume contract. Either `resumeFlag` ("flag-style":
@@ -202,6 +212,11 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const [pinnedKeys, setPinnedKeys] = useState<Set<string>>(new Set())
   const [renamingSession, setRenamingSession] = useState<ChatSession | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  // Sandboxed chats (API-triggered sandbox sessions) — the audit-resume list.
+  const [sandboxSessions, setSandboxSessions] = useState<SandboxChat[]>([])
+  const [showNormal, setShowNormal] = useState(true)
+  const [showSandbox, setShowSandbox] = useState(true)
+  const [reopening, setReopening] = useState<string | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const selectedRowRef = useRef<HTMLButtonElement>(null)
@@ -241,7 +256,35 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     } finally {
       setLoading(false)
     }
+
+    // Sandboxed chats (best-effort, independent of the normal-chat fetch): the
+    // API-triggered sandbox sessions for this workspace. Empty on hosts with no
+    // sandbox history — the section just doesn't render.
+    try {
+      const sb = await daemonCliGet<SandboxChat[]>('sandbox/list', { project_path: projectPath })
+      setSandboxSessions(Array.isArray(sb) ? sb : [])
+    } catch {
+      setSandboxSessions([])
+    }
   }, [projectPath])
+
+  // Re-launch a sandbox chat INSIDE its sandbox (audit-resume). The daemon
+  // re-mounts the session's persistent layer + `claude --resume`; the cell
+  // surfaces as its orange tab via the app-level adoption.
+  const handleSandboxClick = useCallback(async (session: SandboxChat) => {
+    if (!projectPath || reopening) return
+    setReopening(session.sessionId)
+    try {
+      await daemonCliPost('sandbox/reopen', {
+        project_path: projectPath,
+        session_id: session.sessionId,
+      })
+    } catch (err) {
+      console.error('[chat-history] sandbox reopen failed:', err)
+    } finally {
+      setReopening(null)
+    }
+  }, [projectPath, reopening])
 
   // Fetch custom names and pinned state
   const fetchCustomNames = useCallback(async () => {
@@ -670,7 +713,15 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        {loading ? (
+        {/* ── Section: Chats (normal, local sessions) ── */}
+        <button
+          className="no-drag w-full flex items-center gap-1.5 px-3 py-1.5 border-b border-white/[0.06] hover:bg-white/[0.03] transition-colors"
+          onClick={() => setShowNormal((v) => !v)}
+        >
+          <span className="text-[9px] text-[var(--color-text-muted)] w-2">{showNormal ? '▼' : '▶'}</span>
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] font-mono">Chats</span>
+        </button>
+        {showNormal && (loading ? (
           <div className="px-3 py-6 text-center">
             <p className="text-[11px] text-[var(--color-text-muted)] font-mono">Loading...</p>
           </div>
@@ -773,6 +824,40 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
               })
             })()}
           </div>
+        ))}
+
+        {/* ── Section: Sandboxed (API-triggered cell sessions; re-launch in sandbox) ── */}
+        {sandboxSessions.length > 0 && (
+          <>
+            <button
+              className="no-drag w-full flex items-center gap-1.5 px-3 py-1.5 border-y border-white/[0.06] hover:bg-white/[0.03] transition-colors mt-1"
+              onClick={() => setShowSandbox((v) => !v)}
+            >
+              <span className="text-[9px] text-[var(--color-text-muted)] w-2">{showSandbox ? '▼' : '▶'}</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#e8843c] font-mono">Sandboxed</span>
+              <span className="text-[9px] text-[var(--color-text-muted)] ml-auto tabular-nums">{sandboxSessions.length}</span>
+            </button>
+            {showSandbox && sandboxSessions.map((s) => (
+              <button
+                key={s.sessionId}
+                onClick={() => handleSandboxClick(s)}
+                disabled={reopening === s.sessionId}
+                title="Re-launch this chat inside its sandbox"
+                className="no-drag w-full flex items-center gap-2 px-3 h-8 hover:bg-white/[0.04] active:bg-white/[0.06] text-left group disabled:opacity-50 transition-colors"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#e8843c] flex-shrink-0" />
+                <div className="flex-1 min-w-0 flex flex-col justify-center">
+                  <span className="text-[11px] text-[var(--color-text-secondary)] font-mono truncate leading-tight">{s.title}</span>
+                  <span className="text-[10px] text-[var(--color-text-muted)] font-mono leading-tight truncate">
+                    {reopening === s.sessionId ? 'launching in sandbox…' : 'sandbox · click to re-launch'}
+                  </span>
+                </div>
+                <span className="text-[10px] text-[var(--color-text-muted)] font-mono flex-shrink-0 tabular-nums">
+                  {formatTime(s.timestamp)}
+                </span>
+              </button>
+            ))}
+          </>
         )}
       </div>
     </div>

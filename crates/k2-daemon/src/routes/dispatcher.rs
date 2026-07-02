@@ -424,6 +424,7 @@ async fn handle_one_request(
             | "/cli/chat/rename"
             | "/cli/chat/toggle-pin"
             | "/cli/chat/migrate-ide"
+            | "/cli/sandbox/reopen"
             | "/cli/themes/create-template"
             | "/cli/themes/delete"
             | "/cli/skill-layers/create"
@@ -2536,6 +2537,7 @@ async fn handle_one_request(
         p if is_post && post_allowed && (
             p.starts_with("/cli/fs/")
                 || p.starts_with("/cli/chat/")
+                || p.starts_with("/cli/sandbox/")
                 || p.starts_with("/cli/themes/")
                 || p.starts_with("/cli/skill-layers/")
                 || p.starts_with("/cli/review-checklist/")
@@ -2936,6 +2938,14 @@ async fn handle_one_request(
                                 .unwrap_or(0);
                             crate::v1_sandboxes::handle_v1_ws_messages(&principal, ws, sid, since)
                         }
+                        // POST /v1/w/<ws>/message — message the workspace's
+                        // CANONICAL agent (talk semantics: live-inject or
+                        // wake+resume+inject), gated by remote-instruct opt-in +
+                        // a busy/HITL guard. NOT a sandbox cell.
+                        ([ws, "message"], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::v1_ws_message::handle_v1_ws_message(&principal, ws, &body)
+                        }
                         // Anything else under `/v1/w/` (wrong shape, wrong
                         // method, extra segments) → uniform 404, drain first.
                         _ => {
@@ -3242,6 +3252,7 @@ fn dispatch_unit6_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
         // Chat history (state-mutating)
         "/cli/chat/rename" => crate::chat_routes::handle_rename(body),
         "/cli/chat/toggle-pin" => crate::chat_routes::handle_toggle_pin(body),
+        "/cli/sandbox/reopen" => crate::sandbox_chat_routes::handle_sandbox_reopen(body),
         "/cli/chat/migrate-ide" => crate::chat_routes::handle_migrate_ide(body),
         // Themes
         "/cli/themes/create-template" => crate::themes_routes::handle_create_template(body),

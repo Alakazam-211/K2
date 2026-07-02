@@ -828,6 +828,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 
         // ── Phase 2 Unit 6: chat history (GET) ────────────────────
         "/cli/chat/list" => crate::chat_routes::handle_list(params),
+        "/cli/sandbox/list" => crate::sandbox_chat_routes::handle_sandbox_list(params),
         "/cli/chat/storage-paths" => crate::chat_routes::handle_storage_paths(params),
         "/cli/chat/custom-names" => crate::chat_routes::handle_custom_names(params),
         "/cli/chat/pinned" => crate::chat_routes::handle_pinned(params),

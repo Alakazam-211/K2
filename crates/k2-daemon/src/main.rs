@@ -41,6 +41,9 @@ mod awareness_ws;
 mod boot_status;
 mod canonical_session;
 mod chat_routes;
+mod sandbox_chat_routes;
+mod sandbox_reaper;
+mod v1_ws_message;
 mod claude_auth_host;
 mod classify_routes;
 mod cli;
@@ -741,6 +744,11 @@ async fn async_main() {
     // every call — this is the hygiene backstop for sessions never
     // presented again after expiry. First pass runs at boot.
     let _session_reaper_handle = session_reaper::spawn();
+
+    // Idle-reaper for API-created sandbox cells: tears a cell down once it's
+    // been idle past its per-request `timeout_secs` (default 180). Replaces the
+    // guest-init `sleep 86400` observability hack. No-op until a cell registers.
+    let _sandbox_reaper_handle = sandbox_reaper::spawn();
 
     // K2 Connect E2E (PRD `k2-connect-e2e-encryption.md` §4 Option A) —
     // when `K2_E2E` is on, stand up a SECOND listener that terminates TLS

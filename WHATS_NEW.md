@@ -3,6 +3,25 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.21 — Agents by API, smoother terminals, federation fixes
+
+- **Run coding agents on your K2 server by API.** Authenticated API calls can
+  start a Claude Code session inside any workspace — in a hardened sandbox with
+  a timeout you control — or message the workspace's own agent directly, the
+  same one you chat with in the app. API-launched sessions appear live as
+  orange tabs in the workspace.
+- **Sandboxed chats in the Chats panel.** A new collapsible Sandboxed section
+  lists every API-launched session; click one to relaunch it right back into
+  its sandbox.
+- **Smoother terminals.** Output rendering is frame-paced, wheel scrolling is
+  snappier, and copying text out of a terminal grabs clean lines without stray
+  padding.
+- **Cross-server messaging repaired** (broke in 0.40.20): pairing no longer
+  records unroutable peers, and a declined message now tells the sender it
+  didn't land instead of silently claiming success.
+- Fixed a first-provision crash in secure-tunnel certificate setup and a CLI
+  crash in `k2 terminal write`.
+
 ## 0.40.20 — Smoother server updates + tighter inbox trust
 
 - **Updating or restarting a connected server no longer needs an app relaunch.**

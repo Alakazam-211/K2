@@ -440,6 +440,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // at read time (`FsMode::from_setting`) — fail-safe to the RO-base
         // default; the write path validates the exact enum before storing.
         ("0060_project_sandbox_fs_mode", include_str!("../../drizzle_sql/0060_project_sandbox_fs_mode.sql")),
+        // 0061 (sandbox v2 / fs-mirror PRD §5): the host BRIDGE index
+        // `sandbox_sessions` — one row per workspace-scoped MIRROR sandbox
+        // session (session_id → workspace, sandbox home, `.jsonl` real path,
+        // `/work` layer). Powers the per-workspace audit LIST + the resume
+        // re-mount lookup. Separate from the canonical `workspace_sessions`.
+        ("0061_sandbox_sessions_index", include_str!("../../drizzle_sql/0061_sandbox_sessions_index.sql")),
     ];
 
     for (name, sql) in migrations {

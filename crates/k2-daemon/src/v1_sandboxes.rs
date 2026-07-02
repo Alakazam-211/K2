@@ -470,6 +470,28 @@ pub fn handle_v1_ws_address(
         return uniform_ws_404();
     }
 
+    // OP #3 message-live (F3 liveness router): if the addressed session is LIVE
+    // (a running cell registered in v2_session_map), DELIVER the caller's prompt
+    // into its interactive claude PTY (submit with CR) instead of cold-resuming a
+    // duplicate cell. Cold sessions fall through to the resume spawn below.
+    if let Some(parsed) = k2_core::session::SessionId::parse(&sid) {
+        if let Some(live) = crate::v2_session_map::lookup_by_session_id(&parsed) {
+            crate::sandbox_reaper::stamp(&parsed);
+            let prompt = serde_json::from_slice::<serde_json::Value>(body)
+                .ok()
+                .and_then(|v| v.get("prompt").and_then(|x| x.as_str()).map(str::to_string))
+                .unwrap_or_default();
+            if !prompt.is_empty() {
+                let mut bytes = prompt.into_bytes();
+                bytes.push(b'\r');
+                live.write(bytes);
+            }
+            return CliResponse::ok_json(
+                serde_json::json!({ "sessionId": sid, "delivered": true, "live": true }).to_string(),
+            );
+        }
+    }
+
     let req = WorkspaceSessionRequest {
         workspace_slug: slug,
         workspace_path: ws_path,
@@ -479,9 +501,10 @@ pub fn handle_v1_ws_address(
 }
 
 /// `GET /v1/w/<ws>/sessions` — list this workspace's sandbox sessions (audit).
-/// Authorizes the workspace, then (SLICE 1) returns an empty list — the
-/// persistent per-(workspace, session) index lands with the overlay work in
-/// slices 2-3 (PRD §B/§H).
+/// Authorizes the workspace, then reads the §5 host BRIDGE index
+/// (`sandbox_sessions`) for this workspace slug, newest first. Returns each
+/// session's id + created/last-active timestamps (never the host filesystem
+/// paths — those are daemon-internal audit-resume state, not caller data).
 pub fn handle_v1_ws_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
@@ -490,8 +513,23 @@ pub fn handle_v1_ws_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
     if let Err(resp) = resolve_authorized_workspace(principal, &slug) {
         return resp;
     }
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::SandboxSession::list_for_workspace(&conn, &slug).unwrap_or_default()
+    };
+    let sessions: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "sessionId": r.session_id,
+                "createdAt": r.created_at,
+                "lastActiveAt": r.last_active_at,
+            })
+        })
+        .collect();
     CliResponse::ok_json(
-        serde_json::json!({ "workspace": slug, "sessions": [] }).to_string(),
+        serde_json::json!({ "workspace": slug, "sessions": sessions }).to_string(),
     )
 }
 
@@ -664,6 +702,49 @@ fn spawn_for_workspace_slice1(
     };
     spawn_req.principal_key = Some(principal_key.clone());
 
+    // Idle-reap timeout — the caller's per-request knob (default 180s), NOT a
+    // magic number. Staged into the cell env as a self-terminate backstop and
+    // armed on the daemon idle-reaper after a successful spawn (below).
+    let timeout_secs = crate::sandbox_reaper::normalize_timeout(
+        serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v.get("timeout_secs").and_then(|x| x.as_u64())),
+    );
+    if let Some(env) = spawn_req.env.as_mut() {
+        env.insert("K2_SANDBOX_TIMEOUT_SECS".to_string(), timeout_secs.to_string());
+    }
+
+    // Capture the MIRROR spec's host paths BEFORE the spawn consumes `spawn_req`,
+    // so we can record the §5 index row after a successful spawn (below).
+    // SLICE 4 (reopen/resume): an addressed op re-opens an existing session, so
+    // tell the guest-init to `claude --resume <id>` (its K2_RESUME branch) instead
+    // of minting a fresh `--session-id`. The persistent per-session layer already
+    // holds the prior `<id>.jsonl` at the real slug path, so --resume finds it.
+    if matches!(req.op, WsSessionOp::Address { .. }) {
+        if let Some(env) = spawn_req.env.as_mut() {
+            env.insert("K2_RESUME".to_string(), "1".to_string());
+        }
+    }
+
+    // OP #4 fork: COW-copy the source session's layer into this fresh id's layer
+    // (rename <src>.jsonl -> <dst>.jsonl) and resume it, so the fork continues the
+    // source's history under a NEW id. The spawn door recursively re-chowns the
+    // copied files to the new cell uid.
+    if let WsSessionOp::Fork { from } = &req.op {
+        if let Err(e) = policy::fork_layer(&req.workspace_slug, from, &session_id.to_string()) {
+            sandbox_quota::release(&principal_key);
+            return CliResponse {
+                status: e.status(),
+                content_type: "application/json",
+                body: serde_json::json!({ "error": e.message() }).to_string(),
+            };
+        }
+        if let Some(env) = spawn_req.env.as_mut() {
+            env.insert("K2_RESUME".to_string(), "1".to_string());
+        }
+    }
+    let mirror_for_index = spawn_req.overlay.clone();
+
     // (6) Spawn through the PROVEN v2 internals (per-session uid + P4-H6 chown of
     // the persistent layer, egress, child-exit teardown). NOTE: unlike the
     // ephemeral path we do NOT clean up any dir on failure — the persistent
@@ -695,6 +776,44 @@ fn spawn_for_workspace_slice1(
         return CliResponse::internal_error("spawn response sessionId was malformed");
     };
     crate::sandbox_responses::record_owner(session_id_str, &principal_key);
+
+    // Arm the idle-reaper for this cell (idempotent; a resume re-arms the clock).
+    crate::sandbox_reaper::register(sid, timeout_secs);
+
+    // (§5 index) Record the host BRIDGE row so the per-workspace LIST surfaces
+    // this session (audit) and the resume path can re-mount its sandbox home +
+    // `/work` layer. The claude-session-id == `K2_SESSION_ID` == `session_id_str`
+    // (we inject it), so the `.jsonl` real path is KNOWN:
+    // `<sandbox_home>/projects/<slug>/<session_id>.jsonl`. Best-effort — a failed
+    // insert must NOT fail the (already live) session; it only degrades audit.
+    if let Some(m) = mirror_for_index.as_ref() {
+        let sandbox_home_path = m.sandbox_home_rw.to_string_lossy().into_owned();
+        let jsonl_path = m
+            .sandbox_home_rw
+            .join("projects")
+            .join(&m.slug)
+            .join(format!("{session_id_str}.jsonl"))
+            .to_string_lossy()
+            .into_owned();
+        let row = k2_core::db::schema::SandboxSession {
+            session_id: session_id_str.to_string(),
+            workspace_slug: req.workspace_slug.clone(),
+            workspace_path: m.workspace_ro.to_string_lossy().into_owned(),
+            sandbox_home_path,
+            jsonl_path,
+            layer_path: m.work_rw.to_string_lossy().into_owned(),
+            slug: m.slug.clone(),
+            created_at: 0,      // ignored — table default is unixepoch()
+            last_active_at: 0,  // ignored — table default is unixepoch()
+        };
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err(e) = k2_core::db::schema::SandboxSession::upsert(&conn, &row) {
+            k2_core::log_debug!(
+                "[v1-sandbox/ws] WARN could not record sandbox_sessions index row for session={session_id_str}: {e}"
+            );
+        }
+    }
 
     let stream_tok = stream_token::mint(&sid);
     let grid = format!("/cli/sessions/grid?session={session_id_str}&token={stream_tok}");

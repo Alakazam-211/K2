@@ -231,25 +231,47 @@ mod worker {
             c_path: *const libc::c_char,
             listen: bool,
         ) -> i32;
+        // virtio-net device backed by a userspace proxy (passt). Adding ANY
+        // net device auto-DISABLES TSI. `c_path`=NULL when passing a live `fd`.
+        fn krun_add_net_unixstream(
+            ctx_id: u32,
+            c_path: *const libc::c_char,
+            fd: i32,
+            c_mac: *const u8,
+            features: u32,
+            flags: u32,
+        ) -> i32;
         fn krun_start_enter(ctx_id: u32) -> i32;
     }
 
     // ── Config + errors ─────────────────────────────────────────────────────
-    /// Per-workspace FILESYSTEM MODE (Sandbox v2, PRD §G2 #1). The worker-side
-    /// mirror of `k2-core`'s `sandbox::FsMode`; arrives as the `--fs-mode` argv
-    /// token (`overlay` | `ro-scratch`, emitted by `build_worker_invocation`).
-    /// Governs how SLICE 3 assembles `/workspace`. Default = `Overlay` (matches
-    /// the PRD §G2 #1 LOCKED default + the producer side), so an absent/unset
-    /// mode never silently loses the overlay semantics.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    enum FsModeArg {
-        /// Canonical workspace = overlay LOWER (RO); per-session persistent
-        /// UPPER captures copy-up writes. Merged view at `/workspace`.
-        #[default]
-        Overlay,
-        /// Canonical workspace mounted strictly READ-ONLY at `/workspace`; a
-        /// SEPARATE persistent RW scratch at `/work` (the persistent upper).
-        RoScratch,
+    /// Sandbox v2 — the WORKSPACE-SCOPED **MIRROR** mount set (fs-mirror PRD,
+    /// LOCKED). The worker-side mirror of `k2-core`'s `sandbox::WorkspaceMountSpec`;
+    /// each field arrives as a `--mirror-*` argv token (emitted by
+    /// `build_worker_invocation`). Only HOST SOURCE paths ride the argv — the
+    /// in-cell TARGET paths are the mirrored real paths, handed to the guest-init
+    /// via the guest env (`K2_WS_DIR`/`K2_HOME_DIR`/`K2_MEM_DIR`, staged by the
+    /// resolver). The worker STAGES each source under NEWROOT and virtiofs-exports
+    /// it (RO workspace + RO memory, RW sandbox-home + RW `/work`); the guest-init
+    /// mounts each tag at its real path.
+    #[derive(Debug, Clone, Default)]
+    struct MirrorMounts {
+        /// RO workspace mirror source (`--mirror-workspace-ro`) == the real
+        /// in-cell workspace path (`/home/k2/<ws>`). Mounted read-only.
+        workspace_ro: PathBuf,
+        /// RW per-workspace sandbox home source (`--mirror-home-rw`,
+        /// `~/.k2/sandbox-homes/<ws>/.claude`) → mounted RW at `<home>/.claude`.
+        sandbox_home_rw: PathBuf,
+        /// RO canonical-memory source (`--mirror-memory-ro`) == the real path
+        /// `<home>/.claude/projects/<slug>/memory`. `None` when the flag is
+        /// absent (a workspace with no canonical memory) → the bind is skipped.
+        canonical_memory_ro: Option<PathBuf>,
+        /// RW per-session `/work` scratch source (`--mirror-work-rw`,
+        /// `~/.k2/sandbox-overlays/<ws>/<sid>/work-scratch`) → mounted RW at `/work`.
+        work_rw: PathBuf,
+        /// The in-cell HOME (`--mirror-home`, e.g. `/home/k2`). `HOME` is set to
+        /// this; the sandbox home mounts at `<home>/.claude`.
+        home: PathBuf,
     }
 
     /// Parsed worker invocation (see `build_worker_invocation` in
@@ -274,25 +296,15 @@ mod worker {
         session_id: String,
         drain_on_exit: bool,
         workspace_root: Option<PathBuf>,
-        /// Sandbox v2 (PRD §B, SLICE 3) — WORKSPACE-SCOPED overlay mount. The RO
-        /// lowerdir = the canonical workspace (`--workspace-ro-base`). Present
-        /// ONLY for a workspace-scoped API session; MUTUALLY EXCLUSIVE with
-        /// `workspace_root` (asserted in `parse_args`). When present the worker
-        /// assembles `/workspace` per `fs_mode` (host-side overlay or RO+scratch)
-        /// instead of the legacy single RW bind. `None` ⇒ default-OFF, the
-        /// ephemeral/legacy path is byte-identical.
-        workspace_ro_base: Option<PathBuf>,
-        /// The persistent RW upperdir (`--overlay-upper`): overlay copy-up target
-        /// (overlay mode) or the `/work` scratch source (ro-scratch mode). A
-        /// daemon-minted host path under `~/.k2/sandbox-overlays/<ws>/<sid>/upper`,
-        /// chowned to the cell uid AT THE SPAWN DOOR (slice 2, P4-H6) — NOT here.
-        overlay_upper: Option<PathBuf>,
-        /// The overlay workdir (`--overlay-work`): an overlayfs requirement, on
-        /// the same fs as `overlay_upper`. Unused in ro-scratch mode.
-        overlay_work: Option<PathBuf>,
-        /// Per-workspace FS mode (`--fs-mode`). Only meaningful when
-        /// `workspace_ro_base` is present. Default `Overlay` (PRD §G2 #1).
-        fs_mode: FsModeArg,
+        /// Sandbox v2 — the WORKSPACE-SCOPED **MIRROR** mount set. `Some` ONLY for
+        /// a workspace-scoped API session (the `--mirror-*` flags); MUTUALLY
+        /// EXCLUSIVE with the legacy `workspace_root` (asserted in `parse_args`).
+        /// When present the worker mounts the workspace + canonical memory RO and
+        /// the sandbox home + `/work` RW at their REAL in-cell paths, instead of
+        /// the legacy single RW bind. `None` ⇒ default-OFF (ephemeral/legacy path
+        /// byte-identical). The RW dirs were chowned to the cell uid AT THE SPAWN
+        /// DOOR (P4-H6) — NOT here; the RO dirs stay owned by the workspace.
+        mirror: Option<MirrorMounts>,
         cell_socket: Option<PathBuf>,
         tool_roots: Vec<PathBuf>,
         cwd: Option<PathBuf>,
@@ -324,6 +336,12 @@ mod worker {
         /// tests / a daemon that didn't allocate). Validated `> CELL_UID_FLOOR`
         /// and `!= 0` fail-closed before it is ever used.
         cell_uid: Option<u32>,
+        /// passt virtio-net backend (replaces libkrun TSI, which deadlocks on
+        /// sustained streaming — the claude API pattern). krun-side fd of the
+        /// socketpair to this cell's `passt` process, launched by the supervisor
+        /// as the cell uid BEFORE clone() so its egress is caught by the same
+        /// per-session `skuid` nft policy. `None` ⇒ TSI fallback.
+        passt_net_fd: Option<i32>,
     }
 
     /// Fail-closed floor for a daemon-passed `--cell-uid`. The daemon's allocator
@@ -405,6 +423,19 @@ mod worker {
                 std::process::exit(4);
             }
         };
+
+        // Launch this cell's passt (virtio-net backend, replaces TSI) as the
+        // cell uid in the host mount+net ns, BEFORE clone() so the krun-side
+        // socketpair fd inherits into the jailed child. Egress still rides the
+        // per-session skuid nft policy (passt connects AS the cell uid).
+        match launch_cell_passt(&cfg) {
+            Ok(fd) => cfg.passt_net_fd = Some(fd),
+            Err(e) => {
+                eprintln!("k2-vmm-worker: passt launch failed: {e}");
+                let _ = std::fs::remove_dir_all(&cgroup_dir);
+                std::process::exit(6);
+            }
+        }
 
         // Status pipe: child writes STATUS_OK right before start_enter; EOF = it
         // died in setup. pipe2(0): both ends inheritable across clone().
@@ -507,6 +538,13 @@ mod worker {
         let mut i = 0;
         let mut saw_vcpus = false;
         let mut saw_ram = false;
+        // Sandbox v2 MIRROR flags — collected into temps, assembled + validated
+        // (all-or-none for the required four) after the scan.
+        let mut m_workspace_ro: Option<PathBuf> = None;
+        let mut m_home_rw: Option<PathBuf> = None;
+        let mut m_work_rw: Option<PathBuf> = None;
+        let mut m_home: Option<PathBuf> = None;
+        let mut m_memory_ro: Option<PathBuf> = None;
 
         // Helper: the value following a flag, or a parse error.
         macro_rules! val {
@@ -572,25 +610,24 @@ mod worker {
                 "--workspace-root" => {
                     cfg.workspace_root = Some(PathBuf::from(val!("--workspace-root")));
                 }
-                // Sandbox v2 (SLICE 3) — the WORKSPACE-SCOPED overlay flags.
-                // Emitted only by the workspace-scoped spawn door; validated as a
-                // complete set (all-or-none) after the scan.
-                "--workspace-ro-base" => {
-                    cfg.workspace_ro_base = Some(PathBuf::from(val!("--workspace-ro-base")));
+                // Sandbox v2 — the WORKSPACE-SCOPED MIRROR flags. Emitted only by
+                // the workspace-scoped spawn door; validated as a complete set
+                // (all-or-none for the required four) after the scan. Only HOST
+                // SOURCE paths ride the argv.
+                "--mirror-workspace-ro" => {
+                    m_workspace_ro = Some(PathBuf::from(val!("--mirror-workspace-ro")));
                 }
-                "--overlay-upper" => {
-                    cfg.overlay_upper = Some(PathBuf::from(val!("--overlay-upper")));
+                "--mirror-home-rw" => {
+                    m_home_rw = Some(PathBuf::from(val!("--mirror-home-rw")));
                 }
-                "--overlay-work" => {
-                    cfg.overlay_work = Some(PathBuf::from(val!("--overlay-work")));
+                "--mirror-work-rw" => {
+                    m_work_rw = Some(PathBuf::from(val!("--mirror-work-rw")));
                 }
-                "--fs-mode" => {
-                    let m = val!("--fs-mode");
-                    cfg.fs_mode = match m.as_str() {
-                        "overlay" => FsModeArg::Overlay,
-                        "ro-scratch" => FsModeArg::RoScratch,
-                        other => return fail(format!("invalid --fs-mode: {other}")),
-                    };
+                "--mirror-home" => {
+                    m_home = Some(PathBuf::from(val!("--mirror-home")));
+                }
+                "--mirror-memory-ro" => {
+                    m_memory_ro = Some(PathBuf::from(val!("--mirror-memory-ro")));
                 }
                 "--cell-socket" => {
                     cfg.cell_socket = Some(PathBuf::from(val!("--cell-socket")));
@@ -627,27 +664,39 @@ mod worker {
             return fail("no program after `--`");
         }
 
-        // SLICE 3 — the workspace-scoped overlay flags are an ALL-OR-NONE set.
-        // If any of the three paths is present, all three must be (a partial set
-        // is a malformed invocation → fail-closed, matching the scanner's stance
-        // on missing values). And `--workspace-ro-base` is mutually exclusive
-        // with the legacy `--workspace-root` (the producer sets `workspace_root =
-        // None` for a workspace-scoped session; both present is ambiguous).
-        let ws_scoped_any = cfg.workspace_ro_base.is_some()
-            || cfg.overlay_upper.is_some()
-            || cfg.overlay_work.is_some();
-        if ws_scoped_any {
-            if cfg.workspace_ro_base.is_none()
-                || cfg.overlay_upper.is_none()
-                || cfg.overlay_work.is_none()
-            {
-                return fail(
-                    "workspace-scoped mount needs ALL of --workspace-ro-base, \
-                     --overlay-upper, --overlay-work",
-                );
-            }
-            if cfg.workspace_root.is_some() {
-                return fail("--workspace-root and --workspace-ro-base are mutually exclusive");
+        // Sandbox v2 — the MIRROR flags are an ALL-OR-NONE set for the required
+        // FOUR (workspace-ro, home-rw, work-rw, home); `--mirror-memory-ro` is
+        // OPTIONAL (skip-if-absent). If any required flag is present, all four
+        // must be (a partial set is a malformed invocation → fail-closed). And a
+        // mirror mount is mutually exclusive with the legacy `--workspace-root`
+        // (the producer sets `workspace_root = None` for a mirror session).
+        let mirror_any = m_workspace_ro.is_some()
+            || m_home_rw.is_some()
+            || m_work_rw.is_some()
+            || m_home.is_some()
+            || m_memory_ro.is_some();
+        if mirror_any {
+            match (m_workspace_ro, m_home_rw, m_work_rw, m_home) {
+                (Some(workspace_ro), Some(sandbox_home_rw), Some(work_rw), Some(home)) => {
+                    if cfg.workspace_root.is_some() {
+                        return fail(
+                            "--workspace-root and the --mirror-* flags are mutually exclusive",
+                        );
+                    }
+                    cfg.mirror = Some(MirrorMounts {
+                        workspace_ro,
+                        sandbox_home_rw,
+                        canonical_memory_ro: m_memory_ro,
+                        work_rw,
+                        home,
+                    });
+                }
+                _ => {
+                    return fail(
+                        "mirror mount needs ALL of --mirror-workspace-ro, \
+                         --mirror-home-rw, --mirror-work-rw, --mirror-home",
+                    );
+                }
             }
         }
         Ok(cfg)
@@ -690,39 +739,25 @@ mod worker {
             .collect()
     }
 
-    /// SLICE 3 §G2#3 — point the in-guest agent's config + home at the PERSISTENT
-    /// writable layer so its session store (Claude's `~/.claude` /
-    /// `$CLAUDE_CONFIG_DIR` `.jsonl`) is DURABLE across cell teardown → the
-    /// respawn-and-`--resume`/`--fork` path (slice 4) can rehydrate it. This is
-    /// the addendum's "same key" enabler: the `.jsonl` and the FS upper share one
-    /// per-session layer.
+    /// MIRROR model (fs-mirror PRD, LOCKED) — enforce the in-guest agent's `HOME`
+    /// = the REAL in-cell home (`/home/k2`) and DROP any `CLAUDE_CONFIG_DIR`. With
+    /// `HOME=/home/k2` and the per-workspace sandbox home mounted at
+    /// `/home/k2/.claude`, `claude` resolves its config + session store natively
+    /// at the real path — so `--resume`/audit find `.claude/projects/<slug>/<id>.jsonl`
+    /// at the mirrored real location. This SUPERSEDES the slice-3
+    /// `.k2-sandbox-home` scheme (the store no longer lives inside the workspace).
     ///
-    /// Path choice (documented, per PRD §G2#3):
-    ///   - **overlay**   → `/workspace/.k2-sandbox-home` — the merged `/workspace`
-    ///     IS backed by the persistent upper (any write copies-up into it), so a
-    ///     path under `/workspace` is durable. A dot-prefixed, distinctively-named
-    ///     dir so it does NOT collide with the canonical `.k2/` tree and the F5
-    ///     review can trivially ignore it.
-    ///   - **ro-scratch**→ `/work` — the persistent RW scratch mount itself (the
-    ///     workspace is RO, so the store cannot live there).
-    ///
-    /// Applied ONLY for a workspace-scoped session (`workspace_ro_base` present);
-    /// a no-op otherwise so the ephemeral/legacy env is byte-identical. Overrides
-    /// (upserts) any inherited HOME/CLAUDE_CONFIG_DIR — the persistent-layer
-    /// location is authoritative for a sandbox session.
+    /// Applied ONLY for a mirror session (`mirror` present); a no-op otherwise so
+    /// the ephemeral/legacy env is byte-identical. Overrides (upserts) any
+    /// inherited `HOME` — the mirrored home is authoritative — and REMOVES any
+    /// inherited `CLAUDE_CONFIG_DIR` so claude uses `$HOME/.claude`.
     fn apply_durable_session_env(cfg: &mut WorkerConfig) {
-        if cfg.workspace_ro_base.is_none() {
+        let Some(mirror) = cfg.mirror.as_ref() else {
             return;
-        }
-        let (home, config_dir) = match cfg.fs_mode {
-            FsModeArg::Overlay => (
-                "/workspace/.k2-sandbox-home".to_string(),
-                "/workspace/.k2-sandbox-home/.claude".to_string(),
-            ),
-            FsModeArg::RoScratch => ("/work".to_string(), "/work/.claude".to_string()),
         };
+        let home = mirror.home.to_string_lossy().into_owned();
         upsert_env(&mut cfg.guest_env, "HOME", home);
-        upsert_env(&mut cfg.guest_env, "CLAUDE_CONFIG_DIR", config_dir);
+        cfg.guest_env.retain(|(k, _)| k != "CLAUDE_CONFIG_DIR");
     }
 
     /// Replace the value for `key` in the (NUL-parsed) guest env, or append it if
@@ -853,22 +888,25 @@ mod worker {
                 return fail(format!("workspace-root not a dir: {}", ws.display()));
             }
         }
-        // SLICE 3 — the workspace-scoped layers must all be real dirs (cleaner
-        // failure here than mid-jail). The RO base is the canonical workspace;
-        // upper/work are the daemon-minted persistent layer.
-        if let Some(base) = &cfg.workspace_ro_base {
-            if !base.is_dir() {
-                return fail(format!("workspace-ro-base not a dir: {}", base.display()));
+        // Sandbox v2 MIRROR — the mount sources must all be real dirs (cleaner
+        // failure here than mid-jail). The workspace + memory are RO real paths;
+        // the sandbox home + work are the daemon-minted RW dirs. The canonical
+        // memory is OPTIONAL (skip-if-absent) but if the daemon named it, it must
+        // exist — a named-but-missing memory is a malformed invocation.
+        if let Some(m) = &cfg.mirror {
+            if !m.workspace_ro.is_dir() {
+                return fail(format!("mirror-workspace-ro not a dir: {}", m.workspace_ro.display()));
             }
-        }
-        if let Some(up) = &cfg.overlay_upper {
-            if !up.is_dir() {
-                return fail(format!("overlay-upper not a dir: {}", up.display()));
+            if !m.sandbox_home_rw.is_dir() {
+                return fail(format!("mirror-home-rw not a dir: {}", m.sandbox_home_rw.display()));
             }
-        }
-        if let Some(wk) = &cfg.overlay_work {
-            if !wk.is_dir() {
-                return fail(format!("overlay-work not a dir: {}", wk.display()));
+            if !m.work_rw.is_dir() {
+                return fail(format!("mirror-work-rw not a dir: {}", m.work_rw.display()));
+            }
+            if let Some(mem) = &m.canonical_memory_ro {
+                if !mem.is_dir() {
+                    return fail(format!("mirror-memory-ro not a dir: {}", mem.display()));
+                }
             }
         }
         for t in &cfg.tool_roots {
@@ -927,6 +965,64 @@ mod worker {
     fn write_cgroup(dir: &Path, file: &str, val: &str) -> Result<(), WErr> {
         std::fs::write(dir.join(file), val)
             .map_err(|e| format!("write cgroup {file}={val}: {e}"))
+    }
+
+    /// Launch this cell's `passt` (userspace virtio-net proxy) and return the
+    /// krun-side fd of the socketpair. passt runs as the CELL UID in the host
+    /// mount+net ns (real network) so its outbound connections carry
+    /// `skuid == cell uid` and the existing per-session nft egress policy still
+    /// applies unchanged. `--one-off` makes passt exit when libkrun disconnects
+    /// (i.e. at cell teardown). Replaces libkrun's TSI, which deadlocks on
+    /// sustained streaming (the claude API pattern).
+    fn launch_cell_passt(cfg: &WorkerConfig) -> Result<i32, WErr> {
+        let mut fds = [0i32; 2];
+        // socketpair with flags=0 → neither end is CLOEXEC, so fd_krun survives
+        // clone() into the child and fd_passt survives passt's execv().
+        if unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) } != 0 {
+            return Err(format!("passt socketpair: {}", std::io::Error::last_os_error()));
+        }
+        let (fd_krun, fd_passt) = (fds[0], fds[1]);
+        match unsafe { libc::fork() } {
+            -1 => {
+                unsafe {
+                    libc::close(fd_krun);
+                    libc::close(fd_passt);
+                }
+                Err(format!("fork passt: {}", std::io::Error::last_os_error()))
+            }
+            0 => {
+                // passt child: drop to the cell uid, then exec passt on fd_passt.
+                unsafe {
+                    libc::close(fd_krun);
+                    libc::setgid(cfg.unpriv_gid);
+                    libc::setuid(cfg.unpriv_uid);
+                    let prog = std::ffi::CString::new("/usr/bin/passt").unwrap();
+                    let a0 = std::ffi::CString::new("passt").unwrap();
+                    let a1 = std::ffi::CString::new("--one-off").unwrap();
+                    let a2 = std::ffi::CString::new("-f").unwrap();
+                    let a3 = std::ffi::CString::new("-q").unwrap();
+                    let a4 = std::ffi::CString::new("--fd").unwrap();
+                    let a5 = std::ffi::CString::new(fd_passt.to_string()).unwrap();
+                    let argv: [*const libc::c_char; 7] = [
+                        a0.as_ptr(),
+                        a1.as_ptr(),
+                        a2.as_ptr(),
+                        a3.as_ptr(),
+                        a4.as_ptr(),
+                        a5.as_ptr(),
+                        std::ptr::null(),
+                    ];
+                    libc::execv(prog.as_ptr(), argv.as_ptr());
+                    libc::_exit(127);
+                }
+            }
+            _pid => {
+                unsafe {
+                    libc::close(fd_passt);
+                }
+                Ok(fd_krun)
+            }
+        }
     }
 
     // ── A4/§B — THE HOST JAIL + libkrun handoff (runs in the cloned child) ───
@@ -1054,131 +1150,42 @@ mod worker {
             .map_err(|e| format!("remount workspace nosuid,nodev: {e}"))?;
         }
 
-        // 5b. WORKSPACE-SCOPED `/workspace` (Sandbox v2 §B, SLICE 3). Present only
-        //     when the daemon emitted `--workspace-ro-base` (+ `--overlay-upper`/
-        //     `-work`); MUTUALLY EXCLUSIVE with step-5's `--workspace-root`
-        //     (asserted in `parse_args`, so this and step 5 never both run). We
-        //     ASSEMBLE the guest's `/workspace` HOST-SIDE per `fs_mode`, then let
-        //     `run_libkrun` hand the result to the guest over the SAME
-        //     `workspace`/`work` virtiofs tags. RO base is genuinely read-only to
-        //     the cell in BOTH modes: overlay never writes the lower (copy-up →
-        //     upper), ro-scratch binds it MS_RDONLY.
+        // 5b. WORKSPACE-SCOPED **MIRROR** mounts (fs-mirror PRD, LOCKED). Present
+        //     only when the daemon emitted the `--mirror-*` flags; MUTUALLY
+        //     EXCLUSIVE with step-5's `--workspace-root` (asserted in `parse_args`,
+        //     so this and step 5 never both run). We STAGE each host source under
+        //     NEWROOT (RO workspace + RO memory, RW sandbox-home + RW `/work`),
+        //     then `run_libkrun` virtiofs-exports each staging dir under a fixed
+        //     TAG and the guest-init mounts each tag at its REAL in-cell path
+        //     (from `K2_WS_DIR`/`K2_HOME_DIR`/`K2_MEM_DIR`). The RO mounts are
+        //     genuinely read-only: bind + a SEPARATE MS_RDONLY remount (the
+        //     tool-root pattern of step 6 — the initial bind IGNORES MS_RDONLY)
+        //     AND virtiofs `read_only=true` in run_libkrun (belt-and-braces).
         //
-        //     P4/TOCTOU posture mirrors steps 4–6: canonicalize + leaf-assert
-        //     every source; the upper/work are used ONLY as mount SOURCES (no host
-        //     dirfd is retained — after pivot_root they are unreachable, exactly
-        //     like the guest-base lowerdir of step 4). The upper/work were chowned
-        //     to the cell uid by the SPAWN DOOR (slice 2, P4-H6); we do NOT chown
-        //     them here (they are outside NEWROOT).
-        if let Some(base) = &cfg.workspace_ro_base {
-            let base = base
-                .canonicalize()
-                .map_err(|e| format!("canonicalize workspace-ro-base: {e}"))?;
-            if !base.is_dir() {
-                return fail("workspace-ro-base is not a directory after canonicalize");
-            }
-            // Both present by parse_args's all-or-none gate; re-assert fail-closed.
-            let upper = cfg
-                .overlay_upper
-                .as_ref()
-                .ok_or_else(|| "overlay-upper missing (bug)".to_string())?
-                .canonicalize()
-                .map_err(|e| format!("canonicalize overlay-upper: {e}"))?;
-            let work = cfg
-                .overlay_work
-                .as_ref()
-                .ok_or_else(|| "overlay-work missing (bug)".to_string())?
-                .canonicalize()
-                .map_err(|e| format!("canonicalize overlay-work: {e}"))?;
-            if !upper.is_dir() || !work.is_dir() {
-                return fail("overlay-upper/work not a directory after canonicalize");
-            }
+        //     P4/TOCTOU posture mirrors steps 4–6: canonicalize + is_dir-assert
+        //     every source; the sources are used ONLY as mount SOURCES (no host
+        //     dirfd retained — after pivot_root they are unreachable). The two RW
+        //     dirs were chowned to the cell uid by the SPAWN DOOR (P4-H6); we do
+        //     NOT chown them here. The RO dirs stay owned by the workspace/daemon.
+        //     TAG↔PATH CONTRACT (worker staging ⇄ guest-init mount):
+        //       /mirror/ws   → tag "k2ws"   → $K2_WS_DIR      (RO)
+        //       /mirror/home → tag "k2home" → $K2_HOME_DIR/.claude (RW)
+        //       /mirror/mem  → tag "k2mem"  → $K2_MEM_DIR     (RO, optional)
+        //       /mirror/work → tag "k2work" → /work           (RW)
+        if let Some(m) = &cfg.mirror {
+            let mirror_root = newroot.join("mirror");
+            std::fs::create_dir_all(&mirror_root)
+                .map_err(|e| format!("mkdir NEWROOT/mirror: {e}"))?;
 
-            match cfg.fs_mode {
-                FsModeArg::Overlay => {
-                    // MIRRORS the guest-root overlay (step 4) EXACTLY — same
-                    // `mount("overlay", …, MS_NOSUID|MS_NODEV,
-                    // "lowerdir=…,upperdir=…,workdir=…")` shape — only the dirs
-                    // differ: lower = the canonical workspace (RO), upper+work =
-                    // the daemon-minted PERSISTENT layer (vs step 4's throwaway
-                    // tmpfs dirs). The merged view is exposed to the guest via the
-                    // `workspace` virtiofs tag; the lower is exposed ONLY through
-                    // this merged mount (never separately bound/virtiofs'd), so the
-                    // cell can never write the canonical workspace — all mutation
-                    // is copy-up into the persistent upper.
-                    let merged = newroot.join("workspace-merged");
-                    std::fs::create_dir_all(&merged)
-                        .map_err(|e| format!("mkdir workspace-merged: {e}"))?;
-                    let ov = format!(
-                        "lowerdir={},upperdir={},workdir={}",
-                        base.display(),
-                        upper.display(),
-                        work.display()
-                    );
-                    mount(
-                        Some("overlay"),
-                        &merged,
-                        Some("overlay"),
-                        MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
-                        Some(ov.as_str()),
-                    )
-                    .map_err(|e| format!("mount overlay /workspace: {e}"))?;
-                }
-                FsModeArg::RoScratch => {
-                    // Base → NEWROOT/workspace-src, READ-ONLY. MIRRORS the
-                    // tool-root RO bind (step 6): an initial bind (which SILENTLY
-                    // IGNORES MS_RDONLY) followed by a SEPARATE remount that
-                    // actually applies ro,nosuid,nodev — so RO genuinely takes.
-                    let ws_dst = newroot.join("workspace-src");
-                    std::fs::create_dir_all(&ws_dst)
-                        .map_err(|e| format!("mkdir workspace-src (ro): {e}"))?;
-                    mount(
-                        Some(base.as_path()),
-                        &ws_dst,
-                        None::<&str>,
-                        MsFlags::MS_BIND | MsFlags::MS_REC,
-                        None::<&str>,
-                    )
-                    .map_err(|e| format!("bind workspace-ro-base: {e}"))?;
-                    mount(
-                        None::<&str>,
-                        &ws_dst,
-                        None::<&str>,
-                        MsFlags::MS_BIND
-                            | MsFlags::MS_REMOUNT
-                            | MsFlags::MS_RDONLY
-                            | MsFlags::MS_NOSUID
-                            | MsFlags::MS_NODEV,
-                        None::<&str>,
-                    )
-                    .map_err(|e| format!("remount workspace-ro-base ro: {e}"))?;
-
-                    // Persistent upper → NEWROOT/work-src, READ-WRITE. MIRRORS the
-                    // workspace RW bind (step 5): bind + a nosuid,nodev remount,
-                    // NO MS_RDONLY. All the agent's writes land here (durable).
-                    let work_dst = newroot.join("work-src");
-                    std::fs::create_dir_all(&work_dst)
-                        .map_err(|e| format!("mkdir work-src: {e}"))?;
-                    mount(
-                        Some(upper.as_path()),
-                        &work_dst,
-                        None::<&str>,
-                        MsFlags::MS_BIND | MsFlags::MS_REC,
-                        None::<&str>,
-                    )
-                    .map_err(|e| format!("bind /work: {e}"))?;
-                    mount(
-                        None::<&str>,
-                        &work_dst,
-                        None::<&str>,
-                        MsFlags::MS_BIND
-                            | MsFlags::MS_REMOUNT
-                            | MsFlags::MS_NOSUID
-                            | MsFlags::MS_NODEV,
-                        None::<&str>,
-                    )
-                    .map_err(|e| format!("remount /work nosuid,nodev: {e}"))?;
-                }
+            // RO workspace mirror → NEWROOT/mirror/ws.
+            bind_mirror_source(&m.workspace_ro, &mirror_root.join("ws"), true, "workspace")?;
+            // RW per-workspace sandbox home → NEWROOT/mirror/home.
+            bind_mirror_source(&m.sandbox_home_rw, &mirror_root.join("home"), false, "sandbox-home")?;
+            // RW per-session /work scratch → NEWROOT/mirror/work.
+            bind_mirror_source(&m.work_rw, &mirror_root.join("work"), false, "work")?;
+            // RO canonical memory → NEWROOT/mirror/mem (OPTIONAL — skip if absent).
+            if let Some(mem) = &m.canonical_memory_ro {
+                bind_mirror_source(mem, &mirror_root.join("mem"), true, "memory")?;
             }
         }
 
@@ -1315,6 +1322,48 @@ mod worker {
         //     LOG-first → KILL on-box derivation note.
         build_and_apply_seccomp()?;
 
+        Ok(())
+    }
+
+    /// Sandbox v2 MIRROR (§B step 5b) — stage a host SOURCE dir under NEWROOT for
+    /// virtiofs export. Canonicalizes + asserts the source is a dir (TOCTOU),
+    /// mkdir the staging `dst`, bind-mounts it (`MS_BIND|MS_REC`), then a SEPARATE
+    /// remount applies `nosuid,nodev` (+ `MS_RDONLY` when `ro`) — the initial bind
+    /// IGNORES these flags, exactly like the tool-root (step 6) + workspace RW
+    /// (step 5) binds this MIRRORS. `label` is used only in error messages. When
+    /// `ro`, `run_libkrun` ALSO exports the tag `read_only=true` (belt-and-braces)
+    /// so the RO guarantee holds at both the host bind and the virtiofs layer.
+    fn bind_mirror_source(src: &Path, dst: &Path, ro: bool, label: &str) -> Result<(), WErr> {
+        let src = src
+            .canonicalize()
+            .map_err(|e| format!("canonicalize mirror {label}: {e}"))?;
+        if !src.is_dir() {
+            return fail(format!(
+                "mirror {label} is not a directory after canonicalize"
+            ));
+        }
+        std::fs::create_dir_all(dst).map_err(|e| format!("mkdir mirror {label} dst: {e}"))?;
+        // Initial bind (SILENTLY ignores MS_RDONLY/nosuid/nodev on the first bind).
+        mount(
+            Some(src.as_path()),
+            dst,
+            None::<&str>,
+            MsFlags::MS_BIND | MsFlags::MS_REC,
+            None::<&str>,
+        )
+        .map_err(|e| format!("bind mirror {label}: {e}"))?;
+        // SEPARATE remount that ACTUALLY applies the flags.
+        let mut remount =
+            MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_NOSUID | MsFlags::MS_NODEV;
+        if ro {
+            remount |= MsFlags::MS_RDONLY;
+        }
+        mount(None::<&str>, dst, None::<&str>, remount, None::<&str>).map_err(|e| {
+            format!(
+                "remount mirror {label} ({}): {e}",
+                if ro { "ro" } else { "rw" }
+            )
+        })?;
         Ok(())
     }
 
@@ -1639,44 +1688,50 @@ mod worker {
             return fail(format!("krun_add_virtiofs3 root: {r}"));
         }
 
-        // Workspace virtiofs (tag "workspace"). Three shapes, all jail-relative:
-        //  - WORKSPACE-SCOPED overlay (SLICE 3): the host-assembled merged view at
-        //    `/workspace-merged`, RW (read_only=false) — the guest writes, which
-        //    copy-up into the persistent upper; the guest init mounts tag
-        //    "workspace" at /workspace (unchanged).
-        //  - WORKSPACE-SCOPED ro-scratch (SLICE 3): `/workspace-src` RO
-        //    (read_only=true, same posture as tool-roots) PLUS a second tag "work"
-        //    (`/work-src`) RW for the persistent scratch. NOTE (on-box dep): the
-        //    guest init must ALSO mount the "work" tag at /work in ro-scratch mode
-        //    (it already mounts "workspace"); overlay mode needs NO guest change.
+        // Workspace virtiofs. Two shapes, all jail-relative:
+        //  - WORKSPACE-SCOPED MIRROR (fs-mirror PRD): FOUR tags exporting the
+        //    staged dirs from step 5b — RO workspace `k2ws` (`/mirror/ws`), RW
+        //    sandbox-home `k2home` (`/mirror/home`), RW `/work` `k2work`
+        //    (`/mirror/work`), and (when present) RO memory `k2mem` (`/mirror/mem`).
+        //    `read_only` is enforced at BOTH the host bind (step 5b) AND here. The
+        //    guest-init mounts each tag at its REAL in-cell path (from the guest
+        //    env). TAG↔PATH CONTRACT — see the step-5b comment + the guest-init.
         //  - LEGACY ephemeral (`--workspace-root`): the single RW bind at
-        //    `/workspace-src`, exactly as before.
-        if cfg.workspace_ro_base.is_some() {
-            match cfg.fs_mode {
-                FsModeArg::Overlay => {
-                    let wtag = cstr("workspace", &mut keep)?;
-                    let wsrc = cstr("/workspace-merged", &mut keep)?;
-                    let r = unsafe { krun_add_virtiofs3(ctx, wtag, wsrc, 0, false) };
-                    if r < 0 {
-                        return fail(format!("krun_add_virtiofs3 workspace(overlay): {r}"));
-                    }
-                }
-                FsModeArg::RoScratch => {
-                    // Workspace READ-ONLY (read_only=true — the cell cannot write
-                    // the canonical ws through virtiofs either).
-                    let wtag = cstr("workspace", &mut keep)?;
-                    let wsrc = cstr("/workspace-src", &mut keep)?;
-                    let r = unsafe { krun_add_virtiofs3(ctx, wtag, wsrc, 0, true) };
-                    if r < 0 {
-                        return fail(format!("krun_add_virtiofs3 workspace(ro): {r}"));
-                    }
-                    // Persistent scratch READ-WRITE at tag "work" → guest /work.
-                    let ktag = cstr("work", &mut keep)?;
-                    let ksrc = cstr("/work-src", &mut keep)?;
-                    let r = unsafe { krun_add_virtiofs3(ctx, ktag, ksrc, 0, false) };
-                    if r < 0 {
-                        return fail(format!("krun_add_virtiofs3 work: {r}"));
-                    }
+        //    `/workspace-src` under tag "workspace", exactly as before.
+        if let Some(m) = &cfg.mirror {
+            // DAX SHM window per mirror mount — maps host page cache directly into
+            // the guest so mmap(MAP_SHARED)/SQLite-WAL are coherent on virtiofs.
+            // shm_size=0 (no DAX) is what hangs claude's fsync/session store on
+            // virtiofs (claude-code GH#28890). 512 MiB is enough for config+workspace.
+            const DAX_SHM: u64 = 0;
+            // RO workspace mirror.
+            let wtag = cstr("k2ws", &mut keep)?;
+            let wsrc = cstr("/mirror/ws", &mut keep)?;
+            let r = unsafe { krun_add_virtiofs3(ctx, wtag, wsrc, DAX_SHM, true) };
+            if r < 0 {
+                return fail(format!("krun_add_virtiofs3 k2ws(ro): {r}"));
+            }
+            // RW per-workspace sandbox home.
+            let htag = cstr("k2home", &mut keep)?;
+            let hsrc = cstr("/mirror/home", &mut keep)?;
+            let r = unsafe { krun_add_virtiofs3(ctx, htag, hsrc, DAX_SHM, false) };
+            if r < 0 {
+                return fail(format!("krun_add_virtiofs3 k2home(rw): {r}"));
+            }
+            // RW per-session /work scratch.
+            let ktag = cstr("k2work", &mut keep)?;
+            let ksrc = cstr("/mirror/work", &mut keep)?;
+            let r = unsafe { krun_add_virtiofs3(ctx, ktag, ksrc, DAX_SHM, false) };
+            if r < 0 {
+                return fail(format!("krun_add_virtiofs3 k2work(rw): {r}"));
+            }
+            // RO canonical memory (OPTIONAL — only when step 5b staged it).
+            if m.canonical_memory_ro.is_some() {
+                let mtag = cstr("k2mem", &mut keep)?;
+                let msrc = cstr("/mirror/mem", &mut keep)?;
+                let r = unsafe { krun_add_virtiofs3(ctx, mtag, msrc, DAX_SHM, true) };
+                if r < 0 {
+                    return fail(format!("krun_add_virtiofs3 k2mem(ro): {r}"));
                 }
             }
         } else if cfg.workspace_root.is_some() {
@@ -1698,19 +1753,20 @@ mod worker {
             }
         }
 
-        // Working directory inside the GUEST. The daemon's `--cwd` is a HOST
-        // path (the agent's workspace root, e.g. /tmp/wsA) which does NOT exist
-        // inside the guest — passing it verbatim made init.krun's chdir ENOENT
-        // and the VM stopped before the shell ran (bug #2). The guest only has
-        // its overlay root + the workspace mount at /workspace, so map: a cell
-        // WITH a workspace starts at /workspace; one without starts at /. (The
-        // host cwd's sub-path within the workspace is intentionally not mirrored
-        // yet — the workspace virtio-fs is mounted by a guest init that is a
-        // deferred item, so only /workspace itself is guaranteed to exist.)
-        // A workspace-scoped session (either fs_mode) also starts at /workspace —
-        // that is where the agent reads real context; ro-scratch writes go to the
-        // durable /work (via CLAUDE_CONFIG_DIR/HOME, see apply_durable_session_env).
-        let wd = if cfg.workspace_root.is_some() || cfg.workspace_ro_base.is_some() {
+        // Working directory inside the GUEST — the EXEC workdir libkrun chdir's to
+        // BEFORE the init runs. It must already exist in the guest rootfs at exec
+        // time.
+        //  - MIRROR session: use `/` (always present). The mirror path
+        //    (`/home/k2/<ws>`) does NOT exist yet — the guest-init CREATES + mounts
+        //    it — so it can't be the exec workdir (chicken-and-egg → libkrun fails
+        //    the exec → clean guest exit 0). The guest-init `cd`s into the real
+        //    workspace itself after mounting, and `claude`'s slug comes from THAT
+        //    cwd, not this exec workdir.
+        //  - LEGACY ephemeral (`--workspace-root`): `/workspace` exists in the guest image.
+        //  - No workspace: `/`.
+        let wd: &str = if cfg.mirror.is_some() {
+            "/"
+        } else if cfg.workspace_root.is_some() {
             "/workspace"
         } else {
             "/"
@@ -1726,12 +1782,13 @@ mod worker {
         // the agent's `k2`/`claude` reach the daemon's cell_server.
         if cfg.cell_socket.is_some() {
             // Enable the vsock device FIRST (else port2 → -19 ENODEV). Pass
-            // KRUN_TSI_HIJACK_INET so the SAME vsock device also gives the guest
-            // outbound INET via libkrun's TSI (host-side connect AS k2cell) —
-            // P4-H5 egress. The cell-channel port2 mapping below is unaffected
-            // (AF_VSOCK ⇄ UDS is not INET). The host nft allowlist is the
-            // egress control; here we only open the reachability path.
-            let r = unsafe { krun_add_vsock(ctx, KRUN_TSI_HIJACK_INET) };
+            // tsi_features=0 (NO TSI hijack): guest INET now rides virtio-net via
+            // passt (added below), because TSI's blocking-send/single-TX-drain
+            // DEADLOCKS on sustained streaming (the claude API pattern). The
+            // vsock device is retained ONLY for the F2 cell-channel (port2,
+            // AF_VSOCK ⇄ UDS — not INET). Egress control is still the host nft
+            // allowlist (passt connects AS the cell uid → same skuid policy).
+            let r = unsafe { krun_add_vsock(ctx, 0) };
             if r < 0 {
                 return fail(format!("krun_add_vsock: {r}"));
             }
@@ -1739,6 +1796,31 @@ mod worker {
             let r = unsafe { krun_add_vsock_port2(ctx, HOOK_PORT, csock, false) };
             if r < 0 {
                 return fail(format!("krun_add_vsock_port2: {r}"));
+            }
+        }
+
+        // virtio-net via passt (the supervisor launched it + handed us the
+        // krun-side socketpair fd). Adding this net device is what DISABLES TSI.
+        // NET_FLAG_DHCP_CLIENT → libkrun DHCPs eth0 from passt in-guest (no
+        // guest-init net config). This is the fix for the TSI streaming deadlock.
+        if let Some(net_fd) = cfg.passt_net_fd {
+            // COMPAT_NET_FEATURES = CSUM|GUEST_CSUM|GUEST_TSO4|GUEST_UFO|HOST_TSO4|HOST_UFO
+            const COMPAT_NET_FEATURES: u32 =
+                (1 << 0) | (1 << 1) | (1 << 7) | (1 << 10) | (1 << 11) | (1 << 14);
+            const NET_FLAG_DHCP_CLIENT: u32 = 1 << 1;
+            let mac: [u8; 6] = [0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee];
+            let r = unsafe {
+                krun_add_net_unixstream(
+                    ctx,
+                    std::ptr::null(),
+                    net_fd,
+                    mac.as_ptr(),
+                    COMPAT_NET_FEATURES,
+                    NET_FLAG_DHCP_CLIENT,
+                )
+            };
+            if r < 0 {
+                return fail(format!("krun_add_net_unixstream: {r}"));
             }
         }
 

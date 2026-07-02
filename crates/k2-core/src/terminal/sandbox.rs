@@ -44,10 +44,12 @@ pub struct ShellSpec {
 }
 
 /// Per-workspace FILESYSTEM MODE (Sandbox v2, PRD §G2 #1 — the per-workspace
-/// boolean the workspace owner picks). Governs how the RO canonical workspace
-/// and the persistent per-session writable layer are assembled by the worker
-/// (SLICE 3). Carried in an [`OverlaySpec`] and emitted as `--fs-mode` by
-/// [`build_worker_invocation`]; the daemon reads it from the `projects` table.
+/// boolean the workspace owner picks). Stored in the `projects` table and read
+/// via `k2_core::workspace::settings::get_workspace_fs_mode`. **NOTE:** the
+/// LOCKED fs-mirror model uses a FIXED mount layout (RO workspace + RO memory,
+/// RW sandbox-home + RW `/work`), so the mirror path no longer branches on this
+/// mode — the type is retained for the stored per-workspace setting + a possible
+/// future toggle. It is no longer carried in [`WorkspaceMountSpec`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsMode {
     /// **overlay** (PRD default): the canonical workspace is the overlay LOWER
@@ -93,33 +95,59 @@ impl FsMode {
     }
 }
 
-/// Sandbox v2 (PRD §B) — the WORKSPACE-SCOPED overlay mount spec threaded from
-/// the daemon's policy-resolver, through [`DaemonPtyConfig`](crate::terminal::daemon_pty::DaemonPtyConfig)
-/// and this [`SpawnRequest`], into the worker argv. It carries the three host
-/// paths the worker (SLICE 3) will assemble into the merged `/workspace` view
-/// plus the per-workspace [`FsMode`]. Grouped into ONE struct so adding the
-/// workspace-scoped plumbing touches exactly one optional field on each config
-/// (instead of four), and so the four values can never be threaded apart.
+/// Sandbox v2 — the WORKSPACE-SCOPED **MIRROR** mount spec (PRD
+/// `prd-sandbox-fs-mirror-and-audit.md`, LOCKED). Supersedes the slice-2/3
+/// overlay-merge layout (guest `/workspace` + `.k2-sandbox-home`). Threaded from
+/// the daemon's policy-resolver, through
+/// [`DaemonPtyConfig`](crate::terminal::daemon_pty::DaemonPtyConfig) and this
+/// [`SpawnRequest`], into the worker argv.
 ///
-/// SECURITY: every path here is HOST-RESOLVED by the daemon (the RO base is a
-/// registered `projects.path`; the upper/work are daemon-minted under
-/// `~/.k2/sandbox-overlays/<ws>/<sid>/`) — NONE is a caller path. The upper +
-/// work dirs are chowned to the per-session cell uid at the spawn door (P4-H6);
-/// the RO base is NEVER chowned (it stays owned by the workspace).
+/// **The rule: mirror the paths, restrict the permissions, hand it `/work/`.**
+/// The cell reads the workspace + canonical memory at their REAL host paths
+/// (RO), writes to a per-workspace sandbox home + a per-session `/work` (RW):
+///
+/// ```text
+///   workspace_ro          RO   /home/k2/<ws>                         (host == in-cell path, a true mirror)
+///   sandbox_home_rw       RW   /home/k2/.claude                      (host: ~/.k2/sandbox-homes/<ws>/.claude)
+///   canonical_memory_ro   RO   /home/k2/.claude/projects/<slug>/memory   (host == in-cell path; optional bind)
+///   work_rw               RW   /work                                 (host: ~/.k2/sandbox-overlays/<ws>/<sid>/work-scratch)
+/// ```
+///
+/// SECURITY: every path here is HOST-RESOLVED by the daemon (the RO workspace is
+/// a registered `projects.path`; the memory is `<home>/.claude/projects/<slug>/memory`;
+/// the RW dirs are daemon-minted under `~/.k2/sandbox-homes/` + `~/.k2/sandbox-overlays/`)
+/// — NONE is a caller path. The two RW dirs are chowned to the per-session cell
+/// uid at the spawn door (P4-H6); the RO workspace + RO memory are NEVER chowned
+/// (they stay owned by the workspace / the daemon, and are remounted read-only).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OverlaySpec {
-    /// The RO lowerdir — the canonical workspace, mounted read-only in SLICE 3
-    /// so the cell reads real files/skills but can never corrupt the source.
-    pub workspace_ro_base: PathBuf,
-    /// The persistent RW upperdir — where the session's copy-up writes (overlay)
-    /// or `/work` scratch (ro+scratch) land; keyed by `(workspace, session)` and
-    /// restored on resume (NOT deleted on ChildExit).
-    pub overlay_upper: PathBuf,
-    /// The overlay workdir (an overlayfs implementation requirement) — sits
-    /// beside the upper under the same per-session layer.
-    pub overlay_work: PathBuf,
-    /// The per-workspace filesystem mode (overlay vs ro+scratch).
-    pub fs_mode: FsMode,
+pub struct WorkspaceMountSpec {
+    /// RO workspace MIRROR. Host source AND in-cell target are the SAME real
+    /// path (`/home/k2/<ws>`) — the mirror premise. Mounted read-only; the cell
+    /// reads real files/skills but can never edit the canonical workspace.
+    pub workspace_ro: PathBuf,
+    /// RW per-WORKSPACE sandbox home (host: `~/.k2/sandbox-homes/<ws>/.claude`),
+    /// mounted at `<home>/.claude` in the cell. Accumulates the workspace's
+    /// sandbox session transcripts + memory so they list together under the real
+    /// slug. Chowned to the cell uid at the spawn door.
+    pub sandbox_home_rw: PathBuf,
+    /// RO canonical-memory bind (host == in-cell target == the real path
+    /// `<home>/.claude/projects/<slug>/memory`). `None` when the source is absent
+    /// (a workspace with no canonical memory yet) → the bind is skipped, not an
+    /// error. Read-only so a cell reads the curated memory but can't corrupt it.
+    pub canonical_memory_ro: Option<PathBuf>,
+    /// RW per-SESSION persistent scratch (host:
+    /// `~/.k2/sandbox-overlays/<ws>/<sid>/work-scratch`), mounted at `/work`.
+    /// Keyed by `(workspace, session)`, restored on resume (NOT deleted on
+    /// ChildExit). Chowned to the cell uid at the spawn door.
+    pub work_rw: PathBuf,
+    /// The in-cell HOME — the daemon's real home dir (e.g. `/home/k2`). `HOME` is
+    /// set to this; `<home>/.claude` is the sandbox-home mount point. Carried so
+    /// the worker/guest-init place the sandbox home at the mirrored real path.
+    pub home: PathBuf,
+    /// The claude project slug = the in-cell cwd (`workspace_ro`) with every
+    /// `/`→`-` (e.g. `-home-k2-ai`). Keys the canonical-memory dir + the
+    /// session's `.jsonl` path so `--resume`/audit resolve the real path.
+    pub slug: String,
 }
 
 /// Everything a backend needs to open a child process attached to a PTY. The
@@ -166,13 +194,14 @@ pub struct SpawnRequest {
     /// allocate for) ⇒ no `--cell-uid` is emitted and the worker falls back to
     /// resolving `k2cell`. Unused by [`Passthrough`].
     pub cell_uid: Option<u32>,
-    /// Sandbox v2 (PRD §B) — the WORKSPACE-SCOPED overlay mount spec. `Some`
-    /// only for a workspace-scoped API session (the `/v1/w/<ws>/sessions` door);
-    /// `None` for EVERY other spawn (cockpit, ephemeral `/v1/sandboxes`, plain
-    /// v2) ⇒ default-OFF parity. **Plumbed in SLICE 2, CONSUMED in SLICE 3**
-    /// (the microVM worker assembles `overlay(lower=ro_base, upper, work)` and
-    /// mounts the merged view at the guest cwd). [`Passthrough`] ignores it.
-    pub overlay: Option<OverlaySpec>,
+    /// Sandbox v2 — the WORKSPACE-SCOPED **MIRROR** mount spec
+    /// ([`WorkspaceMountSpec`]). `Some` only for a workspace-scoped API session
+    /// (the `/v1/w/<ws>/sessions` door); `None` for EVERY other spawn (cockpit,
+    /// ephemeral `/v1/sandboxes`, plain v2) ⇒ default-OFF parity. The microVM
+    /// worker mounts the workspace + canonical memory RO and the sandbox home +
+    /// `/work` RW at their REAL host paths. [`Passthrough`] ignores it. (Field
+    /// name kept as `overlay` for plumbing stability across the config chain.)
+    pub overlay: Option<WorkspaceMountSpec>,
 }
 
 /// A spawned child + its captured direct-child PID. Returned from a backend's
@@ -624,21 +653,27 @@ pub fn build_worker_invocation(req: &SpawnRequest, caps: &VmCaps) -> WorkerInvoc
         argv.push(ws.to_string_lossy().into_owned());
     }
 
-    // Sandbox v2 (PRD §B) — the WORKSPACE-SCOPED overlay mount. Emitted only for
-    // a workspace-scoped session; the three host paths + the per-workspace mode.
-    // SLICE 3: the worker CONSUMES these to assemble `overlay(lower=ro_base,
-    // upper, work)` (fs_mode=overlay) or a RO base + separate RW `/work`
-    // (fs_mode=ro+scratch) and mount the merged view at `--cwd`. Until then the
-    // flags are plumbed + tested but the worker does not act on them.
+    // Sandbox v2 — the WORKSPACE-SCOPED **MIRROR** mount. Emitted only for a
+    // workspace-scoped session; the worker stages each source under NEWROOT and
+    // virtiofs-exports it (RO workspace + RO memory, RW sandbox-home + RW /work),
+    // then the guest-init mounts each tag at its REAL in-cell path (from the
+    // guest env `K2_WS_DIR`/`K2_HOME_DIR`/`K2_MEM_DIR`, staged by the resolver).
+    // Only HOST SOURCE paths ride the argv (the in-cell targets are the mirrored
+    // real paths). `--mirror-memory-ro` is omitted when the canonical memory
+    // source is absent (a fresh workspace) — the bind is simply skipped.
     if let Some(ov) = &req.overlay {
-        argv.push("--workspace-ro-base".to_string());
-        argv.push(ov.workspace_ro_base.to_string_lossy().into_owned());
-        argv.push("--overlay-upper".to_string());
-        argv.push(ov.overlay_upper.to_string_lossy().into_owned());
-        argv.push("--overlay-work".to_string());
-        argv.push(ov.overlay_work.to_string_lossy().into_owned());
-        argv.push("--fs-mode".to_string());
-        argv.push(ov.fs_mode.as_flag().to_string());
+        argv.push("--mirror-workspace-ro".to_string());
+        argv.push(ov.workspace_ro.to_string_lossy().into_owned());
+        argv.push("--mirror-home-rw".to_string());
+        argv.push(ov.sandbox_home_rw.to_string_lossy().into_owned());
+        argv.push("--mirror-work-rw".to_string());
+        argv.push(ov.work_rw.to_string_lossy().into_owned());
+        argv.push("--mirror-home".to_string());
+        argv.push(ov.home.to_string_lossy().into_owned());
+        if let Some(mem) = &ov.canonical_memory_ro {
+            argv.push("--mirror-memory-ro".to_string());
+            argv.push(mem.to_string_lossy().into_owned());
+        }
     }
 
     // Per-cell hook socket host path → bind-mounted into the guest.
@@ -940,37 +975,51 @@ mod tests {
         assert_eq!(inv.guest_env, sorted, "guest_env must be deterministically sorted");
     }
 
-    /// Sandbox v2 (PRD §B) — when a workspace-scoped [`OverlaySpec`] is present,
-    /// the three host paths + the fs-mode are emitted as `--workspace-ro-base`,
-    /// `--overlay-upper`, `--overlay-work`, `--fs-mode`; absent ⇒ none appear
-    /// (default-OFF parity, proven by the sentinel test which sets `overlay:
-    /// None`).
+    /// Sandbox v2 — when a workspace-scoped [`WorkspaceMountSpec`] is present, the
+    /// mirror HOST SOURCE paths are emitted as `--mirror-workspace-ro`,
+    /// `--mirror-home-rw`, `--mirror-work-rw`, `--mirror-home`, and (when the
+    /// canonical memory source is present) `--mirror-memory-ro`; absent ⇒ none
+    /// appear (default-OFF parity, proven by the sentinel test's `overlay: None`).
     #[test]
-    fn build_worker_invocation_emits_overlay_spec_flags() {
+    fn build_worker_invocation_emits_mirror_spec_flags() {
         let mut req = sentinel_request();
-        req.overlay = Some(OverlaySpec {
-            workspace_ro_base: PathBuf::from("/home/svc/ai"),
-            overlay_upper: PathBuf::from("/home/svc/.k2/sandbox-overlays/ai/sid/upper"),
-            overlay_work: PathBuf::from("/home/svc/.k2/sandbox-overlays/ai/sid/work"),
-            fs_mode: FsMode::RoScratch,
+        req.overlay = Some(WorkspaceMountSpec {
+            workspace_ro: PathBuf::from("/home/k2/ai"),
+            sandbox_home_rw: PathBuf::from("/home/k2/.k2/sandbox-homes/ai/.claude"),
+            canonical_memory_ro: Some(PathBuf::from(
+                "/home/k2/.claude/projects/-home-k2-ai/memory",
+            )),
+            work_rw: PathBuf::from("/home/k2/.k2/sandbox-overlays/ai/sid/work-scratch"),
+            home: PathBuf::from("/home/k2"),
+            slug: "-home-k2-ai".to_string(),
         });
         let inv = build_worker_invocation(&req, &VmCaps::default());
-        assert_eq!(flag_value(&inv.argv, "--workspace-ro-base"), Some("/home/svc/ai"));
+        assert_eq!(flag_value(&inv.argv, "--mirror-workspace-ro"), Some("/home/k2/ai"));
         assert_eq!(
-            flag_value(&inv.argv, "--overlay-upper"),
-            Some("/home/svc/.k2/sandbox-overlays/ai/sid/upper"),
+            flag_value(&inv.argv, "--mirror-home-rw"),
+            Some("/home/k2/.k2/sandbox-homes/ai/.claude"),
         );
         assert_eq!(
-            flag_value(&inv.argv, "--overlay-work"),
-            Some("/home/svc/.k2/sandbox-overlays/ai/sid/work"),
+            flag_value(&inv.argv, "--mirror-work-rw"),
+            Some("/home/k2/.k2/sandbox-overlays/ai/sid/work-scratch"),
         );
-        // ro+scratch → the argv token `ro-scratch` (no `+` in argv).
-        assert_eq!(flag_value(&inv.argv, "--fs-mode"), Some("ro-scratch"));
+        assert_eq!(flag_value(&inv.argv, "--mirror-home"), Some("/home/k2"));
+        assert_eq!(
+            flag_value(&inv.argv, "--mirror-memory-ro"),
+            Some("/home/k2/.claude/projects/-home-k2-ai/memory"),
+        );
 
-        // Absent overlay ⇒ NO overlay flags (default-OFF parity).
+        // Absent canonical memory ⇒ NO --mirror-memory-ro (skip-if-absent), but
+        // the other four mirror flags still appear.
+        req.overlay.as_mut().unwrap().canonical_memory_ro = None;
+        let inv2 = build_worker_invocation(&req, &VmCaps::default());
+        assert!(!inv2.argv.iter().any(|a| a == "--mirror-memory-ro"));
+        assert_eq!(flag_value(&inv2.argv, "--mirror-workspace-ro"), Some("/home/k2/ai"));
+
+        // Absent overlay ⇒ NO mirror flags at all (default-OFF parity).
         let bare = build_worker_invocation(&sentinel_request(), &VmCaps::default());
-        assert!(!bare.argv.iter().any(|a| a == "--workspace-ro-base"));
-        assert!(!bare.argv.iter().any(|a| a == "--fs-mode"));
+        assert!(!bare.argv.iter().any(|a| a == "--mirror-workspace-ro"));
+        assert!(!bare.argv.iter().any(|a| a == "--mirror-home"));
     }
 
     /// [`FsMode`] default is `overlay` (PRD §G2 #1); the stored-setting parser
@@ -1092,9 +1141,9 @@ mod tests {
         assert!(!inv.argv.iter().any(|a| a == "--drain-on-exit"));
         assert!(flag_value(&inv.argv, "--session-id").is_none());
         assert!(flag_value(&inv.argv, "--cell-uid").is_none());
-        // No overlay ⇒ no overlay flags (default-OFF parity).
-        assert!(flag_value(&inv.argv, "--workspace-ro-base").is_none());
-        assert!(flag_value(&inv.argv, "--fs-mode").is_none());
+        // No overlay ⇒ no mirror flags (default-OFF parity).
+        assert!(flag_value(&inv.argv, "--mirror-workspace-ro").is_none());
+        assert!(flag_value(&inv.argv, "--mirror-home").is_none());
         assert_eq!(flag_value(&inv.argv, "--vcpus"), Some("1"));
         assert_eq!(flag_value(&inv.argv, "--ram-mib"), Some("1024"));
     }

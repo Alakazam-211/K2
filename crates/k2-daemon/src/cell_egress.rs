@@ -122,6 +122,7 @@ fn build_ruleset(cell_uid: u32) -> String {
          \t\tmeta skuid != {uid} accept\n\
          \t\tip daddr 127.0.0.0/8 drop\n\
          \t\tip6 daddr ::1 drop\n\
+         \t\tmeta nfproto ipv6 counter drop\n\
          \t\ttcp dport 443 counter accept\n\
          \t\tudp dport 53 counter accept\n\
          \t\ttcp dport 53 counter accept\n\

@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use k2_core::log_debug;
 use k2_core::session::SessionId;
-use k2_core::terminal::sandbox::OverlaySpec;
+use k2_core::terminal::sandbox::WorkspaceMountSpec;
 use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession};
 
 use crate::awareness_ws::HandlerResult;
@@ -146,15 +146,15 @@ pub struct SpawnRequest {
     /// crash/OOM/kill-9, so the counter can never leak).
     #[serde(skip)]
     pub principal_key: Option<String>,
-    /// Sandbox v2 (PRD §B) — the WORKSPACE-SCOPED overlay mount spec produced by
-    /// the policy-resolver ([`crate::v1_sandboxes::policy::resolve_workspace_session`]).
+    /// Sandbox v2 — the WORKSPACE-SCOPED **MIRROR** mount spec produced by the
+    /// policy-resolver ([`crate::v1_sandboxes::policy::resolve_workspace_session`]).
     /// `#[serde(skip)]` so it NEVER arrives off the wire (a caller can never
     /// hand the daemon arbitrary host mount paths). `None` for EVERY v2/cockpit
     /// + ephemeral `/v1/sandboxes` caller → default-OFF parity. When `Some`, the
-    /// spawn door chowns the persistent upper/work dirs to the per-session cell
-    /// uid (P4-H6) and threads the spec into [`DaemonPtyConfig`] → the worker.
+    /// spawn door chowns the RW sandbox-home + `/work` dirs to the per-session
+    /// cell uid (P4-H6) and threads the spec into [`DaemonPtyConfig`] → the worker.
     #[serde(skip)]
-    pub overlay: Option<OverlaySpec>,
+    pub overlay: Option<WorkspaceMountSpec>,
     /// Sandbox v2 — a HOST-DECIDED session id the spawn MUST use instead of
     /// minting a fresh one. `#[serde(skip)]` (never off the wire). This is what
     /// makes the returned/addressable `sessionId` EQUAL the key of the persistent
@@ -197,6 +197,52 @@ fn chown_path_to_uid(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// SLICE 4 (resume/fork): a RECURSIVE `chown` of an EXISTING per-session layer to
+/// the new cell uid, so files written under a PRIOR session's uid (the restored
+/// `<id>.jsonl`, memory, /work) become readable+writable by this respawn's cell.
+/// Shallow `chown_path_to_uid` only re-owns the top inode; the tree walk re-owns
+/// every entry. Does not follow symlinked dirs (the layer is our own files).
+/// Pass 1: reclaim a (possibly foreign-owned 0700) tree to the DAEMON, TOP-DOWN.
+/// The daemon has CAP_CHOWN (chown needs no read) but NOT DAC_READ, so it must
+/// chown the dir to itself FIRST, THEN it can read_dir + recurse.
+fn chown_tree_reclaim_to_self(path: &std::path::Path) {
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::ffi::OsStrExt;
+        if let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) {
+            libc::chown(c.as_ptr(), libc::geteuid(), libc::getegid());
+        }
+    }
+    if path.is_dir() && !path.is_symlink() {
+        if let Ok(rd) = std::fs::read_dir(path) {
+            for e in rd.flatten() {
+                chown_tree_reclaim_to_self(&e.path());
+            }
+        }
+    }
+}
+
+/// Pass 2: assign a now-daemon-owned tree to the cell uid, BOTTOM-UP (recurse
+/// while we still own+read the dir, chown the dir itself last).
+fn chown_tree_assign(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
+    if path.is_dir() && !path.is_symlink() {
+        for entry in std::fs::read_dir(path)? {
+            chown_tree_assign(&entry?.path(), uid)?;
+        }
+    }
+    chown_path_to_uid(path, uid)
+}
+
+/// Recursively re-own an EXISTING per-session layer to the cell uid on resume/
+/// fork. TWO passes because the daemon can neither read nor keep-readable a
+/// foreign-owned 0700 tree: (1) reclaim to the daemon (top-down) so it becomes
+/// readable, (2) assign to the cell uid (bottom-up). Fresh daemon-owned dirs
+/// pass through cheaply.
+fn chown_tree_to_uid(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
+    chown_tree_reclaim_to_self(path);
+    chown_tree_assign(path, uid)
 }
 
 /// Whether THIS daemon can deliver a real microVM-isolated cell: a Linux build
@@ -618,36 +664,41 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             }
         }
 
-        // (b2) Sandbox v2 (PRD §B/§F) — hand the PERSISTENT overlay layer to THIS
-        // uid. Only the upper + work dirs are chowned (the writable per-session
-        // layer, daemon-MINTED under `~/.k2/sandbox-overlays/<ws>/<sid>/`); the
-        // RO base (`workspace_ro_base`) is DELIBERATELY NOT chowned — it stays
-        // owned by the workspace and is mounted read-only, so the cell can never
-        // corrupt the source. The chown makes the layer 0700-owned by the cell
-        // uid → cross-tenant unreadable (P4-H6). Fail-closed: any chown failure
-        // frees the uid + refuses (never boot a cell that can't own its layer).
+        // (b2) Sandbox v2 (MIRROR model) — hand the two RW mirror dirs to THIS
+        // uid: the per-WORKSPACE sandbox home (`~/.k2/sandbox-homes/<ws>/.claude`)
+        // and the per-SESSION `/work` scratch
+        // (`~/.k2/sandbox-overlays/<ws>/<sid>/work-scratch`). The RO workspace
+        // MIRROR (`workspace_ro`) and the RO canonical memory (`canonical_memory_ro`)
+        // are DELIBERATELY NOT chowned — they stay owned by the workspace / the
+        // daemon and are remounted read-only, so the cell can never corrupt them.
+        // The chown makes the RW dirs 0700-owned by the cell uid → cross-tenant
+        // unreadable (P4-H6); the daemon audits/lists them host-side via its own
+        // privilege (see the fs-mirror PRD §5/§ownership). Fail-closed: any chown
+        // failure frees the uid + refuses.
         //
-        // RESUME CONSISTENCY (SLICE 4): the pool uid may DIFFER on a later
-        // resume, but ownership must stay consistent with the files the previous
-        // cell wrote. The chosen model is (b) RE-CHOWN the whole layer to the
-        // fresh uid on every (re)spawn. Here (fresh session) the dirs are newly
-        // created + EMPTY, so a shallow chown of the two dir inodes is correct
-        // and sufficient. SLICE 4 (resume, non-empty layer) must upgrade this to
-        // a RECURSIVE chown of the layer so pre-existing files re-own to the new
-        // uid — otherwise overlayfs/reads break across a uid change.
+        // RESUME CONSISTENCY (SLICE 4): the pool uid may DIFFER on a later resume;
+        // the model is to RE-CHOWN the RW dirs to the fresh uid on every
+        // (re)spawn. Here (fresh session) the dirs are newly created — a shallow
+        // chown of the dir inodes is sufficient. SLICE 4 (resume, non-empty
+        // sandbox home / work) must upgrade this to a RECURSIVE chown so
+        // pre-existing files re-own to the new uid. NOTE (flagged for on-box
+        // review): the per-workspace sandbox home is SHARED across that
+        // workspace's sessions; a single-uid chown makes it effectively
+        // single-writer-at-a-time — concurrent same-workspace sessions need the
+        // shared-group ownership model (deferred; see the report).
         if let Some(ov) = cfg.overlay.as_ref() {
-            for dir in [&ov.overlay_upper, &ov.overlay_work] {
-                if let Err(e) = chown_path_to_uid(dir, cell_uid) {
+            for dir in [&ov.sandbox_home_rw, &ov.work_rw] {
+                if let Err(e) = chown_tree_to_uid(dir, cell_uid) {
                     crate::cell_uid_pool::free(cell_uid);
                     log_debug!(
-                        "[sandbox] P4-H6 chown persistent overlay dir {} to cell uid {cell_uid} FAILED for session={}: {e}; REFUSING (fail-closed)",
+                        "[sandbox] P4-H6 chown RW mirror dir {} to cell uid {cell_uid} FAILED for session={}: {e}; REFUSING (fail-closed)",
                         dir.display(),
                         session_id_for_response
                     );
                     return HandlerResult {
                         status: "500 Internal Server Error",
                         body: format!(
-                            r#"{{"error":"could not hand persistent overlay layer to sandbox cell uid: {}"}}"#,
+                            r#"{{"error":"could not hand RW mirror dir to sandbox cell uid: {}"}}"#,
                             e.to_string().replace('"', "'")
                         ),
                     };

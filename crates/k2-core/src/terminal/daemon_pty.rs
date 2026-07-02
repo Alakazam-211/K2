@@ -49,7 +49,7 @@ use crate::log_debug;
 use crate::session::SessionId;
 use crate::terminal::login_path;
 use crate::terminal::sandbox::{
-    OverlaySpec, SandboxSpec, ShellSpec, SpawnRequest, SpawnedChild,
+    SandboxSpec, ShellSpec, SpawnRequest, SpawnedChild, WorkspaceMountSpec,
 };
 
 /// Scrollback depth (in rows) retained by the daemon-side Term.
@@ -190,14 +190,14 @@ pub struct DaemonPtyConfig {
     /// stamps it here; [`crate::terminal::sandbox::build_worker_invocation`]
     /// emits it as `--cell-uid <n>` so the worker drops to THIS uid.
     pub cell_uid: Option<u32>,
-    /// Sandbox v2 (PRD §B) — the WORKSPACE-SCOPED overlay mount spec, threaded
-    /// from the daemon's policy-resolver to `build_worker_invocation`. `Some`
-    /// ONLY for a workspace-scoped API session; `None` for every other spawn
-    /// (default-OFF parity). **Plumbed in SLICE 2, consumed by the worker in
-    /// SLICE 3.** When `Some`, [`DaemonPtySession::spawn`] sets the terminal
-    /// [`SpawnRequest::workspace_root`] to `None` (the overlay supersedes the
-    /// single-dir RW mount) and hands this spec through instead.
-    pub overlay: Option<OverlaySpec>,
+    /// Sandbox v2 — the WORKSPACE-SCOPED **MIRROR** mount spec, threaded from the
+    /// daemon's policy-resolver to `build_worker_invocation`. `Some` ONLY for a
+    /// workspace-scoped API session; `None` for every other spawn (default-OFF
+    /// parity). When `Some`, [`DaemonPtySession::spawn`] sets the terminal
+    /// [`SpawnRequest::workspace_root`] to `None` (the mirror spec supersedes the
+    /// single-dir RW mount) and hands this spec through instead. (Field name kept
+    /// as `overlay` for plumbing stability.)
+    pub overlay: Option<WorkspaceMountSpec>,
 }
 
 impl Default for DaemonPtyConfig {
@@ -269,16 +269,6 @@ pub struct DaemonPtySession {
     /// arg contents without keeping a parallel map. Empty when the
     /// shell was spawned with the user's default login args only.
     pub args: Vec<String>,
-
-    /// Sandbox v2 (PRD §D auditability) — for a workspace-scoped OVERLAY cell,
-    /// the HOST canonical workspace path (e.g. `/home/k2/ai`), distinct from the
-    /// guest `cwd` (`/workspace`). `v2_session_map` emits THIS as the
-    /// `SessionAdded.workspace_path` so the cell surfaces as an orange tab
-    /// INSIDE its workspace (the per-workspace subscription matches on the host
-    /// path, which `/workspace` never would). `None` for every non-overlay spawn
-    /// — those keep emitting `cwd`, so behavior is byte-identical off the overlay
-    /// path.
-    pub workspace_host_path: Option<PathBuf>,
 
     /// The daemon-side alacritty Term. Locked briefly by the WS
     /// handler to snapshot the grid or by `resize()` to reshape it.
@@ -570,17 +560,9 @@ impl DaemonPtySession {
         let (label_tx, _label_rx_drop) = broadcast::channel::<String>(16);
         drop(_label_rx_drop);
 
-        // Sandbox v2 (PRD §D) — capture the host workspace path for the tab
-        // association BEFORE `cfg` is partially moved into `Self` below. `None`
-        // for every non-overlay spawn.
-        let workspace_host_path = cfg
-            .overlay
-            .as_ref()
-            .map(|o| o.workspace_ro_base.clone());
         Ok(Arc::new(Self {
             session_id: cfg.session_id,
             cwd: cfg.cwd,
-            workspace_host_path,
             program: cfg.program,
             sandbox: cfg.sandbox,
             pid: child_pid,

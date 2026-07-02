@@ -1030,6 +1030,121 @@ impl WorkspaceState {
     }
 }
 
+// ── Sandbox Sessions (fs-mirror PRD §5 — host bridge index) ────────────
+//
+// One row per workspace-scoped MIRROR sandbox session (migration 0061).
+// The host bridge between the real host paths and the cell's relative
+// resolution: the LIST reads it (audit), the RESUME path reads it (which
+// sandbox home + `/work` layer to re-mount). Distinct from the canonical
+// `workspace_sessions` (off-limits, 1-per-workspace).
+
+/// A workspace-scoped sandbox session's host-side index row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxSession {
+    /// The forced `SessionId` == `K2_SESSION_ID` == the `.jsonl` key.
+    pub session_id: String,
+    /// The URL slug the session was addressed under (e.g. `ai`).
+    pub workspace_slug: String,
+    /// The REAL workspace path == the in-cell cwd (mirror).
+    pub workspace_path: String,
+    /// Host: `~/.k2/sandbox-homes/<ws>/.claude` (the per-ws sandbox home).
+    pub sandbox_home_path: String,
+    /// `<sandbox_home_path>/projects/<slug>/<session_id>.jsonl`.
+    pub jsonl_path: String,
+    /// Host: `~/.k2/sandbox-overlays/<ws>/<sid>/work-scratch` (the `/work` layer).
+    pub layer_path: String,
+    /// The claude project slug = `workspace_path` with `/`→`-`.
+    pub slug: String,
+    pub created_at: i64,
+    pub last_active_at: i64,
+}
+
+impl SandboxSession {
+    /// Upsert the row for a sandbox session (keyed by `session_id`). Called after
+    /// a successful workspace-scoped spawn. On conflict (a resume) it refreshes
+    /// `last_active_at` + the paths (idempotent), never duplicating the session.
+    pub fn upsert(conn: &Connection, row: &SandboxSession) -> Result<()> {
+        conn.execute(
+            "INSERT INTO sandbox_sessions \
+                (session_id, workspace_slug, workspace_path, sandbox_home_path, \
+                 jsonl_path, layer_path, slug, created_at, last_active_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), unixepoch()) \
+             ON CONFLICT(session_id) DO UPDATE SET \
+                workspace_slug = excluded.workspace_slug, \
+                workspace_path = excluded.workspace_path, \
+                sandbox_home_path = excluded.sandbox_home_path, \
+                jsonl_path = excluded.jsonl_path, \
+                layer_path = excluded.layer_path, \
+                slug = excluded.slug, \
+                last_active_at = unixepoch()",
+            params![
+                row.session_id,
+                row.workspace_slug,
+                row.workspace_path,
+                row.sandbox_home_path,
+                row.jsonl_path,
+                row.layer_path,
+                row.slug,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// List a workspace's sandbox sessions, newest first (per-workspace audit).
+    pub fn list_for_workspace(
+        conn: &Connection,
+        workspace_slug: &str,
+    ) -> Result<Vec<SandboxSession>> {
+        let mut stmt = conn.prepare(
+            "SELECT session_id, workspace_slug, workspace_path, sandbox_home_path, \
+                    jsonl_path, layer_path, slug, created_at, last_active_at \
+             FROM sandbox_sessions WHERE workspace_slug = ?1 \
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![workspace_slug], |r| {
+            Ok(SandboxSession {
+                session_id: r.get(0)?,
+                workspace_slug: r.get(1)?,
+                workspace_path: r.get(2)?,
+                sandbox_home_path: r.get(3)?,
+                jsonl_path: r.get(4)?,
+                slug: r.get(6)?,
+                layer_path: r.get(5)?,
+                created_at: r.get(7)?,
+                last_active_at: r.get(8)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Look up a single sandbox session by id (the resume re-mount lookup).
+    pub fn get(conn: &Connection, session_id: &str) -> Result<Option<SandboxSession>> {
+        let mut stmt = conn.prepare(
+            "SELECT session_id, workspace_slug, workspace_path, sandbox_home_path, \
+                    jsonl_path, layer_path, slug, created_at, last_active_at \
+             FROM sandbox_sessions WHERE session_id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![session_id], |r| {
+            Ok(SandboxSession {
+                session_id: r.get(0)?,
+                workspace_slug: r.get(1)?,
+                workspace_path: r.get(2)?,
+                sandbox_home_path: r.get(3)?,
+                jsonl_path: r.get(4)?,
+                layer_path: r.get(5)?,
+                slug: r.get(6)?,
+                created_at: r.get(7)?,
+                last_active_at: r.get(8)?,
+            })
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+}
+
 // ── Workspace Sessions ─────────────────────────────────────────────────
 //
 // One row per `project_id`. The product invariant ("a workspace IS its

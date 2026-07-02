@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{
     EventListener, Notify, OnResize, WindowSize,
@@ -220,6 +221,78 @@ impl Default for DaemonPtyConfig {
     }
 }
 
+/// Trailing-debounce window for [`DaemonPtySession::request_resize`].
+/// Sized to swallow a mobile keyboard show/hide or two clients racing
+/// claims (which fire well inside 120ms of each other) without adding
+/// perceptible latency to a deliberate window resize.
+pub const RESIZE_DEBOUNCE_MS: u64 = 120;
+
+/// Last-declared viewport of one live grid-WS subscriber (orca study
+/// `.k2/notes/orca-pty-mobile-study.md`, "Relevance to K2" #1). The WS
+/// handler upserts this from `SetActive` claims carrying dims and from
+/// `Resize` frames (even ones dropped for being non-active — the
+/// subscriber still declared its viewport); the record is what lets
+/// the daemon restore a sensible PTY size when the active viewer
+/// disconnects instead of leaving the grid stuck at, say, phone dims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubscriberViewport {
+    pub cols: u16,
+    pub rows: u16,
+    /// Monotonic recency stamp from the session's viewport clock. A
+    /// plain counter rather than wall time so the successor election
+    /// is deterministic and unit-testable.
+    pub last_seen: u64,
+}
+
+/// State for the resize debouncer (`request_resize`). Guarded by one
+/// Mutex; the lock is held across the underlying `resize()` call so a
+/// leading apply and a trailing flush can never land out of order.
+struct ResizeGate {
+    /// Newest coalesced target awaiting the trailing flush. Only the
+    /// final geometry of a burst is ever applied from here.
+    pending: Option<(u16, u16)>,
+    /// When the pending target may be applied. Extended by every
+    /// request that lands inside the window (trailing debounce).
+    deadline: Instant,
+    /// A flusher thread is currently parked waiting on `deadline`.
+    flusher_live: bool,
+    /// Instant of the last resize actually applied. `None` until the
+    /// first request — the initial fit of a fresh session must stay
+    /// instant, never debounced.
+    last_applied: Option<Instant>,
+}
+
+/// Successor election on active-viewer detach (orca study takeaway #1:
+/// re-elect the most-recent surviving actor and re-fit to *their*
+/// viewport). Pure so the policy is unit-testable without a PTY.
+///
+/// Returns `Some((subscriber_id, viewport))` — the survivor to promote
+/// and the dims the PTY should restore to — when the departing
+/// connection held the active claim AND a surviving subscriber with
+/// known (nonzero) dims exists. Ties on recency break toward the
+/// higher subscriber id (later-connected). `None` means "no takeover":
+/// either the departing viewer wasn't active (nothing to restore) or
+/// nobody eligible survives (leave dims as-is; a reattaching viewer
+/// claims + resizes anyway).
+fn elect_on_detach(
+    viewports: &HashMap<u64, SubscriberViewport>,
+    departing: u64,
+    current_active: u64,
+) -> Option<(u64, SubscriberViewport)> {
+    if current_active != departing {
+        return None;
+    }
+    viewports
+        .iter()
+        // Defensive: skip the departing id even if the caller hasn't
+        // removed it yet, and skip records with unknown dims (a claim
+        // that never carried cols/rows) — promoting one would resize
+        // the PTY to 0x0-clamped nonsense.
+        .filter(|(id, vp)| **id != departing && vp.cols > 0 && vp.rows > 0)
+        .max_by_key(|(id, vp)| (vp.last_seen, **id))
+        .map(|(id, vp)| (*id, *vp))
+}
+
 /// A daemon-hosted terminal session.
 ///
 /// Holds the PTY, the alacritty Term, and the PTY writer handle.
@@ -331,6 +404,26 @@ pub struct DaemonPtySession {
     /// matching pre-0.39.43 behavior.
     pub active_cols: std::sync::atomic::AtomicU16,
     pub active_rows: std::sync::atomic::AtomicU16,
+
+    /// Per-subscriber viewport registry (orca study, "Relevance to
+    /// K2" #1/#8). Keyed by the WS handler's `subscriber_id`; the
+    /// handler upserts via [`Self::note_viewport`] and removes via
+    /// [`Self::detach_subscriber`] on ANY disconnect. All the
+    /// size-arbitration POLICY — who inherits the PTY size when the
+    /// active viewer leaves — lives here next to the
+    /// `active_subscriber` atomics, not scattered through WS handlers.
+    viewports: Mutex<HashMap<u64, SubscriberViewport>>,
+    /// Monotonic recency clock for `viewports` stamps.
+    viewport_clock: std::sync::atomic::AtomicU64,
+    /// Debounce state for [`Self::request_resize`] (orca study
+    /// takeaway #3 — coalesce resize bursts instead of thrashing the
+    /// PTY through rapid resize+reflow cycles).
+    resize_gate: Mutex<ResizeGate>,
+    /// Count of resizes actually APPLIED through the debounced front
+    /// door. Diagnostic, and the test surface for the same-dims skip
+    /// (Kessel postmortem — see `request_resize`): a skipped no-op
+    /// must NOT bump this.
+    resizes_applied: std::sync::atomic::AtomicU64,
 
     /// Authoritative human-friendly label (Phase B / PRD
     /// `session-label-daemon-owned.md`). The daemon owns this
@@ -575,6 +668,15 @@ impl DaemonPtySession {
             active_subscriber: std::sync::atomic::AtomicU64::new(0),
             active_cols: std::sync::atomic::AtomicU16::new(0),
             active_rows: std::sync::atomic::AtomicU16::new(0),
+            viewports: Mutex::new(HashMap::new()),
+            viewport_clock: std::sync::atomic::AtomicU64::new(0),
+            resize_gate: Mutex::new(ResizeGate {
+                pending: None,
+                deadline: Instant::now(),
+                flusher_live: false,
+                last_applied: None,
+            }),
+            resizes_applied: std::sync::atomic::AtomicU64::new(0),
             label: std::sync::RwLock::new(cfg.label),
             label_source: std::sync::RwLock::new(cfg.label_source),
             label_tx,
@@ -738,6 +840,207 @@ impl DaemonPtySession {
                 rows: rows as usize,
             });
         }
+    }
+
+    /// Record (or refresh) a subscriber's last-declared viewport +
+    /// recency. Called by the grid-WS handler on every `SetActive`
+    /// claim that carries dims and on every `Resize` frame — including
+    /// ones dropped for being non-active, since the subscriber still
+    /// declared what size IT wants; that declaration is exactly what
+    /// the detach election restores to.
+    pub fn note_viewport(&self, subscriber_id: u64, cols: u16, rows: u16) {
+        let stamp = self
+            .viewport_clock
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        self.viewports.lock().insert(
+            subscriber_id,
+            SubscriberViewport {
+                cols,
+                rows,
+                last_seen: stamp,
+            },
+        );
+    }
+
+    /// Grid-WS disconnect hook (orca study takeaway #1 — restore the
+    /// PTY size when the active viewer detaches). Removes the
+    /// departing subscriber's viewport record on ANY disconnect; when
+    /// the departing connection held the active claim, promotes the
+    /// most-recently-active surviving subscriber with known dims and
+    /// resizes the PTY to THEIRS (through the debouncer, so a
+    /// disconnect burst still coalesces). Without this, a session a
+    /// phone or second desktop briefly commandeered stays stuck at
+    /// that viewer's dimensions forever.
+    ///
+    /// No eligible survivor ⇒ the claim clears to 0 ("no claim" —
+    /// first resize from a reattaching viewer wins, the pre-existing
+    /// disconnect semantics) and the dims are left as-is.
+    pub fn detach_subscriber(session: &Arc<Self>, subscriber_id: u64) {
+        use std::sync::atomic::Ordering;
+
+        let successor = {
+            let mut reg = session.viewports.lock();
+            reg.remove(&subscriber_id);
+            let current = session.active_subscriber.load(Ordering::Relaxed);
+            elect_on_detach(&reg, subscriber_id, current)
+        };
+        match successor {
+            Some((id, vp)) => {
+                // CAS from the departing id so a viewer that claimed
+                // between the election and this store isn't clobbered
+                // — their claim already resized the PTY; honor it.
+                if session
+                    .active_subscriber
+                    .compare_exchange(
+                        subscriber_id,
+                        id,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    session.active_cols.store(vp.cols, Ordering::Relaxed);
+                    session.active_rows.store(vp.rows, Ordering::Relaxed);
+                    log_debug!(
+                        "[v2-perf] side=daemon stage=active_detach_promote \
+                         session={} departed={} promoted={} cols={} rows={} \
+                         (restored PTY to survivor dims)",
+                        session.session_id,
+                        subscriber_id,
+                        id,
+                        vp.cols,
+                        vp.rows,
+                    );
+                    Self::request_resize(session, vp.cols, vp.rows);
+                }
+            }
+            None => {
+                // Departing viewer wasn't active, or nobody eligible
+                // survives. Release the claim if we held it — CAS so a
+                // concurrent takeover isn't accidentally cleared
+                // (identical to the pre-election disconnect behavior).
+                let _ = session.active_subscriber.compare_exchange(
+                    subscriber_id,
+                    0,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
+            }
+        }
+    }
+
+    /// Debounced/coalescing front door for size arbitration (orca
+    /// study takeaway #3). Racing claims from two clients or a phone
+    /// keyboard show/hide used to thrash the PTY through back-to-back
+    /// resize+reflow cycles. Requests landing inside the
+    /// [`RESIZE_DEBOUNCE_MS`] window after an applied resize coalesce
+    /// into ONE trailing apply of the newest geometry (the final
+    /// target is never lost — it sits in `pending` until the flusher
+    /// fires). An isolated request — including the very first fit of a
+    /// fresh session — applies instantly. A target that matches the
+    /// live PTY dims is skipped OUTRIGHT (Kessel postmortem — see the
+    /// comment in the body).
+    ///
+    /// The gate lock is held across the underlying [`Self::resize`],
+    /// so a leading apply and a trailing flush can never land out of
+    /// order, and `resize()`'s discard-viewport-before-reflow behavior
+    /// applies to the final geometry unchanged. The flusher is a plain
+    /// std thread (not a tokio task) so this is callable from any
+    /// context — WS loop, disconnect teardown, sync tests — and only
+    /// exists for ~120ms per burst.
+    pub fn request_resize(session: &Arc<Self>, cols: u16, rows: u16) {
+        let cols = cols.max(1);
+        let rows = rows.max(1);
+        let mut gate = session.resize_gate.lock();
+
+        // Kessel postmortem — a NO-OP RESIZE IS NOT FREE. Applying a
+        // resize whose cols/rows match the live PTY size still cleared
+        // the grid + set the winsize, and TUIs correctly do NOT
+        // repaint on an unchanged winsize → blank screen until the
+        // next output. So when the newest target already matches the
+        // current dims — notably when a departing active viewer and
+        // the promoted survivor shared a geometry — apply NOTHING:
+        // drop any older pending target (this request supersedes it)
+        // and leave the gate untouched (no window opens, no
+        // `last_applied` stamp, no SIGWINCH).
+        let current = Self::current_dims(session);
+        if (cols, rows) == current {
+            gate.pending = None;
+            return;
+        }
+
+        let now = Instant::now();
+        let window = Duration::from_millis(RESIZE_DEBOUNCE_MS);
+        let in_window = gate.flusher_live
+            || gate
+                .last_applied
+                .map_or(false, |t| now.duration_since(t) < window);
+        if !in_window {
+            gate.last_applied = Some(now);
+            session
+                .resizes_applied
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            session.resize(cols, rows);
+            return;
+        }
+        gate.pending = Some((cols, rows));
+        gate.deadline = now + window;
+        if !gate.flusher_live {
+            gate.flusher_live = true;
+            // Weak so a parked flusher can't extend a torn-down
+            // session's life; if the session dies mid-burst there's
+            // nothing left worth resizing.
+            let weak = Arc::downgrade(session);
+            std::thread::spawn(move || loop {
+                let sleep_for = {
+                    let Some(s) = weak.upgrade() else { return };
+                    let mut gate = s.resize_gate.lock();
+                    let now = Instant::now();
+                    if now < gate.deadline {
+                        // A newer request extended the deadline while
+                        // we slept — park again until it passes.
+                        gate.deadline - now
+                    } else {
+                        gate.flusher_live = false;
+                        if let Some((c, r)) = gate.pending.take() {
+                            // Same-dims re-check: a direct `resize()`
+                            // caller (HTTP route) may have moved the
+                            // PTY to the pending target while we were
+                            // parked — a no-op apply here would blank
+                            // the TUI (see the skip above).
+                            if (c, r) != Self::current_dims(&s) {
+                                gate.last_applied = Some(now);
+                                s.resizes_applied.fetch_add(
+                                    1,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                                s.resize(c, r);
+                            }
+                        }
+                        return;
+                    }
+                    // `s` (the upgraded Arc) drops here, before the
+                    // sleep below — the flusher never holds the
+                    // session across its park.
+                };
+                std::thread::sleep(sleep_for);
+            });
+        }
+    }
+
+    /// Live PTY/Term dims, for the same-dims resize skip. Briefly
+    /// locks the Term (same FairMutex the snapshot path uses).
+    fn current_dims(session: &Self) -> (u16, u16) {
+        let term = session.term.lock();
+        (term.columns() as u16, term.screen_lines() as u16)
+    }
+
+    /// How many resizes the debounced front door has actually applied.
+    /// Skipped no-ops and coalesced-away intermediates don't count.
+    pub fn resizes_applied(&self) -> u64 {
+        self.resizes_applied
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Handle to the daemon-side alacritty Term. Locked briefly
@@ -1219,6 +1522,248 @@ mod tests {
             "no zombie may remain: waitpid(pid={pid}) returned {wr} \
              (>0 means an unreaped zombie child is still present)"
         );
+    }
+
+    // Resize-arbitration polish (orca study takeaways #1/#3/#8) —
+    // the detach election is a pure function so these cases pin the
+    // policy without a PTY: who becomes active when the active viewer
+    // disconnects, and what dims the PTY restores to.
+
+    fn vp(cols: u16, rows: u16, last_seen: u64) -> SubscriberViewport {
+        SubscriberViewport {
+            cols,
+            rows,
+            last_seen,
+        }
+    }
+
+    #[test]
+    fn elect_promotes_single_survivor() {
+        let mut reg = HashMap::new();
+        reg.insert(7, vp(100, 30, 1));
+        // Active sub 9 departs; 7 is the only survivor with dims.
+        let winner = elect_on_detach(&reg, 9, 9);
+        assert_eq!(winner, Some((7, vp(100, 30, 1))));
+    }
+
+    #[test]
+    fn elect_prefers_most_recent_of_many() {
+        let mut reg = HashMap::new();
+        reg.insert(3, vp(200, 50, 4));
+        reg.insert(7, vp(100, 30, 9));
+        reg.insert(8, vp(40, 10, 2));
+        // 7 acted most recently (stamp 9) — it wins regardless of id
+        // order or dims.
+        let winner = elect_on_detach(&reg, 5, 5);
+        assert_eq!(winner, Some((7, vp(100, 30, 9))));
+    }
+
+    #[test]
+    fn elect_no_survivors_means_no_takeover() {
+        let reg = HashMap::new();
+        assert_eq!(elect_on_detach(&reg, 9, 9), None);
+    }
+
+    #[test]
+    fn elect_noop_when_departing_was_not_active() {
+        let mut reg = HashMap::new();
+        reg.insert(7, vp(100, 30, 1));
+        // Sub 3 departs while 9 holds the claim — nothing to restore;
+        // the active viewer is untouched.
+        assert_eq!(elect_on_detach(&reg, 3, 9), None);
+    }
+
+    #[test]
+    fn elect_skips_departing_and_dimless_records() {
+        let mut reg = HashMap::new();
+        // Departing entry still present (caller hasn't removed it yet)
+        // and a survivor that never declared dims — both ineligible.
+        reg.insert(9, vp(40, 10, 8));
+        reg.insert(5, vp(0, 0, 7));
+        reg.insert(7, vp(100, 30, 2));
+        let winner = elect_on_detach(&reg, 9, 9);
+        assert_eq!(winner, Some((7, vp(100, 30, 2))));
+    }
+
+    #[cfg(unix)]
+    fn spawn_cat_session() -> Arc<DaemonPtySession> {
+        let cfg = DaemonPtyConfig {
+            session_id: SessionId::new(),
+            cwd: Some(PathBuf::from("/tmp")),
+            program: Some("cat".to_string()),
+            ..Default::default()
+        };
+        DaemonPtySession::spawn(cfg).expect("spawn cat")
+    }
+
+    #[cfg(unix)]
+    fn term_dims(s: &DaemonPtySession) -> (u16, u16) {
+        let tm = s.term();
+        let t = tm.lock();
+        (t.columns() as u16, t.screen_lines() as u16)
+    }
+
+    /// Poll the Term until it reaches `want` or the deadline passes.
+    /// Fails LOUDLY with the last observed dims — never a silent skip.
+    #[cfg(unix)]
+    fn assert_dims_settle(s: &DaemonPtySession, want: (u16, u16), what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut got = term_dims(s);
+        while got != want && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+            got = term_dims(s);
+        }
+        assert_eq!(
+            got, want,
+            "{what}: PTY dims never settled to {want:?} (last saw {got:?})"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_request_resize_applies_instantly() {
+        let s = spawn_cat_session();
+        // Initial fit of a fresh session must never be debounced.
+        DaemonPtySession::request_resize(&s, 100, 30);
+        assert_eq!(
+            term_dims(&s),
+            (100, 30),
+            "first resize must apply synchronously"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resize_burst_coalesces_to_final_target() {
+        let s = spawn_cat_session();
+        // Leading edge: the first of the burst applies instantly...
+        DaemonPtySession::request_resize(&s, 100, 30);
+        // ...then two more land inside the debounce window. The
+        // intermediate 90x25 must never be applied; only the final
+        // 40x10 flushes.
+        DaemonPtySession::request_resize(&s, 90, 25);
+        DaemonPtySession::request_resize(&s, 40, 10);
+        assert_eq!(
+            term_dims(&s),
+            (100, 30),
+            "burst members inside the window must be deferred, not applied"
+        );
+        assert_dims_settle(&s, (40, 10), "trailing flush");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn same_dims_request_is_skipped_entirely() {
+        let s = spawn_cat_session();
+        // Kessel postmortem: target == live dims ⇒ nothing may be
+        // applied — no grid clear, no winsize set, no debounce window
+        // opened. (TUIs don't repaint on an unchanged winsize, so a
+        // no-op apply blanks the screen until the next output.)
+        DaemonPtySession::request_resize(&s, 80, 24);
+        assert_eq!(s.resizes_applied(), 0, "same-dims request must be skipped");
+        assert_eq!(term_dims(&s), (80, 24));
+        // Because the skip opened no window, the next REAL resize
+        // still applies instantly.
+        DaemonPtySession::request_resize(&s, 100, 30);
+        assert_eq!(s.resizes_applied(), 1);
+        assert_eq!(
+            term_dims(&s),
+            (100, 30),
+            "real resize after a skipped no-op must be instant"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detach_promotion_with_same_dims_skips_resize() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_cat_session();
+        // Survivor 7 and active viewer 9 declared the SAME viewport —
+        // the common case of two same-sized desktop windows.
+        s.note_viewport(7, 40, 10);
+        s.note_viewport(9, 40, 10);
+        s.active_subscriber.store(9, Relaxed);
+        DaemonPtySession::request_resize(&s, 40, 10);
+        assert_dims_settle(&s, (40, 10), "active claim");
+        assert_eq!(s.resizes_applied(), 1);
+
+        // 9 departs; 7 is promoted — but its dims already match the
+        // live PTY size, so NO resize may be applied.
+        DaemonPtySession::detach_subscriber(&s, 9);
+        assert_eq!(s.active_subscriber.load(Relaxed), 7, "survivor promoted");
+        // Outwait the debounce window: not even a deferred flush may
+        // fire for the same-dims target.
+        std::thread::sleep(Duration::from_millis(RESIZE_DEBOUNCE_MS * 2));
+        assert_eq!(
+            s.resizes_applied(),
+            1,
+            "same-dims promotion must not apply a resize"
+        );
+        assert_eq!(term_dims(&s), (40, 10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detach_of_active_viewer_restores_survivor_dims() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_cat_session();
+        // Sub 7 (a desktop at 100x30) declared first; sub 9 (a phone
+        // at 40x10) claimed active and shrank the PTY.
+        s.note_viewport(7, 100, 30);
+        s.note_viewport(9, 40, 10);
+        s.active_subscriber.store(9, Relaxed);
+        s.active_cols.store(40, Relaxed);
+        s.active_rows.store(10, Relaxed);
+        DaemonPtySession::request_resize(&s, 40, 10);
+        assert_dims_settle(&s, (40, 10), "phone claim");
+
+        // The phone disconnects: sub 7 is promoted and the PTY
+        // restores to ITS dims.
+        DaemonPtySession::detach_subscriber(&s, 9);
+        assert_eq!(s.active_subscriber.load(Relaxed), 7, "survivor promoted");
+        assert_eq!(s.active_cols.load(Relaxed), 100);
+        assert_eq!(s.active_rows.load(Relaxed), 30);
+        assert_dims_settle(&s, (100, 30), "restore on detach");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detach_of_non_active_viewer_changes_nothing() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_cat_session();
+        s.note_viewport(7, 100, 30);
+        s.note_viewport(9, 40, 10);
+        s.active_subscriber.store(9, Relaxed);
+        DaemonPtySession::request_resize(&s, 40, 10);
+        assert_dims_settle(&s, (40, 10), "active claim");
+
+        // A passive watcher leaving must not perturb the active claim
+        // or the PTY size.
+        DaemonPtySession::detach_subscriber(&s, 7);
+        assert_eq!(s.active_subscriber.load(Relaxed), 9, "claim untouched");
+        assert_eq!(term_dims(&s), (40, 10), "size untouched");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detach_of_last_viewer_clears_claim_and_keeps_dims() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_cat_session();
+        s.note_viewport(9, 40, 10);
+        s.active_subscriber.store(9, Relaxed);
+        DaemonPtySession::request_resize(&s, 40, 10);
+        assert_dims_settle(&s, (40, 10), "sole viewer claim");
+
+        // Last viewer out: no survivor to restore to — claim clears to
+        // "none" and dims stay put (a reattaching viewer will claim +
+        // resize anyway).
+        DaemonPtySession::detach_subscriber(&s, 9);
+        assert_eq!(s.active_subscriber.load(Relaxed), 0, "claim released");
+        assert_eq!(term_dims(&s), (40, 10), "dims left as-is");
     }
 
     /// `kill()` is idempotent: calling it twice must not panic, must

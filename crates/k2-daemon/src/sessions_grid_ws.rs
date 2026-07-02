@@ -212,12 +212,19 @@ fn decide_set_active(current: u64, subscriber_id: u64, active: bool) -> SetActiv
 /// Extracted from the WS loop so the store + resize behavior is
 /// unit-testable against a real `DaemonPtySession` without a socket.
 fn apply_set_active(
-    session: &DaemonPtySession,
+    session: &std::sync::Arc<DaemonPtySession>,
     subscriber_id: u64,
     active: bool,
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> SetActiveOutcome {
+    // Any frame that declares dims refreshes this subscriber's
+    // viewport record (+ recency) — even a redundant claim or a
+    // release. The registry is what the detach election restores
+    // from, so it must track the newest declared geometry.
+    if let (Some(c), Some(r)) = (cols, rows) {
+        session.note_viewport(subscriber_id, c, r);
+    }
     let prev = session
         .active_subscriber
         .load(std::sync::atomic::Ordering::Relaxed);
@@ -235,7 +242,11 @@ fn apply_set_active(
                 session
                     .active_rows
                     .store(r, std::sync::atomic::Ordering::Relaxed);
-                session.resize(c, r);
+                // Through the debouncer: racing claims from two clients
+                // (or a viewport flapping with the mobile keyboard)
+                // coalesce to the final geometry instead of thrashing
+                // the PTY through resize+reflow cycles.
+                DaemonPtySession::request_resize(session, c, r);
                 log_debug!(
                     "[v2-perf] side=daemon stage=active_claim \
                      session={} sub={} cols={} rows={} \
@@ -667,6 +678,11 @@ pub async fn serve_session_grid_connection(
                                         std::sync::atomic::Ordering::Relaxed,
                                     );
                                     if my_cols > 0 && my_rows > 0 {
+                                        session.note_viewport(
+                                            subscriber_id,
+                                            my_cols,
+                                            my_rows,
+                                        );
                                         session.active_cols.store(
                                             my_cols,
                                             std::sync::atomic::Ordering::Relaxed,
@@ -675,7 +691,9 @@ pub async fn serve_session_grid_connection(
                                             my_rows,
                                             std::sync::atomic::Ordering::Relaxed,
                                         );
-                                        session.resize(my_cols, my_rows);
+                                        DaemonPtySession::request_resize(
+                                            &session, my_cols, my_rows,
+                                        );
                                     }
                                     log_debug!(
                                         "[v2-perf] side=daemon stage=active_claim_via_input \
@@ -691,9 +709,12 @@ pub async fn serve_session_grid_connection(
                             Ok(Inbound::Resize { cols, rows }) => {
                                 // Remember our own requested dims even when the
                                 // resize is dropped below (non-active) — an
-                                // Input claim (above) snaps the PTY to these.
+                                // Input claim (above) snaps the PTY to these,
+                                // and the session-side registry feeds the
+                                // detach election (restore-on-disconnect).
                                 my_cols = cols;
                                 my_rows = rows;
+                                session.note_viewport(subscriber_id, cols, rows);
                                 // 0.37.11 — only the active subscriber
                                 // can resize. `active = 0` means "no
                                 // claim yet" — accept (first-resize-
@@ -712,7 +733,13 @@ pub async fn serve_session_grid_connection(
                                         rows,
                                         std::sync::atomic::Ordering::Relaxed,
                                     );
-                                    session.resize(cols, rows);
+                                    // Debounced: a flapping viewport (mobile
+                                    // keyboard show/hide) coalesces to its
+                                    // final geometry; the very first fit of a
+                                    // fresh session still applies instantly.
+                                    DaemonPtySession::request_resize(
+                                        &session, cols, rows,
+                                    );
                                 } else {
                                     log_debug!(
                                         "[v2-perf] side=daemon stage=resize_ignored \
@@ -788,15 +815,14 @@ pub async fn serve_session_grid_connection(
         }
     }
 
-    // 0.37.11 — release the active claim on disconnect IF we still
-    // hold it. CAS so a viewer that took over our claim before we
-    // disconnected isn't accidentally cleared.
-    let _ = session.active_subscriber.compare_exchange(
-        subscriber_id,
-        0,
-        std::sync::atomic::Ordering::Relaxed,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    // Evict this connection's viewport record; if we held the active
+    // claim, the session promotes the most-recently-active surviving
+    // subscriber and restores the PTY to THEIR dims (orca study
+    // takeaway #1 — without this, a session a phone briefly
+    // commandeered stayed stuck at phone dimensions). With no
+    // survivor the claim clears to 0, exactly the pre-election CAS
+    // behavior this replaces.
+    DaemonPtySession::detach_subscriber(&session, subscriber_id);
 
     // Drop `events_rx` implicitly on return. Broadcast subscribers
     // don't need to be "restored" — the next connection just calls
@@ -953,10 +979,32 @@ mod tests {
         }
     }
 
+    /// Poll the Term until it reaches `want` or the deadline passes.
+    /// Debounced resizes flush within `RESIZE_DEBOUNCE_MS`; failing
+    /// LOUDLY with the last observed dims, never a silent skip.
+    #[cfg(unix)]
+    fn assert_dims_settle(s: &DaemonPtySession, want: (u16, u16), what: &str) {
+        use k2_core::terminal::Dimensions;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let got = {
+                let tm = s.term();
+                let t = tm.lock();
+                (t.columns() as u16, t.screen_lines() as u16)
+            };
+            if got == want {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("{what}: PTY dims never settled to {want:?} (last saw {got:?})");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn second_claim_resizes_to_its_dims() {
-        use k2_core::terminal::Dimensions;
         use std::sync::atomic::Ordering::Relaxed;
 
         let s = spawn_test_session();
@@ -966,18 +1014,38 @@ mod tests {
             SetActiveOutcome::Claim
         );
         // Sub 9 claims (displacing 7) at ITS dims 100x30 — most-recent
-        // viewer wins, PTY resizes to 9's size.
+        // viewer wins. The claim lands inside the debounce window of
+        // 7's resize, so the PTY reaches 9's size on the trailing
+        // flush rather than instantly (coalescing is the point: only
+        // the final geometry of a claim race gets applied).
         let outcome = apply_set_active(&s, 9, true, Some(100), Some(30));
         assert_eq!(outcome, SetActiveOutcome::Claim);
         assert_eq!(s.active_subscriber.load(Relaxed), 9);
         assert_eq!(s.active_cols.load(Relaxed), 100);
         assert_eq!(s.active_rows.load(Relaxed), 30);
-        {
-            let tm = s.term();
-            let t = tm.lock();
-            assert_eq!(t.columns() as u16, 100, "PTY must follow most-recent claimer");
-            assert_eq!(t.screen_lines() as u16, 30);
-        }
+        assert_dims_settle(&s, (100, 30), "PTY must follow most-recent claimer");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_disconnect_restores_survivor_dims() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_test_session();
+        // Sub 7 (desktop) claims at 120x40; sub 9 (phone) then
+        // commandeers the session at 40x10.
+        apply_set_active(&s, 7, true, Some(120), Some(40));
+        apply_set_active(&s, 9, true, Some(40), Some(10));
+        assert_dims_settle(&s, (40, 10), "phone claim");
+
+        // The phone's WS drops. The teardown path runs the detach
+        // election: sub 7 is promoted and the PTY restores to ITS
+        // dims — no more sessions stuck at phone dimensions.
+        DaemonPtySession::detach_subscriber(&s, 9);
+        assert_eq!(s.active_subscriber.load(Relaxed), 7, "survivor promoted");
+        assert_eq!(s.active_cols.load(Relaxed), 120);
+        assert_eq!(s.active_rows.load(Relaxed), 40);
+        assert_dims_settle(&s, (120, 40), "restore on active disconnect");
     }
 
     #[cfg(unix)]

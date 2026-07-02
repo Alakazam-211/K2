@@ -15,7 +15,7 @@ export const TERMINAL_MANIFEST: SettingEntry[] = [
   { id: 'terminal.natural-text-editing', section: 'terminal', label: 'Natural Text Editing', description: 'Opt+Arrow word motion, Cmd+Arrow line motion', keywords: ['keyboard', 'edit', 'opt', 'alt'] },
   { id: 'terminal.link-click-mode', section: 'terminal', label: 'Link Click Mode', description: 'Click vs Cmd+Click to activate links', keywords: ['link', 'url', 'click'] },
   { id: 'terminal.open-links-in-split', section: 'terminal', label: 'Open Links in Split Pane', description: 'Open file links in a sibling pane when splits are active', keywords: ['link', 'split', 'pane'] },
-  { id: 'terminal.renderer', section: 'terminal', label: 'Terminal Renderer', description: 'Alacritty (default)', keywords: ['renderer', 'engine', 'alacritty', 'kessel', 'v2', 'session stream', 'legacy'] },
+  { id: 'terminal.renderer', section: 'terminal', label: 'Terminal Renderer', description: 'Kessel (default)', keywords: ['renderer', 'engine', 'alacritty', 'kessel', 'v2', 'session stream', 'legacy'] },
   { id: 'terminal.painter', section: 'terminal', label: 'Terminal Painter', description: 'DOM (default) or WebGL (experimental)', keywords: ['painter', 'webgl', 'gpu', 'canvas', 'rendering', 'experimental'] },
 ]
 
@@ -140,22 +140,21 @@ export function TerminalSection(): React.JSX.Element {
         {/* Terminal Renderer.
          *
          *  0.39.0: Only one renderer remains — the daemon-hosted
-         *  Kessel stack (still labeled "Alacritty" in the dropdown).
-         *  Any persisted 'alacritty' (Legacy) or pre-rename
-         *  'alacritty-v2' value is coerced to 'kessel' by the store's
-         *  setter and persist migration. The dropdown is kept as a
-         *  single-option control for discoverability + future
-         *  renderer additions.
+         *  Kessel stack. Any persisted 'alacritty' (Legacy) or
+         *  pre-rename 'alacritty-v2' value is coerced to 'kessel' by
+         *  the store's setter and persist migration. The dropdown is
+         *  kept as a single-option control for discoverability +
+         *  future renderer additions.
          */}
         <SettingRow settingId="terminal.renderer" label={
-          <span title="Alacritty runs on the daemon, survives Tauri quit, and supports heartbeats. Changing this only affects NEW terminals; existing tabs keep their current renderer.">
+          <span title="Kessel runs on the daemon, survives Tauri quit, and supports heartbeats. Changing this only affects NEW terminals; existing tabs keep their current renderer.">
             Terminal Renderer
           </span>
         }>
           <SettingDropdown
             value={renderer === 'kessel' ? renderer : 'kessel'}
             options={[
-              { value: 'kessel', label: 'Alacritty' },
+              { value: 'kessel', label: 'Kessel' },
             ]}
             onChange={(v) => setRenderer(v as TerminalRenderer)}
           />

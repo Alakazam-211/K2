@@ -43,6 +43,10 @@ import {
   keyEventToSequence,
   naturalTextEditingSequence,
 } from '@/lib/key-mapping'
+import {
+  createFrameCoalescer,
+  type FrameCoalescer,
+} from './frameCoalescer'
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, daemonWsBase, type DaemonWsAvailable } from '../kessel/daemon-ws'
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
@@ -634,7 +638,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     snapshotRef.current = snapshot
   }, [snapshot])
-  // Authoritative merged grid, owned by flushPendingFrames (the sole
+  // Authoritative merged grid, owned by applyFrameBatch (the sole
   // frame applier). Rendered `snapshot` mirrors it except while a
   // resize hold parks a blank intermediate here — see the resize-hold
   // block below.
@@ -692,13 +696,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     return () => clearInterval(id)
   }, [])
 
-  const pendingFramesRef = useRef<PendingFrame[]>([])
-  const frameFlushRafRef = useRef<number | null>(null)
-  const flushPendingFrames = useCallback(() => {
-    frameFlushRafRef.current = null
-    const pending = pendingFramesRef.current
-    if (pending.length === 0) return
-    pendingFramesRef.current = []
+  // Applies one drained batch. The queue/flush POLICY (per-rAF
+  // coalescing, snapshot-supersedes, 60-frame starvation cap) lives
+  // in createFrameCoalescer — pure, pinned by frameCoalescer.test.ts;
+  // this callback is the injected applier: called exactly once per
+  // flush, so everything below runs once per display refresh no
+  // matter how many WS messages arrived.
+  const applyFrameBatch = useCallback((pending: PendingFrame[]) => {
     if (import.meta.env.DEV) framesAppliedRef.current += pending.length
     // A full snapshot replace starts a new grid generation — absolute
     // row coords no longer map, so the canvas selection clears
@@ -760,24 +764,21 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       }
     }
   }, [])
-  const enqueueFrame = useCallback(
-    (frame: PendingFrame) => {
-      const pending = pendingFramesRef.current
-      if (frame.kind === 'snapshot') pending.length = 0
-      pending.push(frame)
-      if (pending.length >= 60) {
-        if (frameFlushRafRef.current !== null) {
-          cancelAnimationFrame(frameFlushRafRef.current)
-        }
-        flushPendingFrames()
-        return
-      }
-      if (frameFlushRafRef.current === null) {
-        frameFlushRafRef.current = requestAnimationFrame(flushPendingFrames)
-      }
-    },
-    [flushPendingFrames],
-  )
+  // The coalescer instance: rAF is the scheduler, applyFrameBatch the
+  // applier. Ref-initialized once per mount (StrictMode double-render
+  // safe via the null guard); applyFrameBatch has empty deps so the
+  // captured reference never goes stale.
+  const frameCoalescerRef = useRef<FrameCoalescer<PendingFrame> | null>(null)
+  if (frameCoalescerRef.current === null) {
+    frameCoalescerRef.current = createFrameCoalescer<PendingFrame>({
+      schedule: (flush) => requestAnimationFrame(flush),
+      cancel: (id) => cancelAnimationFrame(id),
+      apply: applyFrameBatch,
+    })
+  }
+  const enqueueFrame = useCallback((frame: PendingFrame) => {
+    frameCoalescerRef.current?.enqueue(frame)
+  }, [])
   const [isFocused, setIsFocused] = useState<boolean>(() =>
     typeof document !== 'undefined' ? document.hasFocus() : false,
   )
@@ -1817,11 +1818,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const ws = wsRef.current
       if (ws && ws.readyState !== WebSocket.CLOSED) ws.close()
       wsRef.current = null
-      if (frameFlushRafRef.current !== null) {
-        cancelAnimationFrame(frameFlushRafRef.current)
-        frameFlushRafRef.current = null
-      }
-      pendingFramesRef.current = []
+      frameCoalescerRef.current?.clear()
     }
   }, [])
 
@@ -2128,7 +2125,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // Mirror of `pendingResize !== null` for the frame-flush path (which
   // must not close over render state). While true, blank merge results
   // stay in `liveGridRef` instead of being rendered — see
-  // flushPendingFrames.
+  // applyFrameBatch.
   const resizeHoldActiveRef = useRef(false)
   const notePendingResize = useCallback((cols: number, rows: number) => {
     // Already at the target: the daemon's same-dims skip means no new

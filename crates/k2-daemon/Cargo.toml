@@ -166,3 +166,13 @@ k2-core = { path = "../k2-core", features = ["test-util"] }
 # the daemon's own tunnel key). Same rcgen version/features k2-core uses, so
 # it resolves to the one crate already in the lock tree — no new dep.
 rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
+# `tokio::time::pause` for the grid-emitter frame-budget tests —
+# cadence assertions run on the paused virtual clock (deterministic,
+# no sleep-and-hope). `full` does NOT include `test-util`; feature
+# unification applies this to test builds only.
+tokio = { version = "1", features = ["full", "test-util"] }
+# Grid-emitter tests feed bytes straight into a session's Term via
+# `vte::ansi::Processor` (standing in for alacritty's IO thread).
+# Same version/features k2-core pins, so Cargo resolves it to the
+# one `vte` already in the lock tree — no new crate.
+vte = { version = "0.15", features = ["std", "ansi"] }

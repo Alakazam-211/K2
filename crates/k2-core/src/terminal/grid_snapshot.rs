@@ -809,4 +809,308 @@ mod tests {
         // 5 chars over 6 columns (emoji is double-width).
         assert_eq!(runs[0].cols, Some(6));
     }
+
+    // ── build_emit decision table (frame-shape pins) ─────────────
+    //
+    // pi-mono study learning B2: K2 has the delta-vs-snapshot
+    // mechanism but nothing pinning it — a regression that turned
+    // steady-state deltas into per-wakeup full snapshots would ship
+    // silently. These tests pin the decision table against a real
+    // Term so an alacritty upgrade or a build_emit refactor that
+    // changes frame SHAPE fails loudly.
+
+    /// Term + EmitState with the mandatory first-emit Full already
+    /// consumed, so each test starts at the steady state where the
+    /// delta-vs-snapshot decision actually matters.
+    fn emit_ready(
+        cols: usize,
+        rows: usize,
+    ) -> (Term<VoidListener>, vte::ansi::Processor, EmitState) {
+        let size = TestSize { cols, rows };
+        let mut term = Term::new(TermConfig::default(), &size, VoidListener);
+        let parser: vte::ansi::Processor = vte::ansi::Processor::new();
+        let mut state = EmitState::default();
+        match build_emit("pane", &mut term, &mut state) {
+            EmitDecision::Full(_) => {}
+            _ => panic!("first emit must be a full snapshot"),
+        }
+        (term, parser, state)
+    }
+
+    fn damaged_row_indices(delta: &TermGridDelta) -> Vec<usize> {
+        delta.damaged_rows.iter().map(|d| d.row).collect()
+    }
+
+    fn damaged_row_text(delta: &TermGridDelta, row: usize) -> String {
+        let d = delta
+            .damaged_rows
+            .iter()
+            .find(|d| d.row == row)
+            .unwrap_or_else(|| panic!("row {row} not in delta: {:?}", damaged_row_indices(delta)));
+        row_text(&d.runs)
+    }
+
+    #[test]
+    fn build_emit_first_emit_is_full_snapshot() {
+        let size = TestSize { cols: 20, rows: 4 };
+        let mut term = Term::new(TermConfig::default(), &size, VoidListener);
+        let mut state = EmitState::default();
+        match build_emit("pane", &mut term, &mut state) {
+            EmitDecision::Full(snap) => {
+                assert_eq!(snap.version, 1);
+                assert_eq!(snap.cols, 20);
+                assert_eq!(snap.rows, 4);
+            }
+            EmitDecision::Delta(_) => panic!("first emit must not be a delta"),
+            EmitDecision::Skip => panic!("first emit must not be skipped"),
+        }
+        assert!(state.has_emitted);
+    }
+
+    #[test]
+    fn build_emit_typing_echo_is_delta_with_exactly_the_damaged_row() {
+        // The bread-and-butter case: a keystroke echo on one row must
+        // wire as a Delta carrying THAT row and nothing else — never a
+        // full snapshot (which would ship grid + scrollback per key).
+        let (mut term, mut parser, mut state) = emit_ready(20, 4);
+        parser.advance(&mut term, b"abc");
+        match build_emit("pane", &mut term, &mut state) {
+            EmitDecision::Delta(delta) => {
+                assert_eq!(
+                    damaged_row_indices(&delta),
+                    vec![0],
+                    "echo on row 0 must damage exactly row 0"
+                );
+                assert_eq!(damaged_row_text(&delta, 0), "abc");
+                assert!(
+                    delta.scrollback_appended.is_empty(),
+                    "no rows scrolled off — scrollback_appended must be empty"
+                );
+                assert_eq!(delta.version, 2);
+            }
+            EmitDecision::Full(_) => panic!("typing echo must not emit a full snapshot"),
+            EmitDecision::Skip => panic!("typing echo must not be skipped"),
+        }
+    }
+
+    #[test]
+    fn build_emit_two_row_write_is_delta_with_both_rows_only() {
+        let (mut term, mut parser, mut state) = emit_ready(20, 4);
+        parser.advance(&mut term, b"one\r\ntwo");
+        match build_emit("pane", &mut term, &mut state) {
+            EmitDecision::Delta(delta) => {
+                let mut rows = damaged_row_indices(&delta);
+                rows.sort_unstable();
+                assert_eq!(rows, vec![0, 1], "exactly the two written rows");
+                assert_eq!(damaged_row_text(&delta, 0), "one");
+                assert_eq!(damaged_row_text(&delta, 1), "two");
+            }
+            EmitDecision::Full(_) => panic!("two-row write must not emit a full snapshot"),
+            EmitDecision::Skip => panic!("two-row write must not be skipped"),
+        }
+    }
+
+    #[test]
+    fn build_emit_no_new_bytes_is_a_minimal_cursor_row_delta() {
+        // Honest pin of a non-obvious reality: alacritty 0.26's
+        // `Term::damage()` unconditionally re-damages the CURRENT
+        // CURSOR LINE on every call ("Always damage current cursor"),
+        // so after the first emit `build_emit` can never return `Skip`
+        // — an emit pass with zero new bytes still yields a Delta
+        // carrying exactly the (unchanged, here empty) cursor row.
+        // The `Skip` arm only fires pre-first-emit / defensively.
+        // Pinned in this direction so (a) a refactor that accidentally
+        // widens the no-op frame to a snapshot fails loudly and (b) if
+        // an alacritty upgrade ever makes true no-op Skips possible,
+        // this test fails and the frame-budget story gets REVISITED
+        // (that would be a wire-traffic win worth knowing about).
+        let (mut term, _parser, mut state) = emit_ready(20, 4);
+        match build_emit("pane", &mut term, &mut state) {
+            EmitDecision::Delta(delta) => {
+                assert_eq!(
+                    damaged_row_indices(&delta),
+                    vec![0],
+                    "no-op emit carries exactly the cursor row"
+                );
+                assert_eq!(damaged_row_text(&delta, 0), "");
+                assert!(delta.scrollback_appended.is_empty());
+            }
+            EmitDecision::Full(_) => panic!("no-op emit must never widen to a full snapshot"),
+            EmitDecision::Skip => panic!(
+                "no-op emit returned Skip — alacritty's always-damage-cursor \
+                 behavior changed; re-evaluate the no-op frame contract"
+            ),
+        }
+    }
+
+    #[test]
+    fn build_emit_clear_screen_is_full_snapshot() {
+        // ED 2 (`CSI 2J`) marks the Term fully damaged — the emit must
+        // take the full-snapshot path, not enumerate every row as a
+        // mega-delta.
+        let (mut term, mut parser, mut state) = emit_ready(20, 4);
+        parser.advance(&mut term, b"seed content");
+        let _ = build_emit("pane", &mut term, &mut state);
+        parser.advance(&mut term, b"\x1b[2J");
+        match build_emit("pane", &mut term, &mut state) {
+            EmitDecision::Full(snap) => assert_eq!(snap.version, 3),
+            EmitDecision::Delta(_) => panic!("full-damage clear must emit Full, not Delta"),
+            EmitDecision::Skip => panic!("full-damage clear must not be skipped"),
+        }
+    }
+
+    #[test]
+    fn build_emit_resize_is_full_snapshot_at_new_dims() {
+        // Geometry change ⇒ alacritty full damage ⇒ Full at the new
+        // dims. This is the grid_snapshot half of the resize contract;
+        // the emitter's settle machinery (which suppresses the blank
+        // intermediate and FORCES the post-settle Full) is pinned in
+        // grid_emitter's own tests.
+        let (mut term, mut parser, mut state) = emit_ready(20, 4);
+        parser.advance(&mut term, b"before resize");
+        let _ = build_emit("pane", &mut term, &mut state);
+        term.resize(TestSize { cols: 30, rows: 6 });
+        match build_emit("pane", &mut term, &mut state) {
+            EmitDecision::Full(snap) => {
+                assert_eq!(snap.cols, 30);
+                assert_eq!(snap.rows, 6);
+            }
+            EmitDecision::Delta(_) => panic!("resize must emit Full, not Delta"),
+            EmitDecision::Skip => panic!("resize must not be skipped"),
+        }
+    }
+
+    #[test]
+    fn build_emit_scroll_is_full_snapshot_carrying_scrollback() {
+        // Output that scrolls the viewport marks FULL damage in
+        // alacritty 0.26 (`scroll_up_relative` → `mark_fully_damaged`),
+        // so a scrolling stream emits Full snapshots whose `scrollback`
+        // carries the rows that left the viewport — and the emit state
+        // absorbs the new history size so a later delta can never
+        // re-append those rows (the client concatenates
+        // scrollback_appended; it is NOT idempotent).
+        let size = TermSizeWithHistory { cols: 20, rows: 3 };
+        let mut term = Term::new(TermConfig::default(), &size, VoidListener);
+        let mut parser: vte::ansi::Processor = vte::ansi::Processor::new();
+        let mut state = EmitState::default();
+        let _ = build_emit("pane", &mut term, &mut state);
+        // 5 rows into a 3-row viewport ⇒ 2 rows scroll into history.
+        parser.advance(&mut term, b"r1\r\nr2\r\nr3\r\nr4\r\nr5");
+        match build_emit("pane", &mut term, &mut state) {
+            EmitDecision::Full(snap) => {
+                assert_eq!(snap.scrollback.len(), 2);
+                assert_eq!(row_text(&snap.scrollback[0]), "r1");
+                assert_eq!(row_text(&snap.scrollback[1]), "r2");
+                assert_eq!(state.last_history_size, 2);
+            }
+            EmitDecision::Delta(_) => {
+                panic!("scroll marks full damage in alacritty 0.26 — must emit Full")
+            }
+            EmitDecision::Skip => panic!("scroll must not be skipped"),
+        }
+        // Post-scroll typing goes back to deltas (steady state must
+        // not degrade into snapshot-per-frame after a scroll).
+        parser.advance(&mut term, b"x");
+        match build_emit("pane", &mut term, &mut state) {
+            EmitDecision::Delta(delta) => {
+                assert!(delta.scrollback_appended.is_empty());
+            }
+            _ => panic!("post-scroll echo must return to the delta path"),
+        }
+    }
+
+    /// `TestSize` allocates zero scrollback; scroll tests need real
+    /// history capacity. 100 rows is plenty and keeps Term::new cheap.
+    struct TermSizeWithHistory {
+        cols: usize,
+        rows: usize,
+    }
+
+    impl Dimensions for TermSizeWithHistory {
+        fn total_lines(&self) -> usize {
+            self.rows + 100
+        }
+        fn screen_lines(&self) -> usize {
+            self.rows
+        }
+        fn columns(&self) -> usize {
+            self.cols
+        }
+    }
+
+    // ── DEC-2026 synchronized-update atomicity pin ───────────────
+    //
+    // The grid emitter's 16ms coalescing deliberately does NO BSU/ESU
+    // handling because the layer below it already provides atomicity:
+    // vte 0.15's `ansi::Processor` buffers every byte between
+    // `\x1b[?2026h` (BSU) and `\x1b[?2026l` (ESU) and applies the
+    // whole update at ESU (see the MIN_FRAME_INTERVAL doc comment in
+    // grid_emitter.rs). This test pins that vendored behavior at the
+    // Processor::advance layer so a vte upgrade that drops or moves
+    // sync buffering fails loudly instead of reintroducing torn
+    // frames. (The OTHER half of the production story — alacritty's
+    // EventLoop suppressing Wakeup while all processed bytes are
+    // synchronized — lives in the IO thread and is not reachable from
+    // a pure Term; it is documented, not pinned, here. What IS
+    // pinnable is the invariant the emitter actually relies on: no
+    // damage becomes observable mid-sync, and ESU releases the whole
+    // frame's damage at once.)
+
+    #[test]
+    fn sync_update_holds_damage_until_esu_then_releases_one_frame() {
+        let (mut term, mut parser, mut state) = emit_ready(40, 6);
+
+        // Two writes on two rows, staggered across separate advance()
+        // calls inside the BSU bracket — the per-write increments a
+        // torn frame would show. Mid-sync observability is asserted on
+        // the Term itself (content + cursor), NOT via build_emit: the
+        // production emitter never runs mid-sync (the EventLoop
+        // suppresses Wakeup while bytes are synchronized), and
+        // build_emit's damage() has an always-damage-cursor side
+        // effect (see the no-op-delta test above) that would muddy
+        // the read.
+        parser.advance(&mut term, b"\x1b[?2026h");
+        parser.advance(&mut term, b"half-A");
+        assert!(
+            encode_row_runs(term.grid(), Line(0), 40).is_empty(),
+            "mid-sync write #1 must stay buffered — row 0 must still be blank"
+        );
+        parser.advance(&mut term, b"\x1b[2;1Hhalf-B");
+        assert!(
+            encode_row_runs(term.grid(), Line(0), 40).is_empty(),
+            "mid-sync write #2 must stay buffered — row 0 must still be blank"
+        );
+        assert!(
+            encode_row_runs(term.grid(), Line(1), 40).is_empty(),
+            "mid-sync write #2 must stay buffered — row 1 must still be blank"
+        );
+        assert_eq!(
+            term.grid().cursor.point,
+            Point::new(Line(0), Column(0)),
+            "even the cursor move must stay buffered until ESU"
+        );
+
+        // ESU: the entire bracketed update lands as ONE frame's worth
+        // of damage — both rows together, one version.
+        parser.advance(&mut term, b"\x1b[?2026l");
+        match build_emit("pane", &mut term, &mut state) {
+            EmitDecision::Delta(delta) => {
+                let mut rows = damaged_row_indices(&delta);
+                rows.sort_unstable();
+                assert_eq!(
+                    rows,
+                    vec![0, 1],
+                    "post-ESU frame must carry BOTH bracketed writes"
+                );
+                assert_eq!(damaged_row_text(&delta, 0), "half-A");
+                assert_eq!(damaged_row_text(&delta, 1), "half-B");
+                assert_eq!(
+                    delta.version, 2,
+                    "the sync block must cost exactly one frame version"
+                );
+            }
+            EmitDecision::Full(_) => panic!("post-ESU frame should be a delta of two rows"),
+            EmitDecision::Skip => panic!("ESU must release the buffered damage"),
+        }
+    }
 }

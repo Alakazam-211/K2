@@ -575,3 +575,374 @@ fn serialize_frame(
         }
     }
 }
+
+// ── Frame-budget regression tests ───────────────────────────────────
+//
+// pi-mono study learning B2: pi pins its render pacing with
+// frame-count assertions in CI; K2 had the mechanism (immediate-emit-
+// when-idle + 16ms coalescing, independently converged with pi's —
+// see the MIN_FRAME_INTERVAL doc) but nothing pinning it. These tests
+// drive the REAL `run` task against a real (silent `/bin/cat`)
+// session on tokio's PAUSED clock: damage is injected by parsing
+// bytes straight into the session's Term (what the IO thread does)
+// and Wakeups are injected through the session's event channel
+// (`events_sender_for_tests`), so every cadence assertion is
+// deterministic — no sleep-and-hope.
+//
+// One caveat rides the whole module: `run`'s `last_emit` is a
+// *std* Instant (real clock), while its sleeps are tokio time
+// (virtual here). Under the paused clock the test body executes in
+// microseconds of real time, so `since < MIN_FRAME_INTERVAL` always
+// holds mid-burst and each coalesce sleep spans (effectively) the
+// full 16ms of virtual time — which is exactly the production shape.
+// The one theoretical hazard is a ≥16ms OS preemption inside a
+// microseconds-wide window, which would let a burst wakeup take the
+// immediate path; the assertions note where that matters.
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    use k2_core::terminal::DaemonPtyConfig;
+
+    /// Spawn a real, silent PTY session (`/bin/cat` with no input
+    /// produces no output, so the real IO thread never injects
+    /// events of its own — every Wakeup in these tests is ours).
+    fn spawn_silent_session() -> Arc<DaemonPtySession> {
+        let cfg = DaemonPtyConfig {
+            program: Some("/bin/cat".to_string()),
+            cwd: Some(std::env::temp_dir()),
+            ..DaemonPtyConfig::default()
+        };
+        DaemonPtySession::spawn(cfg).expect("spawn /bin/cat session")
+    }
+
+    /// Start the REAL emitter task (`run`) with a private frames
+    /// channel. Bypasses `attach`/the registry so the test owns the
+    /// receiver AND the JoinHandle (needed to assert task exit).
+    fn start_emitter(
+        session: &Arc<DaemonPtySession>,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        broadcast::Receiver<GridFrame>,
+    ) {
+        let (frames_tx, frames_rx) = broadcast::channel(FRAMES_CAP);
+        let emit_state = Arc::new(Mutex::new(EmitState::default()));
+        let k1_subs = Arc::new(AtomicUsize::new(0));
+        let handle = tokio::spawn(run(
+            Arc::clone(session),
+            "test-pane".to_string(),
+            frames_tx,
+            emit_state,
+            k1_subs,
+        ));
+        (handle, frames_rx)
+    }
+
+    /// Let every ready task run to its next await point. On the
+    /// paused current-thread runtime this deterministically settles
+    /// the emitter (e.g. past its initial `subscribe_events`, or
+    /// through a suppress-and-drain pass) without advancing the clock.
+    async fn settle_tasks() {
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// Parse bytes into the session's Term — the same mutation the
+    /// alacritty IO thread performs, minus its (real-time) Wakeup.
+    fn feed(session: &Arc<DaemonPtySession>, bytes: &[u8]) {
+        let term_mutex = session.term();
+        let mut term = term_mutex.lock();
+        let mut parser: vte::ansi::Processor = vte::ansi::Processor::new();
+        parser.advance(&mut *term, bytes);
+    }
+
+    fn wakeup(session: &Arc<DaemonPtySession>) {
+        session
+            .events_sender_for_tests()
+            .send(AlacEvent::Wakeup)
+            .expect("emitter must be subscribed");
+    }
+
+    fn frame_event(frame: &GridFrame) -> String {
+        let v: serde_json::Value =
+            serde_json::from_str(&frame.text).expect("frame JSON");
+        v["event"].as_str().expect("frame has event").to_string()
+    }
+
+    /// Drain buffered frames until the channel stays quiet for 100ms
+    /// of virtual time (which also auto-advances any in-flight
+    /// coalesce sleep, so a pending frame can't be missed).
+    async fn drain_frames(rx: &mut broadcast::Receiver<GridFrame>) -> Vec<GridFrame> {
+        let mut out = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                Ok(Ok(f)) => out.push(f),
+                Ok(Err(_)) | Err(_) => return out,
+            }
+        }
+    }
+
+    /// Panic-with-context helper: frame counts are the whole point
+    /// here, so a miss must show what actually arrived.
+    fn assert_frame_count(frames: &[GridFrame], expected: std::ops::RangeInclusive<usize>, what: &str) {
+        assert!(
+            expected.contains(&frames.len()),
+            "{what}: expected {expected:?} frames, got {} — events: {:?}",
+            frames.len(),
+            frames.iter().map(|f| (f.version, frame_event(f))).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn isolated_wakeup_emits_exactly_one_frame_immediately() {
+        let session = spawn_silent_session();
+        let (_task, mut rx) = start_emitter(&session);
+        settle_tasks().await;
+
+        feed(&session, b"hello-idle-echo");
+        let t0 = tokio::time::Instant::now();
+        wakeup(&session);
+        let frame = rx.recv().await.expect("frame for isolated wakeup");
+
+        // Immediate-when-idle: the frame lands with ZERO virtual-time
+        // advance — any added pacing delay would show up here as a
+        // clock step (the paused clock only moves when someone sleeps).
+        assert_eq!(
+            tokio::time::Instant::now(),
+            t0,
+            "isolated wakeup must emit with no added delay (16ms window must not apply when idle)"
+        );
+        assert_eq!(frame_event(&frame), "snapshot", "first emit is the Full snapshot");
+        assert!(frame.text.contains("hello-idle-echo"));
+
+        // …and exactly one frame: nothing else may be in flight.
+        settle_tasks().await;
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "exactly ONE frame for one isolated wakeup"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn burst_of_wakeups_coalesces_into_one_frame_after_the_window() {
+        let session = spawn_silent_session();
+        let (_task, mut rx) = start_emitter(&session);
+        settle_tasks().await;
+
+        // Prime: consume the immediate first frame so the burst below
+        // starts inside a fresh 16ms window.
+        feed(&session, b"prime\r\n");
+        wakeup(&session);
+        let first = rx.recv().await.expect("priming frame");
+        assert_eq!(frame_event(&first), "snapshot");
+
+        // Ten damage+wakeup pairs, delivered without yielding to the
+        // emitter in between — all land inside one coalesce window
+        // (µs of real time; see the module-level caveat).
+        let t1 = tokio::time::Instant::now();
+        for i in 0..10 {
+            feed(&session, format!("burst-{i}\r\n").as_bytes());
+            wakeup(&session);
+        }
+        let frame = rx.recv().await.expect("coalesced burst frame");
+
+        // The whole burst becomes ONE frame, emitted only after the
+        // window elapsed (virtual clock stepped forward), and the
+        // accumulated damage covers EVERY write in the burst.
+        let waited = tokio::time::Instant::now() - t1;
+        assert!(
+            waited > Duration::ZERO && waited <= MIN_FRAME_INTERVAL,
+            "burst frame must ride the 16ms window, waited {waited:?}"
+        );
+        assert_eq!(frame_event(&frame), "delta");
+        for i in 0..10 {
+            assert!(
+                frame.text.contains(&format!("burst-{i}")),
+                "coalesced frame must carry accumulated damage; missing burst-{i}"
+            );
+        }
+        settle_tasks().await;
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "a 10-wakeup burst inside one window must produce exactly ONE frame"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sustained_stream_is_paced_to_the_16ms_floor() {
+        let session = spawn_silent_session();
+        let (_task, mut rx) = start_emitter(&session);
+        settle_tasks().await;
+
+        // Wakeup every 2ms of virtual time for 200ms — a 100-wakeup
+        // stream. `\r` + overwrite keeps everything on row 0 so no
+        // scroll ever inflates frames to snapshots mid-stream.
+        for i in 0..100 {
+            feed(&session, format!("\rstream-{i}").as_bytes());
+            wakeup(&session);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        let frames = drain_frames(&mut rx).await;
+
+        // 200ms / 16ms ≈ 12.5 → immediate head frame + ~12 coalesced.
+        // A broken floor (sleep removed / window shrunk) emits per
+        // wakeup: ~100 frames — loudly outside this band. Lower bound
+        // catches the opposite failure (frames starved/merged away).
+        // The band is ±2 around the ideal 13 because each window's
+        // span is (16ms − the µs of real time the emit itself took);
+        // see the module-level real-vs-virtual caveat.
+        assert_frame_count(&frames, 11..=15, "sustained 200ms stream");
+        // The stream must stay on the delta path throughout (the
+        // first frame of the session is the one allowed snapshot).
+        for f in frames.iter().skip(1) {
+            assert_eq!(
+                frame_event(f),
+                "delta",
+                "steady-state stream frames must be deltas, not snapshots"
+            );
+        }
+        // No content lost to pacing: the final frame carries the last
+        // write (damage accumulates across a window, never drops).
+        let last = frames.last().expect("at least one frame");
+        assert!(
+            last.text.contains("stream-99"),
+            "final coalesced frame must contain the last write"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn child_exit_during_coalesce_window_flushes_final_frame_and_exits() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let session = spawn_silent_session();
+        let (task, mut rx) = start_emitter(&session);
+        settle_tasks().await;
+
+        // Prime so the next wakeup lands mid-window.
+        feed(&session, b"prime\r\n");
+        wakeup(&session);
+        let _ = rx.recv().await.expect("priming frame");
+
+        // Damage + wakeup, then ChildExit while the emitter will be
+        // sleeping out the window: the exit must not eat the final
+        // frame (the classic lost-last-lines bug), and the task must
+        // then exit.
+        feed(&session, b"final-words\r\n");
+        wakeup(&session);
+        session
+            .events_sender_for_tests()
+            .send(AlacEvent::ChildExit(
+                std::process::ExitStatus::from_raw(0),
+            ))
+            .expect("send ChildExit");
+
+        let frame = rx.recv().await.expect("final frame must still be emitted");
+        assert!(
+            frame.text.contains("final-words"),
+            "final frame must carry the damage that preceded the exit"
+        );
+        // Task exits (bounded by virtual time so a hang fails, not wedges).
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("emitter task must exit after ChildExit")
+            .expect("emitter task must not panic");
+        // …and the frames channel closes with it (its tx dropped).
+        assert!(
+            matches!(rx.recv().await, Err(broadcast::error::RecvError::Closed)),
+            "no frames after task exit"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resize_settle_suppresses_frames_then_closes_with_forced_full() {
+        let session = spawn_silent_session();
+        let (_task, mut rx) = start_emitter(&session);
+        settle_tasks().await;
+
+        feed(&session, b"before-resize");
+        wakeup(&session);
+        let first = rx.recv().await.expect("priming frame");
+        assert_eq!(frame_event(&first), "snapshot");
+
+        // A real resize bumps the generation and clears the grid; the
+        // wakeup that follows is (at most) that clear — the settle
+        // gate must SUPPRESS it, not broadcast a blank frame.
+        session.resize(100, 30);
+        feed(&session, b"child-repaint-content");
+        wakeup(&session);
+        settle_tasks().await;
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "no frame may be broadcast inside the settle window (blank-flash suppression)"
+        );
+
+        // No further wakeup arrives (a child that ignores SIGWINCH):
+        // the RESIZE_SETTLE_MAX deadline must close the window with
+        // ONE forced Full snapshot carrying the true post-resize state
+        // — drained damage folds in, nothing is lost.
+        let t = tokio::time::Instant::now();
+        let frame = rx.recv().await.expect("post-settle frame");
+        assert!(
+            tokio::time::Instant::now() - t >= Duration::from_millis(100),
+            "with no repaint evidence, the frame must wait for the settle deadline"
+        );
+        assert_eq!(
+            frame_event(&frame),
+            "snapshot",
+            "the post-settle frame must be a forced FULL snapshot (client mirrors were starved through the window)"
+        );
+        assert!(frame.text.contains("child-repaint-content"));
+        assert!(
+            frame.text.contains("\"cols\":100"),
+            "post-settle Full must carry the new geometry"
+        );
+        assert!(frame.version > first.version, "versions stay monotonic across suppression");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resize_settle_repaint_evidence_ends_suppression_with_full() {
+        let session = spawn_silent_session();
+        let (_task, mut rx) = start_emitter(&session);
+        settle_tasks().await;
+
+        feed(&session, b"before-resize");
+        wakeup(&session);
+        let _ = rx.recv().await.expect("priming frame");
+
+        session.resize(100, 30);
+        // The resize's own clear-wakeup: opens the settle window.
+        wakeup(&session);
+        settle_tasks().await;
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        // REAL-TIME EXCEPTION (justified): the repaint-evidence gate
+        // measures std-clock time (RESIZE_REPAINT_EVIDENCE_MIN, 30ms)
+        // — the paused tokio clock cannot move it. Sleeping 3× the
+        // threshold GUARANTEES the next wakeup reads as repaint
+        // evidence (over-sleeping can only make the condition more
+        // true, so this cannot race; the settle deadline can't fire
+        // meanwhile because it lives on the frozen virtual clock).
+        std::thread::sleep(RESIZE_REPAINT_EVIDENCE_MIN * 3);
+
+        feed(&session, b"the-actual-repaint");
+        let t = tokio::time::Instant::now();
+        wakeup(&session);
+        let frame = rx.recv().await.expect("evidence-closed settle frame");
+
+        // Evidence closes the window NOW — not at the 150ms deadline:
+        // zero virtual-time advance, and the frame is the forced Full.
+        assert_eq!(
+            tokio::time::Instant::now(),
+            t,
+            "repaint evidence must end suppression immediately (the Kessel timers-guess lesson)"
+        );
+        assert_eq!(frame_event(&frame), "snapshot");
+        assert!(frame.text.contains("the-actual-repaint"));
+        assert!(frame.text.contains("\"cols\":100"));
+    }
+}

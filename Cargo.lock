@@ -3193,6 +3193,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "uuid",
+ "vte",
 ]
 
 [[package]]

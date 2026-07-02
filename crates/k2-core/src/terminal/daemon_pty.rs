@@ -1330,6 +1330,19 @@ impl DaemonPtySession {
     pub fn child_pid(&self) -> Option<i32> {
         self.pid
     }
+
+    /// Test seam — a handle to the session's event broadcast SENDER,
+    /// so tests can inject `AlacEvent`s (Wakeup / ChildExit) with
+    /// deterministic timing instead of coaxing the real IO thread
+    /// into producing them (real-time PTY echo is incompatible with
+    /// paused-clock `tokio::time` cadence tests). Gated on
+    /// `test-util` (which dependent crates' dev builds already
+    /// enable) so production binaries never link it. Used by the
+    /// grid-emitter frame-budget tests in `k2-daemon`.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn events_sender_for_tests(&self) -> broadcast::Sender<AlacEvent> {
+        self.events_tx.clone()
+    }
 }
 
 // Explicit `Drop`: forcefully kill + reap the child so agent-CLI

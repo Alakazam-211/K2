@@ -14,7 +14,7 @@ import { useFileUndoStore } from '@/stores/file-undo'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { executeRemoteDrop } from '@/lib/handle-remote-drop'
-import { compressFolder } from '@/lib/fs-transfer'
+import { compressFolder, downloadFile } from '@/lib/fs-transfer'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -1263,6 +1263,9 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     const isSingle = paths.length <= 1
     const isDir = entry.isDirectory
     const hasClipboard = useFileClipboardStore.getState().hasPaths()
+    // Download only makes sense when the tree shows a REMOTE host's files
+    // (on local the file is already on this machine).
+    const isRemote = useConnectHostStore.getState().activeHost !== 'local'
 
     const items = [
       ...(isDir && isSingle
@@ -1287,6 +1290,9 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       ...(isDir && isSingle
         ? [{ id: 'compress', label: 'Compress' }]
         : []),
+      ...(!isDir && isSingle && isRemote
+        ? [{ id: 'download', label: 'Download' }]
+        : []),
       { id: 'delete', label: `Move to Trash${!isSingle ? ` (${paths.length})` : ''}` },
       { id: 'separator-util', label: '', type: 'separator' },
       { id: 'open-finder', label: 'Open in Finder' },
@@ -1310,6 +1316,8 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       // the new archive appears without a manual reload.
       const zipPath = await compressFolder(entry.path)
       if (zipPath) await loadDir(parentDir(entry.path))
+    } else if (clickedId === 'download') {
+      await downloadFile(entry.path)
     } else if (clickedId === 'copy-items') {
       useFileClipboardStore.getState().copy(paths)
       useToastStore.getState().addToast(`Copied ${paths.length} item(s)`, 'success')

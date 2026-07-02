@@ -301,6 +301,49 @@ pub fn read_binary_file(path: &str) -> Result<Vec<u8>, String> {
     fs::read(&path).map_err(map_io_err)
 }
 
+/// Per-request ceiling for a ranged read (`read_file_range`) — bounds the
+/// daemon's per-response memory exactly like `MAX_UPLOAD_CHUNK_SIZE` does
+/// for the upload direction. The renderer asks for 8 MB; headroom
+/// tolerates a larger client.
+pub const MAX_READ_CHUNK_SIZE: u64 = 16 * 1024 * 1024;
+
+/// Read up to `len` bytes of a file starting at `offset` — the download
+/// counterpart of `write_upload_chunk` (0.40.22). Unlike `read_binary_file`
+/// there is NO whole-file size cap: memory is bounded by the per-chunk
+/// ceiling, so a multi-GB download streams in requests. Returns the bytes
+/// (short at EOF; empty past EOF) plus the file's total size, so a client
+/// can size its progress bar from the first response and detect EOF via
+/// `offset + returned.len() >= size`.
+pub fn read_file_range(path: &str, offset: u64, len: u64) -> Result<(Vec<u8>, u64), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    if len == 0 || len > MAX_READ_CHUNK_SIZE {
+        return Err(format!(
+            "range len {len} out of bounds (1..={MAX_READ_CHUNK_SIZE})"
+        ));
+    }
+    let path = validate_path(path)?;
+    let meta = fs::metadata(&path).map_err(map_io_err)?;
+    if !meta.is_file() {
+        return Err(format!("Not a file: {}", path.display()));
+    }
+    let size = meta.len();
+    let mut f = fs::File::open(&path).map_err(map_io_err)?;
+    f.seek(SeekFrom::Start(offset)).map_err(map_io_err)?;
+    // Loop so a short OS read mid-file still fills the buffer; stop only
+    // at genuine EOF (mirrors the Tauri-side read_local_file_range).
+    let mut buf = vec![0u8; len as usize];
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        match f.read(&mut buf[filled..]) {
+            Ok(0) => break, // EOF
+            Ok(n) => filled += n,
+            Err(e) => return Err(map_io_err(e)),
+        }
+    }
+    buf.truncate(filled);
+    Ok((buf, size))
+}
+
 pub fn write_file(path: &str, content: &str) -> Result<(), String> {
     let path = validate_path(path)?.to_string_lossy().to_string();
     fs::write(&path, content).map_err(map_io_err)
@@ -1460,6 +1503,42 @@ mod tests {
         assert!(err.contains("Upload chunk too large"), "got: {err}");
         // Nothing was written — no stray .part.
         assert!(!tmp.path().join(".k2-upload-o.part").exists());
+    }
+
+    #[test]
+    fn read_file_range_returns_slices_and_total_size() {
+        let tmp = TempDir::new("read-range");
+        let p = tmp.path().join("data.bin");
+        fs::write(&p, b"0123456789").unwrap();
+        let s = p.to_string_lossy().to_string();
+
+        let (bytes, size) = read_file_range(&s, 0, 4).expect("first slice");
+        assert_eq!((bytes.as_slice(), size), (&b"0123"[..], 10));
+        let (bytes, _) = read_file_range(&s, 4, 4).expect("middle slice");
+        assert_eq!(bytes, b"4567");
+        // Short read at EOF returns the remainder…
+        let (bytes, _) = read_file_range(&s, 8, 4).expect("tail slice");
+        assert_eq!(bytes, b"89");
+        // …and past-EOF returns empty (not an error) so a racing truncation
+        // terminates the client loop instead of wedging it.
+        let (bytes, _) = read_file_range(&s, 20, 4).expect("past EOF");
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn read_file_range_rejects_dirs_and_bad_len() {
+        let tmp = TempDir::new("read-range-guards");
+        let err = read_file_range(&tmp.s(), 0, 4).expect_err("dir must reject");
+        assert!(err.contains("Not a file"), "got: {err}");
+
+        let p = tmp.path().join("f");
+        fs::write(&p, b"x").unwrap();
+        let s = p.to_string_lossy().to_string();
+        let err = read_file_range(&s, 0, 0).expect_err("len 0 must reject");
+        assert!(err.contains("out of bounds"), "got: {err}");
+        let err = read_file_range(&s, 0, MAX_READ_CHUNK_SIZE + 1)
+            .expect_err("over-cap len must reject");
+        assert!(err.contains("out of bounds"), "got: {err}");
     }
 
     #[test]

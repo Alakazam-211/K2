@@ -67,6 +67,46 @@ pub fn handle_read_binary(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+/// GET `/cli/fs/read-range?path=&offset=&len=` — one slice of a file,
+/// base64 in JSON (the transport every `/cli/*` route shares). The
+/// download counterpart of `fs/upload-chunk` (0.40.22): a client loops
+/// ranged reads to stream a file of ANY size — per-request memory is
+/// bounded by the 16 MB chunk cap, unlike `fs/read-binary`'s whole-file
+/// 50 MB ceiling. Response: `{ base64, len, size, eof }`; offset-addressed
+/// reads make a resume after disconnect free. Auth: `token_ok` via the
+/// shared `/cli/` GET gate, same as every other fs read.
+pub fn handle_read_range(params: &HashMap<String, String>) -> CliResponse {
+    let path = match params.get("path") {
+        Some(p) if !p.is_empty() => p.clone(),
+        _ => return CliResponse::bad_request("Missing 'path' parameter"),
+    };
+    let offset: u64 = match params.get("offset").map(|v| v.parse()) {
+        Some(Ok(v)) => v,
+        Some(Err(_)) => return CliResponse::bad_request("invalid 'offset' parameter"),
+        None => 0,
+    };
+    let len: u64 = match params.get("len").map(|v| v.parse()) {
+        Some(Ok(v)) => v,
+        Some(Err(_)) => return CliResponse::bad_request("invalid 'len' parameter"),
+        None => 8 * 1024 * 1024,
+    };
+    match fsc::read_file_range(&path, offset, len) {
+        Ok((bytes, size)) => {
+            let eof = offset.saturating_add(bytes.len() as u64) >= size;
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "base64": B64.encode(&bytes),
+                    "len": bytes.len() as u64,
+                    "size": size,
+                    "eof": eof,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 /// Report the daemon machine's filesystem basics so a remote client can
 /// seed a folder browser at the host's home dir (instead of a hardcoded
 /// `/`) and render paths with the host's separator. No path input — purely

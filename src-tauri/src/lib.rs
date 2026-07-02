@@ -1243,6 +1243,11 @@ pub fn run() {
             // `/cli/fs/upload-chunk` without holding it in memory.
             commands::local_upload::local_file_size,
             commands::local_upload::read_local_file_range,
+            // 0.40.22 — streaming download-to-local: the renderer loops the
+            // daemon's `GET /cli/fs/read-range` and lands each chunk in
+            // ~/Downloads via ordered .part appends + atomic finalize.
+            commands::local_download::local_download_chunk,
+            commands::local_download::local_download_abort,
             // 0.37.9 — macOS permissions surface for Settings UI
             commands::permissions::permissions_get_status,
             commands::permissions::permissions_request_full_disk_access,

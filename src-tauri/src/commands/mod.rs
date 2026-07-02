@@ -60,4 +60,5 @@ pub mod connect_hosts;
 // (base64) so the renderer can POST them to the remote daemon's
 // `/cli/fs/upload-binary`. HOST-side exception (the file lives on the
 // client's disk; the daemon may be remote).
+pub mod local_download;
 pub mod local_upload;

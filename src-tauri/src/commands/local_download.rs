@@ -7,8 +7,10 @@
 //! the bytes. These commands are the write half — the byte-for-byte
 //! mirror of the daemon's `write_upload_chunk`: ordered appends into a
 //! dot-hidden `.part`, then fsync + collision-free rename on the final
-//! chunk. Destination is FIXED to the user's Downloads directory —
-//! the renderer never picks an arbitrary local path.
+//! chunk. Destination is FIXED to a named mode — the user's Downloads
+//! directory by default, or the `~/.k2/clone-tmp` staging dir for pulled
+//! clone bundles (0.40.22 "Clone to this computer") — the renderer never
+//! picks an arbitrary local path.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use std::path::{Path, PathBuf};
@@ -19,6 +21,22 @@ fn downloads_dir() -> Result<PathBuf, String> {
     dirs::download_dir()
         .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
         .ok_or_else(|| "Cannot resolve the Downloads directory".to_string())
+}
+
+/// Resolve a NAMED destination mode to its directory. Only two modes
+/// exist — visible user downloads, and the clone-bundle staging dir the
+/// local daemon's `clone/unpack` already deletes from + stale-prunes
+/// (never an arbitrary renderer-chosen path):
+///   - `None` / `"downloads"` → `~/Downloads` (the pre-0.40.22 behavior)
+///   - `"clone-tmp"`          → `~/.k2/clone-tmp`
+fn dest_dir(dest: Option<&str>) -> Result<PathBuf, String> {
+    match dest {
+        None | Some("downloads") => downloads_dir(),
+        Some("clone-tmp") => dirs::home_dir()
+            .map(|h| h.join(".k2").join("clone-tmp"))
+            .ok_or_else(|| "Cannot resolve the home directory".to_string()),
+        Some(other) => Err(format!("Unknown download destination mode: {other}")),
+    }
 }
 
 /// Reduce a transfer id to filename-safe characters (ASCII alnum + `-` +
@@ -75,18 +93,21 @@ fn collision_free_path(dir: &Path, filename: &str) -> PathBuf {
     initial
 }
 
-fn part_path(download_id: &str) -> Result<PathBuf, String> {
-    let dir = downloads_dir()?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create Downloads dir: {e}"))?;
+fn part_path(download_id: &str, dest: Option<&str>) -> Result<PathBuf, String> {
+    let dir = dest_dir(dest)?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Cannot create download destination dir: {e}"))?;
     Ok(dir.join(format!(".k2-download-{}.part", sanitize_id(download_id))))
 }
 
-/// Append ONE ordered chunk of a download to `~/Downloads/.k2-download-
+/// Append ONE ordered chunk of a download to `<dest dir>/.k2-download-
 /// <id>.part`, finalizing (fsync + atomic collision-free rename to
 /// `filename`) on `is_last`. Ordering is enforced LOUDLY exactly like the
 /// daemon's upload half: `offset` must equal the part's current length
 /// (`0` starts/restarts); a gap or overlap errors instead of corrupting
 /// the file. Returns the final path on the last chunk, `None` otherwise.
+/// `dest` picks the named destination mode (see `dest_dir`); omitted =
+/// `~/Downloads`, byte-identical to the pre-0.40.22 command.
 #[tauri::command]
 pub async fn local_download_chunk(
     download_id: String,
@@ -94,13 +115,14 @@ pub async fn local_download_chunk(
     offset: u64,
     base64: String,
     is_last: bool,
+    dest: Option<String>,
 ) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::{Seek, SeekFrom, Write};
         let bytes = B64
             .decode(base64.as_bytes())
             .map_err(|e| format!("invalid base64: {e}"))?;
-        let part = part_path(&download_id)?;
+        let part = part_path(&download_id, dest.as_deref())?;
 
         let current_len = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
         if offset != 0 && current_len != offset {
@@ -127,7 +149,7 @@ pub async fn local_download_chunk(
             // final name.
             f.sync_all().map_err(|e| format!("Cannot fsync: {e}"))?;
             drop(f);
-            let dir = downloads_dir()?;
+            let dir = dest_dir(dest.as_deref())?;
             let target = collision_free_path(&dir, &sanitize_filename(&filename));
             std::fs::rename(&part, &target).map_err(|e| format!("Cannot finalize: {e}"))?;
             Ok(Some(target.to_string_lossy().to_string()))
@@ -142,9 +164,12 @@ pub async fn local_download_chunk(
 /// Remove an in-progress download's `.part` (cancel / hard failure). A
 /// missing part is fine — abort must be safe to call unconditionally.
 #[tauri::command]
-pub async fn local_download_abort(download_id: String) -> Result<(), String> {
+pub async fn local_download_abort(
+    download_id: String,
+    dest: Option<String>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let part = part_path(&download_id)?;
+        let part = part_path(&download_id, dest.as_deref())?;
         match std::fs::remove_file(&part) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

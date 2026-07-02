@@ -178,6 +178,48 @@ describe('packFrame — background rects', () => {
   })
 })
 
+describe('packFrame — selection rects', () => {
+  const SEL_R = Math.fround(0x44 / 255)
+  const SEL_A = Math.fround(0.45)
+
+  it('head/body/tail rows: partial, full-width, partial', () => {
+    const g = [[run('aaaa')], [run('bbbb')], [run('cccc')]]
+    const f = frame(g, [], 0, 4)
+    f.selection = { startAbs: 0, startCol: 2, endAbs: 2, endCol: 3 }
+    const p = pack(f)
+    expect(rects(p.selection)).toEqual([
+      // head: cols 2..4
+      [20, 0, 20, 20, SEL_R, SEL_R, SEL_R, SEL_A],
+      // body: full width
+      [0, 20, 40, 20, SEL_R, SEL_R, SEL_R, SEL_A],
+      // tail: cols 0..3
+      [0, 40, 30, 20, SEL_R, SEL_R, SEL_R, SEL_A],
+    ])
+  })
+
+  it('empty rows inside the range still highlight', () => {
+    const g = [[run('a')], [], [run('c')]]
+    const f = frame(g, [], 0, 4)
+    f.selection = { startAbs: 0, startCol: 0, endAbs: 2, endCol: 1 }
+    const p = pack(f)
+    expect(p.selection.count).toBe(3)
+  })
+
+  it('clips to the visible window while scrolled', () => {
+    const sb = [[run('s0')], [run('s1')]]
+    const g = [[run('a')], [run('b')]]
+    const f = frame(g, sb, 20) // scrolled to top: rows 0..1 visible
+    f.selection = { startAbs: 2, startCol: 0, endAbs: 3, endCol: 2 }
+    const p = pack(f)
+    expect(p.selection.count).toBe(0)
+  })
+
+  it('no selection ⇒ no rects', () => {
+    const p = pack(frame([[run('a')]]))
+    expect(p.selection.count).toBe(0)
+  })
+})
+
 describe('packFrame — glyph instances', () => {
   it('packs exact per-cell floats for a tiny grid', () => {
     // 2 cols × 1 row: 'A' (cp 65) then a blank cell.

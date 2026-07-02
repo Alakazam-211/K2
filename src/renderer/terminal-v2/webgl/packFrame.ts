@@ -77,8 +77,14 @@ export class RectList {
 /** Per-frame CPU buffers, allocated once per painter. Glyph uploads
  *  alternate between two arrays (xterm's double-buffering — the GPU
  *  may still be reading last frame's upload source). */
+/** Selection rect translucency — glyphs draw AFTER selection so text
+ *  stays full-contrast under the tint (brief §2.2's deliberate
+ *  divergence from xterm's bake-into-cell-colors). */
+export const SELECTION_ALPHA = 0.45
+
 export class FrameBuffers {
   readonly bg = new RectList()
+  readonly selection = new RectList()
   private glyphA = new Float32Array(0)
   private glyphB = new Float32Array(0)
   private useA = false
@@ -226,6 +232,7 @@ export interface PackedFrame {
    *  many pixels. */
   fractionDevice: number
   bg: RectList
+  selection: RectList
   /** Fixed-slot glyph instances: `rowCount × cols`, GLYPH_FLOATS
    *  each; instance i sits at cell (i % cols, i / cols). */
   glyphData: Float32Array
@@ -264,15 +271,33 @@ export function packFrame(input: PackInput): PackedFrame {
   )
   const fractionDevice = Math.round(layout.fraction * dpr)
 
-  const { bg } = buffers
+  const { bg, selection } = buffers
   bg.reset()
+  selection.reset()
   const rowFloats = snap.cols * GLYPH_FLOATS
   const glyphData = buffers.nextGlyphBuffer(layout.rowCount * rowFloats)
+  const sel = frame.selection
 
   for (let i = 0; i < layout.rowCount; i++) {
     const abs = layout.stripStart + i
     const row = rowAt(frame, abs)
     const rowBase = i * rowFloats
+    // Selection rides visible rows regardless of content — an empty
+    // row inside the range still highlights (native-selection look).
+    if (sel && abs >= sel.startAbs && abs <= sel.endAbs) {
+      const fromCol = abs === sel.startAbs ? sel.startCol : 0
+      const toCol = abs === sel.endAbs ? sel.endCol : snap.cols
+      if (toCol > fromCol) {
+        selection.push(
+          fromCol * deviceCellW,
+          i * deviceCellH - fractionDevice,
+          (toCol - fromCol) * deviceCellW,
+          deviceCellH,
+          frame.theme.selection,
+          SELECTION_ALPHA,
+        )
+      }
+    }
     if (!row || row.length === 0) {
       glyphData.fill(0, rowBase, rowBase + rowFloats)
       continue
@@ -297,6 +322,7 @@ export function packFrame(input: PackInput): PackedFrame {
     rowCount: layout.rowCount,
     fractionDevice,
     bg,
+    selection,
     glyphData,
     glyphCount: layout.rowCount * snap.cols,
   }

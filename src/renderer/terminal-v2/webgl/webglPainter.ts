@@ -112,6 +112,8 @@ export function createWebglPainter(
 
     backend.beginFrame(frame.theme.bg)
     backend.drawRects(packed.bg.data, packed.bg.count)
+    // Selection under glyphs: text stays full-contrast (brief §2.2).
+    backend.drawRects(packed.selection.data, packed.selection.count)
     backend.drawGlyphs(packed.glyphData, packed.glyphCount, {
       cols: frame.snapshot.cols,
       cellW: deviceCellW,

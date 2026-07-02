@@ -67,7 +67,17 @@ import {
 import { decodeGridFrame, type WireFrame } from './gridWire'
 import { colToTextIndex, runColSpan } from './runCols'
 import { createWebglPainter } from './webgl/webglPainter'
-import type { TerminalPainter } from './webgl/painterTypes'
+import type { SelectionRange, TerminalPainter } from './webgl/painterTypes'
+import {
+  normalizeSelection,
+  wordRangeAtCol,
+  type SelectionPoint,
+} from './webgl/selection'
+import {
+  buildCopyText,
+  copySelectionText,
+  modelRowAt,
+} from './copyText'
 
 // ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
 
@@ -274,12 +284,6 @@ function rowToText(row: CellRun[]): string {
   let out = ''
   for (const run of row) out += run.text
   return out
-}
-
-/** Whether a row soft-wraps into the next one (daemon marks the
- *  last run). Absent on frames from older daemons → unwrapped. */
-function isRowWrapped(row: CellRun[]): boolean {
-  return row.length > 0 && row[row.length - 1].wrapped === true
 }
 
 /** Nearest enclosing rendered-row element for a DOM node inside the
@@ -511,6 +515,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const [painterKind] = useState(storePainter)
   const [painterFatal, setPainterFatal] = useState<string | null>(null)
   const useWebgl = painterKind === 'webgl' && painterFatal === null
+  // Canvas-selection model (webgl only). ALWAYS null in DOM mode, so
+  // the shared copy/key handlers can gate on it with zero DOM-path
+  // impact. Version state re-fires the painter render effect; the
+  // model itself lives outside React (per-mousemove updates).
+  const webglSelectionRef = useRef<SelectionRange | null>(null)
+  const [selectionVersion, setSelectionVersion] = useState(0)
 
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   // Issue #5: mid-flight WS drops (TCP reset, WebKit Networking
@@ -621,6 +631,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     const pending = pendingFramesRef.current
     if (pending.length === 0) return
     pendingFramesRef.current = []
+    // A full snapshot replace starts a new grid generation — absolute
+    // row coords no longer map, so the canvas selection clears
+    // (webgl painter only; the ref is always null in DOM mode).
+    if (
+      webglSelectionRef.current &&
+      pending.some((f) => f.kind === 'snapshot')
+    ) {
+      webglSelectionRef.current = null
+      setSelectionVersion((v) => v + 1)
+    }
     setSnapshot((prev) => {
       let next: TermGridSnapshot | null = prev
       for (const f of pending) {
@@ -1763,6 +1783,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
   // ── Cell metrics (for cursor positioning + wheel math) ────────
   const [cellMetrics, setCellMetrics] = useState({ width: 0, height: 0 })
+  // Ref mirror for once-bound handlers (canvas selection drag) —
+  // same pattern as `snapshotRef`.
+  const cellMetricsRef = useRef(cellMetrics)
+  useEffect(() => {
+    cellMetricsRef.current = cellMetrics
+  }, [cellMetrics])
   useLayoutEffect(() => {
     const span = document.createElement('span')
     span.style.cssText = `font-family: ${config.font.family}; font-size: ${fontSize}px; position: absolute; visibility: hidden; white-space: pre;`
@@ -1845,10 +1871,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     painter.render({
       snapshot,
       scrollPx,
-      selection: null,
+      selection: webglSelectionRef.current,
       theme: painterTheme,
     })
-  }, [useWebgl, snapshot, scrollPx, painterTheme, cellMetrics])
+  }, [useWebgl, snapshot, scrollPx, painterTheme, cellMetrics, selectionVersion])
 
   // ── Send input / resize ───────────────────────────────────────
   const sendInput = useCallback((text: string) => {
@@ -2179,6 +2205,28 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // absorbs them; compositionend commits the final string in one
       // sendInput call.
       if (composingRef.current) return
+      // Canvas-selection copy (webgl painter): with no native
+      // selection, WKWebView may never fire a `copy` event — catch
+      // Cmd+C here while a model selection exists. The ref is always
+      // null in DOM mode, so this adds nothing to that path.
+      if (
+        webglSelectionRef.current &&
+        e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        (e.key === 'c' || e.key === 'C')
+      ) {
+        e.preventDefault()
+        const snap = snapshotRef.current
+        if (snap) {
+          navigator.clipboard
+            .writeText(copySelectionText(snap, webglSelectionRef.current))
+            .catch((err) =>
+              console.warn('[terminal-v2/webgl] clipboard write failed:', err),
+            )
+        }
+        return
+      }
       const natural = naturalTextEditingSequence(e)
       if (natural !== null) {
         e.preventDefault()
@@ -2457,6 +2505,167 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     [],
   )
 
+  // ── Canvas selection (webgl painter only) ─────────────────────
+  // Native selection cannot exist over a canvas, so a grid-coordinate
+  // model drives the painter's selection pass instead. Pixel→cell
+  // uses the SAME pointer math as link hover (toGridXY + strip
+  // window), so scale-to-fit and scroll are respected for free.
+  // Handlers bind natively (not via the React props the DOM path
+  // uses) and only when the flag is on — flag-off panes never run a
+  // byte of this.
+  useEffect(() => {
+    if (!useWebgl) return
+    const el = containerRef.current
+    if (!el) return
+
+    const setSelection = (sel: SelectionRange | null): void => {
+      if (!webglSelectionRef.current && !sel) return
+      webglSelectionRef.current = sel
+      setSelectionVersion((v) => v + 1)
+    }
+
+    // Half-cell x rounding for drag boundaries (xterm Mouse.ts:44):
+    // the left half of a cell selects it, the right half selects
+    // from the next boundary. Word/line hits use plain floor.
+    const pointToCell = (
+      clientX: number,
+      clientY: number,
+      halfCell: boolean,
+    ): SelectionPoint | null => {
+      const snap = snapshotRef.current
+      if (!snap) return null
+      const { width: cw, height: ch } = cellMetricsRef.current
+      if (!cw || !ch) return null
+      const pos = toGridXY(clientX, clientY)
+      if (!pos) return null
+      const totalRows = snap.scrollback.length + snap.grid.length
+      if (totalRows === 0) return null
+      const layout = computeStripLayout(
+        scrollPxRef.current,
+        totalRows,
+        snap.rows,
+        ch,
+        0,
+      )
+      const visualRow = Math.floor((pos.y + layout.fraction) / ch)
+      const abs = Math.max(
+        0,
+        Math.min(totalRows - 1, layout.stripStart + visualRow),
+      )
+      const col = Math.max(
+        0,
+        Math.min(snap.cols, Math.floor(pos.x / cw + (halfCell ? 0.5 : 0))),
+      )
+      return { abs, col }
+    }
+
+    let anchor: SelectionPoint | null = null
+    let lastClient = { x: 0, y: 0 }
+    let autoScrollTimer: ReturnType<typeof setInterval> | null = null
+
+    const stopAutoScroll = (): void => {
+      if (autoScrollTimer !== null) {
+        clearInterval(autoScrollTimer)
+        autoScrollTimer = null
+      }
+    }
+
+    const updateFocus = (): void => {
+      if (!anchor) return
+      const focus = pointToCell(lastClient.x, lastClient.y, true)
+      if (!focus) return
+      setSelection(normalizeSelection(anchor, focus))
+    }
+
+    const onDragMove = (ev: MouseEvent): void => {
+      lastClient = { x: ev.clientX, y: ev.clientY }
+      updateFocus()
+      // Drag auto-scroll: pointer above/below the pane nudges the
+      // viewport one line per tick while held (xterm's drag-scroll
+      // interval); the focus recompute pins the selection end to the
+      // moving window edge.
+      const rect = el.getBoundingClientRect()
+      const dir =
+        ev.clientY < rect.top ? 1 : ev.clientY > rect.bottom ? -1 : 0
+      if (dir === 0) {
+        stopAutoScroll()
+        return
+      }
+      if (autoScrollTimer !== null) return
+      autoScrollTimer = setInterval(() => {
+        const snap = snapshotRef.current
+        const ch = cellMetricsRef.current.height || 20
+        const scrollbackLen = snap?.scrollback.length ?? 0
+        setScrollPx((px) => clampScrollPx(px + dir * ch, scrollbackLen, ch))
+        updateFocus()
+      }, 50)
+    }
+
+    const onDragUp = (): void => {
+      stopAutoScroll()
+      anchor = null
+      window.removeEventListener('mousemove', onDragMove)
+      window.removeEventListener('mouseup', onDragUp)
+    }
+
+    const onMouseDown = (ev: MouseEvent): void => {
+      if (ev.button !== 0) return
+      // The overlay scrollbar owns its own drag gesture.
+      if (
+        (ev.target as HTMLElement | null)?.closest?.(
+          '[data-terminal-scrollbar]',
+        )
+      ) {
+        return
+      }
+      const snap = snapshotRef.current
+      if (!snap) return
+      if (ev.detail === 2) {
+        const p = pointToCell(ev.clientX, ev.clientY, false)
+        if (!p) return
+        const range = wordRangeAtCol(modelRowAt(snap, p.abs), p.col)
+        setSelection(
+          range
+            ? {
+                startAbs: p.abs,
+                startCol: range.startCol,
+                endAbs: p.abs,
+                endCol: range.endCol,
+              }
+            : null,
+        )
+        return
+      }
+      if (ev.detail >= 3) {
+        const p = pointToCell(ev.clientX, ev.clientY, false)
+        if (!p) return
+        setSelection({
+          startAbs: p.abs,
+          startCol: 0,
+          endAbs: p.abs,
+          endCol: snap.cols,
+        })
+        return
+      }
+      // Plain click collapses any prior selection; a drag rebuilds
+      // from the anchor.
+      setSelection(null)
+      anchor = pointToCell(ev.clientX, ev.clientY, true)
+      if (!anchor) return
+      lastClient = { x: ev.clientX, y: ev.clientY }
+      window.addEventListener('mousemove', onDragMove)
+      window.addEventListener('mouseup', onDragUp)
+    }
+
+    el.addEventListener('mousedown', onMouseDown)
+    return () => {
+      el.removeEventListener('mousedown', onMouseDown)
+      stopAutoScroll()
+      window.removeEventListener('mousemove', onDragMove)
+      window.removeEventListener('mouseup', onDragUp)
+    }
+  }, [useWebgl, toGridXY])
+
   // ── Link detection: Cmd key tracking ──────────────────────────
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -2645,6 +2854,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const handleCopy = useCallback((e: React.ClipboardEvent) => {
     const snap = snapshotRef.current
     if (!snap || !e.clipboardData) return
+    // WebGL painter path: no native selection exists over the canvas
+    // — the grid-coordinate model is the source of truth. The ref is
+    // always null in DOM mode, so this branch is unreachable there.
+    const gpuSel = webglSelectionRef.current
+    if (gpuSel) {
+      e.preventDefault()
+      e.clipboardData.setData('text/plain', copySelectionText(snap, gpuSel))
+      return
+    }
     const sel = window.getSelection()
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
     const range = sel.getRangeAt(0)
@@ -2661,30 +2879,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     const startCol = colWithin(startDiv, range.startContainer, range.startOffset)
     const endCol = colWithin(endDiv, range.endContainer, range.endOffset)
 
-    const modelRow = (abs: number): CellRun[] => {
-      if (abs < 0) return []
-      if (abs < snap.scrollback.length) return snap.scrollback[abs] ?? []
-      return snap.grid[abs - snap.scrollback.length] ?? []
-    }
-
-    let out = ''
-    for (let abs = startAbs; abs <= endAbs; abs++) {
-      const row = modelRow(abs)
-      const text = rowToText(row)
-      const from = abs === startAbs ? startCol : 0
-      const to = abs === endAbs ? endCol : text.length
-      const seg = text.slice(from, Math.max(from, to))
-      if (abs < endAbs && isRowWrapped(row)) {
-        // Soft-wrap continuation — no newline, no trim (the break
-        // is mid-content).
-        out += seg
-      } else {
-        out += seg.replace(/\s+$/, '')
-        if (abs < endAbs) out += '\n'
-      }
-    }
+    // Text extraction (wrapped-line join + trailing-trim) lives in
+    // buildCopyText — shared verbatim with the painter's copy path.
     e.preventDefault()
-    e.clipboardData.setData('text/plain', out)
+    e.clipboardData.setData(
+      'text/plain',
+      buildCopyText(snap, startAbs, startCol, endAbs, endCol),
+    )
   }, [])
 
   // ── Drag + drop of files (from Finder or K2 files tab) ──────
@@ -3343,6 +3544,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const finalContainerStyle: React.CSSProperties = {
     ...containerStyle,
     cursor: hoveredLink ? 'pointer' : 'text',
+    // Canvas mode: no DOM text to select — suppress native selection
+    // so stray drags over overlay text (HUD, cursor char) can't fight
+    // the model selection. DOM mode keeps native selection.
+    ...(useWebgl
+      ? { userSelect: 'none' as const, WebkitUserSelect: 'none' as const }
+      : {}),
     // Composer 1b: the pane now lives inside a flex-column wrapper so the
     // compose bar can dock beneath it. Override the `height: 100%` from
     // `containerStyle` with flex-grow + `minHeight: 0` so the terminal

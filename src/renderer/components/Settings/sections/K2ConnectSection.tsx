@@ -1070,26 +1070,40 @@ export function K2ConnectSection(): React.JSX.Element {
         {viewerRole !== 'member' && (
           <div className="space-y-1">
             <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
-              <label className="flex items-center gap-2 cursor-pointer select-none no-drag">
-                <input
-                  type="checkbox"
-                  checked={federationEnabled}
-                  onChange={(e) => void setFederationEnabled(e.target.checked)}
-                  className="peer sr-only"
-                />
-                <span
-                  aria-hidden="true"
-                  className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-                >
-                  {federationEnabled && (
-                    <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                    </svg>
-                  )}
+              {/* Switch, not checkbox — visually paired with the
+                  AllowRemoteInstructRow switch below so the whole Remote
+                  access group reads as one control style. */}
+              <div className="min-w-0">
+                <span className="text-xs text-[var(--color-text-secondary)]">
+                  Enable federation (cross-server agents)
                 </span>
-                <span className="text-xs text-[var(--color-text-secondary)]">Enable federation (cross-server agents)</span>
-              </label>
-              <span className="text-[10px] text-[var(--color-text-muted)]">{isRemote ? 'this server' : 'this device'}</span>
+                <span className="text-[10px] text-[var(--color-text-muted)] ml-2">{isRemote ? 'this server' : 'this device'}</span>
+              </div>
+              <button
+                onClick={() => void setFederationEnabled(!federationEnabled)}
+                className="no-drag cursor-pointer flex-shrink-0 relative"
+                aria-label="Enable federation"
+                aria-pressed={federationEnabled}
+                style={{
+                  width: 36,
+                  height: 20,
+                  backgroundColor: federationEnabled ? 'var(--color-accent)' : '#333',
+                  border: 'none',
+                  transition: 'background-color 150ms',
+                }}
+              >
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: 2,
+                    left: federationEnabled ? 18 : 2,
+                    width: 16,
+                    height: 16,
+                    backgroundColor: '#fff',
+                    transition: 'left 150ms',
+                  }}
+                />
+              </button>
             </div>
             {/* Delivery consent — moved here from Settings → General so it
                 sits with the federation master it also gates (it is the

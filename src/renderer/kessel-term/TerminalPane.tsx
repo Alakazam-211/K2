@@ -1046,7 +1046,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         lastSeenWorkingAtRef.current = 0
       }
     }, 500)
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      // Activity-detection study, FM1: this watcher (plus the title/bell
+      // handlers) is the only thing that ever writes working=false for
+      // this pane — and it dies here. A pane unmounting mid-work
+      // (workspace switch, tab close, retainer eviction) would strand
+      // its 'working' entry as a forever-spinner. The pane can no longer
+      // observe the session, so idle is the only honest value to leave
+      // behind; if the session is genuinely still working, a re-mount
+      // (or a retained pane's next frame) re-arms within a second.
+      // Never clobbers 'permission'/'review' (recordTitleActivity
+      // guards those).
+      useActiveAgentsStore.getState().recordTitleActivity(terminalId, false)
+    }
   }, [terminalId])
 
   // ── Spawn effect (0.39.13: spawn ⊥ stream) ────────────────────

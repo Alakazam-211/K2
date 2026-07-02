@@ -244,6 +244,7 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
    * come from the Tauri lifecycle hook and have higher priority.
    */
   recordTitleActivity: (paneId: string, isWorking: boolean) => {
+    if (isWorking) ensureActivityStaleSweep()
     const { paneStatuses, paneProjectMap } = get()
     const current = paneStatuses.get(paneId) ?? 'idle'
     if (current === 'permission' || current === 'review') return
@@ -1353,3 +1354,46 @@ export function __resetAgentStateForHostSwitch(): void {
 onActiveHostChange(() => {
   __resetAgentStateForHostSwitch()
 })
+
+// ── Stale-'working' sweep (activity-detection study, FM2) ──────────
+// Every working=false writer (title ✱ marker, bell, the pane's 1s-grace
+// idle watcher) lives inside a mounted TerminalPane — so a pane that
+// unmounts or parks mid-work leaves its 'working' entry frozen with
+// nothing left alive to clear it: the forever-spinner. This sweep is
+// the pane-independent backstop: a frame-driven 'working' entry whose
+// output heartbeat has gone silent past the threshold flips to idle.
+// Entries with NO output heartbeat are left alone — their working
+// state came from a lifecycle hook, and hooks deliver their own end
+// events (flipping those would false-idle hook-driven panes).
+// False-idle self-heals: the next title tick or frame re-arms
+// 'working' within a second. Guarded against Vite HMR re-eval
+// double-starting the interval.
+const STALE_WORKING_MS = 15_000
+const SWEEP_INTERVAL_MS = 5_000
+declare global {
+  interface Window {
+    __k2ActivityStaleSweep?: ReturnType<typeof setInterval>
+  }
+}
+/** Lazily started on the first working transition (NOT at module
+ *  eval — test suites spy on setInterval with exact call counts, and
+ *  an import-time interval would pollute them; production behavior is
+ *  identical since a sweep with no 'working' entries is a no-op). */
+export function ensureActivityStaleSweep(): void {
+  if (typeof window === 'undefined' || window.__k2ActivityStaleSweep) return
+  window.__k2ActivityStaleSweep = setInterval(() => {
+    const s = useActiveAgentsStore.getState()
+    const now = Date.now()
+    let next: Map<string, PaneStatus> | null = null
+    for (const [paneId, status] of s.paneStatuses) {
+      if (status !== 'working') continue
+      const lastOutput = s.outputTimestamps.get(paneId)
+      if (lastOutput === undefined) continue
+      if (now - lastOutput > STALE_WORKING_MS) {
+        if (!next) next = new Map(s.paneStatuses)
+        next.set(paneId, 'idle')
+      }
+    }
+    if (next) useActiveAgentsStore.setState({ paneStatuses: next })
+  }, SWEEP_INTERVAL_MS)
+}

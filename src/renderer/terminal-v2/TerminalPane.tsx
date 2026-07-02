@@ -1243,6 +1243,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // short-circuit (value unchanged) → the fresh daemon
       // subscriber never learns we're the active viewer.
       lastSentActiveRef.current = null
+      // Fresh daemon subscriber ⇒ we hold no claim until the re-prime
+      // below lands one; render passively meanwhile.
+      setIsActiveViewer(false)
       // Issue #8: re-prime using the FULL predicate (visible AND
       // pane-focused AND window-focused), not window-focus alone.
       // A backgrounded pane that reconnects (e.g. WebKit dropped the
@@ -1714,6 +1717,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     }
   }, [])
 
+  // ── Passive scale-to-fit state ────────────────────────────────
+  // Whether THIS pane last told the daemon it is the active viewer.
+  // React-state mirror of `lastSentActiveRef` (declared with the
+  // set_active effect below) so the scale layout re-derives when the
+  // claim changes — the ref alone wouldn't re-render. `false` when
+  // the claim state is unknown (fresh socket): an unclaimed pane is
+  // treated as passive until its claim goes out.
+  const [isActiveViewer, setIsActiveViewer] = useState(false)
+  // Container content size in px, updated by the ResizeObserver on
+  // EVERY fire (no debounce — the scale must track the box live even
+  // though PTY resizes are debounced). 0×0 until first measure.
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
+
   // ── Cell metrics (for cursor positioning + wheel math) ────────
   const [cellMetrics, setCellMetrics] = useState({ width: 0, height: 0 })
   useLayoutEffect(() => {
@@ -1837,6 +1853,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // recomputes in this instance still short-circuit correctly,
         // but emit nothing now.
         lastSentActiveRef.current = active
+        setIsActiveViewer(active)
         hasSentActiveThisInstanceRef.current = true
         return
       }
@@ -1857,6 +1874,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       }
       ws.send(JSON.stringify(payload))
       lastSentActiveRef.current = active
+      setIsActiveViewer(active)
       hasSentActiveThisInstanceRef.current = true
       if (sessionId) recordSentActive(sessionId, active)
     }
@@ -2181,6 +2199,76 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     return { stripRows: rows, stripAbsRows: abs }
   }, [snapshot, stripLayout.stripStart, stripLayout.rowCount])
 
+  // ── Passive scale-to-fit (kessel-hard-learnings §2.7 / §Wave 3) ─
+  //
+  // When ANOTHER viewer owns the PTY size (this pane never claimed
+  // active, or lost the claim), the grid can be bigger than our box.
+  // The only lossless treatments of a width-committed grid are scale,
+  // letterbox or clip — NEVER re-wrap (1:1 grid row → display row is
+  // preserved: we scale the whole strip uniformly). Scale factor is
+  // min(fitW, fitH, 1), centered/letterboxed, floored at 0.4 after
+  // which we clip instead (unreadably small is worse than clipped).
+  // An active pane renders 1:1 — its resizes drive the PTY, so any
+  // mismatch is transient (the hold-and-scale path below covers it).
+  const PASSIVE_SCALE_FLOOR = 0.4
+  const snapCols = snapshot?.cols ?? 0
+  const snapRows = snapshot?.rows ?? 0
+  const scaleLayout = useMemo(() => {
+    const identity = { scale: 1, offsetX: 0, offsetY: 0, passive: false }
+    const cw = cellMetrics.width
+    const ch = cellMetrics.height
+    if (!snapCols || !snapRows || !cw || !ch) return identity
+    // Same available-box formula as the ResizeObserver's cols/rows
+    // fit, so a grid sized to THIS pane always computes fit ≥ 1 and
+    // renders unscaled.
+    const availW = Math.max(0, containerSize.width - 8)
+    const availH = Math.max(0, containerSize.height - 8)
+    if (!availW || !availH) return identity
+    const gridW = snapCols * cw
+    const gridH = snapRows * ch
+    const fit = Math.min(availW / gridW, availH / gridH)
+    if (isActiveViewer || fit >= 1) return identity
+    const scale = Math.max(fit, PASSIVE_SCALE_FLOOR)
+    return {
+      scale,
+      offsetX: Math.max(0, (availW - gridW * scale) / 2),
+      offsetY: Math.max(0, (availH - gridH * scale) / 2),
+      passive: true,
+    }
+  }, [
+    snapCols,
+    snapRows,
+    cellMetrics.width,
+    cellMetrics.height,
+    containerSize.width,
+    containerSize.height,
+    isActiveViewer,
+  ])
+  // Ref mirror for handlers that bind once (wheel listener) — same
+  // pattern as `snapshotRef`.
+  const scaleLayoutRef = useRef(scaleLayout)
+  useEffect(() => {
+    scaleLayoutRef.current = scaleLayout
+  }, [scaleLayout])
+
+  // Pointer → unscaled grid-content coordinates (px past the 4px
+  // padding, in the grid's own pixel space). THE one place scale
+  // enters pointer math: divide by the scale after removing the
+  // letterbox offsets, then all existing cell math applies unchanged.
+  const toGridXY = useCallback(
+    (clientX: number, clientY: number): { x: number; y: number } | null => {
+      const el = containerRef.current
+      if (!el) return null
+      const rect = el.getBoundingClientRect()
+      const { scale, offsetX, offsetY } = scaleLayoutRef.current
+      return {
+        x: (clientX - rect.left - 4 - offsetX) / scale,
+        y: (clientY - rect.top - 4 - offsetY) / scale,
+      }
+    },
+    [],
+  )
+
   // ── Link detection: Cmd key tracking ──────────────────────────
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -2223,18 +2311,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
       const el = containerRef.current
       if (!el || !snapshot) return
-      const rect = el.getBoundingClientRect()
       const { width: cw, height: ch } = cellMetrics
       if (cw === 0 || ch === 0) return
-      // The 4px padding on the container biases cell positions —
-      // subtract before dividing. Rows live in a strip translated by
-      // -(fraction + overscanTop·cellH); adding `fraction` back and
-      // offsetting by `overscanTop` inverts that transform, so `row`
-      // indexes into `stripRows`.
+      // `toGridXY` removes the 4px padding, the letterbox offsets and
+      // the scale, yielding grid-space pixels. Rows live in a strip
+      // translated by -(fraction + overscanTop·cellH); adding
+      // `fraction` back and offsetting by `overscanTop` inverts that
+      // transform, so `row` indexes into `stripRows`.
+      const pos = toGridXY(e.clientX, e.clientY)
+      if (!pos) return
       const row =
         stripLayout.overscanTop +
-        Math.floor((e.clientY - rect.top - 4 + stripLayout.fraction) / ch)
-      const col = Math.floor((e.clientX - rect.left - 4) / cw)
+        Math.floor((pos.y + stripLayout.fraction) / ch)
+      const col = Math.floor(pos.x / cw)
       const visibleRow = stripRows[row]
       if (!visibleRow) {
         if (hoveredLink) setHoveredLink(null)
@@ -2264,7 +2353,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         setHoveredLink(null)
       }
     },
-    [linkClickMode, hoveredLink, cellMetrics, snapshot, stripLayout, stripRows, cwd],
+    [
+      linkClickMode,
+      hoveredLink,
+      cellMetrics,
+      snapshot,
+      stripLayout,
+      stripRows,
+      cwd,
+      toGridXY,
+    ],
   )
 
   const handleMouseLeave = useCallback(() => {
@@ -2537,6 +2635,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     let lastRows = 0
     let timer: ReturnType<typeof setTimeout> | null = null
     const observer = new ResizeObserver((entries) => {
+      // Live box measurement for the scale-to-fit layout — updated on
+      // EVERY fire, ahead of the debounce below: the hold-and-scale
+      // rendering must track the box each frame of a drag while the
+      // PTY resize itself stays debounced.
+      const liveRect = entries[0]?.contentRect
+      if (liveRect && liveRect.width > 0 && liveRect.height > 0) {
+        setContainerSize((prev) =>
+          prev.width === liveRect.width && prev.height === liveRect.height
+            ? prev
+            : { width: liveRect.width, height: liveRect.height },
+        )
+      }
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = null
@@ -2600,23 +2710,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         const ch2 = cellMetrics.height
         if (cw > 0 && ch2 > 0) {
           e.preventDefault()
-          const rect = el.getBoundingClientRect()
-          // Same 0-based cell math as the link/hover handler; SGR
-          // mouse coordinates are 1-based, so add 1 and clamp to ≥1.
-          // SGR rows address GRID cells: with the local viewport
-          // scrolled up, grid rows sit `scrollPx` px lower on screen,
-          // so subtract it. (Mouse-report mode virtually always means
-          // alt screen ⇒ no scrollback ⇒ scrollPx re-clamped to 0 ⇒
-          // identity.)
-          const col = Math.max(
-            1,
-            Math.floor((e.clientX - rect.left - 4) / cw) + 1,
-          )
+          // Same 0-based cell math as the link/hover handler (shared
+          // scale-aware pointer helper); SGR mouse coordinates are
+          // 1-based, so add 1 and clamp to ≥1. SGR rows address GRID
+          // cells: with the local viewport scrolled up, grid rows sit
+          // `scrollPx` px lower on screen, so subtract it. (Mouse-
+          // report mode virtually always means alt screen ⇒ no
+          // scrollback ⇒ scrollPx re-clamped to 0 ⇒ identity.)
+          const pos = toGridXY(e.clientX, e.clientY)
+          if (!pos) return
+          const col = Math.max(1, Math.floor(pos.x / cw) + 1)
           const row = Math.max(
             1,
-            Math.floor(
-              (e.clientY - rect.top - 4 - scrollPxRef.current) / ch2,
-            ) + 1,
+            Math.floor((pos.y - scrollPxRef.current) / ch2) + 1,
           )
           mouseWheelPosRef.current = { col, row }
           // Accumulate signed pixel movement and flush on a timer.
@@ -2705,6 +2811,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     cellMetrics.height,
     cellMetrics.width,
     sendInput,
+    toGridXY,
   ])
 
   // ── Re-clamp scroll position on snapshot change ───────────────
@@ -3187,6 +3294,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           overflow: 'hidden',
         }}
       >
+        {/* Scale wrapper (passive scale-to-fit + resize hold): the
+            whole strip scales uniformly from the top-left, offset to
+            center/letterbox. Always present so DOM identity (and any
+            native selection anchored in the rows) survives scale
+            transitions; identity renders as translate(0,0) scale(1).
+            The short transition is what makes claim-takeover and the
+            resize hold read as a smooth reflow instead of a snap. */}
+        <div
+          style={{
+            transform: `translate(${scaleLayout.offsetX}px, ${scaleLayout.offsetY}px) scale(${scaleLayout.scale})`,
+            transformOrigin: 'top left',
+            transition: 'transform 120ms ease-out',
+          }}
+        >
         <div
           style={{
             transform: `translateY(${stripLayout.translateY}px)`,
@@ -3206,7 +3327,31 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             )
           })}
         </div>
+        </div>
       </div>
+      {/* Passive-view affordance: this pane is watching a grid sized
+          by another viewer (scaled down to fit). Styling matches the
+          DEV badge above. */}
+      {scaleLayout.passive && snapshot && (
+        <div
+          data-terminal-passive-pill=""
+          style={{
+            position: 'absolute',
+            bottom: 6,
+            right: 8,
+            padding: '2px 6px',
+            background: 'rgba(0,0,0,0.8)',
+            color: '#9a9a9a',
+            fontSize: '10px',
+            fontFamily: 'monospace',
+            zIndex: 999,
+            pointerEvents: 'none',
+            borderRadius: '3px',
+          }}
+        >
+          viewing at {snapshot.cols}×{snapshot.rows}
+        </div>
+      )}
       {scrollbarThumb && (
         <div
           ref={scrollbarTrackRef}
@@ -3243,7 +3388,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           />
         </div>
       )}
-      {cursorOverlay && (
+      {/* Cursor overlay positions in UNSCALED grid space (it's a
+          sibling of the scale wrapper) — hide it while scaled; a
+          scaled view is passive/transitional and the TUI paints its
+          own cursor cell inside the (scaled) grid anyway. */}
+      {cursorOverlay && scaleLayout.scale === 1 && (
         <div aria-hidden="true" style={cursorOverlay.style}>
           {cursorOverlay.char ?? ''}
         </div>

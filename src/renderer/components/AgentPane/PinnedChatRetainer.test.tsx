@@ -10,7 +10,7 @@
 // falls back to the inline pane when the workspace isn't exempt.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, cleanup, act } from '@testing-library/react'
+import { render, cleanup, act, waitFor } from '@testing-library/react'
 import { useEffect, useRef } from 'react'
 
 const h = vi.hoisted(() => ({
@@ -42,6 +42,11 @@ vi.mock('@/stores/projects', async () => {
   return { useProjectsStore }
 })
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
+// Eager-boot seeding resolves agent display names through the daemon
+// helper; keep it inert + deterministic here.
+vi.mock('@/lib/workspace-agent', () => ({
+  agentDisplayName: vi.fn(async (path: string) => `resolved-${path.split('/').pop()}`),
+}))
 
 // AgentChatPane probe. Reads the real TabVisibilityContext so the
 // visibility-through-portal contract is exercised, not mocked.
@@ -217,6 +222,69 @@ describe('MRU cap + pinned growth', () => {
       expect(paneFor(id)).not.toBeNull()
     }
     expect(h.unmounts.value).toBe(0)
+  })
+})
+
+describe('eager boot attach + Active-membership tracking (slice 3)', () => {
+  it('boot-seeds Active workspaces into the hidden host, pinned-to-top first, bounded by the cap', async () => {
+    const ids = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']
+    setActive(...ids)
+    // p6 is pinned to the top of the Active section — it must be seeded
+    // ahead of the list order even though it comes later in projects.
+    setProjects(
+      ids.map((id) => ({ id, path: `/ws/${id}`, manuallyActive: id === 'p6' ? 1 : 0 })),
+    )
+    render(<PinnedChatRetainer />)
+
+    await waitFor(() => expect(paneFor('p6')).not.toBeNull())
+    const st = useRetainedChatStore.getState()
+    expect(st.bootSeeded).toBe(true)
+    // Cap 5 (1 pin ≤ base): pinned-first order p6,p1,p2,p3,p4 — never all 7.
+    expect(st.mruOrder).toEqual(['p6', 'p1', 'p2', 'p3', 'p4'])
+    for (const id of ['p6', 'p1', 'p2', 'p3', 'p4']) {
+      const pane = paneFor(id)
+      expect(pane).not.toBeNull()
+      expect(hiddenHost().contains(pane)).toBe(true)
+    }
+    expect(paneFor('p5')).toBeNull()
+    expect(paneFor('p7')).toBeNull()
+    // Seeded entries carry the daemon-resolved agent name.
+    expect(st.entries.get('p6')?.agentName).toBe('resolved-p6')
+  })
+
+  it('a real visit recorded before the seed lands stays in front of the seeds', async () => {
+    setActive('fg', 'p1', 'p2')
+    setProjects([
+      { id: 'fg', path: '/ws/fg', manuallyActive: 0 },
+      { id: 'p1', path: '/ws/p1', manuallyActive: 0 },
+      { id: 'p2', path: '/ws/p2', manuallyActive: 0 },
+    ])
+    render(<PinnedChatRetainer />)
+    act(() => visit('fg'))
+    await waitFor(() =>
+      expect(useRetainedChatStore.getState().bootSeeded).toBe(true),
+    )
+    expect(useRetainedChatStore.getState().mruOrder).toEqual(['fg', 'p1', 'p2'])
+  })
+
+  it('a workspace re-JOINING Active does not auto-attach (only boot/visit do)', async () => {
+    setActive('a', 'b')
+    setProjects([
+      { id: 'a', path: '/ws/a', manuallyActive: 0 },
+      { id: 'b', path: '/ws/b', manuallyActive: 0 },
+    ])
+    render(<PinnedChatRetainer />)
+    await waitFor(() => expect(paneFor('a')).not.toBeNull())
+
+    act(() => setActive('b')) // 'a' leaves — pruned + detached
+    expect(paneFor('a')).toBeNull()
+
+    act(() => setActive('a', 'b')) // 'a' re-joins — must stay detached
+    expect(paneFor('a')).toBeNull()
+    expect(useRetainedChatStore.getState().mruOrder).not.toContain('a')
+
+    act(() => visit('a')) // a fresh visit re-attaches
+    expect(paneFor('a')).not.toBeNull()
   })
 })
 

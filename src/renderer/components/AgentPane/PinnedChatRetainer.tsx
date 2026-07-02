@@ -40,7 +40,8 @@ import {
   useRetainedChatStore,
   type RetainedChatEntry,
 } from '@/stores/retained-chat'
-import { computeRetainedSet } from '@/kessel-term/retainedChat'
+import { computeRetainedSet, retainedCap } from '@/kessel-term/retainedChat'
+import { agentDisplayName } from '@/lib/workspace-agent'
 
 /** Escape hatch: `localStorage.K2SO_PINNED_RETAIN_OFF = '1'` restores
  *  park-on-hidden everywhere without a rebuild (read per render — flip
@@ -201,6 +202,67 @@ export function PinnedChatRetainer(): React.JSX.Element | null {
         : [],
     [daemonOwnsChat, mruOrder, activeIds, pinnedToTopCount],
   )
+
+  // Active-section membership tracking: a workspace LEAVING the
+  // canonical Active set is dropped from the visit order (its instance
+  // already detached via computeRetainedSet's filter), so a later
+  // re-JOIN does not auto-attach — only boot seeding or a fresh visit
+  // does (owner decision). Boot-transient safe: an empty mirror can
+  // only prune an order that visits/seeds (both Active-gated) have not
+  // populated yet.
+  useEffect(() => {
+    useRetainedChatStore.getState().pruneToActive(activeIds)
+  }, [activeIds])
+
+  // Eager boot attach (owner decision 2): once per host session, when
+  // the Active mirror + project list have landed, pre-attach the pinned
+  // chats of Active-section workspaces — seed MRU order = Active-list
+  // order (pinned-to-top first, then projects order — ActiveBar's
+  // sortPinnedFirst partition), bounded by the cap, never all
+  // workspaces. Seeded instances mount into the hidden host and pay the
+  // ensure/attach chain at boot so even the FIRST visit is instant.
+  const bootSeeded = useRetainedChatStore((s) => s.bootSeeded)
+  const seedStartedRef = useRef(false)
+  useEffect(() => {
+    if (bootSeeded || seedStartedRef.current) return
+    if (!daemonOwnsChat || retentionDisabled()) return
+    if (activeIds.size === 0 || projects.length === 0) return
+    seedStartedRef.current = true
+
+    const activeProjects = projects.filter((p) => activeIds.has(p.id))
+    const ordered = [
+      ...activeProjects.filter((p) => p.manuallyActive !== 0),
+      ...activeProjects.filter((p) => p.manuallyActive === 0),
+    ]
+    const cap = retainedCap(pinnedToTopCount)
+    const candidates = ordered.slice(0, cap)
+    if (candidates.length === 0) return
+
+    let cancelled = false
+    void Promise.all(
+      candidates.map(async (p): Promise<RetainedChatEntry> => ({
+        projectId: p.id,
+        projectPath: p.path,
+        // Same resolution ladder as ensurePinnedAgentTabForMode's
+        // fallback: the daemon's display-name helper is total; the
+        // path basename is the never-empty last resort. (agentChatId
+        // ignores the agent name — projectId alone is the canonical
+        // identity — so a later slot visit with the tab's resolved
+        // name upserts props without changing the instance.)
+        agentName:
+          (await agentDisplayName(p.path).catch(() => '')) ||
+          (p.path.split('/').filter(Boolean).pop() ?? 'agent'),
+      })),
+    ).then((entries) => {
+      if (cancelled) return
+      // seedBoot is one-shot store-side too, so a remount that re-runs
+      // this effect mid-flight cannot double-seed.
+      useRetainedChatStore.getState().seedBoot(entries, cap)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [bootSeeded, daemonOwnsChat, activeIds, projects, pinnedToTopCount])
 
   return (
     <>

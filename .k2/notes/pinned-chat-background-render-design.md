@@ -548,3 +548,70 @@ the same remote cost, minus the two POSTs).*
 - **"Keep rendering" literally:** yes — it's nearly free given viewport
   windowing + memoized rows + `display:none`; cold-pixels is an optional knob,
   not the design.
+
+---
+
+## 6. Build addendum (as-built, 2026-07-02)
+
+Shipped in three slices on top of `e222755`:
+`feat(terminal): retainWhileHidden grid-WS predicate` →
+`feat(tabs): pinned-chat retainer — portal hosting + MRU cap` →
+`feat(tabs): eager boot attach for Active workspaces`.
+
+### Owner decisions folded in (supersede §2.1.4/§2.5/§3/Q1/Q2 above)
+
+- **Retained-set policy: MRU, cap 5** (not background-cap-3). The set holds
+  the most-recently-VISITED exempt workspaces this session (visit = workspace
+  foregrounded → its `PinnedChatSlot` mounts), NOT Active-section order.
+- **Cap growth:** `cap = max(5, pinnedToTopCount)` where pinnedToTopCount =
+  `manually_active ∩ canonical-Active` (ActiveBar's sortPinnedFirst
+  partition). **Interpretation flag for owner veto:** "over 6, let it grow"
+  was read as max(5, n) — ≤5 pins never shrink the cap below 5.
+- **Eager boot:** one-shot per host session — pre-attach Active-section
+  pinned chats at boot, seed order = Active-list order (pinned-to-top
+  first), bounded by the cap. Seeds append BEHIND real visits.
+- **Membership tracking:** leaving Active evicts (prune from MRU + detach);
+  re-joining does NOT auto-attach — only boot seeding or a fresh visit does.
+- **Host switch drops the retained set** (accepted; store resets via
+  `onActiveHostChange`, instances die with `<App key={hostKey}>`).
+
+### Where reality disagreed with this note (reality won)
+
+1. **Paths:** `src/renderer/terminal-v2/` is `src/renderer/kessel-term/`;
+   `activeViewer.ts` line refs shifted accordingly.
+2. **React portals DO remount on container change.** §2.2's "changing a
+   portal's container moves the DOM without unmounting the component" is
+   wrong for naive `createPortal` — the reconciler keys portals on
+   `containerInfo` and remounts children when it changes. As built: each
+   retained instance portals into a STABLE per-workspace container div
+   (created once) that is physically `appendChild`-moved between the slot
+   and the hidden host. The jsdom test pins zero-remount across moves.
+3. **PaneGroupView renders `AgentPane`** (a dispatcher), not `AgentChatPane`
+   directly; the gate (`PinnedChatGate`) hooks `AgentPane`'s
+   `section === 'chat'` branch.
+4. **Hidden host is NOT `display:none`** — it's the off-screen
+   real-dimensions pattern (`BackgroundTerminalSpawner`), because a
+   `display:none` ancestor would zero the pane's container and churn layout
+   on re-show; off-screen keeps a live layout at zero paint cost.
+5. **`BackgroundTerminalSpawner` is currently unmounted** in-tree (pattern
+   precedent only). The retainer mounts as the FIRST child of all three App
+   layout branches (default/focus/settings) so index-based reconciliation
+   keeps it — and every retained pane — alive across layout-mode switches
+   (including Settings, which previously parked everything).
+6. **Eviction on daemon SessionRemoved** rides a new optional
+   `AgentChatPane.onDaemonSessionRemoved` callback (no second
+   session-events WS per retained workspace, contra §2.4's table row).
+   Evict only when BACKGROUNDED — a foreground pane keeps today's
+   idle/Retry surface.
+7. **Kill switch:** `localStorage.K2SO_PINNED_RETAIN_OFF = '1'` restores
+   park-on-hidden everywhere (owner asked for "exactly today" fallbacks;
+   this makes the fallback reachable without a rebuild).
+
+### Telemetry (as built)
+
+`[v2-perf] stage=show_to_painted paint_ms=… [since_switch_ms=…]` — logged
+dev-only on every hidden→visible pane transition; `since_switch_ms` appears
+when a `[ws-switch]` t0 (stamped in `projects.ts` `_doSetActiveWorkspace` /
+`_doSetActiveProject`, `src/renderer/lib/ws-switch-mark.ts`) is <10 s old.
+Retained switch-back should read sub-frame; parked panes report the full
+reattach chain. Warm-state/cold-pixels (§2.2 knob) remains NOT built.

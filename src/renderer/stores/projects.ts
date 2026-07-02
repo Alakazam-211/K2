@@ -25,6 +25,9 @@ import { useToastStore } from './toast'
 import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, registerActivateProject, runLeaveGuard } from './tabs'
 import { useFocusGroupsStore } from './focus-groups'
 import { useSettingsStore } from './settings'
+// [ws-switch] — dev-only t0 mark for the pinned-chat retention
+// show→painted metric (read by TerminalPane's [v2-perf] line).
+import { markWorkspaceSwitch } from '@/lib/ws-switch-mark'
 
 // #657 — hand tabs.ts a lazy reader for `activeProjectId` so the
 // dismiss-reap path can honor "never reap the foreground workspace"
@@ -507,6 +510,8 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   // in `setActiveProject` can defer it behind an async modal decision while
   // the common (no-dirty) path runs it synchronously with zero added latency.
   _doSetActiveProject: (id: string | null) => {
+    // [ws-switch] t0 for the retention show→painted metric (dev-only).
+    markWorkspaceSwitch()
     const state = get()
     const tabsStore = useTabsStore.getState()
 
@@ -599,6 +604,8 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   _doSetActiveWorkspace: (projectId: string, workspaceId: string) => {
+    // [ws-switch] t0 for the retention show→painted metric (dev-only).
+    markWorkspaceSwitch()
     const state = get()
     const tabsStore = useTabsStore.getState()
 

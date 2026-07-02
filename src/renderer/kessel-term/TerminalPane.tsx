@@ -29,6 +29,9 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 
 import { useKesselConfig } from '../kessel/config-context'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
+// [v2-perf] show_to_painted — dev-only workspace-switch t0 (projects.ts
+// stamps it; no store import so kessel-term stays decoupled).
+import { readWorkspaceSwitchMark } from '@/lib/ws-switch-mark'
 import {
   computeDesiredActive,
   getLastSentActive,
@@ -879,6 +882,34 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     },
     [],
   )
+
+  // [v2-perf] stage=show_to_painted (dev-only) — the pinned-chat
+  // retention win metric. Measures a hidden→visible transition to the
+  // next painted frame, plus end-to-end since the last workspace-switch
+  // t0 when one is fresh (projects.ts stamps it via ws-switch-mark). A
+  // retained pane reports sub-frame numbers (portal move + one commit);
+  // a parked pane reports the full spawn/WS/snapshot reattach chain.
+  // Initial mount is excluded — the existing first_render stages cover it.
+  const prevShowRef = useRef<boolean | null>(null)
+  useEffect(() => {
+    const was = prevShowRef.current
+    prevShowRef.current = isTabVisible
+    // No import.meta.env gate here (a NEW occurrence would add to the
+    // baseline tsc errors — untypeable under the web tsconfig); perfLog
+    // no-ops in prod, leaving only one idle rAF per show transition.
+    if (was !== false || !isTabVisible) return
+    const t0 = performance.now()
+    const switchT0 = readWorkspaceSwitchMark()
+    requestAnimationFrame(() => {
+      const painted = performance.now()
+      perfLog('show_to_painted', {
+        paint_ms: (painted - t0).toFixed(1),
+        ...(switchT0 !== null
+          ? { since_switch_ms: (painted - switchT0).toFixed(1) }
+          : {}),
+      })
+    })
+  }, [isTabVisible, perfLog])
 
   // Link detection state. Set on hover over a URL / file path
   // that `detectLinks` recognizes in the row the mouse is over.

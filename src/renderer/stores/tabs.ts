@@ -13,7 +13,9 @@ import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 // when the daemon comes online after a slow boot.
 import { onDaemonConnected } from '@/lib/daemon-reconnect'
 // #625 — reset per-machine workspace-session state on a host switch.
-import { onActiveHostChange } from '@/stores/connect-host'
+// `activeHostKey` + the store guard in-flight layout loads so a response
+// from the PREVIOUS host can never land after a switch.
+import { onActiveHostChange, activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 // per-client-view-state.md — the user's SELECTED tab is per-client view
 // state, sourced from this local store (never the shared layout's leaked
 // `activeTabId`). Module-level fns avoid a React subscription in this store.
@@ -3666,6 +3668,12 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   },
 
   loadWorkspaceSessionsFromDb: async () => {
+    // Host-staleness guard (#625 corollary): a load started against one
+    // host must not land after a switch — the old host's layouts (keyed by
+    // ITS project/workspace ids) would repopulate the just-cleared cache,
+    // and flipping `hasLoadedWorkspaceSessions` would suppress the retry
+    // the NEW host's baseline still needs.
+    const loadHostKey = activeHostKey(useConnectHostStore.getState().activeHost)
     try {
       // The daemon's `workspace-layouts/load-all` route serializes
       // `db_ops::WorkspaceLayout` with `#[serde(rename_all = "camelCase")]`,
@@ -3675,6 +3683,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       // with no shape change — so the raw daemon response already matches
       // this type and needs NO post-fetch transform.
       const sessions = await daemonCliGet<Array<{ projectId: string, workspaceId: string, layoutJson: string }>>('workspace-layouts/load-all')
+      if (activeHostKey(useConnectHostStore.getState().activeHost) !== loadHostKey) return
       const layouts: Record<string, SerializedLayout> = {}
       for (const session of sessions) {
         try {

@@ -17,8 +17,9 @@ import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 // Phase 2.5 fix (finding #547) — daemon-reconnect retry bus.
 import { onDaemonConnected } from '@/lib/daemon-reconnect'
 // #625 — re-restore the active project/workspace against the NEW host on
-// a host switch.
-import { onActiveHostChange } from '@/stores/connect-host'
+// a host switch. `activeHostKey` + the store guard in-flight fetches so a
+// response from the PREVIOUS host can never land after a switch.
+import { onActiveHostChange, activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { onProjectsChanged } from '@/stores/session-events'
 import { useGitInitDialogStore } from './git-init-dialog'
 import { useToastStore } from './toast'
@@ -193,6 +194,15 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   activeWorkspaceId: null,
 
   fetchProjects: async () => {
+    // Host-staleness guard: this fetch belongs to the host that was active
+    // when it STARTED. A host switch mid-flight (onActiveHostChange fires
+    // its own fresh fetch) must discard this one's results — otherwise the
+    // old host's list lands late and overwrites the new host's projects
+    // (and its restore branch can re-activate an old-host project against
+    // the new top-bar host).
+    const fetchHostKey = activeHostKey(useConnectHostStore.getState().activeHost)
+    const hostUnchanged = (): boolean =>
+      activeHostKey(useConnectHostStore.getState().activeHost) === fetchHostKey
     try {
       // GET query params are snake_case (the daemon reads `project_id`);
       // the camelCase Project/Workspace/Section response shapes match the
@@ -224,6 +234,11 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
           }
         })
       )
+
+      // The awaits above may have spanned a host switch — drop this
+      // (now-stale) response on the floor; the switch already fired a
+      // fresh fetch against the new host.
+      if (!hostUnchanged()) return
 
       // Preserve object identity for unchanged projects to avoid unnecessary re-renders
       const prev = get().projects
@@ -291,6 +306,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
           restoredWorkspaceId = restoredProject.workspaces[0]?.id ?? null
         }
 
+        // The settings read above may have spanned a host switch — never
+        // activate this (old) host's project against the new host.
+        if (!hostUnchanged()) return
+
         set({
           activeProjectId: restoredProject.id,
           activeWorkspaceId: restoredWorkspaceId
@@ -322,8 +341,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // Phase 2.5 fix (finding #547): flip the persist gate ONLY
       // after a successful projects fetch. Subsequent
       // setActiveProject/setActiveWorkspace calls (the writers below)
-      // now allow their `settingsUpdate` calls.
-      hasLoadedFromDaemon = true
+      // now allow their `settingsUpdate` calls. Host-guarded: a stale
+      // fetch must not unlock writes the NEW host's baseline hasn't
+      // earned (the switch reset this gate to false on purpose).
+      if (hostUnchanged()) hasLoadedFromDaemon = true
     } catch (err) {
       console.error('[projects] fetchProjects failed:', err)
     }

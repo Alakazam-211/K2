@@ -446,7 +446,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   fetchSettings: async () => {
     const seqBefore = _writeSeq
-    const result = await settingsGet()
+    let result: Awaited<ReturnType<typeof settingsGet>>
+    try {
+      result = await settingsGet()
+    } catch (e) {
+      // Daemon unreachable, or the remote session is dead (settingsGet
+      // throws on non-2xx). Keep the current snapshot; the recovery seams
+      // (onDaemonConnected, the host-change/session-mint re-fire) retry.
+      // Without this, the host-switch burst against a dead remote session
+      // escaped as an unhandled rejection (the onActiveHostChange caller
+      // is fire-and-forget).
+      console.warn('[settings] fetchSettings failed:', e)
+      return
+    }
     // If a write happened while we were fetching, skip — the write's result is fresher
     if (_writeSeq !== seqBefore) return
     set({

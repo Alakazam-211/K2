@@ -159,13 +159,34 @@ export function activeHostKey(active: ActiveHost): string {
   return active === 'local' ? 'local' : `${active.id}:${active.hostname}:${active.port}`
 }
 
+/** Whether the active host carries a usable session: 'local' always does
+ *  (per-boot daemon token, resolved by daemon-ws); a remote does IFF it
+ *  holds a non-empty session token. `expireSession` flips an active
+ *  remote to tokenless; a sign-in mint flips it back. */
+function activeHostAuthed(active: ActiveHost): boolean {
+  return active === 'local' || active.token.length > 0
+}
+
 /**
  * Subscribe to ACTIVE-HOST CHANGES (not every store mutation). `onChange`
- * fires only when {@link activeHostKey} actually differs from the prior
- * value — never on the initial subscribe for the boot 'local' host, and
- * never for unrelated mutations (token refresh, host-list edits) that
- * leave the active host identity unchanged. Returns the zustand
- * unsubscribe fn.
+ * fires when {@link activeHostKey} differs from the prior value — never on
+ * the initial subscribe for the boot 'local' host, and never for unrelated
+ * mutations (token refresh, host-list edits) that leave the active host
+ * identity unchanged. Returns the zustand unsubscribe fn.
+ *
+ * It ALSO fires, with `nextKey === prevKey`, when the ACTIVE host's session
+ * is MINTED — its token transitions empty → non-empty (RemoteSignIn /
+ * loginToHost after `expireSession` dropped it). The host-switch fetch
+ * burst every subscriber runs fires at `selectHost` time, when the new
+ * host's session may be dead (a remote restart wiped it); those fetches
+ * fail terminally with 'signin-required' and NOTHING else replays them —
+ * the later sign-in re-activates the SAME host, so a key-only rule never
+ * re-fires and every host-scoped store keeps the PREVIOUS host's data
+ * while the top bar says the new host is connected (the switch-while-in-
+ * Settings dashboard desync). A mint is the recovery point: replay the
+ * burst. A token REFRESH (non-empty → non-empty, the revival path) does
+ * NOT fire — daemon-cli's revive-and-replay already completes those
+ * requests, and a mid-session full reset would churn live surfaces.
  *
  * This is the single seam the per-machine session stores hook to clear
  * their local-ID-keyed state on a host switch (#625). It runs AFTER
@@ -177,9 +198,18 @@ export function onActiveHostChange(
   onChange: (nextKey: string, prevKey: string) => void,
 ): () => void {
   let lastKey = activeHostKey(useConnectHostStore.getState().activeHost)
+  let lastAuthed = activeHostAuthed(useConnectHostStore.getState().activeHost)
   return useConnectHostStore.subscribe((state) => {
     const nextKey = activeHostKey(state.activeHost)
-    if (nextKey === lastKey) return
+    const nextAuthed = activeHostAuthed(state.activeHost)
+    const keyChanged = nextKey !== lastKey
+    // Same host, session minted (tokenless → token): the switch-time fetch
+    // burst died against the dead session — replay it now that it can
+    // succeed. The authed → UNAUTHED transition (expireSession) only
+    // records state: firing there would launch a burst guaranteed to fail.
+    const sessionMinted = !keyChanged && !lastAuthed && nextAuthed
+    lastAuthed = nextAuthed
+    if (!keyChanged && !sessionMinted) return
     const prevKey = lastKey
     lastKey = nextKey
     onChange(nextKey, prevKey)

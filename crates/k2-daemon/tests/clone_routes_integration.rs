@@ -261,7 +261,13 @@ async fn clone_unpack_owner_token_extracts_registers_and_configures() {
     assert_eq!(proj["agentMode"].as_str(), Some("manager"));
     assert_eq!(proj["color"].as_str(), Some("#abcdef"));
     assert_eq!(proj["name"].as_str(), Some("Cloned WS"));
-    assert_eq!(proj["heartbeatEnabled"].as_i64(), Some(1));
+    // d410883: `heartbeatEnabled` on a Project READ is a LIVE aggregate
+    // ("≥1 enabled, non-archived heartbeat row?"), not the legacy projects-
+    // column flag the clone settings write. No heartbeat rows travel in a
+    // bundle, so a fresh unpack truthfully reports 0 — the unit-test twin
+    // (clone_routes/tests.rs) was already updated; this assertion had
+    // drifted the same way.
+    assert_eq!(proj["heartbeatEnabled"].as_i64(), Some(0));
     assert_eq!(proj["worktreeMode"].as_i64(), Some(1));
 
     // cleanup the registered row.

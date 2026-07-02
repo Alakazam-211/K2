@@ -417,6 +417,15 @@ pub async fn serve_session_grid_connection(
     // to fail with "busy" now subscribe fresh each time and
     // render from a new initial snapshot.
     let mut events_rx = session.subscribe_events();
+    // 2026-07-02 (PTY-leak Bug 2) — register as a REAL viewer for this
+    // connection's lifetime. `subscriber_count()` counts these
+    // registrations, NOT events_tx receivers (internal daemon observers
+    // hold receivers too and used to inflate the count so it never hit
+    // zero, permanently defeating the GH#22 un-forced close guard). The
+    // RAII guard decrements on ANY exit path out of this handler. It
+    // also latches `ever_attached` (v2_spawn's never-attached bare-shell
+    // cap) — one write point, so the two signals can never disagree.
+    let _viewer_reg = session.attach_viewer();
     // Phase B: subscribe to out-of-band label updates. When the
     // CLI route or another process sets the session's label, we
     // need to push `LabelChanged` to this client.
@@ -503,13 +512,10 @@ pub async fn serve_session_grid_connection(
         session.session_id,
         pane_id
     );
-    // 2026-07-02 PTY-leak breaker — latch "a client actually looked at
-    // this session" (never cleared). `v2_spawn`'s never-attached
-    // bare-shell cap consults this so once-viewed tabs never count
-    // against it.
-    session
-        .ever_attached
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    // ("A client actually looked at this session" is latched by the
+    // `attach_viewer()` registration above — see the PTY-leak Bug 2
+    // comment — so `v2_spawn`'s never-attached bare-shell cap and the
+    // live viewer count share one attach definition.)
 
     // Re-auth heartbeat: every 5s, confirm the token that opened this
     // socket is still valid. When an owner disables/removes/role-changes a

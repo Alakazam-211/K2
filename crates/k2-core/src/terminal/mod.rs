@@ -50,7 +50,8 @@ pub use event_sink::TerminalEventSink;
 
 pub use daemon_pty::{
     AlacEvent, DaemonEventListener, DaemonPtyConfig, DaemonPtySession,
-    LabelSource, SubscriberViewport, RESIZE_DEBOUNCE_MS, SCROLLBACK_CAP,
+    LabelSource, SubscriberViewport, ViewerRegistration, RESIZE_DEBOUNCE_MS,
+    SCROLLBACK_CAP,
 };
 
 pub use sandbox::{

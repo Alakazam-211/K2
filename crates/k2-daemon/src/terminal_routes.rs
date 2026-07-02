@@ -629,10 +629,13 @@ pub fn handle_agents_running(_params: &HashMap<String, String>) -> CliResponse {
         // and the renderer use it to tell whether a client is attached
         // to a session. The registry lookup is ALWAYS 0 for v2 sessions
         // (they never register there), so source it from the v2
-        // session's OWN broadcast channel — the exact channel each
-        // grid-WS subscribes to via `session.subscribe_events()` in
-        // sessions_grid_ws.rs. `receiver_count()` therefore counts the
-        // live attached viewers and drops to 0 when all clients detach.
+        // session's OWN viewer registry — each grid-WS connection
+        // holds a `ViewerRegistration` (`session.attach_viewer()` in
+        // sessions_grid_ws.rs) for its lifetime, so the count is the
+        // live attached viewers and drops to 0 when all clients
+        // detach. (2026-07-02 Bug 2: deliberately NOT the events
+        // channel's `receiver_count()` — internal daemon observers
+        // hold receivers there and inflated the old count forever.)
         let session_id = session.session_id();
         let idle_ms = registry::lookup(&session_id)
             .map(|entry| entry.idle_for(now).as_millis() as u64)

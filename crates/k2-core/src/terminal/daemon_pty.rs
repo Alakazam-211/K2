@@ -442,6 +442,26 @@ pub struct DaemonPtySession {
     /// real (once-viewed) tabs never count against it.
     pub ever_attached: std::sync::atomic::AtomicBool,
 
+    /// 2026-07-02 PTY-leak incident (Bug 2) — the number of REAL
+    /// viewers currently attached, i.e. live [`ViewerRegistration`]
+    /// guards handed out by [`Self::attach_viewer`] (the grid-WS
+    /// handler acquires one per connection and holds it until ANY
+    /// disconnect path returns).
+    ///
+    /// This deliberately does NOT piggyback on
+    /// `events_tx.receiver_count()`: the daemon holds its own
+    /// internal receivers on the same broadcast channel — the
+    /// child-exit observer (`v2_spawn::spawn_child_exit_observer`)
+    /// for the session's whole life, plus the shared grid emitter
+    /// (`grid_emitter::run`) from first attach until child exit — so
+    /// the receiver count never returns to its true zero. That
+    /// permanently defeated every "no viewers attached" consumer:
+    /// the GH#22 un-forced close guard saw ≥1 forever and refused
+    /// every reap. Counting explicit registrations instead means a
+    /// future internal `subscribe_events()` caller can NEVER drift
+    /// back into being miscounted as a viewer.
+    viewer_count: std::sync::atomic::AtomicUsize,
+
     /// 0.39.43 (PRD `daemon-multi-client-arbitration.md` Issue A) —
     /// the active viewer's viewport dimensions, captured on the
     /// `SetActive { active:true, cols, rows }` claim. When a viewer
@@ -748,6 +768,7 @@ impl DaemonPtySession {
             child_exited: std::sync::atomic::AtomicBool::new(false),
             active_subscriber: std::sync::atomic::AtomicU64::new(0),
             ever_attached: std::sync::atomic::AtomicBool::new(false),
+            viewer_count: std::sync::atomic::AtomicUsize::new(0),
             active_cols: std::sync::atomic::AtomicU16::new(0),
             active_rows: std::sync::atomic::AtomicU16::new(0),
             viewports: Mutex::new(HashMap::new()),
@@ -1215,23 +1236,51 @@ impl DaemonPtySession {
         self.events_tx.subscribe()
     }
 
-    /// Number of live subscribers currently attached to this
-    /// session's event broadcast.
+    /// Number of REAL viewers currently attached to this session —
+    /// the count of live [`ViewerRegistration`] guards from
+    /// [`Self::attach_viewer`].
     ///
-    /// Each attached grid-WS connection
-    /// (`sessions_grid_ws::handle`) holds a `broadcast::Receiver`
-    /// obtained from [`subscribe_events`]; that receiver lives for
-    /// the duration of the WS connection and drops when the client
-    /// detaches. `broadcast::Sender::receiver_count` therefore
-    /// reports the real number of clients watching this session —
-    /// > 0 means "someone is attached", 0 means "nobody is looking".
+    /// INVARIANT (2026-07-02 PTY-leak incident, Bug 2): this counts
+    /// grid-WS viewer registrations, NEVER `events_tx` receivers.
+    /// It used to read `events_tx.receiver_count()`, but the daemon's
+    /// own internal observers (the child-exit observer for the
+    /// session's whole life, the shared grid emitter from first
+    /// attach) hold receivers on that channel too, so the count never
+    /// reached its true zero — the GH#22 un-forced close guard saw
+    /// "≥1 attached" forever and refused every reap. Internal code is
+    /// free to `subscribe_events()` without affecting this signal;
+    /// anything that should count as a viewer must go through
+    /// [`Self::attach_viewer`].
     ///
     /// This is the authoritative "is a client attached?" signal the
     /// age-out reaper consults before killing a session (GH#22): a
-    /// remote client attached over K2 Connect keeps a live receiver,
+    /// remote client attached over K2 Connect holds a registration,
     /// so the reaper must not reap a session with `subscriber_count() > 0`.
+    /// It also agrees with `ever_attached` by construction:
+    /// `attach_viewer` is the single write point for BOTH (the latch
+    /// is exactly "viewer_count was ever incremented").
     pub fn subscriber_count(&self) -> usize {
-        self.events_tx.receiver_count()
+        self.viewer_count.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Register a REAL viewer (a grid-WS connection) for the lifetime
+    /// of the returned guard. Increments the viewer count and latches
+    /// `ever_attached`; dropping the guard — on ANY WS exit path —
+    /// decrements. The grid-WS handler is the only intended caller;
+    /// internal daemon observers must use [`Self::subscribe_events`]
+    /// alone so they never count as viewers (see
+    /// [`Self::subscriber_count`] for the incident this pins).
+    pub fn attach_viewer(self: &Arc<Self>) -> ViewerRegistration {
+        self.viewer_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // PTY-leak breaker latch (see the `ever_attached` field doc):
+        // latched here so "ever attached" and "attached now" share one
+        // write point and can never disagree about what counts.
+        self.ever_attached
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        ViewerRegistration {
+            session: Arc::clone(self),
+        }
     }
 
     /// Forcefully terminate AND reap the child process.
@@ -1403,6 +1452,25 @@ impl Drop for DaemonPtySession {
     }
 }
 
+/// RAII proof that a REAL viewer (a grid-WS connection) is attached
+/// to a session. Handed out by [`DaemonPtySession::attach_viewer`];
+/// holding it keeps `subscriber_count()` ≥ 1, and dropping it — on
+/// ANY WS exit path, clean or panicked — decrements the count. The
+/// guard owns a strong `Arc` for the same reason the WS handler does:
+/// an attached viewer must keep the session alive (GH#22 — a reap
+/// mid-connection would SIGHUP the child out from under the client).
+pub struct ViewerRegistration {
+    session: Arc<DaemonPtySession>,
+}
+
+impl Drop for ViewerRegistration {
+    fn drop(&mut self) {
+        self.session
+            .viewer_count
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1456,6 +1524,61 @@ mod tests {
     // struct layout. We use the simplest valid spawn (a `cat`
     // subprocess on Unix) under #[cfg(unix)] — the test exits
     // when the Arc drops at scope end.
+
+    // 2026-07-02 PTY-leak incident (Bug 2) — the viewer-count
+    // invariant, on ONE spawned PTY (budget-frugal): internal
+    // `subscribe_events()` receivers (the child-exit observer /
+    // grid-emitter shape) never count as viewers; only
+    // `attach_viewer()` registrations do, the RAII guard decrements
+    // on drop, and the `ever_attached` latch flips with the first
+    // registration and stays latched.
+    #[cfg(unix)]
+    #[test]
+    fn viewer_count_ignores_internal_receivers_and_tracks_registrations() {
+        use std::path::PathBuf;
+        use std::sync::atomic::Ordering;
+        let cfg = DaemonPtyConfig {
+            program: Some("cat".to_string()),
+            cwd: Some(PathBuf::from("/tmp")),
+            ..Default::default()
+        };
+        let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
+
+        // Internal observers: events receivers only — must be invisible
+        // to the viewer signal (pre-fix these inflated it forever).
+        let _internal_rx = s.subscribe_events();
+        let _internal_rx2 = s.subscribe_events();
+        assert_eq!(
+            s.subscriber_count(),
+            0,
+            "internal subscribe_events() receivers must not count as viewers"
+        );
+        assert!(
+            !s.ever_attached.load(Ordering::Relaxed),
+            "internal receivers must not latch ever_attached either"
+        );
+
+        // Real viewers: attach_viewer registrations count and latch.
+        let reg1 = s.attach_viewer();
+        let reg2 = s.attach_viewer();
+        assert_eq!(s.subscriber_count(), 2, "each registration counts once");
+        assert!(
+            s.ever_attached.load(Ordering::Relaxed),
+            "first registration must latch ever_attached"
+        );
+
+        // RAII: every drop decrements; the latch survives.
+        drop(reg1);
+        assert_eq!(s.subscriber_count(), 1, "drop must decrement");
+        drop(reg2);
+        assert_eq!(s.subscriber_count(), 0, "count must return to true zero");
+        assert!(
+            s.ever_attached.load(Ordering::Relaxed),
+            "ever_attached must stay latched after all viewers detach"
+        );
+
+        s.kill();
+    }
 
     #[cfg(unix)]
     #[test]

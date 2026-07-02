@@ -115,11 +115,12 @@ impl LiveSession {
         self.0.bracketed_paste_active()
     }
 
-    /// Number of clients currently attached to this session's grid
-    /// broadcast (real-time viewers). Sourced from the v2 session's
-    /// OWN broadcast channel (`DaemonPtySession::subscriber_count`),
-    /// which is what the grid-WS subscribes to on attach — so this is
-    /// > 0 exactly when at least one client (local or remote) is
+    /// Number of clients currently attached to this session
+    /// (real-time viewers). Sourced from the v2 session's OWN viewer
+    /// registry (`DaemonPtySession::subscriber_count` — the grid-WS
+    /// `attach_viewer()` registrations, NOT events-channel receivers;
+    /// see that method for the 2026-07-02 Bug 2 invariant) — so this
+    /// is > 0 exactly when at least one client (local or remote) is
     /// watching, and 0 when all clients have detached.
     ///
     /// This is the "is a client attached?" signal the age-out reaper

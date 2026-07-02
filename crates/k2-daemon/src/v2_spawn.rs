@@ -1073,10 +1073,14 @@ fn resolve_sandbox(requested: bool) -> k2_core::terminal::SandboxSpec {
 /// Pure decision for whether `/cli/sessions/v2/close` is allowed to
 /// tear a session down.
 ///
-/// GH#22: a remote (or local) client attached over the grid-WS keeps
-/// a live broadcast receiver on the session, so `subscriber_count > 0`
-/// means "someone is watching this session right now". The age-out
-/// reaper drives `/cli/sessions/v2/close`; if we let it unregister an
+/// GH#22: a remote (or local) client attached over the grid-WS holds
+/// a live `ViewerRegistration`, so `subscriber_count > 0` means
+/// "someone is watching this session right now". (2026-07-02 Bug 2:
+/// the count is the explicit viewer registry, NOT events-channel
+/// receivers — internal observers like the child-exit task used to
+/// inflate the receiver count so it never reached zero, which made
+/// this guard refuse EVERY un-forced close.) The age-out reaper
+/// drives `/cli/sessions/v2/close`; if we let it unregister an
 /// attached session, the last-`Arc` drop SIGHUPs the child out from
 /// under the watching client. So when subscribers are attached we
 /// REFUSE — unless the caller explicitly passed `force` (the operator
@@ -1100,8 +1104,9 @@ fn close_allowed(subscriber_count: usize, force: bool) -> bool {
 /// receives SIGHUP, and the session is cleaned up.
 ///
 /// **GH#22 reaper guard.** Before unregistering, we check the v2
-/// session's OWN broadcast subscriber count (the channel each grid-WS
-/// subscribes to on attach). If a client is still attached
+/// session's live viewer count (the grid-WS `ViewerRegistration`
+/// registry — see `DaemonPtySession::subscriber_count` for why it is
+/// NOT the events channel's receiver count). If a client is still attached
 /// (`subscriber_count > 0`) we DO NOT kill the session — we return
 /// `{"closed": false, "reason": "session still has attached clients"}`
 /// instead. This is defense-in-depth so NO reaper path (the renderer's
@@ -1190,6 +1195,13 @@ fn current_dims(session: &DaemonPtySession) -> (u16, u16) {
 /// doesn't keep the Arc alive past the last legitimate holder. If
 /// every other holder drops first, `Weak::upgrade()` returns None
 /// and we exit silently.
+///
+/// 2026-07-02 (PTY-leak Bug 2): the events receiver this task holds
+/// for the session's whole life is an INTERNAL observer — it must
+/// never count as an attached viewer. That's guaranteed structurally:
+/// `subscriber_count()` counts `attach_viewer()` registrations, not
+/// events-channel receivers, so this task (and any future internal
+/// `subscribe_events()` caller) can't re-inflate the viewer signal.
 pub fn spawn_child_exit_observer(
     agent_name: String,
     session: std::sync::Arc<DaemonPtySession>,

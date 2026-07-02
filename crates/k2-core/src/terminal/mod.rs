@@ -30,6 +30,12 @@ pub mod login_path;
 // the Tauri thin client (A5). Generic over `EventListener` so
 // it's usable with any Term variant.
 pub mod grid_snapshot;
+// "k1" binary grid wire — compact fixed-layout encoding of the
+// grid_snapshot types, opt-in per grid-WS connection (`&proto=k1`).
+// JSON stays the default. The byte layout is documented ONCE in this
+// module's doc comment and mirrored by the TS decoder
+// (`src/renderer/terminal-v2/gridWire.ts`).
+pub mod grid_wire;
 // Grow-then-shrink settle watcher (2026-04-22). Every Session Stream
 // spawn opens the PTY at an artificially large rows value; this
 // module owns the "has the initial paint settled?" decision that

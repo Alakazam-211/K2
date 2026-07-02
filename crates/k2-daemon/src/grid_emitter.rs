@@ -45,6 +45,7 @@
 //! rows the attach snapshot already contains.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
@@ -53,7 +54,8 @@ use tokio::sync::broadcast;
 use k2_core::log_debug;
 use k2_core::session::SessionId;
 use k2_core::terminal::{
-    build_emit, drain_damage, AlacEvent, DaemonPtySession, EmitDecision, EmitState,
+    build_emit, drain_damage, grid_wire, AlacEvent, DaemonPtySession, EmitDecision,
+    EmitState,
 };
 
 use crate::sessions_grid_ws::Outbound;
@@ -68,6 +70,34 @@ use crate::sessions_grid_ws::Outbound;
 pub(crate) struct GridFrame {
     pub version: u64,
     pub text: std::sync::Arc<str>,
+    /// The same frame in the "k1" binary format
+    /// (`k2_core::terminal::grid_wire`). Encoded ONCE per frame,
+    /// lazily: `Some` only when ≥1 subscriber of this session opted
+    /// into k1 at encode time (`&proto=k1`), so a JSON-only session
+    /// never pays the second encode. A k1 subscriber can only ever
+    /// forward frames encoded AFTER its attach (its `frame_floor` is
+    /// stamped after [`attach`] bumps the k1 refcount, under the same
+    /// emit_state lock the emitter takes), so `None` on a
+    /// floor-clearing frame is unreachable — the WS loop still falls
+    /// back to `text` there, which the client accepts on either
+    /// transport.
+    pub binary: Option<std::sync::Arc<[u8]>>,
+}
+
+/// RAII registration of one subscriber's wire format with the
+/// session's shared emitter. Dropping it (WS detach, any exit path)
+/// decrements the k1 refcount so the emitter stops binary-encoding
+/// when the last k1 subscriber leaves.
+pub(crate) struct FormatRegistration {
+    k1_subs: Option<Arc<AtomicUsize>>,
+}
+
+impl Drop for FormatRegistration {
+    fn drop(&mut self) {
+        if let Some(c) = &self.k1_subs {
+            c.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
 }
 
 /// Frames channel capacity per session. A subscriber that falls more
@@ -78,6 +108,10 @@ const FRAMES_CAP: usize = 256;
 struct EmitterHandle {
     frames_tx: broadcast::Sender<GridFrame>,
     emit_state: Arc<Mutex<EmitState>>,
+    /// Live count of subscribers that opted into the k1 binary wire.
+    /// Read by the emitter per frame to decide whether to binary-
+    /// encode; written only via [`attach`] / [`FormatRegistration`].
+    k1_subs: Arc<AtomicUsize>,
 }
 
 fn registry() -> &'static Mutex<HashMap<SessionId, EmitterHandle>> {
@@ -88,22 +122,35 @@ fn registry() -> &'static Mutex<HashMap<SessionId, EmitterHandle>> {
 /// Get-or-spawn the shared emitter for `session` and join its frame
 /// stream. Returns the frames receiver + the shared emit state (the
 /// caller locks it — together with the Term, in that order — to take
-/// its stamped read-only attach snapshot).
+/// its stamped read-only attach snapshot) + the caller's format
+/// registration. `wants_k1` subscribers bump the session's k1
+/// refcount HERE — before the caller stamps its version floor — which
+/// is what guarantees every floor-clearing frame carries a binary
+/// encoding.
 pub(crate) fn attach(
     session: &Arc<DaemonPtySession>,
     pane_id: &str,
-) -> (broadcast::Receiver<GridFrame>, Arc<Mutex<EmitState>>) {
+    wants_k1: bool,
+) -> (
+    broadcast::Receiver<GridFrame>,
+    Arc<Mutex<EmitState>>,
+    FormatRegistration,
+) {
     let mut reg = registry().lock();
     if let Some(h) = reg.get(&session.session_id) {
-        return (h.frames_tx.subscribe(), h.emit_state.clone());
+        let registration = register_format(&h.k1_subs, wants_k1);
+        return (h.frames_tx.subscribe(), h.emit_state.clone(), registration);
     }
     let (frames_tx, frames_rx) = broadcast::channel(FRAMES_CAP);
     let emit_state = Arc::new(Mutex::new(EmitState::default()));
+    let k1_subs = Arc::new(AtomicUsize::new(0));
+    let registration = register_format(&k1_subs, wants_k1);
     reg.insert(
         session.session_id,
         EmitterHandle {
             frames_tx: frames_tx.clone(),
             emit_state: emit_state.clone(),
+            k1_subs: k1_subs.clone(),
         },
     );
     log_debug!(
@@ -115,8 +162,20 @@ pub(crate) fn attach(
         pane_id.to_string(),
         frames_tx,
         emit_state.clone(),
+        k1_subs,
     ));
-    (frames_rx, emit_state)
+    (frames_rx, emit_state, registration)
+}
+
+fn register_format(k1_subs: &Arc<AtomicUsize>, wants_k1: bool) -> FormatRegistration {
+    if wants_k1 {
+        k1_subs.fetch_add(1, Ordering::Relaxed);
+        FormatRegistration {
+            k1_subs: Some(k1_subs.clone()),
+        }
+    } else {
+        FormatRegistration { k1_subs: None }
+    }
 }
 
 /// Minimum interval between encoded frames (~60 Hz). An isolated
@@ -129,6 +188,25 @@ pub(crate) fn attach(
 /// that lands during the window, so the coalesced frame is complete.
 /// The legacy `alacritty_backend` emission loop used the same 16ms
 /// floor.
+///
+/// Synchronized output (DECSET 2026, the BSU/ESU frame brackets
+/// Ink/claude emit per repaint) needs NO handling here: it is already
+/// coalesced one layer down, inside the parser this emitter's Wakeups
+/// come from. vte 0.15's `ansi::Processor` buffers every byte between
+/// `\x1b[?2026h` and `\x1b[?2026l` (2 MiB cap) and applies the whole
+/// update to the Term at ESU — or at its own 150ms safety timeout —
+/// and `alacritty_terminal` 0.26's `EventLoop` (which `daemon_pty`
+/// spawns) suppresses the Wakeup entirely while all bytes read were
+/// synchronized (`event_loop.rs`: "Queue terminal redraw unless all
+/// processed bytes were synchronized"), firing it only at sync-END /
+/// timeout. So a Wakeup reaching this task is already a complete
+/// frame boundary; a mid-frame torn emit can't happen, and no
+/// BSU/ESU deferral belongs here. Verified live 2026-07-02: BSU +
+/// three writes staggered over ~100ms + ESU through a scratch
+/// session produced zero deltas until ESU, then exactly one frame
+/// carrying all three; the same probe with ~300ms inside the window
+/// showed the buffered content releasing at +150ms — vte's abort
+/// timeout doing its job.
 const MIN_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// The emitter task: one per live session, exits on child exit /
@@ -139,6 +217,7 @@ async fn run(
     pane_id: String,
     frames_tx: broadcast::Sender<GridFrame>,
     emit_state: Arc<Mutex<EmitState>>,
+    k1_subs: Arc<AtomicUsize>,
 ) {
     let mut events_rx = session.subscribe_events();
     let mut last_emit = std::time::Instant::now() - MIN_FRAME_INTERVAL;
@@ -174,7 +253,7 @@ async fn run(
                         }
                     }
                 }
-                emit_once(&session, &pane_id, &frames_tx, &emit_state);
+                emit_once(&session, &pane_id, &frames_tx, &emit_state, &k1_subs);
                 last_emit = std::time::Instant::now();
                 if child_exited {
                     break;
@@ -194,7 +273,7 @@ async fn run(
                     "[daemon/grid-emitter] session {} lagged {n} events — emitting accumulated damage",
                     session.session_id
                 );
-                emit_once(&session, &pane_id, &frames_tx, &emit_state);
+                emit_once(&session, &pane_id, &frames_tx, &emit_state, &k1_subs);
                 last_emit = std::time::Instant::now();
             }
             Err(broadcast::error::RecvError::Closed) => break,
@@ -215,6 +294,7 @@ fn emit_once(
     pane_id: &str,
     frames_tx: &broadcast::Sender<GridFrame>,
     emit_state: &Arc<Mutex<EmitState>>,
+    k1_subs: &Arc<AtomicUsize>,
 ) {
     // Zero viewers: consume damage WITHOUT encoding so EmitState stays
     // coherent for the next attach (see module docs).
@@ -242,13 +322,21 @@ fn emit_once(
         let mut term = term_mutex.lock();
         build_emit(pane_id, &mut term, &mut st)
     };
+    // One encode per FORMAT per frame: JSON always (the default
+    // protocol every subscriber can consume), k1 binary only while
+    // the session has ≥1 opted-in subscriber.
+    let want_k1 = k1_subs.load(Ordering::Relaxed) > 0;
     let frame = match decision {
-        EmitDecision::Full(snap) => {
-            serialize_frame(snap.version, &Outbound::Snapshot(&snap))
-        }
-        EmitDecision::Delta(delta) => {
-            serialize_frame(delta.version, &Outbound::Delta(&delta))
-        }
+        EmitDecision::Full(snap) => serialize_frame(
+            snap.version,
+            &Outbound::Snapshot(&snap),
+            want_k1.then(|| grid_wire::encode_snapshot(&snap)),
+        ),
+        EmitDecision::Delta(delta) => serialize_frame(
+            delta.version,
+            &Outbound::Delta(&delta),
+            want_k1.then(|| grid_wire::encode_delta(&delta)),
+        ),
         EmitDecision::Skip => None,
     };
     if let Some(f) = frame {
@@ -259,11 +347,16 @@ fn emit_once(
     }
 }
 
-fn serialize_frame(version: u64, outbound: &Outbound<'_>) -> Option<GridFrame> {
+fn serialize_frame(
+    version: u64,
+    outbound: &Outbound<'_>,
+    binary: Option<Vec<u8>>,
+) -> Option<GridFrame> {
     match serde_json::to_string(outbound) {
         Ok(json) => Some(GridFrame {
             version,
             text: std::sync::Arc::from(json),
+            binary: binary.map(std::sync::Arc::from),
         }),
         Err(e) => {
             log_debug!("[daemon/grid-emitter] frame serialize failed: {e}");

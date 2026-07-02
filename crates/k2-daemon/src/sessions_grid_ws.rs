@@ -34,12 +34,19 @@
 //! subscriber), the session persists. Only the map's removal or
 //! explicit close tears it down.
 //!
-//! Message format is JSON text (not binary) for both directions.
-//! Bandwidth of a typical delta is small (damaged rows only); the
-//! JSON framing is convenient and matches the protocol style of
-//! `sessions_ws.rs` / the Awareness Bus.
+//! Message format is JSON text for both directions by default. A
+//! client may opt into the "k1" binary wire with `&proto=k1` on the
+//! WS URL: `snapshot`/`delta` frames are then sent as WS BINARY
+//! messages in the fixed-layout format of
+//! `k2_core::terminal::grid_wire` (~2.5× smaller, DataView-decoded
+//! client-side), while every other event (title, bell, labels,
+//! child_exit, error) and ALL inbound actions stay JSON text. k1
+//! clients additionally `{"action":"ack","version":N}` each applied
+//! frame batch, which drives the ack-gated pacing below; non-opted
+//! clients keep the pre-k1 behavior byte-identical (mixed-version
+//! fleet requirement).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -49,7 +56,8 @@ use tokio_tungstenite::tungstenite::Message;
 use k2_core::log_debug;
 use k2_core::session::SessionId;
 use k2_core::terminal::{
-    snapshot_term, AlacEvent, DaemonPtySession, TermGridDelta, TermGridSnapshot,
+    grid_wire, snapshot_term, AlacEvent, DaemonPtySession, TermGridDelta,
+    TermGridSnapshot,
 };
 
 use crate::v2_session_map;
@@ -139,7 +147,27 @@ enum Inbound {
         #[serde(default)]
         rows: Option<u16>,
     },
+    /// k1 wire — the client applied a frame batch; `version` is the
+    /// highest frame version it has rendered. Sent once per rAF
+    /// flush (not per message). Drives the ack-gated pacing: the
+    /// daemon stops forwarding deltas to a connection whose unacked
+    /// backlog exceeds [`UNACKED_FRAMES_MAX`] / [`UNACKED_BYTES_MAX`]
+    /// and resyncs it with a fresh full snapshot on its next ack.
+    /// JSON (non-k1) clients never send this; an older daemon
+    /// receiving it logs "malformed inbound" and carries on.
+    Ack { version: u64 },
 }
+
+/// k1 pacing: stop forwarding frames to a connection once this many
+/// forwarded frames are unacknowledged...
+const UNACKED_FRAMES_MAX: usize = 32;
+/// ...or once the unacked frames total this many payload bytes,
+/// whichever trips first. Bounds the worst case for a slow viewer:
+/// instead of an unbounded delta firehose (or broadcast-`Lagged`
+/// storms, whose recovery payload is the LARGEST message we have —
+/// a full snapshot with scrollback — at the worst time), it gets a
+/// quiet gap and ONE authoritative snapshot when it catches up.
+const UNACKED_BYTES_MAX: usize = 2 * 1024 * 1024;
 
 /// 0.37.11 — monotonically-increasing subscriber id generator.
 /// Each WS accept claims the next value; the id is passed to the
@@ -325,6 +353,11 @@ pub async fn serve_session_grid_connection(
         std::sync::atomic::Ordering::Relaxed,
     );
 
+    // k1 binary wire opt-in. Anything other than an exact `proto=k1`
+    // (absent, empty, unknown value) keeps the JSON default — an
+    // older client's behavior stays byte-identical.
+    let proto_k1 = params.get("proto").map(|p| p == "k1").unwrap_or(false);
+
     // This connection's last-requested terminal dims, tracked on EVERY
     // `Resize` (even when dropped because we're not the active subscriber)
     // so that when this client sends `Input` and becomes the active viewer
@@ -371,9 +404,11 @@ pub async fn serve_session_grid_connection(
     // silently missed rows (the "starved remote viewer" bug).
     //
     // Order matters: subscribe FIRST, then snapshot — see the version
-    // floor below.
-    let (mut frames_rx, shared_emit_state) =
-        crate::grid_emitter::attach(&session, &pane_id);
+    // floor below. `_format_reg` is the RAII k1-refcount registration;
+    // holding it for the connection's lifetime keeps the emitter
+    // binary-encoding, and dropping it on any exit path releases that.
+    let (mut frames_rx, shared_emit_state, _format_reg) =
+        crate::grid_emitter::attach(&session, &pane_id, proto_k1);
 
     // Initial full snapshot — READ-ONLY. No reset_damage (that would
     // starve every OTHER subscriber of the damage they haven't
@@ -399,7 +434,7 @@ pub async fn serve_session_grid_connection(
     let snap_rows = initial_snapshot.rows;
     let snap_cols = initial_snapshot.cols;
     let snap_scrollback = initial_snapshot.scrollback.len();
-    if send_outbound(&mut write, &Outbound::Snapshot(&initial_snapshot))
+    if send_snapshot(&mut write, &initial_snapshot, proto_k1)
         .await
         .is_err()
     {
@@ -454,6 +489,18 @@ pub async fn serve_session_grid_connection(
     // after the dispatcher already authorized us.
     auth_recheck.tick().await;
 
+    // k1 ack-gated pacing state. Only ever mutated when `proto_k1`;
+    // a JSON connection never touches it (today's behavior, no acks
+    // expected). `unacked` holds (version, payload-bytes) of frames
+    // forwarded but not yet covered by a client ack; when it exceeds
+    // the thresholds we stop forwarding (`paused`) — the SHARED
+    // emitter keeps running for every other subscriber — and the
+    // connection's next ack triggers a fresh read-only full snapshot
+    // through the same version-floor machinery as attach/Lagged.
+    let mut unacked: VecDeque<(u64, usize)> = VecDeque::new();
+    let mut unacked_bytes: usize = 0;
+    let mut paused = false;
+
     // Main loop: event-driven. Every Wakeup from alacritty is a
     // cue to build_emit + send. Inbound messages route to
     // session.write() / session.resize(). No coalescing for v1 —
@@ -486,10 +533,57 @@ pub async fn serve_session_grid_connection(
             frame = frames_rx.recv() => {
                 match frame {
                     Ok(f) => {
-                        if f.version > frame_floor
-                            && write.send(Message::Text(f.text.to_string())).await.is_err()
-                        {
-                            break;
+                        if f.version > frame_floor {
+                            if proto_k1 && paused {
+                                // Ack backlog over threshold: drop the
+                                // frame for THIS connection only. The
+                                // resync snapshot on the next ack is
+                                // stamped with a fresh floor, so every
+                                // frame skipped here is covered by it
+                                // — including `scrollback_appended`
+                                // rows, which are NOT idempotent and
+                                // must never be both skipped-then-
+                                // snapshotted AND replayed.
+                            } else {
+                                let msg = if proto_k1 {
+                                    match &f.binary {
+                                        Some(b) => Message::Binary(b.to_vec()),
+                                        // Unreachable for floor-clearing
+                                        // frames (attach bumps the k1
+                                        // refcount before the floor is
+                                        // stamped); the JSON text is
+                                        // still a correct fallback —
+                                        // the client decodes both.
+                                        None => Message::Text(f.text.to_string()),
+                                    }
+                                } else {
+                                    Message::Text(f.text.to_string())
+                                };
+                                let payload_len = msg.len();
+                                if write.send(msg).await.is_err() {
+                                    break;
+                                }
+                                if proto_k1 {
+                                    unacked.push_back((f.version, payload_len));
+                                    unacked_bytes += payload_len;
+                                    if unacked.len() >= UNACKED_FRAMES_MAX
+                                        || unacked_bytes >= UNACKED_BYTES_MAX
+                                    {
+                                        if !paused {
+                                            log_debug!(
+                                                "[daemon/sessions_grid_ws] k1 ack backlog \
+                                                 ({} frames / {} bytes) — pausing deltas for \
+                                                 session {} sub {}",
+                                                unacked.len(),
+                                                unacked_bytes,
+                                                session.session_id,
+                                                subscriber_id,
+                                            );
+                                        }
+                                        paused = true;
+                                    }
+                                }
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -508,7 +602,14 @@ pub async fn serve_session_grid_connection(
                             frame_floor = st.version;
                             snapshot_term(&pane_id, &*term, frame_floor)
                         };
-                        if send_outbound(&mut write, &Outbound::Snapshot(&snap))
+                        // The re-stamped floor supersedes the ack
+                        // backlog: frames ≤ floor are covered by this
+                        // snapshot, so pacing restarts clean (stale
+                        // acks for them pop nothing).
+                        unacked.clear();
+                        unacked_bytes = 0;
+                        paused = false;
+                        if send_snapshot(&mut write, &snap, proto_k1)
                             .await
                             .is_err()
                         {
@@ -775,6 +876,60 @@ pub async fn serve_session_grid_connection(
                                     rows,
                                 );
                             }
+                            Ok(Inbound::Ack { version }) => {
+                                // k1 pacing. Acks from a non-k1 client
+                                // are ignored (none exist today; the
+                                // guard keeps JSON connections exactly
+                                // on their pre-k1 path).
+                                if !proto_k1 {
+                                    continue;
+                                }
+                                while unacked
+                                    .front()
+                                    .is_some_and(|(v, _)| *v <= version)
+                                {
+                                    let (_, n) = unacked.pop_front().unwrap();
+                                    unacked_bytes -= n;
+                                }
+                                if paused {
+                                    // First ack after the backlog
+                                    // tripped: resync with a fresh
+                                    // READ-ONLY snapshot through the
+                                    // SAME version-floor machinery as
+                                    // attach/Lagged — the re-stamped
+                                    // floor guarantees no delta whose
+                                    // `scrollback_appended` rows this
+                                    // snapshot already contains can be
+                                    // forwarded afterwards (those rows
+                                    // are concatenated client-side,
+                                    // NOT idempotent), and every frame
+                                    // dropped while paused is covered.
+                                    let snap = {
+                                        let st = shared_emit_state.lock();
+                                        let term_mutex = session.term();
+                                        let term = term_mutex.lock();
+                                        frame_floor = st.version;
+                                        snapshot_term(&pane_id, &*term, frame_floor)
+                                    };
+                                    unacked.clear();
+                                    unacked_bytes = 0;
+                                    paused = false;
+                                    log_debug!(
+                                        "[daemon/sessions_grid_ws] k1 ack (v{version}) after \
+                                         backlog pause — resync snapshot at floor {} for \
+                                         session {} sub {}",
+                                        frame_floor,
+                                        session.session_id,
+                                        subscriber_id,
+                                    );
+                                    if send_snapshot(&mut write, &snap, true)
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                            }
                             Err(e) => {
                                 log_debug!(
                                     "[daemon/sessions_grid_ws] malformed inbound: {e}"
@@ -834,6 +989,30 @@ pub async fn serve_session_grid_connection(
         session.session_id,
         subscriber_id,
     );
+}
+
+/// Send a full snapshot in the connection's negotiated wire format:
+/// k1 → one binary `grid_wire` message, default → the standard JSON
+/// text frame. Used by the attach snapshot and both resync paths
+/// (broadcast `Lagged`, ack-backlog recovery).
+async fn send_snapshot<W>(
+    write: &mut W,
+    snap: &TermGridSnapshot,
+    k1: bool,
+) -> Result<(), ()>
+where
+    W: futures_util::SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    if k1 {
+        write
+            .send(Message::Binary(grid_wire::encode_snapshot(snap)))
+            .await
+            .map_err(|e| {
+                log_debug!("[daemon/sessions_grid_ws] send failed: {e}");
+            })
+    } else {
+        send_outbound(write, &Outbound::Snapshot(snap)).await
+    }
 }
 
 async fn send_outbound<W>(write: &mut W, msg: &Outbound<'_>) -> Result<(), ()>

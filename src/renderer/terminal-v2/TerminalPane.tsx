@@ -64,6 +64,7 @@ import {
   computeStripLayout,
   scrollPxFromThumbTopFrac,
 } from './scrollMath'
+import { decodeGridFrame, type WireFrame } from './gridWire'
 
 // ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
 
@@ -593,6 +594,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       }
       return next
     })
+    // k1 flow control: one ack per APPLIED batch, carrying the
+    // highest applied version — sent from the rAF flush, never per
+    // WS message, so ack volume tracks render cadence. The daemon
+    // uses it to bound this connection's unacked backlog; while we
+    // fall behind it stops forwarding deltas and resyncs us with a
+    // fresh full snapshot on our next ack. Gated on the daemon
+    // actually speaking k1 (see k1WireActiveRef).
+    if (k1WireActiveRef.current) {
+      let maxVersion = 0
+      for (const f of pending) {
+        if (f.payload.version > maxVersion) maxVersion = f.payload.version
+      }
+      const ws = wsRef.current
+      if (maxVersion > 0 && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'ack', version: maxVersion }))
+      }
+    }
   }, [])
   const enqueueFrame = useCallback(
     (frame: PendingFrame) => {
@@ -648,6 +666,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // the same way (so Dictation's autocorrect-on-stop gets applied).
   const compositionLastLengthRef = useRef(0)
   const wsRef = useRef<WebSocket | null>(null)
+  // True once the CURRENT socket has delivered a binary (k1) frame —
+  // i.e. the daemon honored our `&proto=k1` opt-in. Gates the ack
+  // sends from the rAF flush: an older JSON-only daemon never sees
+  // acks it would just log as malformed inbound. Reset on every
+  // (re)connect; the daemon's per-connection pacing state resets with
+  // the socket too.
+  const k1WireActiveRef = useRef(false)
   const isTabVisible = useIsTabVisible()
 
   // Issue #8 — mirror the two render-derived inputs to the
@@ -1125,9 +1150,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       while (true) {
         if (isStale()) return
         wsAttempt += 1
+        // `proto=k1` opts into the binary grid wire (gridWire.ts).
+        // An older daemon ignores the param and keeps sending JSON
+        // text frames — both message paths below stay live.
         const candidate = new WebSocket(
-          `${daemonWsBase(creds)}/cli/sessions/grid?session=${sessionId}&token=${creds.token}`,
+          `${daemonWsBase(creds)}/cli/sessions/grid?session=${sessionId}&token=${creds.token}&proto=k1`,
         )
+        candidate.binaryType = 'arraybuffer'
         // Race: open vs. close-before-open. Browser fires both
         // `onerror` then `onclose` when a connection is rejected
         // immediately (port not bound, etc.). We bind temporary
@@ -1180,6 +1209,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
       if (!ws) return // unreachable; satisfies TS
       wsRef.current = ws
+      // Fresh socket — the daemon's per-connection pacing state is
+      // new too, so re-detect k1 from its first binary frame before
+      // resuming acks.
+      k1WireActiveRef.current = false
       // Issue #5 (re-prime active-viewer handshake on each WS
       // (re)connect): the daemon-side subscriber that opens on the
       // new WS is fresh and has no notion that we were previously
@@ -1211,7 +1244,65 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // Setting onopen on an already-open socket would never fire
       // anyway (browser dispatched the event during the retry race).
 
+      // Snapshot arrival handling shared by the JSON text path and
+      // the k1 binary path — the decoded k1 payload is the exact
+      // object shape JSON.parse yields (pinned by gridWire.test.ts),
+      // so everything downstream is transport-blind.
+      const applySnapshotFrame = (payload: TermGridSnapshot) => {
+        const isFirst = !firstSnapshotSeenRef.current
+        if (isFirst) {
+          firstSnapshotSeenRef.current = true
+          const empty = isGridEmpty(payload)
+          firstSnapshotEmptyRef.current = empty
+          perfLog('first_snapshot', {
+            rows: payload.rows,
+            cols: payload.cols,
+            empty: String(empty),
+            scrollback: payload.scrollback.length,
+          })
+        }
+        enqueueFrame({ kind: 'snapshot', payload })
+        // Activity detection runs in a snapshot-driven useEffect
+        // below, NOT inline here. ws.onmessage is captured in the
+        // boot effect's closure and does not re-bind across Vite
+        // HMR / React Fast Refresh — calling activity from here
+        // means HMR'd code wouldn't take effect on existing
+        // sessions. Driving it from setSnapshot's downstream
+        // effect avoids that whole class of bug.
+        //
+        // Functional update returning the SAME object when phase
+        // is already ready — full snapshots recur (any full-
+        // damage frame), and rebuilding the phase object each
+        // time forced a redundant re-render per snapshot.
+        setPhase((prev) =>
+          prev.kind === 'ready' && prev.sessionId === sessionId
+            ? prev
+            : { kind: 'ready', sessionId },
+        )
+      }
+
       ws.onmessage = (evt) => {
+        if (evt.data instanceof ArrayBuffer) {
+          // k1 binary wire — snapshot/delta only; every other event
+          // still arrives as JSON text below.
+          let frame: WireFrame
+          try {
+            frame = decodeGridFrame(evt.data)
+          } catch (e) {
+            // A frame that fails to decode is a protocol violation —
+            // surface it rather than silently desyncing the mirror.
+            // eslint-disable-next-line no-console
+            console.error('[terminal-v2] k1 frame decode failed:', e)
+            return
+          }
+          k1WireActiveRef.current = true
+          if (frame.kind === 'snapshot') {
+            applySnapshotFrame(frame.payload)
+          } else {
+            enqueueFrame({ kind: 'delta', payload: frame.payload })
+          }
+          return
+        }
         if (typeof evt.data !== 'string') return
         let parsed: OutboundMsg
         try {
@@ -1220,39 +1311,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           return
         }
         switch (parsed.event) {
-          case 'snapshot': {
-            const isFirst = !firstSnapshotSeenRef.current
-            if (isFirst) {
-              firstSnapshotSeenRef.current = true
-              const empty = isGridEmpty(parsed.payload)
-              firstSnapshotEmptyRef.current = empty
-              perfLog('first_snapshot', {
-                rows: parsed.payload.rows,
-                cols: parsed.payload.cols,
-                empty: String(empty),
-                scrollback: parsed.payload.scrollback.length,
-              })
-            }
-            enqueueFrame({ kind: 'snapshot', payload: parsed.payload })
-            // Activity detection runs in a snapshot-driven useEffect
-            // below, NOT inline here. ws.onmessage is captured in the
-            // boot effect's closure and does not re-bind across Vite
-            // HMR / React Fast Refresh — calling activity from here
-            // means HMR'd code wouldn't take effect on existing
-            // sessions. Driving it from setSnapshot's downstream
-            // effect avoids that whole class of bug.
-            //
-            // Functional update returning the SAME object when phase
-            // is already ready — full snapshots recur (any full-
-            // damage frame), and rebuilding the phase object each
-            // time forced a redundant re-render per snapshot.
-            setPhase((prev) =>
-              prev.kind === 'ready' && prev.sessionId === sessionId
-                ? prev
-                : { kind: 'ready', sessionId },
-            )
+          case 'snapshot':
+            applySnapshotFrame(parsed.payload)
             break
-          }
           case 'delta':
             enqueueFrame({ kind: 'delta', payload: parsed.payload })
             break

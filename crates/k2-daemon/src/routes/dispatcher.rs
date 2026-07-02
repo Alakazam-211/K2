@@ -1938,6 +1938,11 @@ async fn handle_one_request(
         // credential changes invalidate live sessions server-side, in
         // the same process that owns the live companion runtime.
         // Method gate per feedback_post_only_route_guards memory.
+        // Remote-access keys (federationEnabled / allowRemoteInstruct)
+        // additionally require owner-or-admin — resolved here via the same
+        // `token_is_owner_or_admin` tier the federation management routes
+        // use, enforced key-aware inside the handler (a Member touching a
+        // gated key gets an atomic 403; other keys keep `token_ok` behavior).
         "/cli/settings/update" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
             if !super::http::token_ok(&query, state.token.as_str()) {
@@ -1951,8 +1956,11 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            let actor_can_manage =
+                super::http::token_is_owner_or_admin(&query, state.token.as_str());
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result = crate::settings_routes::handle_settings_update(&body_bytes);
+            let result =
+                crate::settings_routes::handle_settings_update(&body_bytes, actor_can_manage);
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }

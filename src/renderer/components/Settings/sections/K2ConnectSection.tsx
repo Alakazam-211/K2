@@ -1061,9 +1061,11 @@ export function K2ConnectSection(): React.JSX.Element {
             so they must be settable wherever you're looking; the rest of
             K2 Connect (tunnel config) is local-only below. Host-aware persist
             writes to the ACTIVE server's daemon. Hidden for confirmed members
-            (renderer-hide; the /cli/federation/* surface is also role-gated
-            server-side — see .k2/notes/federation-toggle-topology.md for the
-            settings-write gate caveat). The group pairs the federation MASTER
+            — defense-in-depth only: the daemon enforces owner-or-admin on
+            these keys itself (/cli/settings/update 403s a Member touching
+            federationEnabled or allowRemoteInstruct, and the
+            /cli/federation/* surface is role-gated server-side too). The
+            group pairs the federation MASTER
             (does the cross-server surface exist at all) with the delivery
             CONSENT (may remote principals actually message agents) so
             enabling federation and granting consent are one surface. ── */}

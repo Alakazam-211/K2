@@ -603,6 +603,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     snapshotRef.current = snapshot
   }, [snapshot])
+  // Authoritative merged grid, owned by flushPendingFrames (the sole
+  // frame applier). Rendered `snapshot` mirrors it except while a
+  // resize hold parks a blank intermediate here — see the resize-hold
+  // block below.
+  const liveGridRef = useRef<TermGridSnapshot | null>(null)
   // Scroll position in PIXELS above the bottom of the buffer. 0 =
   // pinned to the live grid (the heavy-output path — every input
   // handler snaps here); max = scrollback.length * cellHeight. Pixel
@@ -624,6 +629,38 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // many messages arrived). A queued full snapshot supersedes
   // everything before it. The size cap flushes synchronously if rAF
   // is starved (occluded window) so the queue can't grow unbounded.
+  // DEV-only FPS instrumentation. Counters live in refs and the badge
+  // span updates imperatively (textContent) so measuring can never
+  // cause renders and inflate its own numbers. ui = component commits
+  // per second (scroll + frames + everything), grid = WS frames
+  // applied per second, scroll = wheel flushes per second.
+  const commitCountRef = useRef(0)
+  const framesAppliedRef = useRef(0)
+  const scrollFlushCountRef = useRef(0)
+  const fpsSpanRef = useRef<HTMLSpanElement | null>(null)
+  useEffect(() => {
+    if (import.meta.env.DEV) commitCountRef.current++
+  })
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    let last = performance.now()
+    const id = setInterval(() => {
+      const now = performance.now()
+      const dt = (now - last) / 1000
+      last = now
+      if (dt <= 0) return
+      const ui = Math.round(commitCountRef.current / dt)
+      const grid = Math.round(framesAppliedRef.current / dt)
+      const scroll = Math.round(scrollFlushCountRef.current / dt)
+      commitCountRef.current = 0
+      framesAppliedRef.current = 0
+      scrollFlushCountRef.current = 0
+      const el = fpsSpanRef.current
+      if (el) el.textContent = ` · fps ui:${ui} grid:${grid} scroll:${scroll}`
+    }, 500)
+    return () => clearInterval(id)
+  }, [])
+
   const pendingFramesRef = useRef<PendingFrame[]>([])
   const frameFlushRafRef = useRef<number | null>(null)
   const flushPendingFrames = useCallback(() => {
@@ -631,6 +668,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     const pending = pendingFramesRef.current
     if (pending.length === 0) return
     pendingFramesRef.current = []
+    if (import.meta.env.DEV) framesAppliedRef.current += pending.length
     // A full snapshot replace starts a new grid generation — absolute
     // row coords no longer map, so the canvas selection clears
     // (webgl painter only; the ref is always null in DOM mode).
@@ -641,13 +679,38 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       webglSelectionRef.current = null
       setSelectionVersion((v) => v + 1)
     }
-    setSnapshot((prev) => {
-      let next: TermGridSnapshot | null = prev
-      for (const f of pending) {
-        next = f.kind === 'snapshot' ? f.payload : mergeDelta(next, f.payload)
-      }
-      return next
-    })
+    // Single-writer grid model: `liveGridRef` is the authoritative
+    // merged grid (every frame applies here, always); the rendered
+    // `snapshot` state normally mirrors it. The two diverge in
+    // exactly one case — the resize hold below — so merges never run
+    // inside the state updater (a StrictMode double-invoke would
+    // re-apply deltas onto an already-merged base).
+    let next: TermGridSnapshot | null = liveGridRef.current
+    for (const f of pending) {
+      next = f.kind === 'snapshot' ? f.payload : mergeDelta(next, f.payload)
+    }
+    liveGridRef.current = next
+    // Resize hold, content half: a resize's clear-then-repaint gap can
+    // arrive as a BLANK grid (an old daemon broadcasts the cleared
+    // intermediate; a new daemon's settle timeout can still fire
+    // before a slow child repaints). Painting it would black-flash —
+    // so while a resize we sent is in flight, a blank merge result
+    // stays off-screen: the last non-blank frame keeps rendering
+    // (stretched by the hold-and-scale layout) and the true grid
+    // advances in `liveGridRef` until it has content again or the
+    // hold times out (which promotes whatever is live).
+    const rendered = snapshotRef.current
+    if (
+      resizeHoldActiveRef.current &&
+      rendered &&
+      !isGridEmpty(rendered) &&
+      next &&
+      isGridEmpty(next)
+    ) {
+      // Keep showing `rendered`; nothing to commit this flush.
+    } else {
+      setSnapshot(next)
+    }
     // k1 flow control: one ack per APPLIED batch, carrying the
     // highest applied version — sent from the rAF flush, never per
     // WS message, so ack volume tracks render cadence. The daemon
@@ -1922,32 +1985,50 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   )
+  // Mirror of `pendingResize !== null` for the frame-flush path (which
+  // must not close over render state). While true, blank merge results
+  // stay in `liveGridRef` instead of being rendered — see
+  // flushPendingFrames.
+  const resizeHoldActiveRef = useRef(false)
   const notePendingResize = useCallback((cols: number, rows: number) => {
     // Already at the target: the daemon's same-dims skip means no new
     // frame is coming — nothing to hold for.
     const snap = snapshotRef.current
     if (snap && snap.cols === cols && snap.rows === rows) return
     setPendingResize({ cols, rows })
+    resizeHoldActiveRef.current = true
     if (pendingResizeTimerRef.current) {
       clearTimeout(pendingResizeTimerRef.current)
     }
     pendingResizeTimerRef.current = setTimeout(() => {
       pendingResizeTimerRef.current = null
       setPendingResize(null)
+      resizeHoldActiveRef.current = false
+      // Show the truth on expiry, blank or not — an indefinite hold
+      // would freeze a terminal the child legitimately cleared.
+      if (liveGridRef.current !== snapshotRef.current) {
+        setSnapshot(liveGridRef.current)
+      }
     }, RESIZE_HOLD_TIMEOUT_MS)
   }, [])
-  // Release the hold as soon as a frame at the requested dims lands.
+  // Release the hold as soon as a NON-BLANK frame at the requested
+  // dims lands (dims alone aren't enough — the daemon's cleared-grid
+  // intermediate arrives at the new dims too, and painting it is the
+  // black flash this hold exists to prevent; blank frames park in
+  // liveGridRef until content or the timeout).
   useEffect(() => {
     if (!pendingResize || !snapshot) return
     if (
       snapshot.cols === pendingResize.cols &&
-      snapshot.rows === pendingResize.rows
+      snapshot.rows === pendingResize.rows &&
+      !isGridEmpty(snapshot)
     ) {
       if (pendingResizeTimerRef.current) {
         clearTimeout(pendingResizeTimerRef.current)
         pendingResizeTimerRef.current = null
       }
       setPendingResize(null)
+      resizeHoldActiveRef.current = false
     }
   }, [snapshot, pendingResize])
   useEffect(
@@ -3069,18 +3150,62 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // streaming.
   const scrollAccumRef = useRef(0)
   const scrollRafRef = useRef<number | null>(null)
-  // Mouse-reporting (fullscreen TUI) wheel: accumulate + throttle so a
-  // trackpad's momentum-event flood doesn't fire a storm of SGR notches.
+  // Mouse-reporting (fullscreen TUI) wheel: accumulate + flush per
+  // animation frame, capped by a token bucket so a trackpad's momentum
+  // flood can't storm the PTY (or a long-distance K2 Connect link).
+  // The bucket keeps the ORIGINAL flood ceiling — 8 notches per 50ms —
+  // but lets notches leave smoothly each frame; the old single 50ms
+  // flush timer quantized TUI scrolling to 20Hz, which read as "locked
+  // at 20fps" inside claude/Ink surfaces.
   const mouseWheelAccumRef = useRef(0)
-  const mouseWheelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mouseWheelRafRef = useRef<number | null>(null)
   const mouseWheelPosRef = useRef({ col: 1, row: 1 })
+  const notchWindowStartRef = useRef(0)
+  const notchBudgetRef = useRef(0)
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    // PTY-bound SGR notches stay on a 50ms timer — that throttle is
-    // flood control for the child app (and the wire, which may be a
-    // long-distance K2 Connect link), not render pacing.
-    const FLUSH_MS = 50
+    const NOTCH_WINDOW_MS = 50
+    const NOTCHES_PER_WINDOW = 8
+    // Higher = less sensitive: one SGR notch per ~this many
+    // cell-heights of accumulated movement. Tune to taste.
+    const CELLS_PER_NOTCH = 1.0
+    const flushMouseWheelNotches = () => {
+      mouseWheelRafRef.current = null
+      const ch2 = cellMetrics.height
+      if (ch2 <= 0) return
+      const now = performance.now()
+      if (now - notchWindowStartRef.current >= NOTCH_WINDOW_MS) {
+        notchWindowStartRef.current = now
+        notchBudgetRef.current = NOTCHES_PER_WINDOW
+      }
+      const accum = mouseWheelAccumRef.current
+      const notchPx = ch2 * CELLS_PER_NOTCH
+      // Sub-notch remainder stays accumulated until more input arrives
+      // — a momentum tail below one cell-height emits nothing (the old
+      // min-1-tick flush over-scrolled on every 50ms tail tick).
+      let ticks = Math.floor(Math.abs(accum) / notchPx)
+      if (ticks === 0) return
+      if (ticks > notchBudgetRef.current) ticks = notchBudgetRef.current
+      if (ticks === 0) {
+        // Window budget exhausted; keep the accumulation and re-check
+        // next frame (a fresh 50ms window refills the bucket).
+        mouseWheelRafRef.current = requestAnimationFrame(flushMouseWheelNotches)
+        return
+      }
+      notchBudgetRef.current -= ticks
+      mouseWheelAccumRef.current -= Math.sign(accum) * ticks * notchPx
+      // SGR button: wheel-up = 64 (deltaY<0, toward older content),
+      // wheel-down = 65.
+      const btn = accum < 0 ? 64 : 65
+      const { col: c, row: r } = mouseWheelPosRef.current
+      const seq = `\x1b[<${btn};${c};${r}M`
+      sendInput(seq.repeat(ticks))
+      if (import.meta.env.DEV) scrollFlushCountRef.current++
+      if (Math.abs(mouseWheelAccumRef.current) >= notchPx) {
+        mouseWheelRafRef.current = requestAnimationFrame(flushMouseWheelNotches)
+      }
+    }
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY === 0) return
       const snap = snapshotRef.current
@@ -3114,11 +3239,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             Math.floor((pos.y - scrollPxRef.current) / ch2) + 1,
           )
           mouseWheelPosRef.current = { col, row }
-          // Accumulate signed pixel movement and flush on a timer.
-          // WHY: a trackpad fires a flood of momentum wheel events;
-          // emitting SGR notches per-event made fullscreen TUIs
-          // scroll wildly fast. Throttling to one batch per FLUSH_MS
-          // + a cells-per-notch divisor tames it.
           const pixelDelta =
             e.deltaMode === WheelEvent.DOM_DELTA_LINE
               ? e.deltaY * ch2
@@ -3126,30 +3246,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
                 ? e.deltaY * ch2 * (snap?.rows ?? 24)
                 : e.deltaY
           mouseWheelAccumRef.current += pixelDelta
-          if (!mouseWheelTimerRef.current) {
-            mouseWheelTimerRef.current = setTimeout(() => {
-              mouseWheelTimerRef.current = null
-              const accum = mouseWheelAccumRef.current
-              mouseWheelAccumRef.current = 0
-              if (accum === 0) return
-              // SGR button: wheel-up = 64 (deltaY<0, toward older
-              // content), wheel-down = 65.
-              const btn = accum < 0 ? 64 : 65
-              // Higher = less sensitive: one SGR notch per ~this many
-              // cell-heights of accumulated movement. Tune to taste.
-              const CELLS_PER_NOTCH = 1.0
-              let ticks = Math.max(
-                1,
-                Math.round(Math.abs(accum) / (ch2 * CELLS_PER_NOTCH)),
-              )
-              // Cap so one fast flick can't flood the PTY.
-              if (ticks > 8) ticks = 8
-              const { col: c, row: r } = mouseWheelPosRef.current
-              const seq = `\x1b[<${btn};${c};${r}M`
-              let out = ''
-              for (let i = 0; i < ticks; i++) out += seq
-              sendInput(out)
-            }, FLUSH_MS)
+          if (mouseWheelRafRef.current === null) {
+            mouseWheelRafRef.current = requestAnimationFrame(
+              flushMouseWheelNotches,
+            )
           }
           return
         }
@@ -3178,6 +3278,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           if (accum === 0) return
           const deltaPx = accum * config.scrolling.multiplier
           const scrollbackLen = snapshotRef.current?.scrollback.length ?? 0
+          if (import.meta.env.DEV) scrollFlushCountRef.current++
           // deltaY > 0 scrolls toward the bottom (scrollPx → 0).
           setScrollPx((px) => clampScrollPx(px - deltaPx, scrollbackLen, cellH))
         })
@@ -3190,9 +3291,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         cancelAnimationFrame(scrollRafRef.current)
         scrollRafRef.current = null
       }
-      if (mouseWheelTimerRef.current) {
-        clearTimeout(mouseWheelTimerRef.current)
-        mouseWheelTimerRef.current = null
+      if (mouseWheelRafRef.current !== null) {
+        cancelAnimationFrame(mouseWheelRafRef.current)
+        mouseWheelRafRef.current = null
       }
     }
   }, [
@@ -3840,6 +3941,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           {' '}offPx:{Math.round(scrollPx)}
           {' '}scr:{snapshot?.scrollback.length ?? 0}
           {' '}v:{snapshot?.version ?? 0}
+          <span ref={fpsSpanRef} style={{ color: '#6cf' }} />
           {!isReady && phase.kind !== 'idle' && ' · loading'}
         </div>
       )}

@@ -32,6 +32,13 @@ struct K2SOListener {
     wakeup_tx: mpsc::Sender<()>,
     event_sink: Arc<dyn TerminalEventSink>,
     id: String,
+    /// Answer channel for terminal queries (`PtyWrite` — DA, DSR/CPR
+    /// `\x1b[6n`, DECRQM…). Same hole as v2 had: without this, every
+    /// query answer the emulator generates is dropped and hosted TUIs
+    /// probe into silence. Set exactly once by `create()` — after the
+    /// event loop exists, before its IO thread starts — so no query
+    /// can race an empty slot.
+    reply_tx: Arc<std::sync::OnceLock<EventLoopSender>>,
 }
 
 impl EventListener for K2SOListener {
@@ -39,6 +46,15 @@ impl EventListener for K2SOListener {
         match event {
             AlacEvent::Wakeup => {
                 let _ = self.wakeup_tx.send(());
+            }
+            AlacEvent::PtyWrite(text) => {
+                // Terminal-query answer → back into the PTY on the same
+                // `Msg::Input` FIFO as user keystrokes (alacritty's own
+                // routing). Never surfaced to the event sink: it's
+                // transport back to the child, not session output.
+                if let Some(tx) = self.reply_tx.get() {
+                    let _ = tx.send(Msg::Input(text.into_bytes().into()));
+                }
             }
             AlacEvent::Title(title) => {
                 self.event_sink.on_title(&self.id, &title);
@@ -294,10 +310,12 @@ impl TerminalManager {
         // Clone wakeup_tx before it's moved into the listener.
         // Scroll uses this to inject wakeups into the same channel as PTY events.
         let scroll_wakeup_tx = wakeup_tx.clone();
+        let query_reply = Arc::new(std::sync::OnceLock::new());
         let listener = K2SOListener {
             wakeup_tx,
             event_sink: event_sink.clone(),
             id: id.clone(),
+            reply_tx: Arc::clone(&query_reply),
         };
 
         let term_size = TermSize { cols: c, rows: r };
@@ -433,6 +451,14 @@ impl TerminalManager {
         .map_err(|e| format!("Failed to create event loop: {}", e))?;
 
         let event_loop_sender = event_loop.channel();
+
+        // Terminal-query answers route back into the PTY input channel
+        // (see `K2SOListener::reply_tx`). Installed before the IO thread
+        // spawns so the child's first query can't race an empty sink.
+        assert!(
+            query_reply.set(event_loop.channel()).is_ok(),
+            "query-reply sender is set exactly once, here"
+        );
 
         // Spawn the event loop thread (reads PTY, parses VT100, updates Term)
         event_loop.spawn();

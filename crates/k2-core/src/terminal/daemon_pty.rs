@@ -80,8 +80,10 @@ impl Dimensions for TermSize {
     }
 }
 
-/// Minimal `EventListener` that broadcasts every alacritty lifecycle
-/// event to any number of subscribers via `tokio::sync::broadcast`.
+/// Minimal `EventListener` that broadcasts alacritty lifecycle events
+/// to any number of subscribers via `tokio::sync::broadcast`. The one
+/// exception is `PtyWrite` — terminal-query answers — which routes back
+/// into the PTY input channel instead (see `send_event`).
 /// Consumers (A3's WS handler) subscribe fresh on attach and pull
 /// from their own receiver; there's no ownership transfer, so a
 /// subscriber disconnecting + reconnecting works cleanly.
@@ -107,13 +109,40 @@ impl Dimensions for TermSize {
 /// small `AlacEvent`, so the ceiling is a few hundred KB worst case).
 pub const EVENT_CHANNEL_CAPACITY: usize = 4096;
 
+/// Sink for terminal-query answers (`AlacEvent::PtyWrite`). A boxed
+/// closure rather than the concrete `Notifier` so Term-level tests can
+/// capture replies without standing up a real alacritty event loop
+/// (`EventLoopSender` is unconstructible outside `EventLoop::channel`).
+type QueryReplySink = Box<dyn Fn(String) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct DaemonEventListener {
     tx: broadcast::Sender<AlacEvent>,
+    /// Where `PtyWrite` query answers go: the session's PTY input
+    /// channel. Set exactly once by `spawn()` — after the event loop
+    /// exists, before its IO thread starts — so no query can race an
+    /// empty slot (queries only arrive by parsing PTY output, which
+    /// begins after the IO thread spawns). `OnceLock` keeps reads on
+    /// the hot event path lock-free.
+    reply_tx: Arc<std::sync::OnceLock<QueryReplySink>>,
 }
 
 impl EventListener for DaemonEventListener {
     fn send_event(&self, event: AlacEvent) {
+        // Terminal-query ANSWERS (DA `\x1b[c`, DSR/CPR `\x1b[6n`, DECRQM,
+        // kitty-keyboard negotiation, XTWINOPS…) arrive as `PtyWrite` and
+        // flow INTO the PTY on the same channel as user keystrokes — the
+        // exact routing alacritty's own event loop performs (plain FIFO
+        // enqueue onto the IO thread's write list, no priority). They are
+        // never broadcast: a query answer is transport back to the child,
+        // not session output, so viewers must not observe it (and
+        // `subscriber_count()` stays a pure client-attachment signal).
+        if let AlacEvent::PtyWrite(text) = event {
+            if let Some(reply) = self.reply_tx.get() {
+                reply(text);
+            }
+            return;
+        }
         // Fire-and-forget. If no subscribers, send returns `Err`
         // and we ignore it — the daemon keeps advancing Term state
         // regardless. Subscribers that reconnect later will get the
@@ -603,8 +632,10 @@ impl DaemonPtySession {
         // Drop the initial receiver — we don't keep one ourselves;
         // each subscriber calls `subscribe_events()` to get theirs.
         drop(_initial_rx);
+        let query_reply = Arc::new(std::sync::OnceLock::new());
         let listener = DaemonEventListener {
             tx: events_tx.clone(),
+            reply_tx: Arc::clone(&query_reply),
         };
 
         // Term config — scrollback + cursor + colors. Start from
@@ -643,6 +674,21 @@ impl DaemonPtySession {
         )?;
 
         let pty_sender = event_loop.channel();
+
+        // Route terminal-query answers back into the PTY through the
+        // same `Notifier` user input takes (`Msg::Input` FIFO — matches
+        // alacritty's own `PtyWrite` handling). Installed before
+        // `event_loop.spawn()`: the child's first output bytes can carry
+        // a query, and the sink must exist when the parser answers it.
+        let reply_notifier = Notifier(event_loop.channel());
+        assert!(
+            query_reply
+                .set(Box::new(move |text: String| {
+                    reply_notifier.notify(text.into_bytes());
+                }) as QueryReplySink)
+                .is_ok(),
+            "query-reply sink is set exactly once, here"
+        );
 
         // Spawn the IO thread. The handle is `JoinHandle<(EventLoop, State)>`
         // — we intentionally don't store it. When the last `Arc<Self>`
@@ -1817,6 +1863,105 @@ mod tests {
         DaemonPtySession::request_resize(&s, 100, 30);
         assert_eq!(term_dims(&s), (100, 30));
         assert_eq!(s.resize_generation(), 1);
+    }
+
+    /// A DSR-6 (`\x1b[6n`) parsed by the Term must produce a CPR answer
+    /// that lands in the query-reply sink — the seam `spawn()` wires to
+    /// the PTY's `Notifier` — and must NOT leak onto the viewer
+    /// broadcast (a query answer is transport, not session output).
+    #[test]
+    fn dsr_query_answer_lands_in_reply_sink_not_broadcast() {
+        use alacritty_terminal::vte::ansi::Processor;
+
+        let (tx, mut events_rx) = broadcast::channel::<AlacEvent>(16);
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel::<String>();
+        let reply_slot = Arc::new(std::sync::OnceLock::new());
+        assert!(reply_slot
+            .set(Box::new(move |text: String| {
+                reply_tx.send(text).expect("capture query reply");
+            }) as QueryReplySink)
+            .is_ok());
+        let listener = DaemonEventListener {
+            tx,
+            reply_tx: reply_slot,
+        };
+
+        let size = TermSize { cols: 80, rows: 24 };
+        let mut term = Term::new(TermConfig::default(), &size, listener);
+        let mut parser: Processor = Processor::new();
+        // Print "ab" first so the answer proves the LIVE cursor
+        // position (row 1, col 3), not a hardcoded origin.
+        parser.advance(&mut term, b"ab\x1b[6n");
+
+        let reply = reply_rx
+            .try_recv()
+            .expect("DSR-6 must synchronously produce a CPR answer");
+        assert_eq!(reply, "\x1b[1;3R", "CPR must report the live cursor");
+        match events_rx.try_recv() {
+            Err(broadcast::error::TryRecvError::Empty) => {}
+            other => panic!(
+                "PtyWrite must not reach the viewer broadcast, got {other:?}"
+            ),
+        }
+    }
+
+    /// `^[[<digits>;<digits>R` — the tty-ECHO rendering of a CPR answer
+    /// (ECHOCTL renders the answer's ESC as caret notation on the grid).
+    #[cfg(unix)]
+    fn contains_cpr_echo(row: &str) -> bool {
+        let bytes = row.as_bytes();
+        for start in 0..bytes.len() {
+            let rest = &bytes[start..];
+            if !rest.starts_with(b"^[[") {
+                continue;
+            }
+            let mut i = 3;
+            let row_digits = i;
+            while i < rest.len() && rest[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == row_digits || rest.get(i) != Some(&b';') {
+                continue;
+            }
+            i += 1;
+            let col_digits = i;
+            while i < rest.len() && rest[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i > col_digits && rest.get(i) == Some(&b'R') {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// End-to-end through the REAL notifier + PTY: a DSR-6 the child
+    /// emits gets answered, and the answer arrives on the child's input.
+    /// We type `\x1b[6n\n` at `cat`: the tty ECHO mangles the typed ESC
+    /// to `^[` (no dispatch), but cat's OUTPUT carries a real ESC — the
+    /// parser dispatches the query, the emulator's CPR answer routes
+    /// back into PTY input, and the tty ECHO of that ANSWER renders as
+    /// `^[[<row>;<col>R` on the grid. Before the fix nothing comes back
+    /// and this times out.
+    #[cfg(unix)]
+    #[test]
+    fn dsr_query_from_child_is_answered_through_the_pty() {
+        let s = spawn_cat_session();
+        s.write(b"\x1b[6n\n".to_vec());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let rows = s.visible_text_rows();
+            if rows.iter().any(|r| contains_cpr_echo(r)) {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "no CPR answer echoed within 5s — the query reply \
+                     never reached the child. grid: {rows:?}"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 
     /// `kill()` is idempotent: calling it twice must not panic, must

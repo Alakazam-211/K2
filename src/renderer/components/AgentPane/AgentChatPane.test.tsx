@@ -87,7 +87,7 @@ vi.mock('@/stores/session-events', () => ({
   },
 }))
 
-vi.mock('@/terminal-v2/TerminalPane', () => ({
+vi.mock('@/kessel-term/TerminalPane', () => ({
   TerminalPane: (props: Record<string, unknown>) => {
     h.terminalProps.current = props
     // Count mounts so a test can detect a remount (key bump). Empty deps →

@@ -148,7 +148,7 @@ describe('adoptApiSandboxSession', () => {
     // Attach (not re-spawn): the tab targets the existing cell's agent_name.
     expect(data.attachAgentName).toBe(e.agent_name)
     // Daemon-owned renderer + sandbox-request intent (belt-and-suspenders echo).
-    expect(data.renderer).toBe('alacritty-v2')
+    expect(data.renderer).toBe('kessel')
     expect(data.sandbox).toBe(true)
     // Carries the daemon session id for close-as-minimize cross-referencing.
     expect(data.sessionId).toBe(e.session_id)

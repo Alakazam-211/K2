@@ -2,7 +2,7 @@
 //!
 //! K2SO holds one agent → session map:
 //!
-//!   - [`crate::v2_session_map`] — Alacritty_v2's `DaemonPtySession`
+//!   - [`crate::v2_session_map`] — Kessel's `DaemonPtySession`
 //!     (alacritty Term + grid WS pipeline).
 //!
 //! Historically there was a parallel `session_map` for the Kessel-T0

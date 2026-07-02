@@ -151,7 +151,7 @@ export class GlyphAtlas implements GlyphSource {
         // Page cap hit: clear-and-restart (xterm's clearTexture
         // escape hatch). Consumers drop stale slabs via `epoch`.
         // eslint-disable-next-line no-console
-        console.warn('[terminal-v2/webgl] glyph atlas full at cap — clearing page')
+        console.warn('[kessel-term/webgl] glyph atlas full at cap — clearing page')
         this.glyphs.clear()
         this.layout = createLayout(this.layout.size)
         this.ctx.clearRect(0, 0, this.layout.size, this.layout.size)

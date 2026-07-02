@@ -26,7 +26,7 @@ throwing the advantage away.**
   the *same* core Zed uses. We get its ring-buffer grid, O(1) display
   offset, and damage tracking for free. We even send damage-based JSON
   **deltas** (only changed rows + appended scrollback), which is good.
-- **Frontend side** (`src/renderer/terminal-v2/TerminalPane.tsx`,
+- **Frontend side** (`src/renderer/kessel-term/TerminalPane.tsx`,
   ~2200 lines): a **custom DOM renderer** — not xterm.js, not canvas,
   not WebGL. Each visible row is a `<div>`, each style-run a `<span>`
   with inline styles. Scroll is handled by a **50ms `setTimeout`

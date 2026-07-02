@@ -1,5 +1,5 @@
 //! Daemon-owned map of `agent_name → Arc<DaemonPtySession>` for
-//! Alacritty_v2 sessions.
+//! Kessel sessions.
 //!
 //! Parallel to `session_map.rs` (which holds Kessel-T0's
 //! `SessionStreamSession`). They're kept separate so v1 / Kessel-T0

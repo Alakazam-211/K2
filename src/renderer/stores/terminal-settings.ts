@@ -12,16 +12,23 @@ export type ShortcutModifierLayout = 'cmd-active-cmdshift-pinned' | 'cmd-pinned-
 /**
  * Terminal rendering backend selection.
  *
- * - `alacritty-v2` (default since 0.36.7): daemon-hosted PTY +
+ * - `kessel` (canonical; the stack shipped as the default under its
+ *   working name `alacritty-v2` since 0.36.7): daemon-hosted PTY +
  *   alacritty_terminal::Term. Tauri is a pure viewer rendering
  *   daemon-pushed grid snapshots + deltas. Session survives Tauri
  *   quit; heartbeats can target it. Labeled "Alacritty" in the UI.
  *   The A1–A5 phase plan from `.k2so/prds/alacritty-v2.md` landed
- *   in 0.34–0.36; v2 is now production-hardened.
+ *   in 0.34–0.36; the stack is now production-hardened and is
+ *   officially named Kessel (an un-renaming — Kessel was the R&D
+ *   project that seeded it).
+ * - `alacritty-v2` (legacy alias): the pre-rename working name for
+ *   the Kessel stack. Persisted values get coerced to `kessel` by
+ *   the v5 migration below; already-open tabs stamped with it still
+ *   dispatch to the Kessel pane.
  * - `alacritty` (legacy): in-process alacritty_terminal engine + DOM
  *   renderer. PTY lives in the Tauri process; session dies with the
  *   app. Removed from the Settings UI in 0.37.0; the setter and
- *   persist migration both coerce it to `alacritty-v2`. The legacy
+ *   persist migration both coerce it to `kessel`. The legacy
  *   Rust spawn path remains compiled in to host any pre-existing
  *   in-flight tabs gracefully and is slated for removal in a later
  *   release.
@@ -29,13 +36,16 @@ export type ShortcutModifierLayout = 'cmd-active-cmdshift-pinned' | 'cmd-pinned-
  * Changes to this setting only affect NEW tabs; already-open tabs
  * keep their chosen renderer. Zustand's persist middleware means
  * existing users keep whatever they had set — only fresh installs
- * see the new `alacritty-v2` default.
+ * see the new `kessel` default.
  *
  * 0.39.0: The experimental `kessel` JSON-stream renderer was
- * retired; any persisted value gets coerced to `alacritty-v2` on
- * load via the v3 migration below.
+ * retired; any persisted value got coerced to `alacritty-v2` on
+ * load via the v3 migration below. (The value `kessel` now returns
+ * as the official name of the v2 stack itself — the v3 + v5
+ * migrations compose so a pre-0.39 `kessel` blob still lands on the
+ * daemon-hosted stack.)
  */
-export type TerminalRenderer = 'alacritty' | 'alacritty-v2'
+export type TerminalRenderer = 'alacritty' | 'alacritty-v2' | 'kessel'
 
 /**
  * How the v2 terminal paints its grid (the CellRun rows inside
@@ -45,7 +55,7 @@ export type TerminalRenderer = 'alacritty' | 'alacritty-v2'
  * - `dom` (default): the memoized `<span>` row strip. The proven
  *   path — stays byte-identical regardless of this flag's existence.
  * - `webgl`: experimental WebGL2 instanced painter
- *   (`terminal-v2/webgl/`). Falls back to `dom` per-pane on context
+ *   (`kessel-term/webgl/`). Falls back to `dom` per-pane on context
  *   loss / missing WebGL2. Design: `.k2/notes/webgl-painter-brief.md`.
  *
  * Like `renderer`, the value is read at pane mount — changing it only
@@ -83,11 +93,11 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       linkClickMode: 'click' as LinkClickMode,
       openLinksInSplitPane: true,
       shortcutLayout: 'cmd-active-cmdshift-pinned' as ShortcutModifierLayout,
-      // 0.36.7+: default to alacritty-v2 (the daemon-hosted renderer
-      // that survives Tauri quit and supports heartbeats). Existing
+      // 0.36.7+: default to the daemon-hosted Kessel renderer (it
+      // survives Tauri quit and supports heartbeats). Existing
       // users keep their persisted choice via zustand's persist
-      // middleware — only fresh installs land on v2 by default.
-      renderer: 'alacritty-v2' as TerminalRenderer,
+      // middleware — only fresh installs land on it by default.
+      renderer: 'kessel' as TerminalRenderer,
       // WebGL painter is opt-in (experimental); `dom` is the proven
       // default and the permanent fallback path.
       painter: 'dom' as TerminalPainterKind,
@@ -126,10 +136,11 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
         // setter coerces any programmatic attempt to set it (e.g.,
         // someone editing localStorage by hand or invoking via
         // DevTools) so the chosen renderer stays on a supported path.
-        // 0.39.0: 'kessel' was retired; same coercion applies. Treat
-        // anything other than 'alacritty-v2' as a legacy/unknown
-        // value and snap it back.
-        const normalized = renderer === 'alacritty-v2' ? renderer : 'alacritty-v2'
+        // 0.40.x Kessel rename: 'kessel' is the canonical value for
+        // the daemon-hosted stack; treat anything else ('alacritty',
+        // the pre-rename 'alacritty-v2', unknown future values) as a
+        // legacy/unknown value and snap it back.
+        const normalized = renderer === 'kessel' ? renderer : 'kessel'
         set({ renderer: normalized })
       },
 
@@ -153,7 +164,7 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
         renderer: state.renderer,
         painter: state.painter,
       }),
-      version: 4,
+      version: 5,
       // 0.37.0 (v1 → v2): force-migrate users who had the persisted
       // renderer set to 'alacritty' (Legacy) onto 'alacritty-v2'.
       // The legacy option is removed from the Settings UI and the
@@ -170,6 +181,12 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       // instanced painter, experimental, default 'dom'). Pre-v4
       // persisted blobs lack the key; stamp the default explicitly so
       // every stored shape is self-describing.
+      // 0.40.x (v4 → v5): the Kessel rename. The v2 stack's official
+      // name is Kessel; 'kessel' is the canonical persisted value.
+      // Coerce BOTH legacy values ('alacritty' and the pre-rename
+      // 'alacritty-v2') forward. The steps compose: a pre-v3 'kessel'
+      // (JSON-stream beta) blob flows v3 → 'alacritty-v2' → v5 →
+      // 'kessel', landing on the daemon-hosted stack either way.
       migrate: (persisted: unknown, version: number) => {
         if (persisted && typeof persisted === 'object') {
           let ps = persisted as { renderer?: string; painter?: string }
@@ -181,6 +198,9 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
           }
           if (version < 4 && ps.painter === undefined) {
             ps = { ...ps, painter: 'dom' }
+          }
+          if (version < 5 && (ps.renderer === 'alacritty' || ps.renderer === 'alacritty-v2')) {
+            ps = { ...ps, renderer: 'kessel' }
           }
           return ps as Partial<TerminalSettingsState>
         }

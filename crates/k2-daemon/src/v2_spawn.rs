@@ -1,4 +1,4 @@
-//! HTTP handlers for Alacritty_v2 session spawn + close.
+//! HTTP handlers for Kessel session spawn + close.
 //!
 //! Endpoints (registered in main.rs):
 //!   - `POST /cli/sessions/v2/spawn` — find-or-spawn by agent_name.

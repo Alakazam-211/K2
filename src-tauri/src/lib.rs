@@ -358,11 +358,11 @@ fn reload_daemon_launch_agent(_plist_path: &std::path::Path) {}
 // an LLM host; deleted alongside `commands/assistant.rs` and the
 // `--llm-worker` arm in `src-tauri/src/main.rs`.
 
-/// 0.39.0: `warm_http_pool_async` (Kessel reqwest-runtime warmup) was
-/// removed alongside the Kessel renderer. Kept as an empty stub so
-/// `main.rs` doesn't fail to link — it now does nothing, which is
-/// correct because the alacritty-v2 WS spawn path doesn't share the
-/// blocking reqwest runtime the old Kessel spawn path needed warm.
+/// 0.39.0: `warm_http_pool_async` (Kessel-T0 reqwest-runtime warmup) was
+/// removed alongside the Kessel-T0 JSON-stream renderer. Kept as an empty
+/// stub so `main.rs` doesn't fail to link — it now does nothing, which is
+/// correct because the Kessel WS spawn path doesn't share the
+/// blocking reqwest runtime the old Kessel-T0 spawn path needed warm.
 pub fn warm_http_pool_async() {}
 
 // ── 0.39.x (Issue #6): webview liveness watchdog ─────────────────────

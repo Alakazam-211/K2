@@ -9,7 +9,7 @@
 > **Invariants that do not move**: the Rust daemon owns the authoritative grid
 > (`crates/k2-core/src/terminal/grid_snapshot.rs`); the CellRun snapshot/delta wire protocol
 > is unchanged; the painter is a **pure consumer** that replaces only the DOM `<span>` strip in
-> `src/renderer/terminal-v2/TerminalPane.tsx`.
+> `src/renderer/kessel-term/TerminalPane.tsx`.
 
 **Citation legend** (local read-only clones; verify line drift before relying on exact numbers —
 xterm.js @ `43e8365` 2026-05-28):
@@ -39,7 +39,7 @@ shipped WebGL2 terminal painter (VS Code's default renderer). Zed contributes th
   undecorated blanks are trimmed (`grid_snapshot.rs:264-305`).
 - **Damage granularity is the row**: delta ships full damaged rows + rows newly scrolled into
   scrollback (`grid_snapshot.rs:435-537`); the client merge (`mergeDelta`,
-  `k2:src/renderer/terminal-v2/TerminalPane.tsx:319-352`) replaces damaged rows **by reference**
+  `k2:src/renderer/kessel-term/TerminalPane.tsx:319-352`) replaces damaged rows **by reference**
   and concatenates `scrollbackAppended` — untouched row arrays keep object identity. The DOM
   renderer's `React.memo` row skip exploits exactly this (`TerminalPane.tsx:218-242`); the
   painter's dirty-row detection will exploit it the same way (§2.4).
@@ -624,7 +624,7 @@ dev-only flag) and is independently revertible.
    tmux) A/B; Performance-panel frame times vs DOM under streaming agent output.
 6. **Expose + default-flip staging** — Settings UI toggle (labeled experimental), telemetry-free
    soak on dev machines, then flip the default for fresh installs only (mirroring the
-   `alacritty-v2` rollout convention, `terminal-settings.ts:64-72`). DOM renderer remains the
+   Kessel rollout convention, `terminal-settings.ts:64-72`). DOM renderer remains the
    permanent fallback path and the mouse-report/alt-screen behaviors stay byte-identical on the
    wire.
 

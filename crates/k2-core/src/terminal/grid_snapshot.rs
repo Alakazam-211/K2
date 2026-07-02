@@ -13,7 +13,7 @@
 //!
 //! This module is generic over `alacritty_terminal`'s `EventListener`
 //! so it works uniformly with `NoopListener` (Kessel-T0) and
-//! `DaemonEventListener` (Alacritty_v2).
+//! `DaemonEventListener` (Kessel).
 //!
 //! See `.k2so/prds/alacritty-v2.md` phase A2.
 

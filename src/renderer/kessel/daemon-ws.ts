@@ -155,9 +155,10 @@ export function daemonWsBase(creds: DaemonWsAvailable): string {
  *  daemon isn't reachable.
  *
  *  0.39.0: the Rust-side `kessel_warm_http` companion call was
- *  removed along with the Kessel renderer (the v1 spawn path was
- *  retired; daemon spawns now go through the alacritty-v2 WS handler
- *  which doesn't share the blocking reqwest runtime). This function
+ *  removed along with the Kessel-T0 JSON-stream renderer (the v1
+ *  spawn path was retired; daemon spawns now go through the Kessel
+ *  grid-WS handler, which doesn't share the blocking reqwest
+ *  runtime). This function
  *  is now just a creds-cache primer — kept so callers don't have to
  *  drop the no-op invocation. */
 export function prewarmDaemonWs(): void {

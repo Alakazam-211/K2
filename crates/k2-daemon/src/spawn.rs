@@ -3,7 +3,7 @@
 //!
 //! In 0.39.0 the legacy v1 (`SessionStreamSession` / Kessel-T0) path
 //! was retired along with `/cli/sessions/spawn`. What remains is the
-//! Alacritty_v2 helper (`spawn_agent_session_v2_blocking`) which is
+//! Kessel helper (`spawn_agent_session_v2_blocking`) which is
 //! called from `/cli/sessions/v2/spawn`, `DaemonWakeProvider::wake`,
 //! and other daemon-internal launchers.
 
@@ -86,7 +86,7 @@ pub struct SpawnWorkspaceSessionOutcome {
     pub reused: bool,
 }
 
-/// Alacritty_v2 spawn helper. Takes a `SpawnWorkspaceSessionRequest`
+/// Kessel spawn helper. Takes a `SpawnWorkspaceSessionRequest`
 /// and returns a `SpawnWorkspaceSessionOutcome`; the produced session
 /// is a `DaemonPtySession` registered in `v2_session_map`.
 ///

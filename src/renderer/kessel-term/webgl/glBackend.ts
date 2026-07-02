@@ -128,7 +128,7 @@ function compile(
   gl.compileShader(sh)
   if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
     // eslint-disable-next-line no-console
-    console.warn('[terminal-v2/webgl] shader compile failed:', gl.getShaderInfoLog(sh))
+    console.warn('[kessel-term/webgl] shader compile failed:', gl.getShaderInfoLog(sh))
     gl.deleteShader(sh)
     return null
   }
@@ -153,7 +153,7 @@ function link(
   gl.deleteShader(fs)
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
     // eslint-disable-next-line no-console
-    console.warn('[terminal-v2/webgl] program link failed:', gl.getProgramInfoLog(prog))
+    console.warn('[kessel-term/webgl] program link failed:', gl.getProgramInfoLog(prog))
     gl.deleteProgram(prog)
     return null
   }

@@ -70,7 +70,7 @@ export function createWebglPainter(
     if (fatalFired) return
     fatalFired = true
     // eslint-disable-next-line no-console
-    console.warn(`[terminal-v2/webgl] fatal: ${reason} — DOM fallback takes over`)
+    console.warn(`[kessel-term/webgl] fatal: ${reason} — DOM fallback takes over`)
     fatalCb?.(reason)
   }
 

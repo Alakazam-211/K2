@@ -1,4 +1,4 @@
-// Alacritty_v2 Tauri thin client.
+// Kessel Tauri thin client.
 //
 // Speaks the A3/A4 protocol defined in
 // `.k2so/prds/alacritty-v2.md`:
@@ -19,8 +19,8 @@
 // grid deltas to DOM using the CellRun vocabulary from
 // k2so-core's grid_snapshot module.
 //
-// Deliberately kept small (< 450 lines). The Kessel-era
-// SessionStreamViewTerm was ~600 lines because it held a local
+// Deliberately kept small (< 450 lines). The Kessel-T0-era
+// SessionStreamViewTerm (the retired JSON-stream beta) was ~600 lines because it held a local
 // Term + byte reader + APC filter. None of that here.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -1412,7 +1412,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             // A frame that fails to decode is a protocol violation —
             // surface it rather than silently desyncing the mirror.
             // eslint-disable-next-line no-console
-            console.error('[terminal-v2] k1 frame decode failed:', e)
+            console.error('[kessel-term] k1 frame decode failed:', e)
             return
           }
           k1WireActiveRef.current = true
@@ -2303,7 +2303,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           navigator.clipboard
             .writeText(copySelectionText(snap, webglSelectionRef.current))
             .catch((err) =>
-              console.warn('[terminal-v2/webgl] clipboard write failed:', err),
+              console.warn('[kessel-term/webgl] clipboard write failed:', err),
             )
         }
         return
@@ -2886,7 +2886,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
       if (clicked.type === 'url') {
         daemonCliPost('fs/open-external', { target: clicked.target }).catch((err) =>
-          console.warn('[terminal-v2/link]', err),
+          console.warn('[kessel-term/link]', err),
         )
       } else if (clicked.type === 'file' && clicked.filePath) {
         const tabsStore = useTabsStore.getState()
@@ -3628,7 +3628,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           whiteSpace: 'pre-wrap',
         }}
       >
-        Alacritty v2: {phase.message}
+        Kessel: {phase.message}
       </div>
     )
   }
@@ -3673,7 +3673,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     >
     <div
       ref={containerRef}
-      className="alacritty-v2-pane"
+      className="kessel-pane"
       data-session-id={debugSessionId}
       // App.tsx's global click + refocus-poll use these two data
       // attributes to find the active terminal and keep it focused
@@ -3928,7 +3928,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             borderRadius: '3px',
           }}
         >
-          <strong style={{ color: '#fff' }}>Alacritty</strong>
+          <strong style={{ color: '#fff' }}>Kessel</strong>
           {painterKind === 'webgl' && (
             <span style={{ color: painterFatal ? '#f66' : '#6f6' }}>
               {' '}

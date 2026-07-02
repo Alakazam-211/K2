@@ -1091,7 +1091,7 @@ export function startAgentPolling(): void {
                       cwd,
                       command: cmd,
                       args,
-                      renderer: 'alacritty-v2' as const,
+                      renderer: 'kessel' as const,
                       spawnedAt: performance.now(),
                       heartbeatName: heartbeatName ?? undefined,
                       projectPath,

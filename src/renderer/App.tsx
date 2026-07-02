@@ -64,7 +64,7 @@ import { onActiveHostChange } from './stores/connect-host'
 // TODO(0.39.x): rename src/renderer/kessel/ to a non-Kessel name.
 // Only daemon-ws.ts + config-context.tsx + config.ts remain after the
 // Kessel renderer deletion; these are shared terminal infrastructure
-// used by terminal-v2 + AgentChatPane + tabs/session-events stores.
+// used by kessel-term + AgentChatPane + tabs/session-events stores.
 
 /** Parse focus mode project ID. Two sources because URL fragments
  *  are stripped by Tauri's `WebviewUrl::App` in production builds:

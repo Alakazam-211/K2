@@ -1,4 +1,4 @@
-//! Alacritty_v2 daemon-hosted terminal session.
+//! Kessel daemon-hosted terminal session.
 //!
 //! Minimum viable terminal: PTY + alacritty Term on the daemon,
 //! driven by alacritty_terminal's built-in `EventLoop::spawn()`.

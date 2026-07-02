@@ -147,7 +147,7 @@ pub fn tick(
             // Two reasons we land here:
             //   - Legacy session is being torn down between lookups
             //     (next tick won't see it).
-            //   - V2 session: alacritty_v2 doesn't register in
+            //   - V2 session: Kessel doesn't register in
             //     `k2_core::session::registry` at all yet, so the
             //     watchdog has no idle/created_at to consult.
             //     Skipping leaves v2 sessions un-watchdogged for

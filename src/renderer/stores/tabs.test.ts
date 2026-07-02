@@ -584,7 +584,7 @@ describe('D9 sandbox tab marker', () => {
           items: [{
             id: 'item-1',
             type: 'terminal',
-            data: { terminalId, cwd: '/tmp/proj', renderer: 'alacritty-v2', sandboxBackend } as TerminalItemData,
+            data: { terminalId, cwd: '/tmp/proj', renderer: 'kessel', sandboxBackend } as TerminalItemData,
           }],
           activeItemIndex: 0,
         }]]),

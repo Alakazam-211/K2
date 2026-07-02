@@ -231,7 +231,7 @@ if (typeof window !== 'undefined') {
  * Close a terminal session on the appropriate backend for its
  * renderer. Called on every deliberate tab-close path in the
  * store (removeTab, removePaneFromTab, closeItemInPaneGroup,
- * clearAllTabs). Alacritty_v2 requires this explicit call
+ * clearAllTabs). Kessel requires this explicit call
  * because its component unmount cleanup intentionally does NOT
  * close the daemon session — that's what makes workspace swap +
  * Tauri restart retain sessions.
@@ -304,7 +304,8 @@ function closeTerminalForRenderer(data: TerminalItemData): void {
         console.warn('[tabs] terminal/kill failed:', e),
       )
       break
-    case 'alacritty-v2':
+    case 'kessel':
+    case 'alacritty-v2': // pre-rename working name for the Kessel stack
       // Daemon-owned PTY; unregister from v2_session_map so the
       // last Arc drops and DaemonPtySession tears down the child
       // + PTY master. See .k2so/prds/alacritty-v2.md phase A6.
@@ -415,10 +416,12 @@ export interface TerminalItemData {
    * terminals mid-session. Missing / undefined = alacritty (the
    * historical default for every tab created pre-4.5).
    *
+   *   - 'kessel'        — daemon-owned PTY (cli/sessions/v2/close).
+   *   - 'alacritty-v2'  — pre-rename working name for 'kessel';
+   *                       still dispatches to the Kessel pane.
    *   - 'alacritty'     (Legacy) — Tauri-local PTY (terminal_kill).
-   *   - 'alacritty-v2'  — daemon-owned PTY (cli/sessions/v2/close).
    */
-  renderer?: 'alacritty' | 'alacritty-v2'
+  renderer?: 'alacritty' | 'alacritty-v2' | 'kessel'
   /** Set on tabs that are attached to a heartbeat's live PTY.
    *  Closing the tab flips `surfaced=false` instead of killing the
    *  PTY (the heartbeat keeps firing in the background).
@@ -1999,10 +2002,10 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     const targetGroup = get().splitCount > 1 ? get().splitCount - 1 : 0
     const tabId = get().addTabToGroup(targetGroup, projectPath, { title, command: 'claude', args })
 
-    // Force v2 renderer for heartbeat tabs regardless of the user's
-    // workspace renderer choice — heartbeat-spawned PTYs already only
-    // live in v2_session_map, so a tab attached to that session must
-    // use the v2 path. See `.k2so/prds/heartbeat-active-session-tracking.md`.
+    // Force the Kessel renderer for heartbeat tabs regardless of the
+    // user's workspace renderer choice — heartbeat-spawned PTYs already
+    // only live in v2_session_map, so a tab attached to that session must
+    // use the Kessel path. See `.k2so/prds/heartbeat-active-session-tracking.md`.
     if (tabId) {
       set((s) => ({
         tabs: s.tabs.map((t) => {
@@ -2013,7 +2016,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
               if (item.type !== 'terminal') return item
               return {
                 ...item,
-                data: { ...item.data, renderer: 'alacritty-v2' as const },
+                data: { ...item.data, renderer: 'kessel' as const },
               }
             })
             updatedGroups.set(pgId, { ...pg, items: updatedItems })
@@ -4641,12 +4644,12 @@ export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
     sandbox: true,
     sandboxBackend: backend,
   })
-  // alacritty-v2 is the daemon-owned renderer; makeTerminalPaneGroup stamps the
-  // user's current renderer preference, so force v2 explicitly — the daemon
-  // session it attaches to IS a v2 session.
+  // Kessel is the daemon-owned renderer; makeTerminalPaneGroup stamps the
+  // user's current renderer preference, so force Kessel explicitly — the
+  // daemon session it attaches to IS a Kessel (v2) session.
   const firstItem = [...tab.paneGroups.values()][0]?.items[0]
   if (firstItem?.type === 'terminal') {
-    (firstItem.data as TerminalItemData).renderer = 'alacritty-v2'
+    (firstItem.data as TerminalItemData).renderer = 'kessel'
   }
   console.warn(
     `[tabs] api-sandbox adoption — surfacing cell agent=${agentName} backend=${backend} as a new tab`,

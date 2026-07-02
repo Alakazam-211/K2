@@ -6,10 +6,10 @@ pub mod grid_types;
 pub mod reflow;
 mod font_renderer;
 // 0.34.0 Session Stream PTY reader (Phase 2) was retired in 0.39.0
-// alongside the Kessel-T0 renderer. The Alacritty_v2 `daemon_pty`
+// alongside the Kessel-T0 renderer. The Kessel `daemon_pty`
 // module below is now the only daemon-side terminal type.
 
-// Alacritty_v2 daemon-hosted PTY + Term module (Phase A1 of the
+// Kessel daemon-hosted PTY + Term module (Phase A1 of the
 // .k2so/prds/alacritty-v2.md plan). Minimal: no LineMux, no byte
 // broadcast, no ring, no APC. Uses alacritty's built-in
 // EventLoop::spawn() rather than a custom reader.
@@ -25,16 +25,16 @@ pub mod sandbox;
 // inherited launchd PATH) so agent CLIs in ~/.local/bin, homebrew,
 // nvm shims, etc. resolve by bare name instead of ENOENT.
 pub mod login_path;
-// Alacritty_v2 grid snapshot + delta wire types + serializers
+// Kessel grid snapshot + delta wire types + serializers
 // (Phase A2). Shared between the daemon's WS endpoint (A3) and
 // the Tauri thin client (A5). Generic over `EventListener` so
 // it's usable with any Term variant.
 pub mod grid_snapshot;
-// "k1" binary grid wire — compact fixed-layout encoding of the
-// grid_snapshot types, opt-in per grid-WS connection (`&proto=k1`).
+// "k1" — Kessel wire format v1: compact fixed-layout binary encoding
+// of the grid_snapshot types, opt-in per grid-WS connection (`&proto=k1`).
 // JSON stays the default. The byte layout is documented ONCE in this
 // module's doc comment and mirrored by the TS decoder
-// (`src/renderer/terminal-v2/gridWire.ts`).
+// (`src/renderer/kessel-term/gridWire.ts`).
 pub mod grid_wire;
 // Grow-then-shrink settle watcher (2026-04-22). Every Session Stream
 // spawn opens the PTY at an artificially large rows value; this

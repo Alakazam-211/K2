@@ -19,7 +19,7 @@ use crate::spawn::{spawn_agent_session_v2_blocking, SpawnWorkspaceSessionRequest
 
 /// Looks up the target agent's session handle across BOTH the
 /// legacy `session_map` (Kessel-T0) and `v2_session_map`
-/// (Alacritty_v2) and writes the rendered signal bytes into its
+/// (Kessel) and writes the rendered signal bytes into its
 /// PTY. If no session is registered for the target agent in
 /// either map, returns `NotFound` — the egress path sees this as
 /// "inject failed" and reports it in the `DeliveryReport`; the

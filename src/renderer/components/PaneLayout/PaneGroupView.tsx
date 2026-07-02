@@ -1,6 +1,6 @@
 import { useCallback, useContext, useState } from 'react'
 import { AlacrittyTerminalView } from '@/components/Terminal/AlacrittyTerminalView'
-import { TerminalPane } from '@/terminal-v2/TerminalPane'
+import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { FileViewerPane } from '@/components/FileViewerPane/FileViewerPane'
 import { AgentPane } from '@/components/AgentPane/AgentPane'
 import { useTabsStore } from '@/stores/tabs'
@@ -215,9 +215,11 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                   { terminalId: td.terminalId, cwd: td.cwd },
                 )
               }
-              if (raw.renderer === 'alacritty-v2') {
-                // A5: daemon-hosted v2 thin client.
-                // See .k2so/prds/alacritty-v2.md.
+              if (raw.renderer === 'kessel' || raw.renderer === 'alacritty-v2') {
+                // A5: Kessel — the daemon-hosted thin client.
+                // ('alacritty-v2' is the pre-rename working name for
+                // the same stack; in-flight tabs stamped with it
+                // dispatch here too.) See .k2so/prds/alacritty-v2.md.
                 content = (
                   <TerminalPane
                     terminalId={td.terminalId}

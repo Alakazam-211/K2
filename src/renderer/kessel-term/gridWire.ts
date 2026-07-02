@@ -1,4 +1,4 @@
-// "k1" binary grid wire — client decoder.
+// "k1" — Kessel wire format v1: client decoder.
 //
 // Mirrors the layout documented in
 // `crates/k2-core/src/terminal/grid_wire.rs` (the single source of

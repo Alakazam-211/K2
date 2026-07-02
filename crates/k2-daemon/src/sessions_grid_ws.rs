@@ -1,4 +1,4 @@
-//! `/cli/sessions/grid` WebSocket endpoint (Alacritty_v2).
+//! `/cli/sessions/grid` WebSocket endpoint (Kessel).
 //!
 //! Serves grid snapshots + deltas from a daemon-hosted
 //! `DaemonPtySession`'s `alacritty_terminal::Term` to a single
@@ -393,7 +393,7 @@ pub async fn serve_session_grid_connection(
     // need to push `LabelChanged` to this client.
     let mut labels_rx = session.subscribe_labels();
 
-    let pane_id = format!("alacritty-v2-{}", session.session_id);
+    let pane_id = format!("kessel-{}", session.session_id);
 
     // 0.39.46 — join the session's SHARED emitter. Damage is consumed
     // by exactly one consumer per session (the emitter task); this

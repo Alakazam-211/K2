@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { terminalKill } from '@/lib/terminal-daemon'
-import { TerminalPane } from '@/terminal-v2/TerminalPane'
+import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 
 // ── Session file helpers ────────────────────────────────────────────

@@ -1,4 +1,4 @@
-//! "k1" binary grid wire format — compact fixed-layout encoding of
+//! Kessel wire format v1 ("k1") — compact fixed-layout binary encoding of
 //! [`TermGridSnapshot`] / [`TermGridDelta`].
 //!
 //! Opt-in per connection (`&proto=k1` on the grid-WS URL); the JSON
@@ -10,7 +10,7 @@
 //! client's `JSON.parse` would have produced (the round-trip parity
 //! test below pins this).
 //!
-//! The client-side decoder is `src/renderer/terminal-v2/gridWire.ts`.
+//! The client-side decoder is `src/renderer/kessel-term/gridWire.ts`.
 //! This module doc is the single source of truth for the layout; the
 //! TS module mirrors it verbatim.
 //!
@@ -482,7 +482,7 @@ mod tests {
     /// combining accents), explicit colors, every style flag, wrapped
     /// runs, empty rows, non-default cursor + mode bits. The SAME
     /// snapshot/delta pair backs the TS decoder fixture
-    /// (`src/renderer/terminal-v2/gridWire.test.ts`) — regenerate its
+    /// (`src/renderer/kessel-term/gridWire.test.ts`) — regenerate its
     /// hex + JSON constants via `fixture_hex_and_json_dump` below if
     /// this changes.
     fn fixture_snapshot() -> TermGridSnapshot {
@@ -731,7 +731,7 @@ mod tests {
     }
 
     /// Regenerates the constants embedded in
-    /// `src/renderer/terminal-v2/gridWire.test.ts`. Run with
+    /// `src/renderer/kessel-term/gridWire.test.ts`. Run with
     /// `cargo test -p k2-core --lib grid_wire::tests::fixture_hex_and_json_dump -- --nocapture`
     /// and paste the output when the fixture changes. Asserts the
     /// encodings are non-empty so it fails loudly rather than

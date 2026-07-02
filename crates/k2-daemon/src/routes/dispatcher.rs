@@ -870,7 +870,7 @@ async fn handle_one_request(
             .await;
             return DispatchOutcome::Done;
         }
-        // Alacritty_v2 (A3): grid snapshot + delta WS endpoint.
+        // Kessel (A3): grid snapshot + delta WS endpoint.
         // Serves one Tauri thin client per session. Single-subscriber
         // by design. See `.k2so/prds/alacritty-v2.md`.
         "/cli/sessions/grid" => {
@@ -1003,7 +1003,7 @@ async fn handle_one_request(
             .await;
             return DispatchOutcome::Done;
         }
-        // POST /cli/sessions/v2/spawn — Alacritty_v2 find-or-spawn
+        // POST /cli/sessions/v2/spawn — Kessel find-or-spawn
         // (A4). Parallel to /cli/sessions/spawn but produces a
         // DaemonPtySession (registered in v2_session_map) instead
         // of a SessionStreamSession. Idempotent on agent_name: same

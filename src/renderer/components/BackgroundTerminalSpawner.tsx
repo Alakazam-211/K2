@@ -1,6 +1,6 @@
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
-import { TerminalPane } from '@/terminal-v2/TerminalPane'
+import { TerminalPane } from '@/kessel-term/TerminalPane'
 
 /**
  * Renders background agent terminals in a hidden off-screen container.

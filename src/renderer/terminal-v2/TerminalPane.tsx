@@ -1772,13 +1772,74 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // sends `set_active:true` becomes the resize authority for that
   // session until another claims or it disconnects.
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null)
-  const sendResize = useCallback((cols: number, rows: number) => {
-    lastResizeRef.current = { cols, rows }
-    if (!useWindowFocusStore.getState().isFocused) return
-    const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify({ action: 'resize', cols, rows }))
+
+  // ── Resize hold-and-scale bookkeeping (black-flash fix, client
+  // half) ─────────────────────────────────────────────────────────
+  // While a resize we sent is in flight — the container reshaped but
+  // incoming frames still carry the OLD cols/rows — the scale layout
+  // keeps rendering the last grid stretched/letterboxed to the new
+  // box instead of drawing old-geometry content 1:1 (clipped or
+  // undersized) and then flashing. Cleared the moment a frame with
+  // the requested dims arrives, or by a hard timeout after which we
+  // render whatever we have unscaled (the daemon may have coalesced
+  // the request away).
+  const RESIZE_HOLD_TIMEOUT_MS = 500
+  const [pendingResize, setPendingResize] = useState<{
+    cols: number
+    rows: number
+  } | null>(null)
+  const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  )
+  const notePendingResize = useCallback((cols: number, rows: number) => {
+    // Already at the target: the daemon's same-dims skip means no new
+    // frame is coming — nothing to hold for.
+    const snap = snapshotRef.current
+    if (snap && snap.cols === cols && snap.rows === rows) return
+    setPendingResize({ cols, rows })
+    if (pendingResizeTimerRef.current) {
+      clearTimeout(pendingResizeTimerRef.current)
+    }
+    pendingResizeTimerRef.current = setTimeout(() => {
+      pendingResizeTimerRef.current = null
+      setPendingResize(null)
+    }, RESIZE_HOLD_TIMEOUT_MS)
   }, [])
+  // Release the hold as soon as a frame at the requested dims lands.
+  useEffect(() => {
+    if (!pendingResize || !snapshot) return
+    if (
+      snapshot.cols === pendingResize.cols &&
+      snapshot.rows === pendingResize.rows
+    ) {
+      if (pendingResizeTimerRef.current) {
+        clearTimeout(pendingResizeTimerRef.current)
+        pendingResizeTimerRef.current = null
+      }
+      setPendingResize(null)
+    }
+  }, [snapshot, pendingResize])
+  useEffect(
+    () => () => {
+      if (pendingResizeTimerRef.current) {
+        clearTimeout(pendingResizeTimerRef.current)
+        pendingResizeTimerRef.current = null
+      }
+    },
+    [],
+  )
+
+  const sendResize = useCallback(
+    (cols: number, rows: number) => {
+      lastResizeRef.current = { cols, rows }
+      if (!useWindowFocusStore.getState().isFocused) return
+      const ws = wsRef.current
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      ws.send(JSON.stringify({ action: 'resize', cols, rows }))
+      notePendingResize(cols, rows)
+    },
+    [notePendingResize],
+  )
 
   // Emit `set_active` on focus changes + re-emit latest dimensions
   // when this window regains focus so the daemon snaps the PTY to
@@ -1932,6 +1993,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               cols: lastResizeRef.current.cols,
               rows: lastResizeRef.current.rows,
             }))
+            // This resize is in flight like any other — hold-and-
+            // scale until frames reflow to our geometry.
+            notePendingResize(
+              lastResizeRef.current.cols,
+              lastResizeRef.current.rows,
+            )
           }
         }
       }
@@ -2227,14 +2294,29 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     const gridW = snapCols * cw
     const gridH = snapRows * ch
     const fit = Math.min(availW / gridW, availH / gridH)
-    if (isActiveViewer || fit >= 1) return identity
-    const scale = Math.max(fit, PASSIVE_SCALE_FLOOR)
-    return {
+    const letterboxed = (scale: number, passive: boolean) => ({
       scale,
       offsetX: Math.max(0, (availW - gridW * scale) / 2),
       offsetY: Math.max(0, (availH - gridH * scale) / 2),
-      passive: true,
+      passive,
+    })
+    if (!isActiveViewer) {
+      if (fit >= 1) return identity
+      return letterboxed(Math.max(fit, PASSIVE_SCALE_FLOOR), true)
     }
+    // Active pane, resize in flight (hold-and-scale): frames still
+    // carry the OLD geometry — stretch the last grid to the new box
+    // (scale may exceed 1 when the box grew) until the first frame at
+    // the requested dims lands or the hold times out. This is what
+    // turns the container-resize window from a flash into a smooth
+    // reflow.
+    if (
+      pendingResize &&
+      (snapCols !== pendingResize.cols || snapRows !== pendingResize.rows)
+    ) {
+      return letterboxed(Math.max(fit, PASSIVE_SCALE_FLOOR), false)
+    }
+    return identity
   }, [
     snapCols,
     snapRows,
@@ -2243,6 +2325,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     containerSize.width,
     containerSize.height,
     isActiveViewer,
+    pendingResize,
   ])
   // Ref mirror for handlers that bind once (wheel listener) — same
   // pattern as `snapshotRef`.

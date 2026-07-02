@@ -424,6 +424,17 @@ pub struct DaemonPtySession {
     /// (Kessel postmortem — see `request_resize`): a skipped no-op
     /// must NOT bump this.
     resizes_applied: std::sync::atomic::AtomicU64,
+    /// Bumped by [`Self::resize`] on every REAL dims change, from
+    /// inside the same term-lock critical section as the pre-reflow
+    /// viewport clear. The grid emitter samples it (under the same
+    /// lock) to open its blank-frame suppression window: between the
+    /// clear and the child's SIGWINCH repaint the Term is blank, and
+    /// broadcasting that intermediate is the user-visible resize
+    /// "black flash". An atomic on the session rather than a new
+    /// event variant because `AlacEvent` is alacritty's own enum (not
+    /// ours to extend), and a side-channel message would reintroduce
+    /// ordering questions the lock-coupled atomic doesn't have.
+    resize_generation: std::sync::atomic::AtomicU64,
 
     /// Authoritative human-friendly label (Phase B / PRD
     /// `session-label-daemon-owned.md`). The daemon owns this
@@ -677,6 +688,7 @@ impl DaemonPtySession {
                 last_applied: None,
             }),
             resizes_applied: std::sync::atomic::AtomicU64::new(0),
+            resize_generation: std::sync::atomic::AtomicU64::new(0),
             label: std::sync::RwLock::new(cfg.label),
             label_source: std::sync::RwLock::new(cfg.label_source),
             label_tx,
@@ -831,6 +843,14 @@ impl DaemonPtySession {
             || (term.screen_lines() as u16) != rows;
 
         if dims_changed {
+            // Announce the real resize BEFORE the clear, inside the
+            // same term-lock critical section: the emitter reads the
+            // generation under this lock, so it either observes
+            // (old gen, pre-clear content) or (new gen, cleared/
+            // reshaped content) — never a blank grid it would treat
+            // as an ordinary frame. See `resize_generation`.
+            self.resize_generation
+                .fetch_add(1, std::sync::atomic::Ordering::Release);
             // Discard-then-reshape inside the same lock so the grid
             // never observes pre-clear stale chrome at new dims.
             term.goto(0, 0);
@@ -840,6 +860,17 @@ impl DaemonPtySession {
                 rows: rows as usize,
             });
         }
+    }
+
+    /// Monotonic count of real (dims-changing) resizes applied. The
+    /// grid emitter compares successive reads to detect "a resize
+    /// just cleared the viewport" and suppress blank-frame broadcast
+    /// until the child's repaint (or a hard timeout). For an exact
+    /// read, sample while holding the Term lock — `resize()` bumps
+    /// this inside its own term-lock critical section.
+    pub fn resize_generation(&self) -> u64 {
+        self.resize_generation
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Record (or refresh) a subscriber's last-declared viewport +
@@ -1005,10 +1036,13 @@ impl DaemonPtySession {
                         gate.flusher_live = false;
                         if let Some((c, r)) = gate.pending.take() {
                             // Same-dims re-check: a direct `resize()`
-                            // caller (HTTP route) may have moved the
-                            // PTY to the pending target while we were
-                            // parked — a no-op apply here would blank
-                            // the TUI (see the skip above).
+                            // caller may have moved the PTY to the
+                            // pending target while we were parked — a
+                            // no-op apply here would blank the TUI
+                            // (see the skip above). All production
+                            // routes (grid-WS + HTTP) now come through
+                            // this front door, but resize() stays
+                            // callable directly.
                             if (c, r) != Self::current_dims(&s) {
                                 gate.last_applied = Some(now);
                                 s.resizes_applied.fetch_add(
@@ -1764,6 +1798,25 @@ mod tests {
         DaemonPtySession::detach_subscriber(&s, 9);
         assert_eq!(s.active_subscriber.load(Relaxed), 0, "claim released");
         assert_eq!(term_dims(&s), (40, 10), "dims left as-is");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resize_generation_bumps_only_on_real_dims_change() {
+        let s = spawn_cat_session();
+        assert_eq!(s.resize_generation(), 0);
+        // Same-dims: the debounced front door skips outright — no
+        // clear, no SIGWINCH, no generation bump (the emitter must
+        // never open a settle window for a no-op).
+        DaemonPtySession::request_resize(&s, 80, 24);
+        assert_eq!(s.resize_generation(), 0, "no-op resize must not bump");
+        // Direct same-dims resize() is also gated on dims_changed.
+        s.resize(80, 24);
+        assert_eq!(s.resize_generation(), 0, "direct no-op must not bump");
+        // Real change bumps exactly once.
+        DaemonPtySession::request_resize(&s, 100, 30);
+        assert_eq!(term_dims(&s), (100, 30));
+        assert_eq!(s.resize_generation(), 1);
     }
 
     /// `kill()` is idempotent: calling it twice must not panic, must

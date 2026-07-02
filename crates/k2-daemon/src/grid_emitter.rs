@@ -43,6 +43,20 @@
 //! (`last_history_size` especially) coherent; a stale value would
 //! make the first delta after a viewer attaches re-append scrollback
 //! rows the attach snapshot already contains.
+//!
+//! ## Resize settle (blank-frame suppression)
+//!
+//! A real resize clears the viewport before the child's SIGWINCH
+//! repaint; broadcasting that blank intermediate was the visible
+//! resize "black flash". The emitter samples the session's
+//! `resize_generation` (bumped under the term lock by
+//! `daemon_pty::resize`) and, on a change, opens a settle window:
+//! damage is drained (zero-viewer pattern) but nothing is broadcast
+//! until repaint evidence ([`RESIZE_REPAINT_EVIDENCE_MIN`]) or the
+//! hard [`RESIZE_SETTLE_MAX`] timeout, whichever first; the window
+//! closes with one forced Full snapshot. Suppressed frames never
+//! exist on the wire, so versions stay monotonic and the k1
+//! floor/ack/resync semantics are untouched.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -209,6 +223,81 @@ fn register_format(k1_subs: &Arc<AtomicUsize>, wants_k1: bool) -> FormatRegistra
 /// timeout doing its job.
 const MIN_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
+/// Resize settle — hard ceiling on blank-frame suppression. A real
+/// resize clears the viewport (`daemon_pty::resize`: goto(0,0) +
+/// ClearMode::Below, kept deliberately) before the child's SIGWINCH
+/// repaint lands; frames built in that window are blank and used to
+/// broadcast to every viewer as the visible "black flash". While a
+/// settle window is open the emitter drains damage without encoding
+/// (the zero-viewer pattern) and the first post-settle emit is forced
+/// Full — so no damage is ever lost, versions stay monotonic (the
+/// suppressed frames simply never exist on the wire), and the k1
+/// floor/ack/resync semantics are untouched. If the child never
+/// repaints (apps that ignore SIGWINCH), this timeout publishes the
+/// daemon's true (cleared) state rather than freezing viewers on
+/// stale geometry forever.
+const RESIZE_SETTLE_MAX: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Evidence-of-repaint threshold. The resize's own clear arrives
+/// (if at all) essentially instantly; claude/Ink bracket their
+/// SIGWINCH repaint in synchronized output, so it lands as ONE
+/// coalesced post-ESU Wakeup comfortably later. Any Wakeup this far
+/// into the settle window is therefore treated as the repaint and
+/// ends suppression immediately — the Kessel lesson that timers
+/// guess but the stream tells you (150ms flat-wait ≙ ~3fps; this
+/// path typically settles in single-digit ms after the repaint).
+const RESIZE_REPAINT_EVIDENCE_MIN: std::time::Duration = std::time::Duration::from_millis(30);
+
+/// Resize-settle decision for one incoming damage cue (Wakeup /
+/// Lagged). Pure state transition over the emitter's settle fields so
+/// the Wakeup and Lagged arms share one implementation.
+enum SettleAction {
+    /// Inside an open settle window and the cue is too early to be
+    /// the repaint — drain damage, emit nothing.
+    Suppress,
+    /// No window open (or this cue is the repaint evidence and closed
+    /// it) — proceed to the normal emit path.
+    Emit,
+}
+
+fn settle_gate(
+    session: &DaemonPtySession,
+    seen_resize_gen: &mut u64,
+    settle_since: &mut Option<std::time::Instant>,
+    force_full: &mut bool,
+) -> SettleAction {
+    // A resize since our last look opens (or re-opens) the window.
+    // The cue that carried us here is at most the resize's own clear
+    // — never the repaint, which needs a SIGWINCH round-trip first.
+    let gen = session.resize_generation();
+    if gen != *seen_resize_gen {
+        *seen_resize_gen = gen;
+        *settle_since = Some(std::time::Instant::now());
+        *force_full = true;
+        return SettleAction::Suppress;
+    }
+    if let Some(started) = *settle_since {
+        if started.elapsed() < RESIZE_REPAINT_EVIDENCE_MIN {
+            return SettleAction::Suppress;
+        }
+        // Comfortably after the clear ⇒ this is the child's repaint
+        // (Ink/claude deliver it as one coalesced post-ESU Wakeup).
+        *settle_since = None;
+    }
+    SettleAction::Emit
+}
+
+/// Consume accumulated damage WITHOUT encoding — the zero-viewer
+/// pattern, reused while a resize-settle window is open so no damage
+/// is ever lost and `EmitState` stays coherent for the forced-Full
+/// emit that closes the window.
+fn drain_only(session: &Arc<DaemonPtySession>, emit_state: &Arc<Mutex<EmitState>>) {
+    let mut st = emit_state.lock();
+    let term_mutex = session.term();
+    let mut term = term_mutex.lock();
+    drain_damage(&mut term, &mut st);
+}
+
 /// The emitter task: one per live session, exits on child exit /
 /// session teardown (events channel closed) and removes itself from
 /// the registry.
@@ -221,9 +310,61 @@ async fn run(
 ) {
     let mut events_rx = session.subscribe_events();
     let mut last_emit = std::time::Instant::now() - MIN_FRAME_INTERVAL;
+    // Resize settle state — see RESIZE_SETTLE_MAX. `force_full` is
+    // sticky until a frame actually reaches the channel: a forced
+    // emit that itself races a new resize must stay forced.
+    let mut seen_resize_gen = session.resize_generation();
+    let mut settle_since: Option<std::time::Instant> = None;
+    let mut force_full = false;
     loop {
-        match events_rx.recv().await {
+        // While a settle window is open, bound the wait by its
+        // deadline: a child that never repaints on SIGWINCH must not
+        // freeze every viewer on stale geometry (Kessel §2.6 — a
+        // repaint is not guaranteed).
+        let ev = match settle_since {
+            Some(started) => {
+                let deadline =
+                    tokio::time::Instant::from_std(started + RESIZE_SETTLE_MAX);
+                tokio::select! {
+                    ev = events_rx.recv() => Some(ev),
+                    _ = tokio::time::sleep_until(deadline) => None,
+                }
+            }
+            None => Some(events_rx.recv().await),
+        };
+        let Some(ev) = ev else {
+            // Settle timeout — publish the daemon's true state (all
+            // damage drained during the window folds into this one
+            // forced-Full frame).
+            settle_since = None;
+            force_full = true;
+            match emit_once(
+                &session, &pane_id, &frames_tx, &emit_state, &k1_subs,
+                force_full, seen_resize_gen,
+            ) {
+                EmitOutcome::ResizeRaced(gen) => {
+                    seen_resize_gen = gen;
+                    settle_since = Some(std::time::Instant::now());
+                }
+                EmitOutcome::Clean => force_full = false,
+            }
+            last_emit = std::time::Instant::now();
+            continue;
+        };
+        match ev {
             Ok(AlacEvent::Wakeup) => {
+                if matches!(
+                    settle_gate(
+                        &session,
+                        &mut seen_resize_gen,
+                        &mut settle_since,
+                        &mut force_full,
+                    ),
+                    SettleAction::Suppress
+                ) {
+                    drain_only(&session, &emit_state);
+                    continue;
+                }
                 let since = last_emit.elapsed();
                 let mut child_exited = false;
                 if since < MIN_FRAME_INTERVAL {
@@ -253,7 +394,20 @@ async fn run(
                         }
                     }
                 }
-                emit_once(&session, &pane_id, &frames_tx, &emit_state, &k1_subs);
+                match emit_once(
+                    &session, &pane_id, &frames_tx, &emit_state, &k1_subs,
+                    force_full, seen_resize_gen,
+                ) {
+                    EmitOutcome::ResizeRaced(gen) => {
+                        // A resize cleared the grid while this frame
+                        // was being built — the frame was discarded;
+                        // open the settle window for the repaint.
+                        seen_resize_gen = gen;
+                        settle_since = Some(std::time::Instant::now());
+                        force_full = true;
+                    }
+                    EmitOutcome::Clean => force_full = false,
+                }
                 last_emit = std::time::Instant::now();
                 if child_exited {
                     break;
@@ -268,12 +422,36 @@ async fn run(
                 // Missed Wakeups. Damage accumulates on the Term, so
                 // one emit pass now covers everything we skipped —
                 // but we must run it, because no further Wakeup is
-                // guaranteed to follow.
+                // guaranteed to follow. Routed through the same
+                // settle gate as Wakeup: a lagged cue mid-window is
+                // still just damage, not license to broadcast blank.
                 log_debug!(
                     "[daemon/grid-emitter] session {} lagged {n} events — emitting accumulated damage",
                     session.session_id
                 );
-                emit_once(&session, &pane_id, &frames_tx, &emit_state, &k1_subs);
+                if matches!(
+                    settle_gate(
+                        &session,
+                        &mut seen_resize_gen,
+                        &mut settle_since,
+                        &mut force_full,
+                    ),
+                    SettleAction::Suppress
+                ) {
+                    drain_only(&session, &emit_state);
+                    continue;
+                }
+                match emit_once(
+                    &session, &pane_id, &frames_tx, &emit_state, &k1_subs,
+                    force_full, seen_resize_gen,
+                ) {
+                    EmitOutcome::ResizeRaced(gen) => {
+                        seen_resize_gen = gen;
+                        settle_since = Some(std::time::Instant::now());
+                        force_full = true;
+                    }
+                    EmitOutcome::Clean => force_full = false,
+                }
                 last_emit = std::time::Instant::now();
             }
             Err(broadcast::error::RecvError::Closed) => break,
@@ -286,6 +464,20 @@ async fn run(
     );
 }
 
+/// Outcome of one emit pass, for the resize-settle machinery.
+enum EmitOutcome {
+    /// Frame sent, legitimately skipped, or drained — state is clean.
+    Clean,
+    /// A resize applied while the frame was being built (the
+    /// generation advanced past the caller's expectation, observed
+    /// under the term lock): the built frame may be the cleared
+    /// intermediate, so it was DISCARDED, never broadcast. Carries
+    /// the generation sampled under the lock. The discarded build may
+    /// have consumed a version number — harmless, versions only need
+    /// to stay monotonic on the wire.
+    ResizeRaced(u64),
+}
+
 /// One emit pass. Lock order: emit_state, then term — [`attach`]'s
 /// snapshot path takes the same locks in the same order, which is
 /// what makes its version stamp exact.
@@ -295,7 +487,9 @@ fn emit_once(
     frames_tx: &broadcast::Sender<GridFrame>,
     emit_state: &Arc<Mutex<EmitState>>,
     k1_subs: &Arc<AtomicUsize>,
-) {
+    force_full: bool,
+    expected_resize_gen: u64,
+) -> EmitOutcome {
     // Zero viewers: consume damage WITHOUT encoding so EmitState stays
     // coherent for the next attach (see module docs).
     if frames_tx.receiver_count() == 0 {
@@ -303,7 +497,7 @@ fn emit_once(
         let term_mutex = session.term();
         let mut term = term_mutex.lock();
         drain_damage(&mut term, &mut st);
-        return;
+        return EmitOutcome::Clean;
     }
 
     // Build the decision under the locks, but serialize AFTER
@@ -316,12 +510,28 @@ fn emit_once(
     // this emitter task is the only frames_tx sender, so frames still
     // hit the channel in version order, and the attach path's version
     // stamp (taken under the same locks) stays exact.
-    let decision = {
+    let (decision, gen) = {
         let mut st = emit_state.lock();
         let term_mutex = session.term();
         let mut term = term_mutex.lock();
-        build_emit(pane_id, &mut term, &mut st)
+        // Post-settle repair: resetting the first-emit latch makes
+        // build_emit take its full-snapshot path, which restores
+        // every client mirror after the window's drained (never
+        // encoded) damage. Resize causes full damage anyway, so the
+        // cost is what a delta would have paid.
+        if force_full {
+            st.has_emitted = false;
+        }
+        let d = build_emit(pane_id, &mut term, &mut st);
+        // Sampled under the SAME term lock `resize()` bumps it in:
+        // gen ≠ expected here means the grid we just encoded may be
+        // the post-clear blank — the caller opens a settle window
+        // instead of broadcasting it.
+        (d, session.resize_generation())
     };
+    if gen != expected_resize_gen {
+        return EmitOutcome::ResizeRaced(gen);
+    }
     // One encode per FORMAT per frame: JSON always (the default
     // protocol every subscriber can consume), k1 binary only while
     // the session has ≥1 opted-in subscriber.
@@ -345,6 +555,7 @@ fn emit_once(
         // full snapshot anyway).
         let _ = frames_tx.send(f);
     }
+    EmitOutcome::Clean
 }
 
 fn serialize_frame(

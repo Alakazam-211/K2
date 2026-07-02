@@ -43,12 +43,19 @@ impl LiveSession {
         Ok(())
     }
 
-    /// Resize the underlying PTY + Term grid. Errors are stringly-
-    /// typed for call-site parity with prior `LiveSession::resize`;
-    /// v2's resize is infallible at the daemon API surface so we
-    /// always return `Ok(())`.
+    /// Resize the underlying PTY + Term grid — through the session's
+    /// debounced/coalescing front door (`request_resize`), the same
+    /// path grid-WS resizes take: bursts coalesce to their final
+    /// geometry and a same-dims request is skipped outright (a no-op
+    /// apply still cleared the grid + set the winsize, and TUIs
+    /// correctly don't repaint on an unchanged winsize → blank
+    /// screen). This also keys the emitter's resize-settle window,
+    /// so HTTP-driven resizes get the same blank-frame suppression
+    /// as WS-driven ones. Errors are stringly-typed for call-site
+    /// parity with the prior signature; v2's resize is infallible at
+    /// the daemon API surface so we always return `Ok(())`.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
-        self.0.resize(cols, rows);
+        DaemonPtySession::request_resize(&self.0, cols, rows);
         Ok(())
     }
 

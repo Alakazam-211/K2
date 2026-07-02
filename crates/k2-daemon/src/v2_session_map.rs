@@ -88,6 +88,16 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
         .as_ref()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
+    // Sandbox v2 (PRD §D auditability) — a workspace-scoped OVERLAY cell's `cwd`
+    // is the GUEST mount `/workspace`, which no per-workspace subscription would
+    // ever match. Emit the HOST workspace path (`/home/<svc>/<ws>`) instead so
+    // the cell surfaces as an orange tab INSIDE its workspace. Non-overlay spawns
+    // carry `workspace_host_path = None` and keep emitting `cwd` verbatim.
+    let workspace_path = session
+        .workspace_host_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| cwd.clone());
     let pane_group_id_opt = crate::session_events::pane_group_id_from_agent(&key);
     // P3c (D1) — surface the resolved sandbox backend name ONLY for a REAL
     // sandbox cell, mirroring the v2/spawn echo's only-surface-a-real-backend
@@ -100,7 +110,7 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
     let sandbox_backend = sandbox_backend_label(session.sandbox);
     let _ = crate::session_events::emit(
         crate::session_events::SessionEvent::SessionAdded {
-            workspace_path: cwd.clone(),
+            workspace_path,
             pane_group_id: pane_group_id_opt.clone(),
             agent_name: key.clone(),
             command: session.program.clone(),
@@ -210,11 +220,22 @@ pub fn unregister(agent_name: &str) -> Option<Arc<DaemonPtySession>> {
         // alongside (or just before) the existing surfaced/sleeping
         // flips. Best-effort: emit returns Err when no subscribers
         // are attached; callers don't care.
+        // Sandbox v2 (PRD §D) — mirror register(): a workspace-scoped OVERLAY
+        // cell's SessionRemoved/HeartbeatStateChanged must carry the HOST
+        // workspace path (not the guest `/workspace` cwd) so the per-workspace
+        // subscription matches and REMOVES the orange tab on teardown. Non-overlay
+        // spawns fall back to `cwd` (byte-identical to before).
         let cwd_emit = session
-            .cwd
+            .workspace_host_path
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                session
+                    .cwd
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
         let _ = crate::session_events::emit(
             crate::session_events::SessionEvent::SessionRemoved {
                 workspace_path: cwd_emit.clone(),

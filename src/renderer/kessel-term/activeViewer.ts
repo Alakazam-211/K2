@@ -84,6 +84,40 @@ export function shouldHoldGridWs(inputs: GridWsInputs): boolean {
   return (inputs.visible || inputs.retainWhileHidden === true) && !inputs.exited
 }
 
+// Pinned-chat retention follow-up — resize emission predicate.
+//
+// `sendResize` used to gate on WINDOW focus alone. A background-retained
+// pane (portal container parked in PinnedChatRetainer's hidden host)
+// keeps its grid-WS AND its ResizeObserver, so a container move that
+// changed its box dispatched a resize with the HIDDEN host's geometry —
+// and because the pane had just released its claim (`set_active:false`
+// ⇒ `active_subscriber == 0`), the daemon's first-resize-wins rule for
+// unclaimed sessions ACCEPTED it. The PTY genuinely reflowed to
+// off-screen dimensions on switch-away and back on switch-in: the
+// "zoom on workspace switch" bug.
+//
+// The rule: only a pane the user can actually SEE may emit resize. A
+// hidden pane still records its measured dims locally (they ride its
+// next `set_active` claim, which snaps the PTY on foreground) but
+// sends NOTHING on the wire.
+export interface ResizeEmitInputs {
+  /** This pane's enclosing tab + pane-item are visible (not parked in
+   *  a hidden host / background tab). */
+  visible: boolean
+  /** The OS window is focused. */
+  windowFocused: boolean
+}
+
+/**
+ * Whether this pane may emit a `resize` frame right now: true iff it
+ * is the visible pane in a focused window. Deliberately does NOT
+ * require the active claim — a visible-but-unclaimed pane's first
+ * resize is how a fresh session gets sized (daemon first-resize-wins).
+ */
+export function shouldEmitResize(inputs: ResizeEmitInputs): boolean {
+  return inputs.visible && inputs.windowFocused
+}
+
 // 0.39.43 (PRD `daemon-multi-client-arbitration.md` Issue A) —
 // cross-remount active-claim dedup.
 //

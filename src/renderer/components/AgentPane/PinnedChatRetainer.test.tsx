@@ -103,6 +103,59 @@ const paneFor = (projectId: string): HTMLElement | null =>
 const hiddenHost = (): HTMLElement =>
   document.querySelector('[data-pinned-chat-hidden-host]')!
 
+// jsdom has no ResizeObserver; the retainer's slot-mirror effect needs
+// one. The fake records observed targets and lets a test FIRE a resize
+// with explicit contentRect dims.
+class FakeResizeObserver {
+  static instances: FakeResizeObserver[] = []
+  observed: Element[] = []
+  private readonly cb: ResizeObserverCallback
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb
+    FakeResizeObserver.instances.push(this)
+  }
+  observe(el: Element): void {
+    this.observed.push(el)
+  }
+  unobserve(el: Element): void {
+    this.observed = this.observed.filter((o) => o !== el)
+  }
+  disconnect(): void {
+    this.observed = []
+  }
+  fire(width: number, height: number): void {
+    this.cb(
+      [{ contentRect: { width, height } } as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    )
+  }
+}
+
+/** The live observer watching `el` — throws if the mirror isn't wired. */
+const observerOf = (el: Element): FakeResizeObserver => {
+  const found = FakeResizeObserver.instances.find((o) =>
+    o.observed.includes(el),
+  )
+  if (!found) throw new Error('no ResizeObserver is observing the element')
+  return found
+}
+
+/** Register a foreground slot for `projectId` whose box measures
+ *  `width`×`height` (jsdom's getBoundingClientRect is all-zeros). */
+function mountSlot(
+  projectId: string,
+  width: number,
+  height: number,
+): HTMLDivElement {
+  const slotEl = document.createElement('div')
+  slotEl.getBoundingClientRect = () =>
+    ({ width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+  document.body.appendChild(slotEl)
+  act(() => useRetainedChatStore.getState().registerSlot(projectId, slotEl))
+  act(() => useRetainedChatStore.getState().setSlotVisible(projectId, true))
+  return slotEl
+}
+
 beforeEach(() => {
   cleanup()
   document.body.innerHTML = ''
@@ -113,6 +166,8 @@ beforeEach(() => {
   h.nextInstanceId.value = 0
   h.mounts.value = 0
   h.unmounts.value = 0
+  FakeResizeObserver.instances = []
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver)
 })
 
 describe('portal-move — the same instance survives container moves', () => {
@@ -177,6 +232,78 @@ describe('portal-move — the same instance survives container moves', () => {
     act(() => setActive('b'))
     expect(paneFor('a')).toBeNull()
     expect(paneFor('b')).not.toBeNull()
+  })
+})
+
+// The workspace-switch zoom fix, retainer half: parked panes must
+// measure TRUE content-area dims, so the hidden host tracks the
+// FOREGROUND slot's box instead of staying a fixed 800×600. With an
+// unchanged window, a background pane then re-foregrounds with
+// identical dims — no resize, no re-fit.
+describe('hidden host mirrors the foreground slot dims', () => {
+  it('sizes the host to the visible slot box on register, then tracks its resizes', () => {
+    setActive('a')
+    render(<PinnedChatRetainer />)
+    act(() => visit('a'))
+
+    // Pre-first-measure fallback.
+    expect(hiddenHost().style.width).toBe('800px')
+    expect(hiddenHost().style.height).toBe('600px')
+
+    // Foreground slot registers → host snaps to its measured box.
+    const slotEl = mountSlot('a', 1280, 720)
+    expect(hiddenHost().style.width).toBe('1280px')
+    expect(hiddenHost().style.height).toBe('720px')
+
+    // The slot's live resizes (window resize) track through.
+    act(() => observerOf(slotEl).fire(1440, 900))
+    expect(hiddenHost().style.width).toBe('1440px')
+    expect(hiddenHost().style.height).toBe('900px')
+  })
+
+  it('keeps the last-known dims when the slot unregisters (workspace stashed)', () => {
+    setActive('a')
+    render(<PinnedChatRetainer />)
+    act(() => visit('a'))
+    const slotEl = mountSlot('a', 1280, 720)
+
+    act(() => useRetainedChatStore.getState().unregisterSlot('a', slotEl))
+    // No visible slot: the parked pane keeps measuring the last TRUE
+    // foreground dims, not a reset 800×600.
+    expect(hiddenHost().style.width).toBe('1280px')
+    expect(hiddenHost().style.height).toBe('720px')
+    // The mirror observer detached with the slot.
+    expect(
+      FakeResizeObserver.instances.every((o) => !o.observed.includes(slotEl)),
+    ).toBe(true)
+  })
+
+  it('a zero-box measurement (hidden pane-item artifact) never shrinks the host', () => {
+    setActive('a')
+    render(<PinnedChatRetainer />)
+    act(() => visit('a'))
+    const slotEl = mountSlot('a', 1280, 720)
+
+    act(() => observerOf(slotEl).fire(0, 0))
+    expect(hiddenHost().style.width).toBe('1280px')
+    expect(hiddenHost().style.height).toBe('720px')
+  })
+
+  it('re-registering after a switch re-mirrors the new slot box', () => {
+    setActive('a', 'b')
+    render(<PinnedChatRetainer />)
+    act(() => {
+      visit('a')
+      visit('b')
+    })
+    const slotA = mountSlot('a', 1280, 720)
+    act(() => useRetainedChatStore.getState().unregisterSlot('a', slotA))
+
+    // The next foreground workspace's slot has a different box (e.g.
+    // sidebar toggled while switching) — the host follows it.
+    mountSlot('b', 1000, 640)
+    expect(hiddenHost().style.width).toBe('1000px')
+    expect(hiddenHost().style.height).toBe('640px')
   })
 })
 

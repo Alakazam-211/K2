@@ -36,6 +36,7 @@ import {
   computeDesiredActive,
   getLastSentActive,
   recordSentActive,
+  shouldEmitResize,
   shouldHoldGridWs,
 } from './activeViewer'
 import {
@@ -2098,6 +2099,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // sends `set_active:true` becomes the resize authority for that
   // session until another claims or it disconnects.
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null)
+  // Dims most recently WRITTEN to the wire (vs `lastResizeRef` = most
+  // recently measured). The two diverge only while hidden — sendResize
+  // records without emitting — and the foreground catch-up effect
+  // below flushes the difference exactly once on show.
+  const lastSentResizeRef = useRef<{ cols: number; rows: number } | null>(
+    null,
+  )
 
   // ── Resize hold-and-scale bookkeeping (black-flash fix, client
   // half) ─────────────────────────────────────────────────────────
@@ -2175,11 +2183,29 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
   const sendResize = useCallback(
     (cols: number, rows: number) => {
+      // Recorded unconditionally — these dims ride the next `set_active`
+      // claim (the daemon snaps the PTY to them on foreground), so a
+      // hidden pane's measurements must stay current even though it
+      // emits no resize frames.
       lastResizeRef.current = { cols, rows }
-      if (!useWindowFocusStore.getState().isFocused) return
+      // Only the visible pane in the focused window emits (pinned-chat
+      // retention: a background pane parked in the retainer's hidden
+      // host sends NOTHING — after its own release the session is
+      // unclaimed, and the daemon's first-resize-wins rule would ACCEPT
+      // a background resize, reflowing the PTY to off-screen geometry:
+      // the workspace-switch zoom bug).
+      if (
+        !shouldEmitResize({
+          visible: tabVisibleRef.current,
+          windowFocused: useWindowFocusStore.getState().isFocused,
+        })
+      ) {
+        return
+      }
       const ws = wsRef.current
       if (!ws || ws.readyState !== WebSocket.OPEN) return
       ws.send(JSON.stringify({ action: 'resize', cols, rows }))
+      lastSentResizeRef.current = { cols, rows }
       notePendingResize(cols, rows)
     },
     [notePendingResize],
@@ -2337,6 +2363,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               cols: lastResizeRef.current.cols,
               rows: lastResizeRef.current.rows,
             }))
+            lastSentResizeRef.current = { ...lastResizeRef.current }
             // This resize is in flight like any other — hold-and-
             // scale until frames reflow to our geometry.
             notePendingResize(
@@ -2400,6 +2427,25 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     recomputeAndSendActiveRef.current()
   }, [isFocused, isTabVisible])
+
+  // Foreground catch-up (pinned-chat retention): a hidden pane records
+  // measurements without emitting (see sendResize), so if its box
+  // changed while backgrounded (window resized behind another
+  // workspace) the wire is stale the moment it shows again — and the
+  // ResizeObserver won't re-fire because the mirrored hidden host
+  // already matched the slot. Flush the recorded dims once on show.
+  // With an unchanged window this is a no-op (recorded == sent): the
+  // zero-resize foreground path the retention feature promises.
+  useEffect(() => {
+    if (!isTabVisible) return
+    const measured = lastResizeRef.current
+    if (!measured) return
+    const sent = lastSentResizeRef.current
+    if (sent && sent.cols === measured.cols && sent.rows === measured.rows) {
+      return
+    }
+    sendResize(measured.cols, measured.rows)
+  }, [isTabVisible, sendResize])
 
   // ── Keyboard input ────────────────────────────────────────────
   // 0.37.9 — handlers attach to the shadow <textarea> instead of the
@@ -2699,6 +2745,30 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     scaleLayoutRef.current = scaleLayout
   }, [scaleLayout])
+
+  // Portal-move settle guard (pinned-chat retention): the scale
+  // wrapper's 120ms transform transition exists for GENUINE runtime
+  // scale changes (claim takeover, resize hold-and-scale). A retained
+  // pane being re-parented between the hidden host and a slot must not
+  // animate whatever one-frame settle follows the move — it reads as a
+  // zoom on every workspace switch. Disarmed while hidden and for the
+  // first frames after a show; re-armed on the second rAF, after the
+  // ResizeObserver's post-move measurement has committed and painted.
+  const [scaleTransitionArmed, setScaleTransitionArmed] = useState(false)
+  useEffect(() => {
+    if (!isTabVisible) {
+      setScaleTransitionArmed(false)
+      return
+    }
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setScaleTransitionArmed(true))
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      if (raf2 !== 0) cancelAnimationFrame(raf2)
+    }
+  }, [isTabVisible])
 
   // Pointer → unscaled grid-content coordinates (px past the 4px
   // padding, in the grid's own pixel space). THE one place scale
@@ -4185,12 +4255,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             native selection anchored in the rows) survives scale
             transitions; identity renders as translate(0,0) scale(1).
             The short transition is what makes claim-takeover and the
-            resize hold read as a smooth reflow instead of a snap. */}
+            resize hold read as a smooth reflow instead of a snap —
+            armed only after a show has settled (see
+            `scaleTransitionArmed`) so a portal move never animates. */}
         <div
           style={{
             transform: `translate(${scaleLayout.offsetX}px, ${scaleLayout.offsetY}px) scale(${scaleLayout.scale})`,
             transformOrigin: 'top left',
-            transition: 'transform 120ms ease-out',
+            transition: scaleTransitionArmed
+              ? 'transform 120ms ease-out'
+              : 'none',
           }}
         >
         {useWebgl ? (

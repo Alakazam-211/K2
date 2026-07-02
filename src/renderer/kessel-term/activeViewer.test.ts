@@ -5,6 +5,7 @@ import {
   computeDesiredActive,
   getLastSentActive,
   recordSentActive,
+  shouldEmitResize,
   shouldHoldGridWs,
   shouldSkipRemountReclaim,
 } from './activeViewer'
@@ -122,6 +123,62 @@ describe('shouldHoldGridWs', () => {
     // desired=false and releases/never claims the active slot.
     expect(
       computeDesiredActive({ visible: false, paneFocused: true, windowFocused: true }),
+    ).toBe(false)
+  })
+})
+
+// Pinned-chat retention follow-up — resize emission predicate. The
+// invariant pinned here (owner decision, workspace-switch zoom fix): a
+// BACKGROUND pane never emits resize — switching AWAY from a workspace
+// sends NOTHING size-related, the session just keeps its last-visited
+// dims on the daemon until the next foreground claim re-sizes it. The
+// old window-focus-only gate broke this: a retained pane parked in the
+// hidden host sent its off-screen geometry — and because that pane had
+// just RELEASED its active claim (active_subscriber == 0), the daemon's
+// first-resize-wins rule ACCEPTED the resize: the PTY reflowed to
+// hidden dims on every workspace switch-away and back on switch-in
+// (the "zoom on workspace switch" bug).
+describe('shouldEmitResize', () => {
+  const cases: Array<{
+    visible: boolean
+    windowFocused: boolean
+    expected: boolean
+  }> = [
+    { visible: false, windowFocused: false, expected: false },
+    { visible: false, windowFocused: true, expected: false },
+    { visible: true, windowFocused: false, expected: false },
+    { visible: true, windowFocused: true, expected: true },
+  ]
+
+  for (const c of cases) {
+    it(`visible=${c.visible} windowFocused=${c.windowFocused} -> ${c.expected}`, () => {
+      expect(
+        shouldEmitResize({
+          visible: c.visible,
+          windowFocused: c.windowFocused,
+        }),
+      ).toBe(c.expected)
+    })
+  }
+
+  it('a hidden pane never emits — even in a focused window (the retained-background case)', () => {
+    // This is the exact workspace-switch state: window focused, pane
+    // just re-parented into the hidden host. One accepted resize here
+    // reflows the PTY to off-screen geometry.
+    expect(shouldEmitResize({ visible: false, windowFocused: true })).toBe(false)
+  })
+
+  it('a visible pane in a focused window emits WITHOUT holding the active claim', () => {
+    // Deliberately weaker than computeDesiredActive (no paneFocused
+    // input): a visible-but-unclaimed pane's first resize is how a
+    // fresh session gets sized (daemon first-resize-wins).
+    expect(shouldEmitResize({ visible: true, windowFocused: true })).toBe(true)
+    expect(
+      computeDesiredActive({
+        visible: true,
+        paneFocused: false,
+        windowFocused: true,
+      }),
     ).toBe(false)
   })
 })

@@ -181,6 +181,42 @@ export function PinnedChatRetainer(): React.JSX.Element | null {
   // hidden host exists; the setState re-render re-parents it in.
   const [hiddenHost, setHiddenHost] = useState<HTMLDivElement | null>(null)
 
+  // Hidden host mirrors the FOREGROUND slot's box. Parked panes used to
+  // measure the host's fixed 800×600 while the real content area was
+  // e.g. 1400×900 — so every switch-away re-measured the pane against
+  // wrong dimensions and every switch-back settled it again (the
+  // workspace-switch zoom). Mirroring keeps a background pane's
+  // measurements TRUE: when the window hasn't changed, foregrounding is
+  // a pure re-parent — same dims, no resize, no scale settle — and its
+  // background rendering is already pixel-correct for the switch. While
+  // no slot is visible the last-known dims persist (they're still the
+  // best estimate of the content area).
+  const visibleSlotEl = useMemo(() => {
+    for (const slot of slots.values()) {
+      if (slot.visible) return slot.el
+    }
+    return null
+  }, [slots])
+  useEffect(() => {
+    if (!hiddenHost || !visibleSlotEl) return
+    const mirror = (width: number, height: number): void => {
+      // A zero box is a measurement artifact (slot inside a hidden
+      // pane-item mid-switch), never a real content size — keep the
+      // last-known dims.
+      if (width <= 0 || height <= 0) return
+      hiddenHost.style.width = `${width}px`
+      hiddenHost.style.height = `${height}px`
+    }
+    const rect = visibleSlotEl.getBoundingClientRect()
+    mirror(rect.width, rect.height)
+    const observer = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect
+      if (r) mirror(r.width, r.height)
+    })
+    observer.observe(visibleSlotEl)
+    return () => observer.disconnect()
+  }, [hiddenHost, visibleSlotEl])
+
   // Cap growth input: workspaces pinned to the top of the Active
   // section (ActiveBar's sortPinnedFirst partition = manuallyActive ∩
   // canonical Active).
@@ -271,9 +307,15 @@ export function PinnedChatRetainer(): React.JSX.Element | null {
           BackgroundTerminalSpawner). display:none is NOT used: the pane
           is deliberately kept rendering (viewport-windowed + memoized
           rows ⇒ cheap), which keeps activity detection live for
-          background Active workspaces. Resize safety while parked here:
-          the daemon only accepts resizes from the ACTIVE subscriber,
-          and a hidden pane never claims active. */}
+          background Active workspaces. The inline 800×600 is only the
+          pre-first-measure fallback — the mirror effect above resizes
+          this host to the foreground slot's box so parked panes always
+          measure TRUE content-area dims. Resize safety while parked
+          here: a hidden pane never claims active AND never emits
+          resize at all (shouldEmitResize gates sendResize on
+          visibility — a released session is unclaimed, so the daemon's
+          first-resize-wins rule would otherwise accept our off-screen
+          geometry). */}
       <div
         ref={setHiddenHost}
         aria-hidden

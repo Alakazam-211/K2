@@ -799,6 +799,57 @@ mod tests {
         assert!(!after.allow_remote_instruct);
     }
 
+    /// Federation toggle-topology consolidation (UI-only move of the
+    /// remote-instruct toggle to the K2 Connect page) — the MIGRATION is
+    /// IDENTITY: neither key is renamed, no default changes, and the two
+    /// flags stay independent, so every pre-update settings.json keeps its
+    /// exact effective behavior. This test locks all four old flag
+    /// combinations: a 0.40.x-shaped file (the same camelCase keys the
+    /// /cli/settings/update deep-merge writes) must load back to the same
+    /// pair, and updating one flag must never touch the other. A key
+    /// rename or a coupled write would fail here loudly.
+    #[test]
+    fn federation_and_remote_instruct_flags_survive_update_unchanged() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        for (fed, instruct) in [(false, false), (false, true), (true, false), (true, true)] {
+            // Persist the old-file shape via the same generic deep-merge
+            // path the toggles hit.
+            update(serde_json::json!({
+                "federationEnabled": fed,
+                "allowRemoteInstruct": instruct,
+            }))
+            .expect("update");
+            let s = load();
+            assert_eq!(
+                s.federation_enabled, fed,
+                "federationEnabled must round-trip unchanged for ({fed},{instruct})"
+            );
+            assert_eq!(
+                s.allow_remote_instruct, instruct,
+                "allowRemoteInstruct must round-trip unchanged for ({fed},{instruct})"
+            );
+
+            // Flipping ONE flag must leave the other exactly as persisted —
+            // the toggles are independent gates (federation surface vs
+            // delivery consent), never a coupled write.
+            let merged = update(serde_json::json!({ "federationEnabled": !fed })).expect("update");
+            assert_eq!(merged.federation_enabled, !fed);
+            assert_eq!(
+                merged.allow_remote_instruct, instruct,
+                "toggling federationEnabled must not touch allowRemoteInstruct"
+            );
+            let merged =
+                update(serde_json::json!({ "allowRemoteInstruct": !instruct })).expect("update");
+            assert_eq!(merged.allow_remote_instruct, !instruct);
+            assert_eq!(
+                merged.federation_enabled, !fed,
+                "toggling allowRemoteInstruct must not touch federationEnabled"
+            );
+        }
+    }
+
     /// GH#8 — the "Use local LLM to detect HITL" opt-in must default OFF
     /// on a fresh settings file, persist through save→load, ingest the
     /// camelCase `useLlmHitlDetection` key via the generic `update()`

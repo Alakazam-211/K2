@@ -1784,6 +1784,12 @@ function RemoteInstructToggle({
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const enabled = (project.allowRemoteInstruct ?? 0) === 1
+  // The app-level master (K2 Connect → "Let remote users message agents")
+  // OR-overrides this per-workspace flag server-side
+  // (`remote_instruct_allowed_for_path`): with the master ON, remote
+  // messages land here even while this toggle shows OFF. Surface that so
+  // an OFF toggle never reads as a deny it doesn't enforce.
+  const globalAllow = useSettingsStore((s) => s.allowRemoteInstruct)
 
   const toggle = async (): Promise<void> => {
     if (busy) return
@@ -1833,6 +1839,13 @@ function RemoteInstructToggle({
               ? 'People signed into this host over K2 Connect can send messages to this workspace\'s agent via the composer. You (the owner) can always message agents.'
               : 'Off (recommended): only you can message this workspace\'s agent. Turn on to let K2 Connect users instruct the agent here — it runs with full shell and filesystem access.'}
           </div>
+          {!enabled && globalAllow && (
+            <div className="text-[10px] text-amber-300/80 mt-1 leading-relaxed">
+              Currently allowed anyway: the global &ldquo;Let remote users message
+              agents&rdquo; switch (Settings → K2 Connect) opts in every workspace,
+              overriding this toggle.
+            </div>
+          )}
         </div>
       </div>
     </div>

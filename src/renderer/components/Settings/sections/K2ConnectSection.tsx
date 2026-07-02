@@ -30,6 +30,7 @@ import { getDaemonWs, daemonHttpBase, invalidateDaemonWs } from '@/kessel/daemon
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { SettingEntry } from '../searchManifest'
 import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingControls'
+import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import {
   signIn as accountSignIn,
   signOut as accountSignOut,
@@ -108,6 +109,7 @@ export const K2_CONNECT_MANIFEST: SettingEntry[] = [
   { id: 'k2-connect.auto-start', section: 'k2-connect', label: 'Re-launch tunnel on restart', description: 'Automatically start this tunnel when the daemon restarts', keywords: ['auto', 'autostart', 'restart', 'reconnect', 'boot', 'relaunch'] },
   { id: 'k2-connect.users', section: 'k2-connect', label: 'Users / Access', description: 'People you allow to connect in to this device’s daemon', keywords: ['users', 'access', 'people', 'login', 'password', 'connect in', 'multi-user', 'allow', 'invite'] },
   { id: 'k2-connect.federation', section: 'k2-connect', label: 'Enable federation', description: 'Allow cross-server agent communication on this server', keywords: ['federation', 'cross-server', 'peers', 'agents', 'connect', 'mesh', 'cortana'] },
+  { id: 'k2-connect.allow-remote-instruct', section: 'k2-connect', label: 'Let remote users message agents', description: 'Delivery consent for remote messages: K2 Connect users via the composer, and paired federation servers', keywords: ['remote', 'instruct', 'message', 'agents', 'composer', 'consent', 'federation', 'inbound', 'connect users', 'allow'] },
 ]
 
 interface TunnelStatus {
@@ -1054,34 +1056,47 @@ export function K2ConnectSection(): React.JSX.Element {
       </p>
 
       <div className="space-y-5">
-        {/* ── Enable Federation (PER-SERVER) — renders for owner/admin on BOTH
-            this Mac AND a remote host. Federation is a per-server setting, so it
-            must be settable wherever you're looking; the rest of K2 Connect
-            (tunnel config) is local-only below. Host-aware persist writes to the
-            ACTIVE server's daemon. Hidden for confirmed members (the daemon also
-            owner-gates the write + the /cli/federation/* gate). ── */}
+        {/* ── Remote access (PER-SERVER) — renders for owner/admin on BOTH
+            this Mac AND a remote host. Both switches are per-server settings,
+            so they must be settable wherever you're looking; the rest of
+            K2 Connect (tunnel config) is local-only below. Host-aware persist
+            writes to the ACTIVE server's daemon. Hidden for confirmed members
+            (renderer-hide; the /cli/federation/* surface is also role-gated
+            server-side — see .k2/notes/federation-toggle-topology.md for the
+            settings-write gate caveat). The group pairs the federation MASTER
+            (does the cross-server surface exist at all) with the delivery
+            CONSENT (may remote principals actually message agents) so
+            enabling federation and granting consent are one surface. ── */}
         {viewerRole !== 'member' && (
-          <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
-            <label className="flex items-center gap-2 cursor-pointer select-none no-drag">
-              <input
-                type="checkbox"
-                checked={federationEnabled}
-                onChange={(e) => void setFederationEnabled(e.target.checked)}
-                className="peer sr-only"
-              />
-              <span
-                aria-hidden="true"
-                className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-              >
-                {federationEnabled && (
-                  <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                  </svg>
-                )}
-              </span>
-              <span className="text-xs text-[var(--color-text-secondary)]">Enable federation (cross-server agents)</span>
-            </label>
-            <span className="text-[10px] text-[var(--color-text-muted)]">{isRemote ? 'this server' : 'this device'}</span>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
+              <label className="flex items-center gap-2 cursor-pointer select-none no-drag">
+                <input
+                  type="checkbox"
+                  checked={federationEnabled}
+                  onChange={(e) => void setFederationEnabled(e.target.checked)}
+                  className="peer sr-only"
+                />
+                <span
+                  aria-hidden="true"
+                  className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
+                >
+                  {federationEnabled && (
+                    <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M2.5 6.5 L5 9 L9.5 3.5" />
+                    </svg>
+                  )}
+                </span>
+                <span className="text-xs text-[var(--color-text-secondary)]">Enable federation (cross-server agents)</span>
+              </label>
+              <span className="text-[10px] text-[var(--color-text-muted)]">{isRemote ? 'this server' : 'this device'}</span>
+            </div>
+            {/* Delivery consent — moved here from Settings → General so it
+                sits with the federation master it also gates (it is the
+                consent for BOTH connect-user composer messages AND paired
+                servers' inbound federation messages). NOT nested under the
+                checkbox: it works with federation off (composer path). */}
+            <AllowRemoteInstructRow />
           </div>
         )}
 

@@ -230,10 +230,6 @@ export function GeneralSection(): React.JSX.Element {
             you message them via the composer (resolved server-side). */}
         <OwnerDisplayNameRow />
 
-        {/* Composer 1c — per-host opt-in for connect-users to message
-            agents (owner is always allowed; default OFF, daemon-enforced). */}
-        <AllowRemoteInstructRow />
-
         {/* K2 Daemon — persistent-agents service */}
         <DaemonRow />
 
@@ -426,61 +422,12 @@ function OwnerDisplayNameRow(): React.JSX.Element {
 }
 
 // ── Composer 1c (D4) — "Allow remote instruct" ─────────────────────────
-// Per-host opt-in that lets CONNECT-USERS (people who signed into THIS host
-// over K2 Connect) instruct agents via the message composer. The OWNER (you,
-// on this machine) can always use the composer regardless. DEFAULTS OFF: the
-// composer instructs an agent running --dangerously-skip-permissions (= full
-// shell + filesystem access), so a host must be explicitly opted in before
-// remote users can drive agents. The daemon enforces this server-side
-// (drain-then-403); this toggle sets the host flag AND drives the
-// renderer-hide of the composer for non-owner principals.
-function AllowRemoteInstructRow(): React.JSX.Element {
-  const allow = useSettingsStore((s) => s.allowRemoteInstruct)
-  const setAllow = useSettingsStore((s) => s.setAllowRemoteInstruct)
-
-  const toggle = useCallback(() => {
-    void setAllow(!allow)
-  }, [allow, setAllow])
-
-  return (
-    <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
-          Let remote users message agents
-        </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-          {allow
-            ? 'People signed into this host over K2 Connect can send messages to your agents via the composer. You (the owner) can always message agents.'
-            : 'Off (recommended): only you can message agents here. Turn on to let K2 Connect users instruct agents on this host — they run with full shell and filesystem access.'}
-        </p>
-      </div>
-      <button
-        onClick={toggle}
-        className="no-drag cursor-pointer flex-shrink-0 relative"
-        data-settings-id="general.allow-remote-instruct"
-        style={{
-          width: 36,
-          height: 20,
-          backgroundColor: allow ? 'var(--color-accent)' : '#333',
-          border: 'none',
-          transition: 'background-color 150ms',
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute',
-            top: 2,
-            left: allow ? 18 : 2,
-            width: 16,
-            height: 16,
-            backgroundColor: '#fff',
-            transition: 'left 150ms',
-          }}
-        />
-      </button>
-    </div>
-  )
-}
+// MOVED to Settings → K2 Connect (shared/AllowRemoteInstructRow), beneath
+// the "Enable federation" master: the toggle is the delivery consent for
+// BOTH remote audiences (K2 Connect connect-users via the composer AND
+// paired federation servers' inbound messages), so it lives with the rest
+// of the remote-access switches instead of scattered here. See
+// .k2/notes/federation-toggle-topology.md.
 
 function CLIVersionRow(): React.JSX.Element {
   const [status, setStatus] = useState<{

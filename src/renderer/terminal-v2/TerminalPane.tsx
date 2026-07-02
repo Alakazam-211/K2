@@ -1744,6 +1744,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // though PTY resizes are debounced). 0×0 until first measure.
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
 
+  // ── Device pixel ratio (WebGL painter only) ───────────────────
+  // Tracks monitor moves / OS zoom. matchMedia's resolution query
+  // fires `change` when devicePixelRatio departs the queried value;
+  // re-arm against the new value each time. Drives the quantized
+  // cell metrics below + the painter's atlas rebuild. Inert (state
+  // never updates) when the flag is off.
+  const [dpr, setDpr] = useState(() =>
+    typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+  )
+  useEffect(() => {
+    if (!useWebgl) return
+    const mq = window.matchMedia(`(resolution: ${dpr}dppx)`)
+    const onChange = () => setDpr(window.devicePixelRatio || 1)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [useWebgl, dpr])
+
   // ── Cell metrics (for cursor positioning + wheel math) ────────
   const [cellMetrics, setCellMetrics] = useState({ width: 0, height: 0 })
   useLayoutEffect(() => {
@@ -1753,11 +1770,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     document.body.appendChild(span)
     const rect = span.getBoundingClientRect()
     document.body.removeChild(span)
+    // WebGL painter: quantize the cell width to the device grid —
+    // floor(css × dpr) / dpr — so EVERY cellMetrics consumer (cursor
+    // overlay, shadow IME textarea, hit tests, resize col math)
+    // shares the painter's exact device cell width (brief §1.3: the
+    // painter must floor to integer device px; quantizing the shared
+    // metric keeps the DOM overlays pixel-aligned with the canvas
+    // instead of drifting sub-pixel-per-column). DOM path keeps the
+    // fractional measurement byte-identically.
+    const width = useWebgl ? Math.floor(rect.width * dpr) / dpr : rect.width
     setCellMetrics({
-      width: rect.width,
+      width,
       height: Math.ceil(fontSize * config.font.lineHeightMultiplier),
     })
-  }, [fontSize, config.font.family, config.font.lineHeightMultiplier])
+  }, [fontSize, config.font.family, config.font.lineHeightMultiplier, useWebgl, dpr])
 
   // ── WebGL painter lifecycle (useWebgl only) ───────────────────
   // The painter is a pure consumer downstream of the rAF coalescer:
@@ -1806,11 +1832,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     painter.setMetrics({
       cssCellW: cellMetrics.width,
       cssCellH: cellMetrics.height,
-      dpr: window.devicePixelRatio || 1,
+      dpr,
       fontFamily: config.font.family,
       fontSize,
     })
-  }, [useWebgl, cellMetrics, config.font.family, fontSize])
+  }, [useWebgl, cellMetrics, config.font.family, fontSize, dpr])
   useLayoutEffect(() => {
     if (!useWebgl) return
     const painter = painterRef.current

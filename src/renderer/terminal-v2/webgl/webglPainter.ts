@@ -1,6 +1,7 @@
 // WebGL2 terminal painter — orchestrates the pure pieces (packFrame,
-// RowCache) against the narrow GL backend. Browser-bound glue only:
-// everything with logic worth testing lives in the pure modules.
+// RowCache, contextLoss) against the narrow GL backend. Browser-bound
+// glue only: everything with logic worth testing lives in the pure
+// modules.
 //
 // Fatal policy: ANY unrecoverable condition (no WebGL2, shader
 // compile failure, failed sanity readback, unrestored context loss)
@@ -19,6 +20,7 @@ import {
 } from './glBackend'
 import { FrameBuffers, packFrame, RowCache } from './packFrame'
 import { GlyphAtlas } from './glyphAtlas'
+import { createContextLossTracker } from './contextLoss'
 
 /** Known clear color for the mount-time pixel-readback sanity probe
  *  (brief §7.7: WKWebView's WebGL history demands a rendered-pixels
@@ -48,6 +50,9 @@ export function createWebglPainter(
   let fatalCb: ((reason: string) => void) | null = null
   let atlas: GlyphAtlas | null = null
   let uploadedAtlasVersion = -1
+  /** Last frame drawn — replayed after a successful context restore
+   *  (nothing upstream re-renders until the next snapshot/scroll). */
+  let lastFrame: PainterFrame | null = null
 
   const cache = new RowCache()
   const buffers = new FrameBuffers()
@@ -68,12 +73,99 @@ export function createWebglPainter(
     fatalCb?.(reason)
   }
 
-  // Context loss: hardened restore protocol lands with the lifecycle
-  // slice; until then a lost context is immediately fatal → clean DOM
-  // fallback (never a frozen canvas).
+  const doRender = (frame: PainterFrame): void => {
+    if (disposed || fatalFired || !backend || !canvas || !metrics) return
+    if (!atlas || lossTracker.state !== 'live') return
+    const t0 = diagEnabled ? performance.now() : 0
+
+    const { cols, rows } = frame.snapshot
+    if (cols <= 0 || rows <= 0) return
+    const w = cols * deviceCellW
+    const h = rows * deviceCellH
+    if (w !== canvasW || h !== canvasH) {
+      canvasW = w
+      canvasH = h
+      canvas.width = w
+      canvas.height = h
+      canvas.style.width = `${w / metrics.dpr}px`
+      canvas.style.height = `${h / metrics.dpr}px`
+      backend.resize(w, h)
+    }
+
+    const packed = packFrame({
+      frame,
+      cssCellH: metrics.cssCellH,
+      deviceCellW,
+      deviceCellH,
+      dpr: metrics.dpr,
+      cache,
+      buffers,
+      glyphs: atlas,
+    })
+
+    // Packing may have rasterized new glyphs — re-upload the page
+    // once per frame at most, keyed off the atlas version.
+    if (atlas.version !== uploadedAtlasVersion) {
+      backend.uploadAtlas(atlas.canvas)
+      uploadedAtlasVersion = atlas.version
+    }
+
+    backend.beginFrame(frame.theme.bg)
+    backend.drawRects(packed.bg.data, packed.bg.count)
+    backend.drawGlyphs(packed.glyphData, packed.glyphCount, {
+      cols: frame.snapshot.cols,
+      cellW: deviceCellW,
+      cellH: deviceCellH,
+      scrollY: packed.fractionDevice,
+      texW: atlas.size,
+      texH: atlas.size,
+    })
+
+    if (diagEnabled) {
+      diagMs += performance.now() - t0
+      if (++diagFrames >= 60) {
+        // eslint-disable-next-line no-console
+        console.info(
+          `[webgl-diag] frames=${diagFrames} avg=${(diagMs / diagFrames).toFixed(2)}ms ` +
+            `glyphInstances=${packed.glyphCount} bgRects=${packed.bg.count} ` +
+            `rows=${packed.rowCount} cacheRows=${cache.size} ` +
+            `atlas=${atlas.size}px/${atlas.glyphCount} glyphs`,
+        )
+        diagFrames = 0
+        diagMs = 0
+      }
+    }
+  }
+
+  // Context loss protocol (brief §6.4): lost → preventDefault + a
+  // restore window; restored in time → rebuild ALL GL state (the
+  // restored context is blank: programs/buffers/textures are gone)
+  // and replay the last frame; window expiry → fatal → DOM fallback.
+  const lossTracker = createContextLossTracker({
+    onRestore: () => {
+      if (disposed || !canvas) return
+      backend?.dispose()
+      backend = createBackend(canvas)
+      if (!backend) {
+        fatal('webgl2-restore-reinit-failed')
+        return
+      }
+      // Atlas PIXELS survive (the page is a plain canvas) but the GL
+      // texture didn't — force re-upload; same for the drawing-buffer
+      // size and both programs' resolution uniforms.
+      uploadedAtlasVersion = -1
+      canvasW = 0
+      canvasH = 0
+      if (lastFrame) doRender(lastFrame)
+    },
+    onFatal: fatal,
+  })
   const onContextLost = (e: Event): void => {
     e.preventDefault()
-    fatal('webgl-context-lost')
+    lossTracker.handleLost()
+  }
+  const onContextRestored = (): void => {
+    lossTracker.handleRestored()
   }
 
   return {
@@ -81,6 +173,7 @@ export function createWebglPainter(
       if (disposed) return
       canvas = el
       canvas.addEventListener('webglcontextlost', onContextLost)
+      canvas.addEventListener('webglcontextrestored', onContextRestored)
       backend = createBackend(canvas)
       if (!backend) {
         fatal('webgl2-unavailable')
@@ -130,67 +223,8 @@ export function createWebglPainter(
     },
 
     render(frame: PainterFrame): void {
-      if (disposed || fatalFired || !backend || !canvas || !metrics) return
-      if (!atlas) return
-      const t0 = diagEnabled ? performance.now() : 0
-
-      const { cols, rows } = frame.snapshot
-      if (cols <= 0 || rows <= 0) return
-      const w = cols * deviceCellW
-      const h = rows * deviceCellH
-      if (w !== canvasW || h !== canvasH) {
-        canvasW = w
-        canvasH = h
-        canvas.width = w
-        canvas.height = h
-        canvas.style.width = `${w / metrics.dpr}px`
-        canvas.style.height = `${h / metrics.dpr}px`
-        backend.resize(w, h)
-      }
-
-      const packed = packFrame({
-        frame,
-        cssCellH: metrics.cssCellH,
-        deviceCellW,
-        deviceCellH,
-        dpr: metrics.dpr,
-        cache,
-        buffers,
-        glyphs: atlas,
-      })
-
-      // Packing may have rasterized new glyphs — re-upload the page
-      // once per frame at most, keyed off the atlas version.
-      if (atlas.version !== uploadedAtlasVersion) {
-        backend.uploadAtlas(atlas.canvas)
-        uploadedAtlasVersion = atlas.version
-      }
-
-      backend.beginFrame(frame.theme.bg)
-      backend.drawRects(packed.bg.data, packed.bg.count)
-      backend.drawGlyphs(packed.glyphData, packed.glyphCount, {
-        cols: frame.snapshot.cols,
-        cellW: deviceCellW,
-        cellH: deviceCellH,
-        scrollY: packed.fractionDevice,
-        texW: atlas.size,
-        texH: atlas.size,
-      })
-
-      if (diagEnabled) {
-        diagMs += performance.now() - t0
-        if (++diagFrames >= 60) {
-          // eslint-disable-next-line no-console
-          console.info(
-            `[webgl-diag] frames=${diagFrames} avg=${(diagMs / diagFrames).toFixed(2)}ms ` +
-              `glyphInstances=${packed.glyphCount} bgRects=${packed.bg.count} ` +
-              `rows=${packed.rowCount} cacheRows=${cache.size} ` +
-              `atlas=${atlas.size}px/${atlas.glyphCount} glyphs`,
-          )
-          diagFrames = 0
-          diagMs = 0
-        }
-      }
+      lastFrame = frame
+      doRender(frame)
     },
 
     onFatal(cb: (reason: string) => void): void {
@@ -202,12 +236,15 @@ export function createWebglPainter(
 
     dispose(): void {
       disposed = true
+      lossTracker.dispose()
       if (canvas) {
         canvas.removeEventListener('webglcontextlost', onContextLost)
+        canvas.removeEventListener('webglcontextrestored', onContextRestored)
       }
       backend?.dispose()
       backend = null
       canvas = null
+      lastFrame = null
       cache.clear()
     },
   }

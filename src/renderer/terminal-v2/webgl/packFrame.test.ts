@@ -108,6 +108,26 @@ describe('packFrame — windowing', () => {
     expect(p.fractionDevice).toBe(12) // 6 css px × dpr 2
   })
 
+  it('whole-row scroll positions are exact (fraction 0, no drift)', () => {
+    const sb = [[run('s0')], [run('s1')]]
+    const g = [[run('a')], [run('b')]]
+    // Exactly one cell height up.
+    const p = pack(frame(g, sb, 10))
+    expect(p.windowStart).toBe(1)
+    expect(p.rowCount).toBe(2)
+    expect(p.fractionDevice).toBe(0)
+  })
+
+  it('scrolled to the top of history the window starts at row 0', () => {
+    const sb = [[run('s0')], [run('s1')]]
+    const g = [[run('a')], [run('b')]]
+    // Max scroll = scrollback.length * cellH = 20.
+    const p = pack(frame(g, sb, 20))
+    expect(p.windowStart).toBe(0)
+    expect(p.rowCount).toBe(2)
+    expect(p.fractionDevice).toBe(0)
+  })
+
   it('windows the whole grid when there is no scrollback', () => {
     const g = [[run('a', { bg: 0x123456 })], [], []]
     const p = pack(frame(g))

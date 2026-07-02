@@ -328,7 +328,16 @@ pub fn encode_row_runs(grid: &Grid<Cell>, line: Line, cols: usize) -> Vec<CellRu
     // tail stays undecorated blank. Trimmed chars are always plain
     // spaces (1 byte = 1 char = 1 column), so the parallel span
     // shrinks by exactly the byte count removed.
-    while let Some(last) = out.last_mut() {
+    //
+    // NEVER on a wrapped row: wrapping means content reached the last
+    // column, so no padding exists — a trailing space there is a TYPED
+    // space that landed on the wrap boundary. Trimming it made the
+    // copy handler's wrapped-line join fuse the words around the
+    // boundary ("has a" copied as "hasa").
+    while !wrapped {
+        let Some(last) = out.last_mut() else {
+            break;
+        };
         if run_decorates_blanks(last) {
             break;
         }
@@ -714,6 +723,20 @@ mod tests {
         assert_eq!(text, "ab   ");
         let last = runs.last().unwrap();
         assert!(last.bg.is_some());
+    }
+
+    #[test]
+    fn encode_keeps_boundary_space_on_wrapped_rows() {
+        // "1234567 x" in an 8-col grid: the typed space lands exactly
+        // on the last column of the wrapped row. It is content, not
+        // padding — trimming it made the client's wrapped-line join
+        // copy "1234567x" (owner-reported as "has a" → "hasa").
+        let term = term_with(8, 4, b"1234567 x");
+        let wrapped_row = encode_row_runs(term.grid(), Line(0), 8);
+        let continuation = encode_row_runs(term.grid(), Line(1), 8);
+        assert_eq!(row_text(&wrapped_row), "1234567 ");
+        assert_eq!(wrapped_row.last().unwrap().wrapped, Some(true));
+        assert_eq!(row_text(&continuation), "x");
     }
 
     #[test]

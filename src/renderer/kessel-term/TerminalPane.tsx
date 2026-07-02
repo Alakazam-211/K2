@@ -43,6 +43,7 @@ import {
   naturalTextEditingSequence,
 } from '@/lib/key-mapping'
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, daemonWsBase, type DaemonWsAvailable } from '../kessel/daemon-ws'
+import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useTabsStore } from '@/stores/tabs'
 import { useWindowFocusStore } from '@/stores/window-focus'
@@ -1162,9 +1163,26 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             throw new Error(`spawn ${spawnRes.status}: ${body || 'no body'}`)
           }
           if (!spawnRes.ok) {
+            const body = await spawnRes.text()
+            // Stale remote session: a remote daemon restart wiped its
+            // in-memory connect-sessions, so this spawn was rejected with the
+            // token-gate 401/403 — not a bad request. Revive (single-flight
+            // re-login with the remembered password) and retry with fresh
+            // creds; bounded because a second rejection finds the session
+            // 'still-valid' (or in cooldown) and falls through to the error.
+            if (isPossibleAuthFailure(spawnRes.status, body)) {
+              const active = useConnectHostStore.getState().activeHost
+              if (active !== 'local') {
+                const outcome = await reviveRemoteSession(active.id)
+                if (cancelled) return
+                if (outcome === 'revived') {
+                  creds = null // re-resolve so the retry carries the NEW token
+                  continue
+                }
+              }
+            }
             // 4xx — genuine request error, surface immediately. Bad
             // body, missing field, etc. Won't get better by waiting.
-            const body = await spawnRes.text()
             if (!cancelled) {
               setPhase({ kind: 'error', message: `spawn ${spawnRes.status}: ${body}` })
             }

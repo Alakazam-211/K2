@@ -39,6 +39,8 @@ import {
   type FederationState,
 } from '@/lib/host-ops'
 import { isConnectionLevelError } from '@/lib/remote-retry'
+import { reviveRemoteSession } from '@/lib/remote-session'
+import { recoveryStatusText } from '@/lib/remote-recovery'
 import {
   updatePhaseCopy,
   isTerminalPhase,
@@ -396,7 +398,11 @@ function HostTile({
   const creds = remoteCreds(host)
   const signedOut = creds.token.length === 0
   const signInForManagement = useConnectHostStore((s) => s.signInForManagement)
-  const clearHostToken = useConnectHostStore((s) => s.clearHostToken)
+  // The ACTIVE host's three-state recovery surface (owner contract —
+  // lib/remote-recovery.ts). Rendered as a status line on the active tile so
+  // the K2 Connect panel always shows whether the connection is restarting /
+  // re-authenticating / waiting on a sign-in. Only meaningful for isActive.
+  const activeRecovery = useConnectHostStore((s) => s.recovery)
 
   const [federation, setFederation] = useState<FederationState>('loading')
   const [restartBusy, setRestartBusy] = useState(false)
@@ -448,13 +454,16 @@ function HostTile({
 
   const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-  // On a 401-class rejection, drop this host's dead token so the tile flips to
-  // signed-out and surfaces its Sign-in button (the thin client realizing its
-  // credentials went stale). A network failure ("Load failed"/timeout) is NOT
-  // auth — the server may just be restarting — so we leave the token intact and
-  // rely on the inline "Sign in again" escape hatch instead.
+  // On a 401-class rejection — OR the daemon's token-gate 403 ("Invalid or
+  // missing auth token", which a stale session produces and which shares its
+  // body with a genuine role denial) — run the session revival: it
+  // whoami-confirms staleness, silently re-logs-in with the remembered
+  // password, and only drops the token (flipping the tile to signed-out with
+  // its Sign-in button) when re-login can't proceed. A network failure
+  // ("Load failed"/timeout) is NOT auth — the server may just be restarting —
+  // so the token stays intact and the reconnect poll handles it.
   const clearIfAuthError = (m: string): void => {
-    if (isAuthError(m)) clearHostToken(host.id)
+    if (isAuthError(m) || isForbiddenError(m)) void reviveRemoteSession(host.id)
   }
 
   // Best-effort re-read of THIS host's federation badge (used by the reconnect
@@ -517,6 +526,14 @@ function HostTile({
             ok: true,
             text: `${label} is back online${status.version ? ` (v${status.version})` : ''}.`,
           })
+          // The restart that just completed WIPED the daemon's in-memory
+          // connect-sessions: /boot-status is green but this host's cached
+          // session token is dead. Revive it now (whoami-confirm + silent
+          // re-login with the remembered password) so the tile's owner ops —
+          // and, when this is the ACTIVE host, every pane/WS reconnect loop —
+          // get a live session without an app relaunch. Forced: the owner
+          // explicitly restarted/updated this host.
+          void reviveRemoteSession(host.id, { force: true })
           void refreshFederation()
           return
         }
@@ -716,6 +733,23 @@ function HostTile({
               {updateBusy ? 'Updating…' : `Update to ${summary.latest}`}
             </button>
           )}
+        </div>
+      )}
+
+      {/* The ACTIVE connection's recovery state — always visible while it's
+          not plain 'connected', so the owner can see at a glance whether the
+          server is restarting (with boot phase), re-authenticating, or
+          waiting on a sign-in (the only state that needs him). Same copy as
+          the in-app banner (recoveryStatusText — single source). */}
+      {isActive && activeRecovery.kind !== 'connected' && (
+        <div
+          className={`text-[10px] text-right ${
+            activeRecovery.kind === 'signin-required'
+              ? 'text-red-400'
+              : 'text-[var(--color-text-muted)]'
+          }`}
+        >
+          {recoveryStatusText(label, activeRecovery)}
         </div>
       )}
 

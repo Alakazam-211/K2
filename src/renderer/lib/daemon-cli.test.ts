@@ -49,17 +49,34 @@ vi.mock('@/kessel/daemon-ws', async (importOriginal) => {
 })
 
 // Tauri invoke is reached by connect-host (forgetToken on expireSession,
-// persistHosts on addHost). Inert in node.
+// persistHosts on addHost, resolvePassword during session revival). A fake
+// keychain map lets the revival tests seed a remembered password.
+const { fakeKeychain } = vi.hoisted(() => ({ fakeKeychain: new Map<string, string>() }))
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async () => null),
+  invoke: vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+    switch (cmd) {
+      case 'k2_secret_get':
+        return fakeKeychain.get(`${args!.service}:${args!.account}`) ?? null
+      case 'k2_secret_set':
+        fakeKeychain.set(`${args!.service}:${args!.account}`, args!.secret as string)
+        return null
+      case 'k2_secret_delete':
+        fakeKeychain.delete(`${args!.service}:${args!.account}`)
+        return null
+      default:
+        return null // connect_hosts_{read,write} etc. — inert in node
+    }
+  }),
 }))
 
 import { daemonCliGet, daemonCliGetText, daemonCliPost } from './daemon-cli'
 import {
   useConnectHostStore,
   __resetConnectHostStoreForTests,
+  K2_CONNECT_PASSWORD_KEYCHAIN_SERVICE,
   type ConnectHost,
 } from '@/stores/connect-host'
+import { __resetRemoteSessionForTests } from './remote-session'
 
 const LOCAL_CREDS = { port: 47800, token: 'local-tok', host: '127.0.0.1', secure: false }
 const SECURE_CREDS = { port: 443, token: 'remote-tok', host: 'rosson.k2.dev', secure: true }
@@ -190,19 +207,34 @@ describe('daemonCliPost — body in body, token in query', () => {
   })
 })
 
-describe('handleRemoteUnauthorized — a remote 401 expires the session', () => {
+describe('remote auth failures — session revival / expiry through daemon-cli', () => {
   beforeEach(() => {
     mem.clear()
+    fakeKeychain.clear()
     __resetConnectHostStoreForTests()
+    __resetRemoteSessionForTests()
     getDaemonWsMock.mockReset()
     invalidateDaemonWsMock.mockReset()
   })
 
-  it('401 from the active REMOTE host drops its token + raises sign-in', async () => {
+  /** Mirror the REAL getDaemonWs remote behavior: derive creds from the
+   *  store at call time, so a revival-committed token reaches the replay. */
+  function credsFollowStore(): void {
+    getDaemonWsMock.mockImplementation(async () => {
+      const active = useConnectHostStore.getState().activeHost
+      if (active === 'local') return LOCAL_CREDS
+      return { port: active.port, token: active.token, host: active.hostname, secure: active.secure }
+    })
+  }
+
+  it('401 from the active REMOTE host with NO remembered password drops its token + raises sign-in', async () => {
     const host = makeRemoteHost()
     useConnectHostStore.getState().addHost(host)
     useConnectHostStore.getState().selectHost(host)
     getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
+    // Every fetch 401s — the request itself AND the revival's whoami probe,
+    // so the session is confirmed dead; with no keychain password the
+    // revival expires it (classic path).
     vi.stubGlobal('fetch', vi.fn(async () => fakeRes({ status: 401, body: JSON.stringify({ error: 'session expired' }) })))
 
     // The call still rejects with the daemon's message...
@@ -218,11 +250,65 @@ describe('handleRemoteUnauthorized — a remote 401 expires the session', () => 
   it('401 while LOCAL is active does NOT raise a remote sign-in', async () => {
     // active stays 'local' (the default after reset)
     getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
-    vi.stubGlobal('fetch', vi.fn(async () => fakeRes({ status: 401, body: JSON.stringify({ error: 'nope' }) })))
+    const fetchMock = vi.fn(async () => fakeRes({ status: 401, body: JSON.stringify({ error: 'nope' }) }))
+    vi.stubGlobal('fetch', fetchMock)
 
     await expect(daemonCliGet('projects/list')).rejects.toThrow('nope')
     expect(useConnectHostStore.getState().activeHost).toBe('local')
     expect(useConnectHostStore.getState().pendingSignIn).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1) // no probe, no replay
+  })
+
+  it("the stale-session 403 ('Invalid or missing auth token') silently re-logs-in and REPLAYS the request", async () => {
+    // The owner's bug: a remote restart wipes connect-sessions; every /cli/*
+    // then 403s with the token-gate body (NOT 401). With a remembered
+    // password the call must self-heal: whoami-confirm → re-login → replay
+    // with the fresh token — no sign-in overlay, no error surfaced.
+    const host = makeRemoteHost()
+    useConnectHostStore.getState().addHost(host)
+    useConnectHostStore.getState().selectHost(host)
+    credsFollowStore()
+    fakeKeychain.set(`${K2_CONNECT_PASSWORD_KEYCHAIN_SERVICE}:r1`, 'hunter2')
+
+    const staleBody = JSON.stringify({ error: 'Invalid or missing auth token' })
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/cli/auth/whoami')) return fakeRes({ status: 403, body: staleBody })
+      if (url.includes('/cli/auth/login')) {
+        return {
+          ...fakeRes({ status: 200, body: '' }),
+          json: async () => ({ token: 'fresh-tok', username: 'rosson', expiresAt: 'x' }),
+        } as unknown as Response
+      }
+      // The data route: stale token → 403; fresh token → 200.
+      if (url.includes('token=fresh-tok')) return fakeRes({ body: JSON.stringify({ ok: 1 }) })
+      return fakeRes({ status: 403, body: staleBody })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(daemonCliGet('projects/list')).resolves.toEqual({ ok: 1 })
+
+    // The replay carried the REVIVED token, and no sign-in was raised.
+    const dataCalls = fetchMock.mock.calls
+      .map(([u]) => u as string)
+      .filter((u) => u.includes('projects/list'))
+    expect(dataCalls.length).toBe(2)
+    expect(dataCalls[0]).toContain('token=remote-tok')
+    expect(dataCalls[1]).toContain('token=fresh-tok')
+    expect(useConnectHostStore.getState().pendingSignIn).toBeNull()
+    expect((useConnectHostStore.getState().activeHost as ConnectHost).token).toBe('fresh-tok')
+  })
+
+  it('a 403 whose body is NOT the token gate (role denial etc.) is surfaced without probing', async () => {
+    const host = makeRemoteHost()
+    useConnectHostStore.getState().addHost(host)
+    useConnectHostStore.getState().selectHost(host)
+    getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
+    const fetchMock = vi.fn(async () => fakeRes({ status: 403, body: JSON.stringify({ error: 'peer not allowed' }) }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(daemonCliGet('projects/list')).rejects.toThrow('peer not allowed')
+    expect(fetchMock).toHaveBeenCalledTimes(1) // no whoami, no replay
+    expect((useConnectHostStore.getState().activeHost as ConnectHost).token).toBe('remote-tok')
   })
 })
 

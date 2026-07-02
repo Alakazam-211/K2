@@ -36,6 +36,7 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { withRemoteRetry } from '@/lib/remote-retry'
+import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 
 /**
  * Keychain service name for remembered remote-host tokens. Each token is
@@ -201,6 +202,17 @@ export interface ConnectHostState {
   /** Live status of the active host's connection (set by the gate). */
   connectionStatus: ConnectionStatus
   /**
+   * The ACTIVE remote host's recovery state machine (owner contract — see
+   * lib/remote-recovery.ts): 'connected' baseline, or exactly one of
+   * 'reconnecting' (host down / still booting — never a login prompt) /
+   * 'reauthenticating' (silent re-login underway) / 'signin-required' (the
+   * one state that needs the user). Driven by ConnectionGate's health poll
+   * + lib/remote-session's revival; rendered by the gate's banner, the
+   * top-bar host indicator, and the Connections panel. Meaningless while
+   * `activeHost === 'local'` (stays 'connected').
+   */
+  recovery: RemoteRecoveryState
+  /**
    * Remote-capability cache (#638): the ACTIVE host's marketing version +
    * wire protocol, learned from its `/boot-status` when the ConnectionGate
    * accepts it. `lib/server-capabilities.ts` reads `serverVersion` to gate
@@ -240,6 +252,8 @@ export interface ConnectHostState {
   removeHost: (id: string) => void
   /** Gate-driven: update the live connection status of the active host. */
   setConnectionStatus: (status: ConnectionStatus) => void
+  /** Commit the active remote's recovery state (gate poll / revival). */
+  setRecovery: (recovery: RemoteRecoveryState) => void
   /**
    * Gate-driven (#638): cache the ACTIVE host's version + protocol from its
    * accepted `/boot-status`. Pass `{version:null, protocol:null}` to clear
@@ -483,10 +497,19 @@ function hostBaseUrl(host: Pick<ConnectHost, 'hostname' | 'port' | 'secure'>): s
 }
 
 /** Result of {@link loginToHost}. On success the session token is also
- *  committed into the store (setHostToken) so daemon-ws.ts uses it. */
+ *  committed into the store (setHostToken) so daemon-ws.ts uses it.
+ *
+ *  Failure `kind` lets programmatic callers (runtime session revival,
+ *  lib/remote-session.ts) branch without matching user-facing copy:
+ *    - 'auth'        → the daemon REJECTED the credentials (401) — retrying
+ *                      with the same password can never succeed.
+ *    - 'unreachable' → connection-level failure after every retry — the
+ *                      credentials were never evaluated.
+ *    - 'server'      → the endpoint answered but isn't a usable login
+ *                      (non-2xx, malformed body, missing username). */
 export type LoginResult =
   | { ok: true; token: string }
-  | { ok: false; reason: string }
+  | { ok: false; kind: 'auth' | 'unreachable' | 'server'; reason: string }
 
 /** Daemon `POST /cli/auth/login` success body. */
 interface LoginResponse {
@@ -516,7 +539,7 @@ export async function loginToHost(
 ): Promise<LoginResult> {
   const username = host.username?.trim() ?? ''
   if (!username) {
-    return { ok: false, reason: 'This server has no username configured.' }
+    return { ok: false, kind: 'server', reason: 'This server has no username configured.' }
   }
   const url = `${hostBaseUrl(host)}/cli/auth/login`
   // Issue #5: every *.k2.dev host shares ONE relay IP, so the webview pools a
@@ -546,23 +569,24 @@ export async function loginToHost(
   if (!resp) {
     return {
       ok: false,
+      kind: 'unreachable',
       reason: `Couldn't establish a connection to ${host.hostname}. The server may be reachable — try again, and if it keeps failing, quit and relaunch K2.`,
     }
   }
   if (resp.status === 401) {
-    return { ok: false, reason: 'Invalid username or password.' }
+    return { ok: false, kind: 'auth', reason: 'Invalid username or password.' }
   }
   if (!resp.ok) {
-    return { ok: false, reason: `Server returned ${resp.status}. It may not be a K2 server.` }
+    return { ok: false, kind: 'server', reason: `Server returned ${resp.status}. It may not be a K2 server.` }
   }
   let body: LoginResponse
   try {
     body = (await resp.json()) as LoginResponse
   } catch {
-    return { ok: false, reason: 'Server response was not a valid login.' }
+    return { ok: false, kind: 'server', reason: 'Server response was not a valid login.' }
   }
   if (typeof body.token !== 'string' || body.token.length === 0) {
-    return { ok: false, reason: 'Server did not return a session token.' }
+    return { ok: false, kind: 'server', reason: 'Server did not return a session token.' }
   }
   // Commit the session token into the store + stamp lastConnectedAt so
   // daemon-ws.ts (which reads activeHost.token) picks it up, and cache it
@@ -581,6 +605,7 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
   activeHost: 'local',
   hosts: loadHosts(),
   connectionStatus: 'connecting',
+  recovery: { kind: 'connected' },
   pendingSignIn: null,
   signInActivate: true,
   serverVersion: null,
@@ -602,6 +627,9 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
       activeHost: hostOrLocal,
       serverVersion: null,
       serverProtocol: null,
+      // A host switch starts from the healthy baseline — the previous
+      // host's recovery state must never bleed onto the new one.
+      recovery: { kind: 'connected' },
     })
   },
 
@@ -643,6 +671,9 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
       // re-authed host re-accepts and the gate re-caches it.
       serverVersion: null,
       serverProtocol: null,
+      // Recovery contract: expiry means automatic re-auth is off the table
+      // (no/rejected stored credentials) — the ONE state that needs the user.
+      recovery: { kind: 'signin-required' },
     })
   },
 
@@ -696,6 +727,21 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
 
   setConnectionStatus: (status) => {
     set({ connectionStatus: status })
+  },
+
+  setRecovery: (recovery) => {
+    // No-op on an identical state: the gate re-commits on every health tick
+    // (~4s), and a fresh-but-equal object would re-render every subscriber.
+    const prev = get().recovery
+    if (
+      prev.kind === recovery.kind &&
+      (prev.kind !== 'reconnecting' ||
+        recovery.kind !== 'reconnecting' ||
+        prev.bootPhase === recovery.bootPhase)
+    ) {
+      return
+    }
+    set({ recovery })
   },
 
   setServerInfo: ({ version, protocol }) => {
@@ -785,7 +831,7 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
 export function __resetConnectHostStoreForTests(): void {
   const storage = getStorage()
   storage?.removeItem(STORAGE_KEY)
-  useConnectHostStore.setState({ activeHost: 'local', hosts: [], connectionStatus: 'connecting', pendingSignIn: null, serverVersion: null, serverProtocol: null })
+  useConnectHostStore.setState({ activeHost: 'local', hosts: [], connectionStatus: 'connecting', recovery: { kind: 'connected' }, pendingSignIn: null, serverVersion: null, serverProtocol: null })
 }
 
 /** The localStorage key, exported for tests. */

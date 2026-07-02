@@ -14,21 +14,56 @@
 // existing `try/catch` blocks around the old `invoke(...)` calls keep
 // working unchanged.
 
-import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
+import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, type DaemonWsAvailable } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { withRemoteRetry } from '@/lib/remote-retry'
+import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
+
+/** A response plus its (already-consumed) body text. The body is read
+ *  exactly once, up front, because BOTH the auth-failure classifier and the
+ *  parse helpers need it. */
+interface CliHttpResult {
+  res: Response
+  text: string
+}
 
 /**
- * connect-users (#617) session expiry: a 401 from a REMOTE host means its
- * cached session token expired. Drop it + re-trigger the full-screen
- * sign-in (the store no-ops for 'local' or a non-active host). Surfacing
- * the sign-in is enough — we deliberately do NOT auto-retry the request.
+ * Resolve creds → fire ONE request built by `build` → read the body.
+ *
+ * Stale-session recovery (the runtime half of connect-users #617): a remote
+ * daemon restart wipes its in-memory sessions, after which every authed
+ * `/cli/*` call returns 403 "Invalid or missing auth token" (NOT 401 — see
+ * remote-session.ts). On an auth-classified rejection from a REMOTE host we
+ * run `reviveRemoteSession` (single-flight whoami-confirm + re-login with
+ * the remembered password — the same mint flow boot uses) and, ONLY if a
+ * fresh token was actually minted, retry the request once with the new
+ * creds. Every other failure surfaces unchanged; a 401/403 rejected a
+ * request before doing work, so the single replay is side-effect-safe.
  */
-function handleRemoteUnauthorized(res: Response): void {
-  if (res.status !== 401) return
-  const active = useConnectHostStore.getState().activeHost
-  if (active === 'local') return
-  useConnectHostStore.getState().expireSession(active.id)
+async function cliFetch(
+  build: (creds: DaemonWsAvailable) => { url: string; init?: RequestInit },
+): Promise<CliHttpResult> {
+  return withConnRetry(async () => {
+    const attempt = async (): Promise<CliHttpResult> => {
+      const creds = await getDaemonWs()
+      const { url, init } = build(creds)
+      const res = await fetch(url, init)
+      return { res, text: await res.text() }
+    }
+    let out = await attempt()
+    if (isPossibleAuthFailure(out.res.status, out.text)) {
+      const active = useConnectHostStore.getState().activeHost
+      if (active !== 'local') {
+        const outcome = await reviveRemoteSession(active.id)
+        // 'revived' means the store now carries a NEW token — replay once so
+        // the caller never sees the transient stale-session rejection. Any
+        // other outcome (still-valid role denial, sign-in required, network,
+        // cooldown) keeps the original response.
+        if (outcome === 'revived') out = await attempt()
+      }
+    }
+    return out
+  })
 }
 
 /**
@@ -48,20 +83,29 @@ export async function daemonCliGet<T = unknown>(
   route: string,
   params?: Record<string, string | number | boolean | undefined | null>,
 ): Promise<T> {
-  return withConnRetry(async () => {
-    const creds = await getDaemonWs()
-    const search = new URLSearchParams()
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined && v !== null) search.set(k, String(v))
-      }
+  const { res, text } = await cliFetch((creds) => ({
+    url: getUrl(creds, route, params),
+    init: { method: 'GET' },
+  }))
+  return parseDaemonResponse<T>(res, text)
+}
+
+/** Build `GET /cli/<route>?<params>&token=` for resolved creds — shared by
+ *  daemonCliGet/daemonCliGetText so both rebuild the URL with FRESH creds on
+ *  the post-revival replay. */
+function getUrl(
+  creds: DaemonWsAvailable,
+  route: string,
+  params?: Record<string, string | number | boolean | undefined | null>,
+): string {
+  const search = new URLSearchParams()
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) search.set(k, String(v))
     }
-    search.set('token', creds.token)
-    const url = `${daemonHttpBase(creds)}/cli/${route}?${search.toString()}`
-    const res = await fetch(url, { method: 'GET' })
-    handleRemoteUnauthorized(res)
-    return parseDaemonResponse<T>(res)
-  })
+  }
+  search.set('token', creds.token)
+  return `${daemonHttpBase(creds)}/cli/${route}?${search.toString()}`
 }
 
 /**
@@ -80,20 +124,11 @@ export async function daemonCliGetText(
   route: string,
   params?: Record<string, string | number | boolean | undefined | null>,
 ): Promise<string> {
-  return withConnRetry(async () => {
-    const creds = await getDaemonWs()
-    const search = new URLSearchParams()
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined && v !== null) search.set(k, String(v))
-      }
-    }
-    search.set('token', creds.token)
-    const url = `${daemonHttpBase(creds)}/cli/${route}?${search.toString()}`
-    const res = await fetch(url, { method: 'GET' })
-    handleRemoteUnauthorized(res)
-    return parseDaemonText(res)
-  })
+  const { res, text } = await cliFetch((creds) => ({
+    url: getUrl(creds, route, params),
+    init: { method: 'GET' },
+  }))
+  return parseDaemonText(res, text)
 }
 
 /**
@@ -107,17 +142,15 @@ export async function daemonCliPost<T = unknown>(
   route: string,
   body?: unknown,
 ): Promise<T> {
-  return withConnRetry(async () => {
-    const creds = await getDaemonWs()
-    const url = `${daemonHttpBase(creds)}/cli/${route}?token=${creds.token}`
-    const res = await fetch(url, {
+  const { res, text } = await cliFetch((creds) => ({
+    url: `${daemonHttpBase(creds)}/cli/${route}?token=${creds.token}`,
+    init: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-    handleRemoteUnauthorized(res)
-    return parseDaemonResponse<T>(res)
-  })
+    },
+  }))
+  return parseDaemonResponse<T>(res, text)
 }
 
 /**
@@ -128,16 +161,16 @@ export async function daemonCliPost<T = unknown>(
  * `invalidateDaemonWs` hook fires before each retry so the daemon's
  * (possibly rotated) port/token is re-read.
  *
- * Non-2xx responses are NOT retried — those are application errors the route
- * handler explicitly returned (incl. a remote 401, which must surface
- * immediately so `handleRemoteUnauthorized` can drop the dead session).
+ * Non-2xx responses are NOT retried here — those are application errors the
+ * route handler explicitly returned. The one exception lives in `cliFetch`:
+ * an auth-classified 401/403 from a remote host goes through session revival
+ * and is replayed once IFF a fresh token was minted.
  */
 function withConnRetry<T>(op: () => Promise<T>): Promise<T> {
   return withRemoteRetry(op, { onRetry: invalidateDaemonWs })
 }
 
-async function parseDaemonResponse<T>(res: Response): Promise<T> {
-  const text = await res.text()
+async function parseDaemonResponse<T>(res: Response, text: string): Promise<T> {
   if (!res.ok) {
     // Daemon's bad_request shape: `{"error":"<message>"}`. Surface
     // the message verbatim so existing renderer code that does
@@ -167,8 +200,7 @@ async function parseDaemonResponse<T>(res: Response): Promise<T> {
 /** Like `parseDaemonResponse` but returns the raw body text on success
  *  (no JSON parse). Non-2xx still throws the `{"error":"..."}`-aware
  *  message so callers see a useful string, not `[object Response]`. */
-async function parseDaemonText(res: Response): Promise<string> {
-  const text = await res.text()
+function parseDaemonText(res: Response, text: string): string {
   if (!res.ok) {
     let msg = text
     try {

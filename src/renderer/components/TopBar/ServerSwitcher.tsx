@@ -27,6 +27,8 @@ import {
 } from '@/stores/connect-host'
 import { useSettingsStore } from '@/stores/settings'
 import { useAddServerFocusStore } from '@/stores/add-server-focus'
+import { reviveRemoteSession } from '@/lib/remote-session'
+import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 
 function statusColor(status: ConnectionStatus): string {
   switch (status) {
@@ -37,6 +39,40 @@ function statusColor(status: ConnectionStatus): string {
     case 'offline':
       return '#f85149' // red
   }
+}
+
+/**
+ * The host indicator's color + tooltip, folding the ACTIVE remote's
+ * three-state recovery surface (lib/remote-recovery.ts) over the plain
+ * connection status: 'reconnecting' says the server is restarting/booting
+ * (with the boot phase when known), 'reauthenticating' shows the silent
+ * re-login, and 'signin-required' goes RED — the one state that needs the
+ * user. Exported for tests.
+ */
+export function hostIndicator(
+  status: ConnectionStatus,
+  recovery: RemoteRecoveryState,
+  isRemoteActive: boolean,
+): { color: string; title: string } {
+  if (isRemoteActive) {
+    switch (recovery.kind) {
+      case 'reconnecting':
+        return {
+          color: '#d29922',
+          title:
+            recovery.bootPhase !== null
+              ? `Server restarting (${recovery.bootPhase})… reconnecting automatically`
+              : 'Reconnecting… retrying automatically',
+        }
+      case 'reauthenticating':
+        return { color: '#d29922', title: 'Re-authenticating…' }
+      case 'signin-required':
+        return { color: '#f85149', title: 'Sign-in required — select this server to sign in' }
+      case 'connected':
+        break // fall through to the plain connection status
+    }
+  }
+  return { color: statusColor(status), title: `Connection: ${status}` }
 }
 
 function StatusDot({ status }: { status: ConnectionStatus }): React.JSX.Element {
@@ -60,6 +96,7 @@ export default function ServerSwitcher(): React.JSX.Element {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const hosts = useConnectHostStore((s) => s.hosts)
   const connectionStatus = useConnectHostStore((s) => s.connectionStatus)
+  const recovery = useConnectHostStore((s) => s.recovery)
   const pickHost = useConnectHostStore((s) => s.pickHost)
   const openSettings = useSettingsStore((s) => s.openSettings)
   const requestAddServerFocus = useAddServerFocusStore((s) => s.requestAddServerFocus)
@@ -92,6 +129,26 @@ export default function ServerSwitcher(): React.JSX.Element {
 
   const pick = useCallback(
     (h: 'local' | ConnectHost) => {
+      // Re-picking the ALREADY-ACTIVE remote is the user's manual "reconnect"
+      // gesture. pickHost would silently selectHost (hostKey unchanged → the
+      // gate never re-probes), which is a dead end when the host's session
+      // went stale after a remote restart/update. Instead:
+      //   - 'signin-required' → route straight to the login surface (the one
+      //     state that needs the user; never a dead reconnect).
+      //   - otherwise → force a session revival: whoami-confirm + re-login
+      //     with the remembered password (raising RemoteSignIn only if that
+      //     can't proceed).
+      const state = useConnectHostStore.getState()
+      const active = state.activeHost
+      if (h !== 'local' && active !== 'local' && active.id === h.id) {
+        if (state.recovery.kind === 'signin-required') {
+          state.requestSignIn(active)
+        } else {
+          void reviveRemoteSession(h.id, { force: true })
+        }
+        setOpen(false)
+        return
+      }
       // pickHost decides silent-switch vs full-screen sign-in (step #3).
       pickHost(h)
       setOpen(false)
@@ -118,9 +175,26 @@ export default function ServerSwitcher(): React.JSX.Element {
       <button
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-1.5 h-6 px-2 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors rounded"
-        title="Switch K2 server"
+        title={hostIndicator(connectionStatus, recovery, activeHost !== 'local').title}
       >
-        <StatusDot status={connectionStatus} />
+        {/* Recovery-aware dot: amber while restarting/re-authenticating,
+            red when sign-in is required (the only user-action state). */}
+        {(() => {
+          const ind = hostIndicator(connectionStatus, recovery, activeHost !== 'local')
+          return (
+            <span
+              aria-label={ind.title}
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: 1,
+                background: ind.color,
+                flexShrink: 0,
+                display: 'inline-block',
+              }}
+            />
+          )
+        })()}
         <span className="max-w-[140px] truncate">{activeLabel}</span>
         <svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="2 4 5 7 8 4" />

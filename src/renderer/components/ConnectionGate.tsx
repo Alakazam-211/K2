@@ -43,7 +43,14 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
-import { useConnectHostStore, activeHostKey } from '@/stores/connect-host'
+import { useConnectHostStore, activeHostKey, type ConnectHost } from '@/stores/connect-host'
+import { reviveRemoteSession } from '@/lib/remote-session'
+import {
+  deriveRecovery,
+  recoveryPollMs,
+  recoveryStatusText,
+  type RemoteRecoveryState,
+} from '@/lib/remote-recovery'
 import { RemoteSignIn } from './RemoteSignIn'
 import { AppErrorBoundary } from './AppErrorBoundary'
 
@@ -68,9 +75,6 @@ const MIN_COMPATIBLE_PROTOCOL = 1
  *  connects, poll its health at this interval so a tunnel drop is
  *  detected and surfaced as the dimmed overlay. */
 const REMOTE_HEALTH_POLL_MS = 4000
-/** Upper bound for the exponential reconnect backoff once a connected
- *  remote drops — avoids hammering a flaky tunnel. */
-const REMOTE_RECONNECT_MAX_MS = 8000
 /** How many CONSECUTIVE failed health-polls a connected remote must rack
  *  up before we call it a real drop. A single slow/blipped poll over a
  *  higher-latency tunnel must NOT trip the reconnect indicator while the
@@ -323,14 +327,13 @@ export function ConnectionGate(): React.ReactElement {
   // host-key that has reached 'accept' at least once. Local is never
   // soft-reconnected (the blank is correct for the auto-update race).
   const [connectedOnceKey, setConnectedOnceKey] = useState<string | null>(null)
-  // K2 Connect step #4 (debounced drop): a single slow/blipped health-poll
-  // over a higher-latency tunnel must NOT surface anything while the data
-  // WS is still streaming. We only flip this true after
-  // REMOTE_DROP_THRESHOLD CONSECUTIVE failed polls; the gate then renders
-  // the small non-blocking "reconnecting" banner. Reset to false on the
-  // next accepting poll. Distinct from `decision` so a sub-threshold blip
-  // leaves connectionStatus 'connected' and the App fully interactive.
-  const [reconnecting, setReconnecting] = useState(false)
+  // The active remote's THREE-STATE recovery surface (owner contract —
+  // lib/remote-recovery.ts): 'reconnecting' (down / still booting, debounced
+  // for network blips), 'reauthenticating' (silent re-login underway), or
+  // 'signin-required' (stored credentials rejected — the only state that
+  // asks the user). Committed by this gate's poll + lib/remote-session's
+  // revival; rendered as the non-blocking RecoveryBanner over the live app.
+  const recovery = useConnectHostStore((s) => s.recovery)
 
   // K2 Connect step #1: the gate is host-aware. `hostKey` changes when
   // the user picks a different daemon in the top-bar switcher → the
@@ -397,10 +400,10 @@ export function ConnectionGate(): React.ReactElement {
     let consecutiveFails = 0
 
     // A host switch must re-poll from scratch: drop any prior accept so
-    // the overlay shows while the new host is contacted.
+    // the overlay shows while the new host is contacted. (The recovery
+    // banner state resets in selectHost, which owns the switch.)
     setDecision({ kind: 'wait', reason: 'switching-host' })
     setAttempts(0)
-    setReconnecting(false)
 
     const ensurePolicy = async (): Promise<AcceptancePolicy> => {
       // Select the policy by active-host KIND (K2 Connect step #4):
@@ -486,8 +489,48 @@ export function ConnectionGate(): React.ReactElement {
             // `hasToken` already narrowed `active` to a ConnectHost.
             useConnectHostStore.getState().expireSession(active.id)
             next = { kind: 'wait', reason: 'remote-session-expired' }
+          } else {
+            // 'alive' → keep the accept and mount as normal; the recovery
+            // surface starts (or returns to) the healthy baseline.
+            useConnectHostStore.getState().setRecovery({ kind: 'connected' })
           }
-          // 'alive' → keep the accept and mount as normal.
+        }
+      }
+      // Runtime staleness probe (mirrors the daemon's own 5s WS re-auth
+      // heartbeat, from the other side): /boot-status is PUBLIC, so a remote
+      // restart/update that WIPED the in-memory connect-sessions still polls
+      // 'accept' here while every authed /cli/* call 403s and every WS
+      // reconnect loop spins on the dead token. Probe the session on each
+      // post-accept health tick; a confirmed-dead (401/403) session goes
+      // through the single-flight reviveRemoteSession — the SAME re-login
+      // flow boot uses — so the app self-heals in place instead of needing a
+      // relaunch. Only 'dead' acts ('unknown' is a blip); revival itself
+      // expires the token + raises RemoteSignIn only when the remembered
+      // password is missing/rejected, and its backoff caps re-login attempts.
+      //
+      // Recovery contract: 'dead' here is state 2 ('reauthenticating') —
+      // reviveRemoteSession paints it and folds its outcome back through the
+      // reducer (connected / signin-required / still reauthenticating).
+      // Awaited so this tick's poll cadence sees the settled state.
+      if (next.kind === 'accept' && isRemote && acceptedOnce) {
+        const active = useConnectHostStore.getState().activeHost
+        if (active !== 'local' && !!active.token && active.token.length > 0) {
+          const probe = await probeRemoteSession()
+          if (cancelled) return
+          if (probe === 'dead') {
+            await reviveRemoteSession(active.id)
+            if (cancelled) return
+          } else {
+            // 'alive', or a blip ('unknown' is never evidence of staleness):
+            // the host is up+ready and the session holds → connected. This
+            // also clears a prior 'reconnecting' banner on recovery.
+            useConnectHostStore.getState().setRecovery(
+              deriveRecovery({
+                bootStatus: { reachable: true, phase: 'ready' },
+                auth: probe === 'alive' ? 'ok' : 'unknown',
+              }),
+            )
+          }
         }
       }
       // Debounced-drop path: a REMOTE host that has already connected this
@@ -531,7 +574,6 @@ export function ConnectionGate(): React.ReactElement {
         // A clean poll clears the debounce: any in-flight blip count is
         // forgotten and the reconnect banner (if shown) comes down.
         consecutiveFails = 0
-        setReconnecting(false)
         if (isRemote) {
           // Remote: keep a slow health-poll alive so a tunnel drop is
           // detected and surfaced as the soft-reconnect overlay (the App
@@ -549,26 +591,43 @@ export function ConnectionGate(): React.ReactElement {
       // throughout; recovery (an accept above) clears the counter + banner.
       if (softPoll) {
         consecutiveFails += 1
-        if (shouldSurfaceRemoteDrop(consecutiveFails)) {
+        // Recovery state 1 — the "still booting back up" affordance. A host
+        // that ANSWERED /boot-status with a pre-'ready' phase (e.g.
+        // 'migrating' while an update applies) is AUTHORITATIVELY restarting:
+        // surface immediately, carrying the phase so the banner can say why.
+        // A network-level failure (status null) is debounced behind
+        // REMOTE_DROP_THRESHOLD so a single tunnel blip never flashes the
+        // banner while the data WS is still streaming. Never a login prompt
+        // in this state — auth is unknowable until the host is back.
+        const bootingAuthoritative = status !== null && status.phase !== 'ready'
+        if (bootingAuthoritative || shouldSurfaceRemoteDrop(consecutiveFails)) {
           setDecision(next)
           useConnectHostStore.getState().setConnectionStatus('connecting')
-          setReconnecting(true)
+          useConnectHostStore.getState().setRecovery(
+            deriveRecovery({
+              bootStatus: bootingAuthoritative
+                ? { reachable: true, phase: status.phase }
+                // A reachable-but-rejected edge (e.g. incompatible protocol
+                // after an update) renders as generic reconnecting, never as
+                // 'connected' — fold it into the unreachable input.
+                : { reachable: false },
+              auth: 'unknown',
+            }),
+          )
         }
         // else: below threshold — leave 'connected' + no banner untouched.
       }
       setAttempts((a) => a + 1)
       attemptsLocal += 1
-      // Backoff:
+      // Backoff (recoveryPollMs is the tested schedule):
       //   - First connect (local, or a remote not yet accepted): tight 500ms.
-      //   - Soft poll still WITHIN the debounce window (no banner yet): keep
-      //     the normal health cadence so we detect recovery / cross the
-      //     threshold promptly rather than stretching out a swallowed blip.
-      //   - Confirmed soft reconnect (banner up): ease off exponentially so
-      //     we don't hammer a flaky tunnel.
+      //   - Soft poll still WITHIN the debounce window (recovery still
+      //     'connected' — no banner yet): normal health cadence so we detect
+      //     recovery / cross the threshold promptly.
+      //   - Confirmed 'reconnecting' (banner up): ease off exponentially so
+      //     we don't hammer a down/booting host.
       const backoff = softPoll
-        ? shouldSurfaceRemoteDrop(consecutiveFails)
-          ? Math.min(REMOTE_RECONNECT_MAX_MS, 500 * 2 ** Math.min(attemptsLocal, 5))
-          : REMOTE_HEALTH_POLL_MS
+        ? recoveryPollMs(useConnectHostStore.getState().recovery, attemptsLocal)
         : 500
       timeoutId = setTimeout(() => { void tick() }, backoff)
     }
@@ -607,11 +666,12 @@ export function ConnectionGate(): React.ReactElement {
   // through transient drops — never fall back to the full-screen
   // ConnectingOverlay/blank. We key this purely on "has connected once +
   // App is mounted" (NOT the current decision): a sub-threshold blip leaves
-  // the App fully usable with NO banner, and only the debounced
-  // `reconnecting` flag (>= REMOTE_DROP_THRESHOLD consecutive fails) adds
-  // the small non-blocking banner over the still-live view. Local — and a
-  // remote's FIRST connect — keep the full-screen blanking overlay (correct
-  // for the auto-update race / nothing-to-show-yet).
+  // the App fully usable with NO banner, and only a non-'connected'
+  // `recovery` state (debounced drop / authoritative boot phase / re-auth /
+  // sign-in-required) adds the small non-blocking banner over the still-live
+  // view. Local — and a remote's FIRST connect — keep the full-screen
+  // blanking overlay (correct for the auto-update race /
+  // nothing-to-show-yet).
   const keepRemoteMounted =
     activeHost !== 'local' && connectedOnceKey === hostKey && AppModule !== null
 
@@ -623,11 +683,12 @@ export function ConnectionGate(): React.ReactElement {
 
   if (keepRemoteMounted) {
     const App = AppModule
-    const label = activeHost.label
     return (
       <>
         <AppErrorBoundary><App key={hostKey} /></AppErrorBoundary>
-        {reconnecting && <ReconnectBanner label={label} />}
+        {recovery.kind !== 'connected' && (
+          <RecoveryBanner host={activeHost} recovery={recovery} />
+        )}
         {signInOverlay}
       </>
     )
@@ -654,16 +715,26 @@ export function ConnectionGate(): React.ReactElement {
   )
 }
 
-/** Small, NON-BLOCKING reconnect indicator shown over the still-live view
- *  while a previously-connected REMOTE host reconnects (K2 Connect step #4).
- *  Unlike the old full-screen overlay, this:
- *    - does NOT cover the app or the top-bar (a bottom-center pill),
- *    - passes ALL input through (`pointerEvents: 'none'`) so the app — and
- *      the top-bar host switcher — stay fully usable while we retry.
- *  It only mounts after the drop has been DEBOUNCED (>= REMOTE_DROP_THRESHOLD
- *  consecutive failed polls), so a single blip over a higher-latency tunnel
- *  never flashes it while the data WS is still streaming. */
-function ReconnectBanner({ label }: { label: string }): React.ReactElement {
+/** Small, NON-BLOCKING recovery indicator shown over the still-live view
+ *  while a previously-connected REMOTE host recovers (K2 Connect step #4 +
+ *  the three-state owner contract). Unlike the old full-screen overlay:
+ *    - it does NOT cover the app or the top-bar (a bottom-center pill),
+ *    - it passes ALL input through (`pointerEvents: 'none'`) so the app —
+ *      and the top-bar host switcher — stay fully usable while we retry.
+ *      The one interactive element is the 'signin-required' Sign-in button
+ *      (pointerEvents re-enabled on the pill for that state only), which
+ *      routes straight to RemoteSignIn — never a dead end.
+ *  'reconnecting' only mounts after the drop is debounced (or the host
+ *  authoritatively reports a pre-ready boot phase), so a single blip over a
+ *  higher-latency tunnel never flashes it while the data WS is streaming. */
+function RecoveryBanner({
+  host,
+  recovery,
+}: {
+  host: ConnectHost
+  recovery: RemoteRecoveryState
+}): React.ReactElement {
+  const needsUser = recovery.kind === 'signin-required'
   return (
     <div
       role="status"
@@ -697,20 +768,42 @@ function ReconnectBanner({ label }: { label: string }): React.ReactElement {
           fontSize: '0.8rem',
           userSelect: 'none',
           WebkitUserSelect: 'none',
+          // Only the sign-in state accepts input (its button below).
+          pointerEvents: needsUser ? 'auto' : 'none',
         }}
       >
-        {/* Amber status dot — "degraded, not down". */}
+        {/* Status dot: amber = degraded-but-automatic; red = needs the user. */}
         <span
           aria-hidden
           style={{
             width: '8px',
             height: '8px',
             borderRadius: '50%',
-            background: '#f5a623',
+            background: needsUser ? '#f85149' : '#f5a623',
             flexShrink: 0,
           }}
         />
-        <span>Reconnecting to {label}… retrying automatically</span>
+        <span>{recoveryStatusText(host.label, recovery)}</span>
+        {needsUser && (
+          <button
+            onClick={() => {
+              // Route straight to the login surface for THIS host — the one
+              // state that legitimately needs the user.
+              useConnectHostStore.getState().requestSignIn(host)
+            }}
+            style={{
+              padding: '0.15rem 0.6rem',
+              fontSize: '0.75rem',
+              borderRadius: '999px',
+              border: '1px solid var(--color-border, rgba(255,255,255,0.25))',
+              background: 'var(--color-accent, #2f6feb)',
+              color: '#fff',
+              cursor: 'pointer',
+            }}
+          >
+            Sign in
+          </button>
+        )}
       </div>
     </div>
   )

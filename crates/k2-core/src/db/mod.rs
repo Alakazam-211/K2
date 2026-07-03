@@ -822,7 +822,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 13, "expected 12 built-in presets");
+        assert_eq!(n, 13, "expected 13 built-in presets");
     }
 
     #[test]
@@ -1043,7 +1043,7 @@ mod tests {
         let preset_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM agent_presets WHERE is_built_in=1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(preset_count, 12);
+        assert_eq!(preset_count, 13);
         drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
@@ -1060,7 +1060,7 @@ mod tests {
         let presets: i64 = conn
             .query_row("SELECT COUNT(*) FROM agent_presets WHERE is_built_in=1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(presets, 12, "re-bootstrap must not duplicate presets");
+        assert_eq!(presets, 13, "re-bootstrap must not duplicate presets");
         drop(conn);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }

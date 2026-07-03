@@ -79,6 +79,9 @@ pub mod editors;
 // Opens NO network trust boundary; inert until later phases wire ingress.
 // Gated behind the default-OFF `K2_FEDERATION` flag (see `federation::enabled`).
 pub mod federation;
+// Feedback F1 (prd-agent-feedback-notifications) — durable agent→human
+// asks (`k2 feedback ask`) + per-item comment threads.
+pub mod feedback;
 pub mod fs_abstract;
 pub mod fs_atomic;
 pub mod fs_commands;

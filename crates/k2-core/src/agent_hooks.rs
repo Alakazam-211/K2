@@ -71,6 +71,17 @@ pub enum HookEvent {
     /// commands; those are now thin proxies (deleted) over the daemon's
     /// `/cli/chat/rename` + `/cli/chat/toggle-pin` routes.
     SyncChatHistory,
+    /// Feedback F1 (prd-agent-feedback-notifications §4.3): fires when
+    /// an agent files a new feedback item (`/cli/feedback/create`).
+    /// Payload: `{id, projectPath, title, kind, priority, agentName}`.
+    /// The renderer's Feedback page + waiting-count badge (F2) and the
+    /// desktop notification subscribe to this on the `/events` WS.
+    FeedbackCreated,
+    /// Feedback F1: fires when a feedback item is answered
+    /// (`/cli/feedback/answer`). Payload: `{id, projectPath}`.
+    /// `k2 feedback ask --wait` polls rather than subscribing in F1,
+    /// but the event lets fronts flip a card waiting→answered live.
+    FeedbackAnswered,
 }
 
 impl HookEvent {
@@ -89,6 +100,8 @@ impl HookEvent {
             Self::SessionUnsurfaced => "session:unsurfaced",
             Self::ChatRefreshed => "chat:refreshed",
             Self::SyncChatHistory => "sync:chat-history",
+            Self::FeedbackCreated => "feedback:created",
+            Self::FeedbackAnswered => "feedback:answered",
         }
     }
 }

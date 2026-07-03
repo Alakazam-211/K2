@@ -461,6 +461,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // backfill to NULL (non-retroactive), new rows are stamped with the
         // current global default at creation.
         ("0063_project_default_agent", include_str!("../../drizzle_sql/0063_project_default_agent.sql")),
+        // 0064 (feedback F1, prd-agent-feedback-notifications §4.1):
+        // `feedback` (durable agent→human asks: kind/title/body/options/
+        // priority/status/answer + session deep-link fields) +
+        // `feedback_comments` (per-item discussion thread, FK CASCADE) +
+        // the (project_id, status, created_at) list index. Additive.
+        ("0064_feedback", include_str!("../../drizzle_sql/0064_feedback.sql")),
     ];
 
     for (name, sql) in migrations {

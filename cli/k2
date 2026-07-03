@@ -6256,6 +6256,570 @@ EXAMPLES
 EOF
 }
 
+# ── 0.40.24: `k2 agent` — the agent management plane (S2) ───────────
+#
+# `k2 agent` is the management namespace over the workspace==agent
+# identity; `k2 workspace` remains the substrate plumbing. Verbs and
+# help text follow .k2/notes/agent-cli-mockup-0.40.24.md (the
+# comprehension-test artifact) — hire/list/retire land later in the
+# 0.40.24 cycle (S3/S4).
+#
+# Output contract (PRD §4): data → stdout; errors → stderr as JSON
+# {"error":{"code","hint"}}. Exit codes: 0 ok · 1 error · 2 bad usage ·
+# 3 refused by a safety guard · 4 not found.
+
+cmd_help_agent() {
+    cat <<'EOF'
+k2 agent — manage this server's agents (each agent lives in its own workspace directory)
+
+USAGE
+  k2 agent <command> [args] [flags]
+
+COMMANDS
+  hire <dir>              Provision a new agent in <dir> (create, configure, wire, launch) in one call
+                          [coming in this release — not available in this build yet]
+  conf [<name>]           Show all of an agent's settings (default: the agent in the current directory)
+  get <name> <key>        Print a single setting's value (bare, script-friendly)
+  set <name> [flags]      Change one or more settings (hire's settings flags)
+  list                    List every agent on this server with mode + live status
+                          [coming in this release — meanwhile: k2 workspace list]
+  retire <name>           Safely decommission an agent (guards + archive; never deletes)
+                          [coming in this release — not available in this build yet]
+
+ADDRESSING
+  <name> accepts an agent name or a path. Anything containing "/" is treated as a path.
+  Names match case-insensitively; quote names containing spaces ("QA Bot").
+  Unknown names fail with exit 4 and a did-you-mean list. Commands that default to
+  the current directory (conf) fail with exit 4 when it isn't a registered agent.
+
+GLOBAL FLAGS
+  --json                  Machine-readable output (single JSON object; mutations include ok/changed/actions)
+  --dry-run               Print the exact action plan without changing anything (mutating commands).
+                          Combines with --json: the plan prints as actions with status "pending".
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage · 3 refused by a safety guard · 4 not found
+
+Run 'k2 agent <command> --help' for details on a command.
+EOF
+}
+
+cmd_help_agent_set() {
+    cat <<'EOF'
+Change one or more of an agent's settings in a single call.
+Uses the same SETTINGS flags as hire (--mode, --enabled, --name, --persona);
+set does not wire connections or launch sessions. Unknown flags fail (exit 2)
+and list the valid flags.
+
+USAGE
+  k2 agent set <name> [flags]
+
+FLAGS
+  --mode <mode>           off | custom | manager | k2 ("off" also sets enabled=false)
+  --enabled <bool>        true | false (false pauses without changing mode)
+  --name <new-name>       Rename the agent (display name; the directory does not move)
+  --persona <file.md>     Replace the agent's persona with this file's contents.
+                          The previous persona is backed up automatically to
+                          <dir>/.k2/agent/agent-backups/.
+  --dry-run               Show what would change; change nothing
+  --json                  JSON output
+
+EXAMPLES
+  k2 agent set scout --mode manager
+  k2 agent set scout --enabled false --persona ./scout-v2.md
+EOF
+}
+
+cmd_help_agent_conf() {
+    cat <<'EOF'
+Show all of an agent's settings: name, path, mode, enabled, persona,
+connections, and live-session status.
+
+USAGE
+  k2 agent conf [<name>] [--json]
+
+  <name> is an agent name or a path (anything containing "/" is a path).
+  Omitted: the agent in the current directory (exit 4 when the current
+  directory isn't a registered agent).
+
+FLAGS
+  --json                  Machine-readable output (single JSON object)
+EOF
+}
+
+cmd_help_agent_get() {
+    cat <<'EOF'
+Print a single setting's value — bare on stdout, script-friendly.
+
+USAGE
+  k2 agent get <name> <key> [--json]
+
+KEYS
+  mode | enabled | name | path | persona
+  (persona prints the charter file's content)
+
+FLAGS
+  --json                  Wrap the value in a JSON object instead
+EOF
+}
+
+# Emit a contract-shaped error to stderr: {"error":{"code","hint"}}.
+_agent_err() {
+    local code="$1" hint="$2"
+    CODE="$code" HINT="$hint" python3 -c 'import json,os,sys
+sys.stderr.write(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT"]}}) + "\n")' 2>/dev/null \
+        || echo "Error ($code): $hint" >&2
+}
+
+# Resolve an agent token (name | path; ""→PWD) and fetch its conf JSON
+# from the daemon. Prints the conf object on stdout. Exit/return codes
+# per the agent-CLI contract: 0 ok, 1 daemon/transport error, 4 not
+# found (with the daemon's did-you-mean hint forwarded).
+_agent_conf_fetch() {
+    local token="${1:-}"
+    [ -z "$token" ] && token="$PWD"
+    local q="$token"
+    case "$token" in
+        # ADDRESSING: anything containing "/" is a path — absolutize so
+        # relative paths and ~ resolve before hitting the daemon.
+        */*)
+            q=$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$token" 2>/dev/null) || q="$token"
+            ;;
+    esac
+    local resp
+    resp=$(cli_request "/cli/agent/conf" "q=$(urlencode "$q")") || resp=""
+    if [ -z "$resp" ]; then
+        _agent_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
+        return 1
+    fi
+    RESP="$resp" python3 - <<'PYEOF'
+import json, os, sys
+raw = os.environ.get("RESP", "")
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.stderr.write(json.dumps({"error": {"code": "bad_response",
+        "hint": "daemon returned an unparseable response: %r" % raw[:200]}}) + "\n")
+    sys.exit(1)
+err = d.get("error")
+if err is not None:
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    sys.stderr.write(json.dumps({"error": err}) + "\n")
+    sys.exit(4 if err.get("code") == "not_found" else 1)
+if not d.get("ok"):
+    sys.stderr.write(json.dumps({"error": {"code": "error",
+        "hint": "unexpected daemon response: %r" % raw[:200]}}) + "\n")
+    sys.exit(1)
+print(json.dumps(d))
+PYEOF
+}
+
+cmd_agent_conf() {
+    if _wants_help "$@"; then cmd_help_agent_conf; exit 0; fi
+    local token="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent conf [<name>] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$token" ]; then token="$1"; else
+                    _agent_err "bad_usage" "unexpected extra argument '$1' — usage: k2 agent conf [<name>] [--json]"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    local conf rc=0
+    conf=$(_agent_conf_fetch "$token") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    if $as_json; then
+        printf '%s\n' "$conf"
+        return 0
+    fi
+    CONF="$conf" python3 - <<'PYEOF'
+import json, os, time
+d = json.loads(os.environ["CONF"])
+
+def ago(ts):
+    s = int(time.time() - ts)
+    if s < 60: return "just now"
+    if s < 3600: return "%dm ago" % (s // 60)
+    if s < 172800: return "%dh ago" % (s // 3600)
+    return "%dd ago" % (s // 86400)
+
+persona = d.get("personaPath")
+if persona:
+    detail = ""
+    try:
+        st = os.stat(persona)
+        with open(persona, encoding="utf-8", errors="replace") as f:
+            lines = sum(1 for _ in f)
+        detail = " (%d lines, updated %s)" % (lines, ago(st.st_mtime))
+    except OSError:
+        pass
+    persona_line = persona + detail
+else:
+    persona_line = "(none)"
+
+conns = d.get("connections") or []
+connects = ", ".join("%s (%s)" % (c.get("peer", "?"), c.get("direction", "?")) for c in conns) or "(none)"
+
+live = d.get("live") or {}
+if live.get("active"):
+    line = "yes — session %s" % str(live.get("sessionId", ""))[:8]
+    up = live.get("uptimeSec")
+    if isinstance(up, (int, float)):
+        h, m = int(up) // 3600, (int(up) % 3600) // 60
+        line += " (%dh %dm)" % (h, m) if h else " (%dm)" % m
+else:
+    line = "no"
+
+print("agent    : %s" % d.get("name", "?"))
+print("path     : %s" % d.get("path", "?"))
+print("mode     : %s" % d.get("mode", "?"))
+print("enabled  : %s" % ("true" if d.get("enabled") else "false"))
+print("persona  : %s" % persona_line)
+print("connects : %s" % connects)
+print("live     : %s" % line)
+PYEOF
+}
+
+cmd_agent_get() {
+    if _wants_help "$@"; then cmd_help_agent_get; exit 0; fi
+    local name="" key="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent get <name> <key> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then name="$1"
+                elif [ -z "$key" ]; then key="$1"
+                else
+                    _agent_err "bad_usage" "unexpected extra argument '$1' — usage: k2 agent get <name> <key>"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$name" ] || [ -z "$key" ]; then
+        _agent_err "bad_usage" "usage: k2 agent get <name> <key> — keys: mode, enabled, name, path, persona"
+        exit 2
+    fi
+    case "$key" in
+        mode|enabled|name|path|persona) ;;
+        *)
+            _agent_err "bad_usage" "unknown key '$key' — valid keys: mode, enabled, name, path, persona"
+            exit 2 ;;
+    esac
+    local conf rc=0
+    conf=$(_agent_conf_fetch "$name") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    CONF="$conf" KEY="$key" AS_JSON="$as_json" python3 - <<'PYEOF'
+import json, os, sys
+d = json.loads(os.environ["CONF"])
+key = os.environ["KEY"]
+as_json = os.environ.get("AS_JSON") == "true"
+
+if key == "persona":
+    p = d.get("personaPath")
+    if not p:
+        sys.stderr.write(json.dumps({"error": {"code": "no_persona",
+            "hint": "%s has no persona file yet — set one with: k2 agent set %s --persona <file.md>"
+                    % (d.get("name"), d.get("name"))}}) + "\n")
+        sys.exit(1)
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            value = f.read()
+    except OSError as e:
+        sys.stderr.write(json.dumps({"error": {"code": "persona_unreadable", "hint": str(e)}}) + "\n")
+        sys.exit(1)
+else:
+    value = d.get(key)
+
+if as_json:
+    print(json.dumps({"ok": True, "key": key, "value": value}))
+elif key == "persona":
+    sys.stdout.write(value)
+elif value is True:
+    print("true")
+elif value is False:
+    print("false")
+else:
+    print(value)
+PYEOF
+}
+
+cmd_agent_set() {
+    if _wants_help "$@"; then cmd_help_agent_set; exit 0; fi
+    local name="" mode="" enabled="" new_name="" persona="" dry_run=false as_json=false
+    local valid_flags="--mode --enabled --name --persona --dry-run --json"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --mode)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--mode requires a value (off | custom | manager | k2)"; exit 2; }
+                mode="$2"; shift 2 ;;
+            --enabled)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--enabled requires a value (true | false)"; exit 2; }
+                enabled="$2"; shift 2 ;;
+            --name)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--name requires a value"; exit 2; }
+                new_name="$2"; shift 2 ;;
+            --persona)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--persona requires a file path"; exit 2; }
+                persona="$2"; shift 2 ;;
+            --dry-run) dry_run=true; shift ;;
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — valid flags: $valid_flags"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then name="$1"; else
+                    _agent_err "bad_usage" "unexpected extra argument '$1' — usage: k2 agent set <name> [flags]"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$name" ]; then
+        _agent_err "bad_usage" "missing <name> — usage: k2 agent set <name> [flags] (valid flags: $valid_flags)"
+        exit 2
+    fi
+    if [ -z "$mode" ] && [ -z "$enabled" ] && [ -z "$new_name" ] && [ -z "$persona" ]; then
+        _agent_err "bad_usage" "nothing to set — pass at least one of: --mode --enabled --name --persona"
+        exit 2
+    fi
+    case "$mode" in
+        ""|off|custom|manager|k2|k2so) ;;
+        *)
+            _agent_err "bad_usage" "invalid --mode '$mode' — valid: off, custom, manager, k2"
+            exit 2 ;;
+    esac
+    case "$enabled" in
+        ""|true|false) ;;
+        *)
+            _agent_err "bad_usage" "invalid --enabled '$enabled' — valid: true, false"
+            exit 2 ;;
+    esac
+    if [ -n "$persona" ] && { [ ! -f "$persona" ] || [ ! -r "$persona" ]; }; then
+        _agent_err "bad_usage" "persona file not found or unreadable: $persona"
+        exit 2
+    fi
+    local conf rc=0
+    conf=$(_agent_conf_fetch "$name") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    CONF="$conf" MODE="$mode" ENABLED="$enabled" NEW_NAME="$new_name" \
+    PERSONA_FILE="$persona" DRY_RUN="$dry_run" AS_JSON="$as_json" \
+    ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
+import json, os, re, sys
+import urllib.error, urllib.parse, urllib.request
+
+conf = json.loads(os.environ["CONF"])
+mode = os.environ.get("MODE", "")
+enabled = os.environ.get("ENABLED", "")
+new_name = os.environ.get("NEW_NAME", "")
+persona_file = os.environ.get("PERSONA_FILE", "")
+dry_run = os.environ.get("DRY_RUN") == "true"
+as_json = os.environ.get("AS_JSON") == "true"
+base = os.environ["ABASE"]
+token = os.environ["ATOKEN"]
+
+path = conf["path"]
+agent_label = conf.get("name") or os.path.basename(path)
+
+def fail(code, hint, exit_code=1):
+    sys.stderr.write(json.dumps({"error": {"code": code, "hint": hint}}) + "\n")
+    sys.exit(exit_code)
+
+def http_get(route, params):
+    qs = urllib.parse.urlencode(dict(params, token=token))
+    try:
+        with urllib.request.urlopen(base + route + "?" + qs, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            return {"error": "HTTP %s on %s" % (e.code, route)}
+    except Exception as e:
+        return {"error": "%s: %s" % (route, e)}
+
+def http_post_json(route, body):
+    url = base + route + "?token=" + urllib.parse.quote(token, safe="")
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            return {"error": "HTTP %s on %s" % (e.code, route)}
+    except Exception as e:
+        return {"error": "%s: %s" % (route, e)}
+
+# CLI-canonical mode spelling (k2so accepted as a back-compat alias).
+req_mode = {"k2so": "k2"}.get(mode, mode)
+
+# ── Build the plan ───────────────────────────────────────────────
+actions = []
+if mode:
+    if req_mode == conf.get("mode"):
+        actions.append({"step": "set-mode", "mode": req_mode,
+                        "status": "skipped", "reason": "already %s" % req_mode})
+    else:
+        actions.append({"step": "set-mode", "mode": req_mode, "status": "pending",
+                        "from": conf.get("mode")})
+if enabled:
+    want = enabled == "true"
+    if want == bool(conf.get("enabled")):
+        actions.append({"step": "set-enabled", "enabled": want,
+                        "status": "skipped", "reason": "already %s" % enabled})
+    else:
+        actions.append({"step": "set-enabled", "enabled": want, "status": "pending",
+                        "from": bool(conf.get("enabled"))})
+if new_name:
+    if new_name == conf.get("name"):
+        actions.append({"step": "rename", "name": new_name,
+                        "status": "skipped", "reason": "already named %s" % new_name})
+    else:
+        actions.append({"step": "rename", "name": new_name, "status": "pending",
+                        "from": conf.get("name")})
+persona_content = None
+if persona_file:
+    try:
+        with open(persona_file, encoding="utf-8", errors="replace") as f:
+            persona_content = f.read()
+    except OSError as e:
+        fail("bad_usage", "cannot read persona file %s: %s" % (persona_file, e), 2)
+    current = None
+    if conf.get("personaPath"):
+        try:
+            with open(conf["personaPath"], encoding="utf-8", errors="replace") as f:
+                current = f.read()
+        except OSError:
+            current = None
+    if current is not None and current == persona_content:
+        actions.append({"step": "write-persona", "source": persona_file,
+                        "status": "skipped", "reason": "identical content"})
+    else:
+        actions.append({"step": "write-persona", "source": persona_file, "status": "pending"})
+
+def emit(ok, changed, extra_status=None):
+    out = {"ok": ok, "changed": changed, "name": conf.get("name"), "path": path,
+           "actions": actions}
+    if dry_run:
+        out["dryRun"] = True
+    if as_json:
+        print(json.dumps(out))
+    else:
+        label = agent_label
+        if dry_run:
+            print("DRY RUN — no changes made. Plan for %s:" % label)
+        for a in actions:
+            step, status = a["step"], a["status"]
+            if step == "set-mode":
+                line = "mode: %s" % a["mode"] if status == "skipped" else \
+                       "mode: %s → %s" % (a.get("from"), a["mode"])
+            elif step == "set-enabled":
+                want = "true" if a["enabled"] else "false"
+                line = "enabled: %s" % want if status == "skipped" else \
+                       "enabled: %s → %s" % ("true" if a.get("from") else "false", want)
+            elif step == "rename":
+                line = "name: %s" % a["name"] if status == "skipped" else \
+                       "name: %s → %s" % (a.get("from"), a["name"])
+            else:
+                line = "persona: replace from %s (previous backed up)" % a["source"] \
+                       if status != "skipped" else "persona: unchanged (identical content)"
+            marker = {"pending": "would apply", "done": "done", "skipped": "skipped",
+                      "failed": "FAILED"}[status]
+            print("  %-14s %s" % ("[" + marker + "]", line))
+        if not dry_run:
+            n = sum(1 for a in actions if a["status"] == "done")
+            print("%s: %s" % (label, ("%d change(s) applied." % n) if n else "no changes."))
+
+if dry_run:
+    emit(True, any(a["status"] == "pending" for a in actions))
+    sys.exit(0)
+
+# ── Apply ────────────────────────────────────────────────────────
+changed = False
+
+# 1. DB settings (mode/enabled) in one /cli/workspace/set call.
+fields = {}
+for a in actions:
+    if a["status"] != "pending":
+        continue
+    if a["step"] == "set-mode":
+        fields["agent_mode"] = a["mode"]
+    elif a["step"] == "set-enabled":
+        fields["agent_enabled"] = "1" if a["enabled"] else "0"
+if fields:
+    resp = http_post_json("/cli/workspace/set", {"project": path, "fields": fields})
+    if resp.get("error") or not resp.get("ok"):
+        for a in actions:
+            if a["status"] == "pending" and a["step"] in ("set-mode", "set-enabled"):
+                a["status"] = "failed"
+        emit(False, changed)
+        err = resp.get("error")
+        hint = err if isinstance(err, str) else (err or {}).get("hint") or json.dumps(resp)[:300]
+        fail("daemon_error", "settings write failed: %s" % hint)
+    by_field = {a.get("field"): a.get("status") for a in resp.get("actions", [])}
+    for a in actions:
+        if a["status"] != "pending":
+            continue
+        if a["step"] == "set-mode":
+            a["status"] = by_field.get("agent_mode", "done")
+        elif a["step"] == "set-enabled":
+            a["status"] = by_field.get("agent_enabled", "done")
+        if a["status"] == "done":
+            changed = True
+
+# 2. Rename (display name — AGENT.md frontmatter + live label).
+for a in actions:
+    if a["step"] == "rename" and a["status"] == "pending":
+        resp = http_get("/cli/workspace/set-agent-display-name",
+                        {"project_path": path, "name": a["name"]})
+        if resp.get("error") or not resp.get("success"):
+            a["status"] = "failed"
+            emit(False, changed)
+            fail("daemon_error", "rename failed: %s" % resp.get("error", json.dumps(resp)[:300]))
+        a["status"] = "done"
+        changed = True
+
+# 3. Persona (charter file) via the existing save+backup machinery.
+for a in actions:
+    if a["step"] == "write-persona" and a["status"] == "pending":
+        # Scaffold `.k2/agent/AGENT.md` first when the workspace has no
+        # persona yet — /cli/agents/create is a no-op when it exists,
+        # and save-agent-md refuses to write into a missing agent dir.
+        agent_name = re.sub(r"[^A-Za-z0-9_-]", "-", os.path.basename(path)) or "agent"
+        if not conf.get("personaPath"):
+            resp = http_get("/cli/agents/create",
+                            {"project_path": path, "name": agent_name, "role": ""})
+            if resp.get("error"):
+                a["status"] = "failed"
+                emit(False, changed)
+                fail("daemon_error", "persona scaffold failed: %s" % resp["error"])
+        resp = http_post_json("/cli/agents/save-agent-md",
+                              {"project_path": path, "agent_name": agent_name,
+                               "content": persona_content})
+        if resp.get("error") or not resp.get("success"):
+            a["status"] = "failed"
+            emit(False, changed)
+            fail("daemon_error", "persona write failed: %s" % resp.get("error", json.dumps(resp)[:300]))
+        a["status"] = "done"
+        changed = True
+
+emit(True, changed)
+PYEOF
+}
+
 cmd_help_skills() {
     cat <<'EOF'
 k2 skills <subcommand> [options]
@@ -7169,23 +7733,37 @@ case "${1:-help}" in
         shift; cmd_fed "$@"
         ;;
     agent)
-        # 0.39.0f Phase 2.1b: singular `agent` keeps only the documented
-        # internal-tier subverbs (`update`, `complete`). Undocumented
-        # `create` / `delete` / `list` / `profile` arms previously chained
-        # to legacy `cmd_agents_*` bodies; with those bodies removed in
-        # 2.1b, the arms hard-deprecate. `profile` routes to the
-        # workspace-level verb per `cmd_help_internal`.
+        # 0.40.24: `k2 agent` is the agent MANAGEMENT plane (PRD
+        # prd-agent-cli-0.40.24.md) — conf/get/set land in S2;
+        # hire/list/retire follow in S3/S4. The 0.39.0f internal-tier
+        # subverbs (`update`, `complete`, `profile`) and the
+        # hard-deprecated arms are preserved below the new verbs.
         case "${2:-}" in
+            conf)   shift 2; cmd_agent_conf "$@" ;;
+            get)    shift 2; cmd_agent_get "$@" ;;
+            set)    shift 2; cmd_agent_set "$@" ;;
+            hire)
+                echo "k2 agent hire is coming later in this release (0.40.24) and is not available in this build yet." >&2
+                echo "Meanwhile: k2 workspace create <path> + k2 agent set <name> --mode/--enabled/--persona." >&2
+                exit 1 ;;
+            retire)
+                echo "k2 agent retire is coming later in this release (0.40.24) and is not available in this build yet." >&2
+                echo "Meanwhile: k2 workspace remove <name-or-path> (DB-only deregister; files stay)." >&2
+                exit 1 ;;
+            --help|-h|'') cmd_help_agent; exit 0 ;;
             update) shift 2; cmd_agent_update "$@" ;;
             complete) shift 2; cmd_agent_complete "$@" ;;
             profile) shift 2; cmd_workspace_profile "$@" ;;
             create)
-                fail_deprecated "agent create" "k2 skills create <name>" ;;
+                fail_deprecated "agent create" "k2 skills create <name> (k2 agent hire arrives later in 0.40.24)" ;;
             delete|remove)
-                fail_deprecated "agent delete" "k2 skills remove <name>" ;;
+                fail_deprecated "agent delete" "k2 skills remove <name> or k2 workspace remove <name-or-path>" ;;
             list)
-                fail_deprecated "agent list" "k2 workspace list (or k2 skills list)" ;;
-            *)      echo "Unknown agent subcommand: ${2:-}" >&2; cmd_help; exit 1 ;;
+                fail_deprecated "agent list" "k2 workspace list (k2 agent list arrives later in 0.40.24)" ;;
+            *)
+                echo "Unknown agent subcommand: ${2:-}" >&2
+                cmd_help_agent >&2
+                exit 2 ;;
         esac
         ;;
     agents)

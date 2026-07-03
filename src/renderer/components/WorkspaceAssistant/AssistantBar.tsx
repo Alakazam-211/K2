@@ -16,7 +16,8 @@ import { useProjectsStore } from '../../stores/projects'
 import { usePanelsStore } from '../../stores/panels'
 import { useMergeDialogStore } from '../MergeDialog/MergeDialog'
 import { useToastStore } from '../../stores/toast'
-import { usePresetsStore, parseCommand } from '../../stores/presets'
+import { usePresetsStore } from '../../stores/presets'
+import { resolveAgentCommand } from '@/lib/agent-resolve'
 
 interface ToolCall {
   tool: string
@@ -371,14 +372,21 @@ async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
 
         case 'ask_agent': {
           const query = call.args.query as string
-          const agent = useSettingsStore.getState().defaultAgent || 'claude'
-          // Launch the default agent with the query as an argument
+          // Launch the default agent with the query as an argument —
+          // resolved through the one seam (id-first, legacy-token tolerant,
+          // first-enabled fallback), preset base args included.
+          const resolved = resolveAgentCommand(
+            usePresetsStore.getState().presets,
+            useSettingsStore.getState().defaultAgent,
+          )
+          const command = resolved?.command ?? 'claude'
+          const label = resolved?.preset.label ?? command
           tabsStore.addTab(cwd, {
-            title: `${agent}: ${query.slice(0, 30)}${query.length > 30 ? '...' : ''}`,
-            command: agent,
-            args: [query]
+            title: `${label}: ${query.slice(0, 30)}${query.length > 30 ? '...' : ''}`,
+            command,
+            args: [...(resolved?.args ?? []), query]
           })
-          results.push(`Sent to ${agent}`)
+          results.push(`Sent to ${label}`)
           break
         }
 
@@ -468,11 +476,12 @@ async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
         case 'ai_commit':
         case 'ai_commit_merge': {
           const includeMerge = call.tool === 'ai_commit_merge'
-          const defaultAgentId = useSettingsStore.getState().defaultAgent
-          const presets = usePresetsStore.getState().presets
-          const preset = presets.find((p) => p.id === defaultAgentId)
-          if (preset) {
-            const { command, args } = parseCommand(preset.command)
+          const resolved = resolveAgentCommand(
+            usePresetsStore.getState().presets,
+            useSettingsStore.getState().defaultAgent,
+          )
+          if (resolved) {
+            const { command, args } = resolved
             let prompt = (call.args.message as string) || 'Review the changes in this repository and create a well-structured commit with an appropriate commit message.'
             if (includeMerge) {
               prompt += '\n\nAfter committing, merge this branch back into main and resolve any conflicts.'

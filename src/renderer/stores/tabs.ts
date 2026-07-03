@@ -5,6 +5,7 @@ import { agentDisplayName } from '@/lib/workspace-agent'
 import { terminalKill } from '@/lib/terminal-daemon'
 import type { MosaicNode, MosaicDirection } from 'react-mosaic-component'
 import { RESUMABLE_CLI_TOOLS } from '@shared/constants'
+import { resolveAgentCommand, type AgentPresetLike } from '@/lib/agent-resolve'
 import { useSettingsStore } from '@/stores/settings'
 import { useTerminalSettingsStore, type TerminalRenderer } from '@/stores/terminal-settings'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
@@ -3903,20 +3904,23 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         const tabId = crypto.randomUUID()
         const paneGroupId = crypto.randomUUID()
 
-        // Look up default agent preset
+        // Look up default agent preset via the one resolution seam
+        // (id-first, legacy-token tolerant, first-enabled fallback).
+        // Workspace-default precedence lands with Slice 1 (tabs.ts cannot
+        // import the projects store — projects.ts imports tabs.ts).
         let agentOpts: { command?: string; args?: string[]; title?: string } = {}
         try {
-          const defaultAgent = useSettingsStore.getState().defaultAgent
-          if (defaultAgent && _presetsStoreRef) {
-            const presets = _presetsStoreRef().presets
-            const preset = presets.find((p: any) => {
-              const cmd = p.command.split(/\s+/)[0]
-              return cmd === defaultAgent && p.enabled
-            })
-            if (preset) {
-              const parts = preset.command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || []
-              const cleaned = parts.map((p: string) => p.replace(/^["']|["']$/g, ''))
-              agentOpts = { command: cleaned[0], args: cleaned.slice(1), title: preset.label }
+          if (_presetsStoreRef) {
+            const resolved = resolveAgentCommand(
+              _presetsStoreRef().presets as AgentPresetLike[],
+              useSettingsStore.getState().defaultAgent,
+            )
+            if (resolved) {
+              agentOpts = {
+                command: resolved.command,
+                args: resolved.args,
+                title: resolved.preset.label,
+              }
             }
           }
         } catch { /* fall back to plain terminal */ }

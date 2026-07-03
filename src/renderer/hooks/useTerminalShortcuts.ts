@@ -9,6 +9,7 @@ import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { getActiveBarItems } from '@/components/Sidebar/ActiveBar'
 import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
+import { resolveAgentPreset, readProjectDefaultAgent } from '@/lib/agent-resolve'
 import type { TerminalPane } from '@/stores/tabs'
 
 /**
@@ -70,15 +71,19 @@ export function useTerminalShortcuts(cwd: string): void {
           if (e.altKey) return
           e.preventDefault()
           if (e.shiftKey) {
-            // Cmd+Shift+T: Launch default agent in new tab
+            // Cmd+Shift+T: Launch default agent in new tab — resolution goes
+            // through the one seam (workspace default → global → first
+            // enabled; id-first, legacy-token tolerant).
             const presetsState = usePresetsStore.getState()
-            const defaultAgent = useSettingsStore.getState().defaultAgent
-            // Match the default agent setting to a preset by command name
-            const defaultPreset = defaultAgent
-              ? presetsState.presets.find((p) => p.command.split(/\s+/)[0] === defaultAgent && p.enabled)
-              : null
-            // Fall back to first enabled preset if default not found
-            const preset = defaultPreset || presetsState.presets.find((p) => p.enabled)
+            const projectsState = useProjectsStore.getState()
+            const activeProject = projectsState.projects.find(
+              (p) => p.id === projectsState.activeProjectId,
+            )
+            const preset = resolveAgentPreset(
+              presetsState.presets,
+              useSettingsStore.getState().defaultAgent,
+              readProjectDefaultAgent(activeProject),
+            )
             if (preset) {
               presetsState.launchPreset(preset.id, cwd, 'tab')
             }

@@ -5,8 +5,7 @@ import { AIFileEditor } from '../AIFileEditor/AIFileEditor'
 import { CodeEditor } from '../FileViewerPane/CodeEditor'
 import { parseCustomThemeJson, serializeThemeToJson, DEFAULT_COLORS, DEFAULT_SYNTAX } from '@/lib/editor-themes'
 import { useCustomThemesStore } from '@/stores/custom-themes'
-import { useSettingsStore } from '@/stores/settings'
-import { usePresetsStore, parseCommand } from '@/stores/presets'
+import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import type { ThemeColors } from '@/lib/editor-themes'
 import type { HighlightStyle } from '@codemirror/language'
 
@@ -112,14 +111,9 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
   const [themeVersion, setThemeVersion] = useState(0)
   const closeCreator = useCustomThemesStore((s) => s.closeCreator)
 
-  // Resolve the user's default AI agent command
-  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
-  const presets = usePresetsStore((s) => s.presets)
-  const agentCommand = useMemo(() => {
-    const preset = presets.find((p) => p.id === defaultAgent) || presets.find((p) => p.enabled)
-    if (!preset) return null
-    return parseCommand(preset.command)
-  }, [defaultAgent, presets])
+  // Default agent resolved through the one seam (id-first, legacy-token
+  // tolerant, first-enabled fallback). Themes are global — no project scope.
+  const agentCommand = useResolvedAgentCommand()
 
   const [error, setError] = useState<string | null>(null)
 

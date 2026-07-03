@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useSettingsStore } from '@/stores/settings'
-import { usePresetsStore, parseCommand } from '@/stores/presets'
+import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useTabsStore } from '@/stores/tabs'
 import { useAssistantStore } from '@/stores/assistant'
 import { useToastStore } from '@/stores/toast'
@@ -96,8 +96,9 @@ function WorkspaceStatusDot({ path }: { path?: string }): React.JSX.Element | nu
 
 function DiffStats({ path }: { path: string }): React.JSX.Element | null {
   const { data: changes } = useGitChanges(path)
-  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
-  const presets = usePresetsStore((s) => s.presets)
+  // Default agent resolved through the one seam (id-first, legacy-token
+  // tolerant, first-enabled fallback), scoped to this workspace's project.
+  const resolvedAgent = useResolvedAgentCommand(undefined, { projectPath: path })
   const [hovered, setHovered] = useState(false)
 
   const added = changes.filter((f) => f.status === 'added' || f.status === 'untracked').length
@@ -108,10 +109,8 @@ function DiffStats({ path }: { path: string }): React.JSX.Element | null {
   const handleAiCommit = (e: React.MouseEvent) => {
     e.stopPropagation()
 
-    const preset = presets.find((p) => p.id === defaultAgent)
-    if (!preset) return
-
-    const { command, args } = parseCommand(preset.command)
+    if (!resolvedAgent) return
+    const { command, args } = resolvedAgent
 
     const MAX_FILES = 80
     const fileLines = changes.slice(0, MAX_FILES).map((f) => `${f.status}: ${f.path}`)

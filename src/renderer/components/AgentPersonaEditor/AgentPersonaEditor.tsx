@@ -2,8 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { AIFileEditor } from '../AIFileEditor/AIFileEditor'
-import { useSettingsStore } from '@/stores/settings'
-import { usePresetsStore, parseCommand } from '@/stores/presets'
+import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeEditor } from '../FileViewerPane/CodeEditor'
@@ -64,14 +63,9 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
   const [previewScale, setPreviewScale] = useState(100)
   const cssScale = Math.round(previewScale * 0.7)
 
-  // Resolve the user's default AI agent command
-  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
-  const presets = usePresetsStore((s) => s.presets)
-  const agentCommand = useMemo(() => {
-    const preset = presets.find((p) => p.id === defaultAgent) || presets.find((p) => p.enabled)
-    if (!preset) return null
-    return parseCommand(preset.command)
-  }, [defaultAgent, presets])
+  // Default agent resolved through the one seam (id-first, legacy-token
+  // tolerant, first-enabled fallback), scoped to this project.
+  const agentCommand = useResolvedAgentCommand(undefined, { projectPath })
 
   // Initialize: fetch agent context + CLAUDE.md preview
   useEffect(() => {

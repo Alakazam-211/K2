@@ -7,8 +7,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
-import { usePresetsStore, parseCommand } from '@/stores/presets'
-import { useSettingsStore } from '@/stores/settings'
+import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useGitInfo, useGitChanges } from '@/hooks/useGit'
 
 // ── Status helpers ───────────────────────────────────────────────────────────
@@ -100,21 +99,21 @@ export default function ChangesPanel(): React.JSX.Element {
 
   // ── AI Commit ────────────────────────────────────────────────────────
 
-  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
-  const presets = usePresetsStore((s) => s.presets)
+  // Default agent resolved through the one seam (id-first, legacy-token
+  // tolerant, first-enabled fallback), scoped to the active workspace.
+  const resolvedAgent = useResolvedAgentCommand(activeWorkspace?.id)
   const isWorktree = activeWorkspace?.type === 'worktree'
   const branchName = gitInfo?.currentBranch ?? 'current branch'
 
   const handleAiCommit = useCallback((includeMerge: boolean) => {
     if (!workspacePath) return
 
-    const preset = presets.find((p) => p.id === defaultAgent)
-    if (!preset) {
-      console.error('[changes] No preset found for default agent:', defaultAgent)
+    if (!resolvedAgent) {
+      console.error('[changes] No enabled agent preset — cannot resolve a default agent')
       return
     }
 
-    const { command, args } = parseCommand(preset.command)
+    const { command, args } = resolvedAgent
 
     // Build concise changed-files summary (agent will run git diff itself)
     const MAX_FILES = 80
@@ -137,7 +136,7 @@ export default function ChangesPanel(): React.JSX.Element {
       command,
       args: [...args, prompt]
     })
-  }, [workspacePath, changes, presets, defaultAgent, branchName])
+  }, [workspacePath, changes, resolvedAgent, branchName])
 
   const handleOpenDiff = useCallback((filePath: string) => {
     const activeTab = useTabsStore.getState().getActiveTab()

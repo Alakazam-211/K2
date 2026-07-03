@@ -10,7 +10,8 @@ import {
 import { useTabsStore, type TerminalItemData } from './tabs'
 import { useToastStore } from './toast'
 import { useProjectsStore } from './projects'
-import { usePresetsStore, parseCommand } from './presets'
+import { usePresetsStore } from './presets'
+import { resolveAgentCommand, readProjectDefaultAgent } from '@/lib/agent-resolve'
 import { useSettingsStore } from './settings'
 import { KNOWN_AGENT_COMMANDS, AGENT_IDLE_THRESHOLD_MS } from '@shared/constants'
 import { agentChatId, worktreeChatId, parseTerminalId } from '@/lib/terminal-id'
@@ -1201,12 +1202,24 @@ export function startAgentPolling(): void {
       }
     }>('cli:ai-commit', (event) => {
       const { projectPath, includeMerge, message, gitContext } = event.payload
-      const defaultAgent = useSettingsStore.getState().defaultAgent
-      const presets = usePresetsStore.getState().presets
-      const preset = presets.find((p) => p.id === defaultAgent)
-      if (!preset) return
+      // Resolve the default agent through the one seam (id-first,
+      // legacy-token tolerant, first-enabled fallback). The target
+      // project's own default (Slice 1) takes precedence once it exists.
+      const project = useProjectsStore
+        .getState()
+        .projects.find(
+          (p) =>
+            p.path === projectPath ||
+            p.workspaces.some((w) => w.worktreePath === projectPath),
+        )
+      const resolved = resolveAgentCommand(
+        usePresetsStore.getState().presets,
+        useSettingsStore.getState().defaultAgent,
+        readProjectDefaultAgent(project),
+      )
+      if (!resolved) return
 
-      const { command, args } = parseCommand(preset.command)
+      const { command, args } = resolved
 
       // Build a rich prompt with git context so the agent has immediate visibility
       const parts: string[] = []

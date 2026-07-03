@@ -3,8 +3,7 @@ import { TabBar } from '@/components/TabBar/TabBar'
 import { PaneLayout } from '@/components/PaneLayout/PaneLayout'
 import { PresetsBar } from '@/components/PresetsBar/PresetsBar'
 import { useTabsStore } from '@/stores/tabs'
-import { useSettingsStore } from '@/stores/settings'
-import { usePresetsStore } from '@/stores/presets'
+import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useTerminalShortcuts } from '@/hooks/useTerminalShortcuts'
 import { KeyCombo } from '@/components/KeySymbol'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
@@ -205,14 +204,10 @@ function TabGroupColumn({
 // ── Empty workspace hints ────────────────────────────────────────────────
 
 function EmptyWorkspaceHints(): React.JSX.Element {
-  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
-  const presets = usePresetsStore((s) => s.presets)
-
-  // Find the default agent preset label
-  const defaultPreset = defaultAgent
-    ? presets.find((p) => p.command.split(/\s+/)[0] === defaultAgent && p.enabled)
-    : null
-  const agentLabel = defaultPreset?.label || defaultAgent || 'AI Agent'
+  // Resolved through the one default-agent seam (id-first, legacy-token
+  // tolerant, first-enabled fallback) so the hint names what ⇧⌘T launches.
+  const resolved = useResolvedAgentCommand()
+  const agentLabel = resolved?.preset.label || 'AI Agent'
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 text-[var(--color-text-muted)]">

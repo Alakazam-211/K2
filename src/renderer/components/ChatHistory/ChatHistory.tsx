@@ -5,6 +5,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore, type TerminalItemData } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { usePresetsStore } from '@/stores/presets'
+import { resolveAgentCommand } from '@/lib/agent-resolve'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { KeyCombo } from '@/components/KeySymbol'
 import { resolveChatHistoryHost } from './resolveHost'
@@ -377,7 +378,14 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     if (!projectPath || !searchQuery.trim()) return
 
     const paths = await daemonCliGet<ChatStoragePaths>('chat/storage-paths', { project_path: projectPath })
-    const agent = useSettingsStore.getState().defaultAgent || 'claude'
+    // Resolve the default agent through the one seam (id-first,
+    // legacy-token tolerant, first-enabled fallback).
+    const resolved = resolveAgentCommand(
+      usePresetsStore.getState().presets,
+      useSettingsStore.getState().defaultAgent,
+    )
+    const agent = resolved?.command ?? 'claude'
+    const baseArgs = resolved?.args ?? []
 
     // Build the search prompt with available paths
     const locationLines: string[] = []
@@ -403,7 +411,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     const targetGroup = tabsStore.splitCount > 1 ? tabsStore.splitCount - 1 : 0
 
     // Claude uses -p for print mode; other agents get the prompt as a positional arg
-    const args = agent === 'claude' ? ['-p', prompt] : [prompt]
+    const args = agent === 'claude' ? [...baseArgs, '-p', prompt] : [...baseArgs, prompt]
 
     tabsStore.addTabToGroup(targetGroup, projectPath, {
       title: `Search: ${searchQuery.trim().slice(0, 30)}`,

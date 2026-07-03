@@ -15,6 +15,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { usePresetsStore, parseCommand } from '@/stores/presets'
+import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useTabsStore } from '@/stores/tabs'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
@@ -2159,13 +2160,9 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
   const filePath = `${projectPath}/.k2/PROJECT.md`
   const watchDir = `${projectPath}/.k2`
 
-  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
-  const presets = usePresetsStore((s) => s.presets)
-  const agentCommand = useMemo(() => {
-    const preset = presets.find((p) => p.id === defaultAgent) || presets.find((p) => p.enabled)
-    if (!preset) return null
-    return parseCommand(preset.command)
-  }, [defaultAgent, presets])
+  // Default agent resolved through the one seam (id-first, legacy-token
+  // tolerant, first-enabled fallback), scoped to this project.
+  const agentCommand = useResolvedAgentCommand(undefined, { projectPath })
 
   useEffect(() => {
     daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })

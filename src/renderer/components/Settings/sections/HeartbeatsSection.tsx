@@ -6,8 +6,7 @@ import { useToastStore } from '@/stores/toast'
 import type { SettingEntry } from '../searchManifest'
 import { AIFileEditor } from '@/components/AIFileEditor/AIFileEditor'
 import { FileViewerPane, type FileViewerHandle } from '@/components/FileViewerPane/FileViewerPane'
-import { useSettingsStore } from '@/stores/settings'
-import { usePresetsStore, parseCommand } from '@/stores/presets'
+import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { SettingDropdown } from '../controls/SettingControls'
 
 // ── Types mirroring the backend agent_heartbeats table ────────────────
@@ -448,13 +447,9 @@ export function WakeupEditor({ projectPath, agentName, heartbeat, otherHeartbeat
   const wakeupAbs = `${projectPath}/${heartbeat.wakeupPath}`
   const wakeupDir = wakeupAbs.slice(0, wakeupAbs.lastIndexOf('/'))
 
-  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
-  const presets = usePresetsStore((s) => s.presets)
-  const agentCommand = useMemo(() => {
-    const preset = presets.find((p) => p.id === defaultAgent) || presets.find((p) => p.enabled)
-    if (!preset) return null
-    return parseCommand(preset.command)
-  }, [defaultAgent, presets])
+  // Default agent resolved through the one seam (id-first, legacy-token
+  // tolerant, first-enabled fallback), scoped to this project.
+  const agentCommand = useResolvedAgentCommand(undefined, { projectPath })
 
   // AI context: persona (AGENT.md) full + summaries of OTHER heartbeats
   // so the AI can catch conflicts/duplication without ballooning prompt size.

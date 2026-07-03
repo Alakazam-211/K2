@@ -1,8 +1,7 @@
 import { useState, useCallback, useMemo } from 'react'
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useActiveAgentsStore } from '@/stores/active-agents'
-import { useSettingsStore } from '@/stores/settings'
-import { usePresetsStore, parseCommand } from '@/stores/presets'
+import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useTabsStore } from '@/stores/tabs'
 import { useGitInfo, useGitChanges } from '@/hooks/useGit'
 import { useMergeDialogStore } from '@/components/MergeDialog/MergeDialog'
@@ -14,8 +13,9 @@ import WorktreeDialog from '@/components/Sidebar/WorktreeDialog'
 function GitBadge({ path }: { path?: string }): React.JSX.Element | null {
   const { data } = useGitInfo(path)
   const { data: changes } = useGitChanges(path)
-  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
-  const presets = usePresetsStore((s) => s.presets)
+  // Default agent resolved through the one seam (id-first, legacy-token
+  // tolerant, first-enabled fallback), scoped to this workspace's project.
+  const resolvedAgent = useResolvedAgentCommand(undefined, { projectPath: path })
   const [hovered, setHovered] = useState(false)
 
   if (!data?.isRepo) return null
@@ -27,10 +27,8 @@ function GitBadge({ path }: { path?: string }): React.JSX.Element | null {
     e.stopPropagation()
     if (!path) return
 
-    const preset = presets.find((p) => p.id === defaultAgent)
-    if (!preset) return
-
-    const { command, args } = parseCommand(preset.command)
+    if (!resolvedAgent) return
+    const { command, args } = resolvedAgent
 
     const MAX_FILES = 80
     const fileLines = changes.slice(0, MAX_FILES).map((f: { status: string; path: string }) => `${f.status}: ${f.path}`)

@@ -166,6 +166,67 @@ async fn ensure_canonical_session_fresh_spawns_and_registers() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Agent-degeneralization S2: with NO `launch:` block in AGENT.md, the
+// fresh spawn honors `projects.default_agent` (resolved against
+// agent_presets) instead of the old hardcoded claude default.
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ensure_canonical_session_honors_projects_default_agent() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+
+    let workspace_id = "canon-test-ws-default-agent";
+    let project = setup_project(workspace_id, "default-agent-test", "custom");
+
+    // AGENT.md WITHOUT a `launch:` block — level 1 of the resolver is
+    // absent, so the spawn must fall to level 2 (projects.default_agent).
+    let dir = project.join(".k2so/agent");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("AGENT.md"),
+        "---\nname: scout\ntype: custom\n---\n# scout\n",
+    )
+    .unwrap();
+
+    // Custom enabled preset whose command is `cat` (self-contained: no
+    // claude binary, no API), pointed at by the workspace default.
+    let preset_id = uuid::Uuid::new_v4().to_string();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+             VALUES (?1, 'canon-cat-agent', 'cat', '', 1, 990, 0)",
+            rusqlite::params![preset_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE projects SET default_agent = ?1 WHERE id = ?2",
+            rusqlite::params![preset_id, workspace_id],
+        )
+        .unwrap();
+    }
+
+    let project_path = project.to_string_lossy().into_owned();
+    let outcome = ensure_canonical_session(&project_path)
+        .expect("ensure must succeed via the workspace default agent");
+    assert!(!outcome.reused, "cold workspace must spawn fresh");
+
+    let live = v2_session_map::lookup_by_agent_name(workspace_id)
+        .expect("canonical session must be registered");
+    assert_eq!(
+        live.program.as_deref(),
+        Some("cat"),
+        "fresh canonical spawn must run the workspace's default agent \
+         (projects.default_agent → preset command), NOT hardcoded claude"
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Idempotency: second call on a live workspace returns reused=true
 // ─────────────────────────────────────────────────────────────────────
 

@@ -10,7 +10,7 @@
 //!
 //! Registered at daemon startup via `register_all()`.
 
-use k2_core::workspace::launch_profile::{load_launch_profile, resolve_cwd, LaunchProfile};
+use k2_core::workspace::launch_profile::{resolve_cwd, LaunchProfile};
 use k2_core::awareness::{AgentAddress, AgentSignal, InjectProvider, WakeProvider};
 use k2_core::log_debug;
 
@@ -189,19 +189,26 @@ fn try_auto_launch(agent: &str, signal: &AgentSignal) -> Result<(), String> {
     // YAML shouldn't kill the wake path).
     //
     // 0.37.0 ergonomic fallback: AGENT.md without an explicit
-    // `launch:` block synthesizes a default `claude
-    // --dangerously-skip-permissions` running at the workspace
-    // root. This closes the "no launch profile" gap for the common
-    // case — workspaces shipped without webhook automation just
-    // want their pinned chat agent woken when a wake signal
-    // arrives. Custom workflows (Baden's SMS bridge, --print
-    // single-shot patterns, custom resume logic) still author an
-    // explicit `launch:` block in AGENT.md and override these
-    // defaults field-by-field.
-    let profile = match load_launch_profile(&project_path, agent) {
-        Ok(Some(p)) => p,
-        Ok(None) => default_launch_profile(),
-        Err(e) => return Err(format!("launch profile parse failed: {e}")),
+    // `launch:` block synthesizes a default profile running at the
+    // workspace root. Agent-degeneralization S2: the default is now
+    // resolved (projects.default_agent → global
+    // AppSettings.default_agent → `claude
+    // --dangerously-skip-permissions`) instead of hardcoding claude.
+    // Custom workflows (Baden's SMS bridge, --print single-shot
+    // patterns, custom resume logic) still author an explicit
+    // `launch:` block in AGENT.md and override these defaults
+    // field-by-field.
+    let profile = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match k2_core::workspace::agent_resolve::resolve_launch_profile(
+            &conn,
+            &project_path,
+            agent,
+        ) {
+            Ok(p) => p,
+            Err(e) => return Err(format!("launch profile parse failed: {e}")),
+        }
     };
 
     // Pass the BARE agent_name + workspace_id; the spawn helper
@@ -236,30 +243,11 @@ fn try_auto_launch(agent: &str, signal: &AgentSignal) -> Result<(), String> {
 
     log_debug!(
         "[daemon/wake] auto-launched session={} agent={agent} pending_drained={} \
-         via AGENT.md launch profile",
+         via resolved launch profile",
         outcome.session_id,
         outcome.pending_drained,
     );
     Ok(())
-}
-
-/// Default launch profile for workspaces whose AGENT.md doesn't
-/// declare a `launch:` block. Mirrors the everyday "open the chat
-/// tab in Tauri" command — claude in interactive mode with K2SO's
-/// permission flag, running at the project root. Custom workflows
-/// (heartbeats with --print, automation with --resume, alternate
-/// harnesses like codex/gemini, custom cwd) still author an
-/// explicit `launch:` block in AGENT.md and override these
-/// defaults field-by-field.
-fn default_launch_profile() -> LaunchProfile {
-    LaunchProfile {
-        command: Some("claude".to_string()),
-        args: Some(vec!["--dangerously-skip-permissions".to_string()]),
-        cwd: None, // None = project root via resolve_cwd
-        cols: None,
-        rows: None,
-        env: Default::default(),
-    }
 }
 
 /// Lookup `projects.path` by `projects.id`. Returns `None` if the

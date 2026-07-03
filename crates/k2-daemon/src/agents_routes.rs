@@ -77,26 +77,47 @@ pub fn spawn_wake_via_session_stream(
     // session — see matching comment in `wake::spawn_wake_headless`.
     let pinned_session_id = uuid::Uuid::new_v4().to_string();
 
+    // Agent-degeneralization S2: resolve the workspace/global default
+    // agent instead of hardcoding claude.
+    let (resolved, project_id) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (
+            k2_core::workspace::agent_resolve::resolve_agent_command(&conn, project_path),
+            k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path),
+        )
+    };
+
     // --print so claude delivers + exits (no lingering daemon PTY
     // that competes with the user's tab in find_live_for_resume).
     // See longer rationale in wake::spawn_wake_headless.
-    let args = vec![
-        "--dangerously-skip-permissions".to_string(),
-        "--print".to_string(),
-        "--session-id".to_string(),
-        pinned_session_id.clone(),
-        wake_prompt.to_string(),
-    ];
-    let project_id = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path)
+    //
+    // Slice 3: `--print`/`--session-id` + the positional prompt are
+    // Claude grammar — a non-claude default spawns the preset's own
+    // command+args bare (no pre-minted id, wake prompt NOT delivered)
+    // until the ProviderResume adapter lands.
+    let claude_grammar = resolved.is_claude();
+    let args = if claude_grammar {
+        let mut args = resolved.args.clone();
+        k2_core::workspace::agent_resolve::ensure_flag(
+            &mut args,
+            "--dangerously-skip-permissions",
+        );
+        args.extend([
+            "--print".to_string(),
+            "--session-id".to_string(),
+            pinned_session_id.clone(),
+            wake_prompt.to_string(),
+        ]);
+        args
+    } else {
+        resolved.args.clone()
     };
     let outcome = spawn_agent_session_v2_blocking(SpawnWorkspaceSessionRequest {
         agent_name: agent_name.to_string(),
         project_id: project_id.clone(),
         cwd: project_path.to_string(),
-        command: Some("claude".to_string()),
+        command: Some(resolved.command.clone()),
         args: Some(args),
         cols: 120,
         rows: 38,
@@ -110,16 +131,20 @@ pub fn spawn_wake_via_session_stream(
         Some("system".to_string()),
     );
 
-    // Synchronous per-heartbeat session stamp.
+    // Synchronous per-heartbeat session stamp. Slice 3: the pinned id
+    // was only actually passed (via --session-id) under Claude grammar;
+    // don't stamp a ghost id for a foreign agent.
     if let Some(hb_name) = heartbeat_name {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        if let Some(project_id) =
-            k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path)
-        {
-            let _ = k2_core::db::schema::AgentHeartbeat::save_session_id(
-                &conn, &project_id, hb_name, &pinned_session_id,
-            );
+        if claude_grammar {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            if let Some(project_id) =
+                k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path)
+            {
+                let _ = k2_core::db::schema::AgentHeartbeat::save_session_id(
+                    &conn, &project_id, hb_name, &pinned_session_id,
+                );
+            }
         }
     }
 
@@ -127,7 +152,7 @@ pub fn spawn_wake_via_session_stream(
         HookEvent::CliTerminalSpawnBackground,
         serde_json::json!({
             "terminalId": outcome.session_id.to_string(),
-            "command": "claude",
+            "command": resolved.command.as_str(),
             "cwd": project_path,
             "projectPath": project_path,
             "agentName": agent_name,
@@ -176,10 +201,28 @@ pub fn handle_agents_launch(
     }
     let cli_command = params.get("command").cloned().filter(|s| !s.is_empty());
 
+    // Agent-degeneralization S2: only when the caller passed NO explicit
+    // command, resolve the workspace/global default agent
+    // (projects.default_agent → AppSettings.default_agent → claude)
+    // instead of letting build_launch default to a hardcoded claude.
+    // An explicit `command` param keeps exact legacy behavior.
+    let resolved = if cli_command.is_none() {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        Some(k2_core::workspace::agent_resolve::resolve_agent_command(
+            &conn,
+            project_path,
+        ))
+    } else {
+        None
+    };
+    let effective_command =
+        cli_command.or_else(|| resolved.as_ref().map(|r| r.command.clone()));
+
     let launch_info = match k2_core::workspace::agent_launch::k2so_agents_build_launch(
         project_path.to_string(),
         agent.clone(),
-        cli_command,
+        effective_command,
         None,
         None,
         None, // /cli/agents/launch is a manual launch — use the per-agent global session
@@ -188,9 +231,21 @@ pub fn handle_agents_launch(
         Err(e) => return CliResponse::bad_request(format!("build_launch failed: {e}")),
     };
 
-    let command = str_field(&launch_info, "command", "claude").to_string();
+    let mut command = str_field(&launch_info, "command", "claude").to_string();
     let cwd = str_field(&launch_info, "cwd", project_path).to_string();
-    let args = str_array(&launch_info, "args");
+    let mut args = str_array(&launch_info, "args");
+
+    // Slice 3: build_launch composes Claude flag grammar
+    // (--dangerously-skip-permissions / --append-system-prompt /
+    // --resume / --fork-session + a positional wake message). When the
+    // RESOLVED default is not claude, spawn the preset's own
+    // command+args bare in the branch-selected cwd instead — no resume
+    // and no wake-prompt injection (correct-but-degraded) until the
+    // ProviderResume adapter teaches build_launch per-agent grammar.
+    if let Some(r) = resolved.as_ref().filter(|r| !r.is_claude()) {
+        command = r.command.clone();
+        args = r.args.clone();
+    }
 
     let project_id = {
         let db = k2_core::db::shared();
@@ -278,10 +333,36 @@ pub fn handle_agents_delegate(
         Err(e) => return CliResponse::bad_request(format!("delegate failed: {e}")),
     };
 
-    let command = str_field(&launch_info, "command", "claude").to_string();
     let cwd = str_field(&launch_info, "cwd", project_path).to_string();
     let agent_name = str_field(&launch_info, "agentName", &target).to_string();
-    let args = str_array(&launch_info, "args");
+    let mut args = str_array(&launch_info, "args");
+
+    // Agent-degeneralization S2: `k2so_agents_delegate` stamps
+    // `command: "claude"` today, so this fallback is defensive-only —
+    // but if the delegate JSON ever omits the command, the
+    // workspace/global default agent fills it instead of a bare
+    // literal. Slice 3: the delegate arg vector speaks Claude flag
+    // grammar (--append-system-prompt + positional kickoff), so a
+    // non-claude resolved default spawns the preset's own command+args
+    // bare in the delegated worktree (no task prompt injection) until
+    // the ProviderResume adapter carries per-agent grammar.
+    let command = match launch_info.get("command").and_then(|v| v.as_str()) {
+        Some(c) => c.to_string(),
+        None => {
+            let resolved = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace::agent_resolve::resolve_agent_command(
+                    &conn,
+                    project_path,
+                )
+            };
+            if !resolved.is_claude() {
+                args = resolved.args.clone();
+            }
+            resolved.command
+        }
+    };
 
     // Delegated agents run in worktree subdirs, not the parent
     // workspace. The delegated PTY isn't bound to the parent's

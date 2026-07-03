@@ -83,6 +83,15 @@ pub fn spawn_wake_headless(
     // deferred-save thread guessing wrong.
     let pinned_session_id = uuid::Uuid::new_v4().to_string();
 
+    // Agent-degeneralization S2: resolve the workspace/global default
+    // agent (projects.default_agent → AppSettings.default_agent →
+    // claude) instead of hardcoding claude for the fresh wake spawn.
+    let resolved = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_resolve::resolve_agent_command(&conn, project_path)
+    };
+
     // Interactive mode (no `--print`). The wakeup body is delivered
     // after spawn via a two-phase PTY write (body + 150ms settle +
     // `\r`), matching how `run_inject` writes wakeups to live PTYs
@@ -98,23 +107,41 @@ pub fn spawn_wake_headless(
     //      `claude --resume` process.
     //   3. Audit-ability is preserved either way — claude writes the
     //      same JSONL whether run interactively or under `--print`.
-    let args = vec![
-        "--dangerously-skip-permissions".to_string(),
-        "--session-id".to_string(),
-        pinned_session_id.clone(),
-    ];
-
-    // Test-only override. Integration tests in
-    // `crates/k2so-daemon/tests/heartbeat_fire_v2_integration.rs`
+    //
+    // Test-only override (first arm). Integration tests in
+    // `crates/k2-daemon/tests/heartbeat_fire_v2_integration.rs`
     // set this env var to a benign command (e.g. `cat`) so the
     // test can exercise the v2 spawn + post-spawn DB writes
     // without requiring `claude` on PATH or burning API calls.
-    // Production never sets this — defaults to `claude` + the
-    // args above.
-    let (command, args) = match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
-        Ok(c) if !c.is_empty() => (c, Vec::<String>::new()),
-        _ => ("claude".to_string(), args),
-    };
+    // Production never sets this. `claude_grammar` tracks whether the
+    // spawned command speaks Claude's flag/session-id grammar — the
+    // pinned-session stamps below are gated on it (test override keeps
+    // legacy stamping behavior so the integration test's assertions
+    // stay meaningful).
+    let (command, args, claude_grammar) =
+        match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
+            Ok(c) if !c.is_empty() => (c, Vec::<String>::new(), true),
+            _ if resolved.is_claude() => {
+                let mut args = resolved.args.clone();
+                // Headless wakes can't answer permission prompts —
+                // guarantee the flag even on a customized preset.
+                k2_core::workspace::agent_resolve::ensure_flag(
+                    &mut args,
+                    "--dangerously-skip-permissions",
+                );
+                args.push("--session-id".to_string());
+                args.push(pinned_session_id.clone());
+                (resolved.command.clone(), args, true)
+            }
+            _ => {
+                // Slice 3: `--session-id` pre-mint (and the skip-
+                // permissions flag) are Claude grammar. A non-claude
+                // default spawns the preset's own command+args bare;
+                // its session id is only discoverable post-hoc, which
+                // lands with the ProviderResume adapter.
+                (resolved.command.clone(), resolved.args.clone(), false)
+            }
+        };
 
     let project_id = {
         let db = k2_core::db::shared();
@@ -141,7 +168,9 @@ pub fn spawn_wake_headless(
         agent_name: agent_name.to_string(),
         project_id: project_id.clone(),
         cwd: project_path.to_string(),
-        command: Some("claude".to_string()),
+        // S2: the resolved command (previously a hardcoded "claude"
+        // that also ignored the test override's substitute binary).
+        command: Some(command.clone()),
         args: Some(args),
         cols: 120,
         rows: 38,
@@ -217,9 +246,17 @@ pub fn spawn_wake_headless(
         let db = k2_core::db::shared();
         let conn = db.lock();
         if let Some(pid) = project_id.as_deref() {
-            let _ = k2_core::db::schema::AgentHeartbeat::save_session_id(
-                &conn, pid, hb_name, &pinned_session_id,
-            );
+            // Slice 3: last_session_id is a CLAUDE resume id — only
+            // stamp it when the spawned command speaks Claude grammar
+            // (the pinned uuid was actually passed via --session-id).
+            // A non-claude spawn writes no id; the planner's JSONL
+            // self-heal keeps subsequent fires on the fresh path until
+            // the ProviderResume adapter can adopt foreign ids.
+            if claude_grammar {
+                let _ = k2_core::db::schema::AgentHeartbeat::save_session_id(
+                    &conn, pid, hb_name, &pinned_session_id,
+                );
+            }
             let _ = k2_core::db::schema::AgentHeartbeat::save_active_terminal_id(
                 &conn, pid, hb_name, &terminal_id,
             );
@@ -243,7 +280,7 @@ pub fn spawn_wake_headless(
         k2_core::agent_hooks::HookEvent::CliTerminalSpawnBackground,
         serde_json::json!({
             "terminalId": &terminal_id,
-            "command": "claude",
+            "command": command.as_str(),
             "cwd": project_path,
             "heartbeatName": heartbeat_name,
             "projectPath": project_path,
@@ -263,7 +300,12 @@ pub fn spawn_wake_headless(
     // (pinned-chat-identity-ssot PRD §4.1a; GH#24). This call keeps the
     // wake path's behavior identical — same agent_name keying, same ~5s
     // window, same `save_session_id` persistence.
-    if heartbeat_name.is_none() {
+    // Slice 3: the deferred read-back probes CLAUDE's on-disk session
+    // dir (`newest_claude_session_on_disk`) — for a non-claude spawn it
+    // could adopt an unrelated claude conversation, so it's gated on
+    // claude grammar until the ProviderResume adapter does per-agent
+    // post-hoc id discovery.
+    if heartbeat_name.is_none() && claude_grammar {
         defer_stamp_adopted_session(project_path.to_string(), agent_name.to_string());
     }
 

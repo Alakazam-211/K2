@@ -68,7 +68,7 @@
 //!   call this helper rather than duplicating the spawn-and-register
 //!   logic. Wake and proactive ensure converge on the same code.
 
-use k2_core::workspace::launch_profile::{load_launch_profile, resolve_cwd, LaunchProfile};
+use k2_core::workspace::launch_profile::{resolve_cwd, LaunchProfile};
 use k2_core::log_debug;
 
 use crate::session_lookup;
@@ -165,11 +165,22 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
         });
     }
 
-    // 3. Load launch profile (or default).
-    let mut profile = match load_launch_profile(project_path, &agent_name) {
-        Ok(Some(p)) => p,
-        Ok(None) => default_launch_profile(),
-        Err(e) => return Err(format!("launch profile parse failed: {e}")),
+    // 3. Resolve the launch profile (agent-degeneralization S2):
+    //    AGENT.md `launch:` block → projects.default_agent → global
+    //    AppSettings.default_agent → literal claude. Replaces the
+    //    hardcoded default_launch_profile() so workspace/global
+    //    defaults govern the canonical fresh spawn.
+    let mut profile = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match k2_core::workspace::agent_resolve::resolve_launch_profile(
+            &conn,
+            project_path,
+            &agent_name,
+        ) {
+            Ok(p) => p,
+            Err(e) => return Err(format!("launch profile parse failed: {e}")),
+        }
     };
 
     // 3b. Resume-aware canonical claude chat. A bare
@@ -191,6 +202,10 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
     //     the newest conversation for continuity when the user asks.) Cold
     //     workspaces with no saved session still get a stable pinned id.
     //     Claude chats only; custom launch commands keep their profile args.
+    //     Slice 3: this gate keeps Claude resume grammar (`--resume` /
+    //     `--session-id`) off non-claude profiles — a resolved non-claude
+    //     default spawns its preset command+args bare (no resume) until
+    //     the ProviderResume adapter lands.
     let is_claude_chat = profile
         .command
         .as_deref()
@@ -252,21 +267,6 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
         reused: false,
         pending_drained: outcome.pending_drained,
     })
-}
-
-/// Default launch profile for workspaces whose AGENT.md doesn't
-/// declare a `launch:` block. Mirrors the everyday "open the chat
-/// tab in Tauri" command — claude in interactive mode at the
-/// project root.
-pub fn default_launch_profile() -> LaunchProfile {
-    LaunchProfile {
-        command: Some("claude".to_string()),
-        args: Some(vec!["--dangerously-skip-permissions".to_string()]),
-        cwd: None,
-        cols: None,
-        rows: None,
-        env: Default::default(),
-    }
 }
 
 /// Build a `SpawnWorkspaceSessionRequest` from a `LaunchProfile`.

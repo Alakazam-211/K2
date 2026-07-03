@@ -414,30 +414,60 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             };
 
             // Pick the command + base args. Tab row wins when it carries a
-            // command; the pinned chat defaults to `claude` so it recovers
-            // even after Phase 3 drops the tab-row write.
-            let recovered_cmd = tab_row
-                .as_ref()
-                .and_then(|r| r.command.clone())
-                .or_else(|| if is_pinned { Some("claude".to_string()) } else { None });
-
-            if let Some(saved_cmd) = recovered_cmd {
-                let mut saved_args: Vec<String> = tab_row
+            // command; the pinned chat's no-tab-row fallback (Phase 3)
+            // used to hardcode `claude` — agent-degeneralization S2
+            // resolves the workspace/global default agent instead
+            // (projects.default_agent → AppSettings.default_agent →
+            // claude). The bool tracks whether the recovered command may
+            // receive the `--resume` splice below.
+            let recovered: Option<(String, Vec<String>, bool)> = if let Some(cmd) =
+                tab_row.as_ref().and_then(|r| r.command.clone())
+            {
+                // Tab-row path — unchanged legacy behavior.
+                let saved_args: Vec<String> = tab_row
                     .as_ref()
                     .and_then(|r| r.args_json.as_deref())
                     .and_then(|s| serde_json::from_str(s).ok())
                     .unwrap_or_else(|| {
-                        // No tab row (pinned, Phase 3): start from the
-                        // standard pinned-chat base flags so a recovered
-                        // claude still runs headlessly.
+                        // Tab row without args: the standard pinned-chat
+                        // base flags so a recovered claude still runs
+                        // headlessly.
                         vec!["--dangerously-skip-permissions".to_string()]
                     });
+                Some((cmd, saved_args, true))
+            } else if is_pinned {
+                let resolved = k2_core::workspace::agent_resolve::resolve_agent_command(
+                    &conn,
+                    &project_id,
+                );
+                if resolved.is_claude() {
+                    let mut base = resolved.args.clone();
+                    // Recovered pinned claude must stay headless even on
+                    // a customized preset.
+                    k2_core::workspace::agent_resolve::ensure_flag(
+                        &mut base,
+                        "--dangerously-skip-permissions",
+                    );
+                    Some((resolved.command, base, true))
+                } else {
+                    // Slice 3: `--resume` (and the SSOT resume id itself)
+                    // are Claude grammar — a non-claude default recovers
+                    // the pinned chat with the preset's own command+args
+                    // bare (fresh conversation, no resume) until the
+                    // ProviderResume adapter lands.
+                    Some((resolved.command, resolved.args, false))
+                }
+            } else {
+                None
+            };
+
+            if let Some((saved_cmd, mut saved_args, may_splice_resume)) = recovered {
                 // If we have a resume id, strip any existing
                 // `--session-id` flag (we replace it with `--resume` for
                 // unambiguous resumption) and splice in `--resume <id>`.
                 // The base args carry --dangerously-skip-permissions and
                 // similar flags we want to keep.
-                if let Some(sid) = resume_id.as_deref() {
+                if let Some(sid) = resume_id.as_deref().filter(|_| may_splice_resume) {
                     // Drop any --session-id <value> pair.
                     let mut i = 0;
                     while i + 1 < saved_args.len() {

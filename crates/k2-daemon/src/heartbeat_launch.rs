@@ -628,19 +628,43 @@ fn run_resume_and_fire(
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
 
+    // Agent-degeneralization S2: the resume spawn used to hardcode
+    // `claude`; resolve the workspace/global default instead.
+    let resolved = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_resolve::resolve_agent_command(&conn, project_path)
+    };
+    // Slice 3: ResumeAndFire speaks Claude flag grammar (`--print` /
+    // `--resume <claude-session>`), and the saved id IS a claude
+    // session (the planner verified its JSONL). When the resolved
+    // default is NOT claude, degrade to a fresh fire — the fresh path
+    // spawns the preset's own command+args bare and delivers the
+    // wakeup via PTY write, no Claude flags. Proper foreign-agent
+    // resume lands with the ProviderResume adapter.
+    if !resolved.is_claude() {
+        return run_fresh_fire(project_path, project_id, agent_name, hb, wakeup_abs, catchup_of);
+    }
+
     // Resume + --print: rejoin the saved conversation, deliver the
     // wakeup as the next user turn, claude responds + exits. PTY is
     // ephemeral so it doesn't accumulate stale entries in the daemon
     // session map. The user's tab (if/when they open one) becomes
     // the canonical long-lived view via openHeartbeatTab's interactive
-    // --resume.
-    let args = vec![
-        "--dangerously-skip-permissions".to_string(),
+    // --resume. Base args come from the resolved preset (so a
+    // customized claude preset keeps its flags); headless fires can't
+    // answer permission prompts, so the skip flag is guaranteed.
+    let mut args = resolved.args.clone();
+    k2_core::workspace::agent_resolve::ensure_flag(
+        &mut args,
+        "--dangerously-skip-permissions",
+    );
+    args.extend([
         "--print".to_string(),
         "--resume".to_string(),
         session_id.to_string(),
         prompt,
-    ];
+    ]);
 
     // 0.37.8 — register the resumed PTY under the heartbeat's own
     // canonical key (`<project_id>:hb:<name>`) so it doesn't collide
@@ -657,7 +681,7 @@ fn run_resume_and_fire(
             agent_name: agent_name.to_string(),
             project_id: Some(project_id.to_string()),
             cwd: project_path.to_string(),
-            command: Some("claude".to_string()),
+            command: Some(resolved.command.clone()),
             args: Some(args),
             cols: 120,
             rows: 38,
@@ -697,7 +721,7 @@ fn run_resume_and_fire(
                 k2_core::agent_hooks::HookEvent::CliTerminalSpawnBackground,
                 serde_json::json!({
                     "terminalId": out.session_id.to_string(),
-                    "command": "claude",
+                    "command": resolved.command.as_str(),
                     "cwd": project_path,
                     "projectPath": project_path,
                     "agentName": agent_name,

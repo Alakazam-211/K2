@@ -613,17 +613,35 @@ fn heal_tabs_array(
     }
 }
 
-/// How many prunable bare-terminal tabs a stored layout may keep.
-/// Deliberately the SAME knob as v2_spawn's never-attached bare-shell
-/// cap (`K2_V2_BARE_TAB_CAP`, default 32): the daemon refuses to hold
-/// more than that many never-attached bare shells per workspace, so a
-/// layout referencing more can never restore them — they are
-/// unrestorable garbage that only costs mount time.
-fn leaked_bare_tab_keep() -> usize {
-    std::env::var("K2_V2_BARE_TAB_CAP")
+/// How many prunable bare-terminal tabs a layout may plausibly hold
+/// because a HUMAN opened them. Above this, the count itself is the
+/// tell: the re-mint leak produced identical session-less "Terminal N"
+/// tabs by the hundreds, humans open a handful — so a pathological
+/// layout is pruned to ZERO prunable tabs, not capped.
+///
+/// Why 16, and why it must NOT be `K2_V2_BARE_TAB_CAP` (32):
+///   - the first version of this heal kept the newest `cap` (32) bare
+///     tabs, so a once-healed poisoned row now sits at EXACTLY 32
+///     all-bare tabs — still 32 doomed spawn POSTs (each refused by
+///     the spawn cap) on every workspace entry, the 3-4s
+///     workspace-switch hang. The threshold must sit strictly BELOW
+///     the spawn cap so those rows read as pathological on the next
+///     load and finish healing.
+///   - generous headroom above real usage: dev-box layouts never held
+///     more than single-digit genuine unnamed bare shells (renamed
+///     tabs are `locked` and protected regardless).
+///   - the cost asymmetry favors pruning: a prunable tab is
+///     never-attached AND session-less, so restoring it yields a
+///     brand-new empty shell — pruning one loses nothing but a tab
+///     stub (one Cmd+T to recreate), while KEEPING debris costs
+///     O(count) refused spawn round-trips on EVERY entry. And a LIVE
+///     bare shell can never be lost at all: the daemon reconcile
+///     re-adopts any live `tab-*` PTY missing from the layout.
+fn leaked_bare_tab_plausible_max() -> usize {
+    std::env::var("K2_BARE_TAB_PRUNE_THRESHOLD")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(32)
+        .unwrap_or(16)
 }
 
 /// 2026-07-02 leaked-tab layout heal — the persistence-side companion
@@ -648,11 +666,14 @@ fn leaked_bare_tab_keep() -> usize {
 ///   - no pane group has a RESUMABLE `workspace_tab_sessions` row
 ///     (`session_id IS NOT NULL`) — those restore real CLI sessions.
 ///
-/// When more than [`leaked_bare_tab_keep`] prunable tabs exist across
-/// the layout (main strip + extraGroups), the OLDEST surplus is
-/// dropped (tab arrays append newest-last) and the healed JSON is
-/// returned. `None` = nothing to do, layout at/under cap, or
-/// unparseable (healing must never eat a layout).
+/// Policy (2026-07-03, the workspace-switch latency fix): the prunable
+/// COUNT decides. At or under [`leaked_bare_tab_plausible_max`] the
+/// tabs are plausibly a human's open shells and the layout round-trips
+/// untouched. Above it the layout is leak-poisoned and ALL prunable
+/// tabs drop — keeping a "newest N" remnant (the first version of this
+/// heal capped at the spawn cap, 32) just left N doomed spawn POSTs on
+/// every workspace entry. `None` = nothing to prune, plausible count,
+/// or unparseable (healing must never eat a layout).
 pub fn prune_leaked_bare_tabs(project_id: &str, layout_json: &str) -> Option<String> {
     let mut layout: serde_json::Value = serde_json::from_str(layout_json).ok()?;
 
@@ -705,8 +726,8 @@ pub fn prune_leaked_bare_tabs(project_id: &str, layout_json: &str) -> Option<Str
         })
     };
 
-    // Count prunable tabs across the whole layout, then drop the
-    // OLDEST surplus in array order (main strip first, then groups).
+    // Count prunable tabs across the whole layout (main strip +
+    // extraGroups); the count is what classifies the layout.
     let count_in = |tabs: Option<&serde_json::Value>| -> usize {
         tabs.and_then(|v| v.as_array())
             .map(|a| a.iter().filter(|t| is_prunable(t)).count())
@@ -718,24 +739,18 @@ pub fn prune_leaked_bare_tabs(project_id: &str, layout_json: &str) -> Option<Str
             total_prunable += count_in(g.get("tabs"));
         }
     }
-    let keep = leaked_bare_tab_keep();
-    if total_prunable <= keep {
+    let plausible = leaked_bare_tab_plausible_max();
+    if total_prunable <= plausible {
         return None;
     }
 
-    let mut to_drop = total_prunable - keep;
-    let mut drop_in = |tabs: Option<&mut serde_json::Value>| {
+    // Pathological — drop EVERY prunable tab. Protected / marked /
+    // resumable tabs pass `is_prunable == false` and always survive.
+    let drop_in = |tabs: Option<&mut serde_json::Value>| {
         let Some(tabs) = tabs.and_then(|v| v.as_array_mut()) else {
             return;
         };
-        tabs.retain(|t| {
-            if to_drop > 0 && is_prunable(t) {
-                to_drop -= 1;
-                false
-            } else {
-                true
-            }
-        });
+        tabs.retain(|t| !is_prunable(t));
     };
     drop_in(layout.get_mut("tabs"));
     if let Some(groups) = layout.get_mut("extraGroups").and_then(|v| v.as_array_mut()) {
@@ -745,11 +760,10 @@ pub fn prune_leaked_bare_tabs(project_id: &str, layout_json: &str) -> Option<Str
     }
 
     crate::log_debug!(
-        "[layout-heal] pruned {} leaked bare-terminal tab(s) for project={} (kept {}; cap {})",
-        total_prunable - keep,
+        "[layout-heal] pruned ALL {} leaked bare-terminal tab(s) for project={} (count exceeded plausible max {})",
+        total_prunable,
         project_id,
-        keep,
-        keep
+        plausible
     );
     serde_json::to_string(&layout).ok()
 }
@@ -1534,9 +1548,15 @@ mod leaked_tab_prune_tests {
     //! every workspace-view remount (leaving Settings, workspace
     //! switch) then mounted all ~450 panes and fired ~450 doomed spawn
     //! POSTs (measured: 15 remounts × 450 `bare_tab_cap` refusals in
-    //! the daemon log). These tests pin the bound: a served layout can
-    //! never carry more prunable bare tabs than the spawn cap will
-    //! ever restore — the exit path's remount work stays bounded.
+    //! the daemon log).
+    //!
+    //! 2026-07-03 — policy hardened for the workspace-switch latency
+    //! fix: the first heal kept the newest 32 (the spawn cap), which
+    //! left once-healed rows carrying EXACTLY 32 debris tabs — 32
+    //! refused spawns per workspace entry, a 3-4s switch. These tests
+    //! now pin the binary rule: a plausible count of genuine bare
+    //! tabs round-trips untouched; a pathological count prunes to
+    //! ZERO prunable tabs (protected/marked/resumable always survive).
 
     use super::*;
     use crate::db;
@@ -1614,46 +1634,89 @@ mod leaked_tab_prune_tests {
     }
 
     #[test]
-    fn prune_drops_oldest_surplus_and_leaves_at_cap_layouts_alone() {
+    fn prune_keeps_plausible_counts_and_zeroes_pathological_ones() {
         let pid = unique("cap");
         seed_project(&pid);
-        let keep = leaked_bare_tab_keep();
+        let plausible = leaked_bare_tab_plausible_max();
 
-        // Exactly at the cap → untouched (None): normal layouts never
-        // pay for this heal.
-        let at_cap = serde_json::json!({
+        // A human-plausible count (10 genuine open shells) → untouched
+        // (None): normal layouts never pay for this heal.
+        let genuine = serde_json::json!({
             "version": 2,
-            "tabs": (0..keep).map(bare_tab).collect::<Vec<_>>()
+            "tabs": (0..10).map(bare_tab).collect::<Vec<_>>()
         })
         .to_string();
         assert_eq!(
-            prune_leaked_bare_tabs(&pid, &at_cap),
+            prune_leaked_bare_tabs(&pid, &genuine),
             None,
-            "a layout at the cap must round-trip untouched"
+            "a 10-bare-tab layout is plausibly human and must round-trip untouched"
         );
 
-        // 8 over the cap → the 8 OLDEST (array-front) bare tabs drop.
+        // Exactly at the threshold → still untouched (boundary pin).
+        let at_threshold = serde_json::json!({
+            "version": 2,
+            "tabs": (0..plausible).map(bare_tab).collect::<Vec<_>>()
+        })
+        .to_string();
+        assert_eq!(
+            prune_leaked_bare_tabs(&pid, &at_threshold),
+            None,
+            "a layout AT the plausible max must round-trip untouched"
+        );
+
+        // One over the threshold → pathological; ALL prunable tabs drop.
         let over = serde_json::json!({
             "version": 2,
-            "tabs": (0..keep + 8).map(bare_tab).collect::<Vec<_>>()
+            "tabs": (0..plausible + 1).map(bare_tab).collect::<Vec<_>>()
         })
         .to_string();
-        let healed = prune_leaked_bare_tabs(&pid, &over).expect("surplus must be pruned");
-        let ids = tab_ids(&healed);
-        assert_eq!(ids.len(), keep, "healed layout must hold exactly the cap");
+        let healed = prune_leaked_bare_tabs(&pid, &over).expect("pathological layout must be pruned");
         assert_eq!(
-            ids[0],
-            "tab-bare-8",
-            "the oldest (front) tabs are the ones dropped"
+            tab_ids(&healed).len(),
+            0,
+            "a pathological layout prunes to ZERO bare tabs, not a capped remnant"
         );
-        assert_eq!(ids[keep - 1], format!("tab-bare-{}", keep + 7));
+    }
+
+    #[test]
+    fn prune_second_pass_cleans_a_row_the_old_cap_rule_already_healed() {
+        // The live regression shape (dev-box Cortana row): the first
+        // version of this heal pruned 488 → 35 by keeping the newest
+        // K2_V2_BARE_TAB_CAP (32) bare tabs — which still fired 32
+        // doomed spawn POSTs on every workspace entry (the 3-4s
+        // switch). A second heal pass over that already-once-healed
+        // shape must remove the remaining debris.
+        let pid = unique("second-pass");
+        seed_project(&pid);
+
+        let mut tabs = vec![
+            serde_json::json!({ "id": "tab-system", "isSystemAgent": true,
+                "paneGroups": { "pg-s": { "id": "pg-s", "items": [
+                    { "id": "i-s", "type": "agent", "agentName": "a", "projectPath": "/tmp/x", "section": "chat" }
+                ], "activeItemIndex": 0 } } }),
+            serde_json::json!({ "id": "tab-pinned", "isPinnedFile": true,
+                "paneGroups": { "pg-p": { "id": "pg-p", "items": [
+                    { "id": "i-p", "type": "file-viewer", "filePath": "/tmp/f.html" }
+                ], "activeItemIndex": 0 } } }),
+        ];
+        // Exactly the old cap's remnant: 32 identical bare tabs.
+        tabs.extend((461..493).map(bare_tab));
+        let once_healed = serde_json::json!({ "version": 2, "tabs": tabs }).to_string();
+
+        let healed = prune_leaked_bare_tabs(&pid, &once_healed)
+            .expect("an at-old-cap all-bare row must still read as pathological");
+        let ids = tab_ids(&healed);
+        assert_eq!(
+            ids,
+            vec!["tab-system".to_string(), "tab-pinned".to_string()],
+            "second pass must drop all 32 debris tabs and keep only real tabs"
+        );
     }
 
     #[test]
     fn prune_spares_system_pinned_locked_marked_and_resumable_tabs() {
         let pid = unique("spare");
         seed_project(&pid);
-        let keep = leaked_bare_tab_keep();
 
         // A bare-shaped tab whose pane group has a RESUMABLE saved
         // session — restores real work, must survive.
@@ -1705,26 +1768,23 @@ mod leaked_tab_prune_tests {
             resumable_tab,
         ];
 
-        // Protected tabs at the FRONT — where oldest-first pruning
-        // would eat them if the predicate ever regressed.
+        // Protected tabs at the FRONT — where a prune-everything pass
+        // would eat them if the predicate ever regressed. The bare-tab
+        // count is far past the plausible max, so ALL of them drop.
         let mut tabs: Vec<serde_json::Value> = protected.to_vec();
-        tabs.extend((0..keep + 5).map(bare_tab));
+        tabs.extend((0..leaked_bare_tab_plausible_max() + 5).map(bare_tab));
         let layout = serde_json::json!({ "version": 2, "tabs": tabs }).to_string();
 
-        let healed = prune_leaked_bare_tabs(&pid, &layout).expect("surplus must be pruned");
+        let healed = prune_leaked_bare_tabs(&pid, &layout).expect("pathological layout must be pruned");
         let ids = tab_ids(&healed);
         assert_eq!(
             ids.len(),
-            protected.len() + keep,
-            "only the bare surplus is pruned"
+            protected.len(),
+            "every bare tab is pruned; every protected tab survives"
         );
         for id in ["tab-system", "tab-pinned", "tab-locked", "tab-heartbeat", "tab-resumable"] {
             assert!(ids.contains(&id.to_string()), "{id} must survive the prune");
         }
-        assert!(
-            !ids.contains(&"tab-bare-0".to_string()),
-            "the oldest bare tab is the one dropped"
-        );
     }
 
     #[test]
@@ -1744,13 +1804,19 @@ mod leaked_tab_prune_tests {
         let wid = unique("bounded-ws");
         seed_project(&pid);
         seed_workspace(&wid, &pid);
-        let keep = leaked_bare_tab_keep();
 
-        // Plant the dev-box pathology directly: ~500 leaked bare tabs
-        // written before the prune existed.
+        // Plant the dev-box pathology directly: 450 leaked bare tabs
+        // (written before the prune existed) alongside one real tab.
+        let mut poisoned_tabs = vec![serde_json::json!({
+            "id": "tab-real", "isSystemAgent": true,
+            "paneGroups": { "pg-real": { "id": "pg-real", "items": [
+                { "id": "i-real", "type": "agent", "agentName": "a", "projectPath": "/tmp/x", "section": "chat" }
+            ], "activeItemIndex": 0 } }
+        })];
+        poisoned_tabs.extend((0..450).map(bare_tab));
         let poisoned = serde_json::json!({
             "version": 2,
-            "tabs": (0..500).map(bare_tab).collect::<Vec<_>>()
+            "tabs": poisoned_tabs
         })
         .to_string();
         {
@@ -1764,15 +1830,16 @@ mod leaked_tab_prune_tests {
             .expect("plant poisoned row");
         }
 
-        // Read-repair: the served view is bounded — THIS is what makes
-        // the settings-exit remount O(cap) instead of O(leak).
+        // Read-repair: the served view holds ONLY real tabs — THIS is
+        // what makes the workspace-entry remount O(real tabs) instead
+        // of O(leak).
         let served = workspace_layout_load(&pid, &wid)
             .expect("load ok")
             .expect("row present");
         assert_eq!(
-            tab_ids(&served).len(),
-            keep,
-            "load must serve a bounded view of a poisoned row"
+            tab_ids(&served),
+            vec!["tab-real".to_string()],
+            "load must serve a real-tabs-only view of a poisoned row"
         );
 
         // Save-side: a client re-persisting its poisoned in-memory
@@ -1789,8 +1856,8 @@ mod leaked_tab_prune_tests {
             .expect("stored row")
         };
         assert_eq!(
-            tab_ids(&stored).len(),
-            keep,
+            tab_ids(&stored),
+            vec!["tab-real".to_string()],
             "save must persist the pruned form, not the poisoned one"
         );
     }

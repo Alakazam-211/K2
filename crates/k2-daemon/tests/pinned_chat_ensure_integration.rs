@@ -678,6 +678,254 @@ async fn auto_path_still_converges_when_saved_id_missing() {
     v2_session_map::clear_for_tests();
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Slice 3 (agent de-generalization) — the pinned chat speaks the
+// workspace default agent's dialect end to end. A workspace whose
+// `projects.default_agent` is a GROK preset must:
+//   - spawn `grok` (not claude) with its preset args,
+//   - premint via grok's `--session-id <uuid>` (new-sessions-only flag
+//     per the storage study) with NO claude flags,
+//   - stamp workspace_sessions.harness = 'grok' (load-bearing: the
+//     next resolve picks the grok adapter from it),
+//   - and hold a STABLE session id across reused ensures.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Read `workspace_sessions.harness` for a workspace.
+fn saved_harness(workspace_id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::WorkspaceSession::get(&conn, workspace_id)
+        .unwrap()
+        .map(|row| row.harness)
+}
+
+/// Install a shim for an arbitrary agent binary (same cat-exec shape as
+/// the claude shim).
+fn install_agent_shim(binary: &str) -> PathBuf {
+    let shim_dir = std::env::temp_dir().join(format!(
+        "k2so-pinned-chat-shim-{}-{}-{}",
+        binary,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    let shim = shim_dir.join(binary);
+    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let prev = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
+    shim_dir
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ensure_pinned_chat_grok_default_premints_grok_grammar_and_harness() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("grok-e2e");
+    let _shim = install_agent_shim("grok");
+
+    let workspace_id = "pinned-grok-e2e-ws";
+    let project = setup_project(workspace_id, "grok-e2e");
+    let project_path = project.to_string_lossy().into_owned();
+
+    // Workspace default agent = a grok preset (seeded-builtin shape).
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let preset_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+             VALUES (?1, 'grok-e2e', 'grok --always-approve', '', 1, 970, 0)",
+            rusqlite::params![preset_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE projects SET default_agent = ?1 WHERE id = ?2",
+            rusqlite::params![preset_id, workspace_id],
+        )
+        .unwrap();
+    }
+
+    let out = ensure_pinned_chat(&project_path, false, false)
+        .expect("ensure must succeed for a grok-default workspace");
+
+    assert_eq!(out.command, "grok", "must spawn the workspace default agent");
+    assert_eq!(out.provider, "grok");
+    assert!(
+        !out.pending_session_discovery,
+        "grok premints — no post-hoc discovery needed"
+    );
+    assert!(!out.claude_session_id.is_empty(), "premint id must be set");
+    assert_eq!(
+        out.args,
+        vec![
+            "--always-approve".to_string(),
+            "--session-id".to_string(),
+            out.claude_session_id.clone()
+        ],
+        "grok argv = preset args + grok premint grammar, NO claude flags"
+    );
+    assert!(
+        !out.args.iter().any(|a| a == "--dangerously-skip-permissions"),
+        "--dangerously-skip-permissions is claude-only"
+    );
+
+    // harness is load-bearing truth now.
+    assert_eq!(
+        saved_harness(workspace_id).as_deref(),
+        Some("grok"),
+        "workspace_sessions.harness must record the ACTUAL provider"
+    );
+    assert_eq!(
+        saved_session_id(workspace_id).as_deref(),
+        Some(out.claude_session_id.as_str()),
+        "premint id persisted BEFORE spawn (SSOT contract)"
+    );
+
+    // A real grok writes its session dir live within seconds; the cat
+    // shim doesn't, so seed the on-disk summary for the preminted id —
+    // the second ensure must then RESUME it via the grok adapter's
+    // exists-check (stable identity, GH#24 shape in grok flavor).
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        let dir = home
+            .join(".grok")
+            .join("sessions")
+            .join("%2Ffixture")
+            .join(&out.claude_session_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("summary.json"),
+            serde_json::json!({
+                "info": { "id": out.claude_session_id, "cwd": project_path },
+                "last_active_at": "2026-07-03T10:00:00Z",
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    let again = ensure_pinned_chat(&project_path, false, false).expect("reused ensure");
+    assert!(again.reused);
+    assert_eq!(
+        again.claude_session_id, out.claude_session_id,
+        "identity must be stable across reused ensures once the session is on disk"
+    );
+    assert!(again.resumed_existing, "on-disk grok session → resume path");
+    assert_eq!(again.provider, "grok");
+
+    v2_session_map::clear_for_tests();
+}
+
+// Slice 3 — a self-minting provider (pi) spawns BARE with
+// pendingSessionDiscovery=true and stamps harness up front; the id is
+// adopted post-hoc by provider_resume::defer_adopt_discovered_session
+// (its stamping core is covered by k2-core unit tests — the 5s probe
+// window is too slow to block an integration test on).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ensure_pinned_chat_pi_default_spawns_bare_with_pending_discovery() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("pi-e2e");
+    let _shim = install_agent_shim("pi");
+
+    let workspace_id = "pinned-pi-e2e-ws";
+    let project = setup_project(workspace_id, "pi-e2e");
+    let project_path = project.to_string_lossy().into_owned();
+
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let preset_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+             VALUES (?1, 'pi-e2e', 'pi', '', 1, 971, 0)",
+            rusqlite::params![preset_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE projects SET default_agent = ?1 WHERE id = ?2",
+            rusqlite::params![preset_id, workspace_id],
+        )
+        .unwrap();
+    }
+
+    let out = ensure_pinned_chat(&project_path, false, false)
+        .expect("ensure must succeed for a pi-default workspace");
+
+    assert_eq!(out.command, "pi");
+    assert_eq!(out.provider, "pi");
+    assert!(
+        out.pending_session_discovery,
+        "pi mints its own ids — the caller is told to adopt post-hoc"
+    );
+    assert!(
+        out.args.is_empty(),
+        "pi spawns bare — no invented flags, got: {:?}",
+        out.args
+    );
+    assert!(out.claude_session_id.is_empty(), "no premint id for pi");
+    assert_eq!(
+        saved_harness(workspace_id).as_deref(),
+        Some("pi"),
+        "harness stamped up front so the post-hoc adopt + next resolve know the provider"
+    );
+    assert_eq!(
+        saved_session_id(workspace_id),
+        None,
+        "session_id stays NULL until the on-disk id is adopted"
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
+// Slice 3 — set-chat-session carries an OPTIONAL provider param that
+// persists harness alongside session_id; omitting it keeps the
+// existing harness (backward compat — the renderer only starts sending
+// it in Slice 4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_chat_session_route_persists_optional_provider() {
+    let _g = lock();
+    init_for_tests();
+
+    let workspace_id = "pinned-set-provider-ws";
+    let project = setup_project(workspace_id, "set-provider");
+    let project_path = project.to_string_lossy().into_owned();
+    set_saved_session_id(workspace_id, "old-id"); // row exists, harness 'claude'
+
+    let call = |session_id: &str, provider: Option<&str>| {
+        let mut params = std::collections::HashMap::new();
+        params.insert("project".to_string(), project_path.clone());
+        params.insert("session_id".to_string(), session_id.to_string());
+        if let Some(p) = provider {
+            params.insert("provider".to_string(), p.to_string());
+        }
+        k2_daemon::workspace_routes::dispatch("/cli/workspace/set-chat-session", &params)
+            .expect("route handled")
+    };
+
+    // With provider: harness follows the pick.
+    let resp = call("grok-session-1", Some("grok"));
+    assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+    assert_eq!(saved_session_id(workspace_id).as_deref(), Some("grok-session-1"));
+    assert_eq!(saved_harness(workspace_id).as_deref(), Some("grok"));
+
+    // Without provider: session id updates, harness is KEPT.
+    let resp = call("grok-session-2", None);
+    assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+    assert_eq!(saved_session_id(workspace_id).as_deref(), Some("grok-session-2"));
+    assert_eq!(
+        saved_harness(workspace_id).as_deref(),
+        Some("grok"),
+        "missing provider must not clobber the stored harness"
+    );
+}
+
 // Explicit pick of a session whose `.jsonl` is GENUINELY gone → the
 // resolver returns an Err (surfaced as a toast), and must NOT silently
 // swap to a different session OR clobber the saved id.

@@ -538,4 +538,48 @@ mod tests {
         // Must not spawn a thread / panic.
         defer_adopt_discovered_session("hermes".into(), "/nowhere".into());
     }
+
+    #[test]
+    fn adopt_discovered_session_stamps_id_and_harness() {
+        let guard = HomeGuard::new("adopt-stamp");
+        crate::db::init_for_tests();
+        let project_path = format!("/fixture/adopt-{}", uuid::Uuid::new_v4());
+        let sid = "01920000-aaaa-7000-8000-00000000adop";
+        write_grok_fixture(&guard.home, sid, &project_path, "2026-07-03T10:00:00Z", None);
+
+        // Registered project + a pre-existing row with the legacy
+        // 'claude' harness (what a bare-spawn row looks like before the
+        // provider truth lands).
+        let project_id = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let pid = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, 'adopt', ?2)",
+                rusqlite::params![pid, project_path],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+                 VALUES (?1, ?2, NULL, 'claude', 'user', 'running', unixepoch())",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), pid],
+            )
+            .unwrap();
+            pid
+        };
+
+        assert_eq!(
+            adopt_discovered_session("grok", &project_path).as_deref(),
+            Some(sid),
+            "must discover the newest on-disk grok session"
+        );
+
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let row = crate::db::schema::WorkspaceSession::get(&conn, &project_id)
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(row.session_id.as_deref(), Some(sid), "session_id stamped");
+        assert_eq!(row.harness, "grok", "harness stamped truthfully alongside the id");
+    }
 }

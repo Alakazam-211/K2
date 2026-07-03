@@ -183,45 +183,67 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
         }
     };
 
-    // 3b. Resume-aware canonical claude chat. A bare
-    //     `claude --dangerously-skip-permissions` spawned here on a daemon
-    //     restart / boot-sweep starts a FRESH conversation; because this PTY
-    //     registers under the canonical key FIRST, a later
-    //     `ensure-pinned-chat` finds it live and reuses it (`reused=true`),
-    //     never reaching its own `--resume` resolver — so the workspace's
-    //     selected session only came back on a manual reload (force_respawn).
-    //     Resolve the resume args HERE, the SAME way the interactive
-    //     pinned-chat path does, so the boot/restart respawn restores the
-    //     selected session. We pass explicit_selection=TRUE to make this
-    //     NON-DESTRUCTIVE: a valid saved session is resumed, but a
-    //     saved-but-unresolvable one returns Err (we fall back to the bare
-    //     profile and spawn fresh) WITHOUT overwriting
-    //     workspace_sessions.session_id — so a proactive boot spawn can never
-    //     clobber the user's pinned-chat pick with a throwaway mint. (The
-    //     interactive reload force-respawns with explicit=false to converge to
-    //     the newest conversation for continuity when the user asks.) Cold
+    // 3b. Resume-aware canonical chat. A bare profile command spawned
+    //     here on a daemon restart / boot-sweep starts a FRESH
+    //     conversation; because this PTY registers under the canonical
+    //     key FIRST, a later `ensure-pinned-chat` finds it live and
+    //     reuses it (`reused=true`), never reaching its own resume
+    //     resolver — so the workspace's selected session only came back
+    //     on a manual reload (force_respawn). Resolve the resume args
+    //     HERE, the SAME way the interactive pinned-chat path does, so
+    //     the boot/restart respawn restores the selected session. We
+    //     pass explicit_selection=TRUE to make this NON-DESTRUCTIVE: a
+    //     valid saved session is resumed, but a saved-but-unresolvable
+    //     one returns Err (we fall back to the bare profile and spawn
+    //     fresh) WITHOUT overwriting workspace_sessions.session_id — so
+    //     a proactive boot spawn can never clobber the user's
+    //     pinned-chat pick with a throwaway mint. (The interactive
+    //     reload force-respawns with explicit=false to converge to the
+    //     newest conversation for continuity when the user asks.) Cold
     //     workspaces with no saved session still get a stable pinned id.
-    //     Claude chats only; custom launch commands keep their profile args.
-    //     Slice 3: this gate keeps Claude resume grammar (`--resume` /
-    //     `--session-id`) off non-claude profiles — a resolved non-claude
-    //     default spawns its preset command+args bare (no resume) until
-    //     the ProviderResume adapter lands.
-    let is_claude_chat = profile
+    //
+    //     Slice 3: gated on the profile command mapping to a
+    //     ProviderResume adapter (was claude-only) — custom launch
+    //     commands (AGENT.md `launch:` bash etc.) keep their profile
+    //     args untouched. BASENAME GUARD: the resolver picks its OWN
+    //     command (the stored harness wins for an existing canonical
+    //     session), so we splice its args ONLY when its command matches
+    //     the profile's — e.g. an AGENT.md/claude profile over a
+    //     grok-harness canonical session must NOT get grok flags. The
+    //     mismatch case spawns the profile bare (Slice-2 degraded
+    //     behavior); reconciling command ownership at this site is
+    //     Slice 3b.
+    let profile_is_resumable = profile
         .command
         .as_deref()
-        .and_then(|c| c.rsplit('/').next())
-        .map(|name| name == "claude")
+        .map(|c| k2_core::workspace::provider_resume::provider_resume_for_command(c).is_some())
         .unwrap_or(false);
-    if is_claude_chat {
+    if profile_is_resumable {
         match k2_core::workspace::resume_chat::resolve_resume_chat_args_ex(project_path, true) {
             Ok(resolved) => {
-                log_debug!(
-                    "[daemon/canonical] resume-aware spawn for {project_path}: \
-                     session={} resumed_existing={}",
-                    resolved.resume_session,
-                    resolved.resumed_existing,
-                );
-                profile.args = Some(resolved.args);
+                let same_command = profile
+                    .command
+                    .as_deref()
+                    .and_then(|c| c.rsplit('/').next())
+                    == resolved.command.rsplit('/').next();
+                if same_command {
+                    log_debug!(
+                        "[daemon/canonical] resume-aware spawn for {project_path}: \
+                         provider={} session={} resumed_existing={}",
+                        resolved.provider,
+                        resolved.resume_session,
+                        resolved.resumed_existing,
+                    );
+                    profile.args = Some(resolved.args);
+                } else {
+                    log_debug!(
+                        "[daemon/canonical] resume resolver picked {} but the launch \
+                         profile runs {:?} for {project_path}; spawning the profile \
+                         bare (no resume splice)",
+                        resolved.command,
+                        profile.command,
+                    );
+                }
             }
             Err(e) => log_debug!(
                 "[daemon/canonical] resume resolve failed for {project_path}, \

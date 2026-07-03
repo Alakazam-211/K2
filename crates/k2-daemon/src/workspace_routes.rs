@@ -93,13 +93,21 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         //
         // Query params:
         //   project=<workspace-path>
-        //   session_id=<claude-uuid-to-set>
+        //   session_id=<conversation-uuid-to-set>
+        //   provider=<harness>   (OPTIONAL, Slice 3 — the provider that
+        //     owns the picked session, e.g. "claude"/"grok"/"pi". When
+        //     present it's persisted to workspace_sessions.harness
+        //     alongside the id so the resume resolver picks the right
+        //     ProviderResume adapter. Absent = keep the existing
+        //     harness — backward compatible; the renderer only starts
+        //     sending it in Slice 4.)
         "/cli/workspace/set-chat-session" => match need_project(params) {
             Ok(p) => {
                 let session_id = str_param(params, "session_id");
                 if session_id.is_empty() {
                     return Some(CliResponse::bad_request("Missing session_id parameter"));
                 }
+                let provider = opt_param(params, "provider");
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 let project_id = match k2_core::workspace::agent_identity::resolve_project_id(&conn, &p) {
@@ -108,14 +116,21 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         format!("project not registered: {p}"),
                     )),
                 };
-                match k2_core::db::schema::WorkspaceSession::update_session_id(
-                    &conn, &project_id, &session_id,
-                ) {
+                let update = match provider.as_deref() {
+                    Some(prov) => k2_core::db::schema::WorkspaceSession::update_session_id_and_harness(
+                        &conn, &project_id, &session_id, prov,
+                    ),
+                    None => k2_core::db::schema::WorkspaceSession::update_session_id(
+                        &conn, &project_id, &session_id,
+                    ),
+                };
+                match update {
                     Ok(rows) => CliResponse::ok_json(
                         serde_json::json!({
                             "success": true,
                             "projectId": project_id,
                             "sessionId": session_id,
+                            "provider": provider,
                             "rowsUpdated": rows,
                         }).to_string(),
                     ),

@@ -39,13 +39,27 @@ pub fn k2so_agents_lock(
         if let Some(project_id) = resolve_project_id(&conn, &project_path) {
             let session_uuid = uuid::Uuid::new_v4().to_string();
             let owner_val = owner.as_deref().unwrap_or("system");
+            // Slice 3 (harness load-bearing): this generic lock helper
+            // doesn't know which agent the caller spawned, and its old
+            // hardcoded "claude" CLOBBERED a truthful harness on every
+            // wake/canonical-ensure — resetting e.g. a grok pinned chat
+            // to claude across a daemon restart. Preserve the existing
+            // row's harness; only a brand-new row (never resolved) gets
+            // the historical 'claude' default (matching the column
+            // default). Spawn sites that know their provider write
+            // truth via the resolver / adoption helper.
+            let harness = WorkspaceSession::get(&conn, &project_id)
+                .ok()
+                .flatten()
+                .map(|row| row.harness)
+                .unwrap_or_else(|| "claude".to_string());
             let _ = WorkspaceSession::upsert(
                 &conn,
                 &session_uuid,
                 &project_id,
                 terminal_id.as_deref(),
                 None,
-                "claude",
+                &harness,
                 owner_val,
                 "running",
             );

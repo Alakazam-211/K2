@@ -64,17 +64,22 @@ pub struct EnsurePinnedChatOutcome {
     /// Daemon-side v2 PTY session id (UUID string). This is the
     /// `active_terminal_id` a subsequent attach resolves to.
     pub session_id: String,
-    /// The Claude conversation UUID we're resuming OR that was
-    /// pre-allocated for a never-chatted workspace. Always set.
+    /// The provider conversation UUID we're resuming OR that was
+    /// pre-allocated for a never-chatted workspace. EMPTY only for a
+    /// self-minting provider's fresh spawn (`pending_session_discovery`)
+    /// or an unknown provider (bare spawn, no session identity).
+    /// Field/JSON key keeps the historical `claudeSessionId` name for
+    /// renderer compat — Slice 4 renames it on the wire.
     pub claude_session_id: String,
-    /// `true` when the saved Claude session was usable (JSONL on
-    /// disk) → `--resume`. `false` when we pre-allocated a fresh UUID
-    /// → `--session-id`.
+    /// `true` when the saved session was usable (conversation on
+    /// disk) → resume grammar. `false` when we pre-allocated a fresh
+    /// UUID / spawned bare.
     pub resumed_existing: bool,
-    /// Spawn command (`claude`).
+    /// Spawn command (the resolved provider's binary, e.g. `claude`).
     pub command: String,
-    /// Spawn args (`--dangerously-skip-permissions` + the resume /
-    /// session-id pair).
+    /// Spawn args (the provider's preset args + its resume / premint
+    /// grammar; claude: `--dangerously-skip-permissions` + the
+    /// resume / session-id pair, byte-identical to pre-Slice-3).
     pub args: Vec<String>,
     pub cols: u16,
     pub rows: u16,
@@ -82,6 +87,13 @@ pub struct EnsurePinnedChatOutcome {
     /// returned (no fresh spawn). `false` on a fresh spawn (cold
     /// workspace OR `force_respawn`).
     pub reused: bool,
+    /// Provider key governing this launch (`workspace_sessions.harness`
+    /// value: "claude", "grok", "pi", …).
+    pub provider: String,
+    /// `true` when the provider mints its own session ids: the resolver
+    /// spawned bare and the daemon adopts the discovered id post-hoc
+    /// (`provider_resume::defer_adopt_discovered_session`, wired below).
+    pub pending_session_discovery: bool,
 }
 
 impl EnsurePinnedChatOutcome {
@@ -96,6 +108,8 @@ impl EnsurePinnedChatOutcome {
             "cols": self.cols,
             "rows": self.rows,
             "reused": self.reused,
+            "provider": self.provider,
+            "pendingSessionDiscovery": self.pending_session_discovery,
         })
     }
 }
@@ -218,29 +232,38 @@ pub fn ensure_pinned_chat(
     }
 
     // 6. Eager post-spawn read-back (pinned-chat-identity-ssot PRD §4.1a;
-    //    GH#24). On a FRESH spawn (`!reused`), claude will write its
-    //    `.jsonl` a beat from now under the session id it actually adopts.
-    //    Defer ~5s, probe the chat-history dir, and stamp
-    //    `workspace_sessions.session_id` (the SSOT) with the adopted id.
-    //    This writes truth at the source so the resolver's
-    //    `claude_session_file_exists` happy-path hits on the next ensure —
-    //    no re-mint loop. On a reused PTY we skip: identity is already
-    //    correct (the resolver/earlier read-back set it) and no new
-    //    `.jsonl` is being created. The 0.39.40 resolver converge fallback
-    //    remains the lazy safety net if this eager stamp ever misses.
+    //    GH#24). On a FRESH spawn (`!reused`), the agent will write its
+    //    session file a beat from now under the id it actually adopts.
+    //    Defer ~5s, probe the PROVIDER's on-disk store, and stamp
+    //    `workspace_sessions.session_id` + `harness` (the SSOT) with the
+    //    adopted id. This writes truth at the source so the resolver's
+    //    adapter exists-check happy-path hits on the next ensure — no
+    //    re-mint loop. Slice 3 generalized this from the claude-only
+    //    `wake_headless::defer_stamp_adopted_session` to the core
+    //    `provider_resume::defer_adopt_discovered_session` — for premint
+    //    providers (claude/grok) it confirms the pinned id; for
+    //    self-minting providers (pi/codex/gemini/cursor,
+    //    `pending_session_discovery=true`) it's the ONLY way the id
+    //    lands; for unknown providers it no-ops. On a reused PTY we
+    //    skip: identity is already correct (the resolver/earlier
+    //    read-back set it) and no new session file is being created.
+    //    The 0.39.40 resolver converge fallback remains the lazy safety
+    //    net if this eager stamp ever misses.
     if !spawn_outcome.reused {
-        crate::wake_headless::defer_stamp_adopted_session(
+        k2_core::workspace::provider_resume::defer_adopt_discovered_session(
+            resolved.provider.clone(),
             project_path.to_string(),
-            project_id.clone(),
         );
     }
 
     log_debug!(
-        "[daemon/pinned-chat] ensured session={} canonical_key={} claude_session={} resumed_existing={} reused={} force_respawn={} explicit_selection={}",
+        "[daemon/pinned-chat] ensured session={} canonical_key={} provider={} chat_session={} resumed_existing={} pending_discovery={} reused={} force_respawn={} explicit_selection={}",
         session_id,
         canonical_key,
+        resolved.provider,
         resolved.resume_session,
         resolved.resumed_existing,
+        resolved.pending_session_discovery,
         spawn_outcome.reused,
         force_respawn,
         explicit_selection,
@@ -255,6 +278,8 @@ pub fn ensure_pinned_chat(
         cols: DEFAULT_COLS,
         rows: DEFAULT_ROWS,
         reused: spawn_outcome.reused,
+        provider: resolved.provider,
+        pending_session_discovery: resolved.pending_session_discovery,
     })
 }
 

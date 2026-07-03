@@ -5154,6 +5154,7 @@ cmd_help() {
         talk)                     cmd_help_talk ;;
         read)                     cmd_help_read ;;
         inbox)                    cmd_help_inbox ;;
+        agent)                    cmd_help_agent ;;
         workspace)                cmd_help_workspace ;;
         skills)                   cmd_help_skills ;;
         settings)                 cmd_help_settings ;;
@@ -5573,6 +5574,71 @@ cmd_schema() {
       "description": "Manage/list the workspaces this one is connected to (the yellow pages used for name addressing).",
       "args": [],
       "flags": []
+    },
+    {
+      "name": "agent hire",
+      "usage": "k2 agent hire <dir> [--name <n>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, set mode, wire connections, optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "args": [{"name": "dir", "required": true}],
+      "flags": [
+        {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
+        {"name": "--template", "arg": "archetype", "description": "Built-in persona archetype: worker | manager | qa | researcher. Mutually exclusive with --persona (both = exit 2)."},
+        {"name": "--persona", "arg": "file.md", "description": "Use this file as the agent's persona (copied to <dir>/.k2/agent/AGENT.md)."},
+        {"name": "--mode", "arg": "mode", "description": "off | custom | manager | k2 (default: custom). 'off' also sets enabled=false."},
+        {"name": "--enabled", "arg": "bool", "description": "true | false (default: true). false pauses without changing mode."},
+        {"name": "--connect", "arg": "name", "description": "Wire a connection to another agent (repeatable). Connections are always mutual (bidirectional)."},
+        {"name": "--launch", "arg": null, "description": "Start the agent's session after provisioning."},
+        {"name": "--onboard", "arg": "msg", "description": "Send msg to the agent after it starts (implies --launch)."},
+        {"name": "--dry-run", "arg": null, "description": "Print the exact action plan; change nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output (ok/changed/actions)."}
+      ]
+    },
+    {
+      "name": "agent conf",
+      "usage": "k2 agent conf [<name>] [--json]",
+      "description": "Show all of an agent's settings: name, path, mode, enabled, persona, connections (always mutual), live status. Default: the agent in the current directory (exit 4 if unregistered).",
+      "args": [{"name": "name", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Single JSON object: {ok,name,path,mode,enabled,personaPath,connections,live}."}]
+    },
+    {
+      "name": "agent get",
+      "usage": "k2 agent get <name> <key> [--json]",
+      "description": "Print a single setting's value, bare on stdout (script-friendly). Keys: mode | enabled | name | path | persona (persona prints the charter file content).",
+      "args": [{"name": "name", "required": true}, {"name": "key", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "Wrap the value in a JSON object instead."}]
+    },
+    {
+      "name": "agent set",
+      "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--dry-run] [--json]",
+      "description": "Change one or more settings in a single call (hire's SETTINGS flags; no connection wiring or launching). Unknown flags exit 2 listing the valid ones.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--mode", "arg": "mode", "description": "off | custom | manager | k2 ('off' also sets enabled=false)."},
+        {"name": "--enabled", "arg": "bool", "description": "true | false (false pauses without changing mode; survives daemon restarts)."},
+        {"name": "--name", "arg": "new-name", "description": "Rename the agent (display name; the directory does not move)."},
+        {"name": "--persona", "arg": "file.md", "description": "Replace the persona with this file's contents (previous persona backed up automatically)."},
+        {"name": "--dry-run", "arg": null, "description": "Show what would change; change nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output (ok/changed/actions)."}
+      ]
+    },
+    {
+      "name": "agent list",
+      "usage": "k2 agent list [--json]",
+      "description": "Fleet view: every agent on this server with name, mode, enabled, live status, path.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,agents:[...]}."}]
+    },
+    {
+      "name": "agent retire",
+      "usage": "k2 agent retire <name> [--archive-to <dir>] [--force] [--dry-run] [--json]",
+      "description": "Safely decommission an agent: deregister, unwire connections, ARCHIVE the folder (never deletes). REFUSES (exit 3) on uncommitted/unpushed git work or likely secrets; --force overrides.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--archive-to", "arg": "dir", "description": "Where to move the folder (default: ~/.k2/archive/<name>-<date>/)."},
+        {"name": "--force", "arg": null, "description": "Override the safety guards."},
+        {"name": "--dry-run", "arg": null, "description": "Show what would happen; change nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
     },
     {
       "name": "checkin",
@@ -8173,6 +8239,10 @@ CHECKIN
   checkin --status "message"            Report status update
   checkin --done [--blocked "reason"]   Task complete (or blocked)
   done                                  Shortcut for `checkin --done`
+
+AGENTS
+  agent                                 Hire, configure, list, retire this server's agents
+                                        (hire/conf/get/set/list/retire — see `k2 agent --help`)
 
 WORKSPACE
   workspace list                        Yellow pages: every workspace + status

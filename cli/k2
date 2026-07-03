@@ -6364,10 +6364,12 @@ EOF
 }
 
 # Emit a contract-shaped error to stderr: {"error":{"code","hint"}}.
+# Python prints to ITS stdout; bash redirects the whole thing to stderr
+# (redirecting python's stderr would also swallow the message itself).
 _agent_err() {
     local code="$1" hint="$2"
-    CODE="$code" HINT="$hint" python3 -c 'import json,os,sys
-sys.stderr.write(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT"]}}) + "\n")' 2>/dev/null \
+    CODE="$code" HINT="$hint" python3 -c 'import json,os
+print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT"]}}))' >&2 \
         || echo "Error ($code): $hint" >&2
 }
 

@@ -55,6 +55,33 @@ const MAX_PARALLEL_HEARTBEAT_SPAWNS: usize = 6;
 /// exists from P5.1; this constant is the fallback).
 const DEFAULT_SPAWN_DEADLINE_SECS: u64 = 30;
 
+/// Extra time (beyond the spawn deadline) the lease watchdog waits for
+/// a timed-out spawn to finish on its own before force-releasing the
+/// in-flight lease it is still holding. See `run_candidates_bounded`.
+const DEFAULT_LEASE_WATCHDOG_GRACE_SECS: u64 = 90;
+
+/// Spawn deadline with a test/tuning env override
+/// (`K2_HEARTBEAT_SPAWN_DEADLINE_SECS`). The override exists so the
+/// lease-watchdog integration test can exercise the timeout path in
+/// seconds instead of minutes; production leaves it unset.
+fn spawn_deadline_secs() -> u64 {
+    std::env::var("K2_HEARTBEAT_SPAWN_DEADLINE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_SPAWN_DEADLINE_SECS)
+}
+
+/// Watchdog grace with a test/tuning env override
+/// (`K2_HEARTBEAT_LEASE_WATCHDOG_SECS`).
+fn lease_watchdog_grace_secs() -> u64 {
+    std::env::var("K2_HEARTBEAT_LEASE_WATCHDOG_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_LEASE_WATCHDOG_GRACE_SECS)
+}
+
 /// Handler for `/cli/agents/triage` — read-only summary. Matches
 /// pre-Phase-4 Tauri's `k2so_agents_triage_summary` shape. Used
 /// by the user-facing `k2so agents triage` verb. Never spawns.
@@ -109,6 +136,26 @@ pub fn handle_active_projects() -> String {
 ///   5. `stamp_heartbeat_fired` on the ones that actually spawned.
 ///   6. Return the count for `heartbeat.sh` to parse.
 pub fn handle_scheduler_fire(project_path: &str) -> String {
+    // Belt-and-suspenders for the lease watchdog: sweep any in-flight
+    // lease older than 5 minutes at the top of every tick (one cheap
+    // conditional UPDATE), so a wedged row recovers within a tick even
+    // if the watchdog task itself died with a daemon restart. The boot
+    // sweep (main.rs) remains as the third layer.
+    {
+        let db = shared_db();
+        let conn = db.lock();
+        match k2_core::db::schema::AgentHeartbeat::sweep_stale_leases(&conn, 300) {
+            Ok(0) => {}
+            Ok(n) => k2_core::log_debug!(
+                "[daemon/scheduler-fire] tick sweep released {} stale lease(s)",
+                n
+            ),
+            Err(e) => k2_core::log_debug!(
+                "[daemon/scheduler-fire] WARN: tick lease sweep: {e}"
+            ),
+        }
+    }
+
     let launchable = match scheduler::k2so_agents_scheduler_tick(project_path.to_string()) {
         Ok(v) => v,
         Err(e) => {
@@ -187,6 +234,23 @@ pub fn handle_scheduler_fire(project_path: &str) -> String {
 
 /// Bounded-concurrent fan-out of `smart_launch` over the heartbeat
 /// candidates. Returns the names that fired successfully.
+fn run_candidates_bounded(
+    project_path: &str,
+    candidates: Vec<heartbeat::HeartbeatFireCandidate>,
+) -> Vec<String> {
+    run_candidates_bounded_with(project_path, candidates, |pp, cand| {
+        crate::heartbeat_launch::smart_launch_with_origin(
+            pp,
+            &cand.name,
+            cand.catchup_of.as_deref(),
+        )
+    })
+}
+
+/// [`run_candidates_bounded`] with the launcher injected — production
+/// passes `smart_launch_with_origin`; the lease-watchdog integration
+/// test passes a deliberately-hanging closure so the timeout path is
+/// exercisable without a real hung PTY allocate.
 ///
 /// Uses `tokio::task::block_in_place` + `Handle::current().block_on`
 /// to step into async land from a sync HTTP handler (the daemon
@@ -195,13 +259,31 @@ pub fn handle_scheduler_fire(project_path: &str) -> String {
 /// and `tokio::time::timeout` enforces a per-spawn deadline so a
 /// hung PTY allocate can't wedge the tick.
 ///
-/// Each smart_launch call is sync (PTY spawn, file I/O, DB writes)
-/// so we wrap it in `spawn_blocking` — that runs it on tokio's
-/// blocking pool without freezing the multi-thread workers.
-fn run_candidates_bounded(
+/// Each launch call is sync (PTY spawn, file I/O, DB writes) so we
+/// wrap it in `spawn_blocking` — that runs it on tokio's blocking
+/// pool without freezing the multi-thread workers.
+///
+/// **Timeout path (wedge fix, misfire study §1.6.2):** a spawn that
+/// outlives the deadline keeps running on the blocking pool AND keeps
+/// holding the row's in-flight lease — pre-overhaul that wedged the
+/// heartbeat until the next daemon restart's boot sweep (the "P5.5
+/// watchdog" this comment used to promise). Now the timeout arm arms
+/// that watchdog: wait one more grace period for the spawn to finish
+/// on its own (it then handles its own lease/audit); if it's still
+/// hung, force-release the lease age-conditionally and record the
+/// attempt as a failure (backoff + auto-disable accounting included).
+pub fn run_candidates_bounded_with<F>(
     project_path: &str,
     candidates: Vec<heartbeat::HeartbeatFireCandidate>,
-) -> Vec<String> {
+    launch: F,
+) -> Vec<String>
+where
+    F: Fn(&str, &heartbeat::HeartbeatFireCandidate) -> serde_json::Value
+        + Send
+        + Sync
+        + Clone
+        + 'static,
+{
     if candidates.is_empty() {
         return Vec::new();
     }
@@ -210,27 +292,21 @@ fn run_candidates_bounded(
         tokio::runtime::Handle::current().block_on(async move {
             let sem = Arc::new(Semaphore::new(MAX_PARALLEL_HEARTBEAT_SPAWNS));
             let project_path = Arc::new(project_path.to_string());
-            let deadline = Duration::from_secs(DEFAULT_SPAWN_DEADLINE_SECS);
+            let deadline = Duration::from_secs(spawn_deadline_secs());
 
             let mut set: JoinSet<Option<String>> = JoinSet::new();
             for cand in candidates {
                 let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
                 let project_path = project_path.clone();
+                let launch = launch.clone();
                 set.spawn(async move {
-                    let cand_name = cand.name.clone();
                     let cand_for_log = cand.name.clone();
-                    // Carry the evaluator's catch-up provenance into the
-                    // launcher so a recovered miss audits `fired_catchup`
-                    // with its originally-scheduled time.
-                    let catchup_of = cand.catchup_of.clone();
-                    let outcome_fut = spawn_blocking(move || {
-                        crate::heartbeat_launch::smart_launch_with_origin(
-                            &project_path,
-                            &cand_name,
-                            catchup_of.as_deref(),
-                        )
-                    });
-                    let result = match tokio::time::timeout(deadline, outcome_fut).await {
+                    let started = std::time::Instant::now();
+                    let launch_project = project_path.clone();
+                    let mut handle = spawn_blocking(move || launch(&launch_project, &cand));
+                    // `&mut handle` so the JoinHandle survives a timeout
+                    // and can be handed to the watchdog below.
+                    let result = match tokio::time::timeout(deadline, &mut handle).await {
                         Ok(Ok(v)) => v,
                         Ok(Err(e)) => {
                             k2_core::log_debug!(
@@ -241,12 +317,15 @@ fn run_candidates_bounded(
                             return None;
                         }
                         Err(_) => {
-                            // Timeout. The lease will be cleared by the
-                            // boot-time sweep next time we restart, or by
-                            // an explicit release in P5.5's watchdog.
                             k2_core::log_debug!(
-                                "[daemon/scheduler-fire] hb {} timed out after {}s",
-                                cand_for_log, DEFAULT_SPAWN_DEADLINE_SECS
+                                "[daemon/scheduler-fire] hb {} timed out after {}s — lease watchdog armed",
+                                cand_for_log, deadline.as_secs()
+                            );
+                            spawn_lease_watchdog(
+                                project_path.to_string(),
+                                cand_for_log,
+                                handle,
+                                started,
                             );
                             drop(permit);
                             return None;
@@ -276,6 +355,53 @@ fn run_candidates_bounded(
             fired
         })
     })
+}
+
+/// Watchdog for a spawn that outlived its deadline. Races the still-
+/// running spawn against one grace period:
+///
+/// - Spawn finishes first → it already handled its own lease + audit
+///   (success stamps, failure records); just log.
+/// - Grace expires first → the spawn is genuinely hung. Force-release
+///   the in-flight lease it is holding via the age-conditional
+///   `release_lease_if_stale` — the age bound is the attempt's REAL
+///   elapsed time minus a second, so a lease re-acquired by any later
+///   attempt is never clobbered — and record a failed fire-attempt.
+fn spawn_lease_watchdog(
+    project_path: String,
+    hb_name: String,
+    mut handle: tokio::task::JoinHandle<serde_json::Value>,
+    started: std::time::Instant,
+) {
+    tokio::spawn(async move {
+        let grace = Duration::from_secs(lease_watchdog_grace_secs());
+        tokio::select! {
+            res = &mut handle => {
+                k2_core::log_debug!(
+                    "[daemon/scheduler-fire] hb {} finished late after {}s (result present: {}) — no lease release needed",
+                    hb_name,
+                    started.elapsed().as_secs(),
+                    res.is_ok(),
+                );
+            }
+            _ = tokio::time::sleep(grace) => {
+                let min_age = (started.elapsed().as_secs() as i64 - 1).max(1);
+                let pp = project_path.clone();
+                let name = hb_name.clone();
+                let released = spawn_blocking(move || {
+                    crate::heartbeat_launch::force_release_hung_lease(&pp, &name, min_age)
+                })
+                .await
+                .unwrap_or(false);
+                k2_core::log_debug!(
+                    "[daemon/scheduler-fire] hb {} still hung after {}s — watchdog release: {}",
+                    hb_name,
+                    started.elapsed().as_secs(),
+                    released,
+                );
+            }
+        }
+    });
 }
 
 // `dispatch_wake` retired in 0.37.0 — every fire goes through

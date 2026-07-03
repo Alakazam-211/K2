@@ -28,6 +28,26 @@ export interface HeartbeatRow {
   // session. The heartbeat's own last_session_id stays in the DB
   // untouched; un-checking restores legacy targeting.
   useWorkspaceSession: boolean
+  // Reliability overhaul (migration 0062) — failure/error visibility.
+  consecutiveFailures: number
+  nextRetryAt: string | null
+  // Why the system (not the user) disabled this row: 'failures'
+  // (auto-disabled after repeated failed fire-attempts) or
+  // 'wakeup_missing'. null = user choice / enabled.
+  disabledReason: string | null
+  // Human-readable reason the schedule can never fire (unparseable
+  // spec). null = schedule evaluates cleanly.
+  scheduleError: string | null
+}
+
+/** Red status badge under the heartbeat name for system-flagged error
+ *  states: auto-disabled after repeated failures, auto-disabled for a
+ *  missing WAKEUP.md, or a schedule the evaluator can't parse. */
+export function heartbeatErrorBadge(row: HeartbeatRow): string | null {
+  if (!row.enabled && row.disabledReason === 'failures') return 'Disabled after repeated failures'
+  if (!row.enabled && row.disabledReason === 'wakeup_missing') return 'Disabled — WAKEUP.md missing'
+  if (row.scheduleError) return `Invalid schedule: ${row.scheduleError}`
+  return null
 }
 
 // Mirrors src-tauri db::schema::HeartbeatFire (camelCase via serde rename).
@@ -591,7 +611,18 @@ function WakeupPreview({
 
 function decisionColor(decision: string): string {
   if (decision === 'fired') return 'text-green-400'
-  if (decision === 'error' || decision === 'wakeup_file_missing') return 'text-red-400'
+  // Catch-up fires are still successes — amber so a recovered miss is
+  // visible at a glance without reading the reason.
+  if (decision === 'fired_catchup') return 'text-amber-400'
+  if (
+    decision === 'error' ||
+    decision === 'wakeup_file_missing' ||
+    decision === 'schedule_invalid' ||
+    decision === 'auto_disabled' ||
+    decision === 'auto_disabled_failing' ||
+    decision === 'tick_gap'
+  )
+    return 'text-red-400'
   if (decision.startsWith('skipped_')) return 'text-[var(--color-text-muted)]'
   if (decision === 'no_work') return 'text-[var(--color-text-muted)]'
   return 'text-[var(--color-text-secondary)]'
@@ -1037,6 +1068,19 @@ export function HeartbeatsPanel({
                   ) : (
                     <span className="text-[9px] text-[var(--color-text-muted)] truncate">
                       Last fired: {describeLastFired(r.lastFired)}
+                    </span>
+                  )}
+                  {/* Reliability overhaul: surface system-flagged error
+                      states (auto-disabled after failures / missing
+                      WAKEUP.md / unparseable schedule) instead of a
+                      silently-flipped toggle. Re-enabling clears the
+                      failure state. */}
+                  {heartbeatErrorBadge(r) && (
+                    <span
+                      className="text-[9px] text-red-400 truncate"
+                      title={r.scheduleError ?? undefined}
+                    >
+                      {heartbeatErrorBadge(r)}
                     </span>
                   )}
                   {/* 0.37.8 — per-heartbeat pinned-chat delivery opt-in.

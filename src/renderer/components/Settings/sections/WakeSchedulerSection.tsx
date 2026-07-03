@@ -78,8 +78,18 @@ interface SystemFireRow {
  *  one that should pop on visual scan. */
 function decisionStyle(decision: string): { label: string; color: string } {
   if (decision === 'fired') return { label: '●', color: 'text-[var(--color-good,#57c98a)]' }
-  if (decision === 'error') return { label: '!', color: 'text-[var(--color-bad,#ef6f6f)]' }
-  if (decision === 'wakeup_file_missing') return { label: '!', color: 'text-[var(--color-bad,#ef6f6f)]' }
+  // Catch-up fires are successes for a previously-missed occurrence —
+  // amber dot so a recovered miss is scannable.
+  if (decision === 'fired_catchup') return { label: '●', color: 'text-amber-400' }
+  if (
+    decision === 'error' ||
+    decision === 'wakeup_file_missing' ||
+    decision === 'schedule_invalid' ||
+    decision === 'auto_disabled' ||
+    decision === 'auto_disabled_failing' ||
+    decision === 'tick_gap'
+  )
+    return { label: '!', color: 'text-[var(--color-bad,#ef6f6f)]' }
   if (decision === 'not_due') return { label: '·', color: 'text-[var(--color-text-muted)]' }
   return { label: '○', color: 'text-[var(--color-text-muted)]' }
 }
@@ -112,6 +122,19 @@ interface SystemHeartbeatRow {
   enabled: boolean
   lastFired: string | null
   useWorkspaceSession: boolean
+  // Reliability overhaul — failure/error visibility (see HeartbeatRow).
+  consecutiveFailures: number
+  disabledReason: string | null
+  scheduleError: string | null
+}
+
+/** Same error-badge derivation HeartbeatsSection uses, for the
+ *  system-wide row shape. */
+function systemRowErrorBadge(row: SystemHeartbeatRow): string | null {
+  if (!row.enabled && row.disabledReason === 'failures') return 'Disabled after repeated failures'
+  if (!row.enabled && row.disabledReason === 'wakeup_missing') return 'Disabled — WAKEUP.md missing'
+  if (row.scheduleError) return 'Invalid schedule'
+  return null
 }
 
 /** Compact one-liner for the heartbeat list row — "Every day at 9 AM",
@@ -360,6 +383,10 @@ export function WakeSchedulerSection(): React.JSX.Element {
       lastFired: editingHeartbeat.lastFired,
       createdAt: 0,
       useWorkspaceSession: editingHeartbeat.useWorkspaceSession,
+      consecutiveFailures: editingHeartbeat.consecutiveFailures,
+      nextRetryAt: null,
+      disabledReason: editingHeartbeat.disabledReason,
+      scheduleError: editingHeartbeat.scheduleError,
     }
     const slug = editingHeartbeat.projectName.toLowerCase().replace(/\s+/g, '-')
     const otherHeartbeats: HeartbeatRow[] = heartbeats
@@ -375,6 +402,10 @@ export function WakeSchedulerSection(): React.JSX.Element {
         lastFired: r.lastFired,
         createdAt: 0,
         useWorkspaceSession: r.useWorkspaceSession,
+        consecutiveFailures: r.consecutiveFailures,
+        nextRetryAt: null,
+        disabledReason: r.disabledReason,
+        scheduleError: r.scheduleError,
       }))
     return (
       <div className="absolute inset-0 overflow-hidden bg-[var(--color-bg)]">
@@ -584,6 +615,14 @@ export function WakeSchedulerSection(): React.JSX.Element {
                 <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate">
                   {describeHeartbeatSpec(row.specJson, row.frequency)}
                 </div>
+                {systemRowErrorBadge(row) && (
+                  <div
+                    className="text-[10px] text-[var(--color-bad,#ef6f6f)] mt-0.5 truncate"
+                    title={row.scheduleError ?? undefined}
+                  >
+                    {systemRowErrorBadge(row)}
+                  </div>
+                )}
               </div>
               {/* Pinned-chat checkbox — themed to match the rest of
                   settings (the native input's blue square didn't fit

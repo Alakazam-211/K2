@@ -466,12 +466,9 @@ fn run_fresh_fire(
                 "terminalId": terminal_id,
             })
         }
-        Err(e) => {
-            release_lease(project_id, &hb.name);
-            write_audit(project_id, agent_name, hb, "error",
-                &format!("fresh fire spawn failed: {e}"));
-            error_value("error", &format!("spawn failed: {e}"), &hb.name)
-        }
+        Err(e) => record_fire_failure(
+            project_id, agent_name, hb, &format!("fresh fire spawn failed: {e}"),
+        ),
     }
 }
 
@@ -548,9 +545,7 @@ fn run_workspace_session_delivery(
         } else {
             format!("{reason}: {hint}")
         };
-        release_lease(project_id, &hb.name);
-        write_audit(project_id, agent_name, hb, "error", &audit_msg);
-        error_value("error", &audit_msg, &hb.name)
+        record_fire_failure(project_id, agent_name, hb, &audit_msg)
     }
 }
 
@@ -568,27 +563,22 @@ fn run_inject(
     let body_raw = match std::fs::read_to_string(wakeup_abs) {
         Ok(s) => s,
         Err(e) => {
-            release_lease(project_id, &hb.name);
-            write_audit(project_id, agent_name, hb, "error",
-                &format!("inject failed reading WAKEUP.md: {e}"));
-            return error_value("error",
-                &format!("could not read WAKEUP.md: {e}"), &hb.name);
+            return record_fire_failure(
+                project_id, agent_name, hb,
+                &format!("inject failed reading WAKEUP.md: {e}"),
+            );
         }
     };
     let body = wake::strip_frontmatter(&body_raw);
     let body_trimmed = body.trim();
     if body_trimmed.is_empty() {
-        release_lease(project_id, &hb.name);
-        write_audit(project_id, agent_name, hb, "error", "WAKEUP.md body empty");
-        return error_value("error", "WAKEUP.md body is empty", &hb.name);
+        return record_fire_failure(project_id, agent_name, hb, "WAKEUP.md body is empty");
     }
 
     if let Err(e) = live.write(body_trimmed.as_bytes()) {
-        release_lease(project_id, &hb.name);
-        write_audit(project_id, agent_name, hb, "error",
-            &format!("inject write failed: {e}"));
-        return error_value("error",
-            &format!("write to live PTY failed: {e}"), &hb.name);
+        return record_fire_failure(
+            project_id, agent_name, hb, &format!("inject write to live PTY failed: {e}"),
+        );
     }
     // Two-phase: paste body, send Enter after a brief settle. Same
     // pattern the awareness-bus inject uses.
@@ -727,13 +717,133 @@ fn run_resume_and_fire(
                 "targetSessionId": out.session_id.to_string(),
             })
         }
-        Err(e) => {
-            release_lease(project_id, &hb.name);
-            write_audit(project_id, agent_name, hb, "error",
-                &format!("resume spawn failed: {e}"));
-            error_value("error", &format!("resume spawn failed: {e}"), &hb.name)
-        }
+        Err(e) => record_fire_failure(
+            project_id, agent_name, hb, &format!("resume spawn failed: {e}"),
+        ),
     }
+}
+
+// ── Failure policy (backoff + auto-disable) ────────────────────────
+
+/// Consecutive failed fire-attempts before a heartbeat is auto-disabled
+/// (owner decision: 5). A success resets the counter; a manual
+/// re-enable clears the disabled state.
+pub(crate) const MAX_CONSECUTIVE_FAILURES: i64 = 5;
+
+/// Backoff base: after the Nth consecutive failure the next retry is
+/// `base * 2^(N-1)` seconds out (1/2/4/8 min for N=1..4), capped below.
+const FAILURE_BACKOFF_BASE_SECS: i64 = 60;
+const FAILURE_BACKOFF_CAP_SECS: i64 = 3600;
+
+/// Central failure bookkeeping for every failed fire-attempt: release
+/// the lease, write the `error` audit row, bump the consecutive-failure
+/// counter with its exponential-backoff window, and — at
+/// [`MAX_CONSECUTIVE_FAILURES`] — auto-disable the row with the
+/// distinct `auto_disabled_failing` decision + `disabled_reason =
+/// 'failures'` so the UI renders a "disabled after repeated failures"
+/// badge. Replaces the pre-overhaul blind retry-every-tick-forever
+/// (one `error` row per minute, indefinitely).
+///
+/// Returns the same error JSON the failure sites used to build, so
+/// callers stay one-expression.
+fn record_fire_failure(
+    project_id: &str,
+    agent_name: &str,
+    hb: &AgentHeartbeat,
+    reason: &str,
+) -> serde_json::Value {
+    release_lease(project_id, &hb.name);
+
+    // The row was loaded at smart_launch entry and the in-flight lease
+    // makes fire-attempts single-flight, so `hb.consecutive_failures`
+    // is the authoritative prior count.
+    let new_count = hb.consecutive_failures + 1;
+    let backoff_secs = FAILURE_BACKOFF_BASE_SECS
+        .saturating_mul(1i64 << (new_count - 1).clamp(0, 30))
+        .min(FAILURE_BACKOFF_CAP_SECS);
+    let next_retry = (chrono::Utc::now() + chrono::Duration::seconds(backoff_secs)).to_rfc3339();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = AgentHeartbeat::note_fire_failure(
+            &conn, project_id, &hb.name, Some(&next_retry),
+        );
+    }
+    write_audit(project_id, agent_name, hb, "error",
+        &format!("{reason} (failure {new_count}/{MAX_CONSECUTIVE_FAILURES})"));
+
+    if new_count >= MAX_CONSECUTIVE_FAILURES {
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = AgentHeartbeat::auto_disable(&conn, project_id, &hb.name, "failures");
+        }
+        let disable_reason = format!(
+            "auto-disabled after {new_count} consecutive failed fire-attempts; \
+             last error: {reason}. Re-enable from Settings → Heartbeats to retry."
+        );
+        write_audit(project_id, agent_name, hb, "auto_disabled_failing", &disable_reason);
+        k2_core::log_debug!(
+            "[heartbeat] auto-disabled hb={} project={} after {} consecutive failures",
+            hb.name,
+            project_id,
+            new_count
+        );
+    }
+
+    error_value("error", reason, &hb.name)
+}
+
+/// Watchdog half of the spawn-timeout wedge fix (misfire study §1.6.2):
+/// when a `smart_launch` outlives its deadline AND its grace period,
+/// conditionally release the in-flight lease it is still holding so the
+/// heartbeat isn't wedged until the next daemon restart. The release is
+/// age-gated (`min_lease_age_secs`, derived from the attempt's actual
+/// elapsed time) so a lease re-acquired by a LATER attempt is never
+/// clobbered. No-op (returns false) when the hung spawn actually
+/// finished and handled its own lease.
+///
+/// A real release counts as a failed fire-attempt — same audit +
+/// backoff + auto-disable accounting as any other failure.
+pub(crate) fn force_release_hung_lease(
+    project_path: &str,
+    hb_name: &str,
+    min_lease_age_secs: i64,
+) -> bool {
+    let (hb, agent_name, project_id) = match resolve_row(project_path, hb_name) {
+        Ok(t) => t,
+        Err(e) => {
+            k2_core::log_debug!(
+                "[heartbeat] watchdog release skipped — row unresolvable: {e}"
+            );
+            return false;
+        }
+    };
+    let cleared = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        AgentHeartbeat::release_lease_if_stale(
+            &conn, &project_id, hb_name, min_lease_age_secs,
+        )
+        .unwrap_or(0)
+    };
+    if cleared == 0 {
+        k2_core::log_debug!(
+            "[heartbeat] watchdog release no-op for {hb_name} — lease already \
+             handled (spawn finished or a newer attempt holds it)"
+        );
+        return false;
+    }
+    let _ = record_fire_failure(
+        &project_id,
+        &agent_name,
+        &hb,
+        &format!(
+            "spawn hung for more than {min_lease_age_secs}s; \
+             in-flight lease force-released by the watchdog"
+        ),
+    );
+    true
 }
 
 // ── Lease + stamp helpers ─────────────────────────────────────────
@@ -836,9 +946,11 @@ fn auto_disable_missing_wakeup(
     );
     write_audit(project_id, agent_name, hb, "auto_disabled", &reason);
     {
+        // 0062: record WHY via disabled_reason so Settings shows a
+        // "WAKEUP.md missing" badge instead of a silently-off toggle.
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let _ = AgentHeartbeat::set_enabled(&conn, project_id, &hb.name, false);
+        let _ = AgentHeartbeat::auto_disable(&conn, project_id, &hb.name, "wakeup_missing");
     }
     k2_core::log_debug!(
         "[heartbeat] auto-disabled hb={} project={} agent={} reason=missing-wakeup path={}",

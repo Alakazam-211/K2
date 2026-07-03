@@ -18,6 +18,24 @@
 
 set -euo pipefail
 
+# Staple with retry: after `notarytool --wait` reports Accepted, the ticket
+# can take a minute to propagate to CloudKit — a premature staple fails with
+# "could not find ticket" (Error 65). Retry instead of dying (killed the
+# 0.40.23 release on first attempt).
+staple_with_retry() {
+    local target="$1"
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if xcrun stapler staple "$target"; then
+            return 0
+        fi
+        echo "  staple attempt ${attempt} failed (ticket not propagated yet?) — retrying in 30s..."
+        sleep 30
+    done
+    echo "FATAL: stapling $target failed after 5 attempts" >&2
+    return 1
+}
+
 VERSION="${1:-}"
 NOTES_FILE="${2:-}"
 if [ -z "$VERSION" ]; then
@@ -267,7 +285,7 @@ NOTARY_AUTH=()
 while IFS= read -r arg; do NOTARY_AUTH+=("$arg"); done < <(notary_auth_args)
 xcrun notarytool submit "/tmp/K2_${VERSION}.zip" \
     "${NOTARY_AUTH[@]}" --wait
-xcrun stapler staple "K2.app"
+staple_with_retry "K2.app"
 echo "  App notarized and stapled."
 
 # ── Step 5: Create update bundle (tar.gz) from notarized app + sign it ──
@@ -311,7 +329,7 @@ echo ""
 echo "Step 7: Notarizing DMG..."
 xcrun notarytool submit "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \
     "${NOTARY_AUTH[@]}" --wait
-xcrun stapler staple "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
+staple_with_retry "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
 echo "  DMG notarized and stapled."
 
 # ── Step 8: Generate latest.json ──

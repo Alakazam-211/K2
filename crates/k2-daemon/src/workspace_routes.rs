@@ -536,3 +536,235 @@ pub fn handle_workspace_set(body: &[u8]) -> CliResponse {
         .to_string(),
     )
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Inline unit tests — 0.40.24 S2 settings plane
+// ──────────────────────────────────────────────────────────────────────
+//
+// `db::shared()` in a test context auto-inits the PROCESS-GLOBAL
+// in-memory DB (`init_for_tests`), shared across every test in the
+// binary — so each test inserts its own project row with a UNIQUE
+// name/path (a `ws-set-` prefix) to avoid collisions.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique(label: &str) -> (String, String) {
+        let id = uuid::Uuid::new_v4();
+        (
+            format!("ws-set-{label}-{id}"),
+            format!("/tmp/ws-set-test-{label}-{}-{id}", std::process::id()),
+        )
+    }
+
+    fn insert_project(name: &str, path: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, name, path],
+        )
+        .expect("insert project row");
+        id
+    }
+
+    fn stored_value(path: &str, field: &str) -> Option<String> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            &format!("SELECT CAST({field} AS TEXT) FROM projects WHERE path = ?1"),
+            rusqlite::params![path],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .expect("read stored value")
+    }
+
+    fn set_body(project: &str, fields: serde_json::Value) -> Vec<u8> {
+        serde_json::json!({ "project": project, "fields": fields })
+            .to_string()
+            .into_bytes()
+    }
+
+    /// Multi-field set in ONE call: `agent_mode` + an EXPLICIT
+    /// `agent_enabled` in the same batch. The mode write couples
+    /// enabled (bot mode → 1), so the explicit `agent_enabled: "0"`
+    /// must be applied AFTER the mode and win.
+    #[test]
+    fn workspace_set_multi_field_applies_mode_before_explicit_enabled() {
+        let (name, path) = unique("multi");
+        insert_project(&name, &path);
+
+        let resp = handle_workspace_set(&set_body(
+            &path,
+            serde_json::json!({ "agent_enabled": "0", "agent_mode": "manager" }),
+        ));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["changed"], true);
+
+        // Both fields landed; the explicit enabled=0 beat the coupling.
+        assert_eq!(stored_value(&path, "agent_mode").as_deref(), Some("manager"));
+        assert_eq!(stored_value(&path, "agent_enabled").as_deref(), Some("0"));
+
+        // Every requested field is reported in actions.
+        let actions = body["actions"].as_array().expect("actions array");
+        assert_eq!(actions.len(), 2, "actions={actions:?}");
+        assert!(
+            actions.iter().all(|a| a["status"] == "done"),
+            "both fields should apply: {actions:?}"
+        );
+    }
+
+    /// One unknown field rejects the ENTIRE batch — the valid field in
+    /// the same request must NOT be applied.
+    #[test]
+    fn workspace_set_unknown_field_rejects_whole_batch() {
+        let (name, path) = unique("unknown");
+        insert_project(&name, &path);
+        let before = stored_value(&path, "agent_mode");
+
+        let resp = handle_workspace_set(&set_body(
+            &path,
+            serde_json::json!({ "agent_mode": "manager", "not_a_field": "x" }),
+        ));
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+        assert!(
+            resp.body.contains("not_a_field"),
+            "error must name the offending field: {}",
+            resp.body
+        );
+        assert!(
+            resp.body.contains("agent_mode") && resp.body.contains("sandbox_fs_mode"),
+            "error must list the valid fields: {}",
+            resp.body
+        );
+        // Nothing was applied.
+        assert_eq!(
+            stored_value(&path, "agent_mode"),
+            before,
+            "a rejected batch must have zero side effects"
+        );
+    }
+
+    /// GET on the POST-only route answers an explicit 405 through the
+    /// read dispatch chain (feedback_post_only_route_guards).
+    #[test]
+    fn workspace_set_get_dispatch_is_405() {
+        let params = HashMap::new();
+        let resp = dispatch("/cli/workspace/set", &params)
+            .expect("route must be claimed by the GET chain");
+        assert_eq!(resp.status, "405 Method Not Allowed");
+        assert!(resp.body.contains("POST required"), "body={}", resp.body);
+    }
+
+    /// B2: the CLI-canonical `k2` spelling stores as the legacy `k2so`
+    /// (every stored-value reader matches that), displays back as `k2`,
+    /// and a re-run of the same set converges with `changed:false`.
+    #[test]
+    fn workspace_set_normalizes_k2_spelling_and_converges() {
+        let (name, path) = unique("k2norm");
+        insert_project(&name, &path);
+
+        let body = set_body(&path, serde_json::json!({ "agent_mode": "k2" }));
+        let resp = handle_workspace_set(&body);
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(stored_value(&path, "agent_mode").as_deref(), Some("k2so"));
+        assert_eq!(
+            k2_core::workspace::settings::display_agent_mode("k2so"),
+            "k2",
+            "stored spelling must display as the canonical vocabulary"
+        );
+        // Coupling: bot mode flips enabled on.
+        assert_eq!(stored_value(&path, "agent_enabled").as_deref(), Some("1"));
+
+        // Idempotent re-run: the change probe compares against the
+        // NORMALIZED spelling, so this must skip, not re-apply.
+        let resp2 = handle_workspace_set(&set_body(&path, serde_json::json!({ "agent_mode": "k2" })));
+        let body2: serde_json::Value = serde_json::from_str(&resp2.body).expect("valid JSON");
+        assert_eq!(body2["ok"], true);
+        assert_eq!(body2["changed"], false, "re-run must converge: {}", resp2.body);
+        assert_eq!(body2["actions"][0]["status"], "skipped");
+    }
+
+    /// Bad agent_mode VALUES are rejected loudly (no store-then-break).
+    #[test]
+    fn workspace_set_rejects_invalid_mode_value() {
+        let (name, path) = unique("badmode");
+        insert_project(&name, &path);
+        let resp = handle_workspace_set(&set_body(&path, serde_json::json!({ "agent_mode": "bogus" })));
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+        assert!(
+            resp.body.contains("invalid agent_mode"),
+            "error should describe the invalid value: {}",
+            resp.body
+        );
+    }
+
+    /// `project` accepts a workspace NAME (the resolver path `k2 agent
+    /// set <name>` uses); an unknown token 404s with the stable
+    /// `not_found` code + hint.
+    #[test]
+    fn workspace_set_resolves_name_and_404s_unknown() {
+        let (name, path) = unique("byname");
+        insert_project(&name, &path);
+
+        // Address by NAME, not path.
+        let resp = handle_workspace_set(&set_body(&name, serde_json::json!({ "agent_mode": "custom" })));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(stored_value(&path, "agent_mode").as_deref(), Some("custom"));
+
+        // Unknown token → 404 + not_found code.
+        let resp = handle_workspace_set(&set_body(
+            "no-such-agent-anywhere",
+            serde_json::json!({ "agent_mode": "custom" }),
+        ));
+        assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(body["error"]["code"], "not_found", "body={}", resp.body);
+    }
+
+    /// Empty batches and bodies without a project are usage errors,
+    /// not silent no-ops.
+    #[test]
+    fn workspace_set_requires_project_and_fields() {
+        let resp = handle_workspace_set(br#"{"project":"","fields":{"agent_mode":"off"}}"#);
+        assert_eq!(resp.status, "400 Bad Request");
+        assert!(resp.body.contains("project"), "body={}", resp.body);
+
+        let (name, path) = unique("nofields");
+        insert_project(&name, &path);
+        let resp = handle_workspace_set(&set_body(&path, serde_json::json!({})));
+        assert_eq!(resp.status, "400 Bad Request");
+        assert!(resp.body.contains("fields"), "body={}", resp.body);
+    }
+
+    /// `/cli/agent/conf` returns the full shape for a registered
+    /// workspace (display-normalized mode, enabled bool, null persona,
+    /// empty connections, inactive live) and the not-found shape for an
+    /// unknown token.
+    #[test]
+    fn agent_conf_returns_full_shape_and_404s_unknown() {
+        let (name, path) = unique("conf");
+        insert_project(&name, &path);
+        handle_workspace_set(&set_body(&path, serde_json::json!({ "agent_mode": "k2" })));
+
+        let resp = crate::agents_routes::handle_agent_conf(&name);
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["path"], path.as_str());
+        assert_eq!(body["mode"], "k2", "stored k2so must display as k2: {}", resp.body);
+        assert_eq!(body["enabled"], true);
+        assert!(body["personaPath"].is_null(), "no AGENT.md on disk: {}", resp.body);
+        assert_eq!(body["connections"], serde_json::json!([]));
+        assert_eq!(body["live"]["active"], false);
+
+        let resp = crate::agents_routes::handle_agent_conf("definitely-not-registered");
+        assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(body["error"]["code"], "not_found");
+    }
+}

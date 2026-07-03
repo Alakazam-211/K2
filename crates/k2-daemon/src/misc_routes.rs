@@ -55,8 +55,14 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                             // write) is the common case and isn't an
                             // error; just log and let the next caller
                             // (or boot sweep) handle it.
+                            // B2 (0.40.24): the CLI validates the canonical
+                            // spelling `k2`; the stored/legacy spelling is
+                            // `k2so` (see settings::stored_agent_mode_value).
+                            // Accept BOTH here — this check runs on the RAW
+                            // requested value, before the write-side
+                            // normalization maps k2 → k2so.
                             let bot_mode = matches!(mode.as_str(),
-                                "custom" | "manager" | "k2so");
+                                "custom" | "manager" | "k2so" | "k2");
                             let agent_md =
                                 k2_core::workspace_dot_dir(&p).join("agent/AGENT.md");
                             let mut ensure_summary = serde_json::Value::Null;

@@ -10,19 +10,45 @@
 //! Moved to core so the daemon can serve `/cli/mode`, `/cli/worktree`,
 //! `/cli/settings` headlessly.
 
-/// Update a single project setting. Field names are allowlisted —
-/// the SQL interpolates the column name directly so any arbitrary
-/// string from query params would be an injection vector without
-/// this check.
-pub fn update_project_setting(
-    project_path: &str,
-    field: &str,
-    value: &str,
-) -> Result<(), String> {
-    let db = crate::db::shared();
-    let conn = db.lock();
+/// B2 (0.40.24) — map the CLI-canonical agent mode `"k2"` onto the
+/// stored legacy spelling `"k2so"`.
+///
+/// The CLI's documented mode vocabulary is `off | custom | manager | k2`
+/// (cli/k2 validates exactly that), but every stored-value consumer —
+/// the canonical-spawn check in the daemon's `/cli/mode` route, the
+/// `agent_identity` type resolver, wake-prompt templates, the 0.37.0
+/// unification migration — matches the legacy `"k2so"` spelling. Rather
+/// than migrate every reader + existing DB rows, we normalize at the
+/// WRITE boundary: both spellings are accepted as input, one spelling
+/// is ever stored. Read-side display normalization is the inverse —
+/// see [`display_agent_mode`].
+pub fn stored_agent_mode_value(mode: &str) -> &str {
+    if mode == "k2" {
+        "k2so"
+    } else {
+        mode
+    }
+}
 
-    let allowed = [
+/// B2 (0.40.24) — inverse of [`stored_agent_mode_value`]: map the stored
+/// legacy spellings (`"k2so"`, and the UI's historic `"agent"` synonym —
+/// `agent_identity::agent_type_for` treats both as the same mode) onto
+/// the CLI-canonical `"k2"` for display. Every other value passes
+/// through untouched. Used by read surfaces (`k2 agent conf/get`) so
+/// operators only ever see the documented vocabulary.
+pub fn display_agent_mode(stored: &str) -> &str {
+    match stored {
+        "k2so" | "agent" => "k2",
+        other => other,
+    }
+}
+
+/// The `projects` columns [`update_project_setting`] may write. Public
+/// so route-level writers (the daemon's `/cli/workspace/set`) can
+/// validate a whole field batch up front — rejecting the entire request
+/// before applying anything — instead of failing halfway through.
+pub fn allowed_project_setting_fields() -> &'static [&'static str] {
+    &[
         "agent_mode",
         "worktree_mode",
         "heartbeat_enabled",
@@ -38,7 +64,31 @@ pub fn update_project_setting(
         // Sandbox v2 (PRD §G2 #1) — per-workspace sandbox FS mode. Values:
         // 'overlay' | 'ro+scratch' (default 'overlay'). See `get_workspace_fs_mode`.
         "sandbox_fs_mode",
-    ];
+    ]
+}
+
+/// Update a single project setting. Field names are allowlisted —
+/// the SQL interpolates the column name directly so any arbitrary
+/// string from query params would be an injection vector without
+/// this check.
+pub fn update_project_setting(
+    project_path: &str,
+    field: &str,
+    value: &str,
+) -> Result<(), String> {
+    // B2 (0.40.24): normalize the CLI-canonical mode spelling onto the
+    // stored one so `k2 settings --mode k2` / `k2 agent set --mode k2`
+    // land on the value every downstream reader matches.
+    let value = if field == "agent_mode" {
+        stored_agent_mode_value(value)
+    } else {
+        value
+    };
+
+    let db = crate::db::shared();
+    let conn = db.lock();
+
+    let allowed = allowed_project_setting_fields();
     if !allowed.contains(&field) {
         return Err(format!("Unknown setting: {}", field));
     }

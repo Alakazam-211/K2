@@ -170,6 +170,20 @@ urlencode() {
     python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1" 2>/dev/null || echo "$1"
 }
 
+# 0.40.24 (B4): true when any argument is --help/-h. Used to intercept
+# help requests on every workspace/connections/agent subcommand BEFORE
+# the args reach a handler — `k2 workspace create --help` used to
+# literally mkdir + register a workspace named `--help`.
+_wants_help() {
+    local a
+    for a in "$@"; do
+        case "$a" in
+            --help|-h) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 # POST a form-encoded body (0.39.45, GH #35/#37/#29). Token + project
 # ride the query string (the daemon's auth gate parses the query);
 # everything else — message text, inbox title/body — rides the POST
@@ -4782,6 +4796,7 @@ cmd_workspace_remove() {
             *) if [ -z "$target_path" ]; then target_path="$1"; fi; shift ;;
         esac
     done
+    local target_token="$target_path"
     if [ -z "$target_path" ]; then
         echo "Usage: k2 workspace remove <path> [--mode keep-current|restore-original]" >&2
         echo "" >&2
@@ -4796,6 +4811,23 @@ cmd_workspace_remove() {
     if [ -d "$target_path" ]; then
         target_path="$(cd "$target_path" && pwd)"
     fi
+    # 0.40.24 (B3): accept a NAME as well as a path — every other verb
+    # (`connections`, `msg`) already resolves name-or-path; remove was
+    # path-only. Route the token through the daemon's canonical resolver
+    # (name | absolute path | UUID) before the path-keyed removal.
+    local resolved
+    resolved=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target_path")" \
+        | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path", ""))
+except Exception:
+    pass' 2>/dev/null) || resolved=""
+    if [ -z "$resolved" ]; then
+        echo "Error: workspace '$target_token' not found (by name or path)." >&2
+        echo "Run 'k2 workspace list' for registered workspaces." >&2
+        exit 4
+    fi
+    target_path="$resolved"
     if [ -n "$mode" ]; then
         cli_request "/cli/workspace/remove" \
             "path=$(urlencode "$target_path")" \
@@ -5074,7 +5106,9 @@ cmd_settings() {
     done
     if [[ -n "$set_mode" ]]; then
         case "$set_mode" in
-            off|custom|manager|k2) ;;
+            # `k2so` accepted for back-compat (B2); the daemon stores one
+            # canonical spelling either way (settings::stored_agent_mode_value).
+            off|custom|manager|k2|k2so) ;;
             *)
                 echo "Error: invalid mode '$set_mode' (valid: off, custom, manager, k2)" >&2
                 exit 1
@@ -6205,6 +6239,23 @@ EXAMPLES
 EOF
 }
 
+cmd_help_connections() {
+    cat <<'EOF'
+k2 connections [list|add|remove] [workspace-name]
+
+Manage this workspace's connections to other workspaces (agents).
+
+  list              List connections for this workspace
+  add <name>        Connect to another workspace (name, path, or <agent>@<host>)
+  remove <name>     Disconnect from a workspace
+
+EXAMPLES
+  k2 connections list
+  k2 connections add "QA Bot"
+  k2 connections remove scout
+EOF
+}
+
 cmd_help_skills() {
     cat <<'EOF'
 k2 skills <subcommand> [options]
@@ -6503,6 +6554,19 @@ cmd_workspace_update() {
         echo "Usage: k2 workspace update --field <f> --value <v>" >&2
         exit 1
     fi
+    # 0.40.24 (B1): `update --field` edits the AGENT.md profile — it has
+    # NEVER touched the projects DB. Passing a DB column name here used to
+    # silently append a useless `## agent_mode` section to AGENT.md while
+    # the real setting stayed unchanged. Fail loudly and point at the
+    # settings plane instead.
+    case "$field" in
+        id|name|path|color|tab_order|last_opened_at|worktree_mode|icon_url|focus_group_id|pinned|manually_active|last_interaction_at|created_at|agent_enabled|heartbeat_enabled|agent_mode|state_id|tier_id|heartbeat_mode|heartbeat_schedule|heartbeat_last_fire|allow_remote_instruct|use_session_stream|sandbox_fs_mode|anthropic_api_key)
+            echo "Error: '$field' is a workspace SETTING (a projects DB column), not an AGENT.md profile field." >&2
+            echo "'k2 workspace update' only edits the agent's AGENT.md; it would not change the real setting." >&2
+            echo "Use: k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>]  (see 'k2 agent set --help')" >&2
+            exit 2
+            ;;
+    esac
     # Forward to agent profile update (workspace agent IS the workspace).
     # The agent name is the workspace's primary agent — daemon resolves it.
     local agent_name
@@ -7235,6 +7299,14 @@ EOF
         esac
         ;;
     workspace)
+        # 0.40.24 (B4): --help/-h anywhere in a workspace subcommand prints
+        # help and exits 0 — it must never reach a handler as an argument
+        # (`k2 workspace create --help` used to create a workspace named
+        # `--help`).
+        if _wants_help "${@:2}"; then
+            cmd_help_workspace
+            exit 0
+        fi
         case "${2:-}" in
             # Phase 2.1 A6.1 daily subverbs.
             list)              shift 2; cmd_workspace_list "$@" ;;
@@ -7445,6 +7517,12 @@ EOF
         shift; cmd_release "$@"
         ;;
     connections)
+        # 0.40.24 (B4): --help/-h on any connections subcommand prints help
+        # and exits 0 instead of being consumed as a workspace name.
+        if _wants_help "${@:2}"; then
+            cmd_help_connections
+            exit 0
+        fi
         shift; cmd_connections "$@"
         ;;
     api-key)

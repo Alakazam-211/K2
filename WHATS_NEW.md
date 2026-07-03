@@ -3,6 +3,28 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.23 — Heartbeats you can trust
+
+- **Missed heartbeats now catch up.** If your machine was asleep or off when a
+  heartbeat was scheduled, it fires once when K2 comes back — no matter how
+  long it's been — instead of silently skipping. Restarting the daemon also
+  fires anything that came due while it was down.
+- **Firing windows.** Each heartbeat can now be limited to a time-of-day range
+  (say, hourly but only 9 AM–5 PM). Fires that come due outside the window wait
+  for it to open.
+- **Manual runs no longer eat the schedule.** Launching a heartbeat's agent by
+  hand doesn't consume that day's scheduled fire anymore.
+- **Failures are visible and bounded.** A heartbeat that keeps failing backs
+  off, then disables itself after five straight failures with a clear badge —
+  and re-enabling it resets the slate.
+- **The scheduler can't die silently.** If the background scheduler ever goes
+  missing (it could, invisibly, for weeks), K2 now shows a "transport down"
+  notice and reinstalls it automatically.
+- **Snappier workspace switching.** Workspaces with long histories no longer
+  stall on entry: saved layouts self-clean leftover empty terminal tabs from
+  older versions, and hidden terminals wait to start their shells until you
+  actually view them.
+
 ## 0.40.22 — Kessel: a first-class terminal
 
 Meet **Kessel** — K2's terminal, rebuilt to feel first-class. It's the same

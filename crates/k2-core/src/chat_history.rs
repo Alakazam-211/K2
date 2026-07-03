@@ -467,6 +467,38 @@ pub fn detect_cursor_session(project_path: &str) -> Option<String> {
     best.map(|(_, id)| id)
 }
 
+/// Does a Cursor chat dir with a `store.db` exist for this
+/// `session_id` + `project_path` (including worktree hash variants)?
+/// Chat-dir-id semantics: the id is the directory name under
+/// `~/.cursor/chats/<hash>/` — the same id [`detect_cursor_session`]
+/// and `parse_cursor_sessions` return (NOT the composerId of the
+/// IDE-side parser). Used by the ProviderResume adapter's exists check
+/// before `cursor-agent --resume <id>`.
+pub fn cursor_session_file_exists(session_id: &str, project_path: &str) -> bool {
+    if session_id.is_empty() {
+        return false;
+    }
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let cursor_chats_dir = home.join(".cursor").join("chats");
+    let root = resolve_root_project_path(project_path);
+    let root_hash = cursor_project_hash(root);
+    let Ok(entries) = fs::read_dir(&cursor_chats_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !(name == root_hash || name.starts_with(&format!("{}-.worktrees-", root_hash))) {
+            continue;
+        }
+        if entry.path().join(session_id).join("store.db").exists() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Return the most recent Gemini session uuid for a project path.
 ///
 /// Gemini's storage layout (verified against a live install):
@@ -736,6 +768,181 @@ pub fn detect_codex_session(project_path: &str) -> Option<String> {
         .and_then(|p| p.get("id"))
         .and_then(|v| v.as_str())
         .map(String::from)
+}
+
+// ── Grok on-disk session discovery ───────────────────────────────────
+//
+// Spec: `.k2/notes/grok-session-storage-study.md` (empirical, grok
+// 0.2.82). Layout:
+//
+//   ~/.grok/sessions/<percent-encoded-abs-cwd>/<uuidv7>/summary.json
+//
+// summary.json is the metadata SSOT: `.info.{id,cwd}` plus
+// `updated_at`/`last_active_at` (RFC3339 UTC) and `session_kind`
+// ("subagent" ONLY on subagent sessions — absent on user sessions).
+// Rules from the study:
+//   - read `.info.cwd` from the file, never decode dir names
+//     (%-encoding of spaces/unicode is untested);
+//   - SKIP `session_kind == "subagent"` (else 1 user session + N
+//     subagents = N+1 rows; grok's own `sessions list` filters them);
+//   - newest by `last_active_at` (fallback `updated_at`, fallback
+//     file mtime);
+//   - writes are LIVE (summary.json mtime advances mid-session), so a
+//     just-spawned session is discoverable within seconds.
+//
+// Only the exists/newest pair needed by the ProviderResume adapter
+// lives here (Slice 3); the full detect_grok_session /
+// parse_grok_sessions ChatHistory adapters are Slice 6.
+
+/// `~/.grok/sessions` — grok's per-cwd session tree.
+fn grok_sessions_root() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".grok").join("sessions"))
+}
+
+/// Parse one grok session dir's `summary.json`. Returns
+/// `(session_id, cwd, timestamp_ms)` or `None` for subagent sessions,
+/// missing/malformed summaries, or a missing cwd. `session_id` prefers
+/// `.info.id`, falling back to the dir name (dir name == id by spec).
+/// `timestamp_ms` is `last_active_at` → `updated_at` → summary.json
+/// mtime (the study's ordering; the sqlite index is never consulted —
+/// it lags live state).
+fn read_grok_summary(session_dir: &Path) -> Option<(String, String, i64)> {
+    let summary_path = session_dir.join("summary.json");
+    let content = fs::read_to_string(&summary_path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    // session_kind is top-level per the study; check `.info` too for
+    // robustness across grok versions.
+    let kind = parsed
+        .get("session_kind")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            parsed
+                .get("info")
+                .and_then(|i| i.get("session_kind"))
+                .and_then(|v| v.as_str())
+        });
+    if kind == Some("subagent") {
+        return None;
+    }
+
+    let info = parsed.get("info");
+    let cwd = info
+        .and_then(|i| i.get("cwd"))
+        .and_then(|v| v.as_str())?
+        .to_string();
+    let id = info
+        .and_then(|i| i.get("id"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or_else(|| {
+            session_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })?;
+
+    let ts = ["last_active_at", "updated_at"]
+        .iter()
+        .find_map(|key| {
+            parsed
+                .get(*key)
+                .and_then(|v| v.as_str())
+                .and_then(parse_rfc3339_to_ms)
+        })
+        .or_else(|| {
+            fs::metadata(&summary_path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+        })
+        .unwrap_or(0);
+
+    Some((id, cwd, ts))
+}
+
+/// Does a grok session dir with a family-matching cwd exist for this
+/// `session_id` + `project_path`? Subagent sessions never match (they
+/// aren't resumable user conversations).
+pub fn grok_session_file_exists(session_id: &str, project_path: &str) -> bool {
+    match grok_sessions_root() {
+        Some(root) => grok_session_exists_in_root(&root, session_id, project_path),
+        None => false,
+    }
+}
+
+/// Inner, HOME-free core of [`grok_session_file_exists`] — takes the
+/// sessions root explicitly so tests can point it at a fixture tree.
+fn grok_session_exists_in_root(
+    sessions_root: &Path,
+    session_id: &str,
+    project_path: &str,
+) -> bool {
+    if session_id.is_empty() {
+        return false;
+    }
+    let root = resolve_root_project_path(project_path);
+    let Ok(cwd_dirs) = fs::read_dir(sessions_root) else {
+        return false;
+    };
+    for cwd_entry in cwd_dirs.flatten() {
+        // Skips non-dirs: session_search.sqlite, *.lock files.
+        if !cwd_entry.path().is_dir() {
+            continue;
+        }
+        let session_dir = cwd_entry.path().join(session_id);
+        if !session_dir.is_dir() {
+            continue;
+        }
+        if let Some((_, cwd, _)) = read_grok_summary(&session_dir) {
+            if matches_project_family(&cwd, root) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The most-recently-active grok session id for this `project_path`
+/// (root + worktree family, subagents skipped), or `None` when grok has
+/// no user session for the workspace. Newest by `last_active_at`
+/// (fallback `updated_at`, fallback mtime) per the storage study.
+pub fn newest_grok_session_on_disk(project_path: &str) -> Option<String> {
+    let root = grok_sessions_root()?;
+    newest_grok_session_in_root(&root, project_path)
+}
+
+/// Inner, HOME-free core of [`newest_grok_session_on_disk`].
+fn newest_grok_session_in_root(sessions_root: &Path, project_path: &str) -> Option<String> {
+    let root = resolve_root_project_path(project_path);
+    let cwd_dirs = fs::read_dir(sessions_root).ok()?;
+    let mut best: Option<(i64, String)> = None;
+
+    for cwd_entry in cwd_dirs.flatten() {
+        if !cwd_entry.path().is_dir() {
+            continue;
+        }
+        let Ok(session_dirs) = fs::read_dir(cwd_entry.path()) else {
+            continue;
+        };
+        for session_entry in session_dirs.flatten() {
+            if !session_entry.path().is_dir() {
+                continue;
+            }
+            let Some((id, cwd, ts)) = read_grok_summary(&session_entry.path()) else {
+                continue;
+            };
+            if !matches_project_family(&cwd, root) {
+                continue;
+            }
+            match &best {
+                Some((best_ts, _)) if ts <= *best_ts => {}
+                _ => best = Some((ts, id)),
+            }
+        }
+    }
+
+    best.map(|(_, id)| id)
 }
 
 /// Provider dispatcher used by the daemon's post-spawn session-save
@@ -2903,6 +3110,147 @@ mod tests {
             newest_session_in_projects_dir(&projects, "-Users-z-proj-nsi"),
             None
         );
+    }
+
+    // ── Grok on-disk discovery (slice 3 ProviderResume backing) ─────
+    //
+    // Fixture layout mirrors `.k2/notes/grok-session-storage-study.md`:
+    // `<sessions_root>/<encoded-cwd>/<uuid>/summary.json`. The inner
+    // `_in_root` cores are exercised directly (HOME-free); the adapter
+    // wrappers get a $HOME-honoring test in `provider_resume.rs`.
+
+    fn write_grok_session(
+        sessions_root: &std::path::Path,
+        cwd_dir: &str,
+        session_id: &str,
+        cwd: &str,
+        last_active_at: &str,
+        session_kind: Option<&str>,
+    ) {
+        let dir = sessions_root.join(cwd_dir).join(session_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut summary = serde_json::json!({
+            "info": { "id": session_id, "cwd": cwd },
+            "generated_title": "test session",
+            "created_at": last_active_at,
+            "updated_at": last_active_at,
+            "last_active_at": last_active_at,
+            "num_messages": 4,
+        });
+        if let Some(kind) = session_kind {
+            summary["session_kind"] = serde_json::json!(kind);
+        }
+        std::fs::write(dir.join("summary.json"), summary.to_string()).unwrap();
+        std::fs::write(dir.join("chat_history.jsonl"), b"{\"type\":\"user\"}\n").unwrap();
+    }
+
+    #[test]
+    fn grok_exists_matches_family_and_skips_subagents() {
+        let tmp = U6TempDir::new("grok-exists");
+        let root = tmp.path.join(".grok").join("sessions");
+        std::fs::create_dir_all(&root).unwrap();
+        // Decoy non-dir entries the walk must skip (study: sqlite index
+        // + .lock files live as siblings of the cwd dirs).
+        std::fs::write(root.join("session_search.sqlite"), b"sqlite").unwrap();
+        std::fs::write(root.join("active_sessions.lock"), b"").unwrap();
+
+        let project = "/Users/z/proj-grok";
+        let user_sid = "01920000-aaaa-7000-8000-000000000001";
+        let sub_sid = "01920000-aaaa-7000-8000-000000000002";
+        let other_sid = "01920000-aaaa-7000-8000-000000000003";
+        write_grok_session(&root, "%2FUsers%2Fz%2Fproj-grok", user_sid, project,
+            "2026-07-03T10:00:00Z", None);
+        // Subagent session with the RIGHT cwd — must never match.
+        write_grok_session(&root, "%2FUsers%2Fz%2Fproj-grok", sub_sid, project,
+            "2026-07-03T11:00:00Z", Some("subagent"));
+        // Right id shape, WRONG project — must never match.
+        write_grok_session(&root, "%2FUsers%2Fz%2Fother", other_sid, "/Users/z/other",
+            "2026-07-03T12:00:00Z", None);
+
+        assert!(grok_session_exists_in_root(&root, user_sid, project));
+        assert!(
+            !grok_session_exists_in_root(&root, sub_sid, project),
+            "subagent sessions must be invisible to the exists check"
+        );
+        assert!(!grok_session_exists_in_root(&root, other_sid, project));
+        assert!(!grok_session_exists_in_root(&root, "no-such-id", project));
+        // Worktree family: a worktree path resolves to the root project.
+        assert!(grok_session_exists_in_root(
+            &root,
+            user_sid,
+            "/Users/z/proj-grok/.worktrees/feature-x"
+        ));
+    }
+
+    #[test]
+    fn grok_newest_picks_last_active_and_skips_subagents() {
+        let tmp = U6TempDir::new("grok-newest");
+        let root = tmp.path.join(".grok").join("sessions");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let project = "/Users/z/proj-grok-newest";
+        let older = "01920000-bbbb-7000-8000-000000000001";
+        let newest = "01920000-bbbb-7000-8000-000000000002";
+        let sub = "01920000-bbbb-7000-8000-000000000003";
+        let foreign = "01920000-bbbb-7000-8000-000000000004";
+        write_grok_session(&root, "%2Fproj", older, project, "2026-07-03T09:00:00Z", None);
+        // Worktree sibling counts as family AND is the newest user session.
+        write_grok_session(
+            &root,
+            "%2Fproj-wt",
+            newest,
+            "/Users/z/proj-grok-newest/.worktrees/f",
+            "2026-07-03T10:30:00Z",
+            None,
+        );
+        // Subagent is newest overall — must be skipped.
+        write_grok_session(&root, "%2Fproj", sub, project, "2026-07-03T11:00:00Z",
+            Some("subagent"));
+        // Unrelated project, newest of all — must be ignored.
+        write_grok_session(&root, "%2Fother", foreign, "/Users/z/other",
+            "2026-07-03T12:00:00Z", None);
+
+        assert_eq!(
+            newest_grok_session_in_root(&root, project).as_deref(),
+            Some(newest),
+            "newest must be picked by last_active_at across the project family, \
+             skipping subagents + foreign projects"
+        );
+    }
+
+    #[test]
+    fn grok_newest_none_for_unknown_project_and_missing_root() {
+        let tmp = U6TempDir::new("grok-none");
+        let root = tmp.path.join(".grok").join("sessions");
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(newest_grok_session_in_root(&root, "/nope"), None);
+        // Missing sessions root entirely.
+        assert_eq!(
+            newest_grok_session_in_root(&tmp.path.join("absent"), "/nope"),
+            None
+        );
+    }
+
+    #[test]
+    fn grok_summary_timestamp_falls_back_to_mtime() {
+        let tmp = U6TempDir::new("grok-mtime");
+        let root = tmp.path.join(".grok").join("sessions");
+        let project = "/Users/z/proj-grok-mtime";
+        let a = "01920000-cccc-7000-8000-000000000001";
+        let b = "01920000-cccc-7000-8000-000000000002";
+        // Neither summary carries last_active_at/updated_at → mtime decides.
+        for (sid, secs) in [(a, 1_000_000u64), (b, 2_000_000u64)] {
+            let dir = root.join("%2Fproj").join(sid);
+            std::fs::create_dir_all(&dir).unwrap();
+            let summary = serde_json::json!({ "info": { "id": sid, "cwd": project } });
+            let path = dir.join("summary.json");
+            std::fs::write(&path, summary.to_string()).unwrap();
+            set_mtime(
+                &path,
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+            );
+        }
+        assert_eq!(newest_grok_session_in_root(&root, project).as_deref(), Some(b));
     }
 
     #[test]

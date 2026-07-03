@@ -1337,6 +1337,12 @@ function ProjectDetail({
           </div>
         )}
 
+        {/* Default Agent — per-workspace override of the global default
+            agent (agent de-generalization Slice 1, migration 0063). Always
+            visible — it applies to plain Cmd+Shift+T launches regardless of
+            agentMode. */}
+        <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
+
         {/* Workspace Knowledge — edits the canonical .k2so/PROJECT.md
             (shared project knowledge injected into every agent at launch).
             Regenerates the workspace SKILL.md on close. This is the single
@@ -2134,6 +2140,78 @@ function StateSelector({ projectId, currentStateId }: { projectId: string; curre
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Default Agent Selector (per-workspace dropdown, migration 0063) ──────
+//
+// Agent de-generalization Slice 1: the per-workspace default-agent
+// override (`projects.default_agent`). Value semantics: an agent_presets
+// preset id (UUID); a stored LEGACY command token like "claude" is
+// tolerated read-side by matching the preset command's first token
+// (Slice 0's tolerant matching). ''/null = inherit the global
+// Settings → Editors & Agents default at resolve time.
+//
+// Same shape as StateSelector above: local component, optimistic store
+// update, POST `projects/update` (empty string clears the column back to
+// NULL — the stateId convention).
+
+function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: string; currentDefaultAgent?: string | null }): React.JSX.Element {
+  const presets = usePresetsStore((s) => s.presets)
+  const globalDefaultAgent = useSettingsStore((s) => s.defaultAgent)
+  const [selected, setSelected] = useState(currentDefaultAgent || '')
+
+  useEffect(() => {
+    setSelected(currentDefaultAgent || '')
+  }, [currentDefaultAgent])
+
+  // Tolerant resolve: preset id first (canonical), then legacy command
+  // token (what the global setting historically stored).
+  const resolvePreset = (val: string) =>
+    presets.find((p) => p.id === val) ?? presets.find((p) => p.command.split(/\s+/)[0] === val)
+
+  const globalPreset = resolvePreset(globalDefaultAgent)
+  const enabledPresets = presets.filter((p) => p.enabled !== 0)
+  // A stored legacy token normalizes to its preset id so the dropdown
+  // highlights the matching row; a value that matches NO preset falls
+  // through to SettingDropdown's placeholder (shown muted) instead of
+  // silently reading as "Inherit" or as the first option.
+  const selectedPreset = selected ? resolvePreset(selected) : undefined
+  const value = selected ? (selectedPreset?.id ?? selected) : ''
+
+  const handleChange = async (presetId: string): Promise<void> => {
+    setSelected(presetId)
+    try {
+      await daemonCliPost('projects/update', { id: projectId, defaultAgent: presetId || '' })
+      emitProjectsChanged()
+      const store = useProjectsStore.getState()
+      const updated = store.projects.map((p) =>
+        p.id === projectId ? { ...p, defaultAgent: presetId || null } : p
+      )
+      useProjectsStore.setState({ projects: updated })
+    } catch (err) {
+      console.error('[default-agent-selector] Update failed:', err)
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)]">
+      <div>
+        <span className="text-xs text-[var(--color-text-secondary)]">Default Agent</span>
+        <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
+          The agent ⇧⌘T and AI helpers launch for this workspace.
+        </p>
+      </div>
+      <SettingDropdown
+        value={value}
+        options={[
+          { value: '', label: `Inherit global (${globalPreset?.label ?? globalDefaultAgent})` },
+          ...enabledPresets.map((p) => ({ value: p.id, label: p.label })),
+        ]}
+        onChange={handleChange}
+        placeholder={selected || undefined}
+      />
     </div>
   )
 }

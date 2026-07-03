@@ -154,6 +154,13 @@ interface Project {
   // agent via the composer. The daemon ENFORCES the gate server-side;
   // this drives the renderer composer-hide for non-owner principals.
   allowRemoteInstruct: number
+  // Agent de-generalization S1 (migration 0063) — per-workspace default
+  // agent: an agent_presets preset id (UUID string), though readers must
+  // ALSO tolerate a legacy command token like 'claude'. null = inherit
+  // the global Settings defaultAgent at resolve time. Stamped with the
+  // current global default when the row is created (non-retroactive).
+  // Written via POST projects/update `defaultAgent` ('' clears to null).
+  defaultAgent: string | null
 }
 
 export interface ProjectWithWorkspaces extends Project {

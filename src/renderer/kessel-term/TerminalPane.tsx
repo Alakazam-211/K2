@@ -3314,12 +3314,39 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         if (hoveredLink) setHoveredLink(null)
         return
       }
-      const links = detectLinks(text, cwd)
+      // Soft-wrap join: a URL/path that wraps spans several grid rows,
+      // and scanning only the hovered row truncates the match at the
+      // row edge (only the pre-wrap fragment was detected/opened).
+      // Rebuild the LOGICAL line around the hovered row using the same
+      // `wrapped` last-run flag the copy handler joins on: walk up
+      // while the row ABOVE wraps into us, down while WE wrap onward.
+      // Wrapped joins are mid-content (no trim, no separator) —
+      // identical semantics to buildCopyText. Bounded to 8 rows each
+      // way: a single link longer than that is pathological.
+      const isRowWrapped = (r: CellRun[] | undefined): boolean =>
+        !!r && r.length > 0 && r[r.length - 1].wrapped === true
+      let firstRow = row
+      while (row - firstRow < 8 && isRowWrapped(stripRows[firstRow - 1])) {
+        firstRow--
+      }
+      let lastRow = row
+      while (lastRow - row < 8 && isRowWrapped(stripRows[lastRow])) {
+        lastRow++
+      }
+      let joined = ''
+      let prefixLen = 0
+      for (let r = firstRow; r <= lastRow; r++) {
+        const t = rowToText(stripRows[r] ?? [])
+        if (r < row) prefixLen += t.length
+        joined += t
+      }
+      const links = detectLinks(joined, cwd)
       // Terminal column → UTF-16 text offset before comparing against
       // detectLinks ranges (string indices): a wide char occupies two
       // columns but one text position, so raw column compare would
-      // skew every hit right of CJK/emoji content.
-      const textIdx = colToTextIndex(visibleRow, col)
+      // skew every hit right of CJK/emoji content. Offset by the
+      // joined-line prefix so the index addresses the logical line.
+      const textIdx = prefixLen + colToTextIndex(visibleRow, col)
       const hit = links.find((l) => textIdx >= l.start && textIdx < l.end)
       if (hit) {
         if (

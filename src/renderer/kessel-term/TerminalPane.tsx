@@ -95,6 +95,7 @@ import {
   modelRowAt,
 } from './copyText'
 import { shouldApplyOsc52 } from './oscClipboard'
+import { pickSeamColor } from './seamColor'
 
 // ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
 
@@ -2735,6 +2736,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     return { stripRows: rows, stripAbsRows: abs }
   }, [snapshot, stripLayout.stripStart, stripLayout.rowCount])
 
+  // iTerm-style "extend background color to edges": when the visible
+  // strip's boundary cells share one explicit bg (fullscreen TUI),
+  // the container paints it so the sub-cell remainder at the right/
+  // bottom edges doesn't show the theme background as a seam. Null
+  // (plain shell / no majority) keeps the theme. Recomputed per
+  // committed frame but the RESULT is a primitive — downstream memos
+  // (containerStyle) only rebuild when the picked color actually
+  // changes, so a TUI steadily repainting its own bg causes zero
+  // style churn. Applies to both painters: the WebGL canvas is sized
+  // to exactly cols×rows cells, so the seam is this same container
+  // showing through (the painter's clear color stays theme-bg — grid
+  // cells with default bg ride it).
+  const seamBg = useMemo(
+    () => pickSeamColor(stripRows, snapshot?.cols),
+    [stripRows, snapshot?.cols],
+  )
+
   // ── Passive scale-to-fit (kessel-hard-learnings §2.7 / §Wave 3) ─
   //
   // When ANOTHER viewer owns the PTY size (this pane never claimed
@@ -3952,7 +3970,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       fontSize: `${fontSize}px`,
       lineHeight: `${Math.ceil(fontSize * config.font.lineHeightMultiplier)}px`,
       color: `rgb(${(config.colors.foreground >> 16) & 0xff},${(config.colors.foreground >> 8) & 0xff},${config.colors.foreground & 0xff})`,
-      backgroundColor: `rgb(${(config.colors.background >> 16) & 0xff},${(config.colors.background >> 8) & 0xff},${config.colors.background & 0xff})`,
+      // Seam fill (see `seamBg`): a fullscreen TUI's own bg extends
+      // into the cell-quantization remainder at the right/bottom
+      // edges instead of exposing the theme background as a seam.
+      backgroundColor: hexToCss(seamBg ?? config.colors.background),
       whiteSpace: 'pre',
       padding: '4px',
       position: 'relative',
@@ -3968,6 +3989,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       config.font.lineHeightMultiplier,
       config.colors.foreground,
       config.colors.background,
+      seamBg,
     ],
   )
 

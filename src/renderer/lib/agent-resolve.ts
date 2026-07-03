@@ -16,11 +16,15 @@
 // zustand/tauri scaffolding. React consumers should prefer the thin wrapper
 // hook `useResolvedAgentCommand` (src/renderer/hooks/useResolvedAgentCommand.ts).
 
-/** Structural subset of `AgentPreset` (stores/presets.ts) this seam needs. */
-export interface AgentPresetLike {
+/** Minimum shape needed to MATCH a stored value against a preset. */
+export interface AgentPresetRef {
   id: string
-  label: string
   command: string
+}
+
+/** Structural subset of `AgentPreset` (stores/presets.ts) this seam needs. */
+export interface AgentPresetLike extends AgentPresetRef {
+  label: string
   /** Daemon rows use 0/1; accept booleans for callers/tests. */
   enabled: number | boolean
 }
@@ -73,7 +77,7 @@ export function parseCommand(commandStr: string): { command: string; args: strin
 }
 
 /** First whitespace-delimited token of a preset's command string. */
-function commandFirstToken(preset: AgentPresetLike): string {
+function commandFirstToken(preset: AgentPresetRef): string {
   return preset.command.split(/\s+/)[0] ?? ''
 }
 
@@ -84,7 +88,7 @@ function commandFirstToken(preset: AgentPresetLike): string {
  * names, or null. Use this for DISPLAY (e.g. the settings picker); use
  * `resolveAgentPreset` when you need something launchable.
  */
-export function matchAgentPreset<P extends AgentPresetLike>(
+export function matchAgentPreset<P extends AgentPresetRef>(
   presets: readonly P[],
   value: string | null | undefined,
 ): P | null {

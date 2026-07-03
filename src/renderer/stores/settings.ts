@@ -77,7 +77,10 @@ interface SettingsState {
   // Editor settings
   editor: EditorSettingsBackend
 
-  // Default agent CLI tool (e.g. 'claude', 'codex', 'gemini')
+  // Default AI agent. Canonically an agent_presets id (UUID); legacy
+  // settings.json values hold a command first-token like 'claude'.
+  // Never compare this field directly — resolve it via @/lib/agent-resolve
+  // (resolveAgentPreset / useResolvedAgentCommand), which accepts both.
   defaultAgent: string
 
   // Pre-select a specific project in the projects section

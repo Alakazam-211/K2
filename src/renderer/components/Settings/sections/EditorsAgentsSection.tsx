@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
 import { usePresetsStore } from '@/stores/presets'
+import { matchAgentPreset } from '@/lib/agent-resolve'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { KeyCombo } from '@/components/KeySymbol'
 import { SettingDropdown } from '../controls/SettingControls'
@@ -55,10 +56,16 @@ function DefaultAgentPickerInline({ presets }: { presets: { id: string; label: s
   const defaultAgent = useSettingsStore((s) => s.defaultAgent)
   const setDefaultAgent = useSettingsStore((s) => s.setDefaultAgent)
 
+  // Canonical stored value = preset id (agent_presets UUID). Legacy
+  // settings.json values hold the command's first token ("claude") — map
+  // them onto their preset for display; resolution everywhere else goes
+  // through resolveAgentPreset, which accepts both. No data migration:
+  // the stored value upgrades to an id the next time the user picks.
   const agentOptions = presets.map((p) => ({
-    value: p.command.split(/\s+/)[0],
+    value: p.id,
     label: p.label,
   }))
+  const selectedId = matchAgentPreset(presets, defaultAgent)?.id ?? defaultAgent
 
   return (
     <div className="flex items-center justify-between px-3 py-2.5">
@@ -67,7 +74,7 @@ function DefaultAgentPickerInline({ presets }: { presets: { id: string; label: s
         <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Launched with <KeyCombo combo="⇧⌘" />T or from the assistant</div>
       </div>
       <SettingDropdown
-        value={defaultAgent}
+        value={selectedId}
         options={agentOptions}
         onChange={setDefaultAgent}
       />

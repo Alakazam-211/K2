@@ -49,6 +49,7 @@ pub mod fs_routes;
 pub mod grid_emitter;
 pub mod git_routes;
 pub mod heartbeat_launch;
+pub mod heartbeat_monitor;
 pub mod heartbeat_routes;
 pub mod inbox_routes;
 pub mod llm_host;

@@ -60,6 +60,7 @@ mod fs_routes;
 mod grid_emitter;
 mod git_routes;
 mod heartbeat_launch;
+mod heartbeat_monitor;
 mod heartbeat_routes;
 mod inbox_routes;
 mod llm_host;
@@ -297,6 +298,25 @@ async fn async_main() {
             Ok(0) => {}
             Ok(n) => log_debug!("[daemon] swept {} stale heartbeat lease(s) from prior crash", n),
             Err(e) => log_debug!("[daemon] WARN: sweep_stale_leases: {e}"),
+        }
+    }
+
+    // Heartbeat audit retention (reliability overhaul): prune
+    // `heartbeat_fires` rows older than 90 days. The pruner existed
+    // since the audit table did but had zero callers — combined with
+    // the now-retired per-tick not_due rows (1,440/heartbeat/day) the
+    // table grew unboundedly and real fires drowned in no-op rows.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(90)).to_rfc3339();
+        match k2_core::db::schema::HeartbeatFire::prune_before(&conn, &cutoff) {
+            Ok(0) => {}
+            Ok(n) => log_debug!(
+                "[daemon] pruned {} heartbeat audit row(s) older than 90 days",
+                n
+            ),
+            Err(e) => log_debug!("[daemon] WARN: heartbeat_fires prune: {e}"),
         }
     }
 
@@ -750,6 +770,14 @@ async fn async_main() {
     // been idle past its per-request `timeout_secs` (default 180). Replaces the
     // guest-init `sleep 86400` observability hack. No-op until a cell registers.
     let _sandbox_reaper_handle = sandbox_reaper::spawn();
+
+    // Heartbeat reliability monitor: boot-time overdue scan (misses
+    // catch up on restart without waiting for — or depending on — the
+    // launchd tick), wall-clock-jump detection (immediate re-evaluation
+    // on wake-from-sleep), and tick-transport self-heal (reinstall a
+    // silently-missing dev.k2.heartbeat agent). Spawned after the
+    // readiness gate so the scan runs against fully-migrated state.
+    let _heartbeat_monitor_handle = heartbeat_monitor::spawn();
 
     // Federation outbox drain (audit finding #5 — the retry loop the durable
     // outbox promised). Sweeps queued cross-server messages to reachable

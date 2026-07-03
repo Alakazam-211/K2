@@ -398,36 +398,30 @@ pub fn k2so_agents_scheduler_tick(project_path: String) -> Result<Vec<String>, S
         .unwrap_or_else(|| "heartbeat".to_string());
 
     // Gate 1: workspace-level state. Locked workspaces halt all agents.
+    //
+    // Audit hygiene (reliability overhaul): the three routine gate
+    // skips below no longer write per-tick `skipped_locked` /
+    // `skipped_schedule` audit rows — at the 60s tick cadence a locked
+    // or mode-off workspace produced 1,440 identical no-op rows a day
+    // and real fires drowned. The gates themselves are unchanged; only
+    // decisions that carry information reach `heartbeat_fires` now.
     if let Some(ws_state) = get_workspace_state(&project_path) {
         if ws_state.heartbeat == 0 {
-            audit(
-                None,
-                &mode_str,
-                "skipped_locked",
-                Some("workspace state has heartbeat=0"),
-                None,
-                None,
-            );
             return Ok(vec![]);
         }
     }
 
-    // Gate 2: project-level schedule.
+    // Gate 2: project-level schedule (Lane A — the legacy project-level
+    // `heartbeat_mode`/`heartbeat_schedule` columns; deliberately still
+    // on the calendar-position evaluator. Folding this lane into
+    // `workspace_heartbeats` rows is deferred — misfire study, owner
+    // decision 7).
     if let Some((project_id, mode, schedule, last_fire)) = project_row.clone() {
         if mode == "off" {
-            audit(None, &mode, "skipped_schedule", Some("heartbeat_mode=off"), None, None);
             return Ok(vec![]);
         }
         if mode == "scheduled" || mode == "hourly" {
             if !should_project_fire(&mode, schedule.as_deref(), last_fire.as_deref()) {
-                audit(
-                    None,
-                    &mode,
-                    "skipped_schedule",
-                    Some("schedule window not open"),
-                    None,
-                    None,
-                );
                 return Ok(vec![]);
             }
             let db = crate::db::shared();

@@ -79,6 +79,54 @@ pub fn ensure_cron_installed() -> Result<bool, String> {
     Ok(changed)
 }
 
+/// Is the tick transport actually installed AND armed?
+///
+/// macOS: the `dev.k2.heartbeat` plist exists on disk AND launchd
+/// reports the agent loaded (`launchctl print gui/<uid>/…`). The
+/// misfire study found this box's agent silently missing for ~3 weeks
+/// while every enabled heartbeat sat dark with zero signal — the
+/// plist-on-disk check alone is not enough.
+///
+/// Linux: the `k2so-agent-heartbeat` crontab entry exists.
+///
+/// Other platforms report `true` (no supported transport to verify —
+/// don't raise false alarms).
+pub fn transport_installed() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let plist_path = home_dir().join("Library/LaunchAgents/dev.k2.heartbeat.plist");
+        if !plist_path.exists() {
+            return false;
+        }
+        let uid_target = format!("gui/{}/dev.k2.heartbeat", unsafe { libc::getuid() });
+        std::process::Command::new("launchctl")
+            .args(["print", &uid_target])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("crontab")
+            .args(["-l"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    String::from_utf8(o.stdout).ok()
+                } else {
+                    None
+                }
+            })
+            .map(|c| c.contains("k2so-agent-heartbeat"))
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        true
+    }
+}
+
 /// Bash script written to `~/.k2so/heartbeat.sh`. Asks the daemon
 /// for active projects on every tick and forwards each to
 /// `/cli/scheduler-tick`. P5.6 retired the `heartbeat-projects.txt`

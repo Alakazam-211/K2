@@ -90,6 +90,68 @@ pub fn handle_triage(project_path: &str) -> String {
         .unwrap_or_else(|e| format!("Triage error: {}", e))
 }
 
+/// A tick gap larger than this (seconds) is audit-worthy: at the 60s
+/// default cadence, 5 missing ticks means the machine slept, the
+/// daemon was down, or the launchd transport is dead. 5 minutes also
+/// tolerates users who set the wake interval to a few minutes.
+const TICK_GAP_AUDIT_SECS: i64 = 300;
+
+/// Stamp `scheduler_meta.last_tick_at = now` and return the gap since
+/// the previous tick when it exceeds [`TICK_GAP_AUDIT_SECS`]. The
+/// persisted stamp is what makes "the scheduler is not ticking"
+/// observable at all (misfire study fragility #12 — the transport can
+/// die silently for weeks); the returned gap feeds `tick_gap` audit
+/// rows so downtime shows up in the fire history next to the catch-up
+/// fires it caused.
+fn note_tick_and_detect_gap() -> Option<i64> {
+    let db = shared_db();
+    let conn = db.lock();
+    let now = chrono::Utc::now();
+    let prev = k2_core::db::schema::SchedulerMeta::get(
+        &conn,
+        k2_core::db::schema::SchedulerMeta::LAST_TICK_AT,
+    )
+    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+    .map(|t| t.with_timezone(&chrono::Utc));
+    if let Err(e) = k2_core::db::schema::SchedulerMeta::set(
+        &conn,
+        k2_core::db::schema::SchedulerMeta::LAST_TICK_AT,
+        &now.to_rfc3339(),
+    ) {
+        k2_core::log_debug!("[daemon/scheduler-fire] WARN: persist last_tick_at: {e}");
+    }
+    let gap = (now - prev?).num_seconds();
+    (gap > TICK_GAP_AUDIT_SECS).then_some(gap)
+}
+
+/// Write a `tick_gap` audit row for one project. Reason spells out the
+/// three possible causes so "why didn't it run?" is answerable from
+/// the fire history alone.
+fn write_tick_gap_audit(project_path: &str, gap_secs: i64) {
+    let db = shared_db();
+    let conn = db.lock();
+    let Some(project_id) =
+        k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path)
+    else {
+        return;
+    };
+    let _ = k2_core::db::schema::HeartbeatFire::insert_with_schedule(
+        &conn,
+        &project_id,
+        None,
+        None,
+        "tick",
+        "tick_gap",
+        Some(&format!(
+            "no scheduler tick for {gap_secs}s — machine asleep, daemon down, \
+             or heartbeat transport dead. Missed occurrences catch up now."
+        )),
+        None,
+        None,
+        None,
+    );
+}
+
 /// Handler for `/cli/heartbeat/active-projects` — newline-delimited
 /// list of project paths with at least one enabled, non-archived
 /// `workspace_heartbeats` row. Replaces the static
@@ -118,6 +180,23 @@ pub fn handle_active_projects() -> String {
         Err(_) => return String::new(),
     };
     let paths: Vec<String> = rows.filter_map(|r| r.ok()).collect();
+    drop(stmt);
+    drop(conn);
+
+    // heartbeat.sh calls this once per cron tick, BEFORE the per-project
+    // scheduler-tick calls — the natural once-per-tick spot to stamp
+    // `last_tick_at` and detect gaps. A detected gap writes one
+    // `tick_gap` row per active project so every affected workspace's
+    // history explains its upcoming catch-up fires.
+    if let Some(gap) = note_tick_and_detect_gap() {
+        k2_core::log_debug!(
+            "[daemon/scheduler-fire] tick gap detected: {gap}s since previous tick"
+        );
+        for p in &paths {
+            write_tick_gap_audit(p, gap);
+        }
+    }
+
     paths.join("\n")
 }
 
@@ -136,6 +215,14 @@ pub fn handle_active_projects() -> String {
 ///   5. `stamp_heartbeat_fired` on the ones that actually spawned.
 ///   6. Return the count for `heartbeat.sh` to parse.
 pub fn handle_scheduler_fire(project_path: &str) -> String {
+    // Per-project ticks that DIDN'T come through active-projects
+    // (manual "tick now", boot overdue scan, direct curl) still stamp
+    // the tick and surface a gap for this project. When heartbeat.sh
+    // drove the tick, active-projects stamped seconds ago → no-op here.
+    if let Some(gap) = note_tick_and_detect_gap() {
+        write_tick_gap_audit(project_path, gap);
+    }
+
     // Belt-and-suspenders for the lease watchdog: sweep any in-flight
     // lease older than 5 minutes at the top of every tick (one cheap
     // conditional UPDATE), so a wedged row recovers within a tick even

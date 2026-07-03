@@ -580,6 +580,49 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             CliResponse::ok_text(crate::triage::handle_active_projects())
         }
 
+        // Reliability overhaul — tick-transport health for the UI.
+        // `lastTickAt` is stamped by every scheduler tick
+        // (scheduler_meta KV); a stale value while heartbeats are
+        // enabled means the transport (launchd agent / crontab /
+        // daemon) is not delivering ticks — the Settings page renders
+        // a "heartbeat transport down since <t>" banner from this.
+        // Daemon-wide status, so no project param (must precede the
+        // project-scoped catch-all arm below).
+        "/cli/heartbeat/scheduler-status" => {
+            let (last_tick_at, enabled_count) = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let last = k2_core::db::schema::SchedulerMeta::get(
+                    &conn,
+                    k2_core::db::schema::SchedulerMeta::LAST_TICK_AT,
+                );
+                let count: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM workspace_heartbeats \
+                         WHERE enabled = 1 AND archived_at IS NULL",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                (last, count)
+            };
+            let stale_secs = last_tick_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds());
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "lastTickAt": last_tick_at,
+                    "staleSecs": stale_secs,
+                    "enabledCount": enabled_count,
+                    "transportInstalled":
+                        k2_core::heartbeats::install::transport_installed(),
+                    "wakeMode": k2_core::app_settings::load().wake_scheduler.mode,
+                })
+                .to_string(),
+            )
+        }
+
         // ── Heartbeat CRUD + fires ──────────────────────────────────
         p if p.starts_with("/cli/heartbeat/") || p == "/cli/heartbeat-log" => {
             match need_project(params) {

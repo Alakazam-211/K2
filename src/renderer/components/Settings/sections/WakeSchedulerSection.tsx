@@ -128,6 +128,40 @@ interface SystemHeartbeatRow {
   scheduleError: string | null
 }
 
+/** Payload of `/cli/heartbeat/scheduler-status` — daemon-wide tick
+ *  transport health. `lastTickAt` is stamped by every scheduler tick;
+ *  stale (or absent) while heartbeats are enabled = the launchd agent /
+ *  crontab / daemon is not delivering ticks. */
+interface SchedulerStatus {
+  lastTickAt: string | null
+  staleSecs: number | null
+  enabledCount: number
+  transportInstalled: boolean
+  wakeMode: string
+}
+
+/** Transport-down banner text, or null when healthy. Tolerance is
+ *  2 ticks at the configured interval (min 3 min) so a slow cadence
+ *  doesn't false-alarm. */
+function transportDownMessage(
+  status: SchedulerStatus | null,
+  intervalMinutes: number,
+): string | null {
+  if (!status) return null
+  if (status.enabledCount === 0) return null
+  if (status.wakeMode === 'off') return null // explicit user choice
+  const toleranceSecs = Math.max(180, intervalMinutes * 120)
+  const stale = status.staleSecs == null || status.staleSecs > toleranceSecs
+  if (!stale && status.transportInstalled) return null
+  const since = status.lastTickAt
+    ? `since ${new Date(status.lastTickAt).toLocaleString()}`
+    : '— no tick has ever been recorded'
+  if (!status.transportInstalled) {
+    return `Heartbeat transport down ${since}: the launchd wake agent is not installed/loaded. The daemon will self-heal it shortly; if this persists, re-apply the wake scheduler below.`
+  }
+  return `Heartbeat transport down ${since}: scheduler ticks are not arriving (machine asleep, daemon restarts, or launchd agent stalled). Missed fires will catch up on the next tick.`
+}
+
 /** Same error-badge derivation HeartbeatsSection uses, for the
  *  system-wide row shape. */
 function systemRowErrorBadge(row: SystemHeartbeatRow): string | null {
@@ -189,6 +223,10 @@ export function WakeSchedulerSection(): React.JSX.Element {
   // fires across all workspaces. Polled every 5s so the user sees
   // newly-firing heartbeats live without having to reopen the page.
   const [fires, setFires] = useState<SystemFireRow[]>([])
+  // Reliability overhaul — tick-transport health (last_tick_at
+  // staleness + launchd agent presence). Polled every 15s; renders the
+  // "heartbeat transport down since <t>" banner.
+  const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null)
   // Last successfully-persisted snapshot. `dirty` is computed from
   // deep-equality against this — there's no separate `setDirty` flag
   // that can drift out of sync with the actual on-disk state. Apply
@@ -277,6 +315,24 @@ export function WakeSchedulerSection(): React.JSX.Element {
     }
     void tick()
     const id = window.setInterval(tick, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const tick = async (): Promise<void> => {
+      try {
+        const status = await daemonCliGet<SchedulerStatus>('heartbeat/scheduler-status', {})
+        if (!cancelled) setSchedulerStatus(status)
+      } catch {
+        // Silent — health polling must never toast on a transient miss.
+      }
+    }
+    void tick()
+    const id = window.setInterval(tick, 15000)
     return () => {
       cancelled = true
       window.clearInterval(id)
@@ -429,7 +485,16 @@ export function WakeSchedulerSection(): React.JSX.Element {
     // per-row enable toggle, pinned-chat checkbox, and edit-wakeup
     // button. The right column inherits the same parent container so
     // the page just spreads naturally on wider Settings panes.
-    <div data-settings-id="heartbeats" className="flex gap-8 items-start">
+    <div data-settings-id="heartbeats" className="flex flex-col gap-4">
+      {/* Reliability overhaul — transport-down banner. Rendered above
+          both columns: a dead tick transport nullifies everything
+          configured below, so it must be the first thing seen. */}
+      {transportDownMessage(schedulerStatus, settings.intervalMinutes) && (
+        <div className="border border-[var(--color-bad,#ef6f6f)]/60 bg-[var(--color-bad,#ef6f6f)]/10 px-3 py-2 text-[11px] text-[var(--color-bad,#ef6f6f)] leading-relaxed">
+          {transportDownMessage(schedulerStatus, settings.intervalMinutes)}
+        </div>
+      )}
+      <div className="flex gap-8 items-start">
       {/* ── Left column: launchd plist mode ─────────────────────────── */}
       <div className="w-1/3 min-w-[280px] max-w-[420px] flex-shrink-0">
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
@@ -746,6 +811,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
             )
           })}
         </div>
+      </div>
       </div>
     </div>
   )

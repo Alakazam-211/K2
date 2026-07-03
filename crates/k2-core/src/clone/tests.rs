@@ -852,6 +852,7 @@ fn settings_captured_from_project_row() {
         None,                          // state_id
         None,                          // heartbeat_mode
         None,                          // heartbeat_schedule
+        None,                          // default_agent
     )
     .expect("set agent_mode + heartbeat");
 
@@ -938,6 +939,7 @@ fn settings_round_trip_through_bundle() {
         None,                          // state_id
         None,                          // heartbeat_mode
         None,                          // heartbeat_schedule
+        None,                          // default_agent
     )
     .expect("set agent_mode");
 

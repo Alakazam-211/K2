@@ -327,6 +327,7 @@ pub fn unpack_and_register(
             None,                          // state_id
             None,                          // heartbeat_mode
             None,                          // heartbeat_schedule
+            None,                          // default_agent — the pulled row keeps its stamp-on-register value
         )
         .map_err(|e| format!("apply settings: {e}"))?;
         return Ok((updated, dest_path));

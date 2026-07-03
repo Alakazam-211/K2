@@ -453,6 +453,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // tick-transport gaps measurable. See
         // `.k2/notes/heartbeat-misfire-study.md`.
         ("0062_heartbeat_reliability", include_str!("../../drizzle_sql/0062_heartbeat_reliability.sql")),
+        // 0063 (agent de-generalization S1): per-workspace DEFAULT AGENT
+        // column `default_agent` on `projects` (nullable TEXT, no default).
+        // Holds an `agent_presets` preset id (UUID) — readers also tolerate
+        // a legacy command token like "claude". NULL = inherit the global
+        // `AppSettings.default_agent` at resolve time; existing rows
+        // backfill to NULL (non-retroactive), new rows are stamped with the
+        // current global default at creation.
+        ("0063_project_default_agent", include_str!("../../drizzle_sql/0063_project_default_agent.sql")),
     ];
 
     for (name, sql) in migrations {

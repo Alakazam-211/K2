@@ -292,6 +292,29 @@ pub fn projects_list() -> Result<Vec<Project>, String> {
     Ok(projects)
 }
 
+/// Agent de-generalization S1 (migration 0063) — stamp a freshly
+/// CREATED `projects` row with the CURRENT global default agent
+/// (`AppSettings.default_agent`). Non-retroactive by design: only the
+/// create flows below call this, so pre-existing rows keep NULL
+/// (= inherit the global at resolve time) and a new workspace keeps
+/// the agent it was born with even if the global default changes
+/// later. Stores the value as given (preset id today, legacy command
+/// token like "claude" historically) — shape is NOT validated here;
+/// readers do tolerant matching. An empty global value is not stamped
+/// (NULL stays the one representation of "nothing chosen").
+fn stamp_default_agent(conn: &rusqlite::Connection, project_id: &str) -> Result<(), String> {
+    let global = crate::app_settings::load().default_agent;
+    if global.trim().is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE projects SET default_agent = ?1 WHERE id = ?2",
+        rusqlite::params![global, project_id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 pub fn projects_create(
     name: &str,
     path: &str,
@@ -307,6 +330,7 @@ pub fn projects_create(
     with_transaction(&conn, || {
         Project::create(&conn, &project_id, name, path, &color, tab_order, 1, None, None)
             .map_err(|e| e.to_string())?;
+        stamp_default_agent(&conn, &project_id)?;
         Workspace::create(
             &conn,
             &workspace_id,
@@ -339,6 +363,7 @@ pub fn projects_update(
     state_id: Option<Option<&str>>,
     heartbeat_mode: Option<String>,
     heartbeat_schedule: Option<Option<&str>>,
+    default_agent: Option<Option<&str>>,
 ) -> Result<Project, String> {
     // Pre-update: if agent_mode is changing, archive orphan agents for
     // the project's path BEFORE applying the swap. Uses the same in-
@@ -381,6 +406,7 @@ pub fn projects_update(
         state_id,
         heartbeat_mode,
         heartbeat_schedule,
+        default_agent,
     )
     .map_err(|e| e.to_string())?;
     Project::get(&conn, id).map_err(|e| e.to_string())
@@ -404,7 +430,7 @@ pub fn projects_reorder(ids: &[String]) -> Result<(), String> {
         Project::update(
             &conn,
             id,
-            None, None, None, Some(i as i64), None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, Some(i as i64), None, None, None, None, None, None, None, None, None, None, None, None,
         )
         .map_err(|e| e.to_string())?;
     }
@@ -570,6 +596,7 @@ pub fn projects_add_from_path(path: &str) -> Result<AddFromPathResult, String> {
             &conn, &project_id, &name, path, "#3b82f6", tab_order, 0, None, None,
         )
         .map_err(|e| e.to_string())?;
+        stamp_default_agent(&conn, &project_id)?;
         Workspace::create(
             &conn,
             &workspace_id,
@@ -613,7 +640,7 @@ fn reconcile_focus_group(
         project_id,
         None, None, None, None, None, None,
         Some(Some(group_id.as_str())),
-        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None, None,
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -636,6 +663,7 @@ pub fn projects_add_without_git(path: &str) -> Result<Project, String> {
             &conn, &project_id, &name, path, "#3b82f6", tab_order, 0, None, None,
         )
         .map_err(|e| e.to_string())?;
+        stamp_default_agent(&conn, &project_id)?;
         Workspace::create(
             &conn,
             &workspace_id,
@@ -699,6 +727,7 @@ pub fn projects_init_git_and_open(path: &str, branch: Option<&str>) -> Result<Pr
             &conn, &project_id, &name, path, "#3b82f6", tab_order, 0, None, None,
         )
         .map_err(|e| e.to_string())?;
+        stamp_default_agent(&conn, &project_id)?;
         Workspace::create(
             &conn,
             &workspace_id,
@@ -725,7 +754,7 @@ pub fn projects_enable_worktrees(project_id: &str) -> Result<Project, String> {
     with_transaction(&conn, || {
         Project::update(
             &conn, project_id, None, None, None, None, Some(1), None, None, None, None, None, None,
-            None, None, None, None,
+            None, None, None, None, None,
         )
         .map_err(|e| e.to_string())?;
 
@@ -812,7 +841,7 @@ pub fn projects_get_icon(path: &str, project_id: Option<&str>) -> Result<IconRes
                 pid,
                 None, None, None, None, None,
                 Some(Some(data_url.as_str())),
-                None, None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None, None, None,
             )
             .ok();
         }
@@ -838,7 +867,7 @@ pub fn projects_detect_icon(project_id: &str) -> Result<IconResult, String> {
             project_id,
             None, None, None, None, None,
             Some(Some(data_url.as_str())),
-            None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None,
         )
         .map_err(|e| e.to_string())?;
         Ok(IconResult {
@@ -862,7 +891,7 @@ pub fn projects_set_icon(project_id: &str, data_url: &str) -> Result<IconResult,
         project_id,
         None, None, None, None, None,
         Some(Some(data_url)),
-        None, None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None, None, None,
     )
     .map_err(|e| e.to_string())?;
     Ok(IconResult {
@@ -879,7 +908,7 @@ pub fn projects_clear_icon(project_id: &str) -> Result<(), String> {
         project_id,
         None, None, None, None, None,
         Some(None),
-        None, None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None, None, None,
     )
     .map_err(|e| e.to_string())
 }
@@ -979,5 +1008,109 @@ mod tests {
         );
 
         delete_project("real-ws-projects-ops");
+    }
+
+    /// 0063 stamp-on-create: a project row CREATED through the public
+    /// create flow gets `default_agent` stamped with the CURRENT global
+    /// `AppSettings.default_agent` — pinning the workspace to the agent
+    /// it was born with (the NULL = inherit-global fallthrough is only
+    /// for pre-migration rows, covered in schema.rs). HOME is pointed at
+    /// a temp dir (under the crate-wide HOME_LOCK, like app_settings'
+    /// own tests) so the asserted value is fully deterministic and the
+    /// developer's real ~/.k2/settings.json is never read or written.
+    #[test]
+    fn projects_create_stamps_default_agent_from_global_setting() {
+        let _g = crate::themes::HOME_LOCK.lock();
+
+        // Temp HOME with a settings.json whose default_agent is a known
+        // preset-id-shaped value.
+        let tmp_home = std::env::temp_dir().join(format!(
+            "k2so-stamp-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp_home).expect("create temp HOME");
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &tmp_home);
+
+        let run = || -> Project {
+            let stamped_preset = "aaaabbbb-1234-4abc-9def-000011112222";
+            let mut s = crate::app_settings::AppSettings::default();
+            s.default_agent = stamped_preset.into();
+            crate::app_settings::save(&s).expect("save global settings");
+
+            db::init_for_tests();
+            let path = format!("/tmp/k2so-stamp-test/{}", Uuid::new_v4());
+            let created =
+                projects_create("StampMe", &path, None).expect("projects_create ok");
+            assert_eq!(
+                created.default_agent.as_deref(),
+                Some(stamped_preset),
+                "created row must be stamped with the global default_agent"
+            );
+
+            // The stamp must survive an unrelated projects_update (None
+            // leaves it untouched) and be visible through Project::get.
+            let updated = projects_update(
+                &created.id,
+                Some("StampMe Renamed"),
+                None, None, None, None, None, None, None, None, None, None, None, None,
+                None,
+            )
+            .expect("projects_update ok");
+            assert_eq!(updated.name, "StampMe Renamed");
+            assert_eq!(
+                updated.default_agent.as_deref(),
+                Some(stamped_preset),
+                "unrelated update must not clear the stamp"
+            );
+
+            // And projects_update can override + clear it (the route's
+            // Some("") → Some(None) convention lands here as Some(None)).
+            let overridden = projects_update(
+                &created.id,
+                None, None, None, None, None, None, None, None, None, None, None, None, None,
+                Some(Some("claude")),
+            )
+            .expect("projects_update set override ok");
+            assert_eq!(
+                overridden.default_agent.as_deref(),
+                Some("claude"),
+                "legacy command token must be stored as given"
+            );
+            let cleared = projects_update(
+                &created.id,
+                None, None, None, None, None, None, None, None, None, None, None, None, None,
+                Some(None),
+            )
+            .expect("projects_update clear ok");
+            assert_eq!(
+                cleared.default_agent, None,
+                "Some(None) must clear back to NULL = inherit global"
+            );
+            created
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+
+        // Cleanup: restore HOME before re-raising any assertion failure so a
+        // failing run can't leak the temp HOME into sibling tests.
+        let created_id = match &result {
+            Ok(p) => Some(p.id.clone()),
+            Err(_) => None,
+        };
+        if let Some(id) = created_id {
+            delete_project(&id);
+        }
+        match original_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp_home);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
     }
 }

@@ -834,6 +834,11 @@ struct ProjectsUpdateBody {
     state_id: Option<String>,
     heartbeat_mode: Option<String>,
     heartbeat_schedule: Option<String>,
+    /// 0063 — per-workspace default agent (agent_presets preset id, or a
+    /// legacy command token like "claude"; stored as given).
+    /// Some("...") sets it, Some("") clears to NULL (= inherit the global
+    /// default), None leaves unchanged — same convention as `state_id`.
+    default_agent: Option<String>,
 }
 
 pub fn handle_projects_update(body: &[u8]) -> CliResponse {
@@ -862,6 +867,13 @@ pub fn handle_projects_update(body: &[u8]) -> CliResponse {
             Some(s.as_str())
         }
     });
+    let default_agent_param = b.default_agent.as_ref().map(|a| {
+        if a.is_empty() {
+            None
+        } else {
+            Some(a.as_str())
+        }
+    });
     serialized(pops::projects_update(
         &b.id,
         b.name.as_deref(),
@@ -877,6 +889,7 @@ pub fn handle_projects_update(body: &[u8]) -> CliResponse {
         state_param,
         b.heartbeat_mode,
         hb_schedule_param,
+        default_agent_param,
     ))
 }
 
@@ -1228,6 +1241,91 @@ pub fn dispatch_unit4_post(path: &str, body: &[u8]) -> CliResponse {
         }
 
         _ => CliResponse::not_found(),
+    }
+}
+
+#[cfg(test)]
+mod projects_update_default_agent_tests {
+    //! 0063 (agent de-generalization S1) — the `defaultAgent` JSON key on
+    //! `POST /cli/projects/update`. Pins the renderer-facing contract:
+    //! `"defaultAgent": "<value>"` sets the per-workspace default agent
+    //! (stored verbatim — preset id or legacy command token),
+    //! `"defaultAgent": ""` clears it back to NULL (= inherit the global
+    //! default), and omitting the key leaves it untouched.
+
+    use super::*;
+
+    fn unique(suffix: &str) -> String {
+        format!(
+            "pda-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            suffix
+        )
+    }
+
+    fn seed_project(project_id: &str, path: &str) {
+        let dbh = k2_core::db::shared();
+        let conn = dbh.lock();
+        k2_core::db::schema::Project::create(
+            &conn, project_id, "Test", path, "#fff", 0, 0, None, None,
+        )
+        .expect("seed project");
+    }
+
+    fn get_default_agent(project_id: &str) -> Option<String> {
+        let dbh = k2_core::db::shared();
+        let conn = dbh.lock();
+        k2_core::db::schema::Project::get(&conn, project_id)
+            .expect("project row must exist")
+            .default_agent
+    }
+
+    #[test]
+    fn projects_update_sets_and_clears_default_agent() {
+        let project_id = unique("p");
+        seed_project(&project_id, &format!("/tmp/{project_id}"));
+        assert_eq!(
+            get_default_agent(&project_id),
+            None,
+            "seeded row must start NULL (inherit global)"
+        );
+
+        // Set — value stored verbatim, echoed back camelCase in the payload.
+        let preset_id = "12345678-abcd-4ef0-9876-fedcba987654";
+        let body = serde_json::json!({ "id": project_id, "defaultAgent": preset_id }).to_string();
+        let resp = handle_projects_update(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert!(
+            resp.body.contains(&format!("\"defaultAgent\":\"{preset_id}\"")),
+            "response must echo the stored value: {}",
+            resp.body
+        );
+        assert_eq!(get_default_agent(&project_id).as_deref(), Some(preset_id));
+
+        // Omitting the key must leave it untouched.
+        let body = serde_json::json!({ "id": project_id, "name": "Renamed" }).to_string();
+        let resp = handle_projects_update(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(
+            get_default_agent(&project_id).as_deref(),
+            Some(preset_id),
+            "update without defaultAgent must not touch the column"
+        );
+
+        // Empty string clears back to NULL (same convention as stateId).
+        let body = serde_json::json!({ "id": project_id, "defaultAgent": "" }).to_string();
+        let resp = handle_projects_update(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert!(
+            resp.body.contains("\"defaultAgent\":null"),
+            "cleared value must echo as null: {}",
+            resp.body
+        );
+        assert_eq!(get_default_agent(&project_id), None);
     }
 }
 

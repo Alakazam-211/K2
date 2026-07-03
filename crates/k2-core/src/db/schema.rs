@@ -104,6 +104,13 @@ pub struct Project {
     /// allowed regardless; the app-level `allowRemoteInstruct` is a
     /// global master OR'd on top (back-compat). Fail-closed: default 0.
     pub allow_remote_instruct: i64,
+    /// Agent de-generalization S1 — per-workspace default agent
+    /// (migration 0063). An `agent_presets` preset id (UUID string);
+    /// readers must also tolerate a legacy command token like "claude".
+    /// `None` = inherit the global `AppSettings.default_agent` at
+    /// resolve time. Stamped with the current global default when the
+    /// row is created (non-retroactive for pre-existing rows).
+    pub default_agent: Option<String>,
 }
 
 impl Project {
@@ -119,7 +126,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, default_agent \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -145,6 +152,7 @@ impl Project {
                 heartbeat_schedule: row.get(18).ok().flatten(),
                 heartbeat_last_fire: row.get(19).ok().flatten(),
                 allow_remote_instruct: row.get(20).unwrap_or(0),
+                default_agent: row.get(21).ok().flatten(),
             })
         })?;
         rows.collect()
@@ -155,7 +163,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, default_agent \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -181,6 +189,7 @@ impl Project {
                     heartbeat_schedule: row.get(18).ok().flatten(),
                     heartbeat_last_fire: row.get(19).ok().flatten(),
                     allow_remote_instruct: row.get(20).unwrap_or(0),
+                    default_agent: row.get(21).ok().flatten(),
                 })
             },
         )
@@ -223,6 +232,7 @@ impl Project {
         state_id: Option<Option<&str>>,
         heartbeat_mode: Option<String>,
         heartbeat_schedule: Option<Option<&str>>,
+        default_agent: Option<Option<&str>>,
     ) -> Result<()> {
         // Wrap in transaction so all field updates succeed or fail atomically.
         // Without this, agent_mode and agent_enabled can diverge if the process crashes mid-update.
@@ -280,6 +290,13 @@ impl Project {
         }
         if let Some(v) = heartbeat_schedule {
             tx.execute("UPDATE projects SET heartbeat_schedule = ?1 WHERE id = ?2", params![v, id])?;
+        }
+        // 0063 — per-workspace default agent. `Some(Some(v))` sets it
+        // (preset id or legacy command token — stored as given, shape is
+        // NOT validated); `Some(None)` clears back to NULL = inherit the
+        // global default.
+        if let Some(v) = default_agent {
+            tx.execute("UPDATE projects SET default_agent = ?1 WHERE id = ?2", params![v, id])?;
         }
         tx.commit()?;
         Ok(())
@@ -2852,6 +2869,105 @@ mod unit_tests {
         // Archive the only enabled one → back to 0 (archived ≠ live, matches scheduler).
         AgentHeartbeat::archive(&conn, &id, "triage").unwrap();
         assert_eq!(Project::get(&conn, &id).unwrap().heartbeat_enabled, 0, "archived heartbeat must not count");
+    }
+
+    #[test]
+    fn project_default_agent_is_null_after_migration_and_bare_insert() {
+        // 0063 semantics: the column is nullable with NO default, so a row
+        // created without an explicit value (and, by the same ALTER TABLE
+        // backfill rule, every pre-migration row) reads None = "inherit the
+        // global default at resolve time". Non-retroactivity hangs off this.
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-da-null");
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(
+            p.default_agent, None,
+            "bare insert must leave default_agent NULL (inherit global)"
+        );
+        let from_list = Project::list(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == id)
+            .expect("row must appear in list");
+        assert_eq!(from_list.default_agent, None, "list() must read the same NULL");
+    }
+
+    #[test]
+    fn project_default_agent_update_roundtrip_set_and_clear() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-da-rt");
+
+        // Set to a preset id (the canonical value shape).
+        let preset_id = "0f9a1c2e-1111-4222-8333-444455556666";
+        Project::update(
+            &conn,
+            &id,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None,
+            Some(Some(preset_id)),
+        )
+        .unwrap();
+        assert_eq!(
+            Project::get(&conn, &id).unwrap().default_agent.as_deref(),
+            Some(preset_id),
+            "preset-id value must round-trip"
+        );
+
+        // Legacy command token must be stored verbatim — shape is NOT
+        // validated on write (Slice 0 defines tolerant matching read-side).
+        Project::update(
+            &conn,
+            &id,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None,
+            Some(Some("claude")),
+        )
+        .unwrap();
+        assert_eq!(
+            Project::get(&conn, &id).unwrap().default_agent.as_deref(),
+            Some("claude"),
+            "legacy command token must be stored as given"
+        );
+
+        // Some(None) clears back to NULL = inherit global.
+        Project::update(
+            &conn,
+            &id,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None,
+            Some(None),
+        )
+        .unwrap();
+        assert_eq!(
+            Project::get(&conn, &id).unwrap().default_agent,
+            None,
+            "Some(None) must clear the override back to NULL"
+        );
+
+        // None leaves the value untouched.
+        Project::update(
+            &conn,
+            &id,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None,
+            Some(Some(preset_id)),
+        )
+        .unwrap();
+        Project::update(
+            &conn,
+            &id,
+            Some("renamed"),
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None,
+        )
+        .unwrap();
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.name, "renamed");
+        assert_eq!(
+            p.default_agent.as_deref(),
+            Some(preset_id),
+            "an unrelated update must not touch default_agent"
+        );
     }
 
     #[test]

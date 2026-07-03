@@ -1,0 +1,21 @@
+-- Agent de-generalization S1 — per-workspace DEFAULT AGENT.
+--
+-- The workspace-level override for which CLI agent Cmd+Shift+T /
+-- launchDefaultAgent / the AI file editors resolve to for THIS
+-- workspace. Layering at resolve time is:
+--   projects.default_agent → AppSettings.default_agent (global) → claude.
+--
+-- Value semantics: an `agent_presets` preset id (UUID string). Readers
+-- must ALSO tolerate a legacy command token like "claude" — the global
+-- setting historically stored the command's first token, and Slice 0
+-- defines tolerant matching renderer-side. The column stores what it is
+-- given; shape is NOT validated on write.
+--
+-- Nullable, NO DEFAULT: NULL = inherit the global default at resolve
+-- time. Existing rows backfill to NULL — deliberately, so the feature is
+-- NON-RETROACTIVE: pre-existing workspaces keep following the global
+-- setting until the owner picks one. New rows are stamped with the
+-- CURRENT global default at creation (projects_ops create flows), so a
+-- workspace keeps the agent it was born with even if the global default
+-- later changes.
+ALTER TABLE projects ADD COLUMN default_agent TEXT;

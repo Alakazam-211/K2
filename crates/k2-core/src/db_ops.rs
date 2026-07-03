@@ -234,7 +234,7 @@ pub fn focus_groups_assign_project(
         project_id,
         None, None, None, None, None, None,
         Some(focus_group_id),
-        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None, None,
     )
     .map_err(|e| e.to_string())?;
 
@@ -270,7 +270,7 @@ pub fn focus_groups_reconcile_project(project_id: &str) -> Result<Project, Strin
                     project_id,
                     None, None, None, None, None, None,
                     Some(None),
-                    None, None, None, None, None, None, None, None,
+                    None, None, None, None, None, None, None, None, None,
                 )
                 .map_err(|e| e.to_string())?;
             }
@@ -295,7 +295,7 @@ pub fn focus_groups_reconcile_project(project_id: &str) -> Result<Project, Strin
                     project_id,
                     None, None, None, None, None, None,
                     Some(Some(group_id.as_str())),
-                    None, None, None, None, None, None, None, None,
+                    None, None, None, None, None, None, None, None, None,
                 )
                 .map_err(|e| e.to_string())?;
             }

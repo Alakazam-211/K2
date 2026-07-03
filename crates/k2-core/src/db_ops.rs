@@ -434,6 +434,12 @@ pub fn workspace_layout_save_with_revision(
     // takes its own scoped locks.
     let healed = heal_system_agent_tab_identity(project_id, layout_json);
     let layout_json = healed.as_deref().unwrap_or(layout_json);
+    // 2026-07-02: prune leaked bare-terminal tabs at save time too, so
+    // a client still holding a poisoned in-memory layout (the pre-
+    // b339c70 re-mint loop's output) can't re-persist hundreds of dead
+    // tabs over the healed row. Same scoped-lock rule as above.
+    let pruned = prune_leaked_bare_tabs(project_id, layout_json);
+    let layout_json = pruned.as_deref().unwrap_or(layout_json);
 
     let db = db::shared();
     let conn = db.lock();
@@ -479,10 +485,15 @@ pub fn workspace_layout_load(
         // whose pinned tab carries a foreign workspace's identity
         // (rows corrupted before the save-side heal existed). Not
         // persisted here (a read must not bump the revision); the next
-        // save persists the healed form.
-        Ok(json) => Ok(Some(
-            heal_system_agent_tab_identity(project_id, &json).unwrap_or(json),
-        )),
+        // save persists the healed form. 2026-07-02: compose the
+        // leaked-bare-tab prune the same way — rows poisoned by the
+        // pre-b339c70 tab re-mint loop otherwise make every workspace
+        // restore O(hundreds of dead panes).
+        Ok(json) => {
+            let json = heal_system_agent_tab_identity(project_id, &json).unwrap_or(json);
+            let json = prune_leaked_bare_tabs(project_id, &json).unwrap_or(json);
+            Ok(Some(json))
+        }
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
@@ -600,6 +611,147 @@ fn heal_tabs_array(
             }
         }
     }
+}
+
+/// How many prunable bare-terminal tabs a stored layout may keep.
+/// Deliberately the SAME knob as v2_spawn's never-attached bare-shell
+/// cap (`K2_V2_BARE_TAB_CAP`, default 32): the daemon refuses to hold
+/// more than that many never-attached bare shells per workspace, so a
+/// layout referencing more can never restore them — they are
+/// unrestorable garbage that only costs mount time.
+fn leaked_bare_tab_keep() -> usize {
+    std::env::var("K2_V2_BARE_TAB_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(32)
+}
+
+/// 2026-07-02 leaked-tab layout heal — the persistence-side companion
+/// to v2_spawn's bare-tab cap.
+///
+/// The split-pane restore re-mint loop (client bug b339c70; shipped
+/// broken since 0.39.39, so released clients still carry it) appended a
+/// fresh "Terminal N" tab to the saved layout every layout-echo cycle.
+/// One workspace on the dev box accumulated 488 tabs / 450 dead bare
+/// shells; the spawn cap stopped the PTY exhaustion, but the POISONED
+/// LAYOUT persisted — and every workspace-view remount (leaving
+/// Settings, workspace switch, boot) mounted all ~450 panes and fired
+/// ~450 doomed spawn POSTs. That is the "leaving Settings hangs"
+/// regression: the exit path is O(saved tabs).
+///
+/// Scope is deliberately the leak's exact shape, mirroring the spawn
+/// cap's predicate. A tab is PRUNABLE only when ALL hold:
+///   - not `isSystemAgent`, not `isPinnedFile`, not `locked`
+///     (a user rename is a statement the tab matters);
+///   - every pane item is a plain `terminal` with none of the
+///     heartbeat / surfaced / attach / sandbox markers;
+///   - no pane group has a RESUMABLE `workspace_tab_sessions` row
+///     (`session_id IS NOT NULL`) — those restore real CLI sessions.
+///
+/// When more than [`leaked_bare_tab_keep`] prunable tabs exist across
+/// the layout (main strip + extraGroups), the OLDEST surplus is
+/// dropped (tab arrays append newest-last) and the healed JSON is
+/// returned. `None` = nothing to do, layout at/under cap, or
+/// unparseable (healing must never eat a layout).
+pub fn prune_leaked_bare_tabs(project_id: &str, layout_json: &str) -> Option<String> {
+    let mut layout: serde_json::Value = serde_json::from_str(layout_json).ok()?;
+
+    // Pane groups with a resumable saved session — their tabs restore
+    // real work (claude --resume …) and are never pruned. One query,
+    // scoped lock (same idiom as the identity heal above).
+    let resumable: std::collections::HashSet<String> = {
+        let db = db::shared();
+        let conn = db.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT pane_group_id FROM workspace_tab_sessions \
+                 WHERE project_id = ?1 AND session_id IS NOT NULL",
+            )
+            .ok()?;
+        let rows = stmt
+            .query_map(rusqlite::params![project_id], |r| r.get::<_, String>(0))
+            .ok()?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    // Is this tab the leak's shape? (See the doc comment's predicate.)
+    let is_prunable = |tab: &serde_json::Value| -> bool {
+        for flag in ["isSystemAgent", "isPinnedFile", "locked"] {
+            if tab.get(flag).and_then(|v| v.as_bool()) == Some(true) {
+                return false;
+            }
+        }
+        let Some(pgs) = tab.get("paneGroups").and_then(|v| v.as_object()) else {
+            return false;
+        };
+        if pgs.is_empty() {
+            return false;
+        }
+        if pgs.keys().any(|pg_id| resumable.contains(pg_id)) {
+            return false;
+        }
+        pgs.values().all(|pg| {
+            pg.get("items")
+                .and_then(|v| v.as_array())
+                .map(|items| {
+                    items.iter().all(|item| {
+                        item.get("type").and_then(|v| v.as_str()) == Some("terminal")
+                            && ["heartbeatName", "surfacedAgentName", "attachAgentName", "sandbox"]
+                                .iter()
+                                .all(|k| item.get(*k).map_or(true, |v| v.is_null()))
+                    })
+                })
+                .unwrap_or(false)
+        })
+    };
+
+    // Count prunable tabs across the whole layout, then drop the
+    // OLDEST surplus in array order (main strip first, then groups).
+    let count_in = |tabs: Option<&serde_json::Value>| -> usize {
+        tabs.and_then(|v| v.as_array())
+            .map(|a| a.iter().filter(|t| is_prunable(t)).count())
+            .unwrap_or(0)
+    };
+    let mut total_prunable = count_in(layout.get("tabs"));
+    if let Some(groups) = layout.get("extraGroups").and_then(|v| v.as_array()) {
+        for g in groups {
+            total_prunable += count_in(g.get("tabs"));
+        }
+    }
+    let keep = leaked_bare_tab_keep();
+    if total_prunable <= keep {
+        return None;
+    }
+
+    let mut to_drop = total_prunable - keep;
+    let mut drop_in = |tabs: Option<&mut serde_json::Value>| {
+        let Some(tabs) = tabs.and_then(|v| v.as_array_mut()) else {
+            return;
+        };
+        tabs.retain(|t| {
+            if to_drop > 0 && is_prunable(t) {
+                to_drop -= 1;
+                false
+            } else {
+                true
+            }
+        });
+    };
+    drop_in(layout.get_mut("tabs"));
+    if let Some(groups) = layout.get_mut("extraGroups").and_then(|v| v.as_array_mut()) {
+        for g in groups {
+            drop_in(g.get_mut("tabs"));
+        }
+    }
+
+    crate::log_debug!(
+        "[layout-heal] pruned {} leaked bare-terminal tab(s) for project={} (kept {}; cap {})",
+        total_prunable - keep,
+        project_id,
+        keep,
+        keep
+    );
+    serde_json::to_string(&layout).ok()
 }
 
 pub fn workspace_layout_load_all() -> Result<Vec<WorkspaceLayout>, String> {
@@ -1371,5 +1523,275 @@ mod layout_heal_tests {
         );
         assert_eq!(item["projectPath"], serde_json::json!(path));
         assert!(item.get("sessionId").is_none());
+    }
+}
+
+#[cfg(test)]
+mod leaked_tab_prune_tests {
+    //! 2026-07-02 — leaked bare-terminal tab prune (the settings-exit
+    //! latency fix). The pre-b339c70 re-mint loop poisoned one dev-box
+    //! workspace's saved layout with 488 tabs / 450 dead bare shells;
+    //! every workspace-view remount (leaving Settings, workspace
+    //! switch) then mounted all ~450 panes and fired ~450 doomed spawn
+    //! POSTs (measured: 15 remounts × 450 `bare_tab_cap` refusals in
+    //! the daemon log). These tests pin the bound: a served layout can
+    //! never carry more prunable bare tabs than the spawn cap will
+    //! ever restore — the exit path's remount work stays bounded.
+
+    use super::*;
+    use crate::db;
+
+    fn unique(suffix: &str) -> String {
+        format!(
+            "prune-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            suffix
+        )
+    }
+
+    fn seed_project(project_id: &str) {
+        let dbh = db::shared();
+        let conn = dbh.lock();
+        crate::db::schema::Project::create(
+            &conn,
+            project_id,
+            "Pruned",
+            &format!("/tmp/{project_id}"),
+            "#fff",
+            0,
+            0,
+            None,
+            None,
+        )
+        .expect("seed project");
+    }
+
+    fn seed_workspace(workspace_id: &str, project_id: &str) {
+        let dbh = db::shared();
+        let conn = dbh.lock();
+        crate::db::schema::Workspace::create(
+            &conn,
+            workspace_id,
+            project_id,
+            None,
+            "default",
+            None,
+            "main",
+            0,
+            None,
+        )
+        .expect("seed workspace");
+    }
+
+    /// The leak's exact serialized shape: a bare "Terminal N" tab whose
+    /// single pane item is a plain terminal with no markers.
+    fn bare_tab(n: usize) -> serde_json::Value {
+        let pg = format!("pg-bare-{n}");
+        serde_json::json!({
+            "id": format!("tab-bare-{n}"),
+            "title": format!("Terminal {n}"),
+            "mosaicTree": pg,
+            "paneGroups": { pg.clone(): {
+                "id": pg,
+                "items": [{ "id": format!("item-{n}"), "paneGroupId": format!("pg-bare-{n}"), "type": "terminal" }],
+                "activeItemIndex": 0
+            } }
+        })
+    }
+
+    fn tab_ids(json: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(json).expect("healed JSON parses");
+        v["tabs"]
+            .as_array()
+            .expect("tabs array")
+            .iter()
+            .map(|t| t["id"].as_str().expect("tab id").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn prune_drops_oldest_surplus_and_leaves_at_cap_layouts_alone() {
+        let pid = unique("cap");
+        seed_project(&pid);
+        let keep = leaked_bare_tab_keep();
+
+        // Exactly at the cap → untouched (None): normal layouts never
+        // pay for this heal.
+        let at_cap = serde_json::json!({
+            "version": 2,
+            "tabs": (0..keep).map(bare_tab).collect::<Vec<_>>()
+        })
+        .to_string();
+        assert_eq!(
+            prune_leaked_bare_tabs(&pid, &at_cap),
+            None,
+            "a layout at the cap must round-trip untouched"
+        );
+
+        // 8 over the cap → the 8 OLDEST (array-front) bare tabs drop.
+        let over = serde_json::json!({
+            "version": 2,
+            "tabs": (0..keep + 8).map(bare_tab).collect::<Vec<_>>()
+        })
+        .to_string();
+        let healed = prune_leaked_bare_tabs(&pid, &over).expect("surplus must be pruned");
+        let ids = tab_ids(&healed);
+        assert_eq!(ids.len(), keep, "healed layout must hold exactly the cap");
+        assert_eq!(
+            ids[0],
+            "tab-bare-8",
+            "the oldest (front) tabs are the ones dropped"
+        );
+        assert_eq!(ids[keep - 1], format!("tab-bare-{}", keep + 7));
+    }
+
+    #[test]
+    fn prune_spares_system_pinned_locked_marked_and_resumable_tabs() {
+        let pid = unique("spare");
+        seed_project(&pid);
+        let keep = leaked_bare_tab_keep();
+
+        // A bare-shaped tab whose pane group has a RESUMABLE saved
+        // session — restores real work, must survive.
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            crate::db::schema::WorkspaceTabSession::upsert(
+                &conn,
+                &crate::db::schema::WorkspaceTabSession {
+                    project_id: pid.clone(),
+                    pane_group_id: "pg-resumable".into(),
+                    agent_name: "tab-pg-resumable".into(),
+                    session_id: Some("claude-session-uuid".into()),
+                    command: Some("claude".into()),
+                    args_json: None,
+                    cwd: None,
+                    last_seen_at: 0,
+                },
+            )
+            .expect("seed resumable tab session");
+        }
+        let resumable_tab = serde_json::json!({
+            "id": "tab-resumable",
+            "title": "Terminal 999",
+            "mosaicTree": "pg-resumable",
+            "paneGroups": { "pg-resumable": {
+                "id": "pg-resumable",
+                "items": [{ "id": "item-r", "paneGroupId": "pg-resumable", "type": "terminal" }],
+                "activeItemIndex": 0
+            } }
+        });
+        let protected = [
+            serde_json::json!({ "id": "tab-system", "isSystemAgent": true,
+                "paneGroups": { "pg-s": { "id": "pg-s", "items": [
+                    { "id": "i-s", "type": "agent", "agentName": "a", "projectPath": "/tmp/x", "section": "chat" }
+                ], "activeItemIndex": 0 } } }),
+            serde_json::json!({ "id": "tab-pinned", "isPinnedFile": true,
+                "paneGroups": { "pg-p": { "id": "pg-p", "items": [
+                    { "id": "i-p", "type": "file-viewer", "filePath": "/tmp/f.html" }
+                ], "activeItemIndex": 0 } } }),
+            serde_json::json!({ "id": "tab-locked", "locked": true,
+                "paneGroups": { "pg-l": { "id": "pg-l", "items": [
+                    { "id": "i-l", "paneGroupId": "pg-l", "type": "terminal" }
+                ], "activeItemIndex": 0 } } }),
+            serde_json::json!({ "id": "tab-heartbeat",
+                "paneGroups": { "pg-h": { "id": "pg-h", "items": [
+                    { "id": "i-h", "paneGroupId": "pg-h", "type": "terminal", "heartbeatName": "daily" }
+                ], "activeItemIndex": 0 } } }),
+            resumable_tab,
+        ];
+
+        // Protected tabs at the FRONT — where oldest-first pruning
+        // would eat them if the predicate ever regressed.
+        let mut tabs: Vec<serde_json::Value> = protected.to_vec();
+        tabs.extend((0..keep + 5).map(bare_tab));
+        let layout = serde_json::json!({ "version": 2, "tabs": tabs }).to_string();
+
+        let healed = prune_leaked_bare_tabs(&pid, &layout).expect("surplus must be pruned");
+        let ids = tab_ids(&healed);
+        assert_eq!(
+            ids.len(),
+            protected.len() + keep,
+            "only the bare surplus is pruned"
+        );
+        for id in ["tab-system", "tab-pinned", "tab-locked", "tab-heartbeat", "tab-resumable"] {
+            assert!(ids.contains(&id.to_string()), "{id} must survive the prune");
+        }
+        assert!(
+            !ids.contains(&"tab-bare-0".to_string()),
+            "the oldest bare tab is the one dropped"
+        );
+    }
+
+    #[test]
+    fn prune_returns_none_for_unparseable_layout() {
+        let pid = unique("garbage");
+        seed_project(&pid);
+        assert_eq!(
+            prune_leaked_bare_tabs(&pid, "not json at all {{{"),
+            None,
+            "pruning must never eat a layout it can't parse"
+        );
+    }
+
+    #[test]
+    fn load_and_save_serve_bounded_layouts_for_a_poisoned_row() {
+        let pid = unique("bounded");
+        let wid = unique("bounded-ws");
+        seed_project(&pid);
+        seed_workspace(&wid, &pid);
+        let keep = leaked_bare_tab_keep();
+
+        // Plant the dev-box pathology directly: ~500 leaked bare tabs
+        // written before the prune existed.
+        let poisoned = serde_json::json!({
+            "version": 2,
+            "tabs": (0..500).map(bare_tab).collect::<Vec<_>>()
+        })
+        .to_string();
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            conn.execute(
+                "INSERT INTO workspace_layouts (id, project_id, workspace_id, layout_json, updated_at, revision)
+                 VALUES (?1, ?2, ?3, ?4, unixepoch(), 1)",
+                rusqlite::params![format!("{pid}:{wid}"), pid, wid, poisoned],
+            )
+            .expect("plant poisoned row");
+        }
+
+        // Read-repair: the served view is bounded — THIS is what makes
+        // the settings-exit remount O(cap) instead of O(leak).
+        let served = workspace_layout_load(&pid, &wid)
+            .expect("load ok")
+            .expect("row present");
+        assert_eq!(
+            tab_ids(&served).len(),
+            keep,
+            "load must serve a bounded view of a poisoned row"
+        );
+
+        // Save-side: a client re-persisting its poisoned in-memory
+        // layout gets pruned before the row is written.
+        workspace_layout_save_with_revision(&pid, &wid, &poisoned).expect("save");
+        let stored: String = {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            conn.query_row(
+                "SELECT layout_json FROM workspace_layouts WHERE project_id = ?1 AND workspace_id = ?2",
+                rusqlite::params![pid, wid],
+                |r| r.get(0),
+            )
+            .expect("stored row")
+        };
+        assert_eq!(
+            tab_ids(&stored).len(),
+            keep,
+            "save must persist the pruned form, not the poisoned one"
+        );
     }
 }

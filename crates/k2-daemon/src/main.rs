@@ -57,6 +57,7 @@ mod db_routes;
 mod events;
 mod federation_drain;
 mod federation_routes;
+mod feedback_routes;
 mod fs_routes;
 mod grid_emitter;
 mod git_routes;

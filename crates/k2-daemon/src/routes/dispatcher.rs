@@ -500,6 +500,17 @@ async fn handle_one_request(
             // route is a one-shot helper for tests / explicit
             // re-migration triggers — daemon first-boot also auto-
             // invokes (Phase 2.1b wiring).
+            // Feedback F1 (prd-agent-feedback-notifications §4.3) —
+            // mutating routes. JSON-bodied POSTs (create carries the ask
+            // title/body/options; comment/answer carry free text) so long
+            // values dodge the request-head cap and never URL-log.
+            // token_ok (owner OR connect-user, like /cli/chat/*) +
+            // require_post in the dedicated arm below; reads (list/show)
+            // are GETs via crate::cli::dispatch (feedback_routes).
+            | "/cli/feedback/create"
+            | "/cli/feedback/comment"
+            | "/cli/feedback/answer"
+            | "/cli/feedback/resolve"
             | "/cli/inbox/compose"
             | "/cli/inbox/move"
             | "/cli/inbox/archive"
@@ -2723,6 +2734,40 @@ async fn handle_one_request(
         // operations run in spawn_blocking per F5 (atomic-rename of
         // a `.md` file isn't slow, but `safe_delete::trash` calls
         // into macOS Finder via AppleScript and CAN block).
+        // Feedback F1 — `/cli/feedback/*` mutations (create / comment /
+        // answer / resolve). JSON-bodied POSTs; token_ok (owner OR
+        // connect-user session — connect users see + answer feedback,
+        // PRD §4.3) + require_post per feedback_post_only_route_guards.
+        // Handlers run in spawn_blocking (SQLite writes).
+        p if is_post && post_allowed && p.starts_with("/cli/feedback/") => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::feedback_routes::dispatch_post(&p_owned, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         p if is_post && post_allowed && p.starts_with("/cli/inbox/") => {
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let _ = stream.read(&mut buf).await;

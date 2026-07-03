@@ -3,6 +3,30 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.24 — Hire agents from the command line
+
+- **`k2 agent hire` — provision an agent in one command.** What used to take
+  seven manual steps (folder, persona file, registration, mode, connections,
+  launch, first message) is now one idempotent call: `k2 agent hire ~/agents/scout
+  --template worker --connect "Appa" --onboard "Welcome aboard."` Bring your own
+  persona with `--persona <file.md>`, or scaffold from a built-in archetype
+  (worker, manager, qa, researcher). Re-running is always safe — it completes
+  whatever's missing and reports what changed.
+- **A full agent-management surface:** `k2 agent conf` (all settings), `get`/`set`
+  (change mode, name, persona — with automatic persona backups), `list` (your
+  fleet at a glance), and `retire` (safe decommission: refuses if it finds
+  uncommitted git work or likely secrets, and archives the folder — never
+  deletes). Everything supports `--json` and `--dry-run`, designed for both you
+  and your agents to drive.
+- **Agent names are now human.** Display names can have spaces and capitals
+  ("QA Bot"), and renaming an agent updates how you address it everywhere.
+- **Paused agents stay paused.** Disabling an agent now survives a server
+  restart — it won't quietly come back to life.
+- **CLI footguns fixed:** `--help` on workspace commands no longer acts on the
+  literal text "--help" (it once created a workspace named that), `workspace
+  remove` accepts agent names (not just paths), and setting agent modes no
+  longer scribbles into your persona file.
+
 ## 0.40.23 — Heartbeats you can trust
 
 - **Missed heartbeats now catch up.** If your machine was asleep or off when a

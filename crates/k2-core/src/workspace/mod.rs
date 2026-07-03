@@ -17,6 +17,9 @@
 pub mod agent_channel;
 pub mod agent_identity;
 pub mod agent_launch;
+// Agent de-generalization Slice 2: daemon-side default-agent resolver —
+// AGENT.md `launch:` → projects.default_agent → global default → claude.
+pub mod agent_resolve;
 pub mod checkin;
 pub mod display;
 pub mod events;

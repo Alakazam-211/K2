@@ -822,7 +822,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 12, "expected 12 built-in presets");
+        assert_eq!(n, 13, "expected 12 built-in presets");
     }
 
     #[test]
@@ -839,7 +839,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 12, "reseeding must not duplicate rows");
+        assert_eq!(n, 13, "reseeding must not duplicate rows");
     }
 
     // ── purge_orphan_project_children self-heal ───────────────────

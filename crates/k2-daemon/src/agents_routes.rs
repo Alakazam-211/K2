@@ -870,6 +870,10 @@ pub fn handle_agent_list() -> CliResponse {
 
     let mut agents: Vec<serde_json::Value> = rows
         .into_iter()
+        // The audit sentinels (`_orphan`, `_broadcast`) are internal
+        // activity-feed FK rows, not agents — same filter as
+        // `projects_list()`.
+        .filter(|(id, _, _, _)| !k2_core::db::AUDIT_SENTINEL_IDS.contains(&id.as_str()))
         .map(|(id, path, mode_raw, enabled)| {
             let name = k2_core::workspace::display::agent_display_name(&path);
             let live = crate::session_lookup::lookup_any(
@@ -1143,6 +1147,50 @@ pub fn handle_relations_list_incoming(project_id: String) -> CliResponse {
 #[cfg(test)]
 mod gap_route_tests {
     use super::*;
+
+    /// 0.40.24 S3 — `/cli/agent/list` returns every registered agent
+    /// (display-normalized mode, enabled bool, live flag, path), sorted
+    /// case-insensitively, and NEVER leaks the internal audit sentinels
+    /// (`_orphan`/`_broadcast` — activity-feed FK rows, not agents).
+    #[test]
+    fn agent_list_returns_fleet_and_filters_audit_sentinels() {
+        let id = uuid::Uuid::new_v4();
+        let name = format!("agent-list-test-{id}");
+        let path = format!("/tmp/agent-list-test-{}-{id}", std::process::id());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, agent_mode, agent_enabled) \
+                 VALUES (?1, ?2, ?3, 'k2so', 1)",
+                rusqlite::params![id.to_string(), name, path],
+            )
+            .expect("insert project row");
+        }
+
+        let resp = handle_agent_list();
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(body["ok"], true);
+        let agents = body["agents"].as_array().expect("agents array");
+
+        // Our row is present with the DISPLAY mode spelling (k2so → k2).
+        let mine = agents
+            .iter()
+            .find(|a| a["path"] == path.as_str())
+            .unwrap_or_else(|| panic!("registered agent missing from list: {}", resp.body));
+        assert_eq!(mine["name"], name.as_str());
+        assert_eq!(mine["mode"], "k2", "stored k2so must display as k2");
+        assert_eq!(mine["enabled"], true);
+        assert_eq!(mine["live"], false);
+
+        // The audit sentinels never surface.
+        assert!(
+            agents.iter().all(|a| a["path"] != "_orphan" && a["path"] != "_broadcast"),
+            "audit sentinels leaked into the fleet view: {}",
+            resp.body
+        );
+    }
 
     #[test]
     fn regenerate_rejects_missing_project_path() {

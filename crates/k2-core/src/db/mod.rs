@@ -673,8 +673,10 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
 /// FK (see [`seed_audit_sentinels`]) and must NEVER surface in the
 /// user-facing workspace list. UI-facing surfaces filter them out;
 /// internal callers (heartbeat/agent scanning, dedup/import checks,
-/// migrations) see every row via `Project::list`.
-pub(crate) const AUDIT_SENTINEL_IDS: &[&str] = &["_orphan", "_broadcast"];
+/// migrations) see every row via `Project::list`. Public (0.40.24 S3)
+/// so the daemon's fleet-view route (`/cli/agent/list` behind
+/// `k2 agent list`) can apply the same filter.
+pub const AUDIT_SENTINEL_IDS: &[&str] = &["_orphan", "_broadcast"];
 
 pub(crate) fn seed_audit_sentinels(conn: &Connection) -> Result<()> {
     let sentinels: &[(&str, &str, &str)] = &[

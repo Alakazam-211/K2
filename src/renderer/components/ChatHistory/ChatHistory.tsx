@@ -137,6 +137,8 @@ const PROVIDER_AGENT_NAME: Record<string, string> = {
   gemini: 'Gemini',
   pi: 'Pi',
   codex: 'Codex',
+  grok: 'Grok',
+  hermes: 'Hermes',
 }
 
 function ProviderIcon({ provider }: { provider: string }): React.JSX.Element {

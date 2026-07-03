@@ -2361,22 +2361,27 @@ function AgentDisplayNameField({
 
   const dirty = ready && draft !== saved
 
+  // Mirrors k2-core's `validate_display_name` (0.40.24 S3 loosened
+  // contract): display names are human labels — spaces + mixed case
+  // are allowed ("QA Bot", "K2 - Marketing Manager"). Still banned:
+  // empty, >64 chars, control characters, leading/trailing
+  // whitespace, and "/" (the name seeds retire's archive folder
+  // label).
   const validate = (n: string): string | null => {
-    if (n.length < 2) return 'Display name must be at least 2 characters.'
+    if (n.length === 0) return 'Display name must not be empty.'
     if (n.length > 64) return 'Display name must be at most 64 characters.'
-    if (!/^[a-z][a-z0-9-]*[a-z0-9]$/.test(n)) {
-      return 'Lowercase letters, digits, hyphens only. Start with a letter, no trailing hyphen.'
-    }
+    if (n !== n.trim()) return 'Display name must not start or end with whitespace.'
+    if (n.includes('/')) return "Display name must not contain '/'."
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u001f\u007f-\u009f]/.test(n)) return 'Display name must not contain control characters.'
     return null
   }
 
   const handleSave = async (): Promise<void> => {
-    // 0.37.9 — lowercase at save time, not on every keystroke. The
-    // onChange handler used to lowercase eagerly, but that mutated
-    // the DOM input value mid-composition during Apple Dictation,
-    // hanging the dictation engagement. Lowercasing once on commit
-    // keeps the validation contract intact and dictation working.
-    const candidate = draft.toLowerCase()
+    // 0.40.24 S3: names are case-preserving now (mixed case is part
+    // of the label), so the 0.37.9 save-time lowercasing is retired
+    // along with the slug-shaped rule.
+    const candidate = draft
     const err = validate(candidate)
     if (err) { setError(err); return }
     setError(null)
@@ -2410,8 +2415,10 @@ function AgentDisplayNameField({
             // Apple Dictation. Dictation manages the input value
             // internally during the composition phase; if we mutate
             // it underneath, dictation's state desyncs and the
-            // engagement hangs/aborts. Lowercase enforcement now
-            // happens at save time via `validate()` instead.
+            // engagement hangs/aborts. (0.40.24 S3: lowercase
+            // enforcement is gone entirely — names are case-
+            // preserving; `validate()` at save time carries the
+            // remaining rules.)
             onChange={(e) => { setDraft(e.target.value); setError(null) }}
             disabled={!ready || busy}
             placeholder="agent"

@@ -130,28 +130,40 @@ fn lookup_project_name(project_path: &str) -> Option<String> {
 }
 
 /// Validate a candidate display name. Returns `Ok(())` if the input
-/// is acceptable, `Err(reason)` otherwise. Same regex as the agent
-/// CRUD path so a workspace's display name can never end up in a
-/// shape that wouldn't survive being copied into a directory name
-/// later.
+/// is acceptable, `Err(reason)` otherwise.
+///
+/// 0.40.24 S3 (Rosson, 2026-07-03): the old slug-shaped rule
+/// (lowercase + digits + hyphens only) is deliberately LOOSENED —
+/// display names are human labels, and operators want "QA Bot" or
+/// "K2 - Marketing Manager". The remaining limits are the ones that
+/// protect downstream consumers:
+///
+/// - non-empty, ≤ 64 chars — the `[from <name>]` PTY prefix and every
+///   list/table surface assume a bounded label
+///   (`workspace_msg::OWNER_DISPLAY_NAME_MAX` mirrors the 64 ceiling);
+/// - no control characters — the name is written into AGENT.md
+///   frontmatter as a single `display_name: <value>` line and injected
+///   into one-line PTY prefixes (a newline would corrupt both);
+/// - no leading/trailing whitespace — names are matched/rendered
+///   trimmed everywhere; invisible padding makes addressing flaky;
+/// - no `/` — the name doubles as the default archive folder label
+///   (`k2 agent retire` → `~/.k2/archive/<name>-<date>/`) and must
+///   never smuggle a path separator.
 pub fn validate_display_name(name: &str) -> Result<(), String> {
-    if name.len() < 2 {
-        return Err("Display name must be at least 2 characters.".to_string());
+    if name.is_empty() {
+        return Err("Display name must not be empty.".to_string());
     }
-    if name.len() > 64 {
+    if name.chars().count() > 64 {
         return Err("Display name must be at most 64 characters.".to_string());
     }
-    let bytes = name.as_bytes();
-    let starts_ok = bytes[0].is_ascii_lowercase();
-    let ends_ok = bytes[bytes.len() - 1].is_ascii_alphanumeric();
-    let body_ok = name
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-    if !(starts_ok && ends_ok && body_ok) {
-        return Err(
-            "Lowercase letters, digits, hyphens only. Start with a letter, no trailing hyphen."
-                .to_string(),
-        );
+    if name != name.trim() {
+        return Err("Display name must not start or end with whitespace.".to_string());
+    }
+    if name.contains('/') {
+        return Err("Display name must not contain '/'.".to_string());
+    }
+    if name.chars().any(char::is_control) {
+        return Err("Display name must not contain control characters.".to_string());
     }
     Ok(())
 }
@@ -167,6 +179,19 @@ pub fn validate_display_name(name: &str) -> Result<(), String> {
 /// get filled in later when the persona editor / mode setup runs.
 /// Reading via `agent_display_name` already tolerates a partial
 /// frontmatter, so the stub is enough to make the read path resolve.
+///
+/// ## Both name stores (0.40.24 S3)
+///
+/// A rename also updates `projects.name` for the workspace so
+/// NAME-BASED ADDRESSING follows the rename — `resolve_workspace`
+/// (`k2 talk <name>`, `k2 msg`, `k2 agent <name>`) and the
+/// connections target resolver all match on `projects.name`. The
+/// S2-era gap was that `--name` only touched AGENT.md: the label
+/// changed but `k2 agent conf "New Name"` still bounced. The
+/// TECHNICAL keys stay untouched (AGENT.md `name:` frontmatter,
+/// `v2_session_map` keys, `workspace_sessions.terminal_id`) so live
+/// PTYs aren't dropped by a rename. An UNREGISTERED path (no
+/// `projects` row yet) is fine — only AGENT.md is written.
 pub fn set_agent_display_name(project_path: &str, name: &str) -> Result<(), String> {
     validate_display_name(name)?;
 
@@ -188,6 +213,20 @@ pub fn set_agent_display_name(project_path: &str, name: &str) -> Result<(), Stri
     let updated = rewrite_frontmatter_field(&content, "display_name", name);
 
     crate::workspace::work_item::atomic_write(&agent_md, &updated)?;
+
+    // Both name stores: keep `projects.name` (the ADDRESSING name) in
+    // sync so `resolve_workspace` follows the rename. 0 rows updated =
+    // unregistered path — that's fine (AGENT.md is still the label
+    // store); a real DB error is not.
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE projects SET name = ?1 WHERE path = ?2",
+            rusqlite::params![name, project_path],
+        )
+        .map_err(|e| format!("display name written, but projects.name update failed: {e}"))?;
+    }
 
     cache().lock().unwrap().remove(project_path);
 
@@ -295,22 +334,124 @@ fn rewrite_frontmatter_field(content: &str, key: &str, value: &str) -> String {
 mod tests {
     use super::*;
 
+    // ── Validator contract (0.40.24 S3 — loosened deliberately) ────
+    //
+    // Display names are HUMAN labels: spaces and mixed case are first-
+    // class ("QA Bot", "K2 - Marketing Manager"). What stays banned is
+    // exactly what breaks downstream consumers: empty, >64 chars,
+    // control chars (one-line frontmatter + PTY prefix), surrounding
+    // whitespace (trimmed matching everywhere), and "/" (the name
+    // seeds retire's archive folder label).
+
     #[test]
     fn validate_accepts_simple_name() {
         assert!(validate_display_name("scout").is_ok());
         assert!(validate_display_name("scout-2").is_ok());
         assert!(validate_display_name("ab").is_ok());
+        // Single-character names are legal — "non-empty" is the floor.
+        assert!(validate_display_name("a").is_ok());
+        // Exactly at the 64-char ceiling.
+        assert!(validate_display_name(&"x".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_spaces_and_mixed_case() {
+        assert!(validate_display_name("Scout").is_ok());
+        assert!(validate_display_name("QA Bot").is_ok());
+        assert!(validate_display_name("K2 - Marketing Manager").is_ok());
+        // Internal punctuation and non-ASCII are label content, not a
+        // problem for any consumer — allowed.
+        assert!(validate_display_name("Björn (Ops #2)").is_ok());
+        // Leading hyphen / trailing hyphen were slug-era rules; a human
+        // label may carry them.
+        assert!(validate_display_name("-leading").is_ok());
+        assert!(validate_display_name("trailing-").is_ok());
     }
 
     #[test]
     fn validate_rejects_bad_shape() {
+        // Empty.
         assert!(validate_display_name("").is_err());
-        assert!(validate_display_name("a").is_err());
-        assert!(validate_display_name("Scout").is_err());
-        assert!(validate_display_name("-leading").is_err());
-        assert!(validate_display_name("trailing-").is_err());
-        assert!(validate_display_name("has space").is_err());
+        // Over the 64-char ceiling (chars, not bytes).
         assert!(validate_display_name(&"x".repeat(65)).is_err());
+        // Leading/trailing whitespace (any kind).
+        assert!(validate_display_name(" padded").is_err());
+        assert!(validate_display_name("padded ").is_err());
+        assert!(validate_display_name("\tQA Bot").is_err());
+        // A whitespace-only name is both "empty after trim" and
+        // padded — rejected either way.
+        assert!(validate_display_name("   ").is_err());
+        // Control characters (would corrupt the one-line frontmatter
+        // field and the `[from <name>]` PTY prefix).
+        assert!(validate_display_name("QA\nBot").is_err());
+        assert!(validate_display_name("QA\x1bBot").is_err());
+        assert!(validate_display_name("QA\tBot").is_err());
+        // Path separator (archive-folder label safety).
+        assert!(validate_display_name("ops/qa").is_err());
+    }
+
+    #[test]
+    fn set_display_name_writes_both_name_stores() {
+        // Rosson's 0.40.24 S3 decision: a rename must land in BOTH
+        // stores — AGENT.md `display_name:` (the label) AND
+        // `projects.name` (the addressing name resolve_workspace
+        // matches). Uses the shared in-memory test DB + a real temp
+        // dir for the AGENT.md write.
+        let dir = std::env::temp_dir().join(format!(
+            "k2-display-bothstores-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("create workspace dir");
+        let path = dir.to_string_lossy().to_string();
+        let project_id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![project_id, "old-name", path],
+            )
+            .expect("insert project row");
+        }
+
+        set_agent_display_name(&path, "QA Bot").expect("rename must succeed");
+
+        // Store 1: AGENT.md frontmatter (and the read path resolves it,
+        // spaces intact).
+        assert_eq!(agent_display_name(&path), "QA Bot");
+        // Store 2: projects.name (addressing).
+        let db_name: String = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT name FROM projects WHERE id = ?1",
+                rusqlite::params![project_id],
+                |r| r.get(0),
+            )
+            .expect("project row still present")
+        };
+        assert_eq!(db_name, "QA Bot", "projects.name must follow the rename");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn set_display_name_on_unregistered_path_still_writes_agent_md() {
+        // No projects row: the AGENT.md label write must still succeed
+        // (0 DB rows updated is NOT an error — only a real DB failure is).
+        let dir = std::env::temp_dir().join(format!(
+            "k2-display-unregistered-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("create workspace dir");
+        let path = dir.to_string_lossy().to_string();
+
+        set_agent_display_name(&path, "Solo Label").expect("unregistered rename ok");
+        assert_eq!(agent_display_name(&path), "Solo Label");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -52,6 +52,11 @@ interface ScheduleSpec {
   days_of_month?: number[]  // monthly
   months?: string[]         // yearly
   every_seconds?: number    // hourly
+  // Firing window (any frequency): fires — including catch-ups for
+  // missed occurrences — happen only between start and end; a due fire
+  // outside the window holds until the window next opens. Hourly has
+  // always carried these keys; the reliability overhaul honors them
+  // for every frequency. Absent = fire any hour.
   start?: string
   end?: string
 }
@@ -84,15 +89,20 @@ function to12h(t: string | undefined): string {
 function describeSpec(row: HeartbeatRow): string {
   const spec = parseSpec(row.specJson)
   const at = spec.time ? ` at ${to12h(spec.time)}` : ''
+  // Non-hourly window suffix — hourly renders its window inline below.
+  const win =
+    spec.frequency !== 'hourly' && (spec.start || spec.end)
+      ? ` · window ${to12h(spec.start ?? '00:00')}–${to12h(spec.end ?? '23:59')}`
+      : ''
   switch (spec.frequency) {
     case 'daily':
-      return `Every day${at}`
+      return `Every day${at}${win}`
     case 'weekly':
-      return `${(spec.days ?? []).join(', ') || '—'}${at}`
+      return `${(spec.days ?? []).join(', ') || '—'}${at}${win}`
     case 'monthly':
-      return `Day(s) ${(spec.days_of_month ?? []).join(', ') || '—'}${at}`
+      return `Day(s) ${(spec.days_of_month ?? []).join(', ') || '—'}${at}${win}`
     case 'yearly':
-      return `${(spec.months ?? []).join(', ')} day(s) ${(spec.days_of_month ?? []).join(', ') || '—'}${at}`
+      return `${(spec.months ?? []).join(', ')} day(s) ${(spec.days_of_month ?? []).join(', ') || '—'}${at}${win}`
     case 'hourly':
       return `Every ${Math.round((spec.every_seconds ?? 3600) / 60)}min ${to12h(spec.start ?? '00:00')}–${to12h(spec.end ?? '23:59')}`
     default:
@@ -135,6 +145,20 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
   const toggleMonth = (m: string): void => {
     const curr = spec.months ?? []
     update({ months: curr.includes(m) ? curr.filter((x) => x !== m) : [...curr, m] })
+  }
+
+  // Firing window (non-hourly; hourly always shows its own start/end
+  // pair). Default OFF — no keys in the spec means fire any hour.
+  const windowOn = spec.start != null || spec.end != null
+  const toggleWindow = (): void => {
+    if (windowOn) {
+      setSpec((s) => {
+        const { start: _s, end: _e, ...rest } = s
+        return rest as ScheduleSpec
+      })
+    } else {
+      update({ start: '09:00', end: '17:00' })
+    }
   }
 
   const nameValid = /^[a-z][a-z0-9-]*[a-z0-9]$/.test(name) && !['default', 'legacy'].includes(name)
@@ -313,6 +337,58 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
               </div>
             </div>
           </>
+        )}
+
+        {spec.frequency !== 'hourly' && (
+          <div className="mb-3">
+            <button
+              onClick={toggleWindow}
+              className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+            >
+              <span
+                role="checkbox"
+                aria-checked={windowOn}
+                className={`w-3 h-3 border flex items-center justify-center flex-shrink-0 ${
+                  windowOn
+                    ? 'bg-[var(--color-accent)] border-[var(--color-accent)]'
+                    : 'border-[var(--color-border)]'
+                }`}
+              >
+                {windowOn && (
+                  <svg className="w-2 h-2 text-white" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M1.5 4l1.5 1.5L6.5 2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+              </span>
+              Only fire within a time window
+            </button>
+            {windowOn && (
+              <div className="mt-2 flex gap-3 items-end">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Window start</label>
+                  <input
+                    type="time"
+                    value={spec.start ?? '09:00'}
+                    onChange={(e) => update({ start: e.target.value })}
+                    className="px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Window end</label>
+                  <input
+                    type="time"
+                    value={spec.end ?? '17:00'}
+                    onChange={(e) => update({ end: e.target.value })}
+                    className="px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                  />
+                </div>
+              </div>
+            )}
+            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">
+              Fires — including catch-ups for missed occurrences — happen only inside this
+              window; a fire that comes due outside it waits for the window to open.
+            </div>
+          </div>
         )}
 
         {error && <div className="text-[11px] text-red-400 mb-3">{error}</div>}

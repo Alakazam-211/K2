@@ -130,11 +130,17 @@ function describeHeartbeatSpec(specJson: string, frequency: string): string {
     return mm === '00' ? `${h} ${ap}` : `${h}:${mm} ${ap}`
   }
   const at = typeof spec.time === 'string' ? ` at ${fmt12(spec.time)}` : ''
+  // Non-hourly firing window (reliability overhaul) — hourly renders
+  // its window inline in its own case below.
+  const win =
+    frequency !== 'hourly' && (typeof spec.start === 'string' || typeof spec.end === 'string')
+      ? ` · window ${fmt12((spec.start as string | undefined) ?? '00:00')}–${fmt12((spec.end as string | undefined) ?? '23:59')}`
+      : ''
   switch (frequency) {
-    case 'daily': return `Every day${at}`
-    case 'weekly': return `${(spec.days as string[] | undefined ?? []).join(', ') || '—'}${at}`
-    case 'monthly': return `Day(s) ${(spec.days_of_month as number[] | undefined ?? []).join(', ') || '—'}${at}`
-    case 'yearly': return `${(spec.months as string[] | undefined ?? []).join(', ')} day(s) ${(spec.days_of_month as number[] | undefined ?? []).join(', ') || '—'}${at}`
+    case 'daily': return `Every day${at}${win}`
+    case 'weekly': return `${(spec.days as string[] | undefined ?? []).join(', ') || '—'}${at}${win}`
+    case 'monthly': return `Day(s) ${(spec.days_of_month as number[] | undefined ?? []).join(', ') || '—'}${at}${win}`
+    case 'yearly': return `${(spec.months as string[] | undefined ?? []).join(', ')} day(s) ${(spec.days_of_month as number[] | undefined ?? []).join(', ') || '—'}${at}${win}`
     case 'hourly': {
       const every = (spec.every_seconds as number | undefined) ?? 3600
       const start = fmt12((spec.start as string | undefined) ?? '00:00')

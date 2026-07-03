@@ -24,6 +24,12 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
     TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Register a projects row with `agent_enabled = 1` — the state every
+/// supported mode-setting path (`update_project_setting`, `k2 agent
+/// hire/set`) leaves a bot-mode workspace in. The 0.40.24 boot-sweep
+/// resurrect gate skips `agent_enabled = 0` rows, and the column's
+/// schema default is 0, so tests must set it explicitly like the real
+/// write paths do. Use [`set_agent_enabled`] to pause an agent.
 fn setup_project(workspace_id: &str, name: &str, agent_mode: &str) -> PathBuf {
     let project_path = std::env::temp_dir().join(format!(
         "k2so-canonical-test-{}-{}-{}",
@@ -40,8 +46,8 @@ fn setup_project(workspace_id: &str, name: &str, agent_mode: &str) -> PathBuf {
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.execute(
-        "INSERT OR REPLACE INTO projects (id, path, name, agent_mode) \
-         VALUES (?1, ?2, ?3, ?4)",
+        "INSERT OR REPLACE INTO projects (id, path, name, agent_mode, agent_enabled) \
+         VALUES (?1, ?2, ?3, ?4, 1)",
         rusqlite::params![
             workspace_id,
             project_path.to_string_lossy().as_ref(),
@@ -51,6 +57,18 @@ fn setup_project(workspace_id: &str, name: &str, agent_mode: &str) -> PathBuf {
     )
     .unwrap();
     project_path
+}
+
+/// Flip `projects.agent_enabled` — what `k2 agent set <name>
+/// --enabled false/true` stores (mode untouched).
+fn set_agent_enabled(workspace_id: &str, enabled: bool) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "UPDATE projects SET agent_enabled = ?1 WHERE id = ?2",
+        rusqlite::params![i64::from(enabled), workspace_id],
+    )
+    .unwrap();
 }
 
 /// Write an AGENT.md whose `launch:` profile spawns `cat` instead of
@@ -209,7 +227,11 @@ async fn ensure_canonical_session_errors_when_no_agent_md() {
 
     let workspace_id = "canon-test-ws-no-agent";
     let project = setup_project(workspace_id, "no-agent", "custom");
-    // Deliberately don't write AGENT.md.
+    // Deliberately don't write AGENT.md — and clear the enabled flag,
+    // since `projects.agent_enabled = 1` ALONE makes an agent
+    // resolvable (agent_identity contract b). This test is the
+    // genuinely-no-agent case.
+    set_agent_enabled(workspace_id, false);
     let project_path = project.to_string_lossy().into_owned();
 
     let result = ensure_canonical_session(&project_path);
@@ -261,6 +283,59 @@ async fn boot_sweep_ensures_bot_mode_workspaces_with_agent_md() {
     assert!(
         v2_session_map::lookup_by_agent_name("sweep-off:scout").is_none(),
         "boot sweep must skip mode='off' workspaces"
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Resurrect gate (0.40.24 S5): a paused agent stays paused across a
+// daemon restart
+// ─────────────────────────────────────────────────────────────────────
+
+/// `k2 agent set <name> --enabled false` pauses an agent WITHOUT
+/// changing its mode. Before the S5 gate, the boot sweep resurrected
+/// every bot-mode workspace regardless of `agent_enabled`, so the
+/// pause silently didn't survive a daemon restart. The sweep must now
+/// skip disabled agents — and still resurrect enabled ones.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn boot_sweep_skips_disabled_agents_and_resurrects_enabled_ones() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+
+    // Both workspaces are fully resurrectable EXCEPT for the enabled
+    // bit: bot mode + AGENT.md on disk.
+    let enabled_ws = setup_project("sweep-gate-enabled", "gate-enabled", "custom");
+    write_test_agent_md(&enabled_ws, "scout", "custom");
+
+    let disabled_ws = setup_project("sweep-gate-disabled", "gate-disabled", "custom");
+    write_test_agent_md(&disabled_ws, "scout", "custom");
+    // The pause: what `k2 agent set gate-disabled --enabled false`
+    // stores (agent_mode stays 'custom').
+    set_agent_enabled("sweep-gate-disabled", false);
+
+    // Simulate the post-restart boot sweep (v2_session_map is empty —
+    // cleared above — exactly like a fresh daemon process).
+    boot_sweep_ensure_canonical_sessions();
+
+    assert!(
+        v2_session_map::lookup_by_agent_name("sweep-gate-enabled").is_some(),
+        "boot sweep must still resurrect an ENABLED bot-mode agent"
+    );
+    assert!(
+        v2_session_map::lookup_by_agent_name("sweep-gate-disabled").is_none(),
+        "boot sweep must NOT resurrect an agent paused with agent_enabled=0 — \
+         `k2 agent set --enabled false` must survive a daemon restart"
+    );
+
+    // Re-enable + re-sweep: the agent is resurrectable again (the gate
+    // pauses, it doesn't retire).
+    set_agent_enabled("sweep-gate-disabled", true);
+    boot_sweep_ensure_canonical_sessions();
+    assert!(
+        v2_session_map::lookup_by_agent_name("sweep-gate-disabled").is_some(),
+        "re-enabling the agent must make the boot sweep resurrect it again"
     );
 
     v2_session_map::clear_for_tests();

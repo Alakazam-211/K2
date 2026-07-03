@@ -329,21 +329,32 @@ fn stamp_active_terminal_id(project_id: &str, terminal_id: &str) {
 /// and ensure each has a canonical session. Recovers cleanly from
 /// a daemon restart that wiped `v2_session_map`.
 ///
+/// 0.40.24 (S5): the sweep honors `projects.agent_enabled` — a paused
+/// agent (`k2 agent set <name> --enabled false`) must STAY paused
+/// across a daemon restart, so disabled rows are skipped (and logged).
+/// The column is `NOT NULL DEFAULT 0` (drizzle 0012) and every
+/// supported mode-setting path syncs it to 1 for bot modes, so
+/// enabled == 1 is the only resurrectable state.
+///
 /// Best-effort per workspace: a failure on one workspace doesn't
 /// stop the sweep from continuing to the next.
 pub fn boot_sweep_ensure_canonical_sessions() {
-    let projects: Vec<(String, String)> = {
+    let projects: Vec<(String, String, bool)> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let mut stmt = match conn.prepare(
-            "SELECT id, path FROM projects \
+            "SELECT id, path, COALESCE(agent_enabled, 0) FROM projects \
              WHERE agent_mode IN ('custom', 'manager', 'k2so')",
         ) {
             Ok(s) => s,
             Err(_) => return,
         };
         let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)? == 1,
+            ))
         });
         match rows {
             Ok(it) => it.flatten().collect(),
@@ -358,7 +369,17 @@ pub fn boot_sweep_ensure_canonical_sessions() {
     let mut ensured = 0usize;
     let mut reused = 0usize;
     let mut errors = 0usize;
-    for (_pid, path) in &projects {
+    for (_pid, path, enabled) in &projects {
+        // Resurrect gate (0.40.24 S5): a disabled agent stays down.
+        // `k2 agent set <name> --enabled false` pauses the agent
+        // without changing its mode — before this gate, a daemon
+        // restart silently un-paused it.
+        if !enabled {
+            log_debug!(
+                "[daemon/canonical] boot sweep skipped workspace {path}: agent_enabled=0 (paused)"
+            );
+            continue;
+        }
         // Skip workspaces whose filesystem dir is gone (deleted on
         // disk but still in the DB).
         if !std::path::Path::new(path).exists() {

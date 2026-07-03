@@ -7,6 +7,7 @@ import { emit } from '@tauri-apps/api/event'
 // other windows re-fetch; we now re-emit that event from the renderer after
 // each successful mutation (see `emitPresetsChanged`).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { parseCommand } from '@/lib/agent-resolve'
 import { useTabsStore, registerPresetsStore } from './tabs'
 import type { TerminalPane, Tab, PaneGroup, Item } from './tabs'
 
@@ -62,39 +63,10 @@ interface PresetsState {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-export function parseCommand(commandStr: string): { command: string; args: string[] } {
-  // Split respecting quoted strings
-  const parts: string[] = []
-  let current = ''
-  let inQuote: string | null = null
-
-  for (let i = 0; i < commandStr.length; i++) {
-    const ch = commandStr[i]
-
-    if (inQuote) {
-      if (ch === inQuote) {
-        inQuote = null
-      } else {
-        current += ch
-      }
-    } else if (ch === '"' || ch === "'") {
-      inQuote = ch
-    } else if (ch === ' ') {
-      if (current.length > 0) {
-        parts.push(current)
-        current = ''
-      }
-    } else {
-      current += ch
-    }
-  }
-  if (current.length > 0) {
-    parts.push(current)
-  }
-
-  const [command, ...args] = parts
-  return { command: command || '', args }
-}
+// parseCommand moved to the PURE agent-resolution seam (@/lib/agent-resolve)
+// so non-store code and tests can use it without pulling in zustand/tabs.
+// Re-exported here so existing importers keep working.
+export { parseCommand }
 
 // ── Store ────────────────────────────────────────────────────────────────
 

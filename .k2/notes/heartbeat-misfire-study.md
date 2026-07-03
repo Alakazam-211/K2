@@ -416,3 +416,54 @@ it robust to the dead-laptop case specifically; 3-4 are the "polish it off."
 7. **Lane A's future** — project-level `heartbeat_mode`/`heartbeat_schedule`
    duplicates the per-row system; fold it into a `workspace_heartbeats` row
    or keep as-is? (Out of scope for slices 1-4 except the stamp-order fix.)
+
+---
+
+## Implementation addendum (2026-07-02, reliability overhaul shipped)
+
+The overhaul landed in four slices on top of this study. Where the
+owner's decisions or reality diverged from Part 2/3 above, the shipped
+behavior is:
+
+1. **No catch-up grace window.** The owner overrode the proposed 24h
+   cutoff: a miss ALWAYS catches up — one coalesced late fire for the
+   most recent missed occurrence, however old. Consequently there is no
+   `missed`/`MissedExpired` audit decision; the trail distinguishes
+   `fired` (≤15 min after the occurrence, single pending) from
+   `fired_catchup` (reason carries the originally-scheduled time).
+2. **Firing windows** (owner feature): optional per-heartbeat `start`/
+   `end` in spec_json, honored for EVERY frequency (generalizes the
+   hourly-only legacy window). Out-of-window occurrences neither fire
+   nor count as missed; a due fire evaluated while the window is closed
+   holds (`HoldWindow`) until the window opens. Editor UI in both
+   heartbeat surfaces.
+3. **First-fire waits for the first scheduled slot** — never-fired rows
+   evaluate from `created_at` (fire-on-create retired). Pre-existing
+   enabled-but-never-fired rows will catch up their most recent
+   occurrence on upgrade instead of firing immediately (same net fire).
+4. **Failure policy:** exponential backoff 1/2/4/8 min (cap 1h) via
+   `consecutive_failures`/`next_retry_at`; auto-disable at 5 with
+   `disabled_reason='failures'` + `auto_disabled_failing` audit row +
+   Settings badge; success or manual re-enable resets.
+5. **Wedge fixes:** the spawn-timeout lease watchdog (§1.6.2) is built
+   (grace race + age-conditional release + failure accounting), plus a
+   per-tick stale-lease sweep; unparseable specs persist a visible
+   `schedule_error` + one `schedule_invalid` audit row per transition.
+6. **Transport:** `scheduler_meta.last_tick_at` on every tick;
+   `tick_gap` audit rows on >5 min gaps; boot overdue scan +
+   wall-clock-jump scan + launchd self-heal in the daemon's
+   heartbeat monitor (`/cli/heartbeat/scheduler-status` + Settings
+   banner surface it). `K2_HEARTBEAT_NO_SELF_HEAL=1` opts a test
+   daemon out of launchctl side effects.
+7. **Audit hygiene:** per-tick `not_due`/`skipped_schedule` rows are
+   gone (both lanes); the 90-day pruner runs at boot.
+8. **Deliberately NOT done** (noted, deferred): the Lane-A fold into
+   `workspace_heartbeats` (decision 7) INCLUDING its stamp-order fix —
+   moving the project-level stamp after spawn-success changes Lane A's
+   window-consumption semantics, so it travels with the fold; dead
+   schema removal (`starting_deadline_secs`, `concurrency_policy=
+   'replace'`); the src-tauri schedule-preview simulation still uses
+   the legacy evaluator (display-only drift for windows/catch-up);
+   `daily interval>1` is approximated as cron `*/N` day-of-month
+   (aliases at month boundaries, same class of jank as the legacy
+   day-of-year modulo it replaces).

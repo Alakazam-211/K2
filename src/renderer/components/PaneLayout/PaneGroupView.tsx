@@ -230,6 +230,13 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                     args={td.args}
                     spawnedAt={td.spawnedAt}
                     attachAgentName={(td as any).attachAgentName}
+                    // 2026-07-03 lazy-spawn gate — a known CLI session id
+                    // marks this tab as backed by real work, so it keeps
+                    // eager spawn-on-mount (stays warm while hidden). A
+                    // restored bare tab (no command, no session) defers
+                    // its spawn POST until first visible instead of
+                    // firing on workspace mount.
+                    sessionId={td.sessionId}
                     // 0.37.4 Phase B: seed + lock the daemon label
                     // when the tab has a meaningful title. Stops
                     // claude --resume's "Claude Code" title from

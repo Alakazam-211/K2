@@ -432,6 +432,15 @@ export interface TerminalPaneProps {
    *  and silently spawns a fresh resume. See
    *  `.k2so/prds/heartbeat-active-session-tracking.md`. */
   attachAgentName?: string
+  /** 2026-07-03 lazy-spawn gate — the CLI/daemon session id the client
+   *  knows backs this tab (creation-stamped for chat-history restores,
+   *  reconcile-stamped from the daemon's live-session list). NOT sent
+   *  on the spawn POST (the daemon resolves resume state by
+   *  agent_name); its presence marks the tab as backed by real work,
+   *  so it keeps today's EAGER spawn-on-mount and stays warm while
+   *  hidden. Absent + no `command` + hidden ⇒ the spawn POST defers
+   *  until the pane is first visible. */
+  sessionId?: string
   /** 0.37.4 Phase B — initial label seed sent to the daemon at
    *  spawn time. Used by callers that already know what this
    *  session should be called (e.g. a chat-history-restored tab
@@ -524,6 +533,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     args,
     spawnedAt,
     attachAgentName,
+    sessionId: knownSessionId,
     seedLabel,
     lockLabel,
     sandbox,
@@ -1065,6 +1075,50 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     }
   }, [terminalId])
 
+  // ── Lazy-spawn gate (2026-07-03: workspace-switch latency) ────
+  //
+  // A workspace mount renders EVERY saved tab's pane (retained-view
+  // model — mounting hidden for instant tab-switch is fine), and
+  // pre-fix each pane fired its spawn POST immediately: a restored
+  // layout with N never-attached bare tabs cost N sequential
+  // round-trips per workspace entry (each one refused by the daemon's
+  // bare-tab cap anyway — pure latency, zero value). A restored bare
+  // tab now spawns LAZILY: the POST defers until first visible, one
+  // on-demand round-trip when the user actually switches to it.
+  //
+  // MUST-STAY-EAGER — for these, spawning while hidden is the point:
+  //   - `command`         — a real program must start running
+  //                         unwatched (BackgroundTerminalSpawner's
+  //                         heartbeat spawns, AgentPane/AgentChatPane
+  //                         fallback claude launches, AIFileEditor);
+  //   - `sessionId`       — the client KNOWS real work backs this tab
+  //                         (creation- or reconcile-stamped): keep it
+  //                         warm so switching to it never pays the
+  //                         spawn round-trip;
+  //   - `attachAgentName` — attaches to an EXISTING daemon session
+  //                         (surfaced heartbeat tabs, the pinned
+  //                         canonical chat — PinnedChatRetainer's
+  //                         retention presupposes the attach);
+  //   - `sandbox`         — cell provisioning is deliberately not
+  //                         deferred behind first view;
+  //   - `retainWhileHidden` — holds the grid-WS while hidden, which
+  //                         presupposes a spawned session.
+  //
+  // Arming is ONE-WAY (false → true, exactly once), so the 0.39.13
+  // stable-deps guarantee below survives: later visibility flips
+  // never tear down or re-issue the spawn.
+  const spawnEager = Boolean(
+    command || knownSessionId || attachAgentName || sandbox || retainWhileHidden,
+  )
+  const [spawnArmed, setSpawnArmed] = useState(() => spawnEager || isTabVisible)
+  useEffect(() => {
+    // Arms on first-visible — and also when a hidden pane's props later
+    // gain an eager marker (e.g. reconcile stamps a live session's
+    // command/sessionId), so "session survives, tab reattaches" keeps
+    // working without the tab ever being viewed.
+    if (!spawnArmed && (spawnEager || isTabVisible)) setSpawnArmed(true)
+  }, [spawnArmed, spawnEager, isTabVisible])
+
   // ── Spawn effect (0.39.13: spawn ⊥ stream) ────────────────────
   //
   // Runs the idempotent HTTP POST to /cli/sessions/v2/spawn ONLY —
@@ -1075,6 +1129,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // never tear this down or re-issue the spawn POST — the v1 churn this
   // fix removes. Any step failing parks the component in `{error}`.
   useEffect(() => {
+    // Lazy-spawn gate: an unarmed pane skips the WHOLE effect body —
+    // no POST, no daemon side effects, phase stays 'idle'. The arming
+    // flip re-runs this effect exactly once (see spawnArmed above).
+    if (!spawnArmed) return
     let cancelled = false
     // For heartbeat-surfaced tabs, attachAgentName carries the daemon's
     // existing v2_session_map key (e.g. the workspace's primary agent
@@ -1304,9 +1362,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // it; the daemon's idempotent spawn re-attaches the same PTY and the
     // bumped spawnGeneration re-opens the grid-WS). The big WS-open
     // closure now lives in `openGridWs` below, called by the grid-WS
-    // effect — not inline here.
+    // effect — not inline here. `spawnArmed` (2026-07-03) keeps the
+    // stability contract: it flips false→true exactly once (the lazy
+    // spawn's deferred first run), never back.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminalId, cwd, command, args?.join('\0'), reconnectAttempt])
+  }, [terminalId, cwd, command, args?.join('\0'), reconnectAttempt, spawnArmed])
 
   // ── Grid-WS open routine (0.39.13) ────────────────────────────
   // The whole WS handshake + handler wiring, extracted from the old

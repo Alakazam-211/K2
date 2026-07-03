@@ -86,6 +86,9 @@ vi.mock('./tabs', () => ({
   // #672 — projects.ts also registers the canonical activate gesture on
   // the tabs module at load time (open/attach⇒activate, PRD §4.3.1).
   registerActivateProject: vi.fn(),
+  // Agent-degeneralization S1 — per-workspace default-agent lazy reader,
+  // registered at module load like the two above.
+  registerProjectDefaultAgentGetter: vi.fn(),
 }))
 vi.mock('./focus-groups', () => ({
   useFocusGroupsStore: {

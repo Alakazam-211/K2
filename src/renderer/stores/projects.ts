@@ -23,7 +23,7 @@ import { onActiveHostChange, activeHostKey, useConnectHostStore } from '@/stores
 import { onProjectsChanged } from '@/stores/session-events'
 import { useGitInitDialogStore } from './git-init-dialog'
 import { useToastStore } from './toast'
-import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, registerActivateProject, runLeaveGuard } from './tabs'
+import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, registerActivateProject, registerProjectDefaultAgentGetter, runLeaveGuard } from './tabs'
 import { useFocusGroupsStore } from './focus-groups'
 import { useSettingsStore } from './settings'
 // [ws-switch] — dev-only t0 mark for the pinned-chat retention
@@ -42,6 +42,14 @@ registerActiveProjectIdGetter(() => useProjectsStore.getState().activeProjectId)
 // without a static projects→tabs→projects import cycle (PRD §4.3.1).
 // Defined below (hoisted function); safe to reference here.
 registerActivateProject((projectId: string) => activateProject(projectId))
+
+// Agent-degeneralization S1 — hand tabs.ts a lazy reader for a project's
+// per-workspace default agent (Cmd+Shift+T / launchDefaultAgent precedence:
+// workspace default → global default). Same cycle-avoidance pattern as above.
+registerProjectDefaultAgentGetter(
+  (projectId: string) =>
+    useProjectsStore.getState().projects.find((p) => p.id === projectId)?.defaultAgent ?? undefined,
+)
 
 // Debounce touchInteraction to avoid excessive DB writes (5 min per project)
 const TOUCH_DEBOUNCE_MS = 5 * 60 * 1000

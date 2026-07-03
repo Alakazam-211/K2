@@ -98,6 +98,21 @@ function activateProjectViaRef(projectId: string): void {
   _activateProjectRef?.(projectId)
 }
 
+// Agent-degeneralization S1 — lazy reference to a project's per-workspace
+// default agent (projects.default_agent, NULL ⇒ inherit global). Same
+// lazy-registration pattern as above (projects.ts imports tabs.ts).
+// Falls back to undefined (= global default) when unregistered.
+let _projectDefaultAgentRef: ((projectId: string) => string | undefined) | null = null
+export function registerProjectDefaultAgentGetter(
+  getter: (projectId: string) => string | undefined,
+): void {
+  _projectDefaultAgentRef = getter
+}
+function projectDefaultAgentViaRef(projectId: string | null): string | undefined {
+  if (!projectId || !_projectDefaultAgentRef) return undefined
+  return _projectDefaultAgentRef(projectId)
+}
+
 // ── Unsaved-changes leave guard (save/discard/cancel on workspace switch) ──
 //
 // When the user switches AWAY from a workspace that has dirty file tabs, the
@@ -3905,15 +3920,17 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         const paneGroupId = crypto.randomUUID()
 
         // Look up default agent preset via the one resolution seam
-        // (id-first, legacy-token tolerant, first-enabled fallback).
-        // Workspace-default precedence lands with Slice 1 (tabs.ts cannot
-        // import the projects store — projects.ts imports tabs.ts).
+        // (id-first, legacy-token tolerant, first-enabled fallback), with
+        // the workspace's own default (projects.default_agent) taking
+        // precedence over the global setting. `key` is
+        // `${projectId}:${workspaceId}`.
         let agentOpts: { command?: string; args?: string[]; title?: string } = {}
         try {
           if (_presetsStoreRef) {
             const resolved = resolveAgentCommand(
               _presetsStoreRef().presets as AgentPresetLike[],
               useSettingsStore.getState().defaultAgent,
+              projectDefaultAgentViaRef(key.split(':')[0] || null),
             )
             if (resolved) {
               agentOpts = {

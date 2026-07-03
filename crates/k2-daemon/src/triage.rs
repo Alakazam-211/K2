@@ -219,8 +219,16 @@ fn run_candidates_bounded(
                 set.spawn(async move {
                     let cand_name = cand.name.clone();
                     let cand_for_log = cand.name.clone();
+                    // Carry the evaluator's catch-up provenance into the
+                    // launcher so a recovered miss audits `fired_catchup`
+                    // with its originally-scheduled time.
+                    let catchup_of = cand.catchup_of.clone();
                     let outcome_fut = spawn_blocking(move || {
-                        crate::heartbeat_launch::smart_launch(&project_path, &cand_name)
+                        crate::heartbeat_launch::smart_launch_with_origin(
+                            &project_path,
+                            &cand_name,
+                            catchup_of.as_deref(),
+                        )
                     });
                     let result = match tokio::time::timeout(deadline, outcome_fut).await {
                         Ok(Ok(v)) => v,

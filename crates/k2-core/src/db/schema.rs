@@ -1521,6 +1521,27 @@ pub struct AgentHeartbeat {
     /// Un-checking the flag restores the original behavior with the
     /// historical session intact. Default false. See migration 0043.
     pub use_workspace_session: bool,
+    /// 0062 — count of consecutive failed fire-attempts (spawn error,
+    /// inject error, watchdog-released hang). Reset to 0 by any
+    /// successful fire (`stamp_fired_and_release`) and by a manual
+    /// enable/disable toggle. At 5 the row is auto-disabled with
+    /// `disabled_reason='failures'`.
+    pub consecutive_failures: i64,
+    /// 0062 — RFC3339 earliest time the scheduler may retry this row
+    /// after a failure (exponential backoff: 1/2/4/8 min). NULL = no
+    /// backoff pending. Manual launches bypass this gate.
+    pub next_retry_at: Option<String>,
+    /// 0062 — why `enabled` is 0, when the system (not the user)
+    /// flipped it: `failures` (backoff exhaustion) or `wakeup_missing`
+    /// (WAKEUP.md deleted). NULL for user-disabled rows. Cleared by
+    /// any manual enable/disable so re-enabling resets the state.
+    pub disabled_reason: Option<String>,
+    /// 0062 — human-readable reason the evaluator can't parse this
+    /// row's `frequency`/`spec_json` (a schedule that can never fire).
+    /// Set on the first tick that observes the problem, cleared when
+    /// the spec evaluates cleanly again or the schedule is edited.
+    /// Pre-0062 this state was invisible: enabled-but-dark forever.
+    pub schedule_error: Option<String>,
 }
 
 impl AgentHeartbeat {
@@ -1573,7 +1594,7 @@ impl AgentHeartbeat {
 
     /// Column list for SELECTs. Centralised so adding a new column means
     /// updating one constant + `from_row`, not five query strings.
-    const COLS: &'static str = "id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, last_session_id, archived_at, created_at, concurrency_policy, starting_deadline_secs, active_deadline_secs, in_flight_started_at, active_terminal_id, use_workspace_session";
+    const COLS: &'static str = "id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, last_session_id, archived_at, created_at, concurrency_policy, starting_deadline_secs, active_deadline_secs, in_flight_started_at, active_terminal_id, use_workspace_session, consecutive_failures, next_retry_at, disabled_reason, schedule_error";
 
     pub fn get_by_name(conn: &Connection, project_id: &str, name: &str) -> Result<Option<AgentHeartbeat>> {
         let sql = format!(
@@ -1625,9 +1646,9 @@ impl AgentHeartbeat {
             let hb = Self::from_row(row)?;
             // Two extra columns appended in the SELECT above. Their
             // indices follow the AgentHeartbeat fields (which Self::COLS
-            // produced) — 17 fields + project_name (17) + project_path (18).
-            let project_name: String = row.get(17)?;
-            let project_path: String = row.get(18)?;
+            // produced) — 21 fields + project_name (21) + project_path (22).
+            let project_name: String = row.get(21)?;
+            let project_path: String = row.get(22)?;
             Ok((hb, project_name, project_path))
         })?;
         rows.collect()
@@ -1676,9 +1697,75 @@ impl AgentHeartbeat {
     }
 
     pub fn set_enabled(conn: &Connection, project_id: &str, name: &str, enabled: bool) -> Result<usize> {
+        // 0062 — a manual toggle is an operator statement of intent, so
+        // it clears the failure-backoff state: re-enabling a row that was
+        // auto-disabled after repeated failures gives it a clean slate
+        // (counter, retry window, and the disabled_reason badge all reset).
         conn.execute(
-            "UPDATE workspace_heartbeats SET enabled = ?1 WHERE project_id = ?2 AND name = ?3",
+            "UPDATE workspace_heartbeats \
+             SET enabled = ?1, disabled_reason = NULL, \
+                 consecutive_failures = 0, next_retry_at = NULL \
+             WHERE project_id = ?2 AND name = ?3",
             params![enabled as i64, project_id, name],
+        )
+    }
+
+    /// 0062 — system-initiated disable (backoff exhaustion, missing
+    /// WAKEUP.md). Unlike [`Self::set_enabled`] this RECORDS why via
+    /// `disabled_reason` so the UI can render a distinct badge instead
+    /// of a silently-flipped toggle. A manual re-enable clears it.
+    pub fn auto_disable(
+        conn: &Connection,
+        project_id: &str,
+        name: &str,
+        reason: &str,
+    ) -> Result<usize> {
+        conn.execute(
+            "UPDATE workspace_heartbeats SET enabled = 0, disabled_reason = ?1 \
+             WHERE project_id = ?2 AND name = ?3",
+            params![reason, project_id, name],
+        )
+    }
+
+    /// 0062 — record one failed fire-attempt: bump the consecutive
+    /// counter and stamp the backoff window. Returns the NEW counter
+    /// value so the caller can decide whether the auto-disable
+    /// threshold was crossed. All writes on the shared connection are
+    /// serialized by the process-wide mutex, so bump-then-read is safe.
+    pub fn note_fire_failure(
+        conn: &Connection,
+        project_id: &str,
+        name: &str,
+        next_retry_at: Option<&str>,
+    ) -> Result<i64> {
+        conn.execute(
+            "UPDATE workspace_heartbeats \
+             SET consecutive_failures = consecutive_failures + 1, next_retry_at = ?1 \
+             WHERE project_id = ?2 AND name = ?3",
+            params![next_retry_at, project_id, name],
+        )?;
+        conn.query_row(
+            "SELECT consecutive_failures FROM workspace_heartbeats \
+             WHERE project_id = ?1 AND name = ?2",
+            params![project_id, name],
+            |r| r.get(0),
+        )
+    }
+
+    /// 0062 — set (Some) or clear (None) the visible schedule-error
+    /// state. The tick evaluator writes this on the transition into /
+    /// out of "spec unparseable" so an impossible schedule shows up in
+    /// Settings instead of sitting enabled-but-dark forever.
+    pub fn set_schedule_error(
+        conn: &Connection,
+        project_id: &str,
+        name: &str,
+        error: Option<&str>,
+    ) -> Result<usize> {
+        conn.execute(
+            "UPDATE workspace_heartbeats SET schedule_error = ?1 \
+             WHERE project_id = ?2 AND name = ?3",
+            params![error, project_id, name],
         )
     }
 
@@ -1689,8 +1776,12 @@ impl AgentHeartbeat {
         frequency: &str,
         spec_json: &str,
     ) -> Result<usize> {
+        // 0062 — editing the schedule clears any recorded schedule_error;
+        // the next tick re-evaluates the new spec and re-flags if it's
+        // still unparseable.
         conn.execute(
-            "UPDATE workspace_heartbeats SET frequency = ?1, spec_json = ?2 \
+            "UPDATE workspace_heartbeats \
+             SET frequency = ?1, spec_json = ?2, schedule_error = NULL \
              WHERE project_id = ?3 AND name = ?4",
             params![frequency, spec_json, project_id, name],
         )
@@ -1962,7 +2053,8 @@ impl AgentHeartbeat {
 
     /// Combined success path: stamp `last_fired` AND clear the lease in
     /// a single statement, so a tick never observes the row in a
-    /// half-finished state.
+    /// half-finished state. 0062: a success also resets the
+    /// consecutive-failure counter + backoff window.
     pub fn stamp_fired_and_release(
         conn: &Connection,
         project_id: &str,
@@ -1971,7 +2063,8 @@ impl AgentHeartbeat {
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE workspace_heartbeats \
-             SET last_fired = ?1, in_flight_started_at = NULL \
+             SET last_fired = ?1, in_flight_started_at = NULL, \
+                 consecutive_failures = 0, next_retry_at = NULL \
              WHERE project_id = ?2 AND name = ?3",
             params![now, project_id, name],
         )
@@ -1998,6 +2091,31 @@ impl AgentHeartbeat {
         )
     }
 
+    /// 0062 — conditional single-row lease release for the spawn-timeout
+    /// watchdog. Clears `in_flight_started_at` ONLY if the lease is
+    /// older than `older_than_secs`, so a lease re-acquired by a LATER
+    /// fire attempt (or a spawn that completed and re-fired in the
+    /// interim) is never clobbered. Returns the number of rows cleared
+    /// (0 = the hung spawn actually finished and handled its own lease;
+    /// 1 = the watchdog un-wedged the row).
+    pub fn release_lease_if_stale(
+        conn: &Connection,
+        project_id: &str,
+        name: &str,
+        older_than_secs: i64,
+    ) -> Result<usize> {
+        let cutoff = (chrono::Utc::now()
+            - chrono::Duration::seconds(older_than_secs))
+        .to_rfc3339();
+        conn.execute(
+            "UPDATE workspace_heartbeats SET in_flight_started_at = NULL \
+             WHERE project_id = ?1 AND name = ?2 \
+               AND in_flight_started_at IS NOT NULL \
+               AND in_flight_started_at < ?3",
+            params![project_id, name, cutoff],
+        )
+    }
+
     fn from_row(row: &rusqlite::Row<'_>) -> Result<AgentHeartbeat> {
         Ok(AgentHeartbeat {
             id: row.get(0)?,
@@ -2017,6 +2135,10 @@ impl AgentHeartbeat {
             in_flight_started_at: row.get(14)?,
             active_terminal_id: row.get(15)?,
             use_workspace_session: row.get::<_, i64>(16)? == 1,
+            consecutive_failures: row.get(17)?,
+            next_retry_at: row.get(18)?,
+            disabled_reason: row.get(19)?,
+            schedule_error: row.get(20)?,
         })
     }
 
@@ -2559,14 +2681,45 @@ impl HeartbeatFire {
     }
 
     /// Delete fire rows older than the given RFC3339 timestamp. Returns
-    /// the number of rows removed. Used by retention pruning (e.g., a
-    /// user-triggered "clear old heartbeats" action).
-    #[allow(dead_code)] // Retention helper — called from tests; the UI
-                        // currently has no "clear old heartbeats" action.
+    /// the number of rows removed. 0062 wires this into daemon boot
+    /// with a 90-day cutoff so `heartbeat_fires` stops growing
+    /// unboundedly (pre-0062 it had zero callers).
     pub fn prune_before(conn: &Connection, cutoff: &str) -> Result<usize> {
         conn.execute(
             "DELETE FROM heartbeat_fires WHERE fired_at < ?1",
             params![cutoff],
+        )
+    }
+}
+
+// ── Scheduler meta (daemon-wide KV) ────────────────────────────────────
+
+/// 0062 — tiny daemon-owned key/value store for scheduler bookkeeping
+/// that is per-daemon, not per-heartbeat. First key: `last_tick_at`,
+/// stamped on every `/cli/scheduler-tick`, which makes tick-transport
+/// gaps (sleep, daemon downtime, a silently-unloaded launchd agent)
+/// measurable — the single biggest observability hole the misfire
+/// study found.
+pub struct SchedulerMeta;
+
+impl SchedulerMeta {
+    /// The RFC3339 timestamp of the most recent scheduler tick.
+    pub const LAST_TICK_AT: &'static str = "last_tick_at";
+
+    pub fn get(conn: &Connection, key: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT value FROM scheduler_meta WHERE key = ?1",
+            params![key],
+            |r| r.get(0),
+        )
+        .ok()
+    }
+
+    pub fn set(conn: &Connection, key: &str, value: &str) -> Result<usize> {
+        conn.execute(
+            "INSERT INTO scheduler_meta (key, value) VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
         )
     }
 }
@@ -3841,6 +3994,136 @@ mod concurrency_tests {
             .unwrap();
         assert!(fresh.in_flight_started_at.is_some(), "fresh lease preserved");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn release_lease_if_stale_only_clears_old_lease_for_named_row() {
+        let (dir, db_path) = scratch_db();
+        let conn = open_conn(&db_path);
+        let project = make_project(&conn, "/tmp/proj-hb-watchdog");
+        make_heartbeat(&conn, &project, "hung-hb");
+        make_heartbeat(&conn, &project, "other-hb");
+
+        // A fresh lease must survive the conditional release (the
+        // watchdog must never clobber a lease re-acquired by a later
+        // fire attempt).
+        AgentHeartbeat::try_acquire_heartbeat(&conn, &project, "hung-hb").expect("acquire");
+        let cleared = AgentHeartbeat::release_lease_if_stale(&conn, &project, "hung-hb", 120)
+            .expect("conditional release");
+        assert_eq!(cleared, 0, "a fresh lease must not be force-released");
+
+        // Age the lease past the cutoff → cleared, and only this row.
+        let old = (chrono::Utc::now() - chrono::Duration::seconds(300)).to_rfc3339();
+        conn.execute(
+            "UPDATE workspace_heartbeats SET in_flight_started_at = ?1 WHERE name = 'hung-hb'",
+            params![old],
+        )
+        .unwrap();
+        AgentHeartbeat::try_acquire_heartbeat(&conn, &project, "other-hb").expect("acquire other");
+        let cleared = AgentHeartbeat::release_lease_if_stale(&conn, &project, "hung-hb", 120)
+            .expect("conditional release");
+        assert_eq!(cleared, 1, "stale lease must be force-released");
+        let other = AgentHeartbeat::get_by_name(&conn, &project, "other-hb").unwrap().unwrap();
+        assert!(other.in_flight_started_at.is_some(), "unrelated row's lease untouched");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn note_fire_failure_counts_and_success_resets() {
+        let (dir, db_path) = scratch_db();
+        let conn = open_conn(&db_path);
+        let project = make_project(&conn, "/tmp/proj-hb-failures");
+        make_heartbeat(&conn, &project, "flaky-hb");
+
+        let retry = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+        let n1 = AgentHeartbeat::note_fire_failure(&conn, &project, "flaky-hb", Some(&retry))
+            .expect("failure 1");
+        assert_eq!(n1, 1);
+        let n2 = AgentHeartbeat::note_fire_failure(&conn, &project, "flaky-hb", Some(&retry))
+            .expect("failure 2");
+        assert_eq!(n2, 2, "consecutive failures must accumulate");
+        let row = AgentHeartbeat::get_by_name(&conn, &project, "flaky-hb").unwrap().unwrap();
+        assert_eq!(row.next_retry_at.as_deref(), Some(retry.as_str()));
+
+        // A successful fire resets the counter + backoff window.
+        AgentHeartbeat::stamp_fired_and_release(&conn, &project, "flaky-hb").expect("stamp");
+        let row = AgentHeartbeat::get_by_name(&conn, &project, "flaky-hb").unwrap().unwrap();
+        assert_eq!(row.consecutive_failures, 0, "success must reset the failure counter");
+        assert!(row.next_retry_at.is_none(), "success must clear the backoff window");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto_disable_records_reason_and_reenable_clears_state() {
+        let (dir, db_path) = scratch_db();
+        let conn = open_conn(&db_path);
+        let project = make_project(&conn, "/tmp/proj-hb-disable");
+        make_heartbeat(&conn, &project, "doomed-hb");
+        conn.execute(
+            "UPDATE workspace_heartbeats SET enabled = 1 WHERE name = 'doomed-hb'",
+            [],
+        )
+        .unwrap();
+        AgentHeartbeat::note_fire_failure(&conn, &project, "doomed-hb", None).expect("failure");
+
+        AgentHeartbeat::auto_disable(&conn, &project, "doomed-hb", "failures")
+            .expect("auto disable");
+        let row = AgentHeartbeat::get_by_name(&conn, &project, "doomed-hb").unwrap().unwrap();
+        assert!(!row.enabled, "auto_disable must flip enabled off");
+        assert_eq!(
+            row.disabled_reason.as_deref(),
+            Some("failures"),
+            "auto_disable must record WHY for the UI badge",
+        );
+
+        // Manual re-enable = clean slate: reason, counter, backoff all reset.
+        AgentHeartbeat::set_enabled(&conn, &project, "doomed-hb", true).expect("re-enable");
+        let row = AgentHeartbeat::get_by_name(&conn, &project, "doomed-hb").unwrap().unwrap();
+        assert!(row.enabled);
+        assert!(row.disabled_reason.is_none(), "re-enable must clear disabled_reason");
+        assert_eq!(row.consecutive_failures, 0, "re-enable must reset the failure counter");
+        assert!(row.next_retry_at.is_none(), "re-enable must clear the backoff window");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn schedule_error_set_clear_and_edit_clears() {
+        let (dir, db_path) = scratch_db();
+        let conn = open_conn(&db_path);
+        let project = make_project(&conn, "/tmp/proj-hb-scherr");
+        make_heartbeat(&conn, &project, "broken-hb");
+
+        AgentHeartbeat::set_schedule_error(&conn, &project, "broken-hb", Some("bad spec"))
+            .expect("set error");
+        let row = AgentHeartbeat::get_by_name(&conn, &project, "broken-hb").unwrap().unwrap();
+        assert_eq!(row.schedule_error.as_deref(), Some("bad spec"));
+
+        // Editing the schedule clears the recorded error.
+        AgentHeartbeat::update_schedule(&conn, &project, "broken-hb", "daily", r#"{"time":"09:00"}"#)
+            .expect("edit");
+        let row = AgentHeartbeat::get_by_name(&conn, &project, "broken-hb").unwrap().unwrap();
+        assert!(row.schedule_error.is_none(), "editing the schedule must clear schedule_error");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scheduler_meta_roundtrips_and_upserts() {
+        let (dir, db_path) = scratch_db();
+        let conn = open_conn(&db_path);
+        assert_eq!(SchedulerMeta::get(&conn, SchedulerMeta::LAST_TICK_AT), None);
+        SchedulerMeta::set(&conn, SchedulerMeta::LAST_TICK_AT, "2026-07-02T10:00:00Z")
+            .expect("set");
+        SchedulerMeta::set(&conn, SchedulerMeta::LAST_TICK_AT, "2026-07-02T10:01:00Z")
+            .expect("upsert");
+        assert_eq!(
+            SchedulerMeta::get(&conn, SchedulerMeta::LAST_TICK_AT).as_deref(),
+            Some("2026-07-02T10:01:00Z"),
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

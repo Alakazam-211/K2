@@ -22,7 +22,6 @@ use serde::Serialize;
 use crate::workspace::agent_identity::{resolve_agent_name, resolve_project_id};
 use crate::db::schema::{AgentHeartbeat, HeartbeatFire};
 use crate::log_debug;
-use crate::scheduler::should_project_fire;
 
 // Phase 2.5c: cron schedule parsing + next-fire computation.
 pub mod cron;
@@ -302,16 +301,31 @@ pub struct HeartbeatFireCandidate {
     pub agent_name: String,
     pub wakeup_path_abs: String,
     pub wakeup_path_rel: String,
+    /// RFC3339 of the originally-scheduled occurrence when this fire is
+    /// a CATCH-UP for a missed slot (evaluator returned `DueCatchUp`).
+    /// None = on-time fire. The launcher writes `fired_catchup` (with
+    /// this timestamp in the reason) instead of `fired` so the audit
+    /// trail distinguishes recovered misses from on-time fires.
+    pub catchup_of: Option<String>,
 }
 
 /// Iterate enabled `workspace_heartbeats` rows for a project and return the
 /// subset whose schedules are due to fire now.
 ///
+/// Reliability overhaul: `cron::evaluate` is the SINGLE due-authority —
+/// the legacy `should_project_fire` calendar-position gate (which
+/// silently dropped any miss that crossed a day/week/month boundary,
+/// and whose once-per-day latch let a manual launch consume the day's
+/// scheduled fire) no longer runs for these rows. Misses always catch
+/// up, coalesced to one fire for the most recent missed occurrence.
+///
 /// Does NOT lock, spawn, or stamp — those are the caller's
-/// responsibility. Writes audit rows into `heartbeat_fires` for each
-/// evaluated candidate (`fired_multi` / `skipped_schedule` /
-/// `wakeup_file_missing`) so `k2so heartbeat status <name>` can show
-/// what happened.
+/// responsibility. Audit hygiene: quiet non-events (`NotYet`,
+/// window-holds, backoff waits) write NO rows — pre-overhaul every
+/// tick wrote a `not_due`/`skipped_schedule` row per heartbeat (1,440
+/// rows/heartbeat/day) and real fires drowned. Rows are written only
+/// for decisions that carry information: fires (by the launcher),
+/// `schedule_invalid` (on state transition), `wakeup_file_missing`.
 ///
 /// Auto-disables a heartbeat whose `WAKEUP.md` has been deleted from
 /// disk — filesystem tampering recovery so the user notices.
@@ -332,59 +346,69 @@ pub fn k2so_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandid
         return vec![];
     };
 
+    let now = chrono::Local::now();
     let tick_start = std::time::Instant::now();
     let mut candidates = Vec::new();
     for hb in heartbeats {
-        let eligible = should_project_fire(
-            &hb.frequency,
-            Some(&hb.spec_json),
-            hb.last_fired.as_deref(),
-        );
-        if !eligible {
-            let _ = HeartbeatFire::insert_with_schedule(
-                &conn,
-                &project_id,
-                Some(&agent_name),
-                Some(&hb.name),
-                &hb.frequency,
-                "skipped_schedule",
-                Some("window not open"),
-                None,
-                None,
-                Some(tick_start.elapsed().as_millis() as i64),
-            );
-            continue;
+        // Failure backoff: after a failed fire-attempt the launcher
+        // stamps `next_retry_at` (exponential); until then the row is
+        // not retried. Quiet — the failure itself already wrote an
+        // `error` audit row. Manual launches bypass this gate.
+        if let Some(retry_at) = hb
+            .next_retry_at
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        {
+            if now < retry_at {
+                continue;
+            }
         }
 
-        // 0.38.2: cron-shaped scheduling via the croner crate. `is_due`
-        // asks "is now at or past this heartbeat's next scheduled time?"
-        // — backed by `croner` for daily/weekly/monthly/yearly and by
-        // a direct `last_fired + every_seconds` for hourly. No deadline
-        // grace, no skip-because-late. Long pauses recover automatically.
-        //
-        // Replaces the pre-0.38.2 `is_past_deadline` whose K8s-CronJob-
-        // inspired `starting_deadline_secs` window left heartbeats dark
-        // for 22+ days after any pause longer than the grace (~600s).
-        // Observed live in production. See `cron_schedule::is_due`.
-        if !crate::heartbeats::cron::is_due(&hb) {
-            let _ = HeartbeatFire::insert_with_schedule(
-                &conn,
-                &project_id,
-                Some(&agent_name),
-                Some(&hb.name),
-                &hb.frequency,
-                "not_due",
-                Some("next scheduled time not yet reached"),
-                None,
-                None,
-                Some(tick_start.elapsed().as_millis() as i64),
-            );
-            continue;
-        }
+        let catchup_of = match cron::evaluate(&hb) {
+            cron::DueStatus::Due { .. } => None,
+            cron::DueStatus::DueCatchUp { missed_at } => Some(missed_at.to_rfc3339()),
+            cron::DueStatus::NotYet { .. } | cron::DueStatus::HoldWindow { .. } => {
+                // Not due / holding for the firing window: quiet.
+                clear_schedule_error_if_set(&conn, &project_id, &hb);
+                continue;
+            }
+            cron::DueStatus::Invalid { reason } => {
+                // A schedule that can never fire is surfaced ONCE per
+                // state change: persist `schedule_error` (Settings
+                // badge) + one `schedule_invalid` audit row — not a
+                // row per tick.
+                if hb.schedule_error.as_deref() != Some(reason.as_str()) {
+                    let _ = AgentHeartbeat::set_schedule_error(
+                        &conn, &project_id, &hb.name, Some(&reason),
+                    );
+                    let _ = HeartbeatFire::insert_with_schedule(
+                        &conn,
+                        &project_id,
+                        Some(&agent_name),
+                        Some(&hb.name),
+                        &hb.frequency,
+                        "schedule_invalid",
+                        Some(&reason),
+                        None,
+                        None,
+                        Some(tick_start.elapsed().as_millis() as i64),
+                    );
+                    log_debug!(
+                        "[heartbeat-tick] {} schedule invalid: {}",
+                        hb.name,
+                        reason
+                    );
+                }
+                continue;
+            }
+        };
+        clear_schedule_error_if_set(&conn, &project_id, &hb);
 
         let wakeup_abs = std::path::Path::new(project_path).join(&hb.wakeup_path);
         if !wakeup_abs.exists() {
-            let _ = AgentHeartbeat::set_enabled(&conn, &project_id, &hb.name, false);
+            let _ = AgentHeartbeat::auto_disable(
+                &conn, &project_id, &hb.name, "wakeup_missing",
+            );
             let _ = HeartbeatFire::insert_with_schedule(
                 &conn,
                 &project_id,
@@ -413,9 +437,23 @@ pub fn k2so_agents_heartbeat_tick(project_path: &str) -> Vec<HeartbeatFireCandid
             agent_name: agent_name.clone(),
             wakeup_path_abs: wakeup_abs.to_string_lossy().to_string(),
             wakeup_path_rel: hb.wakeup_path,
+            catchup_of,
         });
     }
     candidates
+}
+
+/// Clear a stale `schedule_error` once the row evaluates cleanly again
+/// (spec fixed via edit, or a transient parse issue resolved). Quiet —
+/// the recovery needs no audit row.
+fn clear_schedule_error_if_set(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    hb: &AgentHeartbeat,
+) {
+    if hb.schedule_error.is_some() {
+        let _ = AgentHeartbeat::set_schedule_error(conn, project_id, &hb.name, None);
+    }
 }
 
 /// Stamp `last_fired` on a heartbeat row. Called AFTER `spawn_wake_pty`
@@ -576,6 +614,9 @@ pub fn k2so_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
                 "startingDeadlineSecs": hb.starting_deadline_secs,
                 "activeDeadlineSecs": hb.active_deadline_secs,
                 "useWorkspaceSession": hb.use_workspace_session,
+                "consecutiveFailures": hb.consecutive_failures,
+                "disabledReason": hb.disabled_reason,
+                "scheduleError": hb.schedule_error,
                 "projectName": project_name,
                 "projectPath": project_path,
             })

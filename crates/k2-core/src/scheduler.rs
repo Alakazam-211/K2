@@ -1,10 +1,21 @@
-//! Pure heartbeat-schedule evaluation.
+//! Pure heartbeat-schedule evaluation — LANE A (project-level) ONLY.
 //!
 //! Given a project's `heartbeat_mode` + `heartbeat_schedule` JSON + the
 //! RFC3339 string of its last fire, decide whether the scheduler tick
 //! should fire this project now. No DB, no Tauri, no IO — just string /
 //! JSON / chrono math — so the logic is testable in isolation and runs
 //! identically inside the Tauri app today and the k2so-daemon tomorrow.
+//!
+//! SCOPE (reliability overhaul): this evaluator gates only the
+//! project-level Lane-A tick (`workspace/scheduler.rs`, the legacy
+//! `projects.heartbeat_mode`/`heartbeat_schedule` columns) and the
+//! schedule-preview simulation. The multi-heartbeat rows
+//! (`workspace_heartbeats`, Lane B) are evaluated EXCLUSIVELY by
+//! `crate::heartbeats::cron::evaluate` — this module's calendar-position
+//! checks (which drop any miss that crosses a day/week/month boundary)
+//! and its once-per-day latch no longer apply to them. See
+//! `.k2/notes/heartbeat-misfire-study.md` §1.4 for why the two
+//! evaluators disagreeing was the root of the missed-fire bug.
 //!
 //! Previously lived inline at `src-tauri/src/commands/k2so_agents.rs`
 //! next to the `scheduler_tick` Tauri command. Extracted here so the

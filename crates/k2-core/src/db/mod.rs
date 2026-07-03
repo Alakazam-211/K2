@@ -446,6 +446,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // `/work` layer). Powers the per-workspace audit LIST + the resume
         // re-mount lookup. Separate from the canonical `workspace_sessions`.
         ("0061_sandbox_sessions_index", include_str!("../../drizzle_sql/0061_sandbox_sessions_index.sql")),
+        // 0062 (heartbeat reliability overhaul): failure backoff columns
+        // (`consecutive_failures`, `next_retry_at`, `disabled_reason`),
+        // the visible `schedule_error` state for unparseable specs, and
+        // the `scheduler_meta` KV (first key: `last_tick_at`) that makes
+        // tick-transport gaps measurable. See
+        // `.k2/notes/heartbeat-misfire-study.md`.
+        ("0062_heartbeat_reliability", include_str!("../../drizzle_sql/0062_heartbeat_reliability.sql")),
     ];
 
     for (name, sql) in migrations {

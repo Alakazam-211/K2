@@ -59,7 +59,26 @@ pub enum LaunchDecision {
 /// Run the full smart-launch flow. Returns a JSON value matching the
 /// shape `triage::handle_heartbeat_fire` returns so existing CLI/UI
 /// callers parse it without changes.
+///
+/// Entry point for manual launches (Launch button, `k2 heartbeat
+/// launch`) — always an on-time fire. The scheduler tick calls
+/// [`smart_launch_with_origin`] so catch-up fires carry their
+/// originally-scheduled time into the audit trail.
 pub fn smart_launch(project_path: &str, name: &str) -> serde_json::Value {
+    smart_launch_with_origin(project_path, name, None)
+}
+
+/// [`smart_launch`] with fire provenance. `catchup_of` is the RFC3339
+/// originally-scheduled time when this fire recovers a missed
+/// occurrence (evaluator returned `DueCatchUp`); success then audits
+/// `fired_catchup` instead of `fired` so the trail distinguishes
+/// on-time fires from recovered misses (owner decision 1 of the
+/// reliability overhaul).
+pub fn smart_launch_with_origin(
+    project_path: &str,
+    name: &str,
+    catchup_of: Option<&str>,
+) -> serde_json::Value {
     if name.is_empty() {
         return error_value("error", "missing 'name' parameter", name);
     }
@@ -115,6 +134,7 @@ pub fn smart_launch(project_path: &str, name: &str) -> serde_json::Value {
             &agent_name,
             &hb,
             &wakeup_abs,
+            catchup_of,
         );
     }
 
@@ -208,7 +228,7 @@ pub fn smart_launch(project_path: &str, name: &str) -> serde_json::Value {
                 let conn = db.lock();
                 let _ = AgentHeartbeat::clear_session_id(&conn, &project_id, &hb.name);
             }
-            run_fresh_fire(project_path, &project_id, &agent_name, &hb, &wakeup_abs)
+            run_fresh_fire(project_path, &project_id, &agent_name, &hb, &wakeup_abs, catchup_of)
         }
         LaunchDecision::Inject { .. } => {
             // Prefer the stamped (2a) handle; fall back to the argv (2b)
@@ -216,20 +236,20 @@ pub fn smart_launch(project_path: &str, name: &str) -> serde_json::Value {
             let session_id = saved_session.clone().unwrap_or_default();
             if let Some(live) = active_candidate {
                 run_inject(project_path, &project_id, &agent_name, &hb,
-                    &wakeup_abs, &session_id, String::new(), live)
+                    &wakeup_abs, &session_id, String::new(), live, catchup_of)
             } else if let Some((live_agent, live)) = argv_candidate {
                 run_inject(project_path, &project_id, &agent_name, &hb,
-                    &wakeup_abs, &session_id, live_agent, live)
+                    &wakeup_abs, &session_id, live_agent, live, catchup_of)
             } else {
                 // Unreachable: planner returned Inject only when a
                 // candidate existed. Defensive fall-through to resume.
                 run_resume_and_fire(project_path, &project_id, &agent_name, &hb,
-                    &wakeup_abs, &session_id)
+                    &wakeup_abs, &session_id, catchup_of)
             }
         }
         LaunchDecision::ResumeAndFire { claude_session_id } => {
             run_resume_and_fire(project_path, &project_id, &agent_name, &hb,
-                &wakeup_abs, &claude_session_id)
+                &wakeup_abs, &claude_session_id, catchup_of)
         }
         // The pure planner never returns the Skipped* variants — those
         // are produced earlier in this function before branch selection.
@@ -237,7 +257,7 @@ pub fn smart_launch(project_path: &str, name: &str) -> serde_json::Value {
         | LaunchDecision::SkippedNotFound
         | LaunchDecision::SkippedNoAgent
         | LaunchDecision::SkippedWakeupMissing => {
-            run_fresh_fire(project_path, &project_id, &agent_name, &hb, &wakeup_abs)
+            run_fresh_fire(project_path, &project_id, &agent_name, &hb, &wakeup_abs, catchup_of)
         }
     }
 }
@@ -411,6 +431,7 @@ fn run_fresh_fire(
     agent_name: &str,
     hb: &AgentHeartbeat,
     wakeup_abs: &Path,
+    catchup_of: Option<&str>,
 ) -> serde_json::Value {
     let Some(prompt) = wake::compose_wake_prompt_from_path(wakeup_abs) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
@@ -434,11 +455,11 @@ fn run_fresh_fire(
     match result {
         Ok(terminal_id) => {
             stamp_fired_and_release(project_id, &hb.name);
-            write_audit(project_id, agent_name, hb, "fired",
-                "smart_launch: no saved session — fresh fire");
+            let decision = write_fired_audit(project_id, agent_name, hb,
+                "smart_launch: no saved session — fresh fire", catchup_of);
             serde_json::json!({
                 "success": true,
-                "decision": "fired",
+                "decision": decision,
                 "branch": "fresh_fire",
                 "name": hb.name,
                 "agent": agent_name,
@@ -468,6 +489,7 @@ fn run_workspace_session_delivery(
     agent_name: &str,
     hb: &AgentHeartbeat,
     wakeup_abs: &Path,
+    catchup_of: Option<&str>,
 ) -> serde_json::Value {
     let Some(prompt) = wake::compose_wake_prompt_from_path(wakeup_abs) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
@@ -502,11 +524,12 @@ fn run_workspace_session_delivery(
             .clone()
             .unwrap_or_default();
         stamp_fired_and_release(project_id, &hb.name);
-        write_audit(project_id, agent_name, hb, "fired",
-            &format!("smart_launch (use_workspace_session): {branch} → {target_id}"));
+        let decision = write_fired_audit(project_id, agent_name, hb,
+            &format!("smart_launch (use_workspace_session): {branch} → {target_id}"),
+            catchup_of);
         serde_json::json!({
             "success": true,
-            "decision": "fired",
+            "decision": decision,
             "branch": format!("workspace_session:{branch}"),
             "name": hb.name,
             "agent": agent_name,
@@ -540,6 +563,7 @@ fn run_inject(
     session_id: &str,
     _live_agent: String,
     live: session_lookup::LiveSession,
+    catchup_of: Option<&str>,
 ) -> serde_json::Value {
     let body_raw = match std::fs::read_to_string(wakeup_abs) {
         Ok(s) => s,
@@ -588,11 +612,11 @@ fn run_inject(
     // #677.1 — heartbeat is now live (injected into an existing PTY).
     crate::session_events::emit_heartbeat_live("", project_id, &hb.name, true);
 
-    write_audit(project_id, agent_name, hb, "fired",
-        &format!("smart_launch: injected into live session {target_id}"));
+    let decision = write_fired_audit(project_id, agent_name, hb,
+        &format!("smart_launch: injected into live session {target_id}"), catchup_of);
     serde_json::json!({
         "success": true,
-        "decision": "fired",
+        "decision": decision,
         "branch": "injected",
         "name": hb.name,
         "agent": agent_name,
@@ -608,6 +632,7 @@ fn run_resume_and_fire(
     hb: &AgentHeartbeat,
     wakeup_abs: &Path,
     session_id: &str,
+    catchup_of: Option<&str>,
 ) -> serde_json::Value {
     let Some(prompt) = wake::compose_wake_prompt_from_path(wakeup_abs) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
@@ -690,11 +715,11 @@ fn run_resume_and_fire(
                 }),
             );
             stamp_fired_and_release(&project_id, &hb.name);
-            write_audit(project_id, agent_name, hb, "fired",
-                "smart_launch: resumed session, fired wakeup");
+            let decision = write_fired_audit(project_id, agent_name, hb,
+                "smart_launch: resumed session, fired wakeup", catchup_of);
             serde_json::json!({
                 "success": true,
-                "decision": "fired",
+                "decision": decision,
                 "branch": "resume_and_fire",
                 "name": hb.name,
                 "agent": agent_name,
@@ -733,6 +758,28 @@ fn stamp_fired_and_release(project_id: &str, hb_name: &str) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let _ = AgentHeartbeat::stamp_fired_and_release(&conn, project_id, hb_name);
+}
+
+/// Success-path audit: `fired` for an on-time fire, `fired_catchup`
+/// (reason carries the originally-scheduled time) when the fire
+/// recovers a missed occurrence. Returns the decision string so the
+/// caller can mirror it in its response JSON.
+fn write_fired_audit(
+    project_id: &str,
+    agent_name: &str,
+    hb: &AgentHeartbeat,
+    base_reason: &str,
+    catchup_of: Option<&str>,
+) -> &'static str {
+    let (decision, reason) = match catchup_of {
+        Some(t) => (
+            "fired_catchup",
+            format!("{base_reason} — catch-up of occurrence scheduled {t}"),
+        ),
+        None => ("fired", base_reason.to_string()),
+    };
+    write_audit(project_id, agent_name, hb, decision, &reason);
+    decision
 }
 
 fn write_audit(

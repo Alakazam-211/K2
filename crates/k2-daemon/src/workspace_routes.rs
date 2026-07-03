@@ -322,7 +322,217 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
         }
 
+        // 0.40.24 S2 — `/cli/workspace/set` is POST-only (it mutates
+        // the projects row). A GET landing here via the read dispatch
+        // chain gets an explicit 405 instead of a confusing 404 — the
+        // `feedback_post_only_route_guards` house rule.
+        "/cli/workspace/set" => CliResponse::method_not_allowed(),
+
         _ => return None,
     };
     Some(resp)
+}
+
+// ── 0.40.24 S2 — the settings plane's write door ─────────────────────
+//
+// `POST /cli/workspace/set` — multi-field per-workspace settings write
+// wrapping `k2_core::workspace::settings::update_project_setting`'s
+// allowlist. This is the DB half of the "two doors" decision in
+// `prd-agent-cli-0.40.24.md` §2.5: DB settings go through here
+// (validated allowlist, loud errors); the persona/charter file goes
+// through `/cli/agents/save-agent-md`. Powers `k2 agent set`.
+
+/// `POST /cli/workspace/set` body. `project` accepts a workspace NAME,
+/// absolute path, or project UUID (resolved via
+/// [`crate::workspace_msg::resolve_workspace`]); `fields` maps
+/// allowlisted `projects` column names to their new values.
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default)]
+struct WorkspaceSetBody {
+    project: String,
+    fields: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Shared 404 shape for agent/workspace addressing misses — a stable
+/// `not_found` code plus a did-you-mean hint so the CLI can exit 4 with
+/// the contract's `{error:{code, hint}}` stderr JSON.
+pub(crate) fn workspace_not_found_response(q: &str) -> CliResponse {
+    let suggestion = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::connections::suggest_project_name(&conn, q)
+    };
+    let hint = match suggestion {
+        Some(s) => format!(
+            "no agent/workspace named '{q}' — did you mean '{s}'? Run `k2 workspace list` for registered names, or pass a full path."
+        ),
+        None => format!(
+            "no agent/workspace named '{q}'. Run `k2 workspace list` for registered names, or pass a full path."
+        ),
+    };
+    CliResponse {
+        status: "404 Not Found",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "not_found", "hint": hint },
+        })
+        .to_string(),
+    }
+}
+
+/// Handler for `POST /cli/workspace/set`.
+///
+/// Contract (mirrors the `k2 agent set` mockup):
+/// - The WHOLE field batch is validated before ANYTHING is applied —
+///   one unknown field rejects the request with the valid-field list
+///   and zero side effects.
+/// - `agent_mode` (when present) is applied FIRST: its write couples
+///   `agent_enabled` (off → 0, bot-mode → 1, see
+///   `update_project_setting`), so an EXPLICIT `agent_enabled` in the
+///   same batch must land after it and win.
+/// - Per-field change detection: a field whose stored value already
+///   equals the requested value reports `skipped`, so re-running the
+///   same set converges with `changed: false`.
+pub fn handle_workspace_set(body: &[u8]) -> CliResponse {
+    let b: WorkspaceSetBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    if b.project.is_empty() {
+        return CliResponse::bad_request("missing 'project' (workspace name | path | UUID)");
+    }
+    if b.fields.is_empty() {
+        return CliResponse::bad_request(
+            "missing 'fields' — nothing to set (e.g. {\"fields\":{\"agent_mode\":\"manager\"}})",
+        );
+    }
+    let Some(path) = crate::workspace_msg::resolve_workspace(&b.project) else {
+        return workspace_not_found_response(&b.project);
+    };
+
+    // Validate the ENTIRE batch up front — field names against the
+    // core allowlist, values coerced to the string form the settings
+    // layer stores. Nothing is applied if any entry is bad.
+    let allowed = k2_core::workspace::settings::allowed_project_setting_fields();
+    let mut pending: Vec<(String, String)> = Vec::with_capacity(b.fields.len());
+    for (field, value) in &b.fields {
+        if !allowed.contains(&field.as_str()) {
+            return CliResponse::bad_request(format!(
+                "unknown setting field '{}' — valid fields: {}",
+                field,
+                allowed.join(", "),
+            ));
+        }
+        let v = match value {
+            serde_json::Value::String(s) => s.clone(),
+            // Booleans map onto the 0/1 int columns (agent_enabled,
+            // pinned, worktree_mode, …).
+            serde_json::Value::Bool(bv) => if *bv { "1" } else { "0" }.to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            other => {
+                return CliResponse::bad_request(format!(
+                    "field '{field}' value must be a scalar (string/bool/number), got {other}"
+                ));
+            }
+        };
+        if field == "agent_mode"
+            && !matches!(v.as_str(), "off" | "custom" | "manager" | "k2" | "k2so" | "agent")
+        {
+            return CliResponse::bad_request(format!(
+                "invalid agent_mode '{v}' — valid: off, custom, manager, k2",
+            ));
+        }
+        pending.push((field.clone(), v));
+    }
+
+    // agent_mode first (its write couples agent_enabled; an explicit
+    // agent_enabled in the same batch must be applied after and win),
+    // then the rest in a stable alphabetical order.
+    pending.sort_by(|a, b| {
+        let rank = |f: &str| usize::from(f != "agent_mode");
+        (rank(&a.0), a.0.as_str()).cmp(&(rank(&b.0), b.0.as_str()))
+    });
+
+    let mut actions: Vec<serde_json::Value> = Vec::with_capacity(pending.len());
+    let mut changed = false;
+    for (field, value) in &pending {
+        // The stored form of the requested value (agent_mode's CLI
+        // spelling `k2` normalizes to the stored `k2so` — B2).
+        let stored_target = if field == "agent_mode" {
+            k2_core::workspace::settings::stored_agent_mode_value(value).to_string()
+        } else {
+            value.clone()
+        };
+        // Per-field change probe. `field` is allowlist-validated above,
+        // so interpolating the column name is safe (same rationale as
+        // update_project_setting's own SQL).
+        let current: Option<String> = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                &format!("SELECT CAST({field} AS TEXT) FROM projects WHERE path = ?1"),
+                rusqlite::params![path],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap_or(None)
+        };
+        if current.as_deref() == Some(stored_target.as_str()) {
+            actions.push(serde_json::json!({
+                "field": field,
+                "status": "skipped",
+                "reason": "already set",
+                "value": value,
+            }));
+            continue;
+        }
+        match k2_core::workspace::settings::update_project_setting(&path, field, value) {
+            Ok(()) => {
+                changed = true;
+                actions.push(serde_json::json!({
+                    "field": field,
+                    "status": "done",
+                    "value": value,
+                }));
+            }
+            Err(e) => {
+                // Fail loudly mid-batch: report what landed and what
+                // didn't so the caller can re-run to converge.
+                actions.push(serde_json::json!({
+                    "field": field,
+                    "status": "failed",
+                    "error": e,
+                }));
+                return CliResponse {
+                    status: "400 Bad Request",
+                    content_type: "application/json",
+                    body: serde_json::json!({
+                        "ok": false,
+                        "changed": changed,
+                        "path": path,
+                        "actions": actions,
+                        "error": format!("failed setting '{field}': {e}"),
+                    })
+                    .to_string(),
+                };
+            }
+        }
+    }
+
+    if changed {
+        k2_core::agent_hooks::emit(
+            k2_core::agent_hooks::HookEvent::SyncProjects,
+            serde_json::Value::Null,
+        );
+    }
+
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "changed": changed,
+            "path": path,
+            "actions": actions,
+        })
+        .to_string(),
+    )
 }

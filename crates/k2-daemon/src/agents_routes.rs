@@ -363,6 +363,20 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             Ok(p) => respond(k2_core::workspace::agent::list(p)),
             Err(r) => r,
         },
+        // 0.40.24 S2 — the full per-agent settings read backing
+        // `k2 agent conf/get/set`. `q` is a workspace token (name |
+        // absolute path | UUID); unknown tokens 404 with a stable
+        // `not_found` code + did-you-mean hint (the CLI maps that to
+        // exit 4 per the agent-CLI contract).
+        "/cli/agent/conf" => {
+            let q = str_param(params, "q");
+            if q.is_empty() {
+                return Some(CliResponse::bad_request(
+                    "Missing q (agent name | path | UUID)",
+                ));
+            }
+            handle_agent_conf(&q)
+        }
         "/cli/agents/profile" => match need_project(params) {
             Ok(p) => {
                 let agent = str_param(params, "agent");
@@ -718,6 +732,97 @@ struct RelationDeleteBody {
 /// Returns the regenerated SKILL.md text as JSON. Mirrors the
 /// `k2so_agents_regenerate_workspace_skill` Tauri command (4 renderer
 /// callers).
+/// Handler for `GET /cli/agent/conf?q=<name|path|uuid>` (0.40.24 S2).
+///
+/// Returns the FULL per-agent settings object the `k2 agent conf`
+/// mockup renders:
+/// `{ok, name, path, mode, enabled, personaPath, connections[], live}`.
+///
+/// - `mode` is display-normalized (stored `k2so`/`agent` → CLI-canonical
+///   `k2`, see `settings::display_agent_mode`) so operators only ever
+///   see the documented vocabulary.
+/// - `connections` preserve DIRECTION (`{peer, bidirectional,
+///   direction, remote}`) — conf is a diagnostic surface, unlike the
+///   deliberately direction-erased roster list.
+/// - `live` reports the workspace's canonical session:
+///   `{active, sessionId?, uptimeSec: null}` (uptime tracking is not
+///   plumbed through `DaemonPtySession` yet; the key is emitted for
+///   shape stability).
+pub fn handle_agent_conf(q: &str) -> CliResponse {
+    let Some(path) = crate::workspace_msg::resolve_workspace(q) else {
+        return crate::workspace_routes::workspace_not_found_response(q);
+    };
+
+    // projects row: raw mode + enabled bit.
+    let (mode_raw, enabled) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match conn.query_row(
+            "SELECT agent_mode, agent_enabled FROM projects WHERE path = ?1",
+            rusqlite::params![path],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?.unwrap_or_else(|| "off".to_string()),
+                    r.get::<_, Option<i64>>(1)?.unwrap_or(0) == 1,
+                ))
+            },
+        ) {
+            Ok(v) => v,
+            // resolve_workspace just matched this path; a miss here is
+            // a mid-request removal — treat as not found.
+            Err(_) => return crate::workspace_routes::workspace_not_found_response(q),
+        }
+    };
+
+    // Display name (AGENT.md frontmatter display_name → name →
+    // projects.name — the existing renamable-for-display invariant).
+    let name = k2_core::workspace::display::agent_display_name(&path);
+
+    // Charter file (persona). Canonical post-0.37.0 location only —
+    // conf reports what `k2 agent set --persona` writes.
+    let persona = k2_core::workspace_dot_dir(&path).join("agent/AGENT.md");
+    let persona_path = if persona.exists() {
+        serde_json::json!(persona.to_string_lossy())
+    } else {
+        serde_json::Value::Null
+    };
+
+    let connections = match k2_core::connections::list_peers_directional(&path) {
+        Ok(list) => serde_json::to_value(list).unwrap_or_else(|_| serde_json::json!([])),
+        Err(_) => serde_json::json!([]),
+    };
+
+    // Canonical live session (same lookup ensure_canonical_session
+    // uses for its single-flight check).
+    let live = crate::canonical_session::lookup_project_id(&path)
+        .and_then(|pid| {
+            crate::session_lookup::lookup_any(&crate::canonical_session::canonical_key_for(&pid))
+        })
+        .filter(|s| s.is_child_alive())
+        .map(|s| {
+            serde_json::json!({
+                "active": true,
+                "sessionId": s.session_id().to_string(),
+                "uptimeSec": serde_json::Value::Null,
+            })
+        })
+        .unwrap_or_else(|| serde_json::json!({ "active": false }));
+
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "name": name,
+            "path": path,
+            "mode": k2_core::workspace::settings::display_agent_mode(&mode_raw),
+            "enabled": enabled,
+            "personaPath": persona_path,
+            "connections": connections,
+            "live": live,
+        })
+        .to_string(),
+    )
+}
+
 pub fn handle_regenerate_workspace_skill(body: &[u8]) -> CliResponse {
     let b: ProjectPathBody = match parse_body(body) {
         Ok(b) => b,

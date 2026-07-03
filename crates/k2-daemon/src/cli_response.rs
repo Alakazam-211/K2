@@ -52,6 +52,19 @@ impl CliResponse {
             body: r#"{"error":"route not found"}"#.to_string(),
         }
     }
+    /// 0.40.24 (`feedback_post_only_route_guards`): mutating `/cli/*`
+    /// routes are POST-only. This is the handler-level guard response
+    /// for a POST-only path reached via the GET dispatch chain — the
+    /// dispatcher's top-level 405 short-circuit only covers non-GET
+    /// methods on non-allowlisted paths, so a stray GET would otherwise
+    /// fall through to a confusing 404.
+    pub fn method_not_allowed() -> Self {
+        Self {
+            status: "405 Method Not Allowed",
+            content_type: "application/json",
+            body: r#"{"error":"POST required"}"#.to_string(),
+        }
+    }
     pub fn forbidden() -> Self {
         Self {
             status: "403 Forbidden",

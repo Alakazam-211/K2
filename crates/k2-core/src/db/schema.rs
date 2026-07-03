@@ -1361,6 +1361,27 @@ impl WorkspaceSession {
         )
     }
 
+    /// Update the session id AND the harness (provider) that owns it,
+    /// in one write. Slice 3 (agent de-generalization) makes `harness`
+    /// load-bearing: the pinned-chat resolver reads it to pick the
+    /// ProviderResume adapter, so every site that adopts a session id
+    /// for a known provider must stamp the provider alongside it
+    /// (`set-chat-session` with a `provider` param; the post-hoc
+    /// adoption helper). [`Self::update_session_id`] stays for callers
+    /// that don't know the provider (keeps the existing harness).
+    pub fn update_session_id_and_harness(
+        conn: &Connection,
+        project_id: &str,
+        session_id: &str,
+        harness: &str,
+    ) -> Result<usize> {
+        conn.execute(
+            "UPDATE workspace_sessions SET session_id = ?1, harness = ?2, last_activity_at = unixepoch() \
+             WHERE project_id = ?3",
+            params![session_id, harness, project_id],
+        )
+    }
+
     pub fn clear_session_id(conn: &Connection, project_id: &str) -> Result<usize> {
         conn.execute(
             "UPDATE workspace_sessions SET session_id = NULL WHERE project_id = ?1",

@@ -34,6 +34,10 @@ pub mod lifecycle;
 pub mod migrations;
 pub mod dot_dir_migration;
 pub mod onboarding;
+// Agent de-generalization Slice 3: per-provider resume adapter
+// (grammar + premint + on-disk session model) + the post-hoc session
+// adoption helper for providers that mint their own ids.
+pub mod provider_resume;
 // Phase 2.5e: `claude --resume` / `--session-id` arg resolver for the
 // workspace's canonical chat session. Relocated from
 // `agents/resume_chat.rs` — operates on workspace_sessions, naturally

@@ -547,6 +547,11 @@ async fn handle_one_request(
             // wrapping the update_project_setting allowlist; token_ok +
             // require_post in the dedicated arm below.
             | "/cli/workspace/set"
+            // 0.40.24 S4 (agent CLI) — safe decommission (`k2 agent
+            // retire`). JSON body {q, force, dryRun, archiveTo}; the
+            // guards refuse (409 → CLI exit 3) instead of prompting.
+            // token_ok + require_post in the dedicated arm below.
+            | "/cli/agent/retire"
             // P3a (sandbox / K2-as-a-server) — API-key auth-tier MANAGEMENT
             // (owner-only, always-on; the owner pre-mints keys before flipping
             // the external /v1/* surface live). POST so the minted raw key
@@ -2381,6 +2386,42 @@ async fn handle_one_request(
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let result = tokio::task::spawn_blocking(move || {
                 crate::workspace_routes::handle_workspace_set(&body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
+        // POST /cli/agent/retire — 0.40.24 S4 (agent CLI safe
+        // decommission). Body (JSON): `{"q": "<name|path|uuid>",
+        // "force": bool, "dryRun": bool, "archiveTo": "<dir>"}`.
+        // Guards refuse with 409 (CLI exit 3) instead of prompting;
+        // success stops the live session, unwires edges, deregisters,
+        // cleans non-cascaded rows, and ARCHIVES the folder (never
+        // deletes). token_ok + require_post per the
+        // feedback_post_only_route_guards house rule.
+        p if is_post && post_allowed && p == "/cli/agent/retire" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = tokio::task::spawn_blocking(move || {
+                crate::agent_retire::handle_agent_retire(&body_bytes)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

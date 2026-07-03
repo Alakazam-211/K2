@@ -377,6 +377,14 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
             handle_agent_conf(&q)
         }
+        // 0.40.24 S3 — the fleet view backing `k2 agent list`: every
+        // registered agent (workspace == agent) with its mode, enabled
+        // bit, live-session status, and path.
+        "/cli/agent/list" => handle_agent_list(),
+        // 0.40.24 S4 — retire is POST-only (it mutates rows + moves the
+        // folder). A GET landing here via the read dispatch chain gets
+        // an explicit 405 (feedback_post_only_route_guards).
+        "/cli/agent/retire" => CliResponse::method_not_allowed(),
         "/cli/agents/profile" => match need_project(params) {
             Ok(p) => {
                 let agent = str_param(params, "agent");
@@ -820,6 +828,73 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
             "live": live,
         })
         .to_string(),
+    )
+}
+
+/// Handler for `GET /cli/agent/list` (0.40.24 S3).
+///
+/// The fleet view backing `k2 agent list`: one entry per registered
+/// workspace (workspace == agent), shaped
+/// `{ok, agents: [{name, mode, enabled, live, path}]}` and sorted by
+/// name (case-insensitive) for stable rendering. `mode` is
+/// display-normalized (stored `k2so`/`agent` → `k2`) and `live` uses
+/// the SAME canonical-session source as `handle_agent_conf`'s `live`
+/// object, so `list` and `conf` can never disagree about liveness.
+pub fn handle_agent_list() -> CliResponse {
+    // Snapshot the projects table, then do the per-row display-name
+    // (AGENT.md read) + live lookups WITHOUT holding the DB lock —
+    // `agent_display_name` takes its own locks.
+    let rows: Vec<(String, String, String, bool)> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut stmt = match conn.prepare(
+            "SELECT id, path, COALESCE(agent_mode, 'off'), COALESCE(agent_enabled, 0) \
+             FROM projects",
+        ) {
+            Ok(s) => s,
+            Err(e) => return CliResponse::bad_request(format!("projects query failed: {e}")),
+        };
+        let mapped = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)? == 1,
+            ))
+        });
+        match mapped {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(e) => return CliResponse::bad_request(format!("projects query failed: {e}")),
+        }
+    };
+
+    let mut agents: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(id, path, mode_raw, enabled)| {
+            let name = k2_core::workspace::display::agent_display_name(&path);
+            let live = crate::session_lookup::lookup_any(
+                &crate::canonical_session::canonical_key_for(&id),
+            )
+            .filter(|s| s.is_child_alive())
+            .is_some();
+            serde_json::json!({
+                "name": name,
+                "mode": k2_core::workspace::settings::display_agent_mode(&mode_raw),
+                "enabled": enabled,
+                "live": live,
+                "path": path,
+            })
+        })
+        .collect();
+    agents.sort_by_key(|a| {
+        a["name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_lowercase()
+    });
+
+    CliResponse::ok_json(
+        serde_json::json!({ "ok": true, "agents": agents }).to_string(),
     )
 }
 

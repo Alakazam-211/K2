@@ -37,6 +37,7 @@
 mod active_reaper;
 mod session_reaper;
 mod agents_routes;
+mod agent_retire;
 mod awareness_ws;
 mod boot_status;
 mod canonical_session;

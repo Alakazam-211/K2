@@ -20,7 +20,7 @@
 //! shape so the CLI / SKILL.md / roster never have to think about
 //! direction.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -236,33 +236,35 @@ pub fn list_peers(project_path: &str) -> Result<Vec<Peer>, String> {
     Ok(out)
 }
 
-/// One connection edge with its DIRECTION preserved — the shape the
-/// 0.40.24 `k2 agent conf` surface renders. Unlike [`Peer`] (which
-/// deliberately erases direction for the roster/SKILL.md views), conf
-/// is a diagnostic surface: an operator debugging "why can't scout
-/// message Appa" needs to see that the edge is incoming-only.
+/// One connection edge as the 0.40.24 `k2 agent conf` surface renders
+/// it. LOCAL edges are ALWAYS mutual: the substrate stores ONE
+/// `workspace_relations` row per pair (migration 0051) and a single
+/// row IS bidirectional awareness — there is no direction to report
+/// (the `--one-way`/direction surface was removed post-build, PRD
+/// "Post-build decisions"). Cross-daemon
+/// (`workspace_remote_connections`) edges are the exception: the row
+/// lives only on THIS daemon, so they carry `bidirectional: false` +
+/// `remote: true`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DirectionalPeer {
+pub struct ConfPeer {
     /// Peer workspace display name (`projects.name`), or the remote
     /// `<agent>@<host>` address for cross-daemon edges.
     pub peer: String,
-    /// Convenience flag — `direction == "bidirectional"`.
+    /// `true` for every local edge (one row per pair = mutual
+    /// awareness); `false` only for cross-daemon edges.
     pub bidirectional: bool,
-    /// `"bidirectional"` | `"outgoing"` (this workspace → peer) |
-    /// `"incoming"` (peer → this workspace).
-    pub direction: String,
     /// `true` for cross-daemon (`workspace_remote_connections`) edges.
     #[serde(default)]
     pub remote: bool,
 }
 
-/// Direction-preserving peer list for `project_path`: LOCAL edges from
-/// `workspace_relations` plus REMOTE (`<agent>@<host>`) edges from
-/// `workspace_remote_connections` (always `outgoing` — the reverse
-/// direction lives on the other daemon). Sorted by peer name for
-/// stable rendering. Errors when the workspace isn't registered.
-pub fn list_peers_directional(project_path: &str) -> Result<Vec<DirectionalPeer>, String> {
+/// Conf-shaped peer list for `project_path`: LOCAL edges from
+/// `workspace_relations` (deduped per peer, always bidirectional) plus
+/// REMOTE (`<agent>@<host>`) edges from `workspace_remote_connections`.
+/// Sorted by peer name for stable rendering. Errors when the workspace
+/// isn't registered.
+pub fn list_conf_peers(project_path: &str) -> Result<Vec<ConfPeer>, String> {
     let db = crate::db::shared();
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, project_path)
@@ -273,43 +275,35 @@ pub fn list_peers_directional(project_path: &str) -> Result<Vec<DirectionalPeer>
     let incoming = WorkspaceRelation::list_for_target(&conn, &project_id)
         .map_err(|e| e.to_string())?;
 
-    // peer project_id → (has_outgoing, has_incoming)
-    let mut edges: HashMap<String, (bool, bool)> = HashMap::new();
+    // Dedupe peer ids across the (historically directional) rows —
+    // whichever side holds the row, the pair is mutually connected.
+    let mut peer_ids: HashSet<String> = HashSet::new();
     for rel in &outgoing {
-        edges.entry(rel.target_project_id.clone()).or_default().0 = true;
+        peer_ids.insert(rel.target_project_id.clone());
     }
     for rel in &incoming {
-        edges.entry(rel.source_project_id.clone()).or_default().1 = true;
+        peer_ids.insert(rel.source_project_id.clone());
     }
 
-    let mut out: Vec<DirectionalPeer> = edges
+    let mut out: Vec<ConfPeer> = peer_ids
         .into_iter()
-        .map(|(pid, (out_edge, in_edge))| {
+        .map(|pid| {
             let (name, _path) = peer_identity(&conn, &pid);
-            let direction = match (out_edge, in_edge) {
-                (true, true) => "bidirectional",
-                (true, false) => "outgoing",
-                // (false, false) can't be inserted; fold the remainder
-                // into incoming rather than panicking.
-                _ => "incoming",
-            };
-            DirectionalPeer {
+            ConfPeer {
                 peer: name,
-                bidirectional: direction == "bidirectional",
-                direction: direction.to_string(),
+                bidirectional: true,
                 remote: false,
             }
         })
         .collect();
 
-    // Cross-daemon edges (GAP #3 rows). Stored one-directionally on
-    // this daemon; render as outgoing.
+    // Cross-daemon edges (GAP #3 rows). Stored only on this daemon —
+    // the one genuinely non-mutual shape conf can surface.
     if let Ok(remotes) = WorkspaceRemoteConnection::list_for_source(&conn, &project_id) {
         for r in remotes {
-            out.push(DirectionalPeer {
+            out.push(ConfPeer {
                 peer: r.remote_addr,
                 bidirectional: false,
-                direction: "outgoing".to_string(),
                 remote: true,
             });
         }

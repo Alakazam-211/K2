@@ -749,9 +749,10 @@ struct RelationDeleteBody {
 /// - `mode` is display-normalized (stored `k2so`/`agent` → CLI-canonical
 ///   `k2`, see `settings::display_agent_mode`) so operators only ever
 ///   see the documented vocabulary.
-/// - `connections` preserve DIRECTION (`{peer, bidirectional,
-///   direction, remote}`) — conf is a diagnostic surface, unlike the
-///   deliberately direction-erased roster list.
+/// - `connections` are `{peer, bidirectional, remote}` — local edges
+///   are always mutual (one relation row per pair IS bidirectional
+///   awareness, migration 0051); only cross-daemon edges carry
+///   `bidirectional: false` + `remote: true`.
 /// - `live` reports the workspace's canonical session:
 ///   `{active, sessionId?, uptimeSec: null}` (uptime tracking is not
 ///   plumbed through `DaemonPtySession` yet; the key is emitted for
@@ -795,7 +796,7 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
         serde_json::Value::Null
     };
 
-    let connections = match k2_core::connections::list_peers_directional(&path) {
+    let connections = match k2_core::connections::list_conf_peers(&path) {
         Ok(list) => serde_json::to_value(list).unwrap_or_else(|_| serde_json::json!([])),
         Err(_) => serde_json::json!([]),
     };

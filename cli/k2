@@ -6464,7 +6464,11 @@ else:
     persona_line = "(none)"
 
 conns = d.get("connections") or []
-connects = ", ".join("%s (%s)" % (c.get("peer", "?"), c.get("direction", "?")) for c in conns) or "(none)"
+# Local edges are always mutual (one relation row per pair = mutual
+# awareness); only cross-daemon edges are labeled differently.
+connects = ", ".join(
+    "%s (%s)" % (c.get("peer", "?"), "remote" if c.get("remote") else "bidirectional")
+    for c in conns) or "(none)"
 
 live = d.get("live") or {}
 if live.get("active"):
@@ -6846,10 +6850,7 @@ FLAGS
   --enabled <bool>        true | false (default: true). false pauses the agent
                           without changing its configured mode.
   --connect <name>        Wire a connection to another agent (repeatable).
-                          Connections are bidirectional unless --one-way.
-  --one-way               Make ALL --connect edges in this call one-directional
-                          (this agent → peer). For mixed directionality, run
-                          k2 connections per edge.
+                          Connections are always mutual (bidirectional).
   --launch                Start the agent's session after provisioning
   --onboard <msg>         Send <msg> to the agent after it starts (implies --launch)
   --dry-run               Show the full plan; change nothing
@@ -7091,7 +7092,7 @@ EOF
 cmd_agent_hire() {
     if _wants_help "$@"; then cmd_help_agent_hire; exit 0; fi
     local dir="" name="" template="" persona="" mode="" enabled="" onboard=""
-    local one_way=false launch=false dry_run=false as_json=false
+    local launch=false dry_run=false as_json=false
     local connects=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -7113,7 +7114,6 @@ cmd_agent_hire() {
             --connect)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--connect requires an agent name"; exit 2; }
                 connects+=("$2"); shift 2 ;;
-            --one-way) one_way=true; shift ;;
             --launch) launch=true; shift ;;
             --onboard)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--onboard requires a message"; exit 2; }
@@ -7171,7 +7171,7 @@ cmd_agent_hire() {
 
     HIRE_DIR="$dir" NAME="$name" TEMPLATE="$template" TEMPLATE_BODY="$template_body" \
     PERSONA_FILE="$persona" MODE="$mode" ENABLED="$enabled" CONNECTS="$connects_json" \
-    ONE_WAY="$one_way" LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" \
+    LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" \
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
@@ -7184,7 +7184,6 @@ persona_file = os.environ.get("PERSONA_FILE", "")
 mode = os.environ.get("MODE", "")
 enabled = os.environ.get("ENABLED", "")
 connects = json.loads(os.environ.get("CONNECTS", "[]"))
-one_way = os.environ.get("ONE_WAY") == "true"
 launch = os.environ.get("LAUNCH") == "true"
 onboard = os.environ.get("ONBOARD", "")
 dry_run = os.environ.get("DRY_RUN") == "true"
@@ -7332,12 +7331,14 @@ if name:
         actions.append({"step": "set-name", "name": name, "status": "pending"})
 
 for peer in connects:
+    # Connections are always mutual: the substrate stores ONE row per
+    # pair (migration 0051 — a single row IS bidirectional awareness).
     if peer.lower() in existing_peers:
         actions.append({"step": "connect", "peer": peer, "status": "skipped",
-                        "reason": "edge exists", "bidirectional": not one_way})
+                        "reason": "edge exists", "bidirectional": True})
     else:
         actions.append({"step": "connect", "peer": peer, "status": "pending",
-                        "bidirectional": not one_way})
+                        "bidirectional": True})
 
 if launch:
     if live:
@@ -7382,8 +7383,7 @@ def emit(ok, changed):
         elif step == "set-name":
             line = "name: %s" % a["name"]
         elif step == "connect":
-            line = "connect: %s (%s)" % (
-                a["peer"], "bidirectional" if a.get("bidirectional") else "one-way")
+            line = "connect: %s (bidirectional)" % a["peer"]
         elif step == "launch":
             line = "launch"
             if a.get("sessionId"):
@@ -7506,10 +7506,10 @@ if a and a["status"] == "pending":
     a["status"] = "done"
     changed = True
 
-# 6. connect edges. Bidirectional (default) = one add per direction via
-#    the existing connections machinery; its reverse-pair guard makes
-#    the second add a no-op when one edge already implies mutual
-#    awareness — both outcomes count as wired. --one-way = forward only.
+# 6. connect edges. ONE add per peer: the connections substrate stores
+#    a single row per pair and that row IS mutual awareness (migration
+#    0051; the add-side reverse-pair guard no-ops redundant adds), so
+#    there is no second direction to wire.
 for a in by_step.get("connect", []):
     if a["status"] != "pending":
         continue
@@ -7528,12 +7528,6 @@ for a in by_step.get("connect", []):
                     {"action": "add", "project": path, "target": peer_path})
     if isinstance(resp.get("error"), str) and resp["error"]:
         step_failed(a, "daemon_error", "connect %s failed: %s" % (peer, resp["error"]))
-    if not one_way:
-        resp = http_get("/cli/connections",
-                        {"action": "add", "project": peer_path, "target": path})
-        if isinstance(resp.get("error"), str) and resp["error"]:
-            step_failed(a, "daemon_error",
-                        "reverse connect from %s failed: %s" % (peer, resp["error"]))
     a["status"] = "done"
     changed = True
 

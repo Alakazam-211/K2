@@ -12,6 +12,7 @@ import { useAgentOpsStore } from '@/stores/agent-ops'
 import { useFeedbackStore, initFeedbackEvents } from '@/stores/feedback'
 import { useProjectsStore } from '@/stores/projects'
 import TimerButton from '@/components/Timer/TimerButton'
+import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ServerSwitcher from './ServerSwitcher'
 
 interface TopBarProps {
@@ -197,6 +198,10 @@ export default function TopBar({
             </svg>
           </button>
         )}
+
+        {/* Presence roster — who's connected to this daemon (hidden when
+            alone or when the host predates the presence routes) */}
+        <PresenceRoster />
 
         {/* Timer */}
         <TimerButton />

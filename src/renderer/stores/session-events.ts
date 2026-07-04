@@ -199,6 +199,32 @@ export interface ProjectsChangedEvent {
   kind: 'projects_changed'
 }
 
+/** One aggregated PER-USER presence roster row — wire-frozen against
+ *  `crates/k2-daemon/src/presence.rs::RosterUser` (S1, presence arc).
+ *  `user` is `"owner"` for the synthesized owner row, else the username;
+ *  `role` gains `"viewer"` once S4 lands the role. */
+export interface PresenceRosterUser {
+  user: string
+  role: 'owner' | 'admin' | 'member' | 'viewer'
+  /** Open windows (app-level events sockets) this user holds. */
+  windowCount: number
+  /** Deduped, sorted workspace paths the user is viewing. */
+  workspaces: string[]
+  /** Ephemeral edit grant (S4); always false until the grant routes land. */
+  grantedEdit: boolean
+  /** Unix seconds of the user's EARLIEST live connection. */
+  connectedAt: number
+}
+
+/** APP-LEVEL — the presence roster changed (a connection registered or
+ *  deregistered). Whole-set, last-write-wins — the ActiveChanged
+ *  convention: replace the local roster with the carried one. The
+ *  snapshot twin is `GET /cli/presence/roster` (fetched on hello). */
+export interface PresenceChangedEvent {
+  kind: 'presence_changed'
+  roster: PresenceRosterUser[]
+}
+
 export type SessionEventMessage =
   | SessionAddedEvent
   | SessionRemovedEvent
@@ -214,6 +240,7 @@ export type SessionEventMessage =
   | TabOrderChangedEvent
   | HeartbeatStateChangedEvent
   | ProjectsChangedEvent
+  | PresenceChangedEvent
 
 export interface SessionEventHandlers {
   onAdded?: (event: SessionAddedEvent) => void
@@ -350,9 +377,12 @@ export function subscribeToWorkspaceSessionEvents(
           handlers.onRenamed?.(msg)
           break
         case 'active_changed':
-          // App-level concern (#672) — the per-workspace subscriber
-          // ignores it; `subscribeToActiveState` consumes it. Swallow
-          // here so it doesn't hit the unknown-kind warning.
+        case 'presence_changed':
+          // App-level concerns (#672 / presence S2) — the per-workspace
+          // subscriber ignores them; `subscribeToActiveState` consumes
+          // them. Swallow here so they don't hit the unknown-kind
+          // warning (the daemon re-broadcasts the presence roster on
+          // every connection register/deregister).
           break
         case 'tab_title_changed':
         case 'tab_order_changed':
@@ -494,6 +524,10 @@ type SessionRemovedHandler = (e: SessionRemovedEvent) => void
 
 type ProjectsChangedHandler = (e: ProjectsChangedEvent) => void
 
+// Presence S2 — APP-LEVEL `presence_changed` (whole-set roster replace).
+// Rides the same app-level WS; `stores/presence.ts` is the consumer.
+type PresenceChangedHandler = (e: PresenceChangedEvent) => void
+
 const _llmStatusHandlers = new Set<LlmStatusHandler>()
 const _projectsChangedHandlers = new Set<ProjectsChangedHandler>()
 const _agentStatusHandlers = new Set<AgentStatusHandler>()
@@ -501,6 +535,7 @@ const _tunnelStatusHandlers = new Set<TunnelStatusHandler>()
 const _appHelloHandlers = new Set<AppHelloHandler>()
 const _appSessionAddedHandlers = new Set<SessionAddedHandler>()
 const _appSessionRemovedHandlers = new Set<SessionRemovedHandler>()
+const _presenceChangedHandlers = new Set<PresenceChangedHandler>()
 
 /** Subscribe to APP-LEVEL `projects_changed` (0.39.45, GH #18/#26).
  *  Returns an unsubscribe fn. */
@@ -551,6 +586,13 @@ export function onSessionRemovedApp(fn: SessionRemovedHandler): UnsubscribeFn {
   return () => void _appSessionRemovedHandlers.delete(fn)
 }
 
+/** Presence S2 — subscribe to APP-LEVEL `presence_changed` (the whole-set
+ *  roster broadcast). Returns an unsubscribe fn. */
+export function onPresenceChanged(fn: PresenceChangedHandler): UnsubscribeFn {
+  _presenceChangedHandlers.add(fn)
+  return () => void _presenceChangedHandlers.delete(fn)
+}
+
 function dispatchAppEvent(msg: SessionEventMessage): void {
   switch (msg.kind) {
     case 'llm_status_changed':
@@ -570,6 +612,9 @@ function dispatchAppEvent(msg: SessionEventMessage): void {
       break
     case 'session_removed':
       for (const h of _appSessionRemovedHandlers) h(msg)
+      break
+    case 'presence_changed':
+      for (const h of _presenceChangedHandlers) h(msg)
       break
     default:
       break
@@ -680,7 +725,8 @@ export function subscribeToActiveState(): UnsubscribeFn {
       if (
         msg.kind === 'llm_status_changed' ||
         msg.kind === 'agent_status_changed' ||
-        msg.kind === 'tunnel_status_changed'
+        msg.kind === 'tunnel_status_changed' ||
+        msg.kind === 'presence_changed'
       ) {
         dispatchAppEvent(msg)
         return

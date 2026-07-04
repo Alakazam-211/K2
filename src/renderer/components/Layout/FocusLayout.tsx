@@ -3,6 +3,7 @@ import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { usePanelsStore } from '../../stores/panels'
 import TimerButton from '@/components/Timer/TimerButton'
+import PresenceRoster from '@/components/Presence/PresenceRoster'
 
 interface FocusLayoutProps {
   children: ReactNode
@@ -65,8 +66,9 @@ export default function FocusLayout({
           )}
         </div>
 
-        {/* Right: timer + left/right panel toggles */}
+        {/* Right: presence roster + timer + left/right panel toggles */}
         <div className="flex items-center gap-1">
+          <PresenceRoster />
           <TimerButton />
 
           {/* Separator between timer and panel toggles */}

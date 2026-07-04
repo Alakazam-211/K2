@@ -481,25 +481,77 @@ async function closeV2Session(agentName: string): Promise<void> {
 }
 
 /**
- * Resolve the user's enabled claude preset args (e.g.
- * --dangerously-skip-permissions). Lazy-imports the presets store so
- * module-load doesn't cascade through settings.ts (which calls invoke
- * and breaks vitest environments without a window). Strips any
- * pre-existing `--resume` so callers can append their own deterministically.
- * Returns `[]` when no enabled claude preset is configured.
+ * Session-selection flags stripped from preset args before appending an
+ * explicit resume target (mirrors ChatHistory's SESSION_FLAGS_TO_STRIP).
+ * Matters most for Pi: its `--resume` is an interactive picker, so a
+ * leftover preset flag would shadow the appended `--session <uuid>`.
  */
-async function resolveClaudePresetArgs(): Promise<string[]> {
+const SESSION_FLAGS_TO_STRIP = new Set(['--resume', '-r', '--continue', '-c', '--session'])
+
+/**
+ * Resolve the user's enabled preset args for an agent command (e.g.
+ * claude's --dangerously-skip-permissions). Lazy-imports the presets
+ * store so module-load doesn't cascade through settings.ts (which calls
+ * invoke and breaks vitest environments without a window). Strips any
+ * pre-existing session-selection flag so callers can append their own
+ * deterministically. Returns `[]` when no enabled preset is configured.
+ */
+async function resolvePresetArgs(command: string): Promise<string[]> {
   try {
     const { usePresetsStore } = await import('@/stores/presets')
     const presets = usePresetsStore.getState().presets
-    const preset = presets.find((p) => p.command.split(/\s+/)[0] === 'claude' && p.enabled)
+    const preset = presets.find((p) => p.command.split(/\s+/)[0] === command && p.enabled)
     if (!preset) return []
     const parts = preset.command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || []
     const cleaned = parts.map((p: string) => p.replace(/^["']|["']$/g, ''))
-    return cleaned.slice(1).filter((a: string) => a !== '--resume')
+    return cleaned.slice(1).filter((a: string) => !SESSION_FLAGS_TO_STRIP.has(a))
   } catch {
     return []
   }
+}
+
+/**
+ * Agent-degeneralization S4 — resolve the launch (command + args) that
+ * resumes a DISCOVERED session in its own provider's grammar.
+ *
+ * The daemon's `chat/list` aggregator is the provider oracle: its rows
+ * are parsed from each provider's on-disk session store, so a row's
+ * presence both names the harness AND proves the conversation exists on
+ * disk. Sessions not found there (or a null id) degrade to claude
+ * grammar — the pre-S4 behavior and the only honest guess.
+ */
+async function resolveSessionResumeLaunch(
+  projectPath: string,
+  sessionId: string | null,
+): Promise<{ command: string; args: string[]; provider: string; listed: boolean }> {
+  let provider = 'claude'
+  let listed = false
+  if (sessionId) {
+    try {
+      const rows = await daemonCliGet<Array<{ sessionId: string; provider?: string }>>(
+        'chat/list',
+        { project_path: projectPath },
+      )
+      const row = rows.find((r) => r.sessionId === sessionId)
+      if (row) {
+        provider = row.provider || 'claude'
+        listed = true
+      }
+    } catch { /* daemon read failed — claude fallback */ }
+  }
+  // Invert RESUMABLE_CLI_TOOLS (command → tool) to provider → command.
+  const entry = Object.entries(RESUMABLE_CLI_TOOLS)
+    .find(([, tool]) => tool.provider === provider)
+  const [command, tool] = entry ?? ['claude', RESUMABLE_CLI_TOOLS['claude']]
+  let args: string[]
+  if (tool.resumeSubcommand) {
+    // Subcommand-style (codex): preset args dropped — the saved session
+    // carries its own model/permissions (same rule as ChatHistory).
+    args = [tool.resumeSubcommand, sessionId ?? '']
+  } else {
+    args = [...(await resolvePresetArgs(command)), tool.resumeFlag ?? '--resume', sessionId ?? '']
+  }
+  return { command, args, provider, listed }
 }
 
 // ── Item Types ────────────────────────────────────────────────────────────
@@ -2012,15 +2064,19 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       } catch { /* fall back to spawn-fresh path */ }
       if (agentName) {
         try {
-          const presetArgs = await resolveClaudePresetArgs()
-          const args = [...presetArgs, '--resume', active.claudeSessionId ?? '']
+          // S4 — the live PTY may run ANY provider's harness (the
+          // daemon's wake path resolves the workspace default agent),
+          // so resolve the session's own provider grammar instead of
+          // hardcoding claude argv. These ride along as tab METADATA —
+          // the tab attaches to the EXISTING PTY via attach_agent_name.
+          const launch = await resolveSessionResumeLaunch(projectPath, active.claudeSessionId)
           await daemonCliPost('session/set-surfaced', {
             project_path: projectPath,
             agent_name: agentName,
             surfaced: true,
             terminal_id: active.activeTerminalId,
-            command: 'claude',
-            args,
+            command: launch.command,
+            args: launch.args,
             heartbeat_name: heartbeatName,
             // The daemon's v2_session_map key for the existing PTY.
             // TerminalPane uses this to attach via /cli/sessions/v2/spawn
@@ -2055,33 +2111,40 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       return null
     }
 
-    // Verify the JSONL exists on disk before passing `--resume`.
-    // wake_headless saves last_session_id synchronously at spawn time,
-    // but claude doesn't write the JSONL until it's processed input.
-    // A daemon restart during that window leaves a "ghost" session id
-    // pointing at a missing file — `claude --resume <ghost>` would
-    // fail with "No conversation found" and lock the user into a
-    // broken tab on every retry. The next heartbeat fire will
-    // self-heal via smart_launch's matching JSONL check, so we just
-    // surface the wait state to the user here.
-    const jsonlExists = await daemonCliGet<{ exists: boolean }>('chat/session-exists', {
-      project_path: projectPath,
-      session_id: hb.lastSessionId,
-    })
-      .then((r) => r.exists)
-      .catch(() => true)
-    if (!jsonlExists) {
-      console.info(
-        '[openHeartbeatTab] saved session %s has no JSONL on disk yet; click Launch to refire',
-        hb.lastSessionId,
-      )
-      return null
+    // S4 — resolve which provider owns the saved session and build ITS
+    // resume grammar (heartbeat wakes spawn the workspace default agent
+    // since Slice 3b, so the saved session may belong to any harness).
+    // Sessions chat/list doesn't know degrade to claude — pre-S4 argv.
+    const launch = await resolveSessionResumeLaunch(projectPath, hb.lastSessionId)
+
+    // Verify the conversation exists on disk before resuming.
+    //  - claude: probe chat/session-exists. wake_headless saves
+    //    last_session_id synchronously at spawn time, but claude doesn't
+    //    write the JSONL until it's processed input. A daemon restart in
+    //    that window leaves a "ghost" id pointing at a missing file —
+    //    `claude --resume <ghost>` fails with "No conversation found"
+    //    and locks the user into a broken tab on every retry. The next
+    //    heartbeat fire self-heals via smart_launch's JSONL check, so we
+    //    just surface the wait state here.
+    //  - non-claude: the chat/list row that named the provider (above)
+    //    IS the on-disk proof — rows are parsed from each provider's
+    //    session store, so no second probe exists or is needed.
+    if (launch.provider === 'claude') {
+      const jsonlExists = await daemonCliGet<{ exists: boolean }>('chat/session-exists', {
+        project_path: projectPath,
+        session_id: hb.lastSessionId,
+      })
+        .then((r) => r.exists)
+        .catch(() => true)
+      if (!jsonlExists) {
+        console.info(
+          '[openHeartbeatTab] saved session %s has no JSONL on disk yet; click Launch to refire',
+          hb.lastSessionId,
+        )
+        return null
+      }
     }
 
-    // Read the user's claude preset args (e.g. --dangerously-skip-permissions)
-    // so the resumed session has the same permissions as a fresh launch.
-    const presetArgs = await resolveClaudePresetArgs()
-    const args = [...presetArgs, '--resume', hb.lastSessionId]
     const title = `${heartbeatName} (heartbeat)`
 
     // Focus an existing tab that's already running this resume if
@@ -2094,7 +2157,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
           for (const item of pg.items) {
             if (item.type !== 'terminal') continue
             const td = item.data as TerminalItemData
-            if (td.command !== 'claude') continue
+            if (td.command !== launch.command) continue
             if (td.args?.includes(hb.lastSessionId)) {
               set({ activeTabId: tab.id })
               return tab.id
@@ -2108,7 +2171,11 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // a terminal id, registers in the active group, broadcasts the
     // tab-add event, etc.
     const targetGroup = get().splitCount > 1 ? get().splitCount - 1 : 0
-    const tabId = get().addTabToGroup(targetGroup, projectPath, { title, command: 'claude', args })
+    const tabId = get().addTabToGroup(targetGroup, projectPath, {
+      title,
+      command: launch.command,
+      args: launch.args,
+    })
 
     // Force the Kessel renderer for heartbeat tabs regardless of the
     // user's workspace renderer choice — heartbeat-spawned PTYs already

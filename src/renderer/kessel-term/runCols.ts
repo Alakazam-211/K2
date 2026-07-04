@@ -103,6 +103,23 @@ export function rowColSpan(row: ColRun[]): number {
   return total
 }
 
+/** Start column of each run in a row — prefix sums of the runs'
+ *  column spans. `runColOffsets(row)[i]` is the terminal column at
+ *  which `row[i]` begins; paired with `runColSpan(row[i])` it pins
+ *  the run to its true grid rect (rowRender.tsx), so a glyph the
+ *  font falls back for (braille art, exotic symbols — whose fallback
+ *  advance ≠ one cell) can never push the runs to its right off
+ *  their columns. Empty row ⇒ empty array. */
+export function runColOffsets(row: ColRun[]): number[] {
+  const out: number[] = new Array(row.length)
+  let col = 0
+  for (let i = 0; i < row.length; i++) {
+    out[i] = col
+    col += runColSpan(row[i])
+  }
+  return out
+}
+
 /** Build the per-cluster placement list for a row. Exported for the
  *  WebGL painter's selection/word math (webgl/selection.ts), which
  *  needs cluster granularity, not just index mapping. */

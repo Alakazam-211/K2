@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   colToTextIndex,
   rowColSpan,
+  runColOffsets,
   runColSpan,
   sliceRowByCols,
   type ColRun,
@@ -35,6 +36,45 @@ describe('runColSpan / rowColSpan', () => {
   it('sums runs across a row', () => {
     expect(rowColSpan(wideRow)).toBe(8)
     expect(rowColSpan(splitRow)).toBe(8)
+  })
+})
+
+describe('runColOffsets', () => {
+  it('returns the prefix sums of run column spans (mixed cols runs)', () => {
+    // ab | 日本 (4 cols) | cd → starts at 0, 2, 6.
+    expect(runColOffsets(splitRow)).toEqual([0, 2, 6])
+  })
+
+  it('anchors runs after a wide-char run at the wire span, not the char count', () => {
+    // Single annotated run: whatever follows starts at column 8
+    // (the wire's span), not 6 (the char count).
+    expect(runColOffsets([...wideRow, { text: 'x' }])).toEqual([0, 8])
+  })
+
+  it('uses code-point count for unannotated runs (braille art carries no cols)', () => {
+    // Braille cells (U+2800–U+28FF) are single-width, one column per
+    // code point, so the daemon omits `cols` — the run after grok's
+    // logo art must start at exactly the art's column span even
+    // though the FONT may advance those glyphs at a different width.
+    const braille = '⠋⠙⠀⠀⠈' // includes invisible BRAILLE BLANK padding
+    expect(runColOffsets([{ text: braille }, { text: 'MENU' }])).toEqual([
+      0, 5,
+    ])
+  })
+
+  it('treats zero-span and empty-text runs as zero columns', () => {
+    expect(
+      runColOffsets([
+        { text: 'a' },
+        { text: '́', cols: 0 }, // isolated combining accent
+        { text: '' },
+        { text: 'b' },
+      ]),
+    ).toEqual([0, 1, 1, 1])
+  })
+
+  it('returns an empty array for an empty row', () => {
+    expect(runColOffsets([])).toEqual([])
   })
 })
 

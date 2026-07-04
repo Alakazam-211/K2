@@ -75,6 +75,7 @@ import {
 } from './scrollMath'
 import { decodeGridFrame, type WireFrame } from './gridWire'
 import { colToTextIndex, runColSpan } from './runCols'
+import { hexToCss, TerminalRow } from './rowRender'
 import { createWebglPainter } from './webgl/webglPainter'
 import type { SelectionRange, TerminalPainter } from './webgl/painterTypes'
 import {
@@ -193,112 +194,9 @@ type OutboundMsg =
   | { event: 'label_changed'; payload: { label: string } }
 
 // ── Helpers ───────────────────────────────────────────────────────
-
-function hexToCss(n: number): string {
-  const r = (n >> 16) & 0xff
-  const g = (n >> 8) & 0xff
-  const b = n & 0xff
-  return `rgb(${r},${g},${b})`
-}
-
-function runStyle(
-  run: CellRun,
-  defaultFg: string,
-  defaultBg: string,
-): React.CSSProperties {
-  // Resolve fg/bg, falling back to terminal defaults so the
-  // INVERSE flag actually produces a swap when a cell has only
-  // the flag set (no explicit colors). TUIs that paint their own
-  // visual cursor by inverting a default-colored cell — Cursor
-  // Agent's "P" highlight, vim's normal-mode cursor, etc — rely
-  // on this behavior. Without resolving defaults, an inverse
-  // cell with null fg/null bg was rendering as plain text and
-  // the TUI's cursor block was invisible.
-  const fg = run.fg !== null ? hexToCss(run.fg) : defaultFg
-  const bg = run.bg !== null ? hexToCss(run.bg) : defaultBg
-  const color = run.inverse ? bg : fg
-  const backgroundColor = run.inverse ? fg : bg
-  const style: React.CSSProperties = {}
-  // Only emit color/background when (a) inverse is on (so the
-  // span actually has a visible block) or (b) the cell explicitly
-  // set a non-default value. Always emitting `color: defaultFg`
-  // would unnecessarily bloat the DOM and break inheritance for
-  // cells that meant to use the parent's default.
-  if (run.inverse) {
-    style.color = color
-    style.backgroundColor = backgroundColor
-  } else {
-    if (run.fg !== null) style.color = color
-    if (run.bg !== null) style.backgroundColor = backgroundColor
-  }
-  if (run.bold) style.fontWeight = 'bold'
-  if (run.italic) style.fontStyle = 'italic'
-  if (run.underline && run.strikeout) {
-    style.textDecoration = 'underline line-through'
-  } else if (run.underline) {
-    style.textDecoration = 'underline'
-  } else if (run.strikeout) {
-    style.textDecoration = 'line-through'
-  }
-  if (run.dim) style.opacity = 0.6
-  // Wide/zero-width content: pin the run to its terminal-column span
-  // so alignment is grid-true regardless of the webfont's CJK/emoji
-  // advance (a font whose 日 is 1.9ch would otherwise drift every
-  // column to its right). `ch` is the monospace cell width, matching
-  // the cellMetrics math used for cursor/hit-test positioning.
-  // No overflow:hidden — it would move the inline-block baseline to
-  // its bottom margin edge and misalign the row.
-  if (run.cols !== undefined) {
-    style.display = 'inline-block'
-    style.width = `${run.cols}ch`
-    style.verticalAlign = 'top'
-  }
-  return style
-}
-
-function renderRowRuns(
-  row: CellRun[],
-  absRow: number,
-  defaultFg: string,
-  defaultBg: string,
-): React.ReactNode {
-  if (row.length === 0) return '\u00a0'
-  const spans: React.ReactNode[] = []
-  for (let i = 0; i < row.length; i++) {
-    const run = row[i]
-    spans.push(
-      <span key={`a${absRow}s${i}`} style={runStyle(run, defaultFg, defaultBg)}>
-        {run.text || '\u00a0'}
-      </span>,
-    )
-  }
-  return spans
-}
-
-/** One rendered terminal row. Memoized so a delta frame only
- *  re-renders the rows it actually damaged: `mergeDelta` preserves
- *  the array identity of untouched rows (grid rows are copied by
- *  reference, scrollback rows are concatenated, never rebuilt), so
- *  the shallow prop compare skips every clean row. Full snapshots
- *  rebuild every row array and legitimately re-render everything.
- *  `data-abs-row` is the copy handler's DOM→model row anchor. */
-const TerminalRow = React.memo(function TerminalRow({
-  row,
-  absRow,
-  defaultFg,
-  defaultBg,
-}: {
-  row: CellRun[]
-  absRow: number
-  defaultFg: string
-  defaultBg: string
-}): React.JSX.Element {
-  return (
-    <div data-abs-row={absRow}>
-      {renderRowRuns(row, absRow, defaultFg, defaultBg)}
-    </div>
-  )
-})
+// (hexToCss / runStyle / renderRowRuns / TerminalRow moved to
+// rowRender.tsx — the column-anchored row renderer — so the row
+// contract is unit-testable without the pane's I/O mocks.)
 
 /** Join all run text in a row into a single plain string. Used
  *  for link detection (which operates on raw text). */
@@ -4446,6 +4344,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
                 absRow={absRow}
                 defaultFg={defaultFgCss}
                 defaultBg={defaultBgCss}
+                cellWidth={cellMetrics.width}
+                cellHeight={cellMetrics.height}
               />
             )
           })}

@@ -96,6 +96,46 @@ pub async fn serve_session_events_connection(
     let subscriber_id = NEXT_SUBSCRIBER_ID.fetch_add(1, Ordering::Relaxed);
     let mut rx = session_events::subscribe();
 
+    // S1 presence — resolve WHO holds this socket and register it in the
+    // process-wide presence registry. The dispatcher already auth-gated
+    // the upgrade, so this is classification (owner token vs connect-user
+    // session), not an auth check; a token revoked in the gate→here gap
+    // resolves to None and we simply skip registration (the 5s re-auth
+    // below will tear the socket down). The registration is held in a
+    // DROP-GUARD so EVERY exit path of the loop — clean close, error
+    // break, early return, panic unwind — deregisters and re-broadcasts
+    // the roster; entries cannot leak.
+    //
+    // `close_rx` is the kick handle: `presence::close_connections_for`
+    // (S3) fires the paired sender and the select-arm below closes the
+    // socket immediately instead of waiting for the re-auth tick. When
+    // the identity is unresolvable we keep the sender alive locally so
+    // the (never-fired) receiver arm stays pending rather than erroring.
+    let identity = crate::presence::resolve_identity(&token, &owner_token);
+    let (close_tx, mut close_rx) = tokio::sync::watch::channel(false);
+    let mut _unregistered_close_tx: Option<tokio::sync::watch::Sender<bool>> = None;
+    let _presence_guard: Option<crate::presence::PresenceGuard> = match identity {
+        Some(identity) => {
+            let kind = if workspace_path.is_empty() {
+                crate::presence::PresenceKind::AppSocket
+            } else {
+                crate::presence::PresenceKind::WorkspaceSocket {
+                    path: workspace_path.clone(),
+                }
+            };
+            Some(crate::presence::register(identity, kind, close_tx))
+        }
+        None => {
+            log_debug!(
+                "[daemon/session_events_ws] subscriber {} identity unresolved; \
+                 not registered in presence",
+                subscriber_id,
+            );
+            _unregistered_close_tx = Some(close_tx);
+            None
+        }
+    };
+
     log_debug!(
         "[daemon/session_events_ws] subscriber {} attached for workspace={}",
         subscriber_id,
@@ -120,6 +160,21 @@ pub async fn serve_session_events_connection(
         tokio::time::interval(std::time::Duration::from_secs(5));
     auth_recheck.tick().await; // burn the immediate first tick
 
+    // S1 presence — liveness ping. Server-originated WS Ping every 10s;
+    // if TWO consecutive pings go unanswered (no Pong for >25s — one
+    // ping at t+10 unanswered through t+20, a second at t+20 unanswered
+    // through t+30) we break, which drops the presence guard →
+    // deregister + roster broadcast. Clean closes are instant via the
+    // read-None arm; this catches yanked-network hard drops within ~30s
+    // instead of the TCP timeout. Standard WS clients (tungstenite,
+    // browsers) auto-Pong at the protocol level.
+    const LIVENESS_PING_SECS: u64 = 10;
+    const LIVENESS_DEADLINE_SECS: u64 = 25;
+    let mut liveness_ping =
+        tokio::time::interval(std::time::Duration::from_secs(LIVENESS_PING_SECS));
+    liveness_ping.tick().await; // burn the immediate first tick
+    let mut last_pong = std::time::Instant::now();
+
     loop {
         tokio::select! {
             _ = auth_recheck.tick() => {
@@ -127,6 +182,41 @@ pub async fn serve_session_events_connection(
                     log_debug!(
                         "[daemon/session_events_ws] token revoked mid-session; \
                          closing events WS for subscriber {}",
+                        subscriber_id,
+                    );
+                    let _ = write.send(Message::Close(None)).await;
+                    break;
+                }
+            }
+            _ = liveness_ping.tick() => {
+                if last_pong.elapsed()
+                    > std::time::Duration::from_secs(LIVENESS_DEADLINE_SECS)
+                {
+                    log_debug!(
+                        "[daemon/session_events_ws] subscriber {} missed 2 \
+                         liveness pings; closing",
+                        subscriber_id,
+                    );
+                    let _ = write.send(Message::Close(None)).await;
+                    break;
+                }
+                if write.send(Message::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
+            }
+            changed = close_rx.changed() => {
+                // S1 presence — kick handle fired (S3 walks the registry
+                // and fires each entry's sender) OR the sender vanished
+                // (registry entry gone — shouldn't happen while we hold
+                // the guard; treat as close). Either way: clean close.
+                let fired = match changed {
+                    Ok(()) => *close_rx.borrow_and_update(),
+                    Err(_) => true,
+                };
+                if fired {
+                    log_debug!(
+                        "[daemon/session_events_ws] subscriber {} presence \
+                         close handle fired; closing",
                         subscriber_id,
                     );
                     let _ = write.send(Message::Close(None)).await;
@@ -171,7 +261,11 @@ pub async fn serve_session_events_connection(
                             break;
                         }
                     }
-                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Pong(_))) => {
+                        // S1 presence — liveness: the peer answered our
+                        // server-originated Ping.
+                        last_pong = std::time::Instant::now();
+                    }
                     Some(Ok(Message::Close(frame))) => {
                         let _ = write.send(Message::Close(frame)).await;
                         break;
@@ -233,6 +327,12 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         // no single workspace to scope to (the new project isn't in
         // any subscriber's `?path=` yet, by definition).
         SessionEvent::ProjectsChanged {} => return true,
+
+        // S1 presence — APP-LEVEL (the ActiveChanged convention): the
+        // connected-users roster is daemon-global truth, forwarded to
+        // EVERY subscriber regardless of `?path=` so each window's
+        // presence chips mirror the whole set.
+        SessionEvent::PresenceChanged { .. } => return true,
 
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter below routes them to
@@ -361,7 +461,9 @@ mod tests {
             tab_id: "tab".into(),
             status: "start".into(),
         };
-        for ev in [&llm, &tunnel, &agent] {
+        // S1 presence — the roster is daemon-global, same routing class.
+        let presence = SessionEvent::PresenceChanged { roster: vec![] };
+        for ev in [&llm, &tunnel, &agent, &presence] {
             assert!(event_matches_workspace(ev, "/x/foo"));
             assert!(event_matches_workspace(ev, "/totally/unrelated"));
             assert!(event_matches_workspace(ev, ""));

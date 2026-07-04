@@ -61,6 +61,9 @@ pub mod ops_routes;
 pub mod ops_stream_ws;
 pub mod pending_live;
 pub mod pinned_chat;
+// S1 (presence/multiplayer arc): process-wide connected-users registry +
+// roster broadcast. Registered from the `/cli/sessions/events` WS handler.
+pub mod presence;
 pub mod project_config_routes;
 pub mod providers;
 pub mod review_checklist_routes;

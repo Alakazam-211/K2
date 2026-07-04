@@ -1800,6 +1800,43 @@ async fn handle_one_request(
             }
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // GET /cli/presence/roster — S1 (presence/multiplayer arc).
+        // AUTHORIZED (owner OR connect-user session) — same gate as
+        // /cli/auth/whoami. Read-only snapshot of the live presence
+        // registry; returns `{ "roster": [...] }`, byte-identical in
+        // shape to the `presence_changed` event payload so a client can
+        // reconcile on `hello` (the ActiveChanged snapshot convention).
+        // GET-only: it mutates nothing, so a stray POST gets an explicit
+        // 405 rather than silently reading.
+        "/cli/presence/roster" => {
+            if is_post {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                let r = crate::cli_response::CliResponse {
+                    status: "405 Method Not Allowed",
+                    content_type: "application/json",
+                    body: r#"{"error":"GET required"}"#.to_string(),
+                };
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let _ = stream.read(&mut buf).await;
+            let tok = super::http::extract_token(&query).unwrap_or("");
+            let authorized = (!tok.is_empty()
+                && super::http::ct_eq_token(tok, state.token.as_str()))
+                || k2_core::connect_users::validate_session(tok).is_some();
+            if !authorized {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let r = crate::presence::handle_roster();
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // GET /cli/auth/whoami — AUTHORIZED (owner OR connect-user). Lets
         // a client confirm its session + learn whether it's the owner.
         // We resolve identity here: owner token first, then a live

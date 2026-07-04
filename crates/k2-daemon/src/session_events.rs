@@ -319,6 +319,25 @@ pub enum SessionEvent {
     /// free — consumers re-fetch the canonical list rather than
     /// patching from a diff.
     ProjectsChanged {},
+
+    /// S1 (presence/multiplayer arc) — the connected-users roster
+    /// changed (a `/cli/sessions/events` socket registered or
+    /// deregistered, or — from S4 on — an edit grant toggled).
+    /// APP-LEVEL: forwarded to EVERY subscriber regardless of `?path=`
+    /// (see `event_matches_workspace`). Carries the WHOLE aggregated
+    /// per-user set, not a diff, so client convergence is last-write-
+    /// wins on a snapshot (the ActiveChanged convention). The snapshot
+    /// twin is `GET /cli/presence/roster` (fetched on `hello`), which
+    /// returns the identical `{ "roster": [...] }` payload.
+    ///
+    /// Wire: `{ "kind": "presence_changed", "roster": [ { "user":
+    /// "owner"|username, "role": "owner"|"admin"|"member",
+    /// "windowCount": number, "workspaces": string[], "grantedEdit":
+    /// bool, "connectedAt": number } ] }` — row shape frozen in
+    /// `presence::RosterUser`.
+    PresenceChanged {
+        roster: Vec<crate::presence::RosterUser>,
+    },
 }
 
 static SENDER: OnceLock<broadcast::Sender<SessionEvent>> = OnceLock::new();
@@ -795,6 +814,35 @@ mod tests {
         // Trailing-slash tolerance.
         assert!(matches("/x/K2SO/", "/x/K2SO"));
         assert!(matches("/x/K2SO", "/x/K2SO/"));
+    }
+
+    /// S1 presence FROZEN WIRE CONTRACT: `{ "kind": "presence_changed",
+    /// "roster": [...] }` with the RosterUser row shape (camelCase field
+    /// names). The S2 renderer store + the `GET /cli/presence/roster`
+    /// snapshot both code against exactly this.
+    #[test]
+    fn presence_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::PresenceChanged {
+            roster: vec![crate::presence::RosterUser {
+                user: "owner".into(),
+                role: "owner".into(),
+                window_count: 2,
+                workspaces: vec!["/x/foo".into()],
+                granted_edit: false,
+                connected_at: 1_700_000_000,
+            }],
+        });
+        assert_eq!(json["kind"], "presence_changed");
+        assert_keys(&json, &["kind", "roster"]);
+        let row = &json["roster"][0];
+        assert_eq!(row["user"], "owner");
+        assert_eq!(row["role"], "owner");
+        assert_eq!(row["windowCount"], 2);
+        assert_eq!(row["workspaces"], serde_json::json!(["/x/foo"]));
+        assert_eq!(row["grantedEdit"], false);
+        assert_eq!(row["connectedAt"], 1_700_000_000i64);
+        let row_obj = row.as_object().unwrap();
+        assert_eq!(row_obj.len(), 6, "unexpected roster row keys: {row_obj:?}");
     }
 
     /// P3c (D1) FROZEN WIRE CONTRACT: a `SessionAdded` for a REAL sandbox cell

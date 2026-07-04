@@ -24,6 +24,17 @@
 //!    MODEL-INDEPENDENT, so obvious HITLs are caught even when the
 //!    bundled LLM isn't installed.
 //!
+//!    Slice 5: the marker tables now cover every Big-7 dialog captured
+//!    in the 2026-07 TUI signal studies
+//!    (`.k2/notes/tui-signal-study-grok-hermes-cursor.md`,
+//!    `.k2/notes/tui-signal-study-codex-gemini.md`) — grok's
+//!    always-approve permission gate, hermes' Dangerous Command box,
+//!    cursor-agent's command-approval bar, and the codex/gemini/cursor
+//!    trust dialogs. Two dialogs are PENDING RECAPTURE (both agents
+//!    were auth-broken during the study): codex's exec-approval UI and
+//!    gemini's shell-confirmation strings — their trust dialogs are
+//!    covered, the mid-turn approval wording is not yet verified.
+//!
 //! 2. **qwen classify + extract** (`source="model"`). If the fast-path
 //!    doesn't fire AND the bundled model is loaded, run a temp-0-ish,
 //!    greedy generation with [`CLASSIFY_SYSTEM_PROMPT`] and parse the
@@ -253,33 +264,66 @@ fn classify_screen(screen: &str, use_llm: bool) -> ClassifyResult {
 // ─── Regex fast-path ─────────────────────────────────────────────────
 
 /// Deterministic HITL markers we key on. Each is a stable UI string
-/// from a known interactive prompt. Matching is case-insensitive on a
-/// lowercased copy of the screen.
-///
-/// Markers (documented for the validation agent):
-///   1. `enter to select`        — Claude Code select-menu footer
-///      (`Enter to select · ↑/↓ to navigate · Esc to cancel`).
-///   2. `↑/↓ to navigate`        — same footer, arrow-key hint.
-///   3. `✔ submit` / `submit →`  — the multi-question tab-bar form's
-///      Submit affordance (`☐ … ✔ Submit →`).
-///   4. `do you want to proceed` / `do you want to` — Claude's
-///      tool-permission confirmation gate.
-///   5. a `❯`/`>`-cursored numbered option row (`❯ 1. …`) — the
-///      arrow cursor sitting on a numbered choice.
+/// from a known interactive prompt, sorted/commented by agent.
+/// Matching is case-insensitive on a lowercased copy of the screen.
+/// Slice-5 additions are VERBATIM captures from the 2026-07 TUI signal
+/// studies. Also load-bearing: a `❯`/`>`/`›`/`→`/`●`-cursored numbered
+/// option row or a grok radio row fires the fast-path without any
+/// footer text ([`has_cursored_numbered_option`]).
 const SELECT_MARKERS: &[&str] = &[
+    // claude — select-menu footer
+    // (`Enter to select · ↑/↓ to navigate · Esc to cancel`). The
+    // "enter to select" entry ALSO hits gemini's auth dialog footer
+    // (`(Use Enter to select)` — study-confirmed).
     "enter to select",
     "↑/↓ to navigate",
+    // claude — multi-question tab-bar form's Submit affordance
+    // (`☐ … ✔ Submit →`).
     "✔ submit",
     "submit →",
+    // codex — dialog footer (`Press enter to continue`); its dialogs
+    // miss every other marker (cursor glyph is `›`, handled below).
+    "press enter to continue",
+    // grok — dialog footers use colon-compact hints with NO 'to'
+    // (`↑/↓ Navigate`, `Enter:submit`), so claude's entries can't match.
+    "↑/↓ navigate",
+    "enter:submit",
+    // hermes — gate footer (`↑/↓ to select, Enter to confirm (59s)`).
+    "↑/↓ to select",
+    // cursor-agent — approval-bar hint.
+    "press the key shown",
 ];
 
-/// Permission-gate markers (yes/no confirmation). Checked before the
-/// generic select markers so a confirmation prompt is `kind=permission`.
+/// Permission-gate markers (yes/no confirmation), sorted/commented by
+/// agent. Checked before the generic select markers so a confirmation
+/// prompt is `kind=permission`.
 const PERMISSION_MARKERS: &[&str] = &[
+    // claude — tool-permission confirmation gates.
     "do you want to proceed",
     "do you want to make this edit",
     "do you want to create",
     "do you want to",
+    // codex + gemini + cursor — first-spawn trust dialogs ("Do you
+    // trust the contents of this directory?" / "Do you trust the files
+    // in this folder?" / cursor's Workspace Trust gate). These matched
+    // NOTHING before slice 5.
+    "do you trust",
+    // grok — permission gate (title prefix `⚠ Action Required - `;
+    // footer `1/3:select │ Ctrl+o:yolo │ Ctrl+c:cancel`; option row 3
+    // `3 (○) No, reject (type to add feedback)`).
+    "action required",
+    "ctrl+o:yolo",
+    "no, reject",
+    // hermes — Dangerous Command box (header `⚠️ Dangerous Command`,
+    // footer `↑/↓ to select, Enter to confirm (59s)` — 60s countdown
+    // AUTO-DENIES on expiry).
+    "dangerous command",
+    "enter to confirm",
+    // cursor-agent — command-approval bar (`Run this command?` /
+    // `Not in allowlist: echo`) + transcript line while blocked.
+    "run this command?",
+    "not in allowlist:",
+    "waiting for approval",
 ];
 
 /// Best-effort detector. Returns `Some(ClassifyResult)` (always
@@ -290,8 +334,9 @@ fn fast_path_detect(screen: &str) -> Option<ClassifyResult> {
 
     let permission_hit = PERMISSION_MARKERS.iter().find(|m| lower.contains(**m));
     let select_hit = SELECT_MARKERS.iter().find(|m| lower.contains(**m));
-    // A `❯ 1.` / `> 1.` cursored numbered option is also a strong
-    // select signal even without the footer text.
+    // A cursored numbered option row (`❯ 1.` / `> 1.` / codex `› 1.` /
+    // cursor-agent `→ 1.` / gemini `● 1.` / grok radio `1 (●)`) is
+    // also a strong select signal even without the footer text.
     let cursor_option = has_cursored_numbered_option(screen);
 
     if permission_hit.is_none() && select_hit.is_none() && !cursor_option {
@@ -317,40 +362,91 @@ fn fast_path_detect(screen: &str) -> Option<ClassifyResult> {
     })
 }
 
-/// True if any line looks like an arrow-cursored numbered menu option,
-/// e.g. `❯ 1. Yes` or `> 2. No`. The leading cursor glyph distinguishes
-/// an active menu from ordinary numbered prose ("1. First, do X").
+/// Cursor glyphs that mark the ACTIVE row of a menu, per agent
+/// (2026-07 TUI signal studies):
+///   `❯` claude/hermes · `>` generic/legacy · `›` (U+203A) codex ·
+///   `→` cursor-agent · `●` gemini radio (`● 1. Trust folder`).
+/// Strips the glyph + following whitespace; `None` when the line does
+/// not start with a cursor glyph.
+fn strip_cursor_glyph(t: &str) -> Option<&str> {
+    for g in ['❯', '>', '›', '→', '●'] {
+        if let Some(rest) = t.strip_prefix(g) {
+            return Some(rest.trim_start());
+        }
+    }
+    None
+}
+
+/// True if any line looks like a cursored numbered menu option —
+/// `❯ 1. Yes`, `> 2. No`, `› 1. Update now` (codex), `→ 1. Run`
+/// (cursor-agent), `● 1. Trust folder` (gemini radio) — or a grok
+/// radio row (`1 (●) Yes, proceed` / `3 (○) No, reject`, numbered with
+/// NO arrow glyph). The leading cursor glyph / radio distinguishes an
+/// active menu from ordinary numbered prose ("1. First, do X") — the
+/// existing false-positive discipline: numbered rows only, cursor at
+/// line start.
 fn has_cursored_numbered_option(screen: &str) -> bool {
     screen.lines().any(|line| {
         let t = line.trim_start();
-        let rest = t
-            .strip_prefix('❯')
-            .or_else(|| t.strip_prefix('>'))
-            .map(str::trim_start);
-        match rest {
+        match strip_cursor_glyph(t) {
             Some(r) => starts_with_numbered_option(r),
-            None => false,
+            // grok radio rows carry no cursor glyph; the `N (●)` /
+            // `N (○)` radio IS the cursor.
+            None => is_grok_radio_option(t),
         }
     })
 }
 
-/// `"1. Yes"` / `"12) foo"` → true. A leading run of ASCII digits
-/// followed by `.` or `)` and a space.
+/// `"1. Yes"` / `"12) foo"` / grok `"2 (○) Yes, proceed"` → true.
 fn starts_with_numbered_option(s: &str) -> bool {
-    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return false;
+    numbered_option_label(s).is_some()
+}
+
+/// grok radio option row: leading ASCII digits, then ` (●)` (selected)
+/// or ` (○)` (unselected) — `1 (●) Yes, and don't ask again …`.
+fn is_grok_radio_option(s: &str) -> bool {
+    grok_radio_label(s).is_some()
+}
+
+/// Split a numbered option row into its label:
+/// `1. Yes` / `12) foo` → the text after the `.`/`)`;
+/// grok radio `3 (○) No, reject` → the text after the radio.
+/// `None` when the line is not a numbered option row.
+fn numbered_option_label(s: &str) -> Option<&str> {
+    let digits_len = s.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits_len == 0 {
+        return None;
     }
-    let after = &s[digits.len()..];
-    matches!(after.as_bytes().first(), Some(b'.') | Some(b')'))
+    let after = &s[digits_len..];
+    if let Some(rest) = after.strip_prefix('.').or_else(|| after.strip_prefix(')')) {
+        return Some(rest.trim_start());
+    }
+    grok_radio_label(s)
+}
+
+/// Label of a grok radio row (`2 (○) Yes, proceed` → `Yes, proceed`),
+/// `None` when it isn't one.
+fn grok_radio_label(s: &str) -> Option<&str> {
+    let digits_len = s.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits_len == 0 {
+        return None;
+    }
+    let after = &s[digits_len..];
+    for radio in [" (●)", " (○)"] {
+        if let Some(rest) = after.strip_prefix(radio) {
+            return Some(rest.trim_start());
+        }
+    }
+    None
 }
 
 /// Cheap, best-effort question/option extraction for the fast-path. We
-/// collect numbered option rows (`1. foo`, `❯ 2. bar`) into one
-/// question whose `header` is the nearest preceding non-empty,
-/// non-option line (typically the question text). This is intentionally
-/// simple — the model path does the richer extraction; the fast-path
-/// just needs a usable scout payload.
+/// collect numbered option rows (`1. foo`, `❯ 2. bar`, codex `› 1. …`,
+/// gemini `● 1. …`, grok radio `2 (○) …`) into one question whose
+/// `header` is the nearest preceding non-empty, non-option line
+/// (typically the question text). This is intentionally simple — the
+/// model path does the richer extraction; the fast-path just needs a
+/// usable scout payload.
 fn extract_questions_cheap(screen: &str) -> Vec<ClassifyQuestion> {
     let lines: Vec<&str> = screen.lines().collect();
     let mut options: Vec<String> = Vec::new();
@@ -359,15 +455,9 @@ fn extract_questions_cheap(screen: &str) -> Vec<ClassifyQuestion> {
     for (i, raw) in lines.iter().enumerate() {
         let t = raw.trim();
         // strip an optional leading cursor glyph
-        let body = t
-            .strip_prefix('❯')
-            .or_else(|| t.strip_prefix('>'))
-            .map(str::trim_start)
-            .unwrap_or(t);
-        if starts_with_numbered_option(body) {
-            // drop the "N. " / "N) " prefix to get the option label
-            let digits: String = body.chars().take_while(|c| c.is_ascii_digit()).collect();
-            let label = body[digits.len() + 1..].trim().to_string();
+        let body = strip_cursor_glyph(t).unwrap_or(t);
+        if let Some(label) = numbered_option_label(body) {
+            let label = label.trim().to_string();
             if !label.is_empty() {
                 if first_option_idx.is_none() {
                     first_option_idx = Some(i);
@@ -397,11 +487,7 @@ fn extract_questions_cheap(screen: &str) -> Vec<ClassifyQuestion> {
 }
 
 fn looks_like_option(line: &str) -> bool {
-    let body = line
-        .strip_prefix('❯')
-        .or_else(|| line.strip_prefix('>'))
-        .map(str::trim_start)
-        .unwrap_or(line);
+    let body = strip_cursor_glyph(line).unwrap_or(line);
     starts_with_numbered_option(body)
 }
 
@@ -595,6 +681,169 @@ The build passes now.";
         assert!(!has_cursored_numbered_option("1. first\n2. second"));
         assert!(has_cursored_numbered_option("❯ 1. first"));
         assert!(has_cursored_numbered_option("> 2. second"));
+    }
+
+    #[test]
+    fn slice5_cursor_glyphs_fire_the_option_row_detector() {
+        // codex `›` (U+203A), cursor-agent `→`, gemini `●` radio.
+        assert!(has_cursored_numbered_option("› 1. Update now (npm install -g)"));
+        assert!(has_cursored_numbered_option("→ 1. Run (once)"));
+        assert!(has_cursored_numbered_option("● 1. Trust folder"));
+        // grok radio rows: numbered + `(●)`/`(○)`, NO arrow glyph.
+        assert!(has_cursored_numbered_option(
+            "  2 (○) Yes, proceed"
+        ));
+        assert!(has_cursored_numbered_option(
+            "1 (●) Yes, and don't ask again for anything (always-approve mode)"
+        ));
+        // Radio-less parenthetical prose stays inert.
+        assert!(!has_cursored_numbered_option("1 (of 3) items processed"));
+        // A bare glyph without a numbered row stays inert.
+        assert!(!has_cursored_numbered_option("→ see the docs"));
+        assert!(!has_cursored_numbered_option("● streaming enabled"));
+    }
+
+    // ── Slice 5 — verbatim Big-7 dialog fixtures (2026-07 studies) ────
+
+    #[test]
+    fn grok_permission_gate_fires_permission_with_radio_options() {
+        // Verbatim from tui-signal-study-grok-hermes-cursor.md — the
+        // always-approve default makes this THE dialog K2 must never
+        // blind-Enter (see workspace_msg's gate-hold).
+        let screen = "\
+Run rm -rf build?
+
+1 (●) Yes, and don't ask again for anything (always-approve mode)
+2 (○) Yes, proceed
+3 (○) No, reject (type to add feedback)
+
+1/3:select │ Ctrl+o:yolo │ Ctrl+c:cancel";
+        let r = fast_path_detect(screen).expect("grok gate must fire fast-path");
+        assert_eq!(r.is_hitl, Some(true));
+        assert_eq!(r.kind, "permission");
+        assert_eq!(r.questions.len(), 1);
+        assert_eq!(
+            r.questions[0].options,
+            vec![
+                "Yes, and don't ask again for anything (always-approve mode)",
+                "Yes, proceed",
+                "No, reject (type to add feedback)",
+            ]
+        );
+    }
+
+    #[test]
+    fn hermes_dangerous_command_box_fires_permission() {
+        // Verbatim hermes gate (60s countdown auto-denies on expiry).
+        let screen = "\
+⚠️ Dangerous Command
+
+  rm -rf /tmp/scratch
+
+❯ 1. Allow once
+  2. Allow for session
+  3. Add to allowlist
+  4. Deny
+
+↑/↓ to select, Enter to confirm (59s)";
+        let r = fast_path_detect(screen).expect("hermes gate must fire fast-path");
+        assert_eq!(r.is_hitl, Some(true));
+        assert_eq!(r.kind, "permission");
+        assert_eq!(
+            r.questions[0].options,
+            vec!["Allow once", "Allow for session", "Add to allowlist", "Deny"]
+        );
+    }
+
+    #[test]
+    fn cursor_agent_command_approval_fires_permission() {
+        // Verbatim cursor-agent approval bar + transcript line.
+        let screen = "\
+$ echo test in .
+
+Run this command?
+
+Not in allowlist: echo
+
+→ Run (once) (y)   Add Shell(echo) to allowlist? (tab)   Run Everything (shift+tab)   Skip (esc or n)
+
+Waiting for approval...";
+        let r = fast_path_detect(screen).expect("cursor approval must fire fast-path");
+        assert_eq!(r.is_hitl, Some(true));
+        assert_eq!(r.kind, "permission");
+    }
+
+    #[test]
+    fn codex_trust_dialog_fires_permission() {
+        // "Do you trust" matched NOTHING before slice 5 (codex study;
+        // cyan-highlight selection, no cursor glyph).
+        let screen = "\
+Do you trust the contents of this directory?
+
+  /Users/rosson/scratch
+
+  Yes, continue
+  No, quit
+
+Press enter to continue";
+        let r = fast_path_detect(screen).expect("codex trust dialog must fire fast-path");
+        assert_eq!(r.is_hitl, Some(true));
+        assert_eq!(r.kind, "permission");
+    }
+
+    #[test]
+    fn gemini_trust_dialog_fires_permission_with_radio_cursor_options() {
+        // Verbatim gemini trust dialog — `●` radio, NO footer.
+        let screen = "\
+Do you trust the files in this folder?
+
+● 1. Trust folder
+  2. Trust parent folder
+  3. Don't trust";
+        let r = fast_path_detect(screen).expect("gemini trust dialog must fire fast-path");
+        assert_eq!(r.is_hitl, Some(true));
+        assert_eq!(r.kind, "permission");
+        assert_eq!(
+            r.questions[0].options,
+            vec!["Trust folder", "Trust parent folder", "Don't trust"]
+        );
+    }
+
+    #[test]
+    fn codex_dialog_with_press_enter_to_continue_fires_select() {
+        // codex update dialog: `›` cursor + "Press enter to continue"
+        // footer — missed every pre-slice-5 SELECT marker.
+        let screen = "\
+A new version of codex is available.
+
+› 1. Update now (npm install -g)
+  2. Skip
+
+Press enter to continue";
+        let r = fast_path_detect(screen).expect("codex dialog must fire fast-path");
+        assert_eq!(r.is_hitl, Some(true));
+        assert_eq!(r.kind, "select");
+        assert_eq!(
+            r.questions[0].options,
+            vec!["Update now (npm install -g)", "Skip"]
+        );
+    }
+
+    #[test]
+    fn grok_colon_compact_footer_fires_select() {
+        // grok dialog footers use colon-compact hints with no 'to'
+        // ("↑/↓ Navigate", "Enter:submit") — claude's entries can't
+        // match them.
+        let screen = "\
+Run Grok Build in a project directory?
+
+1 (●) Use current directory
+2 (○) Choose another directory
+
+↑/↓ Navigate │ Enter:submit";
+        let r = fast_path_detect(screen).expect("grok picker must fire fast-path");
+        assert_eq!(r.is_hitl, Some(true));
+        assert_eq!(r.kind, "select");
     }
 
     // ── Model-JSON parsing / robustness ──────────────────────────────

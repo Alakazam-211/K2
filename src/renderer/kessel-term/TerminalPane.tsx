@@ -97,6 +97,8 @@ import {
 } from './copyText'
 import { shouldApplyOsc52 } from './oscClipboard'
 import { pickSeamColor } from './seamColor'
+import { computeScaleLayout } from './scaleLayout'
+import { usePinnedSizeStore, type PinnedSize } from '@/stores/pinned-size'
 
 // ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
 
@@ -192,6 +194,12 @@ type OutboundMsg =
   // 0.37.4 Phase B — daemon-owned label events.
   | { event: 'label_initial'; payload: { label: string } }
   | { event: 'label_changed'; payload: { label: string } }
+  // S7a pin-to-size — daemon-owned pin state. `pin_initial` arrives
+  // once after label_initial, ONLY when the session is pinned;
+  // `pin_changed` fires mid-session (cleared:true = unpinned,
+  // cols/rows omitted).
+  | { event: 'pin_initial'; payload: { cols: number; rows: number; set_by: string | null } }
+  | { event: 'pin_changed'; payload: { cols?: number; rows?: number; cleared: boolean } }
 
 // ── Helpers ───────────────────────────────────────────────────────
 // (hexToCss / runStyle / renderRowRuns / TerminalRow moved to
@@ -547,6 +555,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     snapshotRef.current = snapshot
   }, [snapshot])
+  // S7b pin-to-size — daemon-owned pin state for THIS session,
+  // mirrored from the grid-WS `pin_initial`/`pin_changed` frames
+  // (set inside `applyPinFrame` in the onmessage handler, reset on
+  // every fresh WS connect since an unpinned session sends no pin
+  // frame at all). Drives the scaleLayout pinned branch + the pin
+  // badge; also mirrored into `usePinnedSizeStore` (keyed by daemon
+  // sessionId) so PaneTabBar's pin-size menu reads it with no
+  // polling. Ref mirror for `sendResize`, which must not re-bind on
+  // pin changes.
+  const [pinnedSize, setPinnedSize] = useState<PinnedSize | null>(null)
+  const pinnedSizeRef = useRef<PinnedSize | null>(null)
+  useEffect(() => {
+    pinnedSizeRef.current = pinnedSize
+  }, [pinnedSize])
   // Authoritative merged grid, owned by applyFrameBatch (the sole
   // frame applier). Rendered `snapshot` mirrors it except while a
   // resize hold parks a blank intermediate here — see the resize-hold
@@ -1233,6 +1255,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // open a WS based purely on visibility — so a poll-driven re-render
       // can never tear this spawn down or churn the stream.
       sessionIdRef.current = sessionId
+      // S7b — publish the terminalId→sessionId mapping so
+      // PaneTabBar's pin-size menu can resolve this tab to the
+      // daemon session UUID the pin-size route wants. Registered at
+      // the same moment the session becomes live; dropped in this
+      // effect's cleanup.
+      usePinnedSizeStore.getState().registerSession(terminalId, sessionId)
       // Phase reflects spawn outcome only; the grid-WS effect will move
       // us to 'connecting'/'ready' (visible) or leave us 'parked'
       // (hidden). Reading the live visibility ref keeps the initial
@@ -1268,6 +1296,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // Forget the spawned session for this generation; the grid-WS
       // effect's cleanup (below) owns closing the socket.
       sessionIdRef.current = null
+      // S7b — retract the tab-menu mapping; a re-run re-registers.
+      usePinnedSizeStore.getState().unregisterSession(terminalId)
     }
     // 0.39.13 — STABLE deps only. `isTabVisible` is deliberately NOT
     // here: visibility no longer drives spawn. `reconnectAttempt` still
@@ -1421,6 +1451,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // Fresh daemon subscriber ⇒ we hold no claim until the re-prime
       // below lands one; render passively meanwhile.
       setIsActiveViewer(false)
+      // S7b — reset pin state on every fresh connect. An unpinned
+      // session's connect sequence carries NO pin frame (absence =
+      // unpinned by design), so a pin that was cleared while we were
+      // disconnected would otherwise stick forever; a still-pinned
+      // session re-asserts via `pin_initial` right after
+      // label_initial. Shared applier for the reset + both frames so
+      // local state and the tab-menu store can never diverge.
+      const applyPinFrame = (pin: PinnedSize | null) => {
+        setPinnedSize(pin)
+        usePinnedSizeStore.getState().setPin(sessionId, pin)
+      }
+      applyPinFrame(null)
       // Issue #8: re-prime using the FULL predicate (visible AND
       // pane-focused AND window-focused), not window-focus alone.
       // A backgrounded pane that reconnects (e.g. WebKit dropped the
@@ -1618,6 +1660,29 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             if (newLabel && tabId) {
               useTabsStore.getState().setTabTitle(tabId, newLabel)
             }
+            break
+          }
+          case 'pin_initial': {
+            // S7a/S7b — session is pinned; sent once after
+            // label_initial (only when pinned). `set_by` is "owner"
+            // or the pinning connect-user's username.
+            applyPinFrame({
+              cols: parsed.payload.cols,
+              rows: parsed.payload.rows,
+              setBy: parsed.payload.set_by ?? null,
+            })
+            break
+          }
+          case 'pin_changed': {
+            // Mid-session pin/unpin (the LabelChanged pattern). The
+            // frame carries no setter identity — keep setBy null and
+            // let the badge omit the "by <who>" clause.
+            const p = parsed.payload
+            applyPinFrame(
+              p.cleared || p.cols == null || p.rows == null
+                ? null
+                : { cols: p.cols, rows: p.rows, setBy: null },
+            )
             break
           }
           case 'bell': {
@@ -2205,6 +2270,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // hidden pane's measurements must stay current even though it
       // emits no resize frames.
       lastResizeRef.current = { cols, rows }
+      // S7b — publish the measured fit for the tab menu's "Match my
+      // window now" (keyed by daemon sessionId). Recorded even while
+      // pinned, so match-after-unpin uses fresh numbers.
+      const sid = sessionIdRef.current
+      if (sid) usePinnedSizeStore.getState().setDims(sid, cols, rows)
+      // S7b — while pinned the daemon clamps EVERY resize at
+      // request_resize; emitting would be pure traffic/log noise
+      // (and would arm a pointless 500ms resize hold). Measurements
+      // above still flow so an unpin picks up current dims.
+      if (pinnedSizeRef.current) return
       // Only the visible pane in the focused window emits (pinned-chat
       // retention: a background pane parked in the retainer's hidden
       // host sends NOTHING — after its own release the session is
@@ -2712,89 +2787,39 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     [stripRows, snapshot?.cols],
   )
 
-  // ── Passive scale-to-fit (kessel-hard-learnings §2.7 / §Wave 3) ─
+  // ── Passive scale-to-fit + pin-to-size (S7b) ──────────────────
   //
-  // When ANOTHER viewer owns the PTY size (this pane never claimed
-  // active, or lost the claim), the grid can be bigger than our box.
-  // The only lossless treatments of a width-committed grid are scale,
-  // letterbox or clip — NEVER re-wrap (1:1 grid row → display row is
-  // preserved: we scale the whole strip uniformly). Scale factor is
-  // min(fitW, fitH, 1), centered/letterboxed, floored at 0.4 after
-  // which we clip instead (unreadably small is worse than clipped).
-  // An active pane renders 1:1 — its resizes drive the PTY, so any
-  // mismatch is transient (the hold-and-scale path below covers it).
-  const PASSIVE_SCALE_FLOOR = 0.4
+  // Decision table extracted to `./scaleLayout.ts` (pure, unit-
+  // tested there — passive letterbox @0.4 floor, hold-and-scale,
+  // and the S7b pinned branch: while pinned even the ACTIVE viewer
+  // letterboxes against the daemon-clamped grid, floored at 0.25).
   const snapCols = snapshot?.cols ?? 0
   const snapRows = snapshot?.rows ?? 0
-  const scaleLayout = useMemo(() => {
-    const identity = { scale: 1, offsetX: 0, offsetY: 0, passive: false }
-    const cw = cellMetrics.width
-    const ch = cellMetrics.height
-    if (!snapCols || !snapRows || !cw || !ch) return identity
-    // Same available-box formula as the ResizeObserver's cols/rows
-    // fit, so a grid sized to THIS pane always computes fit ≥ 1 and
-    // renders unscaled. Width subtracts only the LEFT 4px pad — the
-    // right edge is padding-free so the column math gets that width
-    // (the centered remainder supplies the visual right breathing room).
-    const availW = Math.max(0, containerSize.width - 4)
-    const availH = Math.max(0, containerSize.height - 4)
-    if (!availW || !availH) return identity
-    const gridW = snapCols * cw
-    const gridH = snapRows * ch
-    const fit = Math.min(availW / gridW, availH / gridH)
-    const letterboxed = (scale: number, passive: boolean) => ({
-      scale,
-      offsetX: Math.max(0, (availW - gridW * scale) / 2),
-      offsetY: Math.max(0, (availH - gridH * scale) / 2),
-      passive,
-    })
-    // Unscaled (scale-1) rendering centers the sub-cell quantization
-    // remainder: cols = floor(availW / cellW) leaves up to one cell
-    // of slack, and anchoring the grid at the left padding parked ALL
-    // of it on the right — users read that as a bigger right gap than
-    // left. Splitting it (floored to whole px so scale-1 text stays
-    // on the pixel grid) makes the gutters symmetric. These offsets
-    // ARE the content origin: the scale wrapper translates the DOM
-    // strip AND the WebGL canvas by them, and toGridXY subtracts them
-    // for every pointer→cell mapping (selection, link hover, SGR
-    // forwarding), so grid pixels and hit-testing move together. The
-    // cursor overlay + IME shadow textarea add them explicitly via
-    // contentOriginX/Y below. The remainder gutter shows the
-    // container's own background (same fill as the 4px padding), so
-    // no seam appears on either side.
-    const centered = {
-      scale: 1,
-      offsetX: Math.floor(Math.max(0, availW - gridW) / 2),
-      offsetY: Math.floor(Math.max(0, availH - gridH) / 2),
-      passive: false,
-    }
-    if (!isActiveViewer) {
-      if (fit >= 1) return centered
-      return letterboxed(Math.max(fit, PASSIVE_SCALE_FLOOR), true)
-    }
-    // Active pane, resize in flight (hold-and-scale): frames still
-    // carry the OLD geometry — stretch the last grid to the new box
-    // (scale may exceed 1 when the box grew) until the first frame at
-    // the requested dims lands or the hold times out. This is what
-    // turns the container-resize window from a flash into a smooth
-    // reflow.
-    if (
-      pendingResize &&
-      (snapCols !== pendingResize.cols || snapRows !== pendingResize.rows)
-    ) {
-      return letterboxed(Math.max(fit, PASSIVE_SCALE_FLOOR), false)
-    }
-    return centered
-  }, [
-    snapCols,
-    snapRows,
-    cellMetrics.width,
-    cellMetrics.height,
-    containerSize.width,
-    containerSize.height,
-    isActiveViewer,
-    pendingResize,
-  ])
+  const scaleLayout = useMemo(
+    () =>
+      computeScaleLayout({
+        snapCols,
+        snapRows,
+        cellWidth: cellMetrics.width,
+        cellHeight: cellMetrics.height,
+        containerWidth: containerSize.width,
+        containerHeight: containerSize.height,
+        isActiveViewer,
+        pinned: pinnedSize !== null,
+        pendingResize,
+      }),
+    [
+      snapCols,
+      snapRows,
+      cellMetrics.width,
+      cellMetrics.height,
+      containerSize.width,
+      containerSize.height,
+      isActiveViewer,
+      pinnedSize,
+      pendingResize,
+    ],
+  )
   // Ref mirror for handlers that bind once (wheel listener) — same
   // pattern as `snapshotRef`.
   const scaleLayoutRef = useRef(scaleLayout)
@@ -4439,6 +4464,34 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           }}
         >
           viewing at {snapshot.cols}×{snapshot.rows}
+        </div>
+      )}
+      {/* S7b pin badge: the session is pinned to a fixed size for
+          EVERY viewer (daemon clamps all resizes). Replaces the
+          passive pill while pinned (the pinned scaleLayout branch
+          never sets `passive`). Same chip styling; pointer events
+          stay on so the title tooltip works. */}
+      {pinnedSize && (
+        <div
+          data-terminal-pin-badge=""
+          title={`Pinned to ${pinnedSize.cols}×${pinnedSize.rows}${
+            pinnedSize.setBy ? ` by ${pinnedSize.setBy}` : ''
+          } — everyone sees this size`}
+          style={{
+            position: 'absolute',
+            bottom: 6,
+            right: 8,
+            padding: '2px 6px',
+            background: 'rgba(0,0,0,0.8)',
+            color: '#9a9a9a',
+            fontSize: '10px',
+            fontFamily: 'monospace',
+            zIndex: 999,
+            borderRadius: '3px',
+            cursor: 'default',
+          }}
+        >
+          ⌀ {pinnedSize.cols}×{pinnedSize.rows}
         </div>
       )}
       {scrollbarThumb && (

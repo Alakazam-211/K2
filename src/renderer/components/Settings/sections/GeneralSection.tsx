@@ -47,6 +47,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.restart-host', section: 'general', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
   { id: 'general.update-host', section: 'general', label: 'Update connected host', description: 'Update the REMOTE machine you are connected to over K2 Connect', keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
   { id: 'general.active-window-hours', section: 'general', label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
+  { id: 'general.completion-sound', section: 'general', label: 'Completion sound', description: 'Play a sound when an agent finishes unwatched', keywords: ['sound', 'chime', 'audio', 'notification', 'agent', 'done', 'finished', 'complete', 'unseen', 'orange', 'amber', 'dot'] },
   { id: 'general.owner-display-name', section: 'general', label: 'Your name', description: 'The name K2 agents call you when you message them', keywords: ['name', 'display', 'owner', 'you', 'from', 'identity', 'agents', 'call', 'message', 'sender'] },
   { id: 'general.ai-assistant', section: 'general', label: 'AI Workspace Assistant', description: 'Local LLM for natural-language workspace operations (⌘L)', keywords: ['ai', 'assistant', 'llm', 'cmd+l', 'qwen', 'model', 'local', 'gguf'] },
   { id: 'general.model-status', section: 'general', label: 'Model Status', description: 'Current local LLM load state', keywords: ['model', 'llm', 'loaded', 'download'] },
@@ -226,6 +227,9 @@ export function GeneralSection(): React.JSX.Element {
         {/* P1.C — configurable Active-Bar tenure window */}
         <ActiveWindowHoursRow />
 
+        {/* F4 — completion chime for unseen agent completions */}
+        <CompletionSoundRow />
+
         {/* "Your display name" — the `from` attribution agents see when
             you message them via the composer (resolved server-side). */}
         <OwnerDisplayNameRow />
@@ -357,6 +361,58 @@ function ActiveWindowHoursRow(): React.JSX.Element {
         />
         <span className="text-[10px] text-[var(--color-text-muted)]">hours</span>
       </div>
+    </div>
+  )
+}
+
+// ── Completion sound (F4) ──────────────────────────────────────────────
+// Chimes ONLY for UNSEEN completions — an agent finished while its pane
+// wasn't being watched (the same fire that lights the Active-bar amber
+// dot). Watched panes never chime. Backed by
+// `settings.completionSoundEnabled` (daemon settings.json deep-merge),
+// default ON. See .k2/notes/orange-dot-done-sound.md.
+function CompletionSoundRow(): React.JSX.Element {
+  const enabled = useSettingsStore((s) => s.completionSoundEnabled)
+  const setCompletionSoundEnabled = useSettingsStore((s) => s.setCompletionSoundEnabled)
+
+  return (
+    <div
+      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
+      data-settings-id="general.completion-sound"
+    >
+      <div className="flex-1 min-w-0 mr-3">
+        <span className="text-xs text-[var(--color-text-secondary)]">
+          Play a sound when an agent finishes unwatched
+        </span>
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+          A soft chime when an agent completes while you&apos;re looking
+          elsewhere — the audible twin of the amber dot in the Active bar.
+          Agents you&apos;re watching never chime.
+        </p>
+      </div>
+      <button
+        onClick={() => void setCompletionSoundEnabled(!enabled)}
+        className="no-drag cursor-pointer flex-shrink-0 relative"
+        style={{
+          width: 36,
+          height: 20,
+          backgroundColor: enabled ? 'var(--color-accent)' : '#333',
+          border: 'none',
+          transition: 'background-color 150ms',
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            top: 2,
+            left: enabled ? 18 : 2,
+            width: 16,
+            height: 16,
+            backgroundColor: '#fff',
+            transition: 'left 150ms',
+          }}
+        />
+      </button>
     </div>
   )
 }

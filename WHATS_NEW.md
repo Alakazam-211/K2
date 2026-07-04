@@ -3,6 +3,27 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.25 — Any agent, first-class
+
+- **Pick your default agent — for real.** The Editors & Agents default now
+  genuinely works for any agent, and every workspace gets its own Default
+  Agent dropdown. Cmd+Shift+T, heartbeats, wakes, and restart recovery all
+  spawn your choice — Claude, Codex, Gemini, Grok, Cursor Agent, Pi, or
+  Hermes.
+- **Any agent's chat can be the workspace chat.** The pinned tab's session
+  picker now lists every agent's sessions (with their icons) — pin a Grok
+  or Hermes conversation as the canonical chat and K2 resumes it with the
+  right binary and the right flags, including waking it by message.
+- **Grok and Hermes sessions in your drawers.** Both agents' local session
+  stores are discovered live, and the activity spinner / permission
+  indicator now understand each agent's own signals — including Grok's
+  "Action Required" state.
+- **Terminal rendering, iTerm-crisp.** Box-drawing and block characters are
+  now painted geometry instead of font glyphs (seamless TUI borders and
+  logos), exotic art is pinned per-cell so animated symbols can't warp
+  rows, the grid centers its leftover pixels evenly, and panes gained the
+  width that used to be reserved padding.
+
 ## 0.40.24 — Hire agents from the command line
 
 - **`k2 agent hire` — provision an agent in one command.** What used to take

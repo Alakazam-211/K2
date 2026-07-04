@@ -150,7 +150,70 @@ pub fn provider_resume_for_provider(provider: &str) -> Option<&'static ProviderR
     PROVIDERS.iter().find(|p| p.provider == provider)
 }
 
+/// Does a spawned argv claim ownership of `session_id`? Recognizes
+/// EVERY grammar K2 (or a user) launches supported agents with:
+///
+/// - flag style — `--session-id <id>` (claude/grok premint),
+///   `--resume <id>` / `-r <id>` (claude/grok/gemini/cursor),
+///   `--session <id>` (pi);
+/// - subcommand style — `resume <id>` as the LEADING argv pair
+///   (codex; K2 always assembles it at position 0, see
+///   [`ProviderResume::resume_args`]).
+///
+/// Supersedes the daemon's inline `--session-id`/`--resume`-only scans
+/// (workspace_msg branch 1b / relookup, heartbeat
+/// `find_live_for_resume`) — those missed subcommand grammar, so a
+/// live `codex resume <id>` PTY was invisible to the wake/inject
+/// fast paths. Strictly widens matching; claude argv produced by K2
+/// matched before and still matches.
+pub fn argv_references_session(args: &[String], session_id: &str) -> bool {
+    if session_id.is_empty() {
+        return false;
+    }
+    if args.len() >= 2 && args[0] == "resume" && args[1] == session_id {
+        return true;
+    }
+    args.windows(2).any(|w| {
+        matches!(
+            w[0].as_str(),
+            "--session-id" | "--resume" | "-r" | "--session"
+        ) && w[1] == session_id
+    })
+}
+
 impl ProviderResume {
+    /// The premint flag token (`--session-id` for claude/grok), or
+    /// `None` for self-minting providers. Callers that splice the flag
+    /// into an EXISTING argv (v2_spawn's auto-inject) use this; fresh
+    /// assemblies use [`Self::premint_args`].
+    pub fn premint_flag(&self) -> Option<&'static str> {
+        match self.premint {
+            Some(PremintStyle::Flag(flag)) => Some(flag),
+            None => None,
+        }
+    }
+
+    /// Does `args` ALREADY carry a session identity in this provider's
+    /// grammar (so a caller must not splice another resume/premint)?
+    /// Flag style checks the provider's resume flag plus the shared
+    /// `--resume`/`-r` aliases and the premint flag; subcommand style
+    /// checks the leading subcommand.
+    pub fn argv_carries_session_identity(&self, args: &[String]) -> bool {
+        if let Some(flag) = self.premint_flag() {
+            if args.iter().any(|a| a == flag) {
+                return true;
+            }
+        }
+        match self.grammar {
+            ResumeGrammar::Flag(flag) => args
+                .iter()
+                .any(|a| a == flag || a == "--resume" || a == "-r"),
+            ResumeGrammar::Subcommand(sub) => {
+                args.first().map(|a| a == sub).unwrap_or(false)
+            }
+        }
+    }
+
     /// Assemble resume argv for an existing session id, following the
     /// TS convention: flag style appends `<flag> <id>` to the base
     /// (preset) args; subcommand style REPLACES them with
@@ -424,6 +487,73 @@ mod tests {
                 provider_resume_for_provider(p).unwrap().premint_args(&[], "NEW"),
                 None,
                 "{p} mints its own ids — premint must be None"
+            );
+        }
+    }
+
+    // ── argv session-ownership matching (live-PTY scans) ────────────
+
+    #[test]
+    fn argv_references_session_matches_every_supported_grammar() {
+        let sid = "11111111-2222-3333-4444-555555555555";
+        // Flag styles (claude/grok/gemini/cursor/pi).
+        for flag in ["--session-id", "--resume", "-r", "--session"] {
+            let args = args(&["--dangerously-skip-permissions", flag, sid]);
+            assert!(
+                argv_references_session(&args, sid),
+                "{flag} <id> must match"
+            );
+        }
+        // Subcommand style (codex `resume <id>` at position 0).
+        assert!(argv_references_session(&args(&["resume", sid]), sid));
+        // A positional `resume` deeper in argv is NOT the codex
+        // subcommand shape K2 assembles — no false positive.
+        assert!(!argv_references_session(
+            &args(&["--print", "resume", sid]),
+            sid
+        ));
+        // Wrong id / empty id never match.
+        assert!(!argv_references_session(&args(&["--resume", "other"]), sid));
+        assert!(!argv_references_session(&args(&["--resume", sid]), ""));
+        assert!(!argv_references_session(&[], sid));
+    }
+
+    #[test]
+    fn argv_carries_session_identity_is_grammar_aware() {
+        let claude = provider_resume_for_provider("claude").unwrap();
+        assert!(claude.argv_carries_session_identity(&args(&["--session-id", "X"])));
+        assert!(claude.argv_carries_session_identity(&args(&["--resume", "X"])));
+        assert!(claude.argv_carries_session_identity(&args(&["-r", "X"])));
+        assert!(!claude.argv_carries_session_identity(&args(&[
+            "--dangerously-skip-permissions"
+        ])));
+
+        let pi = provider_resume_for_provider("pi").unwrap();
+        assert!(pi.argv_carries_session_identity(&args(&["--session", "X"])));
+        assert!(!pi.argv_carries_session_identity(&args(&["--model", "x"])));
+
+        let codex = provider_resume_for_provider("codex").unwrap();
+        assert!(codex.argv_carries_session_identity(&args(&["resume", "X"])));
+        assert!(
+            !codex.argv_carries_session_identity(&args(&["-c", "resume"])),
+            "subcommand match is leading-position only"
+        );
+    }
+
+    #[test]
+    fn premint_flag_mirrors_the_premint_column() {
+        assert_eq!(
+            provider_resume_for_provider("claude").unwrap().premint_flag(),
+            Some("--session-id")
+        );
+        assert_eq!(
+            provider_resume_for_provider("grok").unwrap().premint_flag(),
+            Some("--session-id")
+        );
+        for p in ["pi", "codex", "gemini", "cursor"] {
+            assert_eq!(
+                provider_resume_for_provider(p).unwrap().premint_flag(),
+                None
             );
         }
     }

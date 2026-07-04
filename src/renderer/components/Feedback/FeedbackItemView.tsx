@@ -33,8 +33,8 @@ import { KindBadge, PriorityBadge, StatusBadge } from './badges'
 
 interface FeedbackItemViewProps {
   id: string
-  /** The list row we navigated from — carries projectPath/projectName so
-   *  the header renders instantly while the full thread loads. */
+  /** The selected list row — carries projectPath/projectName so the
+   *  header renders instantly while the full thread loads. */
   listRow: FeedbackListRow
   nowSec: number
   /** Store revision — bumped by feedback events; refetches the thread. */
@@ -149,6 +149,18 @@ function ThreadTab({
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Keep the newest message in view whenever the rendered thread changes
+  // (initial load, item switch, or a fresh comment). Runs after paint so
+  // scrollHeight reflects the freshly-rendered list.
+  const commentCount = item?.comments.length ?? 0
+  useEffect(() => {
+    if (!item) return
+    requestAnimationFrame(() => {
+      const el = scrollRef.current
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  }, [item, commentCount])
 
   const submit = useCallback(
     async (op: () => Promise<void>): Promise<void> => {

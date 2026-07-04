@@ -2723,7 +2723,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // right edge is padding-free so the column math gets that width
     // (the centered remainder supplies the visual right breathing room).
     const availW = Math.max(0, containerSize.width - 4)
-    const availH = Math.max(0, containerSize.height - 8)
+    const availH = Math.max(0, containerSize.height - 4)
     if (!availW || !availH) return identity
     const gridW = snapCols * cw
     const gridH = snapRows * ch
@@ -3643,7 +3643,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         const rect = entries[0]?.contentRect
         if (!rect || rect.width === 0 || rect.height === 0) return
         const availW = Math.max(0, rect.width - 4)
-        const availH = Math.max(0, rect.height - 8)
+        const availH = Math.max(0, rect.height - 4)
         const newCols = Math.floor(availW / cellMetrics.width)
         const newRows = Math.floor(availH / cellMetrics.height)
         if (newCols < 10 || newRows < 3) return
@@ -3943,9 +3943,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // edges instead of exposing the theme background as a seam.
       backgroundColor: hexToCss(seamBg ?? config.colors.background),
       whiteSpace: 'pre',
-      // Right edge is padding-free: its width goes to the column math;
-      // visual breathing room there comes from the centered remainder.
-      padding: '4px 0 4px 4px',
+      // Right and bottom edges are padding-free: their space goes to the
+      // column/row math; visual breathing room there comes from the
+      // centered remainder (same treatment the right edge got in 0.40.25).
+      padding: '4px 0 0 4px',
       position: 'relative',
       overflow: 'hidden',
       flex: 1,

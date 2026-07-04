@@ -790,25 +790,20 @@ pub fn detect_codex_session(project_path: &str) -> Option<String> {
 //   - writes are LIVE (summary.json mtime advances mid-session), so a
 //     just-spawned session is discoverable within seconds.
 //
-// Only the exists/newest pair needed by the ProviderResume adapter
-// lives here (Slice 3); the full detect_grok_session /
-// parse_grok_sessions ChatHistory adapters are Slice 6.
+// The exists/newest pair backs the ProviderResume adapter (Slice 3);
+// `detect_grok_session` / `parse_grok_sessions` (Slice 6) reuse the
+// same walk + summary readers for the ChatHistory list surface.
 
 /// `~/.grok/sessions` — grok's per-cwd session tree.
 fn grok_sessions_root() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".grok").join("sessions"))
 }
 
-/// Parse one grok session dir's `summary.json`. Returns
-/// `(session_id, cwd, timestamp_ms)` or `None` for subagent sessions,
-/// missing/malformed summaries, or a missing cwd. `session_id` prefers
-/// `.info.id`, falling back to the dir name (dir name == id by spec).
-/// `timestamp_ms` is `last_active_at` → `updated_at` → summary.json
-/// mtime (the study's ordering; the sqlite index is never consulted —
-/// it lags live state).
-fn read_grok_summary(session_dir: &Path) -> Option<(String, String, i64)> {
-    let summary_path = session_dir.join("summary.json");
-    let content = fs::read_to_string(&summary_path).ok()?;
+/// Read + parse one grok session dir's `summary.json`. Returns `None`
+/// for subagent sessions and missing/malformed summaries, so every
+/// caller inherits the mandatory subagent filter (study gotcha #2).
+fn read_grok_summary_value(session_dir: &Path) -> Option<serde_json::Value> {
+    let content = fs::read_to_string(session_dir.join("summary.json")).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
 
     // session_kind is top-level per the study; check `.info` too for
@@ -825,7 +820,20 @@ fn read_grok_summary(session_dir: &Path) -> Option<(String, String, i64)> {
     if kind == Some("subagent") {
         return None;
     }
+    Some(parsed)
+}
 
+/// Extract `(session_id, cwd, timestamp_ms)` from a parsed grok
+/// `summary.json`, or `None` for a missing cwd. `session_id` prefers
+/// `.info.id`, falling back to the dir name (dir name == id by spec).
+/// `timestamp_ms` is `last_active_at` → `updated_at` → summary.json
+/// mtime (the study's ordering; the sqlite index is never consulted —
+/// it lags live state).
+fn grok_summary_fields(
+    session_dir: &Path,
+    parsed: &serde_json::Value,
+) -> Option<(String, String, i64)> {
+    let summary_path = session_dir.join("summary.json");
     let info = parsed.get("info");
     let cwd = info
         .and_then(|i| i.get("cwd"))
@@ -859,6 +867,24 @@ fn read_grok_summary(session_dir: &Path) -> Option<(String, String, i64)> {
         .unwrap_or(0);
 
     Some((id, cwd, ts))
+}
+
+/// Read + extract in one step — the shape the Slice-3 exists/newest
+/// walkers consume.
+fn read_grok_summary(session_dir: &Path) -> Option<(String, String, i64)> {
+    let parsed = read_grok_summary_value(session_dir)?;
+    grok_summary_fields(session_dir, &parsed)
+}
+
+/// Session dir names are UUIDv7 (dir name == session id). Anything
+/// else at that level (`.lock` files, stray artifacts) is skipped.
+fn looks_like_uuid(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() == 36
+        && bytes.iter().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => *b == b'-',
+            _ => b.is_ascii_hexdigit(),
+        })
 }
 
 /// Does a grok session dir with a family-matching cwd exist for this
@@ -945,6 +971,154 @@ fn newest_grok_session_in_root(sessions_root: &Path, project_path: &str) -> Opti
     best.map(|(_, id)| id)
 }
 
+/// Return the most recent grok user session id for a project path —
+/// the `chat/detect-active` entry point. Same newest-on-disk core the
+/// ProviderResume adapter uses: newest by `last_active_at` across the
+/// project family, subagents skipped.
+pub fn detect_grok_session(project_path: &str) -> Option<String> {
+    newest_grok_session_on_disk(project_path)
+}
+
+// ── Hermes on-disk session discovery ─────────────────────────────────
+//
+// Spec: `.k2/notes/hermes-session-storage-study.md` (empirical, Hermes
+// Agent v0.18.0, Nous Research). Unlike every other provider this is
+// ONE SQLite DB, not a file tree:
+//
+//   ~/.hermes/state.db  (WAL mode, held open by any live hermes CLI)
+//
+//   sessions(id, source 'cli'|'subagent'|'tui'|'telegram'|…,
+//            parent_session_id, started_at/ended_at REAL unix-seconds,
+//            title, cwd LITERAL PATH, archived, …)
+//   messages(session_id, role user|assistant|tool, content,
+//            timestamp REAL unix-seconds, …)
+//
+// Rules from the study:
+//   - open READ-ONLY but WAL-CAPABLE (`file:…?mode=ro` + the URI open
+//     flag; NOT `immutable=1` — immutable skips the WAL and misses the
+//     newest rows a live hermes hasn't checkpointed yet). Read-only
+//     connections coexist with the live writer; lock/busy errors
+//     degrade to empty/None — never block or panic.
+//   - user sessions are `source='cli' AND archived=0`. Filter by
+//     SOURCE, not parent_session_id: compression forks and /branch
+//     children carry parent_session_id but are REAL user sessions
+//     (source stays 'cli'), while subagents are sibling rows with
+//     source='subagent'.
+//   - session ids are `YYYYMMDD_HHMMSS_<hex>`, minted internally —
+//     no premint; discovery is post-hoc (pi/codex family).
+//   - cwd association is the literal `cwd` column; family matching
+//     mirrors hermes' own prefix predicate
+//     `(cwd = root OR cwd LIKE root||'/%')`.
+//   - V1 scope: default HERMES_HOME only (profiles/ relocations are
+//     out of scope).
+
+/// `~/.hermes/state.db` — hermes' single-SQLite session store.
+fn hermes_state_db_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".hermes").join("state.db"))
+}
+
+/// Build a `file:…?mode=ro` URI for a db path. SQLite percent-decodes
+/// URI paths, so escape the three characters that would corrupt the
+/// round-trip (`%`) or terminate the path early (`?`, `#`).
+fn sqlite_ro_uri(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    let mut escaped = String::with_capacity(raw.len() + 12);
+    for ch in raw.chars() {
+        match ch {
+            '%' => escaped.push_str("%25"),
+            '?' => escaped.push_str("%3F"),
+            '#' => escaped.push_str("%23"),
+            _ => escaped.push(ch),
+        }
+    }
+    format!("file:{escaped}?mode=ro")
+}
+
+/// Open the hermes DB read-only but WAL-capable. `None` when the file
+/// is absent (hermes never installed / never run) or the open fails.
+fn open_hermes_db_ro(db_path: &Path) -> Option<rusqlite::Connection> {
+    if !db_path.is_file() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        sqlite_ro_uri(db_path),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    // A live hermes holds the DB open in WAL mode. Reads coexist with
+    // the writer, but keep the busy window short so a rare lock
+    // contention degrades to "no data this poll" instead of hanging a
+    // spawn path.
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(250));
+    Some(conn)
+}
+
+/// `(root, like_pattern)` params for the hermes cwd-family predicate
+/// `(cwd = ?a OR cwd LIKE ?b ESCAPE '\')`. LIKE wildcards in the
+/// project path itself (`_` is common in repo names) are escaped so
+/// `/x/my_proj` can't match `/x/my-proj/…`.
+fn hermes_family_params(project_path: &str) -> (String, String) {
+    let root = resolve_root_project_path(project_path);
+    let escaped = root
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    (root.to_string(), format!("{escaped}/%"))
+}
+
+/// The most recent hermes user session id for a project path — the
+/// `chat/detect-active` entry point AND the ProviderResume adapter's
+/// newest-on-disk probe. Absent DB / lock contention → `None`.
+pub fn detect_hermes_session(project_path: &str) -> Option<String> {
+    detect_hermes_session_in_db(&hermes_state_db_path()?, project_path)
+}
+
+/// Inner, HOME-free core of [`detect_hermes_session`] — takes the db
+/// path explicitly so tests can point it at a fixture DB.
+fn detect_hermes_session_in_db(db_path: &Path, project_path: &str) -> Option<String> {
+    let conn = open_hermes_db_ro(db_path)?;
+    let (root, like) = hermes_family_params(project_path);
+    conn.query_row(
+        "SELECT id FROM sessions \
+         WHERE source = 'cli' AND archived = 0 \
+           AND (cwd = ?1 OR cwd LIKE ?2 ESCAPE '\\') \
+         ORDER BY started_at DESC LIMIT 1",
+        rusqlite::params![root, like],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Does ANY hermes session row carry this id? Deliberately NOT
+/// filtered by source/archived/cwd: a stored id can be superseded by a
+/// compression fork (`end_reason='compression'` chains), and hermes'
+/// own `--resume <id>` resolves such an id to the chain tip itself —
+/// so an id that exists at all is resumable (study §CLI grammar).
+pub fn hermes_session_exists(session_id: &str) -> bool {
+    match hermes_state_db_path() {
+        Some(p) => hermes_session_exists_in_db(&p, session_id),
+        None => false,
+    }
+}
+
+/// Inner, HOME-free core of [`hermes_session_exists`].
+fn hermes_session_exists_in_db(db_path: &Path, session_id: &str) -> bool {
+    if session_id.is_empty() {
+        return false;
+    }
+    let Some(conn) = open_hermes_db_ro(db_path) else {
+        return false;
+    };
+    conn.query_row(
+        "SELECT 1 FROM sessions WHERE id = ?1 LIMIT 1",
+        rusqlite::params![session_id],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
 /// Provider dispatcher used by the daemon's post-spawn session-save
 /// task (and the Tauri UI's session-rediscovery). Returns `Ok(None)`
 /// when no session is detected — distinct from `Err` so callers can
@@ -959,6 +1133,8 @@ pub fn detect_active_session(
         "gemini" => detect_gemini_session(project_path),
         "pi" => detect_pi_session(project_path),
         "codex" => detect_codex_session(project_path),
+        "grok" => detect_grok_session(project_path),
+        "hermes" => detect_hermes_session(project_path),
         _ => None,
     };
     Ok(session)
@@ -1897,7 +2073,281 @@ pub fn parse_codex_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSess
     Ok(by_id.into_values().collect())
 }
 
-// ── Aggregate list (claude + cursor + gemini + pi + codex) ────────────
+// ── Grok chat parsing ───────────────────────────────────────────────────
+
+/// First prompt per session id from a cwd dir's `prompt_history.jsonl`
+/// (per-cwd, sibling of the session dirs; lines are
+/// `{timestamp, session_id, prompt, is_bash}`). Title fallback for
+/// very fresh sessions whose server-generated title hasn't landed yet.
+fn grok_prompt_history_index(cwd_dir: &Path) -> HashMap<String, String> {
+    let mut map: HashMap<String, String> = HashMap::new();
+    let file = match File::open(cwd_dir.join("prompt_history.jsonl")) {
+        Ok(f) => f,
+        Err(_) => return map,
+    };
+    for line in BufReader::new(file).lines().flatten() {
+        let parsed: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let sid = match parsed.get("session_id").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if map.contains_key(sid) {
+            continue; // first prompt wins
+        }
+        if let Some(prompt) = parsed.get("prompt").and_then(|v| v.as_str()) {
+            let trimmed = prompt.trim();
+            if !trimmed.is_empty() {
+                map.insert(sid.to_string(), trimmed.to_string());
+            }
+        }
+    }
+    map
+}
+
+/// User+assistant message count for one grok session dir.
+/// `signals.json` counters are the SSOT; fallback counts
+/// `chat_history.jsonl` user/assistant lines WITHOUT a
+/// `synthetic_reason` key (synthetic injected-context user lines carry
+/// it; `num_messages`/`num_chat_messages` in summary.json are too high
+/// — they include reasoning/tool_result frames).
+fn grok_message_count(session_dir: &Path) -> usize {
+    if let Ok(content) = fs::read_to_string(session_dir.join("signals.json")) {
+        if let Ok(signals) = serde_json::from_str::<serde_json::Value>(&content) {
+            let user = signals.get("userMessageCount").and_then(|v| v.as_u64());
+            let assistant = signals
+                .get("assistantMessageCount")
+                .and_then(|v| v.as_u64());
+            if user.is_some() || assistant.is_some() {
+                return (user.unwrap_or(0) + assistant.unwrap_or(0)) as usize;
+            }
+        }
+    }
+    let file = match File::open(session_dir.join("chat_history.jsonl")) {
+        Ok(f) => f,
+        Err(_) => return 0,
+    };
+    BufReader::new(file)
+        .lines()
+        .flatten()
+        .filter(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .map(|v| {
+                    matches!(
+                        v.get("type").and_then(|t| t.as_str()),
+                        Some("user") | Some("assistant")
+                    ) && v.get("synthetic_reason").is_none()
+                })
+                .unwrap_or(false)
+        })
+        .count()
+}
+
+/// Grok session list per `.k2/notes/grok-session-storage-study.md`:
+/// walk `~/.grok/sessions/*/<uuid>/summary.json`, read `.info.cwd`
+/// (never decode the %-encoded dir names), skip subagents and
+/// `.lock`/non-UUID entries. Title = `generated_title` →
+/// `session_summary` → first prompt for the id in the sibling
+/// `prompt_history.jsonl` → "Untitled".
+pub fn parse_grok_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
+    let sessions_root = match grok_sessions_root() {
+        Some(r) => r,
+        None => return Ok(vec![]),
+    };
+    if !sessions_root.exists() {
+        return Ok(vec![]);
+    }
+    Ok(parse_grok_sessions_in_root(&sessions_root, project_filter))
+}
+
+/// Inner, HOME-free core of [`parse_grok_sessions`].
+fn parse_grok_sessions_in_root(
+    sessions_root: &Path,
+    project_filter: Option<&str>,
+) -> Vec<ChatSession> {
+    let filter_root = project_filter.map(resolve_root_project_path);
+    let mut results = Vec::new();
+    let cwd_dirs = match fs::read_dir(sessions_root) {
+        Ok(e) => e,
+        Err(_) => return results,
+    };
+    for cwd_entry in cwd_dirs.filter_map(|e| e.ok()) {
+        let cwd_path = cwd_entry.path();
+        // Skips non-dirs: session_search.sqlite, *.lock files.
+        if !cwd_path.is_dir() {
+            continue;
+        }
+        let session_dirs = match fs::read_dir(&cwd_path) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        // Lazy per-cwd prompt-history index — only read when a session
+        // is missing both generated_title and session_summary.
+        let mut prompt_index: Option<HashMap<String, String>> = None;
+        for session_entry in session_dirs.filter_map(|e| e.ok()) {
+            let session_dir = session_entry.path();
+            if !session_dir.is_dir() {
+                continue;
+            }
+            let dir_name = session_entry.file_name().to_string_lossy().into_owned();
+            if !looks_like_uuid(&dir_name) {
+                continue;
+            }
+            // read_grok_summary_value returns None for subagents —
+            // the mandatory filter (study gotcha #2).
+            let summary = match read_grok_summary_value(&session_dir) {
+                Some(v) => v,
+                None => continue,
+            };
+            let (session_id, cwd, timestamp) =
+                match grok_summary_fields(&session_dir, &summary) {
+                    Some(t) => t,
+                    None => continue,
+                };
+            if let Some(root) = filter_root {
+                if !matches_project_family(&cwd, root) {
+                    continue;
+                }
+            }
+            let mut title = ["generated_title", "session_summary"].iter().find_map(|key| {
+                summary
+                    .get(*key)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+            });
+            if title.is_none() {
+                let index = prompt_index
+                    .get_or_insert_with(|| grok_prompt_history_index(&cwd_path));
+                title = index.get(&session_id).cloned();
+            }
+            let raw_title = title.unwrap_or_default();
+            let truncated_title = if raw_title.is_empty() {
+                "Untitled".to_string()
+            } else if raw_title.chars().count() > 80 {
+                let truncated: String = raw_title.chars().take(77).collect();
+                format!("{}...", truncated)
+            } else {
+                raw_title
+            };
+            results.push(ChatSession {
+                session_id,
+                project: cwd.clone(),
+                origin_branch: extract_worktree_branch(&cwd),
+                title: truncated_title,
+                timestamp,
+                provider: "grok".to_string(),
+                message_count: grok_message_count(&session_dir),
+            });
+        }
+    }
+    // Dedupe by session_id — dir name == id so dupes shouldn't occur,
+    // but the defensive tail matches every other parser here (gemini
+    // #550 / pi / codex): keep the latest-timestamp entry.
+    let mut by_id: HashMap<String, ChatSession> = HashMap::new();
+    for s in results {
+        match by_id.get(&s.session_id) {
+            Some(existing) if existing.timestamp >= s.timestamp => {}
+            _ => {
+                by_id.insert(s.session_id.clone(), s);
+            }
+        }
+    }
+    by_id.into_values().collect()
+}
+
+// ── Hermes chat parsing ─────────────────────────────────────────────────
+
+/// Hermes session list per `.k2/notes/hermes-session-storage-study.md`
+/// — one SQL pass over `~/.hermes/state.db` (read-only, WAL-capable).
+/// User sessions are `source='cli' AND archived=0`; title =
+/// `sessions.title` → first user message → "Untitled"; timestamp =
+/// `MAX(messages.timestamp)` → `ended_at` → `started_at`, unix seconds
+/// × 1000 → ms; message_count = COUNT of user+assistant messages.
+/// Absent DB / lock contention → empty, never an error.
+pub fn parse_hermes_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
+    let db_path = match hermes_state_db_path() {
+        Some(p) => p,
+        None => return Ok(vec![]),
+    };
+    Ok(parse_hermes_sessions_in_db(&db_path, project_filter))
+}
+
+/// Inner, HOME-free core of [`parse_hermes_sessions`].
+fn parse_hermes_sessions_in_db(
+    db_path: &Path,
+    project_filter: Option<&str>,
+) -> Vec<ChatSession> {
+    let Some(conn) = open_hermes_db_ro(db_path) else {
+        return vec![];
+    };
+    let mut sql = String::from(
+        "SELECT s.id, COALESCE(s.cwd, '') AS cwd, \
+                COALESCE(NULLIF(TRIM(COALESCE(s.title, '')), ''), (\
+                    SELECT m.content FROM messages m \
+                    WHERE m.session_id = s.id AND m.role = 'user' \
+                      AND m.content IS NOT NULL AND TRIM(m.content) <> '' \
+                    ORDER BY m.timestamp ASC, m.id ASC LIMIT 1\
+                ), '') AS title, \
+                COALESCE((SELECT MAX(m.timestamp) FROM messages m \
+                          WHERE m.session_id = s.id), \
+                         s.ended_at, s.started_at, 0) AS ts, \
+                (SELECT COUNT(*) FROM messages m \
+                 WHERE m.session_id = s.id \
+                   AND m.role IN ('user', 'assistant')) AS msg_count \
+         FROM sessions s \
+         WHERE s.source = 'cli' AND s.archived = 0",
+    );
+    let family = project_filter.map(hermes_family_params);
+    if family.is_some() {
+        sql.push_str(" AND (s.cwd = ?1 OR s.cwd LIKE ?2 ESCAPE '\\')");
+    }
+    let mut stmt = match conn.prepare(&sql) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    let map_row = |row: &rusqlite::Row| -> rusqlite::Result<ChatSession> {
+        let session_id: String = row.get(0)?;
+        let cwd: String = row.get(1)?;
+        let raw_title: String = row.get(2)?;
+        let ts_secs: f64 = row.get(3)?;
+        let msg_count: i64 = row.get(4)?;
+        let trimmed = raw_title.trim();
+        let title = if trimmed.is_empty() {
+            "Untitled".to_string()
+        } else if trimmed.chars().count() > 80 {
+            let truncated: String = trimmed.chars().take(77).collect();
+            format!("{}...", truncated)
+        } else {
+            trimmed.to_string()
+        };
+        Ok(ChatSession {
+            session_id,
+            origin_branch: extract_worktree_branch(&cwd),
+            project: cwd,
+            title,
+            timestamp: (ts_secs * 1000.0).round() as i64,
+            provider: "hermes".to_string(),
+            message_count: msg_count.max(0) as usize,
+        })
+    };
+    let collected = match &family {
+        Some((root, like)) => stmt
+            .query_map(rusqlite::params![root, like], map_row)
+            .map(|rows| rows.flatten().collect::<Vec<_>>()),
+        None => stmt
+            .query_map([], map_row)
+            .map(|rows| rows.flatten().collect::<Vec<_>>()),
+    };
+    collected.unwrap_or_default()
+}
+
+// ── Aggregate list (claude + cursor + gemini + pi + codex + grok +
+//    hermes) ──────────────────────────────────────────────────────────
 
 pub fn list_all_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
     let mut all = parse_claude_sessions(project_filter)?;
@@ -1905,6 +2355,8 @@ pub fn list_all_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession
     all.extend(parse_gemini_sessions(project_filter)?);
     all.extend(parse_pi_sessions(project_filter)?);
     all.extend(parse_codex_sessions(project_filter)?);
+    all.extend(parse_grok_sessions(project_filter)?);
+    all.extend(parse_hermes_sessions(project_filter)?);
     all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     all.truncate(100);
     Ok(all)
@@ -1922,6 +2374,11 @@ pub struct ChatStoragePaths {
     pub pi_chats_dirs: Vec<String>,
     pub codex_sessions_dirs: Vec<String>,
     pub codex_history_file: Option<String>,
+    pub grok_sessions_dirs: Vec<String>,
+    /// Hermes keeps ALL sessions in one SQLite DB (`~/.hermes/state.db`)
+    /// — a file, not a per-project dir, so this is an `Option` like the
+    /// claude/codex history files.
+    pub hermes_state_db: Option<String>,
 }
 
 pub fn get_storage_paths(project_path: &str) -> Result<ChatStoragePaths, String> {
@@ -2097,6 +2554,52 @@ pub fn get_storage_paths(project_path: &str) -> Result<ChatStoragePaths, String>
         }
         out
     };
+    let grok_sessions_dirs = {
+        // A grok cwd dir belongs to the project when ANY user session
+        // inside carries a family-matching `.info.cwd` (dir names are
+        // %-encoded cwds — read the field, never decode names).
+        let sessions_root = home.join(".grok").join("sessions");
+        let mut out: Vec<String> = Vec::new();
+        if let Ok(entries) = fs::read_dir(&sessions_root) {
+            for cwd_entry in entries.filter_map(|e| e.ok()) {
+                let cwd_path = cwd_entry.path();
+                if !cwd_path.is_dir() {
+                    continue;
+                }
+                let session_dirs = match fs::read_dir(&cwd_path) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                let mut matched = false;
+                for session_entry in session_dirs.filter_map(|e| e.ok()) {
+                    if !session_entry.path().is_dir() {
+                        continue;
+                    }
+                    if let Some((_, cwd, _)) = read_grok_summary(&session_entry.path()) {
+                        if matches_project_family(&cwd, root) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+                if matched {
+                    out.push(cwd_path.to_string_lossy().to_string());
+                }
+            }
+        }
+        out
+    };
+    let hermes_state_db = {
+        // One global SQLite DB for every hermes session — include it
+        // whenever it exists (same global-if-present convention as the
+        // claude/codex history files).
+        let p = home.join(".hermes").join("state.db");
+        if p.exists() {
+            Some(p.to_string_lossy().to_string())
+        } else {
+            None
+        }
+    };
     Ok(ChatStoragePaths {
         claude_history_file,
         claude_sessions_dirs,
@@ -2105,6 +2608,8 @@ pub fn get_storage_paths(project_path: &str) -> Result<ChatStoragePaths, String>
         pi_chats_dirs,
         codex_sessions_dirs,
         codex_history_file,
+        grok_sessions_dirs,
+        hermes_state_db,
     })
 }
 
@@ -3253,6 +3758,492 @@ mod tests {
         assert_eq!(newest_grok_session_in_root(&root, project).as_deref(), Some(b));
     }
 
+    // ── Slice 6: grok/hermes full discovery (chat/list + detect) ────
+    //
+    // Grok fixtures extend the slice-3 tree with the title/count
+    // sources (`signals.json`, `chat_history.jsonl`, the per-cwd
+    // `prompt_history.jsonl`); hermes fixtures build a real WAL-mode
+    // `state.db` via rusqlite per the storage study's schema.
+
+    /// Like `write_grok_session` but with full control over the title
+    /// fields (both absent = exercise the prompt-history/"Untitled"
+    /// fallbacks). Returns the session dir.
+    fn write_grok_summary_custom(
+        sessions_root: &std::path::Path,
+        cwd_dir: &str,
+        session_id: &str,
+        cwd: &str,
+        last_active_at: &str,
+        generated_title: Option<&str>,
+        session_summary: Option<&str>,
+    ) -> std::path::PathBuf {
+        let dir = sessions_root.join(cwd_dir).join(session_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut summary = serde_json::json!({
+            "info": { "id": session_id, "cwd": cwd },
+            "created_at": last_active_at,
+            "updated_at": last_active_at,
+            "last_active_at": last_active_at,
+        });
+        if let Some(t) = generated_title {
+            summary["generated_title"] = serde_json::json!(t);
+        }
+        if let Some(s) = session_summary {
+            summary["session_summary"] = serde_json::json!(s);
+        }
+        std::fs::write(dir.join("summary.json"), summary.to_string()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn grok_parse_lists_user_sessions_skips_subagents_and_nonuuid() {
+        let tmp = U6TempDir::new("grok-parse");
+        let root = tmp.path.join(".grok").join("sessions");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("session_search.sqlite"), b"sqlite").unwrap();
+        std::fs::write(root.join("active_sessions.lock"), b"").unwrap();
+
+        let project = "/Users/z/proj-parse";
+        let user_sid = "01920000-eeee-7000-8000-000000000001";
+        let sub_sid = "01920000-eeee-7000-8000-000000000002";
+        let foreign_sid = "01920000-eeee-7000-8000-000000000003";
+        let dir = write_grok_summary_custom(
+            &root, "%2Fproj", user_sid, project, "2026-07-03T10:00:00Z",
+            Some("Fix the walk"), None,
+        );
+        // signals.json is the message-count SSOT: 2 user + 3 assistant.
+        std::fs::write(
+            dir.join("signals.json"),
+            r#"{"userMessageCount":2,"assistantMessageCount":3,"turnCount":2}"#,
+        )
+        .unwrap();
+        write_grok_session(&root, "%2Fproj", sub_sid, project,
+            "2026-07-03T11:00:00Z", Some("subagent"));
+        write_grok_session(&root, "%2Fother", foreign_sid, "/Users/z/other",
+            "2026-07-03T12:00:00Z", None);
+        // A non-UUID dir with a perfectly valid summary must be skipped.
+        write_grok_summary_custom(
+            &root, "%2Fproj", "not-a-uuid-dir", project,
+            "2026-07-03T13:00:00Z", Some("decoy"), None,
+        );
+
+        let sessions = parse_grok_sessions_in_root(&root, Some(project));
+        assert_eq!(sessions.len(), 1, "got: {sessions:?}");
+        let s = &sessions[0];
+        assert_eq!(s.session_id, user_sid);
+        assert_eq!(s.provider, "grok");
+        assert_eq!(s.project, project);
+        assert_eq!(s.title, "Fix the walk");
+        assert_eq!(s.message_count, 5, "signals user+assistant counts");
+        assert_eq!(
+            s.timestamp,
+            parse_rfc3339_to_ms("2026-07-03T10:00:00Z").unwrap()
+        );
+        assert_eq!(s.origin_branch, None);
+
+        // Unfiltered: the foreign user session appears, subagent +
+        // non-UUID decoy still never do.
+        let all = parse_grok_sessions_in_root(&root, None);
+        let ids: Vec<&str> = all.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(all.len(), 2, "got: {all:?}");
+        assert!(ids.contains(&user_sid) && ids.contains(&foreign_sid));
+    }
+
+    #[test]
+    fn grok_parse_title_fallback_chain() {
+        let tmp = U6TempDir::new("grok-titles");
+        let root = tmp.path.join(".grok").join("sessions");
+        let project = "/Users/z/proj-titles";
+        let a = "01920000-ffff-7000-8000-00000000000a"; // session_summary
+        let b = "01920000-ffff-7000-8000-00000000000b"; // prompt_history
+        let c = "01920000-ffff-7000-8000-00000000000c"; // Untitled
+        write_grok_summary_custom(&root, "%2Fproj", a, project,
+            "2026-07-03T10:00:00Z", None, Some("Summary Title"));
+        write_grok_summary_custom(&root, "%2Fproj", b, project,
+            "2026-07-03T10:01:00Z", None, None);
+        write_grok_summary_custom(&root, "%2Fproj", c, project,
+            "2026-07-03T10:02:00Z", None, None);
+        // Per-cwd prompt_history.jsonl — FIRST prompt for an id wins.
+        let prompt_history = format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "timestamp": "2026-07-03T10:01:00Z", "session_id": b,
+                "prompt": "first prompt for b", "is_bash": false }),
+            serde_json::json!({
+                "timestamp": "2026-07-03T10:01:30Z", "session_id": b,
+                "prompt": "second prompt for b", "is_bash": false }),
+        );
+        std::fs::write(
+            root.join("%2Fproj").join("prompt_history.jsonl"),
+            prompt_history,
+        )
+        .unwrap();
+
+        let sessions = parse_grok_sessions_in_root(&root, Some(project));
+        let title_of = |sid: &str| {
+            sessions
+                .iter()
+                .find(|s| s.session_id == sid)
+                .unwrap_or_else(|| panic!("{sid} missing: {sessions:?}"))
+                .title
+                .clone()
+        };
+        assert_eq!(title_of(a), "Summary Title", "session_summary fallback");
+        assert_eq!(title_of(b), "first prompt for b", "prompt_history fallback");
+        assert_eq!(title_of(c), "Untitled", "final fallback");
+    }
+
+    #[test]
+    fn grok_parse_message_count_falls_back_to_chat_history() {
+        let tmp = U6TempDir::new("grok-count");
+        let root = tmp.path.join(".grok").join("sessions");
+        let project = "/Users/z/proj-count";
+        let sid = "01920000-abab-7000-8000-000000000001";
+        let dir = write_grok_summary_custom(&root, "%2Fproj", sid, project,
+            "2026-07-03T10:00:00Z", Some("t"), None);
+        // No signals.json → count chat_history.jsonl user/assistant
+        // lines WITHOUT synthetic_reason: expect 2 (user + assistant).
+        let chat_history = concat!(
+            "{\"type\":\"system\",\"content\":\"boot\"}\n",
+            "{\"type\":\"user\",\"content\":\"<user_query>hi</user_query>\"}\n",
+            "{\"type\":\"user\",\"synthetic_reason\":\"injected_context\",\"content\":\"ctx\"}\n",
+            "{\"type\":\"assistant\",\"content\":\"hello\"}\n",
+            "{\"type\":\"reasoning\",\"content\":\"thinking\"}\n",
+        );
+        std::fs::write(dir.join("chat_history.jsonl"), chat_history).unwrap();
+
+        let sessions = parse_grok_sessions_in_root(&root, Some(project));
+        assert_eq!(sessions.len(), 1, "got: {sessions:?}");
+        assert_eq!(
+            sessions[0].message_count, 2,
+            "user+assistant minus synthetic lines"
+        );
+    }
+
+    // ── Hermes SQLite fixtures (study schema subset) ────────────────
+
+    fn seed_hermes_db(db_path: &std::path::Path) -> rusqlite::Connection {
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let conn = rusqlite::Connection::open(db_path).expect("open fixture db");
+        // Real hermes runs WAL — fixtures do too, so the read-only
+        // URI open path is exercised against a WAL db.
+        conn.pragma_update(None, "journal_mode", "wal").expect("WAL");
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                 id TEXT PRIMARY KEY,
+                 source TEXT NOT NULL,
+                 parent_session_id TEXT,
+                 started_at REAL NOT NULL,
+                 ended_at REAL,
+                 end_reason TEXT,
+                 message_count INTEGER DEFAULT 0,
+                 title TEXT,
+                 cwd TEXT,
+                 git_branch TEXT,
+                 git_repo_root TEXT,
+                 archived INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE messages (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 session_id TEXT NOT NULL REFERENCES sessions(id),
+                 role TEXT NOT NULL,
+                 content TEXT,
+                 tool_calls TEXT,
+                 timestamp REAL NOT NULL
+             );",
+        )
+        .expect("create schema");
+        conn
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_hermes_session(
+        conn: &rusqlite::Connection,
+        id: &str,
+        source: &str,
+        cwd: Option<&str>,
+        title: Option<&str>,
+        started_at: f64,
+        ended_at: Option<f64>,
+        archived: i64,
+    ) {
+        conn.execute(
+            "INSERT INTO sessions (id, source, cwd, title, started_at, ended_at, archived) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![id, source, cwd, title, started_at, ended_at, archived],
+        )
+        .expect("insert session");
+    }
+
+    fn insert_hermes_message(
+        conn: &rusqlite::Connection,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        timestamp: f64,
+    ) {
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, timestamp) \
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![session_id, role, content, timestamp],
+        )
+        .expect("insert message");
+    }
+
+    const HERMES_PROJ: &str = "/Users/z/proj-hermes";
+    const H_TITLED: &str = "20260701_090000_aaaaaa";
+    const H_UNTITLED_MSG: &str = "20260702_100000_bbbbbb";
+    const H_SUBAGENT: &str = "20260703_110000_cccccc";
+    const H_ARCHIVED: &str = "20260630_080000_dddddd";
+    const H_FOREIGN: &str = "20260629_070000_eeeeee";
+    const H_EMPTY: &str = "20260628_060000_ffffff";
+
+    /// Standard hermes fixture: titled cli session, title-less cli
+    /// session in a worktree (first-user-message fallback), a
+    /// source='subagent' sibling (newest of all — must stay invisible),
+    /// an archived cli row, a foreign-project row, and an empty
+    /// message-less row.
+    fn seed_standard_hermes_fixture(db_path: &std::path::Path) -> rusqlite::Connection {
+        let conn = seed_hermes_db(db_path);
+        insert_hermes_session(&conn, H_TITLED, "cli", Some(HERMES_PROJ),
+            Some("Fix the heartbeats"), 1000.0, None, 0);
+        insert_hermes_message(&conn, H_TITLED, "user", "hello", 1001.0);
+        insert_hermes_message(&conn, H_TITLED, "assistant", "hi!", 1002.0);
+        insert_hermes_message(&conn, H_TITLED, "tool", "ls output", 1003.5);
+
+        let worktree_cwd = format!("{HERMES_PROJ}/.worktrees/f");
+        insert_hermes_session(&conn, H_UNTITLED_MSG, "cli", Some(&worktree_cwd),
+            None, 2000.0, None, 0);
+        insert_hermes_message(&conn, H_UNTITLED_MSG, "user", "  make it fast  ", 2001.0);
+
+        insert_hermes_session(&conn, H_SUBAGENT, "subagent", Some(HERMES_PROJ),
+            Some("delegated research"), 3000.0, None, 0);
+        insert_hermes_session(&conn, H_ARCHIVED, "cli", Some(HERMES_PROJ),
+            Some("old archived work"), 2500.0, Some(2600.0), 1);
+        insert_hermes_session(&conn, H_FOREIGN, "cli", Some("/Users/z/other"),
+            Some("other project"), 1500.0, None, 0);
+        insert_hermes_session(&conn, H_EMPTY, "cli", Some(HERMES_PROJ),
+            None, 500.0, Some(600.0), 0);
+        conn
+    }
+
+    #[test]
+    fn hermes_parse_filters_predicate_and_maps_fields() {
+        let tmp = U6TempDir::new("hermes-parse");
+        let db_path = tmp.path.join(".hermes").join("state.db");
+        let _writer = seed_standard_hermes_fixture(&db_path);
+
+        let sessions = parse_hermes_sessions_in_db(&db_path, Some(HERMES_PROJ));
+        let ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(sessions.len(), 3, "cli+unarchived+family only; got: {sessions:?}");
+        assert!(ids.contains(&H_TITLED) && ids.contains(&H_UNTITLED_MSG) && ids.contains(&H_EMPTY));
+
+        let by_id = |sid: &str| sessions.iter().find(|s| s.session_id == sid).unwrap();
+        let titled = by_id(H_TITLED);
+        assert_eq!(titled.title, "Fix the heartbeats");
+        assert_eq!(titled.provider, "hermes");
+        assert_eq!(titled.project, HERMES_PROJ);
+        assert_eq!(titled.message_count, 2, "user+assistant only, tool rows excluded");
+        assert_eq!(titled.timestamp, 1_003_500, "MAX(messages.timestamp) × 1000 → ms");
+        assert_eq!(titled.origin_branch, None);
+
+        let untitled = by_id(H_UNTITLED_MSG);
+        assert_eq!(untitled.title, "make it fast", "first user message, trimmed");
+        assert_eq!(untitled.origin_branch.as_deref(), Some("f"));
+        assert_eq!(untitled.timestamp, 2_001_000);
+        assert_eq!(untitled.message_count, 1);
+
+        let empty = by_id(H_EMPTY);
+        assert_eq!(empty.title, "Untitled");
+        assert_eq!(empty.timestamp, 600_000, "no messages → ended_at fallback");
+        assert_eq!(empty.message_count, 0);
+
+        // Unfiltered: the foreign cli session joins; subagent +
+        // archived rows stay invisible either way.
+        let all = parse_hermes_sessions_in_db(&db_path, None);
+        assert_eq!(all.len(), 4, "got: {all:?}");
+        assert!(all.iter().any(|s| s.session_id == H_FOREIGN));
+        assert!(!all.iter().any(|s| s.session_id == H_SUBAGENT));
+        assert!(!all.iter().any(|s| s.session_id == H_ARCHIVED));
+    }
+
+    #[test]
+    fn hermes_detect_newest_cli_by_started_at() {
+        let tmp = U6TempDir::new("hermes-detect");
+        let db_path = tmp.path.join(".hermes").join("state.db");
+        let _writer = seed_standard_hermes_fixture(&db_path);
+
+        // Newest by started_at among source='cli' AND archived=0 in the
+        // family — the subagent (3000.0) and archived (2500.0) rows are
+        // newer and must lose to the worktree cli session (2000.0).
+        assert_eq!(
+            detect_hermes_session_in_db(&db_path, HERMES_PROJ).as_deref(),
+            Some(H_UNTITLED_MSG)
+        );
+        // A worktree path resolves to the same family.
+        assert_eq!(
+            detect_hermes_session_in_db(
+                &db_path,
+                &format!("{HERMES_PROJ}/.worktrees/other")
+            )
+            .as_deref(),
+            Some(H_UNTITLED_MSG)
+        );
+        assert_eq!(detect_hermes_session_in_db(&db_path, "/Users/z/nope"), None);
+        // Absent DB → None, never an error.
+        assert_eq!(
+            detect_hermes_session_in_db(&tmp.path.join("absent.db"), HERMES_PROJ),
+            None
+        );
+    }
+
+    #[test]
+    fn hermes_exists_counts_any_row_even_superseded() {
+        let tmp = U6TempDir::new("hermes-exists");
+        let db_path = tmp.path.join(".hermes").join("state.db");
+        let _writer = seed_standard_hermes_fixture(&db_path);
+
+        assert!(hermes_session_exists_in_db(&db_path, H_TITLED));
+        // Compression-chain rule: a stored id can be superseded, and
+        // hermes redirects resume to the chain tip — archived and even
+        // subagent ids count as existing.
+        assert!(hermes_session_exists_in_db(&db_path, H_ARCHIVED));
+        assert!(hermes_session_exists_in_db(&db_path, H_SUBAGENT));
+        assert!(!hermes_session_exists_in_db(&db_path, "20990101_000000_zzzzzz"));
+        assert!(!hermes_session_exists_in_db(&db_path, ""));
+        assert!(!hermes_session_exists_in_db(&tmp.path.join("absent.db"), H_TITLED));
+    }
+
+    #[test]
+    fn hermes_like_pattern_escapes_wildcards() {
+        // `_` in a project path is a LIKE single-char wildcard — without
+        // ESCAPE, /Users/z/my_proj would claim /Users/z/myxproj's
+        // sessions.
+        let tmp = U6TempDir::new("hermes-escape");
+        let db_path = tmp.path.join(".hermes").join("state.db");
+        let conn = seed_hermes_db(&db_path);
+        insert_hermes_session(&conn, "20260701_000000_111111", "cli",
+            Some("/Users/z/myxproj/.worktrees/w"), Some("decoy"), 100.0, None, 0);
+        insert_hermes_session(&conn, "20260702_000000_222222", "cli",
+            Some("/Users/z/my_proj/.worktrees/w"), Some("real"), 50.0, None, 0);
+        assert_eq!(
+            detect_hermes_session_in_db(&db_path, "/Users/z/my_proj").as_deref(),
+            Some("20260702_000000_222222"),
+            "underscore must not wildcard-match the decoy"
+        );
+    }
+
+    #[test]
+    fn hermes_wal_reads_coexist_with_open_writer() {
+        // The live gotcha: a running hermes holds state.db open in WAL
+        // mode. Keep the writer connection open, add a row AFTER the
+        // fixture, and confirm a fresh read-only URI connection sees the
+        // uncheckpointed WAL data.
+        let tmp = U6TempDir::new("hermes-wal");
+        let db_path = tmp.path.join(".hermes").join("state.db");
+        let writer = seed_standard_hermes_fixture(&db_path);
+
+        insert_hermes_session(&writer, "20260704_120000_abcdef", "cli",
+            Some(HERMES_PROJ), Some("live row in WAL"), 5000.0, None, 0);
+
+        // Writer still open — read-only connection must see the row.
+        assert_eq!(
+            detect_hermes_session_in_db(&db_path, HERMES_PROJ).as_deref(),
+            Some("20260704_120000_abcdef"),
+            "ro+URI connection must read uncheckpointed WAL rows"
+        );
+        let sessions = parse_hermes_sessions_in_db(&db_path, Some(HERMES_PROJ));
+        assert!(
+            sessions.iter().any(|s| s.title == "live row in WAL"),
+            "got: {sessions:?}"
+        );
+    }
+
+    #[test]
+    fn detect_active_session_dispatches_grok_and_hermes() {
+        let _g = UNIT6_HOME_LOCK.lock();
+        let _h = U6HomeGuard::new("dispatch-grok-hermes");
+        let home = dirs::home_dir().unwrap();
+
+        let project = "/Users/z/proj-dispatch";
+        let grok_sid = "01920000-cdcd-7000-8000-000000000001";
+        write_grok_session(
+            &home.join(".grok").join("sessions"),
+            "%2Fproj", grok_sid, project, "2026-07-03T10:00:00Z", None,
+        );
+        let conn = seed_hermes_db(&home.join(".hermes").join("state.db"));
+        insert_hermes_session(&conn, "20260703_140000_dedede", "cli",
+            Some(project), Some("dispatch me"), 1000.0, None, 0);
+
+        assert_eq!(
+            detect_active_session("grok", project).unwrap().as_deref(),
+            Some(grok_sid)
+        );
+        assert_eq!(
+            detect_active_session("hermes", project).unwrap().as_deref(),
+            Some("20260703_140000_dedede")
+        );
+    }
+
+    #[test]
+    fn list_all_sessions_includes_grok_and_hermes() {
+        let _g = UNIT6_HOME_LOCK.lock();
+        let _h = U6HomeGuard::new("list-grok-hermes");
+        let home = dirs::home_dir().unwrap();
+
+        let project = "/Users/z/proj-list";
+        write_grok_session(
+            &home.join(".grok").join("sessions"),
+            "%2Fproj", "01920000-efef-7000-8000-000000000001",
+            project, "2026-07-03T10:00:00Z", None,
+        );
+        let conn = seed_hermes_db(&home.join(".hermes").join("state.db"));
+        insert_hermes_session(&conn, "20260703_150000_fafafa", "cli",
+            Some(project), Some("aggregated"), 1000.0, None, 0);
+
+        let sessions = list_all_sessions(Some(project)).expect("list");
+        assert!(
+            sessions.iter().any(|s| s.provider == "grok"),
+            "grok missing from aggregate: {sessions:?}"
+        );
+        assert!(
+            sessions.iter().any(|s| s.provider == "hermes"),
+            "hermes missing from aggregate: {sessions:?}"
+        );
+    }
+
+    #[test]
+    fn get_storage_paths_reports_grok_dirs_and_hermes_db() {
+        let _g = UNIT6_HOME_LOCK.lock();
+        let _h = U6HomeGuard::new("storage-grok-hermes");
+        let home = dirs::home_dir().unwrap();
+
+        let project = "/Users/z/proj-storage";
+        write_grok_session(
+            &home.join(".grok").join("sessions"),
+            "%2Fproj-storage", "01920000-bcbc-7000-8000-000000000001",
+            project, "2026-07-03T10:00:00Z", None,
+        );
+        // A foreign grok cwd dir must NOT be reported.
+        write_grok_session(
+            &home.join(".grok").join("sessions"),
+            "%2Fother", "01920000-bcbc-7000-8000-000000000002",
+            "/Users/z/other", "2026-07-03T10:00:00Z", None,
+        );
+        let _conn = seed_hermes_db(&home.join(".hermes").join("state.db"));
+
+        let paths = get_storage_paths(project).expect("get_storage_paths");
+        assert_eq!(paths.grok_sessions_dirs.len(), 1, "got: {paths:?}");
+        assert!(paths.grok_sessions_dirs[0].ends_with("%2Fproj-storage"));
+        assert!(
+            paths
+                .hermes_state_db
+                .as_ref()
+                .is_some_and(|p| p.ends_with(".hermes/state.db")),
+            "got: {paths:?}"
+        );
+    }
+
     #[test]
     fn extract_worktree_branch_picks_up_branch_suffix() {
         assert_eq!(
@@ -3376,6 +4367,8 @@ mod tests {
         assert!(paths.gemini_chats_dirs.is_empty());
         assert!(paths.pi_chats_dirs.is_empty());
         assert!(paths.codex_sessions_dirs.is_empty());
+        assert!(paths.grok_sessions_dirs.is_empty());
+        assert!(paths.hermes_state_db.is_none());
     }
 
     #[test]

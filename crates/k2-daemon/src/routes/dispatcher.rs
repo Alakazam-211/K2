@@ -358,6 +358,11 @@ async fn handle_one_request(
             // through the GET arm below; POST is method-gated per-handler.
             | "/cli/users/policy"
             | "/cli/auth/login"
+            // Presence S3 — kick a connected user. Owner/Admin-gated per
+            // handler (require_manage + the kick matrix); username rides
+            // the JSON body. Method-gated per-handler below
+            // (feedback_post_only_route_guards).
+            | "/cli/presence/kick"
             // Self-service password change from the daemon-hosted account
             // portal — connect-user session in the body/query, POST so it's
             // never URL-logged. (Was missing here → 405'd before its arm.)
@@ -1839,6 +1844,24 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let r = crate::presence::handle_roster();
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // POST /cli/presence/kick — S3 (presence/multiplayer arc). Kick a
+        // connected user: revoke their persisted sessions (durable) + fire
+        // their live WS close handles (immediate). Gated like
+        // /cli/users/set-disabled: `require_manage` (owner token OR a
+        // managing Admin/Owner session) resolves the actor role, and the
+        // handler enforces the kick matrix (`can_act_on` + admins can't
+        // kick admins) against the target. POST-gated per
+        // feedback_post_only_route_guards.
+        "/cli/presence/kick" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            let actor_role = match super::http::require_manage(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                Some(r) => r,
+                None => return DispatchOutcome::Done,
+            };
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = crate::presence::handle_kick(actor_role, &body_bytes);
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // GET /cli/auth/whoami — AUTHORIZED (owner OR connect-user). Lets

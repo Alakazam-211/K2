@@ -668,6 +668,12 @@ struct SessionRecord {
     /// Best-effort User-Agent at issue. Optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     user_agent: Option<String>,
+    /// Stable per-session id (uuid v4) minted at issue — groundwork for
+    /// per-window kick (presence S3; PRD §5.2 records ids now, surfaces
+    /// them later). `#[serde(default)]` → empty string on legacy records
+    /// that predate the field; no route exposes it yet.
+    #[serde(default)]
+    session_id: String,
 }
 
 /// Per-username failed-attempt + lockout state. Persisted (K2 Connect #4)
@@ -989,6 +995,7 @@ pub fn create_session(username: &str) -> String {
         token_epoch: epoch,
         created_ip: None,
         user_agent: None,
+        session_id: uuid::Uuid::new_v4().to_string(),
     };
     // Persist. A write failure is logged but we STILL return the token so
     // the just-authenticated user isn't dead in the water; the worst case
@@ -1074,16 +1081,20 @@ pub fn validate_session(token: &str) -> Option<String> {
 }
 
 /// Revoke every persisted session belonging to `username`. Called on
-/// remove, disable, password rotation, and role change so a stale token
-/// can't outlive the account change. Deletes from the PERSISTENT store
-/// atomically (the durable half of revocation; the `token_epoch` bump is
-/// the restart-surviving backstop in case this delete is ever raced).
-pub fn revoke_user_sessions(username: &str) {
+/// remove, disable, password rotation, role change, and kick (presence
+/// S3) so a stale token can't outlive the account change. Deletes from
+/// the PERSISTENT store atomically (the durable half of revocation; the
+/// `token_epoch` bump is the restart-surviving backstop in case this
+/// delete is ever raced). Returns how many records were deleted (the
+/// kick route reports it as `revokedSessions`).
+pub fn revoke_user_sessions(username: &str) -> usize {
     let target = normalize_username(username).unwrap_or_else(|_| username.to_string());
-    let _ = update_sessions(|store| {
+    update_sessions(|store| {
+        let before = store.sessions.len();
         store.sessions.retain(|s| s.username != target);
-        Ok(())
-    });
+        Ok(before - store.sessions.len())
+    })
+    .unwrap_or(0)
 }
 
 /// Log out the single session identified by `token`: delete ITS persisted
@@ -1284,6 +1295,9 @@ mod tests {
                     token_epoch: 0,
                     created_ip: None,
                     user_agent: None,
+                    // Legacy shape — records that predate session ids
+                    // deserialize to "" via #[serde(default)].
+                    session_id: String::new(),
                 });
                 Ok(())
             })
@@ -2027,6 +2041,31 @@ mod tests {
         });
     }
 
+    /// Presence S3 groundwork: every minted session carries a uuid-v4
+    /// `session_id`, and revoking reports how many records it deleted.
+    #[test]
+    fn create_session_mints_session_id_and_revoke_counts() {
+        with_temp_home(|| {
+            add_user("sid_user", "password").expect("add");
+            let _t1 = create_session("sid_user");
+            let _t2 = create_session("sid_user");
+            let store = load_sessions().expect("load sessions");
+            assert_eq!(store.sessions.len(), 2);
+            let ids: Vec<&String> =
+                store.sessions.iter().map(|s| &s.session_id).collect();
+            for id in &ids {
+                assert_eq!(id.len(), 36, "uuid v4 string, got {id:?}");
+                assert!(
+                    uuid::Uuid::parse_str(id).is_ok(),
+                    "session_id must parse as a uuid: {id:?}"
+                );
+            }
+            assert_ne!(ids[0], ids[1], "ids are per-session, not per-user");
+            assert_eq!(revoke_user_sessions("sid_user"), 2);
+            assert_eq!(revoke_user_sessions("sid_user"), 0, "idempotent");
+        });
+    }
+
     /// MUST: the daemon-canonical reaper evicts an expired record.
     #[test]
     fn reaper_evicts_expired_record() {
@@ -2045,6 +2084,7 @@ mod tests {
                     token_epoch: 0,
                     created_ip: None,
                     user_agent: None,
+                    session_id: String::new(),
                 });
                 Ok(())
             })

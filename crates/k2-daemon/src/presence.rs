@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use k2_core::connect_users::Role;
@@ -313,6 +313,90 @@ pub fn handle_roster() -> crate::cli_response::CliResponse {
             "serialize roster: {e}"
         )),
     }
+}
+
+/// Body of `POST /cli/presence/kick`.
+#[derive(Deserialize)]
+struct KickReq {
+    username: String,
+}
+
+/// `POST /cli/presence/kick` `{"username"}` (S3 — presence/multiplayer
+/// §5.2) → `{"success":true,"revokedSessions":n,"closedConnections":n}`.
+///
+/// The dispatcher already gated the route via `require_manage` (owner
+/// token OR a managing Admin/Owner session) and hands us the actor's
+/// resolved role. Here we enforce the KICK matrix (PRD §4):
+///
+/// - the host owner is never a target — `"owner"` names the synthesized
+///   roster row backed by the daemon token, not a connect-user row;
+/// - unknown username → 400 (consistent with set-disabled's neighbors);
+/// - `can_act_on(actor, target)` must hold, AND — stricter than the
+///   disable/remove routes — an Admin may NOT kick a fellow Admin
+///   ("✓ (not owner/admin)" in the matrix). `can_act_on` itself is shared
+///   by set-disabled where Admin→Admin IS allowed, so the extra tier
+///   check lives here rather than in the shared predicate.
+///
+/// Action = both halves of revocation: delete the target's persisted
+/// sessions (durable — the next login/validate fails) then fire the
+/// live close handles (immediate — no 5s re-auth wait). Roster
+/// broadcasts follow automatically as the WS loops deregister.
+pub fn handle_kick(
+    actor: Role,
+    body: &[u8],
+) -> crate::cli_response::CliResponse {
+    use crate::cli_response::CliResponse;
+
+    let req: KickReq = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    if req.username == "owner" {
+        return CliResponse::bad_request("the owner cannot be kicked");
+    }
+    let target = match k2_core::connect_users::role_for_user(&req.username) {
+        Some(r) => r,
+        None => {
+            return CliResponse::bad_request(format!(
+                "unknown user '{}'",
+                req.username
+            ))
+        }
+    };
+    let admin_on_admin = actor == Role::Admin && target == Role::Admin;
+    if !k2_core::connect_users::can_act_on(actor, target) || admin_on_admin {
+        return CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": format!(
+                    "a {} cannot kick '{}' ({})",
+                    actor.as_wire(),
+                    req.username,
+                    target.as_wire()
+                )
+            })
+            .to_string(),
+        };
+    }
+
+    // Durable half first (a racing reconnect can't re-auth), then the
+    // immediate socket teardown.
+    let revoked = k2_core::connect_users::revoke_user_sessions(&req.username);
+    let closed = close_connections_for(&req.username);
+    log_debug!(
+        "[daemon/presence] kick '{}' by {}: revoked {revoked} session(s), closed {closed} connection(s)",
+        req.username,
+        actor.as_wire()
+    );
+    CliResponse::ok_json(
+        serde_json::json!({
+            "success": true,
+            "revokedSessions": revoked,
+            "closedConnections": closed,
+        })
+        .to_string(),
+    )
 }
 
 #[cfg(test)]

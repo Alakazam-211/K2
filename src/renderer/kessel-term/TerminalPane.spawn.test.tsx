@@ -108,6 +108,7 @@ vi.mock('@/stores/active-agents', () => ({
     getState: () => ({
       recordOutput: vi.fn(),
       recordTitleActivity: vi.fn(),
+      markSeen: vi.fn(),
       agents: new Map(),
     }),
   },

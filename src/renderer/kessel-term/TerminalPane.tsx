@@ -757,6 +757,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     tabVisibleRef.current = isTabVisible
   }, [isTabVisible])
+  // F4 — the moment this pane is visible AND its window has OS focus, the
+  // user has "seen" it: clear any unseen-done mark (extinguishes the
+  // Active-bar amber dot). getState/subscribe (not a hook selector) so a
+  // focus flip clears the mark without re-rendering the pane — same
+  // discipline as the resize-gating subscriber below.
+  useEffect(() => {
+    if (!isTabVisible) return
+    const maybeMarkSeen = (): void => {
+      if (!useWindowFocusStore.getState().isFocused) return
+      useActiveAgentsStore.getState().markSeen(terminalId)
+    }
+    maybeMarkSeen()
+    return useWindowFocusStore.subscribe(maybeMarkSeen)
+  }, [isTabVisible, terminalId])
   // Pinned-chat retention — same ref-mirror pattern: `ws.onclose` and
   // `openGridWs.isStale` (both bound inside long-lived closures) must
   // read the LATEST retention flag without re-subscribing the socket.

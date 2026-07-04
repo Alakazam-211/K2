@@ -2,7 +2,7 @@ import { useMemo, useCallback, useState, useEffect, useRef, Fragment } from 'rea
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { useActiveStore } from '@/stores/active'
-import { useActiveAgentsStore, projectHasLiveSession } from '@/stores/active-agents'
+import { useActiveAgentsStore, projectHasLiveSession, projectHasUnseenDone } from '@/stores/active-agents'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useSettingsStore, clampActiveWindowHours } from '@/stores/settings'
@@ -328,6 +328,13 @@ function ActiveBarItem({
   // (i.e. it's consuming RAM and is reapable on dismiss/age-out). Selector
   // returns a boolean so the item only re-renders when its liveness flips.
   const hasLiveSession = useActiveAgentsStore((s) => projectHasLiveSession(s.liveSessionCwds, project.path))
+  // F4 — amber "done, unseen" dot: an agent in this workspace finished
+  // while its pane wasn't being watched, and hasn't been viewed since.
+  // Renders in the liveness slot (precedence: permission(red) >
+  // working(spinner) > unseen-done(amber) > live(green)) so the row
+  // doesn't jump. Clicking the row focuses the workspace → the pane's
+  // visible-and-focused effect calls markSeen → dot extinguishes.
+  const hasUnseenDone = useActiveAgentsStore((s) => projectHasUnseenDone(s.unseenDone, s.paneProjectMap, project.id))
 
   // EKG (heartbeat) badge — config-flag semantics: shown whenever this
   // workspace has ≥1 enabled heartbeat, i.e. it CAN self-drive. Persistent
@@ -371,13 +378,22 @@ function ActiveBarItem({
         </span>
       )}
       {/* Session-liveness square, RIGHT of the EKG — always shown: green when
-          ≥1 live session (consuming RAM, reapable), grey when none alive. */}
-      <span
-        className={`flex-shrink-0 w-1.5 h-1.5 rounded-[1px] ${
-          hasLiveSession ? 'bg-green-500' : 'bg-white/20'
-        }`}
-        title={hasLiveSession ? 'Live session running' : 'No live session'}
-      />
+          ≥1 live session (consuming RAM, reapable), grey when none alive.
+          F4 — an unseen completion takes the slot over (amber, round) until
+          the user views the pane. */}
+      {!isAgentWorking && hasUnseenDone ? (
+        <span
+          className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-amber-400"
+          title="Agent finished — not yet viewed"
+        />
+      ) : (
+        <span
+          className={`flex-shrink-0 w-1.5 h-1.5 rounded-[1px] ${
+            hasLiveSession ? 'bg-green-500' : 'bg-white/20'
+          }`}
+          title={hasLiveSession ? 'Live session running' : 'No live session'}
+        />
+      )}
       {shortcutNum !== null && (
         <span className="text-[10px] font-mono text-[var(--color-text-muted)] flex-shrink-0 tabular-nums">
           {shortcutNum}

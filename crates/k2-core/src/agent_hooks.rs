@@ -82,6 +82,12 @@ pub enum HookEvent {
     /// `k2 feedback ask --wait` polls rather than subscribing in F1,
     /// but the event lets fronts flip a card waiting→answered live.
     FeedbackAnswered,
+    /// Feedback: fires when an item's status changes WITHOUT an answer
+    /// being recorded (`/cli/feedback/resolve` — resolved / dismissed /
+    /// reopened-to-waiting). Payload: `{id, projectPath, status}`.
+    /// Lets every window's Feedback list + waiting-count badge refresh
+    /// live (answered has its own `FeedbackAnswered` event).
+    FeedbackStatusChanged,
 }
 
 impl HookEvent {
@@ -102,6 +108,7 @@ impl HookEvent {
             Self::SyncChatHistory => "sync:chat-history",
             Self::FeedbackCreated => "feedback:created",
             Self::FeedbackAnswered => "feedback:answered",
+            Self::FeedbackStatusChanged => "feedback:status-changed",
         }
     }
 }

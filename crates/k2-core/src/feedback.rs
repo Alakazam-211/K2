@@ -373,14 +373,22 @@ pub fn add_comment(id: &str, author: &str, body: &str) -> Result<FeedbackComment
 /// id. Answering again overwrites the accepted answer (last answer
 /// wins) — the thread keeps every attempt.
 ///
-/// This layer stores ONLY — the answer route layers F3's best-effort
+/// Returns the updated item AND the thread comment the answer landed
+/// as, so route callers can report both (the comment route's
+/// first-human-comment-answers path surfaces the `commentId`).
+///
+/// This layer stores ONLY — the routes layer F3's best-effort
 /// deliver-into-session injection (`deliver_live`) on top.
-pub fn set_answer(id: &str, author: &str, answer: &str) -> Result<FeedbackItem, String> {
+pub fn set_answer(
+    id: &str,
+    author: &str,
+    answer: &str,
+) -> Result<(FeedbackItem, FeedbackComment), String> {
     let answer_t = answer.trim();
     if answer_t.is_empty() {
         return Err("answer must not be empty".to_string());
     }
-    add_comment(id, author, answer_t)?;
+    let comment = add_comment(id, author, answer_t)?;
     let now = now_secs();
     let db = crate::db::shared();
     let conn = db.lock();
@@ -395,13 +403,16 @@ pub fn set_answer(id: &str, author: &str, answer: &str) -> Result<FeedbackItem, 
         return Err(format!("no feedback item with id {id}"));
     }
     drop(conn);
-    get_item(id).ok_or_else(|| "feedback row vanished after answer".to_string())
+    let item = get_item(id).ok_or_else(|| "feedback row vanished after answer".to_string())?;
+    Ok((item, comment))
 }
 
 /// Set an item's status (validated against [`STATUSES`]). Used by
-/// `resolve` (→ `resolved`) and `dismiss` (→ `dismissed`); `answered`
-/// should go through [`set_answer`] so the answer is recorded, but is
-/// not forbidden here (the renderer may re-open → `waiting` later).
+/// `resolve` (→ `resolved`), `dismiss` (→ `dismissed`), and reopen
+/// (→ `waiting`); `answered` should go through [`set_answer`] so the
+/// answer is recorded — the resolve ROUTE rejects a manual `answered`
+/// for that reason (a null-answer `answered` would break `--wait`),
+/// though this layer doesn't forbid it.
 pub fn set_status(id: &str, status: &str) -> Result<FeedbackItem, String> {
     if !STATUSES.contains(&status) {
         return Err(format!(
@@ -584,13 +595,18 @@ mod tests {
         assert!(after.updated_at >= item.updated_at);
 
         // Answer: comment + denormalized answer + answered_at + status.
-        let answered = set_answer(&item.id, "owner", "navy").expect("answer");
+        // The returned comment IS the thread entry the answer landed as.
+        let (answered, answer_comment) = set_answer(&item.id, "owner", "navy").expect("answer");
         assert_eq!(answered.status, "answered");
         assert_eq!(answered.answer.as_deref(), Some("navy"));
         assert!(answered.answered_at.is_some());
         assert_eq!(answered.comment_count, 3, "answer lands in the thread too");
+        assert_eq!(answer_comment.author, "owner");
+        assert_eq!(answer_comment.body, "navy");
         let (_, comments) = get_with_comments(&item.id).expect("get");
-        assert_eq!(comments.last().expect("has comments").body, "navy");
+        let last = comments.last().expect("has comments");
+        assert_eq!(last.body, "navy");
+        assert_eq!(last.id, answer_comment.id, "returned comment is the thread entry");
 
         // Resolve, dismiss, invalid.
         let resolved = set_status(&item.id, "resolved").expect("resolve");

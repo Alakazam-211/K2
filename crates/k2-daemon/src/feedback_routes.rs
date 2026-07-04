@@ -13,19 +13,29 @@
 //! code — `not_found` / `ambiguous_id` (candidates listed in the hint)
 //! → the CLI exits 4; validation misses use code `usage` → exit 2.
 //!
-//! Events: `create` fires `HookEvent::FeedbackCreated`
-//! (`{id, projectPath, title, kind, priority, agentName}`) and
-//! `answer` fires `HookEvent::FeedbackAnswered` (`{id, projectPath}`)
-//! on the existing `/events` WireEvent broadcast.
+//! Events on the existing `/events` WireEvent broadcast: `create`
+//! fires `HookEvent::FeedbackCreated` (`{id, projectPath, title, kind,
+//! priority, agentName}`); a recorded answer — the `answer` route OR a
+//! human's first comment on a waiting question/approval — fires
+//! `HookEvent::FeedbackAnswered` (`{id, projectPath}`); `resolve`
+//! fires `HookEvent::FeedbackStatusChanged` (`{id, projectPath,
+//! status}`) for resolve / dismiss / reopen-to-waiting.
 //!
-//! F3 (PRD §4.3 answer flow, §7 decision 1): a recorded answer ALWAYS
-//! injects into the ASKING session — sandbox rows target their live
-//! cell, canonical/sessionless rows go through the workspace-agent
-//! `deliver_live` path with wake=true (a dormant canonical agent is
-//! woken). Injection is BEST-EFFORT and runs AFTER the store +
-//! `FeedbackAnswered` emit: a delivery failure never fails the answer;
-//! the outcome rides the response as `delivered`/`deliveryReason`.
-//! Comments, resolve, and dismiss never inject.
+//! F3 injection (PRD §4.3, §7 decision 1) + the comment-thread model:
+//! every HUMAN-authored message (an answer OR a comment) ALWAYS
+//! best-effort injects into the ASKING session — sandbox rows target
+//! their live cell, canonical/sessionless rows go through the
+//! workspace-agent `deliver_live` path with wake=true (a dormant
+//! canonical agent is woken). Injection runs AFTER the store + emit: a
+//! delivery failure never fails the store; the outcome rides the
+//! response as `delivered`/`deliveryReason`. A human's FIRST comment
+//! on a `waiting` question/approval doubles as the ANSWER behind the
+//! scenes (set_answer → status `answered` → `FeedbackAnswered`), so
+//! `k2 feedback ask --wait` unblocks — `fyi` NEVER auto-answers (the
+//! frozen contract: fyi sits until dismissed/resolved). Agent-authored
+//! comments (`k2 feedback comment` passes the agent's name as
+//! `author`) store ONLY — no injection back into their own session,
+//! no auto-answer. Resolve / dismiss / reopen never inject.
 
 use std::collections::HashMap;
 
@@ -202,51 +212,55 @@ fn show_json(item: &feedback::FeedbackItem, comments: &[feedback::FeedbackCommen
     v.to_string()
 }
 
-// ── F3 — answer → asking-session injection ────────────────────────────
+// ── F3 — human message → asking-session injection ─────────────────────
 
-/// Where a recorded answer gets injected (F3, PRD §7 decision 1:
-/// answers ALWAYS inject; comments/resolve/dismiss never do).
+/// Where a human-authored message (answer OR comment) gets injected
+/// (F3, PRD §7 decision 1: human messages ALWAYS inject;
+/// agent-authored comments and resolve/dismiss/reopen never do).
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum AnswerTarget {
+enum InjectionTarget {
     /// `session_kind == "sandbox"`: deliver to that LIVE cell only.
     /// A gone cell is a graceful skip — never a wake/spawn (the agent
-    /// reads the answer via `k2 feedback show` on its next run).
+    /// reads the thread via `k2 feedback show` on its next run).
     SandboxSession(String),
     /// Canonical or null session: workspace-agent addressing (the
     /// `k2 msg` path), wake=true — a dormant canonical agent is woken
-    /// and the answer delivered on wake.
+    /// and the message delivered on wake.
     WorkspaceAgent,
 }
 
 /// Pure injection-target classifier, unit-tested without touching the
 /// DB or any live session.
-fn answer_target(session_id: Option<&str>, session_kind: Option<&str>) -> AnswerTarget {
+fn injection_target(session_id: Option<&str>, session_kind: Option<&str>) -> InjectionTarget {
     match (session_id, session_kind) {
-        (Some(sid), Some("sandbox")) => AnswerTarget::SandboxSession(sid.to_string()),
-        _ => AnswerTarget::WorkspaceAgent,
+        (Some(sid), Some("sandbox")) => InjectionTarget::SandboxSession(sid.to_string()),
+        _ => InjectionTarget::WorkspaceAgent,
     }
 }
 
-/// The injected body (PRD §4.3): `[feedback:<short-id>] <answer>`. The
-/// `[from <answerer>]` attribution prefix is added by the shared msg
-/// framing, so the line reads like any other `k2 msg` delivery; the
-/// short id is a resolvable prefix (`k2 feedback show <short-id>`).
-fn answer_payload(feedback_id: &str, answer: &str) -> String {
+/// The injected body (PRD §4.3): `[feedback:<short-id>] <body>` —
+/// shared by the answer route AND human comments so both read the
+/// same in-session. The `[from <sender>]` attribution prefix is added
+/// by the shared msg framing, so the line reads like any other
+/// `k2 msg` delivery; the short id is a resolvable prefix
+/// (`k2 feedback show <short-id>`).
+fn feedback_payload(feedback_id: &str, body: &str) -> String {
     let short: String = feedback_id.chars().take(8).collect();
-    format!("[feedback:{short}] {answer}")
+    format!("[feedback:{short}] {body}")
 }
 
-/// Best-effort delivery of a just-recorded answer into the asking
-/// session. The caller has already stored the answer and emitted
-/// `FeedbackAnswered` — this only reports the outcome:
+/// Best-effort delivery of a just-stored human message (answer or
+/// comment) into the asking session. The caller has already stored it
+/// (and emitted any event) — this only reports the outcome:
 /// `(delivered, reason, target_session_id)`.
-fn deliver_answer(
+fn deliver_to_asker(
     item: &feedback::FeedbackItem,
     from: &str,
+    body: &str,
 ) -> (bool, Option<String>, Option<String>) {
-    let payload = answer_payload(&item.id, item.answer.as_deref().unwrap_or_default());
-    match answer_target(item.session_id.as_deref(), item.session_kind.as_deref()) {
-        AnswerTarget::SandboxSession(sid) => {
+    let payload = feedback_payload(&item.id, body);
+    match injection_target(item.session_id.as_deref(), item.session_kind.as_deref()) {
+        InjectionTarget::SandboxSession(sid) => {
             // Live-cell-only: check liveness first so a torn-down cell
             // reports a clear `session_gone` instead of `pty_died`.
             let live = k2_core::session::SessionId::parse(&sid)
@@ -257,7 +271,7 @@ fn deliver_answer(
             let resp = crate::workspace_msg::send_message_to_session(&sid, from, &payload);
             (resp.success, resp.reason, resp.target_session_id)
         }
-        AnswerTarget::WorkspaceAgent => {
+        InjectionTarget::WorkspaceAgent => {
             let (_, path) = project_name_path(&item.project_id);
             let Some(path) = path else {
                 return (false, Some("workspace_not_found".to_string()), None);
@@ -387,9 +401,9 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
 }
 
 /// `POST /cli/feedback/comment` body. `author` defaults to `owner`
-/// (the renderer's thread panel); agents pass their own name via the
-/// CLI. Comments bump the thread ONLY — no notification machinery
-/// fires in F1 (mockup: "only NEW items fire notifications").
+/// (the renderer's thread panel posts author-less); agents pass their
+/// own name via the CLI — that's how human and agent comments are told
+/// apart (see [`handle_comment`]).
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct CommentBody {
@@ -399,6 +413,24 @@ struct CommentBody {
 }
 
 /// Handler for `POST /cli/feedback/comment`.
+///
+/// It's just a comment thread — but HUMAN comments land in the
+/// terminal session (the locked direction that retired the renderer's
+/// Answer-vs-Comment split):
+///
+/// - HUMAN-authored (`author` absent or `owner` — the renderer/API
+///   default; `k2 feedback comment` always self-identifies with the
+///   agent's name, so an agent never matches):
+///   - on a `waiting` question/approval, the comment IS the answer:
+///     `set_answer` → status `answered` → `FeedbackAnswered` emit —
+///     `ask --wait` unblocks and prints it. `fyi` NEVER auto-answers.
+///   - ALWAYS best-effort injects into the asking session via the
+///     shared F3 machinery ([`deliver_to_asker`], wake=true) AFTER
+///     the store + emit; a delivery failure never fails the store.
+///     The outcome rides the response (`delivered`/`deliveryReason`/
+///     `deliveredSessionId`, plus `answered` for the auto-answer).
+/// - AGENT-authored: store only (thread bump), no injection back into
+///   its own session, no auto-answer, no delivery fields.
 pub fn handle_comment(body: &[u8]) -> CliResponse {
     let b: CommentBody = match serde_json::from_slice(body) {
         Ok(b) => b,
@@ -414,25 +446,92 @@ pub fn handle_comment(body: &[u8]) -> CliResponse {
         Ok(f) => f,
         Err(e) => return prefix_error_response(&b.id, e),
     };
-    let author = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("owner");
-    match feedback::add_comment(&full_id, author, &b.body) {
-        Ok(c) => CliResponse::ok_json(
-            serde_json::json!({
-                "ok": true,
-                "id": full_id,
-                "commentId": c.id,
-                "author": c.author,
-            })
-            .to_string(),
-        ),
-        Err(e) => usage_error(e),
+    let author_given = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let author = author_given.unwrap_or("owner");
+    let is_human = author == "owner";
+
+    // Agent comment — store only, current shape (no delivery fields).
+    if !is_human {
+        return match feedback::add_comment(&full_id, author, &b.body) {
+            Ok(c) => CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "id": full_id,
+                    "commentId": c.id,
+                    "author": c.author,
+                })
+                .to_string(),
+            ),
+            Err(e) => usage_error(e),
+        };
     }
+
+    // Human comment. A first comment on a waiting question/approval
+    // doubles as the ANSWER (frozen contract: --wait prints it); fyi
+    // never auto-answers, it sits until dismissed/resolved.
+    let Some(before) = feedback::get_item(&full_id) else {
+        return prefix_error_response(&b.id, PrefixError::NotFound);
+    };
+    let answers = before.status == "waiting"
+        && matches!(before.kind.as_str(), "question" | "approval");
+
+    let (item, comment) = if answers {
+        match feedback::set_answer(&full_id, author, &b.body) {
+            Ok(pair) => pair,
+            Err(e) => return usage_error(e),
+        }
+    } else {
+        match feedback::add_comment(&full_id, author, &b.body) {
+            Ok(c) => match feedback::get_item(&full_id) {
+                Some(item) => (item, c),
+                None => return usage_error("feedback row vanished after comment"),
+            },
+            Err(e) => return usage_error(e),
+        }
+    };
+
+    // FeedbackAnswered BEFORE the injection so `ask --wait` pollers
+    // unblock even if delivery is slow (a wake can take seconds).
+    let (_, path) = project_name_path(&item.project_id);
+    if answers {
+        k2_core::agent_hooks::emit(
+            k2_core::agent_hooks::HookEvent::FeedbackAnswered,
+            serde_json::json!({
+                "id": item.id,
+                "projectPath": path,
+            }),
+        );
+    }
+
+    // Shared F3 delivery — the comment lands in the asking session,
+    // framed with the owner's display name (same server-side
+    // resolution as the composer, D3).
+    let from = crate::workspace_msg::resolve_owner_from();
+    let (delivered, delivery_reason, delivered_session) =
+        deliver_to_asker(&item, &from, &comment.body);
+
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "id": item.id,
+            "commentId": comment.id,
+            "author": comment.author,
+            "answered": answers,
+            "status": item.status,
+            "delivered": delivered,
+            "deliveryReason": delivery_reason,
+            "deliveredSessionId": delivered_session,
+        })
+        .to_string(),
+    )
 }
 
 /// `POST /cli/feedback/answer` body. Stores (thread comment +
 /// denormalized `answer` + `answered_at` + status `answered`), fires
 /// `FeedbackAnswered`, then best-effort injects the answer into the
-/// asking session (F3 — see [`deliver_answer`]).
+/// asking session (F3 — see [`deliver_to_asker`]). Kept for API
+/// compat — the renderer's thread panel now posts plain comments
+/// (a human's first comment on a waiting ask answers it).
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct AnswerBody {
@@ -458,8 +557,9 @@ pub fn handle_answer(body: &[u8]) -> CliResponse {
         Err(e) => return prefix_error_response(&b.id, e),
     };
     let author = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let item = match feedback::set_answer(&full_id, author.unwrap_or("owner"), &b.answer) {
-        Ok(item) => item,
+    let (item, _comment) = match feedback::set_answer(&full_id, author.unwrap_or("owner"), &b.answer)
+    {
+        Ok(pair) => pair,
         Err(e) => return usage_error(e),
     };
 
@@ -483,7 +583,8 @@ pub fn handle_answer(body: &[u8]) -> CliResponse {
     let from = author
         .map(String::from)
         .unwrap_or_else(crate::workspace_msg::resolve_owner_from);
-    let (delivered, delivery_reason, delivered_session) = deliver_answer(&item, &from);
+    let (delivered, delivery_reason, delivered_session) =
+        deliver_to_asker(&item, &from, item.answer.as_deref().unwrap_or_default());
 
     CliResponse::ok_json(
         serde_json::json!({
@@ -503,7 +604,11 @@ pub fn handle_answer(body: &[u8]) -> CliResponse {
 /// `POST /cli/feedback/resolve` body. `status` defaults to `resolved`;
 /// `dismissed` rides the same route (one mutation, two terminal
 /// states) — matching the mockup surface, where the CLI only exposes
-/// `resolve` and dismiss is the human's board action.
+/// `resolve` and dismiss is the human's board action. `waiting` is the
+/// board's REOPEN (the per-card status dropdown); a manual `answered`
+/// is REJECTED loudly — an answered status with a null answer would
+/// break the `ask --wait` contract, so `answered` is only reachable
+/// through an actual reply (answer route / first human comment).
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct ResolveBody {
@@ -521,9 +626,9 @@ pub fn handle_resolve(body: &[u8]) -> CliResponse {
         return usage_error("missing 'id' (a feedback id or unique prefix)");
     }
     let status = b.status.unwrap_or_else(|| "resolved".to_string());
-    if !matches!(status.as_str(), "resolved" | "dismissed") {
+    if !matches!(status.as_str(), "resolved" | "dismissed" | "waiting") {
         return usage_error(format!(
-            "invalid status '{status}' — resolve accepts: resolved, dismissed"
+            "invalid status '{status}' — resolve accepts: resolved, dismissed, waiting (reopen)"
         ));
     }
     let full_id = match feedback::resolve_id_prefix(&b.id) {
@@ -531,14 +636,28 @@ pub fn handle_resolve(body: &[u8]) -> CliResponse {
         Err(e) => return prefix_error_response(&b.id, e),
     };
     match feedback::set_status(&full_id, &status) {
-        Ok(item) => CliResponse::ok_json(
-            serde_json::json!({
-                "ok": true,
-                "id": item.id,
-                "status": item.status,
-            })
-            .to_string(),
-        ),
+        Ok(item) => {
+            // FeedbackStatusChanged on the /events broadcast so every
+            // window's list + waiting-count badge refresh live (the
+            // answer flow has its own FeedbackAnswered). Never injects.
+            let (_, path) = project_name_path(&item.project_id);
+            k2_core::agent_hooks::emit(
+                k2_core::agent_hooks::HookEvent::FeedbackStatusChanged,
+                serde_json::json!({
+                    "id": item.id,
+                    "projectPath": path,
+                    "status": item.status,
+                }),
+            );
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "id": item.id,
+                    "status": item.status,
+                })
+                .to_string(),
+            )
+        }
         Err(e) => usage_error(e),
     }
 }
@@ -661,15 +780,18 @@ mod tests {
         assert_eq!(comments[0]["author"], "scout");
         assert!(comments[0]["at"].is_i64(), "mockup `at` alias present");
 
-        // comment bumps the thread ONLY (status stays waiting).
+        // AGENT comment bumps the thread ONLY (status stays waiting —
+        // only a HUMAN comment on a waiting ask answers it).
         let resp = handle_comment(
-            serde_json::json!({ "id": id, "body": "hold until CI passes" }).to_string().as_bytes(),
+            serde_json::json!({ "id": id, "body": "hold until CI passes", "author": "scout" })
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
         let c: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
-        assert_eq!(c["author"], "owner", "author defaults to owner");
+        assert_eq!(c["author"], "scout");
         let item = k2_core::feedback::get_item(&id).expect("item");
-        assert_eq!(item.status, "waiting", "comment must not change status");
+        assert_eq!(item.status, "waiting", "agent comment must not change status");
         assert_eq!(item.comment_count, 2);
 
         // answer: stores comment + answer + answered_at + status.
@@ -690,6 +812,25 @@ mod tests {
         assert!(!list_ids(&path, &[]).contains(&id), "default hides resolved");
         assert!(list_ids(&path, &[("all", "1")]).contains(&id));
         assert!(list_ids(&path, &[("status", "resolved")]).contains(&id));
+
+        // reopen (per-card status dropdown): waiting rides the resolve
+        // route; the answer survives so --wait semantics stay coherent.
+        let resp = handle_resolve(
+            serde_json::json!({ "id": id, "status": "waiting" }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "reopen failed: {}", resp.body);
+        let r: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(r["status"], "waiting");
+        assert!(list_ids(&path, &[]).contains(&id), "reopened item lists by default");
+
+        // A manual `answered` is rejected loudly — only an actual reply
+        // may answer (a null-answer answered would break --wait).
+        let resp = handle_resolve(
+            serde_json::json!({ "id": id, "status": "answered" }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "usage");
     }
 
     /// A short UNIQUE prefix resolves on show/comment/answer/resolve; an
@@ -833,26 +974,27 @@ mod tests {
     /// back to workspace-agent addressing; a sandbox kind WITHOUT an id
     /// can't address a cell, so it falls back too.
     #[test]
-    fn feedback_answer_target_matrix() {
+    fn feedback_injection_target_matrix() {
         assert_eq!(
-            answer_target(Some("cell-1"), Some("sandbox")),
-            AnswerTarget::SandboxSession("cell-1".to_string())
+            injection_target(Some("cell-1"), Some("sandbox")),
+            InjectionTarget::SandboxSession("cell-1".to_string())
         );
         assert_eq!(
-            answer_target(Some("conv-1"), Some("canonical")),
-            AnswerTarget::WorkspaceAgent
+            injection_target(Some("conv-1"), Some("canonical")),
+            InjectionTarget::WorkspaceAgent
         );
-        assert_eq!(answer_target(None, None), AnswerTarget::WorkspaceAgent);
-        assert_eq!(answer_target(Some("conv-1"), None), AnswerTarget::WorkspaceAgent);
-        assert_eq!(answer_target(None, Some("sandbox")), AnswerTarget::WorkspaceAgent);
+        assert_eq!(injection_target(None, None), InjectionTarget::WorkspaceAgent);
+        assert_eq!(injection_target(Some("conv-1"), None), InjectionTarget::WorkspaceAgent);
+        assert_eq!(injection_target(None, Some("sandbox")), InjectionTarget::WorkspaceAgent);
 
-        // Injected body: PRD §4.3 `[feedback:<short-id>] <answer>` —
-        // the short id is a resolvable 8-char prefix.
+        // Injected body: PRD §4.3 `[feedback:<short-id>] <body>` —
+        // shared by answers AND human comments; the short id is a
+        // resolvable 8-char prefix.
         assert_eq!(
-            answer_payload("7b3f1a2c-9d10-4e6f-8a2b-000000000000", "Go"),
+            feedback_payload("7b3f1a2c-9d10-4e6f-8a2b-000000000000", "Go"),
             "[feedback:7b3f1a2c] Go"
         );
-        assert_eq!(answer_payload("ab", "x"), "[feedback:ab] x");
+        assert_eq!(feedback_payload("ab", "x"), "[feedback:ab] x");
     }
 
     /// F3 — injection is best-effort: a delivery failure NEVER fails
@@ -927,15 +1069,119 @@ mod tests {
         assert_eq!(item.status, "answered");
     }
 
-    /// F3 — ONLY answers inject: comment and resolve never touch the
-    /// delivery path, and their responses carry no delivery fields.
+    /// The comment injection/answer matrix ("it's just a comment
+    /// thread; human comments land in the terminal session"):
+    ///
+    /// | author | item state           | injects | answers |
+    /// |--------|----------------------|---------|---------|
+    /// | human  | waiting question     | yes     | yes     |
+    /// | human  | waiting approval     | yes     | yes     |
+    /// | human  | waiting fyi          | yes     | NEVER   |
+    /// | human  | answered (follow-up) | yes     | no (answer unchanged) |
+    /// | agent  | anything             | no      | no      |
+    ///
+    /// Delivery is best-effort against a dead project (sandbox cell
+    /// gone → session_gone), so `delivered:false` here — the point is
+    /// the delivery ATTEMPT is reported and the store never fails.
     #[test]
-    fn feedback_comment_and_resolve_do_not_inject() {
-        let (name, path) = unique("no-inject");
+    fn feedback_comment_matrix_human_injects_and_first_comment_answers() {
+        let (name, path) = unique("comment-matrix");
+        insert_project(&name, &path);
+        let sandbox_session = || {
+            serde_json::json!({
+                "sessionId": uuid::Uuid::new_v4().to_string(),
+                "sessionKind": "sandbox",
+            })
+        };
+        let comment = |body: serde_json::Value| -> serde_json::Value {
+            let resp = handle_comment(body.to_string().as_bytes());
+            assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
+            serde_json::from_str(&resp.body).expect("valid comment JSON")
+        };
+
+        // Human first comment on a WAITING question → answers +
+        // unblocks --wait (status answered, answer denormalized,
+        // delivery attempted with the shared [feedback:] framing).
+        let created = create_via_route(&path, "Which color?", sandbox_session());
+        let id = created["id"].as_str().expect("id").to_string();
+        let c = comment(serde_json::json!({ "id": id, "body": "navy" }));
+        assert_eq!(c["author"], "owner", "author defaults to owner (human)");
+        assert_eq!(c["answered"], true);
+        assert_eq!(c["status"], "answered");
+        assert_eq!(c["delivered"], false, "dead cell → attempted, not delivered");
+        assert_eq!(c["deliveryReason"], "session_gone");
+        assert!(c["commentId"].is_string());
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "answered", "--wait unblocks on this");
+        assert_eq!(item.answer.as_deref(), Some("navy"));
+        assert_eq!(item.comment_count, 2);
+
+        // Human FOLLOW-UP comment on the now-answered item → injects,
+        // but never re-answers (the accepted answer is untouched).
+        let c = comment(serde_json::json!({ "id": id, "body": "also check contrast" }));
+        assert_eq!(c["answered"], false);
+        assert_eq!(c["status"], "answered");
+        assert_eq!(c["deliveryReason"], "session_gone", "still injects");
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.answer.as_deref(), Some("navy"), "answer unchanged");
+        assert_eq!(item.comment_count, 3);
+
+        // Human comment on a WAITING approval → answers too.
+        let created = create_via_route(
+            &path,
+            "Ship it?",
+            serde_json::json!({ "kind": "approval" }),
+        );
+        let id = created["id"].as_str().expect("id").to_string();
+        let c = comment(serde_json::json!({ "id": id, "body": "Ship it" }));
+        assert_eq!(c["answered"], true);
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.answer.as_deref(), Some("Ship it"));
+
+        // Human comment on a WAITING fyi → injects but NEVER answers
+        // (frozen contract: fyi sits until dismissed/resolved).
+        let created = create_via_route(
+            &path,
+            "Heads up",
+            serde_json::json!({ "kind": "fyi", "sessionId": uuid::Uuid::new_v4().to_string(), "sessionKind": "sandbox" }),
+        );
+        let id = created["id"].as_str().expect("id").to_string();
+        let c = comment(serde_json::json!({ "id": id, "body": "noted, thanks" }));
+        assert_eq!(c["answered"], false);
+        assert_eq!(c["status"], "waiting");
+        assert_eq!(c["deliveryReason"], "session_gone", "fyi comment still injects");
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "waiting", "fyi never auto-answers");
+        assert!(item.answer.is_none());
+
+        // AGENT comment (author = its name, as the CLI always sends)
+        // → store only: no injection, no auto-answer, no delivery
+        // fields in the response.
+        let created = create_via_route(&path, "agent self-note", sandbox_session());
+        let id = created["id"].as_str().expect("id").to_string();
+        let c = comment(serde_json::json!({ "id": id, "body": "still thinking", "author": "scout" }));
+        assert_eq!(c["author"], "scout");
+        assert!(
+            c.get("delivered").is_none()
+                && c.get("deliveryReason").is_none()
+                && c.get("answered").is_none(),
+            "agent comments must not report delivery: {c}"
+        );
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "waiting", "agent comment must not answer");
+        assert_eq!(item.comment_count, 2);
+    }
+
+    /// Resolve / dismiss / reopen never touch the delivery path, and
+    /// reopen (status `waiting`) is the ONLY extra status the route
+    /// accepts — a manual `answered` is a loud usage error.
+    #[test]
+    fn feedback_resolve_reopen_and_never_injects() {
+        let (name, path) = unique("resolve-reopen");
         insert_project(&name, &path);
         let created = create_via_route(
             &path,
-            "comment target",
+            "resolve target",
             serde_json::json!({
                 "sessionId": uuid::Uuid::new_v4().to_string(),
                 "sessionKind": "sandbox",
@@ -943,25 +1189,32 @@ mod tests {
         );
         let id = created["id"].as_str().expect("id").to_string();
 
-        let resp = handle_comment(
-            serde_json::json!({ "id": id, "body": "still thinking" }).to_string().as_bytes(),
-        );
-        assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
-        let c: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
-        assert!(
-            c.get("delivered").is_none() && c.get("deliveryReason").is_none(),
-            "comments must not report delivery: {c}"
-        );
+        // dismiss → reopen → resolve, none reporting delivery.
+        for status in ["dismissed", "waiting", "resolved"] {
+            let resp = handle_resolve(
+                serde_json::json!({ "id": id, "status": status }).to_string().as_bytes(),
+            );
+            assert_eq!(resp.status, "200 OK", "{status} failed: {}", resp.body);
+            let r: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(r["status"], status);
+            assert!(
+                r.get("delivered").is_none() && r.get("deliveryReason").is_none(),
+                "resolve must not report delivery: {r}"
+            );
+        }
         let item = k2_core::feedback::get_item(&id).expect("item");
-        assert_eq!(item.status, "waiting", "comment must not answer");
+        assert_eq!(item.status, "resolved");
+        assert!(item.answer.is_none(), "reopen path never fabricates an answer");
 
-        let resp = handle_resolve(serde_json::json!({ "id": id }).to_string().as_bytes());
-        assert_eq!(resp.status, "200 OK", "resolve failed: {}", resp.body);
-        let r: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
-        assert!(
-            r.get("delivered").is_none() && r.get("deliveryReason").is_none(),
-            "resolve must not report delivery: {r}"
-        );
+        // Manual answered / garbage statuses are loud usage errors.
+        for bad in ["answered", "closed", ""] {
+            let resp = handle_resolve(
+                serde_json::json!({ "id": id, "status": bad }).to_string().as_bytes(),
+            );
+            assert_eq!(resp.status, "400 Bad Request", "status '{bad}' body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage", "status '{bad}'");
+        }
     }
 
     /// Status filter validation + fyi kind flows through list.

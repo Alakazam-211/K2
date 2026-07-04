@@ -373,8 +373,8 @@ pub fn add_comment(id: &str, author: &str, body: &str) -> Result<FeedbackComment
 /// id. Answering again overwrites the accepted answer (last answer
 /// wins) — the thread keeps every attempt.
 ///
-/// F1 stores ONLY — delivering the answer into the asking session
-/// (`deliver_live`) is F3's layer, not this one.
+/// This layer stores ONLY — the answer route layers F3's best-effort
+/// deliver-into-session injection (`deliver_live`) on top.
 pub fn set_answer(id: &str, author: &str, answer: &str) -> Result<FeedbackItem, String> {
     let answer_t = answer.trim();
     if answer_t.is_empty() {

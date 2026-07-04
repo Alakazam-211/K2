@@ -18,9 +18,14 @@
 //! `answer` fires `HookEvent::FeedbackAnswered` (`{id, projectPath}`)
 //! on the existing `/events` WireEvent broadcast.
 //!
-//! F1 boundary: `answer` ONLY stores (thread comment + denormalized
-//! answer + status). The deliver-into-session injection
-//! (`deliver_live`, PRD §4.3 answer flow) is F3, not here.
+//! F3 (PRD §4.3 answer flow, §7 decision 1): a recorded answer ALWAYS
+//! injects into the ASKING session — sandbox rows target their live
+//! cell, canonical/sessionless rows go through the workspace-agent
+//! `deliver_live` path with wake=true (a dormant canonical agent is
+//! woken). Injection is BEST-EFFORT and runs AFTER the store +
+//! `FeedbackAnswered` emit: a delivery failure never fails the answer;
+//! the outcome rides the response as `delivered`/`deliveryReason`.
+//! Comments, resolve, and dismiss never inject.
 
 use std::collections::HashMap;
 
@@ -197,6 +202,79 @@ fn show_json(item: &feedback::FeedbackItem, comments: &[feedback::FeedbackCommen
     v.to_string()
 }
 
+// ── F3 — answer → asking-session injection ────────────────────────────
+
+/// Where a recorded answer gets injected (F3, PRD §7 decision 1:
+/// answers ALWAYS inject; comments/resolve/dismiss never do).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AnswerTarget {
+    /// `session_kind == "sandbox"`: deliver to that LIVE cell only.
+    /// A gone cell is a graceful skip — never a wake/spawn (the agent
+    /// reads the answer via `k2 feedback show` on its next run).
+    SandboxSession(String),
+    /// Canonical or null session: workspace-agent addressing (the
+    /// `k2 msg` path), wake=true — a dormant canonical agent is woken
+    /// and the answer delivered on wake.
+    WorkspaceAgent,
+}
+
+/// Pure injection-target classifier, unit-tested without touching the
+/// DB or any live session.
+fn answer_target(session_id: Option<&str>, session_kind: Option<&str>) -> AnswerTarget {
+    match (session_id, session_kind) {
+        (Some(sid), Some("sandbox")) => AnswerTarget::SandboxSession(sid.to_string()),
+        _ => AnswerTarget::WorkspaceAgent,
+    }
+}
+
+/// The injected body (PRD §4.3): `[feedback:<short-id>] <answer>`. The
+/// `[from <answerer>]` attribution prefix is added by the shared msg
+/// framing, so the line reads like any other `k2 msg` delivery; the
+/// short id is a resolvable prefix (`k2 feedback show <short-id>`).
+fn answer_payload(feedback_id: &str, answer: &str) -> String {
+    let short: String = feedback_id.chars().take(8).collect();
+    format!("[feedback:{short}] {answer}")
+}
+
+/// Best-effort delivery of a just-recorded answer into the asking
+/// session. The caller has already stored the answer and emitted
+/// `FeedbackAnswered` — this only reports the outcome:
+/// `(delivered, reason, target_session_id)`.
+fn deliver_answer(
+    item: &feedback::FeedbackItem,
+    from: &str,
+) -> (bool, Option<String>, Option<String>) {
+    let payload = answer_payload(&item.id, item.answer.as_deref().unwrap_or_default());
+    match answer_target(item.session_id.as_deref(), item.session_kind.as_deref()) {
+        AnswerTarget::SandboxSession(sid) => {
+            // Live-cell-only: check liveness first so a torn-down cell
+            // reports a clear `session_gone` instead of `pty_died`.
+            let live = k2_core::session::SessionId::parse(&sid)
+                .and_then(|s| crate::session_lookup::lookup_by_session_id(&s));
+            if live.is_none() {
+                return (false, Some("session_gone".to_string()), None);
+            }
+            let resp = crate::workspace_msg::send_message_to_session(&sid, from, &payload);
+            (resp.success, resp.reason, resp.target_session_id)
+        }
+        AnswerTarget::WorkspaceAgent => {
+            let (_, path) = project_name_path(&item.project_id);
+            let Some(path) = path else {
+                return (false, Some("workspace_not_found".to_string()), None);
+            };
+            let resp = crate::workspace_msg::deliver_live(
+                &path,
+                &payload,
+                from,
+                "",
+                true,
+                crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+            );
+            (resp.success, resp.reason, resp.target_session_id)
+        }
+    }
+}
+
 // ── POST handlers ─────────────────────────────────────────────────────
 
 /// `POST /cli/feedback/create` body. `project` accepts a workspace
@@ -351,9 +429,10 @@ pub fn handle_comment(body: &[u8]) -> CliResponse {
     }
 }
 
-/// `POST /cli/feedback/answer` body. F1 ONLY STORES: thread comment +
-/// denormalized `answer` + `answered_at` + status `answered`, then
-/// fires `FeedbackAnswered`. The deliver-into-session injection is F3.
+/// `POST /cli/feedback/answer` body. Stores (thread comment +
+/// denormalized `answer` + `answered_at` + status `answered`), fires
+/// `FeedbackAnswered`, then best-effort injects the answer into the
+/// asking session (F3 — see [`deliver_answer`]).
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct AnswerBody {
@@ -378,13 +457,15 @@ pub fn handle_answer(body: &[u8]) -> CliResponse {
         Ok(f) => f,
         Err(e) => return prefix_error_response(&b.id, e),
     };
-    let author = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("owner");
-    let item = match feedback::set_answer(&full_id, author, &b.answer) {
+    let author = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let item = match feedback::set_answer(&full_id, author.unwrap_or("owner"), &b.answer) {
         Ok(item) => item,
         Err(e) => return usage_error(e),
     };
 
     // FeedbackAnswered on the /events broadcast ({id, projectPath}).
+    // Emitted BEFORE the injection so `ask --wait` pollers unblock even
+    // if delivery is slow (a wake can take seconds).
     let (_, path) = project_name_path(&item.project_id);
     k2_core::agent_hooks::emit(
         k2_core::agent_hooks::HookEvent::FeedbackAnswered,
@@ -394,6 +475,16 @@ pub fn handle_answer(body: &[u8]) -> CliResponse {
         }),
     );
 
+    // F3 — the answer ALWAYS injects into the asking session (PRD §7
+    // decision 1), best-effort AFTER the store + emit: a delivery
+    // failure never fails the answer. An unnamed answerer is framed
+    // with the owner's display name (same server-side resolution as
+    // the composer, D3), so the line reads natively in-session.
+    let from = author
+        .map(String::from)
+        .unwrap_or_else(crate::workspace_msg::resolve_owner_from);
+    let (delivered, delivery_reason, delivered_session) = deliver_answer(&item, &from);
+
     CliResponse::ok_json(
         serde_json::json!({
             "ok": true,
@@ -401,6 +492,9 @@ pub fn handle_answer(body: &[u8]) -> CliResponse {
             "status": item.status,
             "answer": item.answer,
             "answeredAt": item.answered_at,
+            "delivered": delivered,
+            "deliveryReason": delivery_reason,
+            "deliveredSessionId": delivered_session,
         })
         .to_string(),
     )
@@ -732,6 +826,142 @@ mod tests {
         }
         let resp = dispatch_post("/cli/feedback/unknown", b"{}");
         assert_eq!(resp.status, "404 Not Found");
+    }
+
+    /// F3 — the injection decision matrix (pure classifier): sandbox
+    /// rows target their live cell; canonical and sessionless rows fall
+    /// back to workspace-agent addressing; a sandbox kind WITHOUT an id
+    /// can't address a cell, so it falls back too.
+    #[test]
+    fn feedback_answer_target_matrix() {
+        assert_eq!(
+            answer_target(Some("cell-1"), Some("sandbox")),
+            AnswerTarget::SandboxSession("cell-1".to_string())
+        );
+        assert_eq!(
+            answer_target(Some("conv-1"), Some("canonical")),
+            AnswerTarget::WorkspaceAgent
+        );
+        assert_eq!(answer_target(None, None), AnswerTarget::WorkspaceAgent);
+        assert_eq!(answer_target(Some("conv-1"), None), AnswerTarget::WorkspaceAgent);
+        assert_eq!(answer_target(None, Some("sandbox")), AnswerTarget::WorkspaceAgent);
+
+        // Injected body: PRD §4.3 `[feedback:<short-id>] <answer>` —
+        // the short id is a resolvable 8-char prefix.
+        assert_eq!(
+            answer_payload("7b3f1a2c-9d10-4e6f-8a2b-000000000000", "Go"),
+            "[feedback:7b3f1a2c] Go"
+        );
+        assert_eq!(answer_payload("ab", "x"), "[feedback:ab] x");
+    }
+
+    /// F3 — injection is best-effort: a delivery failure NEVER fails
+    /// the answer. Covers all three target shapes against a project
+    /// with no agent and no live sessions, asserting the answer stores
+    /// + status flips + the response reports the delivery outcome
+    /// alongside the pre-F3 fields.
+    #[test]
+    fn feedback_answer_injection_best_effort_still_stores() {
+        let (name, path) = unique("inject");
+        insert_project(&name, &path);
+
+        let answer = |id: &str, text: &str| -> serde_json::Value {
+            let resp = handle_answer(
+                serde_json::json!({ "id": id, "answer": text }).to_string().as_bytes(),
+            );
+            assert_eq!(resp.status, "200 OK", "answer failed: {}", resp.body);
+            serde_json::from_str(&resp.body).expect("valid answer JSON")
+        };
+
+        // (a) Sessionless ask → workspace fallback. The test project
+        // has no agent (agent_enabled=0, no saved session), so the
+        // wake path classifies no_agent_mode — and the answer stores.
+        let created = create_via_route(&path, "null-session ask", serde_json::json!({}));
+        let id = created["id"].as_str().expect("id").to_string();
+        let a = answer(&id, "navy");
+        assert_eq!(a["ok"], true);
+        assert_eq!(a["status"], "answered");
+        assert_eq!(a["answer"], "navy");
+        assert!(a["answeredAt"].is_i64());
+        assert_eq!(a["delivered"], false);
+        assert_eq!(a["deliveryReason"], "no_agent_mode");
+        assert!(a["deliveredSessionId"].is_null());
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "answered", "failed delivery must not lose the answer");
+        assert_eq!(item.answer.as_deref(), Some("navy"));
+
+        // (b) Sandbox row whose cell is gone → graceful session_gone
+        // skip (no wake, no spawn) — and the answer stores.
+        let created = create_via_route(
+            &path,
+            "sandbox ask",
+            serde_json::json!({
+                "sessionId": uuid::Uuid::new_v4().to_string(),
+                "sessionKind": "sandbox",
+            }),
+        );
+        let id = created["id"].as_str().expect("id").to_string();
+        let a = answer(&id, "Go");
+        assert_eq!(a["delivered"], false);
+        assert_eq!(a["deliveryReason"], "session_gone");
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "answered");
+        assert_eq!(item.answer.as_deref(), Some("Go"));
+
+        // (c) Canonical row → routed by WORKSPACE identity (not the
+        // conversation id), so the dead-project agent classifies
+        // no_agent_mode, not session_gone.
+        let created = create_via_route(
+            &path,
+            "canonical ask",
+            serde_json::json!({
+                "sessionId": uuid::Uuid::new_v4().to_string(),
+                "sessionKind": "canonical",
+            }),
+        );
+        let id = created["id"].as_str().expect("id").to_string();
+        let a = answer(&id, "Hold");
+        assert_eq!(a["delivered"], false);
+        assert_eq!(a["deliveryReason"], "no_agent_mode");
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "answered");
+    }
+
+    /// F3 — ONLY answers inject: comment and resolve never touch the
+    /// delivery path, and their responses carry no delivery fields.
+    #[test]
+    fn feedback_comment_and_resolve_do_not_inject() {
+        let (name, path) = unique("no-inject");
+        insert_project(&name, &path);
+        let created = create_via_route(
+            &path,
+            "comment target",
+            serde_json::json!({
+                "sessionId": uuid::Uuid::new_v4().to_string(),
+                "sessionKind": "sandbox",
+            }),
+        );
+        let id = created["id"].as_str().expect("id").to_string();
+
+        let resp = handle_comment(
+            serde_json::json!({ "id": id, "body": "still thinking" }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
+        let c: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert!(
+            c.get("delivered").is_none() && c.get("deliveryReason").is_none(),
+            "comments must not report delivery: {c}"
+        );
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.status, "waiting", "comment must not answer");
+
+        let resp = handle_resolve(serde_json::json!({ "id": id }).to_string().as_bytes());
+        assert_eq!(resp.status, "200 OK", "resolve failed: {}", resp.body);
+        let r: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert!(
+            r.get("delivered").is_none() && r.get("deliveryReason").is_none(),
+            "resolve must not report delivery: {r}"
+        );
     }
 
     /// Status filter validation + fyi kind flows through list.

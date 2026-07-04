@@ -3,6 +3,33 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.26 — Agents can ask you things
+
+- **`k2 feedback ask` — a durable question channel from agents to you.** An
+  agent that needs a human decision no longer has to hope you're watching its
+  terminal: it files an ask (question, approval, or FYI — with optional
+  one-tap choices and a priority), keeps working or waits, and the ask sits
+  on the new Feedback page until you handle it. `--wait` blocks the agent
+  until your reply and prints it back, safe for scripting.
+- **The Feedback page.** A "Feedback" button in the top bar (with a
+  waiting-count badge) opens a two-column board: feedback cards on the left —
+  workspace icon + name up top, live status controls on the card — and the
+  conversation on the right. Filter by status chips, a searchable workspace
+  picker, or free-text search. Each item has two tabs: **Thread**, and
+  **Agent** — the asking agent's actual terminal, embedded, with one-click
+  wake if it's dormant.
+- **Replies land in the agent's session.** Every comment you write is
+  delivered straight into the asking agent's terminal (waking it if needed),
+  and the agent's replies appear in your thread instantly. It's a real
+  conversation with a paper trail — your first reply to a waiting ask is
+  recorded as the answer.
+- **Know when an agent finishes — without staring.** Agents that finish
+  working while you're looking elsewhere now show an amber dot in the Active
+  bar until you check on them, with an optional soft chime (Settings →
+  General) when it happens.
+- **Desktop notifications** for new asks when K2 isn't focused, and agent
+  persona templates now teach hires that the feedback channel exists.
+
 ## 0.40.25 — Any agent, first-class
 
 - **Pick your default agent — for real.** The Editors & Agents default now

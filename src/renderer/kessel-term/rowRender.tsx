@@ -32,6 +32,16 @@
 // anchoring every character makes the geometry a pure function of
 // (column, cellWidth), invariant under run re-slicing.
 
+// SYNTHETIC GLYPHS (2026-07 rendering-polish layer): box-drawing
+// (U+2500–257F) and block-element (U+2580–259F, sextants) cells
+// REPLACE their font glyph with painted CSS geometry — stacked
+// background gradients on the same per-char span (arcs ╭╮╰╯ get one
+// child div). Font ink never exactly fills a line box or reaches the
+// cell edges, so stacked blocks (Claude Code's logo) showed
+// horizontal seams and TUI borders got hairline breaks at some
+// zooms; painted rects span exact device-rounded cell fractions, so
+// adjacent cells tile seamlessly. See syntheticGlyphs.ts.
+
 import React from 'react'
 import {
   runCells,
@@ -39,6 +49,11 @@ import {
   runColSpan,
   runNeedsPerCharCells,
 } from './runCols'
+import {
+  paintSyntheticGlyph,
+  syntheticGlyphSpec,
+  type ArcChild,
+} from './syntheticGlyphs'
 
 /** The visual subset of the wire CellRun this renderer needs
  *  (structurally satisfied by TerminalPane's CellRun). */
@@ -108,12 +123,49 @@ function runStyle(
   return style
 }
 
+/** The border-radius stroke corner for ╭╮╰╯ — the one synthetic
+ *  shape CSS gradients can't express, hence the single child div. */
+function arcChildStyle(arc: ArcChild, color: string): React.CSSProperties {
+  const b = `${arc.borderWidth}px`
+  const style: React.CSSProperties = {
+    position: 'absolute',
+    left: arc.left,
+    top: arc.top,
+    width: arc.width,
+    height: arc.height,
+    boxSizing: 'border-box',
+    borderStyle: 'solid',
+    borderColor: color,
+  }
+  switch (arc.corner) {
+    case 'tl': // ╭
+      style.borderWidth = `${b} 0 0 ${b}`
+      style.borderTopLeftRadius = arc.radius
+      break
+    case 'tr': // ╮
+      style.borderWidth = `${b} ${b} 0 0`
+      style.borderTopRightRadius = arc.radius
+      break
+    case 'br': // ╯
+      style.borderWidth = `0 ${b} ${b} 0`
+      style.borderBottomRightRadius = arc.radius
+      break
+    case 'bl': // ╰
+      style.borderWidth = `0 0 ${b} ${b}`
+      style.borderBottomLeftRadius = arc.radius
+      break
+  }
+  return style
+}
+
 function renderRowRuns(
   row: RenderRun[],
   absRow: number,
   defaultFg: string,
   defaultBg: string,
   cellWidth: number,
+  cellHeight: number,
+  dpr: number,
 ): React.ReactNode {
   if (row.length === 0) return '\u00a0'
   // cellWidth unmeasured (pre-first-layout frame): fall back to
@@ -165,9 +217,52 @@ function renderRowRuns(
         }
         delete style.backgroundColor
       }
+      // Resolved ink for synthetic glyphs: the same color runStyle
+      // gave the text (inverse already swapped, defaults resolved).
+      const inkFg = run.fg !== null ? hexToCss(run.fg) : defaultFg
+      const inkBg = run.bg !== null ? hexToCss(run.bg) : defaultBg
+      const ink = run.inverse ? inkBg : inkFg
       const cells = runCells(run)
       for (let c = 0; c < cells.length; c++) {
         const cell = cells[c]
+        const spec =
+          cellHeight > 0
+            ? syntheticGlyphSpec(cell.text.codePointAt(0) ?? 0)
+            : null
+        if (spec) {
+          // SYNTHETIC GEOMETRY: no text node — the glyph is painted
+          // as background layers (or an arc child) on the cell span.
+          // Text styles (decoration/weight) don't apply; heavy/light
+          // weight is intrinsic to the code point. Dim still dims
+          // via opacity, like the font path.
+          const paint = paintSyntheticGlyph(
+            spec,
+            cell.width * cellWidth,
+            cellHeight,
+            dpr,
+            ink,
+          )
+          spans.push(
+            <span
+              key={`a${absRow}s${i}c${c}`}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: (startCol + cell.col) * cellWidth,
+                width: cell.width * cellWidth,
+                height: '100%',
+                overflow: 'hidden',
+                opacity: style.opacity,
+                ...('background' in paint ? paint.background : undefined),
+              }}
+            >
+              {'arc' in paint ? (
+                <div style={arcChildStyle(paint.arc, paint.color)} />
+              ) : null}
+            </span>,
+          )
+          continue
+        }
         spans.push(
           <span
             key={`a${absRow}s${i}c${c}`}
@@ -241,6 +336,7 @@ export const TerminalRow = React.memo(function TerminalRow({
   defaultBg,
   cellWidth,
   cellHeight,
+  dpr = 1,
 }: {
   row: RenderRun[]
   absRow: number
@@ -248,6 +344,10 @@ export const TerminalRow = React.memo(function TerminalRow({
   defaultBg: string
   cellWidth: number
   cellHeight: number
+  /** devicePixelRatio — synthetic glyph geometry rounds to DEVICE
+   *  pixels so strokes stay crisp; a plain number, so delta frames
+   *  still compare equal and the memo skip is undisturbed. */
+  dpr?: number
 }): React.JSX.Element {
   // Fixed height (one cell) + relative positioning host the
   // absolutely-anchored run spans; before metrics are measured the
@@ -259,7 +359,7 @@ export const TerminalRow = React.memo(function TerminalRow({
       : undefined
   return (
     <div data-abs-row={absRow} style={style}>
-      {renderRowRuns(row, absRow, defaultFg, defaultBg, cellWidth)}
+      {renderRowRuns(row, absRow, defaultFg, defaultBg, cellWidth, cellHeight, dpr)}
     </div>
   )
 })

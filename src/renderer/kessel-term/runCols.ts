@@ -121,6 +121,9 @@ export function isUntrustedAdvanceCp(cp: number): boolean {
     // Private Use Area — powerline / Nerd Font symbols, patched-font
     // territory with arbitrary advances.
     (cp >= 0xe000 && cp <= 0xf8ff) ||
+    // Legacy-computing sextants — synthetic-geometry glyphs
+    // (syntheticGlyphs.ts); fonts rarely cover them at all.
+    (cp >= 0x1fb00 && cp <= 0x1fb3b) ||
     // Anything the column math already treats as wide (CJK, emoji):
     // those cells span 2 columns and the glyph advance is whatever
     // the CJK/emoji font says, so pin each to its own 2-col rect.

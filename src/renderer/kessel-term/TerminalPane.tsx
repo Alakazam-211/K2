@@ -1960,22 +1960,25 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // though PTY resizes are debounced). 0×0 until first measure.
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
 
-  // ── Device pixel ratio (WebGL painter only) ───────────────────
+  // ── Device pixel ratio ─────────────────────────────────────────
   // Tracks monitor moves / OS zoom. matchMedia's resolution query
   // fires `change` when devicePixelRatio departs the queried value;
-  // re-arm against the new value each time. Drives the quantized
-  // cell metrics below + the painter's atlas rebuild. Inert (state
-  // never updates) when the flag is off.
+  // re-arm against the new value each time. Drives the WebGL
+  // painter's quantized cell metrics + atlas rebuild, AND the DOM
+  // painter's synthetic box/block glyph geometry (rowRender rounds
+  // strokes to device pixels), so it is tracked for both painters.
   const [dpr, setDpr] = useState(() =>
     typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
   )
   useEffect(() => {
-    if (!useWebgl) return
+    // jsdom (tests) has no matchMedia; dpr just stays at its mount
+    // value there, same as any environment without the API.
+    if (typeof window.matchMedia !== 'function') return
     const mq = window.matchMedia(`(resolution: ${dpr}dppx)`)
     const onChange = () => setDpr(window.devicePixelRatio || 1)
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
-  }, [useWebgl, dpr])
+  }, [dpr])
 
   // ── Cell metrics (for cursor positioning + wheel math) ────────
   const [cellMetrics, setCellMetrics] = useState({ width: 0, height: 0 })
@@ -4392,6 +4395,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
                 defaultBg={defaultBgCss}
                 cellWidth={cellMetrics.width}
                 cellHeight={cellMetrics.height}
+                dpr={dpr}
               />
             )
           })}

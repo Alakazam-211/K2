@@ -13,6 +13,20 @@
 //
 // Browser-bound (Canvas2D + getImageData). All the packing MATH
 // lives in atlasLayout.ts, which is pure and unit-tested.
+//
+// NOT YET SYNTHETIC (2026-07): the DOM painter renders box-drawing/
+// block-element cells as painted CSS geometry (syntheticGlyphs.ts)
+// instead of font glyphs; this atlas still rasterizes them with
+// fillText. Porting = in get(), before the fillText, check
+// syntheticGlyphSpec(cp) for single-code-point cells and rasterize
+// procedurally instead: resolveGlyphRects() already yields device-px
+// rects (build GlyphMetrics with dpr=1 against deviceCellW/H, then
+// ctx.fillRect each; white at spec.alpha for the shades — the
+// shader's tint path treats alpha as coverage, so it composes for
+// free), arcs ╭╮╰╯ as a stroked quarter-ellipse path, dashes as
+// segment fillRects. Deferred, not half-built: this path is behind
+// the WebGL flag, has never been feel-tested, and its rasterization
+// is untestable in the node test env (tests stub GlyphSource).
 
 import {
   allocSlot,

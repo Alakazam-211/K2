@@ -191,6 +191,12 @@ describe('runNeedsPerCharCells', () => {
     expect(runNeedsPerCharCells('😀')).toBe(true) // non-BMP emoji
   })
 
+  it('is true for legacy-computing sextants (synthetic-geometry glyphs)', () => {
+    expect(runNeedsPerCharCells('\u{1FB00}')).toBe(true) // block start
+    expect(runNeedsPerCharCells('\u{1FB3B}')).toBe(true) // block end
+    expect(runNeedsPerCharCells('\u{1FB3C}')).toBe(false) // past the sextants
+  })
+
   it('is false for zero-width combining content alone (rides its base cell)', () => {
     expect(runNeedsPerCharCells('é')).toBe(false)
     expect(runNeedsPerCharCells('́')).toBe(false)

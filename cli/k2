@@ -8933,7 +8933,7 @@ cmd_feedback_ask() {
     FB_PROJECT="$PROJECT" FB_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
     FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
-import json, os, sys, time
+import json, os, re, sys, time
 import urllib.error, urllib.parse, urllib.request
 
 base = os.environ["ABASE"]
@@ -8980,7 +8980,9 @@ if os.environ.get("FB_KIND"):
 if os.environ.get("FB_PRIORITY"):
     payload["priority"] = int(os.environ["FB_PRIORITY"])
 if os.environ.get("FB_OPTIONS"):
-    opts = [o.strip() for o in os.environ["FB_OPTIONS"].split(",") if o.strip()]
+    # Split on unescaped commas only; "\," inside an option is a literal comma.
+    raw = re.split(r"(?<!\\),", os.environ["FB_OPTIONS"])
+    opts = [o for o in (p.strip().replace("\\,", ",") for p in raw) if o]
     if opts:
         payload["options"] = opts
 if os.environ.get("FB_AGENT"):
@@ -9350,6 +9352,7 @@ FLAGS
                          yourself). --wait on a fyi is pointless.
   --options <a,b,c>      Offer specific choices the human taps instead of typing
                          (e.g. --options "Ship it,Hold,Needs changes")
+                         Escape a literal comma inside an option with \,
   --priority <1-5>       1 = urgent … 5 = whenever   (default: 3)
   --wait                 Block until the item is answered, then print the BARE
                          answer to stdout (exit 0) — safe for $(...) capture.

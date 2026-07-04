@@ -7,16 +7,10 @@ import {
   filterBySearch,
   groupByStatus,
   optionsActionable,
-  replyMode,
   sortNewestFirst,
-  type FeedbackKind,
   type FeedbackListRow,
   type FeedbackStatus,
 } from './feedback-api'
-
-function item(status: FeedbackStatus, kind: FeedbackKind = 'question') {
-  return { status, kind, options: null as string[] | null }
-}
 
 describe('sortNewestFirst', () => {
   it('orders by createdAt descending without mutating the input', () => {
@@ -39,21 +33,6 @@ describe('groupByStatus', () => {
     expect(g.waiting.map((r) => r.id)).toEqual(['w'])
     expect(g.answered.map((r) => r.id)).toEqual(['a'])
     expect(g.closed.map((r) => r.id)).toEqual(['r', 'd'])
-  })
-})
-
-describe('replyMode', () => {
-  it('a WAITING question/approval takes the reply as the ANSWER', () => {
-    expect(replyMode(item('waiting', 'question'))).toBe('answer')
-    expect(replyMode(item('waiting', 'approval'))).toBe('answer')
-  })
-  it('fyi never answers — a reply is a comment even while waiting', () => {
-    expect(replyMode(item('waiting', 'fyi'))).toBe('comment')
-  })
-  it('non-waiting items always take comments', () => {
-    expect(replyMode(item('answered', 'question'))).toBe('comment')
-    expect(replyMode(item('resolved', 'approval'))).toBe('comment')
-    expect(replyMode(item('dismissed', 'question'))).toBe('comment')
   })
 })
 

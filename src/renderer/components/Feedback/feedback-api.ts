@@ -122,22 +122,23 @@ export async function fetchFeedbackShow(id: string): Promise<FeedbackShow> {
   return daemonCliGet<FeedbackShow>('feedback/show', { id })
 }
 
-/** POST /cli/feedback/answer — stores the answer + flips to `answered`
- *  (F1 stores only; session injection is F3). Author defaults to
- *  `owner` daemon-side. */
-export async function answerFeedback(id: string, answer: string): Promise<void> {
-  await daemonCliPost('feedback/answer', { id, answer })
-}
-
-/** POST /cli/feedback/comment — appends to the thread, status unchanged. */
+/** POST /cli/feedback/comment — it's just a comment thread. The
+ *  renderer posts author-less (= `owner`, a HUMAN comment): the daemon
+ *  injects it into the asking session, and the FIRST human comment on
+ *  a waiting question/approval doubles as the answer behind the scenes
+ *  (status → answered, `ask --wait` unblocks). fyi never auto-answers.
+ *  (The legacy answer route still exists for API compat; the renderer
+ *  no longer uses it.) */
 export async function commentFeedback(id: string, body: string): Promise<void> {
   await daemonCliPost('feedback/comment', { id, body })
 }
 
-/** POST /cli/feedback/resolve — `resolved` or `dismissed`. */
+/** POST /cli/feedback/resolve — `resolved`, `dismissed`, or `waiting`
+ *  (reopen, the per-card status dropdown). `answered` is NOT manually
+ *  settable — it's only reachable through an actual reply. */
 export async function resolveFeedback(
   id: string,
-  status: 'resolved' | 'dismissed',
+  status: 'resolved' | 'dismissed' | 'waiting',
 ): Promise<void> {
   await daemonCliPost('feedback/resolve', { id, status })
 }
@@ -166,18 +167,6 @@ export function groupByStatus<T extends { status: FeedbackStatus }>(
     else grouped.closed.push(row)
   }
   return grouped
-}
-
-/** What the reply box does for an item: a WAITING question/approval takes
- *  the reply as the ANSWER (answer route → status answered); everything
- *  else (fyi, or an already-answered/closed thread) posts a comment. */
-export function replyMode(item: {
-  status: FeedbackStatus
-  kind: FeedbackKind
-}): 'answer' | 'comment' {
-  return item.status === 'waiting' && (item.kind === 'question' || item.kind === 'approval')
-    ? 'answer'
-    : 'comment'
 }
 
 /** One-tap option buttons are live only while the ask still waits. */

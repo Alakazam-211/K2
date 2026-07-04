@@ -327,7 +327,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
         </div>
 
         {/* RIGHT COLUMN — the response panel. Swaps to whichever item is
-            selected (Thread | Terminal tabs at its top); scrolls
+            selected (Thread | Agent tabs at its top); scrolls
             internally, like the list on the left. */}
         <div className="flex flex-col min-h-0 min-w-0 border-t lg:border-t-0 lg:border-l border-[var(--color-border)]">
           {selectedRow ? (

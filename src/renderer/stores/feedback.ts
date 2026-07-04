@@ -5,7 +5,8 @@
 // its `/events` WS (feedback_routes.rs); src-tauri's daemon_events.rs
 // subscriber re-emits every frame on the Tauri event bus under the
 // HookEvent name — so the renderer listens for `feedback:created` /
-// `feedback:answered` exactly like active-agents listens for
+// `feedback:answered` / `feedback:status-changed` exactly like
+// active-agents listens for
 // `agent:lifecycle`. Each event bumps `revision` (the page refetches on
 // it) and refreshes the badge count; FeedbackCreated additionally fires a
 // desktop notification when the app is unfocused or the Feedback page
@@ -105,6 +106,12 @@ export function initFeedbackEvents(notify: boolean): void {
       }
     }).catch((err) => console.warn('[feedback] listen() unavailable:', err))
     listen('feedback:answered', () => {
+      useFeedbackStore.setState((s) => ({ revision: s.revision + 1 }))
+      void useFeedbackStore.getState().refreshWaitingCount()
+    }).catch((err) => console.warn('[feedback] listen() unavailable:', err))
+    // Resolve / dismiss / reopen-to-waiting (`/cli/feedback/resolve`) —
+    // same refresh as answered: bump revision + re-count the badge.
+    listen('feedback:status-changed', () => {
       useFeedbackStore.setState((s) => ({ revision: s.revision + 1 }))
       void useFeedbackStore.getState().refreshWaitingCount()
     }).catch((err) => console.warn('[feedback] listen() unavailable:', err))

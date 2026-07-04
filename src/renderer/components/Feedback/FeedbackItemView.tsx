@@ -1,13 +1,15 @@
 // Feedback F2 — single-item view: two tabs along the top,
-// Thread (default) | Terminal (PRD §6 F2, design locked).
+// Thread (default) | Agent (the asking session's terminal).
 //
 // Thread: the ask + structured-option one-tap buttons + the comment
-// thread + a reply box. A WAITING question/approval takes the reply as
-// the ANSWER (`/cli/feedback/answer` — F1 stores only, injection is F3);
-// anything else posts a comment. Resolve/dismiss actions ride the
-// resolve route.
+// thread + a reply box. There is NO Answer mode — it's just a comment
+// thread. Every reply (and every tapped option) posts a plain comment;
+// the daemon injects human comments into the asking session, and the
+// first human comment on a waiting question/approval becomes the
+// answer behind the scenes (so `ask --wait` unblocks). Resolve/dismiss
+// actions ride the resolve route.
 //
-// Terminal: the ASKING session's terminal embedded IN PLACE via the
+// Agent: the ASKING session's terminal embedded IN PLACE via the
 // kessel TerminalPane attach machinery (attachAgentName → the idempotent
 // /cli/sessions/v2/spawn reuses the existing daemon PTY — the same
 // mechanism as AgentChatPane and the orange-tab sandbox adoption). A
@@ -20,11 +22,9 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { formatRelativeTime } from '@/components/AgentOps/ops-api'
 import {
-  answerFeedback,
   commentFeedback,
   fetchFeedbackShow,
   optionsActionable,
-  replyMode,
   resolveFeedback,
   type FeedbackListRow,
   type FeedbackShow,
@@ -39,8 +39,8 @@ interface FeedbackItemViewProps {
   nowSec: number
   /** Store revision — bumped by feedback events; refetches the thread. */
   revision: number
-  /** Fired after any successful mutation so the parent list + badge stay
-   *  in sync (resolve/dismiss have no daemon event in F1). */
+  /** Fired after any successful mutation so the parent list + badge
+   *  update instantly (the daemon events also arrive, slightly later). */
   onMutated: () => void
 }
 
@@ -103,7 +103,7 @@ export function FeedbackItemView({
                   : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
               }`}
             >
-              {t === 'thread' ? 'Thread' : 'Terminal'}
+              {t === 'thread' ? 'Thread' : 'Agent'}
             </button>
           ))}
         </div>
@@ -190,16 +190,16 @@ function ThreadTab({
     )
   }
 
-  const mode = replyMode(item)
   const canTapOptions = optionsActionable(item)
   const openItem = item.status === 'waiting' || item.status === 'answered'
 
+  // Always a plain comment — the daemon lands human comments in the
+  // asking session, and the first one on a waiting ask answers it.
   const sendReply = (): void => {
     const text = reply.trim()
     if (!text) return
     void submit(async () => {
-      if (mode === 'answer') await answerFeedback(item.id, text)
-      else await commentFeedback(item.id, text)
+      await commentFeedback(item.id, text)
       setReply('')
     })
   }
@@ -214,8 +214,9 @@ function ThreadTab({
           </div>
         )}
 
-        {/* Structured options — one-tap answer buttons while waiting; the
-            accepted choice stays highlighted afterwards. */}
+        {/* Structured options — one-tap buttons while waiting: tapping
+            posts the label as a comment (which answers a waiting ask
+            daemon-side); the accepted choice stays highlighted after. */}
         {item.options && item.options.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
             {item.options.map((opt) => {
@@ -225,7 +226,7 @@ function ThreadTab({
                   key={opt}
                   type="button"
                   disabled={!canTapOptions || busy}
-                  onClick={() => void submit(() => answerFeedback(item.id, opt))}
+                  onClick={() => void submit(() => commentFeedback(item.id, opt))}
                   className={`px-3 py-1.5 text-[11px] font-medium border transition-colors ${
                     accepted
                       ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
@@ -238,16 +239,6 @@ function ThreadTab({
                 </button>
               )
             })}
-          </div>
-        )}
-
-        {/* Accepted answer (denormalized) — shown once answered. */}
-        {item.answer && (
-          <div className="mb-3 px-3 py-2 bg-green-400/5 border border-green-400/20 text-xs text-[var(--color-text-secondary)] whitespace-pre-wrap break-words">
-            <span className="block text-[10px] font-semibold uppercase tracking-wider text-green-400 mb-1">
-              Answer
-            </span>
-            {item.answer}
           </div>
         )}
 
@@ -287,11 +278,7 @@ function ThreadTab({
               sendReply()
             }
           }}
-          placeholder={
-            mode === 'answer'
-              ? 'Type your answer — it resolves the ask (⌘⏎ to send)'
-              : 'Add a comment to the thread (⌘⏎ to send)'
-          }
+          placeholder="Add a comment — it lands in the agent's session (⌘⏎ to send)"
           rows={2}
           className="w-full px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none placeholder:text-[var(--color-text-muted)]"
         />
@@ -302,7 +289,7 @@ function ThreadTab({
             onClick={sendReply}
             className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
           >
-            {mode === 'answer' ? 'Answer' : 'Comment'}
+            Comment
           </button>
           <div className="flex-1" />
           {openItem && (
@@ -333,7 +320,7 @@ function ThreadTab({
   )
 }
 
-// ── Terminal tab ──────────────────────────────────────────────────────────
+// ── Agent tab (the asking session's terminal, in place) ──────────────────────────────────────────────────────────
 
 interface LiveSessionRow {
   sessionId: string

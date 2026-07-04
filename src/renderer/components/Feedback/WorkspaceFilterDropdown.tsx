@@ -127,14 +127,25 @@ export function WorkspaceFilterDropdown({
 
   useEffect(() => setKeyboardIndex(-1), [query])
 
-  // Outside click closes.
+  // Outside click closes; capture-phase Esc closes the popover BEFORE
+  // the page-level Esc handler (clear selection / close page) sees it.
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent): void => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
     }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setOpen(false)
+      }
+    }
     document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey, true)
+    }
   }, [open])
 
   // Keep the keyboard-highlighted row in view.

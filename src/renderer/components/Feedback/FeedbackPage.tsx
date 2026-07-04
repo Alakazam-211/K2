@@ -70,8 +70,20 @@ function CardStatusDropdown({
     const onDown = (e: MouseEvent): void => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
     }
+    // Capture-phase so the first Esc closes THIS popover instead of
+    // reaching the page-level handler (clear selection / close page).
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setOpen(false)
+      }
+    }
     document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey, true)
+    }
   }, [open])
 
   const setStatus = async (status: (typeof SELECTABLE_STATUSES)[number]): Promise<void> => {

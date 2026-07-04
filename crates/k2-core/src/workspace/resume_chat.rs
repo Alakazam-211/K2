@@ -49,7 +49,7 @@
 //! - **A NEW session** (no saved row / unknown harness on the auto
 //!   path): `agent_resolve::resolve_agent_command` (workspace default →
 //!   global default → claude) governs.
-//! - **Unknown provider** (hermes, arbitrary custom command): degrade
+//! - **Unknown provider** (any arbitrary custom command): degrade
 //!   to a fresh bare spawn with no resume/premint flags — exactly the
 //!   Slice-2 `// Slice 3:` gate behavior.
 //!
@@ -281,7 +281,7 @@ pub fn resolve_resume_chat_args_ex(
             // Unknown provider: fresh bare spawn, no resume, no premint —
             // the Slice-2 degraded behavior, now with a truthful harness
             // stamp (the command's first token) so the row never lies
-            // 'claude' about a hermes spawn.
+            // 'claude' about some custom agent's spawn.
             let provider = default_cmd
                 .command
                 .rsplit('/')
@@ -891,12 +891,12 @@ mod tests {
     fn unknown_provider_degrades_to_bare_spawn_with_truthful_harness() {
         let _guard = HomeGuard::new("unknown");
         crate::db::init_for_tests();
-        let preset = insert_preset("hermes --chat", 955);
+        let preset = insert_preset("aider --chat", 955);
         let path = format!("/fixture/unknown-{}", uuid::Uuid::new_v4());
         let project_id = insert_project(&path, Some(&preset));
 
         let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
-        assert_eq!(out.command, "hermes");
+        assert_eq!(out.command, "aider");
         assert_eq!(out.args, vec!["--chat".to_string()], "preset args pass through verbatim");
         assert!(out.resume_session.is_empty());
         assert!(!out.resumed_existing);
@@ -904,10 +904,10 @@ mod tests {
             !out.pending_session_discovery,
             "no adapter → nothing to discover"
         );
-        assert_eq!(out.provider, "hermes");
+        assert_eq!(out.provider, "aider");
         assert_eq!(
             saved_row(&project_id),
-            Some((None, "hermes".to_string())),
+            Some((None, "aider".to_string())),
             "harness records the actual command token, never a fake 'claude'"
         );
     }
@@ -918,7 +918,7 @@ mod tests {
         crate::db::init_for_tests();
         let path = format!("/fixture/unknown-harness-{}", uuid::Uuid::new_v4());
         let project_id = insert_project(&path, None);
-        set_saved_session(&project_id, "some-foreign-id", "hermes");
+        set_saved_session(&project_id, "some-foreign-id", "aider");
 
         // Explicit pick of a session we can't verify → loud error.
         let err = resolve_resume_chat_args_ex(&path, true).expect_err("must error");

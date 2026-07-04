@@ -29,6 +29,12 @@
 //!       `newest_grok_session_on_disk` — subagents skipped, newest by
 //!       `last_active_at`);
 //!     - cursor: chat-dir `store.db` probe / `detect_cursor_session`;
+//!     - hermes: read-only WAL-capable SQLite queries against
+//!       `~/.hermes/state.db` (`hermes_session_exists` /
+//!       `detect_hermes_session`). The exists check deliberately
+//!       matches ANY row for the id — a stored id can be superseded by
+//!       a compression fork, and hermes' own `--resume` redirects to
+//!       the chain tip;
 //!     - pi / codex / gemini: `parse_*_sessions(Some(project))` for the
 //!       exists check (a listed id = a real on-disk conversation) and
 //!       `detect_*_session` for newest. APPROXIMATION: both walk the
@@ -37,9 +43,9 @@
 //!       requires the project registered in `~/.gemini/projects.json`.
 //!
 //! **Unknown provider ⇒ `None`.** A command that maps to no adapter
-//! (hermes, arbitrary custom commands) makes callers degrade to a
-//! fresh bare spawn with no resume — exactly the Slice-2 `// Slice 3:`
-//! gate behavior.
+//! (arbitrary custom commands) makes callers degrade to a fresh bare
+//! spawn with no resume — exactly the Slice-2 `// Slice 3:` gate
+//! behavior.
 
 use std::time::Duration;
 
@@ -65,9 +71,8 @@ pub enum PremintStyle {
     Flag(&'static str),
 }
 
-/// Per-provider resume knowledge. One static record per Big-7 provider
-/// with on-disk discovery support (hermes has none anywhere yet —
-/// deliberately absent so it degrades like any unknown command).
+/// Per-provider resume knowledge. One static record per Big-7
+/// provider — all seven have on-disk discovery support as of Slice 6.
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderResume {
     /// Provider key — matches `chat_history::detect_active_session`'s
@@ -122,6 +127,17 @@ const PROVIDERS: &[ProviderResume] = &[
         provider: "codex",
         command: "codex",
         grammar: ResumeGrammar::Subcommand("resume"),
+        premint: None,
+    },
+    ProviderResume {
+        provider: "hermes",
+        command: "hermes",
+        // `hermes --resume <SESSION>` resumes by id (or title); its
+        // `--continue` is most-recent GLOBAL (not cwd-scoped) — never
+        // used. NO premint: `--pass-session-id` only injects into the
+        // system prompt, ids are minted internally → post-hoc
+        // discovery (pi/codex family) — hermes storage study.
+        grammar: ResumeGrammar::Flag("--resume"),
         premint: None,
     },
 ];
@@ -275,6 +291,11 @@ impl ProviderResume {
                 crate::chat_history::parse_codex_sessions(Some(project_path)),
                 session_id,
             ),
+            // Deliberately ignores project_path: an id that exists in
+            // state.db AT ALL is resumable — a stored id superseded by
+            // a compression fork still resolves (hermes redirects
+            // `--resume <old-id>` to the chain tip itself).
+            "hermes" => crate::chat_history::hermes_session_exists(session_id),
             _ => false,
         }
     }
@@ -294,6 +315,7 @@ impl ProviderResume {
             "gemini" => crate::chat_history::detect_gemini_session(project_path),
             "pi" => crate::chat_history::detect_pi_session(project_path),
             "codex" => crate::chat_history::detect_codex_session(project_path),
+            "hermes" => crate::chat_history::detect_hermes_session(project_path),
             _ => None,
         }
     }
@@ -408,6 +430,7 @@ mod tests {
             ("gemini", "gemini"),
             ("pi", "pi"),
             ("codex", "codex"),
+            ("hermes", "hermes"),
         ] {
             let a = provider_resume_for_command(cmd)
                 .unwrap_or_else(|| panic!("adapter missing for {cmd}"));
@@ -427,11 +450,11 @@ mod tests {
 
     #[test]
     fn unknown_commands_and_providers_resolve_to_none() {
-        assert!(provider_resume_for_command("hermes").is_none());
+        assert!(provider_resume_for_command("aider").is_none());
         assert!(provider_resume_for_command("bash").is_none());
         assert!(provider_resume_for_command("claudette").is_none());
         assert!(provider_resume_for_command("").is_none());
-        assert!(provider_resume_for_provider("hermes").is_none());
+        assert!(provider_resume_for_provider("aider").is_none());
         assert!(provider_resume_for_provider("cursor-agent").is_none(),
             "provider lookup keys on the provider string, not the binary");
         assert!(provider_resume_for_provider("").is_none());
@@ -482,7 +505,7 @@ mod tests {
             grok.premint_args(&args(&["--always-approve"]), "NEW"),
             Some(args(&["--always-approve", "--session-id", "NEW"]))
         );
-        for p in ["pi", "codex", "gemini", "cursor"] {
+        for p in ["pi", "codex", "gemini", "cursor", "hermes"] {
             assert_eq!(
                 provider_resume_for_provider(p).unwrap().premint_args(&[], "NEW"),
                 None,
@@ -550,7 +573,7 @@ mod tests {
             provider_resume_for_provider("grok").unwrap().premint_flag(),
             Some("--session-id")
         );
-        for p in ["pi", "codex", "gemini", "cursor"] {
+        for p in ["pi", "codex", "gemini", "cursor", "hermes"] {
             assert_eq!(
                 provider_resume_for_provider(p).unwrap().premint_flag(),
                 None
@@ -646,6 +669,94 @@ mod tests {
         assert_eq!(grok.newest_on_disk("/Users/fixture/other-proj"), None);
     }
 
+    /// Minimal `~/.hermes/state.db` fixture (study schema subset,
+    /// WAL mode like the real thing). Returns the open writer
+    /// connection so tests can hold it open while the adapter reads.
+    fn seed_hermes_fixture(home: &std::path::Path) -> rusqlite::Connection {
+        let db_dir = home.join(".hermes");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let conn = rusqlite::Connection::open(db_dir.join("state.db")).unwrap();
+        conn.pragma_update(None, "journal_mode", "wal").unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                 id TEXT PRIMARY KEY, source TEXT NOT NULL,
+                 parent_session_id TEXT, started_at REAL NOT NULL,
+                 ended_at REAL, end_reason TEXT, title TEXT, cwd TEXT,
+                 archived INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE messages (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 session_id TEXT NOT NULL, role TEXT NOT NULL,
+                 content TEXT, timestamp REAL NOT NULL
+             );",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn insert_hermes_row(
+        conn: &rusqlite::Connection,
+        id: &str,
+        source: &str,
+        cwd: &str,
+        started_at: f64,
+        archived: i64,
+    ) {
+        conn.execute(
+            "INSERT INTO sessions (id, source, cwd, started_at, archived) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id, source, cwd, started_at, archived],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn hermes_adapter_exists_newest_and_source_filter_via_home() {
+        let guard = HomeGuard::new("hermes-adapter");
+        let project = "/Users/fixture/hermes-proj";
+        let conn = seed_hermes_fixture(&guard.home);
+        insert_hermes_row(&conn, "20260701_090000_aaaaaa", "cli", project, 1000.0, 0);
+        insert_hermes_row(&conn, "20260702_100000_bbbbbb", "cli", project, 2000.0, 0);
+        // Subagent + archived rows are newest — must lose newest_on_disk.
+        insert_hermes_row(&conn, "20260703_110000_cccccc", "subagent", project, 3000.0, 0);
+        insert_hermes_row(&conn, "20260703_120000_dddddd", "cli", project, 4000.0, 1);
+
+        let hermes = provider_resume_for_provider("hermes").unwrap();
+        assert_eq!(hermes.provider, "hermes");
+        assert_eq!(hermes.command, "hermes");
+        assert_eq!(hermes.grammar, ResumeGrammar::Flag("--resume"));
+        assert_eq!(hermes.premint, None, "no premint — post-hoc discovery family");
+        assert_eq!(
+            hermes.resume_args(&args(&["--some-flag"]), "20260701_090000_aaaaaa"),
+            args(&["--some-flag", "--resume", "20260701_090000_aaaaaa"])
+        );
+
+        assert!(hermes.session_file_exists("20260701_090000_aaaaaa", project));
+        // Compression-chain rule: superseded/archived — even subagent —
+        // ids exist; hermes redirects resume to the chain tip itself.
+        assert!(hermes.session_file_exists("20260703_120000_dddddd", project));
+        assert!(hermes.session_file_exists("20260703_110000_cccccc", project));
+        assert!(!hermes.session_file_exists("20990101_000000_zzzzzz", project));
+        assert!(!hermes.session_file_exists("", project));
+
+        assert_eq!(
+            hermes.newest_on_disk(project).as_deref(),
+            Some("20260702_100000_bbbbbb"),
+            "newest cli+unarchived by started_at — subagent/archived skipped"
+        );
+        assert_eq!(hermes.newest_on_disk("/Users/fixture/other-proj"), None);
+    }
+
+    #[test]
+    fn hermes_adapter_degrades_when_db_absent() {
+        // Fresh scratch HOME with no ~/.hermes at all — the adapter
+        // must answer false/None, never error or block a spawn.
+        let _guard = HomeGuard::new("hermes-absent");
+        let hermes = provider_resume_for_provider("hermes").unwrap();
+        assert!(!hermes.session_file_exists("20260701_090000_aaaaaa", "/x"));
+        assert_eq!(hermes.newest_on_disk("/x"), None);
+    }
+
     #[test]
     fn claude_adapter_backs_onto_existing_probes() {
         let guard = HomeGuard::new("claude-adapter");
@@ -664,9 +775,9 @@ mod tests {
 
     #[test]
     fn adoption_helpers_noop_for_unknown_provider() {
-        assert_eq!(adopt_discovered_session("hermes", "/nowhere"), None);
+        assert_eq!(adopt_discovered_session("aider", "/nowhere"), None);
         // Must not spawn a thread / panic.
-        defer_adopt_discovered_session("hermes".into(), "/nowhere".into());
+        defer_adopt_discovered_session("aider".into(), "/nowhere".into());
     }
 
     #[test]

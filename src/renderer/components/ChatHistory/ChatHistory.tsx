@@ -6,7 +6,7 @@ import { useTabsStore, type TerminalItemData } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { usePresetsStore } from '@/stores/presets'
 import { resolveAgentCommand } from '@/lib/agent-resolve'
-import AgentIcon from '@/components/AgentIcon/AgentIcon'
+import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { KeyCombo } from '@/components/KeySymbol'
 import { resolveChatHistoryHost } from './resolveHost'
 
@@ -129,22 +129,9 @@ function getRightmostLeaf(tree: unknown): string | null {
 }
 
 // ── Icons ────────────────────────────────────────────────────────────
-
-/** Map chat history provider names to AgentIcon agent names */
-const PROVIDER_AGENT_NAME: Record<string, string> = {
-  claude: 'Claude',
-  cursor: 'Cursor Agent',
-  gemini: 'Gemini',
-  pi: 'Pi',
-  codex: 'Codex',
-  grok: 'Grok',
-  hermes: 'Hermes',
-}
-
-function ProviderIcon({ provider }: { provider: string }): React.JSX.Element {
-  const agentName = PROVIDER_AGENT_NAME[provider] ?? provider
-  return <AgentIcon agent={agentName} size={14} />
-}
+//
+// Provider→icon mapping lives in the shared ProviderIcon module (also
+// used by AgentChatPane's canonical-session dropdown) — see the import.
 
 interface ChatStoragePaths {
   claudeHistoryFile: string | null

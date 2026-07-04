@@ -54,7 +54,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import { useSessionLabelsStore } from '@/stores/session-labels'
 import { useActiveAgentsStore } from '@/stores/active-agents'
-import { detectWorkingSignal } from '@/lib/agent-signals'
+import { detectWorkingSignal, GROK_PERMISSION_TITLE_RE } from '@/lib/agent-signals'
 import {
   detectLinks,
   type DetectedLink,
@@ -1611,9 +1611,30 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             // working/idle hint we have. See
             // AlacrittyTerminalView.tsx:510-518 for the legacy
             // version. We use the SAME regex so v2 and legacy agree.
+            //
+            // Per-agent title inventory (2026-07 TUI signal studies):
+            //  - claude: braille prefix while working (working rule);
+            //    ✱-family prefix on idle (idle rule).
+            //  - grok:   `⠙ - Thinking - grok` while working (the same
+            //    braille working rule catches it); idle title carries
+            //    NO glyph (`grok` / `<session title> - grok`), so idle
+            //    comes from the 1s idle watcher; `⚠ Action Required - `
+            //    prefix while a permission gate is open (dedicated
+            //    rule below — grok has no lifecycle hooks, so the
+            //    title is its ONLY permission source).
+            //  - codex:  `⠋ <cwd-basename>` while working (the braille
+            //    rule); idle is the bare basename (no glyph — the idle
+            //    watcher clears).
+            //  - cursor-agent: no busy title (flips to a conversation
+            //    summary at turn completion) — phrase scan + cadence.
+            //  - hermes: NO titles ever — phrase scan + output cadence
+            //    only (the safe unknown-agent default).
+            //  - gemini/pi: working-state titles unverified; both ride
+            //    the phrase scan.
             const raw = parsed.payload.title ?? ''
             const isIdleMarker = /^[*✱✲✳✴✵✶✷✸✹⚹⁎∗※]/.test(raw)
             const isWorkingMarker = /^[\u2800-\u28FF]/.test(raw)
+            const isGrokPermissionMarker = GROK_PERMISSION_TITLE_RE.test(raw)
             // Per-title-change log. Fires every ~1s for any active
             // agent. Opt-in via `localStorage.K2SO_V2_ACTIVITY_VERBOSE='1'`.
             if (
@@ -1626,12 +1647,30 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
                 `[v2-activity] TITLE tid=${terminalId.slice(0, 8)} raw=${JSON.stringify(raw.slice(0, 60))} idleMarker=${isIdleMarker} workingMarker=${isWorkingMarker}`,
               )
             }
-            if (isIdleMarker) {
-              lastSeenWorkingAtRef.current = 0
-              useActiveAgentsStore.getState().recordTitleActivity(terminalId, false)
-            } else if (isWorkingMarker) {
-              lastSeenWorkingAtRef.current = Date.now()
-              useActiveAgentsStore.getState().recordTitleActivity(terminalId, true)
+            if (isGrokPermissionMarker) {
+              // Grok permission gate open — drive the SAME 'permission'
+              // pane state Claude's lifecycle hook drives (toast +
+              // sidebar red). recordTitlePermission tracks the pane as
+              // title-owned so the title can also CLEAR it below — a
+              // hook-set permission (claude) is never clearable from
+              // here.
+              useActiveAgentsStore
+                .getState()
+                .recordTitlePermission(terminalId, true)
+            } else {
+              // Any non-⚠ title clears a TITLE-owned permission (the
+              // grok gate resolved); no-op for every other pane —
+              // including hook-owned permission states.
+              useActiveAgentsStore
+                .getState()
+                .recordTitlePermission(terminalId, false)
+              if (isIdleMarker) {
+                lastSeenWorkingAtRef.current = 0
+                useActiveAgentsStore.getState().recordTitleActivity(terminalId, false)
+              } else if (isWorkingMarker) {
+                lastSeenWorkingAtRef.current = Date.now()
+                useActiveAgentsStore.getState().recordTitleActivity(terminalId, true)
+              }
             }
             // Strip the leading marker chars + collapse whitespace
             // so the user-visible title doesn't have spinner noise
@@ -1671,9 +1710,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           }
           case 'bell': {
             // Bell — same signal iTerm uses for "agent waiting"
-            // notifications. Claude / Codex ring the bell when
-            // they're done and ready for input. Use it as a
-            // definitive idle transition.
+            // notifications. Claude rings the bell when it's done and
+            // ready for input (empirically verified) — use it as a
+            // definitive idle transition. Codex does NOT bell on its
+            // default config (the 2026-07 TUI study disproved the old
+            // "Claude / Codex" claim: zero BELs, including turn-ends
+            // with focus lost). No studied agent (grok/hermes/cursor/
+            // gemini/pi) bells spuriously either, so bell→idle stays
+            // safe without per-agent gating.
             if (import.meta.env.DEV) {
               // eslint-disable-next-line no-console
               console.warn(`[v2-activity] BELL tid=${terminalId.slice(0, 8)}`)

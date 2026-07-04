@@ -84,6 +84,14 @@ const _hookEventAt = new Map<string, number>()
 const HOOK_TRUST_GRACE_MS = 120_000
 const OUTPUT_TRUST_GRACE_MS = 3_000
 
+/** Panes whose 'permission' state was set from a TITLE signal (grok's
+ *  `⚠ Action Required - ` prefix) rather than a lifecycle hook. Only
+ *  these panes may have their permission state CLEARED by a title
+ *  signal — a hook-set permission (claude) stays hook-owned, exactly
+ *  as before. A real hook event for a pane strips its title ownership
+ *  (see `handleLifecycleEvent`), so the hook always wins. */
+const _titlePermissionPanes = new Set<string>()
+
 /** Track agent start times for launch failure detection (paneId → timestamp) */
 const _agentStartTimes = new Map<string, number>()
 /** Track failed launches to avoid infinite retry loops (paneId → retry count) */
@@ -125,6 +133,7 @@ interface ActiveAgentsState {
   getProjectStatus: (projectId: string) => PaneStatus
   recordOutput: (terminalId: string) => void
   recordTitleActivity: (paneId: string, isWorking: boolean) => void
+  recordTitlePermission: (paneId: string, active: boolean) => void
   bindPaneProject: (paneId: string, projectId: string) => void
   handleLifecycleEvent: (paneId: string, tabId: string, eventType: string) => void
   addBackgroundSpawn: (spawn: BackgroundSpawn) => void
@@ -290,6 +299,57 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
   },
 
   /**
+   * Slice 5 — TITLE-driven permission state (grok). Grok announces an
+   * open tool-permission gate in the terminal TITLE (`⚠ Action
+   * Required - ` prefix — 2026-07 TUI signal study) and has NO
+   * lifecycle hooks, so the title is its only permission source.
+   *
+   * `active=true` drives the SAME 'permission' pane state Claude's
+   * hook drives — it delegates to `handleLifecycleEvent('permission')`
+   * for the status write + toast + dedupe — and then marks the pane
+   * title-owned so `active=false` (the prefix went away → the gate
+   * resolved) can clear it back to 'idle'. The next braille tick /
+   * working phrase re-arms 'working' within a second.
+   *
+   * Claude's hook semantics are NOT weakened: a pane whose permission
+   * came from a real hook event is never in `_titlePermissionPanes`
+   * (every hook event strips title ownership first), so `active=false`
+   * no-ops for it — exactly the pre-slice-5 "title activity never
+   * clears permission" contract.
+   */
+  recordTitlePermission: (paneId: string, active: boolean) => {
+    if (active) {
+      // Bind pane→project BEFORE the status write so the sidebar can
+      // attribute the red state even when the gate is the first signal
+      // this pane ever emits (same P1.A discipline as
+      // recordTitleActivity: an agent-chat pane binds to its OWN
+      // embedded project, not whatever workspace is foregrounded).
+      if (!get().paneProjectMap.has(paneId)) {
+        const parsed = parseTerminalId(paneId)
+        const ownProjectId =
+          parsed?.kind === 'agent_chat' ? parsed.projectId : null
+        const boundProjectId =
+          ownProjectId ?? useProjectsStore.getState().activeProjectId
+        if (boundProjectId) get().bindPaneProject(paneId, boundProjectId)
+      }
+      // Reuse the hook path (status + toast + dedupe)…
+      get().handleLifecycleEvent(paneId, '', 'permission')
+      // …then mark title ownership. AFTER the call, because every
+      // hook event — including this internal one — strips ownership.
+      _titlePermissionPanes.add(paneId)
+      return
+    }
+    // Clear — ONLY for a title-owned permission.
+    if (!_titlePermissionPanes.has(paneId)) return
+    _titlePermissionPanes.delete(paneId)
+    const { paneStatuses } = get()
+    if (paneStatuses.get(paneId) !== 'permission') return
+    const newStatuses = new Map(paneStatuses)
+    newStatuses.set(paneId, 'idle')
+    set({ paneStatuses: newStatuses })
+  },
+
+  /**
    * P1.A — register a pane→project mapping UPFRONT, before any
    * title-activity signal can race. Called by AgentChatPane on mount so
    * the pinned-Chat pane's `paneProjectMap` entry exists the moment its
@@ -315,6 +375,14 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
 
     // Record the hook fire so the poll-based cleanup doesn't race us.
     _hookEventAt.set(paneId, Date.now())
+
+    // Slice 5 — a lifecycle event supersedes any TITLE-owned permission
+    // marking: once a hook speaks for a pane, its permission state is
+    // hook-owned and a title signal can no longer clear it.
+    // (`recordTitlePermission(true)` re-adds the mark right after its
+    // internal delegation to this method — grok panes stay
+    // title-owned; claude panes never are.)
+    _titlePermissionPanes.delete(paneId)
 
     if (eventType === 'start') {
       newStatuses.set(paneId, 'working')
@@ -1349,6 +1417,7 @@ export function __resetAgentStateForHostSwitch(): void {
   _hookEventAt.clear()
   _agentStartTimes.clear()
   _launchRetries.clear()
+  _titlePermissionPanes.clear()
   // #688 — the live-session cwd tracking is keyed by the LOCAL host's
   // sessions; wipe it on a host change so the new host's snapshot poll
   // re-seeds `liveSessionCwds` cleanly (and a stale local key can't keep a

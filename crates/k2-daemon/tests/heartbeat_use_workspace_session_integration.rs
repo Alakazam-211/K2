@@ -51,9 +51,14 @@ fn setup_project(workspace_id: &str) -> PathBuf {
 
     let db = k2_core::db::shared();
     let conn = db.lock();
+    // `agent_enabled = 1` alongside the bot mode: every production
+    // mode-setting path keeps the two in lockstep, and since the #9
+    // re-fix `deliver_live`'s wake-existence check is a DB fact
+    // (saved canonical session OR agent_enabled=1) — a mode-only seed
+    // is an unrealistic shape that classifies as `no_agent_mode`.
     conn.execute(
-        "INSERT OR REPLACE INTO projects (id, path, name, agent_mode) \
-         VALUES (?1, ?2, ?3, 'manager')",
+        "INSERT OR REPLACE INTO projects (id, path, name, agent_mode, agent_enabled) \
+         VALUES (?1, ?2, ?3, 'manager', 1)",
         rusqlite::params![
             workspace_id,
             project_path.to_string_lossy().as_ref(),

@@ -10,12 +10,20 @@
 //!   1. `active_terminal_id` set + alive in v2_session_map → inject
 //!      the message body into the live PTY.
 //!   2. `active_terminal_id` null/stale, but an existing PTY's argv
-//!      references `--resume <session_id>` for the workspace's saved
-//!      claude session → inject into that PTY.
-//!   3. Saved `session_id` (claude UUID) but no live PTY → spawn an
-//!      interactive `claude --resume <session_id>`, then deliver.
-//!   4. Neither → spawn an interactive `claude --session-id <new>`,
-//!      then deliver.
+//!      references the workspace's saved session id (any supported
+//!      resume grammar — `--resume`, `--session-id`, pi's `--session`,
+//!      codex's `resume <id>`) → inject into that PTY.
+//!   3. Saved `session_id` but no live PTY → wake: the canonical
+//!      resume resolver (`resume_chat::resolve_resume_chat_args`)
+//!      picks the agent (stored `workspace_sessions.harness` wins for
+//!      an existing canonical session) + the provider's own resume
+//!      argv, spawn interactively, then deliver. Slice 3b — pre-3b
+//!      this hardcoded `claude --resume <id>` and woke the WRONG
+//!      binary for non-claude workspaces (research dragon #3).
+//!   4. Neither → fresh wake via the same resolver: premint providers
+//!      (claude/grok) spawn with `--session-id <new>`, self-minting
+//!      providers (pi/codex/gemini/cursor) spawn bare and adopt their
+//!      discovered id post-hoc, unknown providers spawn bare.
 //!
 //! Every return path produces the canonical [`MsgResponse`] shape:
 //!
@@ -106,7 +114,7 @@ impl MsgReason {
                 "Workspace has no agent. Use `k2 work send` to queue, or `k2 mode custom` to set up an agent."
             }
             Self::SpawnFailed => {
-                "Spawn failed. Verify `claude` is on PATH for the daemon."
+                "Spawn failed. Verify the workspace's agent CLI (e.g. `claude`) is on PATH for the daemon."
             }
             Self::PtyDied => {
                 "Target session crashed during delivery. Check `~/.k2/daemon.stderr.log`."
@@ -733,22 +741,15 @@ fn attempt_delivery(
     }
 
     // Branch 1b: argv-scan fallback for the cold-start case (any live
-    // PTY running --resume <saved_session>).
-    if let Some(claude_sid) = saved_session.as_deref() {
+    // PTY whose argv claims the saved session id). Slice 3b: the match
+    // is grammar-aware (`provider_resume::argv_references_session`) so
+    // subcommand-style resumes (`codex resume <id>`) are found too.
+    if let Some(saved_sid) = saved_session.as_deref() {
         for (_n, live) in session_lookup::snapshot_all() {
-            let args = live.args();
-            let mut i = 0;
-            let mut found = false;
-            while i + 1 < args.len() {
-                if (args[i] == "--session-id" || args[i] == "--resume")
-                    && args[i + 1] == claude_sid
-                {
-                    found = true;
-                    break;
-                }
-                i += 1;
-            }
-            if found {
+            if k2_core::workspace::provider_resume::argv_references_session(
+                &live.args(),
+                saved_sid,
+            ) {
                 return inject_live(&live, text, from, command, "argv_scan", &project_id);
             }
         }
@@ -801,22 +802,11 @@ fn attempt_delivery(
     // conversation regardless of the name.
     let agent_name = resolve_spawn_name(project_path, &agent_mode);
 
-    // Branch 2: saved session, no live PTY → resume + fire.
-    if let Some(claude_sid) = saved_session.as_deref() {
-        return resume_and_fire(
-            project_path,
-            &project_id,
-            &agent_name,
-            claude_sid,
-            text,
-            from,
-            command,
-            wake_timeout,
-        );
-    }
-
-    // Branch 3: fresh fire — no saved session at all.
-    fresh_fire(
+    // Branches 2+3: wake. The canonical resume resolver (Slice 3b)
+    // decides resume-vs-fresh AND which agent binary speaks — the
+    // stored harness wins for an existing canonical session, the
+    // workspace/global default governs a fresh one.
+    wake_and_fire(
         project_path,
         &project_id,
         &agent_name,
@@ -1043,66 +1033,6 @@ fn inject_live(
     MsgResponse::ok(target_id, branch)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn resume_and_fire(
-    project_path: &str,
-    project_id: &str,
-    agent_name: &str,
-    claude_sid: &str,
-    text: &str,
-    from: &str,
-    command: &str,
-    wake_timeout: Duration,
-) -> MsgResponse {
-    let args = vec![
-        "--dangerously-skip-permissions".to_string(),
-        "--resume".to_string(),
-        claude_sid.to_string(),
-    ];
-    spawn_and_inject(
-        project_path,
-        project_id,
-        agent_name,
-        args,
-        text,
-        from,
-        command,
-        "resume_and_fire",
-        Some(claude_sid),
-        wake_timeout,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn fresh_fire(
-    project_path: &str,
-    project_id: &str,
-    agent_name: &str,
-    text: &str,
-    from: &str,
-    command: &str,
-    wake_timeout: Duration,
-) -> MsgResponse {
-    let new_sid = uuid::Uuid::new_v4().to_string();
-    let args = vec![
-        "--dangerously-skip-permissions".to_string(),
-        "--session-id".to_string(),
-        new_sid.clone(),
-    ];
-    spawn_and_inject(
-        project_path,
-        project_id,
-        agent_name,
-        args,
-        text,
-        from,
-        command,
-        "fresh_fire",
-        Some(&new_sid),
-        wake_timeout,
-    )
-}
-
 /// Issue #9 — re-resolve a now-live session for `project_id` AFTER taking
 /// the wake lock. A concurrent waker may have just spawned the canonical
 /// session; if so we inject into THAT rather than spawning a duplicate.
@@ -1125,17 +1055,13 @@ fn relookup_live(project_id: &str, saved_session: Option<&str>) -> Option<sessio
             }
         }
     }
-    if let Some(claude_sid) = saved_session {
+    if let Some(saved_sid) = saved_session {
         for (_n, live) in session_lookup::snapshot_all() {
-            let args = live.args();
-            let mut i = 0;
-            while i + 1 < args.len() {
-                if (args[i] == "--session-id" || args[i] == "--resume")
-                    && args[i + 1] == claude_sid
-                {
-                    return Some(live);
-                }
-                i += 1;
+            if k2_core::workspace::provider_resume::argv_references_session(
+                &live.args(),
+                saved_sid,
+            ) {
+                return Some(live);
             }
         }
     }
@@ -1186,17 +1112,39 @@ fn deliver_post_wake(
     inject_and_submit(live, payload)
 }
 
+/// Issue #9 wake (branches 2+3), Slice-3b rewired. Spawns the
+/// workspace's canonical agent session — resume or fresh — and
+/// synchronously delivers the body once the TUI is ready.
+///
+/// **Which binary + argv (the wake-wrong-binary fix, research dragon
+/// #3):** everything comes from the canonical resume resolver
+/// (`resume_chat::resolve_resume_chat_args`), the same seam the pinned
+/// chat tab's ensure path uses:
+/// - an existing canonical session resumes with the agent its stored
+///   `workspace_sessions.harness` names (a grok workspace wakes `grok`,
+///   never `claude`), speaking that provider's resume grammar via the
+///   `ProviderResume` adapter (`--resume`, pi `--session`, codex
+///   `resume <id>`);
+/// - a fresh wake follows the workspace/global default agent: premint
+///   providers (claude/grok) pin `--session-id <new-uuid>`, self-minting
+///   providers spawn bare and the discovered id is adopted post-hoc
+///   (`defer_adopt_discovered_session`), unknown providers spawn bare
+///   with no invented flags;
+/// - claude argv stays byte-identical to the pre-3b hardcode
+///   (`--dangerously-skip-permissions --resume <sid>` /
+///   `--session-id <new>`).
+///
+/// The resolver runs INSIDE the per-project wake lock so a concurrent
+/// waker can never double-mint a session identity; the post-lock
+/// relookup still coalesces onto a session a first waker just spawned.
 #[allow(clippy::too_many_arguments)]
-fn spawn_and_inject(
+fn wake_and_fire(
     project_path: &str,
     project_id: &str,
     agent_name: &str,
-    args: Vec<String>,
     text: &str,
     from: &str,
     command: &str,
-    branch: &str,
-    claude_session_id: Option<&str>,
     wake_timeout: Duration,
 ) -> MsgResponse {
     // Issue #9 — serialize the wake on `project_id`. Two callers
@@ -1210,7 +1158,16 @@ fn spawn_and_inject(
     // Post-lock re-check: did a concurrent waker already wake the peer? If
     // a live canonical session now exists, deliver into it (no duplicate
     // spawn). `woke: false` because THIS call didn't pay the wake cost.
-    if let Some(live) = relookup_live(project_id, claude_session_id) {
+    let saved_session = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        WorkspaceSession::get(&conn, project_id)
+            .ok()
+            .flatten()
+            .and_then(|r| r.session_id)
+            .filter(|s| !s.is_empty())
+    };
+    if let Some(live) = relookup_live(project_id, saved_session.as_deref()) {
         let payload = format_message(from, text, command);
         return match inject_and_submit(&live, &payload) {
             InjectOutcome::Delivered => {
@@ -1221,20 +1178,50 @@ fn spawn_and_inject(
         };
     }
 
+    // Resolve command + argv + session identity (see fn doc). Held
+    // inside the wake lock so the identity writes (premint/converge)
+    // are single-flight per workspace.
+    let resolved =
+        match k2_core::workspace::resume_chat::resolve_resume_chat_args(project_path) {
+            Ok(r) => r,
+            Err(e) => {
+                log_debug!("[msg/wake] resume resolve failed for {project_path}: {e}");
+                return MsgResponse::fail(MsgReason::SpawnFailed);
+            }
+        };
+    let branch = if resolved.resumed_existing {
+        "resume_and_fire"
+    } else {
+        "fresh_fire"
+    };
+
+    // Test seam — mirrors `wake_headless::spawn_wake_headless`:
+    // substitute a benign command (e.g. `cat`) so integration tests
+    // exercise the wake path without a real agent binary. `cat` never
+    // advertises bracketed-paste readiness, so the readiness ceiling is
+    // clamped to keep tests fast. Production never sets this.
+    let (spawn_command, spawn_args, wake_timeout) =
+        match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
+            Ok(c) if !c.is_empty() => {
+                (c, Vec::new(), wake_timeout.min(Duration::from_millis(1500)))
+            }
+            _ => (resolved.command.clone(), resolved.args.clone(), wake_timeout),
+        };
+
     let wake_start = std::time::Instant::now();
     let outcome = match spawn_agent_session_v2_blocking(SpawnWorkspaceSessionRequest {
         agent_name: agent_name.to_string(),
         project_id: Some(project_id.to_string()),
         cwd: project_path.to_string(),
-        command: Some("claude".to_string()),
-        args: Some(args),
+        command: Some(spawn_command),
+        args: Some(spawn_args),
         cols: 120,
         rows: 38,
         canonical_key: None,
     }) {
         Ok(o) => o,
         Err(e) => {
-            log_debug!("[msg/spawn_and_inject] spawn failed: {e}");
+            log_debug!("[msg/wake_and_fire] spawn failed: {e}");
             return MsgResponse::fail(MsgReason::SpawnFailed);
         }
     };
@@ -1242,7 +1229,9 @@ fn spawn_and_inject(
 
     // Upsert the workspace_sessions row + stamp session_id. Pre-0.37.5
     // history: see git log for `0.37.5 Phase D` if you want the
-    // archaeology.
+    // archaeology. The resolver already persisted the identity for the
+    // premint/converge cases; the stamp below keeps the resume case's
+    // pre-3b parity (idempotent re-write of the same id).
     let canonical_terminal_id = format!("agent-chat:{project_id}");
     let _ = k2_core::workspace::session::k2so_agents_lock(
         project_path.to_string(),
@@ -1254,9 +1243,23 @@ fn spawn_and_inject(
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = WorkspaceSession::save_active_terminal_id(&conn, project_id, &target_id);
-        if let Some(sid) = claude_session_id {
-            let _ = WorkspaceSession::update_session_id(&conn, project_id, sid);
+        if !resolved.resume_session.is_empty() {
+            let _ = WorkspaceSession::update_session_id(
+                &conn,
+                project_id,
+                &resolved.resume_session,
+            );
         }
+    }
+
+    // Self-minting provider (pi/codex/gemini/cursor): adopt the session
+    // id the agent creates on disk a beat after spawn, stamping
+    // `workspace_sessions.session_id` + `harness` (Slice 3b).
+    if resolved.pending_session_discovery {
+        k2_core::workspace::provider_resume::defer_adopt_discovered_session(
+            resolved.provider.clone(),
+            project_path.to_string(),
+        );
     }
 
     log_debug!(

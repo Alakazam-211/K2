@@ -146,7 +146,7 @@ struct SetRoleReq {
 ///
 /// CHANGE-ROLES is OWNER-ONLY (the dispatcher gates this route to an
 /// owner-token OR an Owner-role session via `can_change_roles`). The
-/// `role` is one of `"owner" | "admin" | "member"`.
+/// `role` is one of `"owner" | "admin" | "member" | "viewer"`.
 ///
 /// Last-Owner guard: the route never strips the LAST stored Owner if that
 /// would leave management unreachable. In practice the host owner token
@@ -164,7 +164,7 @@ pub fn handle_set_role(body: &[u8]) -> CliResponse {
         Some(r) => r,
         None => {
             return CliResponse::bad_request(format!(
-                "invalid role '{}' (expected owner|admin|member)",
+                "invalid role '{}' (expected owner|admin|member|viewer)",
                 req.role
             ))
         }
@@ -644,6 +644,13 @@ pub fn handle_whoami(
 mod tests {
     use super::*;
 
+    // `$HOME` is process-global: every HOME-swapping test in this crate
+    // must serialize on the ONE crate-wide lock via
+    // `crate::test_support::with_temp_home` — a module-local lock would
+    // still race the TempHome tests in other modules (federation_drain,
+    // update jobs, …). See test_support.rs's module doc.
+    use crate::test_support::with_temp_home;
+
     #[test]
     fn add_rejects_malformed_body() {
         let r = handle_add(b"not json");
@@ -668,37 +675,23 @@ mod tests {
 
     #[test]
     fn logout_deletes_the_callers_persisted_session() {
-        // Seed a session in a throwaway HOME, then confirm handle_logout
+        // Seed a session in a sandboxed HOME, then confirm handle_logout
         // deletes it (validate_session goes None afterward).
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let tmp =
-            std::env::temp_dir().join(format!("k2-logout-route-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let prev = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp);
-
-        connect_users::add_user("logoutu", "password1").expect("add");
-        let tok = connect_users::create_session("logoutu");
-        assert_eq!(
-            connect_users::validate_session(&tok),
-            Some("logoutu".to_string())
-        );
-        let r = handle_logout(&tok);
-        assert_eq!(r.status, "200 OK");
-        assert_eq!(
-            connect_users::validate_session(&tok),
-            None,
-            "logout must delete the caller's session"
-        );
-
-        match prev {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
+        with_temp_home(|| {
+            connect_users::add_user("logoutu", "password1").expect("add");
+            let tok = connect_users::create_session("logoutu");
+            assert_eq!(
+                connect_users::validate_session(&tok),
+                Some("logoutu".to_string())
+            );
+            let r = handle_logout(&tok);
+            assert_eq!(r.status, "200 OK");
+            assert_eq!(
+                connect_users::validate_session(&tok),
+                None,
+                "logout must delete the caller's session"
+            );
+        });
     }
 
     #[test]
@@ -737,41 +730,43 @@ mod tests {
     }
 
     #[test]
+    fn set_role_accepts_viewer_via_from_wire() {
+        // Presence S4: the existing route accepts "viewer" purely through
+        // Role::from_wire — no route restructuring. Seed a store in a
+        // sandboxed HOME so set_role resolves the target.
+        with_temp_home(|| {
+            connect_users::add_user("viewer_wire", "password1").expect("add");
+            let r = handle_set_role(br#"{"username":"viewer_wire","role":"viewer"}"#);
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            assert_eq!(
+                connect_users::role_for_user("viewer_wire"),
+                Some(connect_users::Role::Viewer)
+            );
+        });
+    }
+
+    #[test]
     fn admin_cannot_remove_owner_403() {
         // Route-level: an Admin actor removing an Owner-role target is
         // rejected with 403 before remove_user runs (K2SO #629). Seed a
-        // store in a throwaway HOME so the role lookup resolves.
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let tmp =
-            std::env::temp_dir().join(format!("k2so-i629-route-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let prev = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp);
+        // store in a sandboxed HOME so the role lookup resolves.
+        with_temp_home(|| {
+            connect_users::add_user("theowner", "password1").expect("add owner");
+            connect_users::set_role("theowner", connect_users::Role::Owner).expect("promote");
 
-        connect_users::add_user("theowner", "password1").expect("add owner");
-        connect_users::set_role("theowner", connect_users::Role::Owner).expect("promote");
+            // Admin actor → can_act_on(Admin, Owner) is false → 403, no delete.
+            let r = handle_remove(connect_users::Role::Admin, br#"{"username":"theowner"}"#);
+            assert_eq!(r.status, "403 Forbidden", "Admin must not remove an Owner");
+            assert!(
+                connect_users::role_for_user("theowner").is_some(),
+                "owner must still exist after the 403"
+            );
 
-        // Admin actor → can_act_on(Admin, Owner) is false → 403, no delete.
-        let r = handle_remove(connect_users::Role::Admin, br#"{"username":"theowner"}"#);
-        assert_eq!(r.status, "403 Forbidden", "Admin must not remove an Owner");
-        assert!(
-            connect_users::role_for_user("theowner").is_some(),
-            "owner must still exist after the 403"
-        );
-
-        // Owner actor → can_act_on(Owner, Owner) is true → succeeds.
-        let r = handle_remove(connect_users::Role::Owner, br#"{"username":"theowner"}"#);
-        assert_eq!(r.status, "200 OK", "Owner may remove an Owner");
-        assert!(connect_users::role_for_user("theowner").is_none());
-
-        match prev {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
+            // Owner actor → can_act_on(Owner, Owner) is true → succeeds.
+            let r = handle_remove(connect_users::Role::Owner, br#"{"username":"theowner"}"#);
+            assert_eq!(r.status, "200 OK", "Owner may remove an Owner");
+            assert!(connect_users::role_for_user("theowner").is_none());
+        });
     }
 
     #[test]

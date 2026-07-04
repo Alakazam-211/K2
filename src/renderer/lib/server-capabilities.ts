@@ -76,6 +76,13 @@ export const FEATURES = {
    *  when NOT (an older / remote daemon that doesn't emit these frames) it
    *  KEEPS the existing polling fallback so status still updates. */
   'daemon-broadcasts': '0.39.39',
+  /** `Role::Viewer` (presence/multiplayer S4): the daemon's
+   *  /cli/users/set-role + add-user flow accept `"viewer"` and the
+   *  presence roster carries viewer rows + POST /cli/presence/grant.
+   *  Gates OFFERING the viewer option in the role dropdown so an older
+   *  daemon (whose Role::from_wire rejects "viewer" with a 400) never
+   *  gets a doomed set-role. */
+  'viewer-role': '0.40.27',
 } as const
 
 export type FeatureKey = keyof typeof FEATURES

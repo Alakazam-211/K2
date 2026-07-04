@@ -238,3 +238,26 @@ describe('serverSupports — remote, roles gating (min 0.39.23)', () => {
     expect(serverSupports('roles')).toBe(true)
   })
 })
+
+describe('serverSupports — remote, viewer-role gating (min 0.40.27, presence S4)', () => {
+  it('maps to 0.40.27', () => {
+    expect(featureMinVersion('viewer-role')).toBe('0.40.27')
+    expect(FEATURES['viewer-role']).toBe('0.40.27')
+  })
+  it('false below min (older daemon 400s a viewer set-role — hide the option)', () => {
+    setActiveRemote('0.40.26')
+    expect(serverSupports('viewer-role')).toBe(false)
+  })
+  it('true at exactly min', () => {
+    setActiveRemote('0.40.27')
+    expect(serverSupports('viewer-role')).toBe(true)
+  })
+  it('true above min', () => {
+    setActiveRemote('0.41.0')
+    expect(serverSupports('viewer-role')).toBe(true)
+  })
+  it('always true for the local daemon (byte-paired with this app)', () => {
+    useConnectHostStore.setState({ activeHost: 'local', serverVersion: null })
+    expect(serverSupports('viewer-role')).toBe(true)
+  })
+})

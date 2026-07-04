@@ -48,10 +48,11 @@ const LOCKOUT_THRESHOLD: u32 = 3;
 /// How long a username stays locked once the threshold is hit.
 const LOCKOUT_DURATION_MINUTES: i64 = 15;
 
-/// Permission tier for a connect-user (K2SO #629). Strict hierarchy
-/// `Owner > Admin > Member`. The local daemon-token holder (the host
-/// machine's owner) is ALWAYS treated as `Owner` regardless of any stored
-/// row — that authority lives in the token, not the file.
+/// Permission tier for a connect-user (K2SO #629; Viewer added by the
+/// presence/multiplayer arc S4). Strict hierarchy
+/// `Owner > Admin > Member > Viewer`. The local daemon-token holder (the
+/// host machine's owner) is ALWAYS treated as `Owner` regardless of any
+/// stored row — that authority lives in the token, not the file.
 ///
 /// - **Owner**: add/remove/enable/disable ANY user + CHANGE ROLES + use
 ///   K2SO. Assignable to a connect-user.
@@ -59,11 +60,17 @@ const LOCKOUT_DURATION_MINUTES: i64 = 15;
 ///   roles; CANNOT act on an Owner-role user.
 /// - **Member**: connect + use K2SO only. No user management. The DEFAULT
 ///   for existing rows (via `#[serde(default)]`) and newly added users.
+/// - **Viewer**: view-only (presence PRD §4) — connects and watches, but
+///   cannot claim/type/resize unless holding an ephemeral edit grant
+///   (`k2-daemon presence.rs::set_granted`), and manages nothing. Sits
+///   BELOW the `>= Member` capability floors (e.g. send-message).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     /// Lowest tier — listed first so the derived `Ord` ranks
-    /// `Member < Admin < Owner`.
+    /// `Viewer < Member < Admin < Owner`. VARIANT ORDER IS LOAD-BEARING
+    /// for `derive(Ord)`; the `role_ordering_*` test pins it.
+    Viewer,
     Member,
     Admin,
     Owner,
@@ -77,13 +84,14 @@ impl Default for Role {
 }
 
 impl Role {
-    /// Parse a wire role string (`"owner"` | `"admin"` | `"member"`).
-    /// Case-insensitive; returns `None` for anything else.
+    /// Parse a wire role string (`"owner"` | `"admin"` | `"member"` |
+    /// `"viewer"`). Case-insensitive; returns `None` for anything else.
     pub fn from_wire(s: &str) -> Option<Role> {
         match s.trim().to_ascii_lowercase().as_str() {
             "owner" => Some(Role::Owner),
             "admin" => Some(Role::Admin),
             "member" => Some(Role::Member),
+            "viewer" => Some(Role::Viewer),
             _ => None,
         }
     }
@@ -94,12 +102,13 @@ impl Role {
             Role::Owner => "owner",
             Role::Admin => "admin",
             Role::Member => "member",
+            Role::Viewer => "viewer",
         }
     }
 }
 
 /// Whether `role` may manage users at all (add/remove/enable/disable).
-/// True for `Admin` and `Owner`; false for `Member`.
+/// True for `Admin` and `Owner`; false for `Member` and `Viewer`.
 pub fn can_manage_users(role: Role) -> bool {
     matches!(role, Role::Admin | Role::Owner)
 }
@@ -112,14 +121,14 @@ pub fn can_change_roles(role: Role) -> bool {
 /// Whether an actor of `actor` role may perform a management action
 /// (remove/disable/etc.) on a target of `target` role.
 ///
-/// - `Owner` can act on anyone (Owner/Admin/Member).
-/// - `Admin` can act on `Admin`/`Member` but NOT on an `Owner`.
-/// - `Member` can act on no one.
+/// - `Owner` can act on anyone (Owner/Admin/Member/Viewer).
+/// - `Admin` can act on `Admin`/`Member`/`Viewer` but NOT on an `Owner`.
+/// - `Member` and `Viewer` can act on no one.
 pub fn can_act_on(actor: Role, target: Role) -> bool {
     match actor {
         Role::Owner => true,
         Role::Admin => target != Role::Owner,
-        Role::Member => false,
+        Role::Member | Role::Viewer => false,
     }
 }
 
@@ -1630,25 +1639,42 @@ mod tests {
     // ── K2SO #629 — role model ──────────────────────────────────────────
 
     #[test]
-    fn role_ordering_is_member_lt_admin_lt_owner() {
+    fn role_ordering_is_viewer_lt_member_lt_admin_lt_owner() {
+        // VARIANT ORDER IS LOAD-BEARING for derive(Ord) — Viewer must be
+        // declared FIRST so it ranks below every other tier (presence S4).
+        assert!(Role::Viewer < Role::Member);
         assert!(Role::Member < Role::Admin);
         assert!(Role::Admin < Role::Owner);
+        assert!(Role::Viewer < Role::Owner);
+        assert!(Role::Viewer < Role::Admin);
         assert!(Role::Member < Role::Owner);
+        // Viewer sits BELOW the `>= Member` capability floors
+        // (e.g. authorize_send_message).
+        assert!(Role::Viewer < Role::Member);
+        assert!(!(Role::Viewer >= Role::Member));
+        // Serde default is UNCHANGED by the Viewer addition: legacy rows
+        // (no `role` field) still deserialize as Member.
         assert_eq!(Role::default(), Role::Member);
     }
 
     #[test]
     fn role_wire_round_trips() {
-        for r in [Role::Owner, Role::Admin, Role::Member] {
+        for r in [Role::Owner, Role::Admin, Role::Member, Role::Viewer] {
             assert_eq!(Role::from_wire(r.as_wire()), Some(r));
         }
         // Case-insensitive + trimmed.
         assert_eq!(Role::from_wire("  OWNER "), Some(Role::Owner));
         assert_eq!(Role::from_wire("Admin"), Some(Role::Admin));
+        assert_eq!(Role::from_wire(" Viewer "), Some(Role::Viewer));
         assert_eq!(Role::from_wire("nonsense"), None);
         // serde uses the same snake_case strings.
         assert_eq!(serde_json::to_string(&Role::Owner).unwrap(), "\"owner\"");
         assert_eq!(serde_json::to_string(&Role::Member).unwrap(), "\"member\"");
+        assert_eq!(serde_json::to_string(&Role::Viewer).unwrap(), "\"viewer\"");
+        assert_eq!(
+            serde_json::from_str::<Role>("\"viewer\"").unwrap(),
+            Role::Viewer
+        );
     }
 
     #[test]
@@ -1656,6 +1682,7 @@ mod tests {
         assert!(can_manage_users(Role::Owner));
         assert!(can_manage_users(Role::Admin));
         assert!(!can_manage_users(Role::Member));
+        assert!(!can_manage_users(Role::Viewer));
     }
 
     #[test]
@@ -1663,6 +1690,7 @@ mod tests {
         assert!(can_change_roles(Role::Owner));
         assert!(!can_change_roles(Role::Admin));
         assert!(!can_change_roles(Role::Member));
+        assert!(!can_change_roles(Role::Viewer));
     }
 
     #[test]
@@ -1671,14 +1699,41 @@ mod tests {
         assert!(can_act_on(Role::Owner, Role::Owner));
         assert!(can_act_on(Role::Owner, Role::Admin));
         assert!(can_act_on(Role::Owner, Role::Member));
-        // Admin can act on Admin/Member but NOT Owner.
+        assert!(can_act_on(Role::Owner, Role::Viewer));
+        // Admin can act on Admin/Member/Viewer but NOT Owner.
         assert!(!can_act_on(Role::Admin, Role::Owner));
         assert!(can_act_on(Role::Admin, Role::Admin));
         assert!(can_act_on(Role::Admin, Role::Member));
+        assert!(can_act_on(Role::Admin, Role::Viewer));
         // Member can act on no one.
         assert!(!can_act_on(Role::Member, Role::Owner));
         assert!(!can_act_on(Role::Member, Role::Admin));
         assert!(!can_act_on(Role::Member, Role::Member));
+        assert!(!can_act_on(Role::Member, Role::Viewer));
+        // Viewer can act on no one — not even another Viewer.
+        assert!(!can_act_on(Role::Viewer, Role::Owner));
+        assert!(!can_act_on(Role::Viewer, Role::Admin));
+        assert!(!can_act_on(Role::Viewer, Role::Member));
+        assert!(!can_act_on(Role::Viewer, Role::Viewer));
+    }
+
+    #[test]
+    fn viewer_role_persists_through_set_role_and_store_round_trip() {
+        with_temp_home(|| {
+            add_user("viewy", "password").expect("add");
+            // New users still default to Member; Viewer is an explicit demote.
+            assert_eq!(role_for_user("viewy"), Some(Role::Member));
+            set_role("viewy", Role::Viewer).expect("demote to viewer");
+            assert_eq!(role_for_user("viewy"), Some(Role::Viewer));
+            // The stored row round-trips through the JSON store + wire view.
+            let views = list_users().expect("list");
+            assert_eq!(views[0].role, Role::Viewer);
+            let json = serde_json::to_string(&views[0]).unwrap();
+            assert!(json.contains("\"role\":\"viewer\""), "got: {json}");
+            // A session for a viewer resolves the viewer role.
+            let tok = create_session("viewy");
+            assert_eq!(role_for_session(&tok), Some(Role::Viewer));
+        });
     }
 
     #[test]

@@ -118,8 +118,9 @@ interface TunnelStatus {
   frpc_installed: boolean
 }
 
-// K2 #629 — connect-user permission tier.
-type K2Role = 'owner' | 'admin' | 'member'
+// K2 #629 — connect-user permission tier. 'viewer' (presence S4) is the
+// LOWEST tier: view-only unless holding an ephemeral edit grant.
+type K2Role = 'owner' | 'admin' | 'member' | 'viewer'
 
 interface K2User {
   username: string
@@ -397,6 +398,10 @@ export function K2ConnectSection(): React.JSX.Element {
   const serverVersion = useConnectHostStore((s) => s.serverVersion)
   const supportsRoles = useServerSupports('roles')
   const oldHostNoRoles = isRemote && serverVersion !== null && !supportsRoles
+  // Presence S4: only OFFER the viewer tier when the active daemon's
+  // Role::from_wire accepts "viewer" — an older daemon would 400 the
+  // set-role. (Capabilities are version-derived; local is always true.)
+  const supportsViewerRole = useServerSupports('viewer-role')
 
   // ── Users / Access state ──────────────────────────────────────────────
   // K2 #629: the LOCAL viewer's role (from whoami). The desktop app talks
@@ -547,7 +552,10 @@ export function K2ConnectSection(): React.JSX.Element {
       if (res.ok) {
         const data = (await res.json()) as { role?: string; owner?: boolean }
         const role: K2Role | null =
-          data.role === 'owner' || data.role === 'admin' || data.role === 'member'
+          data.role === 'owner' ||
+          data.role === 'admin' ||
+          data.role === 'member' ||
+          data.role === 'viewer'
             ? data.role
             : data.owner
               ? 'owner'
@@ -1561,6 +1569,13 @@ export function K2ConnectSection(): React.JSX.Element {
                           <SettingDropdown
                             value={u.role ?? 'member'}
                             options={[
+                              // Presence S4 — viewer is offered only when
+                              // the daemon speaks it (older ones 400 the
+                              // set-role); a row ALREADY viewer keeps the
+                              // option so its value renders + can change.
+                              ...(supportsViewerRole || u.role === 'viewer'
+                                ? [{ value: 'viewer', label: 'Viewer — view-only unless granted' }]
+                                : []),
                               { value: 'member', label: 'Member' },
                               { value: 'admin', label: 'Admin' },
                               { value: 'owner', label: 'Owner' },

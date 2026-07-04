@@ -27,6 +27,11 @@ tauri-plugin-fs = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# Desktop notification on FeedbackCreated (Feedback F2 —
+# prd-agent-feedback-notifications §6). macOS Notification Center via
+# the standard Tauri v2 plugin; the renderer fires it through
+# @tauri-apps/plugin-notification.
+tauri-plugin-notification = "2"
 
 # Cross-platform OS keychain for K2 Connect remote-host tokens. Backs
 # the `k2_secret_{set,get,delete}` Tauri commands. Keyed by ConnectHost

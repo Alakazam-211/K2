@@ -3,6 +3,39 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.27 — See who's here
+
+- **Presence: know who's on your server.** The top bar shows everyone
+  connected to the daemon — role-colored avatars (owner amber, admin purple,
+  member blue, viewer gray) with a `+N` overflow. Click it for the full
+  picture: every user, their role, how many windows they have open,
+  which workspaces they're in, and how long they've been connected.
+- **Moderate from one place.** Owners and admins can **kick** a user from
+  the presence panel — their sessions are revoked and their connections
+  close immediately — and grant a **temporary edit pass** to view-only
+  users. Grants are a simple toggle and automatically reset to view-only
+  when that user disconnects.
+- **A new "Viewer" role.** Users you want watching, not driving: viewers
+  can see everything but can't type, resize, or take over a terminal
+  unless you flip their edit toggle. Set it per-user in Settings →
+  K2 Connect.
+- **Viewer/claimer mode per window.** A new top-bar toggle puts any window
+  in view-only mode — great for demos and second screens. The server
+  enforces it: viewer windows can't type into or resize shared terminals,
+  so nobody's stray keystroke lands in your session.
+- **Pin a terminal to a size.** From any terminal tab: pin to 80×24,
+  100×30, 120×36, 160×48, or "match my window now." Everyone then sees the
+  exact same grid — smaller windows scale it down to fit instead of
+  fighting over the size. Made for teaching, demos, and pair sessions;
+  unpin to go back to normal. The pin survives daemon restarts.
+- **See where people are working.** Workspace rows in the sidebar now show
+  mini presence avatars (who's in that workspace right now) in place of
+  the old +/- git counters — the full change list still lives in the
+  Changes panel.
+- **The timer is now a stopwatch.** One click to start counting up,
+  pause/resume and stop as before — the countdown presets and expiry
+  pop-ups are gone. Your saved time entries and history are untouched.
+
 ## 0.40.26 — Agents can ask you things
 
 - **`k2 feedback ask` — a durable question channel from agents to you.** An

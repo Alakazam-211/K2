@@ -115,6 +115,12 @@ export interface AppSettingsResponse {
   // runs the bundled 1.5B model (ON) or stays regex-only (OFF, default).
   // Optional: older snapshots omit it → readers treat absent as false.
   useLlmHitlDetection?: boolean
+  // F4 — play a soft chime when an agent finishes while its pane isn't
+  // being watched (the unseen-done fire; see completion-sound.ts).
+  // Persisted via the daemon's settings.json deep-merge (no Rust struct
+  // field needed). Optional: older snapshots omit it → readers treat
+  // absent as true (default ON).
+  completionSoundEnabled?: boolean
 }
 
 export interface EditorSettingsBackend {

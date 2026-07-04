@@ -74,6 +74,11 @@ interface SettingsState {
   // decide whether the model is ever consulted.
   useLlmHitlDetection: boolean
 
+  // F4 — completion chime for UNSEEN agent completions only (an agent
+  // finished while its pane wasn't being watched). The amber ActiveBar
+  // dot always shows; this gates only the sound. DEFAULTS ON.
+  completionSoundEnabled: boolean
+
   // Editor settings
   editor: EditorSettingsBackend
 
@@ -115,6 +120,7 @@ interface SettingsState {
   setAllowRemoteInstruct: (enabled: boolean) => void
   setFederationEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
+  setCompletionSoundEnabled: (enabled: boolean) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
   resetAllSettings: () => void
@@ -208,6 +214,7 @@ async function persistAndApply(
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       federationEnabled: result.federationEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
+      completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,
@@ -232,6 +239,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   allowRemoteInstruct: false,
   federationEnabled: false,
   useLlmHitlDetection: false,
+  completionSoundEnabled: true,
   editor: { ...DEFAULT_EDITOR },
   defaultAgent: 'claude',
   initialProjectId: null,
@@ -410,6 +418,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setCompletionSoundEnabled: async (enabled: boolean) => {
+    const prev = get().completionSoundEnabled
+    set({ completionSoundEnabled: enabled }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `completionSoundEnabled`.
+      await persistAndApply(set, { completionSoundEnabled: enabled })
+    } catch (err) {
+      console.error('[settings] Failed to persist completion-sound-enabled:', err)
+      set({ completionSoundEnabled: prev })
+    }
+  },
+
   updateEditorSettings: async (partial: Partial<EditorSettingsBackend>) => {
     const prev = get().editor
     const merged = { ...prev, ...partial }
@@ -443,6 +463,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       federationEnabled: result.federationEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
+      completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
     })
   },
@@ -476,6 +497,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       federationEnabled: result.federationEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
+      completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,

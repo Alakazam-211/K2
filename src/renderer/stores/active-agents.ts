@@ -15,6 +15,8 @@ import { resolveAgentCommand, readProjectDefaultAgent } from '@/lib/agent-resolv
 import { useSettingsStore } from './settings'
 import { KNOWN_AGENT_COMMANDS, AGENT_IDLE_THRESHOLD_MS } from '@shared/constants'
 import { agentChatId, worktreeChatId, parseTerminalId } from '@/lib/terminal-id'
+import { playCompletionSound } from '@/lib/completion-sound'
+import { useWindowFocusStore } from '@/stores/window-focus'
 // #625 — reset agent pane state on a host switch.
 import { onActiveHostChange } from '@/stores/connect-host'
 import { serverSupports } from '@/lib/server-capabilities'
@@ -76,6 +78,108 @@ export interface ActiveAgent {
   hookStatus: PaneStatus
 }
 
+/** F4 — true when any of the project's panes finished while the user
+ *  wasn't looking and hasn't been viewed since. Drives the Active-bar
+ *  amber unseen-done dot. Reads `unseenDone` + `paneProjectMap` off the
+ *  active-agents store (same shape as `projectHasLiveSession`). */
+export function projectHasUnseenDone(
+  unseenDone: Map<string, number>,
+  paneProjectMap: Map<string, string>,
+  projectId: string,
+): boolean {
+  for (const paneId of unseenDone.keys()) {
+    if (paneProjectMap.get(paneId) === projectId) return true
+  }
+  return false
+}
+
+// ── F4: unseen-done state machine ───────────────────────────────────
+// One new piece of state — unseen-done — set when a pane transitions
+// working|permission → idle while the user ISN'T looking at that pane,
+// and cleared the moment they look (TerminalPane's visible+focused
+// effect calls `markSeen`). Both the Active-bar amber dot and the
+// completion chime hang off the same set-transition.
+// Spec: .k2/notes/orange-dot-done-sound.md.
+
+/** Debounce "done" — Claude flickers working→idle→working at tool
+ *  boundaries; only a stop that survives this window counts. */
+const UNSEEN_DONE_DEBOUNCE_MS = 4_000
+/** No unseen-done during the first ~5s after a pane's first activity
+ *  signal — launch banners flicker working→idle on spawn. */
+const UNSEEN_DONE_SPAWN_GRACE_MS = 5_000
+/** paneId → pending done-debounce timer. */
+const _unseenDoneTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** paneId → when the pane FIRST reported activity (spawn-grace anchor). */
+const _paneFirstActiveAt = new Map<string, number>()
+
+/** "Is the user looking at this pane": its tab is the active tab in its
+ *  group AND the pane's item is the active item of its pane group AND
+ *  this window has OS focus. A pane not surfaced in any tab is not
+ *  visible. (The per-pane TabVisibility context isn't readable at store
+ *  level; the active-tab + active-item check is its store-side twin.) */
+function paneIsVisible(paneId: string): boolean {
+  if (!useWindowFocusStore.getState().isFocused) return false
+  const ts = useTabsStore.getState()
+  const groups = [{ tabs: ts.tabs, activeTabId: ts.activeTabId }, ...ts.extraGroups]
+  for (const group of groups) {
+    for (const tab of group.tabs) {
+      for (const pg of tab.paneGroups.values()) {
+        for (let i = 0; i < pg.items.length; i++) {
+          const item = pg.items[i]
+          if (item.type !== 'terminal') continue
+          if ((item.data as TerminalItemData).terminalId !== paneId) continue
+          return tab.id === group.activeTabId && i === pg.activeItemIndex
+        }
+      }
+    }
+  }
+  return false
+}
+
+/** Record that a pane went active (working/permission). Anchors the
+ *  spawn grace, cancels any pending done-debounce (the flicker case),
+ *  and clears a lingering unseen-done mark — the pane is live again. */
+function notePaneActive(paneId: string): void {
+  if (!_paneFirstActiveAt.has(paneId)) {
+    _paneFirstActiveAt.set(paneId, Date.now())
+  }
+  cancelUnseenDone(paneId)
+  useActiveAgentsStore.getState().markSeen(paneId)
+}
+
+function cancelUnseenDone(paneId: string): void {
+  const timer = _unseenDoneTimers.get(paneId)
+  if (timer === undefined) return
+  clearTimeout(timer)
+  _unseenDoneTimers.delete(paneId)
+}
+
+/** A pane just transitioned working|permission → idle. Start the done
+ *  debounce; when it fires (the pane didn't re-enter working) and the
+ *  user isn't looking at the pane, mark it unseen-done + chime. */
+function armUnseenDone(paneId: string): void {
+  cancelUnseenDone(paneId)
+  const firstActiveAt = _paneFirstActiveAt.get(paneId)
+  if (firstActiveAt !== undefined && Date.now() - firstActiveAt < UNSEEN_DONE_SPAWN_GRACE_MS) {
+    return
+  }
+  const timer = setTimeout(() => {
+    _unseenDoneTimers.delete(paneId)
+    const s = useActiveAgentsStore.getState()
+    const status = s.paneStatuses.get(paneId) ?? 'idle'
+    // Belt-and-suspenders — re-entering working cancels the timer, but a
+    // racing write could land between cancel and fire.
+    if (status === 'working' || status === 'permission') return
+    if (paneIsVisible(paneId)) return
+    const next = new Map(s.unseenDone)
+    next.set(paneId, Date.now())
+    useActiveAgentsStore.setState({ unseenDone: next })
+    // Only UNSEEN completions chime — a watched pane never reaches here.
+    playCompletionSound()
+  }, UNSEEN_DONE_DEBOUNCE_MS)
+  _unseenDoneTimers.set(paneId, timer)
+}
+
 /** Last time the Tauri `agent:lifecycle` hook fired for a pane. Used by the
  *  poll-based cleanup to avoid clobbering hook-driven 'working' states while
  *  hooks are actively reporting. A long grace covers quiet Claude turns
@@ -123,6 +227,10 @@ interface ActiveAgentsState {
    *  Derived from the list-running poll; a workspace is "live" when any PTY's
    *  cwd is inside it. See `projectHasLiveSession`. */
   liveSessionCwds: Set<string>
+  /** F4 — paneId → completedAt (ms) for panes that finished while the user
+   *  wasn't looking. Drives the Active-bar amber dot; cleared by `markSeen`
+   *  (pane viewed / re-enters working). See `projectHasUnseenDone`. */
+  unseenDone: Map<string, number>
 
   hasActiveAgents: () => boolean
   getActiveAgentsList: () => ActiveAgent[]
@@ -135,6 +243,10 @@ interface ActiveAgentsState {
   recordTitleActivity: (paneId: string, isWorking: boolean) => void
   recordTitlePermission: (paneId: string, active: boolean) => void
   bindPaneProject: (paneId: string, projectId: string) => void
+  /** F4 — clear a pane's unseen-done mark (the user looked at it, it
+   *  re-entered working, or its session closed). Cheap no-op when the
+   *  pane isn't marked. */
+  markSeen: (paneId: string) => void
   handleLifecycleEvent: (paneId: string, tabId: string, eventType: string) => void
   addBackgroundSpawn: (spawn: BackgroundSpawn) => void
   removeBackgroundSpawn: (id: string) => void
@@ -157,6 +269,15 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
   paneProjectMap: new Map(),
   backgroundSpawns: [],
   liveSessionCwds: new Set(),
+  unseenDone: new Map(),
+
+  markSeen: (paneId: string) => {
+    const { unseenDone } = get()
+    if (!unseenDone.has(paneId)) return
+    const next = new Map(unseenDone)
+    next.delete(paneId)
+    set({ unseenDone: next })
+  },
 
   addBackgroundSpawn: (spawn: BackgroundSpawn) => {
     set((s) => ({ backgroundSpawns: [...s.backgroundSpawns, spawn] }))
@@ -264,6 +385,12 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     newStatuses.set(paneId, next)
     set({ paneStatuses: newStatuses })
 
+    // F4 — scan-driven transitions feed the unseen-done machine: a
+    // working→idle flip is a (debounced) completion candidate; re-entering
+    // working cancels a pending one and clears any lingering mark.
+    if (isWorking) notePaneActive(paneId)
+    else if (current === 'working') armUnseenDone(paneId)
+
     // Bind paneId → activeProjectId on the first 'working' transition
     // so getProjectStatus() can attribute the spinner to a workspace
     // (drives the sidebar Active section + IconRail dots). Mirrors
@@ -347,6 +474,9 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     const newStatuses = new Map(paneStatuses)
     newStatuses.set(paneId, 'idle')
     set({ paneStatuses: newStatuses })
+    // F4 — permission→idle is a completion source too (the gate resolved
+    // and nothing re-armed working). A re-work within the debounce cancels.
+    armUnseenDone(paneId)
   },
 
   /**
@@ -386,6 +516,9 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
 
     if (eventType === 'start') {
       newStatuses.set(paneId, 'working')
+      // F4 — the pane is active again: anchor the spawn grace, cancel a
+      // pending done-debounce, clear any lingering unseen-done mark.
+      notePaneActive(paneId)
       _agentStartTimes.set(paneId, Date.now())
       // Record which project this pane belongs to
       const ps = useProjectsStore.getState()
@@ -400,6 +533,8 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       // Skip duplicate permission toast if already in permission state
       const currentStatus = paneStatuses.get(paneId)
       newStatuses.set(paneId, 'permission')
+      // F4 — permission counts as active (the agent isn't done).
+      notePaneActive(paneId)
       if (currentStatus === 'permission') {
         set({ paneStatuses: newStatuses })
         return
@@ -430,6 +565,11 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
         set({ paneStatuses: newStatuses })
         return
       }
+
+      // F4 — hook-driven completion (working|permission → done). Debounced:
+      // only a stop that survives the window with the user not looking
+      // marks unseen-done (and chimes).
+      armUnseenDone(paneId)
 
       // Check if the pane's tab is currently active
       const tabsState = useTabsStore.getState()
@@ -706,6 +846,9 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
         cleanedStatuses.set(paneId, 'idle')
         _hookEventAt.delete(paneId)
         statusesChanged = true
+        // F4 — poll-cleanup completion (the interrupt/Esc path where the
+        // hook 'stop' never fires). Same debounced unseen-done candidate.
+        armUnseenDone(paneId)
       }
     }
 
@@ -1391,6 +1534,12 @@ export function stopAgentPolling(): void {
   _retryTimeouts.clear()
   _agentStartTimes.clear()
   _launchRetries.clear()
+  // F4 — cancel pending done-debounces so a fire can't land after teardown.
+  for (const timer of _unseenDoneTimers.values()) {
+    clearTimeout(timer)
+  }
+  _unseenDoneTimers.clear()
+  _paneFirstActiveAt.clear()
 }
 
 // ── #625: host-switch reset of agent pane state ─────────────────────────
@@ -1418,6 +1567,12 @@ export function __resetAgentStateForHostSwitch(): void {
   _agentStartTimes.clear()
   _launchRetries.clear()
   _titlePermissionPanes.clear()
+  // F4 — unseen-done marks/timers are keyed by the LOCAL host's paneIds.
+  for (const timer of _unseenDoneTimers.values()) {
+    clearTimeout(timer)
+  }
+  _unseenDoneTimers.clear()
+  _paneFirstActiveAt.clear()
   // #688 — the live-session cwd tracking is keyed by the LOCAL host's
   // sessions; wipe it on a host change so the new host's snapshot poll
   // re-seeds `liveSessionCwds` cleanly (and a stale local key can't keep a
@@ -1430,6 +1585,7 @@ export function __resetAgentStateForHostSwitch(): void {
     paneProjectMap: new Map(),
     backgroundSpawns: [],
     liveSessionCwds: new Set(),
+    unseenDone: new Map(),
   })
 }
 

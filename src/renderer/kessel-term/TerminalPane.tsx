@@ -2729,8 +2729,28 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       offsetY: Math.max(0, (availH - gridH * scale) / 2),
       passive,
     })
+    // Unscaled (scale-1) rendering centers the sub-cell quantization
+    // remainder: cols = floor(availW / cellW) leaves up to one cell
+    // of slack, and anchoring the grid at the left padding parked ALL
+    // of it on the right — users read that as a bigger right gap than
+    // left. Splitting it (floored to whole px so scale-1 text stays
+    // on the pixel grid) makes the gutters symmetric. These offsets
+    // ARE the content origin: the scale wrapper translates the DOM
+    // strip AND the WebGL canvas by them, and toGridXY subtracts them
+    // for every pointer→cell mapping (selection, link hover, SGR
+    // forwarding), so grid pixels and hit-testing move together. The
+    // cursor overlay + IME shadow textarea add them explicitly via
+    // contentOriginX/Y below. The remainder gutter shows the
+    // container's own background (same fill as the 4px padding), so
+    // no seam appears on either side.
+    const centered = {
+      scale: 1,
+      offsetX: Math.floor(Math.max(0, availW - gridW) / 2),
+      offsetY: Math.floor(Math.max(0, availH - gridH) / 2),
+      passive: false,
+    }
     if (!isActiveViewer) {
-      if (fit >= 1) return identity
+      if (fit >= 1) return centered
       return letterboxed(Math.max(fit, PASSIVE_SCALE_FLOOR), true)
     }
     // Active pane, resize in flight (hold-and-scale): frames still
@@ -2745,7 +2765,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     ) {
       return letterboxed(Math.max(fit, PASSIVE_SCALE_FLOOR), false)
     }
-    return identity
+    return centered
   }, [
     snapCols,
     snapRows,
@@ -2790,7 +2810,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // Pointer → unscaled grid-content coordinates (px past the 4px
   // padding, in the grid's own pixel space). THE one place scale
   // enters pointer math: divide by the scale after removing the
-  // letterbox offsets, then all existing cell math applies unchanged.
+  // centering/letterbox offsets (the shared content origin from
+  // scaleLayout), then all existing cell math applies unchanged.
   const toGridXY = useCallback(
     (clientX: number, clientY: number): { x: number; y: number } | null => {
       const el = containerRef.current
@@ -3948,6 +3969,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     [config.colors.background],
   )
 
+  // Content origin: where grid cell (0,0) sits inside the container,
+  // in unscaled px — the 4px padding plus the centering/letterbox
+  // offset from scaleLayout. EVERY overlay positioned in container
+  // space (cursor overlay, IME shadow textarea) must add these;
+  // pointer math inverts the same values inside toGridXY, and the
+  // DOM strip / WebGL canvas get them via the scale wrapper's
+  // translate. One origin, all consumers.
+  const contentOriginX = 4 + scaleLayout.offsetX
+  const contentOriginY = 4 + scaleLayout.offsetY
+
   // 0.37.9 — Cursor-following shadow textarea position with
   // freeze-during-composition. Mirrors xterm.js's `_syncTextArea`:
   // when not composing, position the textarea AT the visible
@@ -3964,11 +3995,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     if (snapshot && cellMetrics.width > 0 && cellMetrics.height > 0) {
       const next: React.CSSProperties = {
         position: 'absolute',
-        left: `${4 + cellMetrics.width * snapshot.cursor.col}px`,
+        left: `${contentOriginX + cellMetrics.width * snapshot.cursor.col}px`,
         // The cursor cell lives in the grid (bottom of the buffer);
         // scrolling up moves it DOWN the screen by exactly the
         // pixel scroll position.
-        top: `${4 + cellMetrics.height * snapshot.cursor.row + scrollPx}px`,
+        top: `${contentOriginY + cellMetrics.height * snapshot.cursor.row + scrollPx}px`,
         width: `${cellMetrics.width}px`,
         height: `${cellMetrics.height}px`,
         lineHeight: `${cellMetrics.height}px`,
@@ -3997,6 +4028,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     cellMetrics.width,
     cellMetrics.height,
     scrollPx,
+    contentOriginX,
+    contentOriginY,
   ])
 
   const cursorOverlay: {
@@ -4017,8 +4050,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (cursorVisibleRow >= 0 && cursorVisibleRow < snapshot.rows) {
         const baseStyle: React.CSSProperties = {
           position: 'absolute',
-          left: `${4 + cellMetrics.width * snapshot.cursor.col}px`,
-          top: `${4 + cellMetrics.height * cursorVisibleRow}px`,
+          left: `${contentOriginX + cellMetrics.width * snapshot.cursor.col}px`,
+          top: `${contentOriginY + cellMetrics.height * cursorVisibleRow}px`,
           width: `${cellMetrics.width}px`,
           height: `${cellMetrics.height}px`,
           pointerEvents: 'none',
@@ -4090,8 +4123,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         return {
           style: {
             position: 'absolute',
-            left: `${4 + cellMetrics.width * found.col}px`,
-            top: `${4 + cellMetrics.height * found.row - 1}px`,
+            left: `${contentOriginX + cellMetrics.width * found.col}px`,
+            top: `${contentOriginY + cellMetrics.height * found.row - 1}px`,
             width: `${cellMetrics.width}px`,
             height: `${cellMetrics.height + 1}px`,
             backgroundColor: defaultBgCss,
@@ -4112,7 +4145,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     }
 
     return null
-  }, [snapshot, cellMetrics, scrollPx, isFocused, defaultBgCss, defaultFgCss])
+  }, [
+    snapshot,
+    cellMetrics,
+    scrollPx,
+    isFocused,
+    defaultBgCss,
+    defaultFgCss,
+    contentOriginX,
+    contentOriginY,
+  ])
 
   // ── Render ────────────────────────────────────────────────────
   if (phase.kind === 'error') {

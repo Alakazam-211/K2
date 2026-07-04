@@ -67,7 +67,6 @@ function resetStore(): void {
     startTime: null,
     pausedElapsed: 0,
     resumeTime: null,
-    targetDurationMs: null,
     showMemoDialog: false,
     stoppedElapsed: null,
     entries: [],

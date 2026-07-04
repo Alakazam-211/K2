@@ -61,9 +61,7 @@ import { useUpdateChecker } from './hooks/useUpdateChecker'
 import { useAppUpdateTrigger } from './hooks/useAppUpdateTrigger'
 import { useWindowSync } from './hooks/useWindowSync'
 import { useTimerStore } from './stores/timer'
-import CountdownOverlay from './components/Timer/CountdownOverlay'
 import MemoDialog from './components/Timer/MemoDialog'
-import ExtendTimerDialog from './components/Timer/ExtendTimerDialog'
 import { useCursorMigrationCheck } from './hooks/useCursorMigrationCheck'
 import { prewarmDaemonWs } from './kessel/daemon-ws'
 // #672 — app-level canonical Active mirror (daemon-owned Active set).
@@ -230,9 +228,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
       <Toast />
       <TransferProgress />
       <AssistantBar />
-      <CountdownOverlay />
       <MemoDialog />
-      <ExtendTimerDialog />
     </FocusErrorBoundary>
   )
 }
@@ -829,9 +825,7 @@ export default function App(): React.JSX.Element {
         <Toast />
         <TransferProgress />
         <AssistantBar />
-        <CountdownOverlay />
         <MemoDialog />
-      <ExtendTimerDialog />
       </>
     )
   }
@@ -889,9 +883,7 @@ export default function App(): React.JSX.Element {
       <Toast />
       <TransferProgress />
       <AssistantBar />
-      <CountdownOverlay />
       <MemoDialog />
-      <ExtendTimerDialog />
       {showQuitDialog && (
         <AgentCloseDialog
           agents={quitAgents}

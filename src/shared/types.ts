@@ -57,11 +57,12 @@ export interface TerminalSettingsBackend {
 
 export interface TimerSettingsBackend {
   visible: boolean
-  countdownEnabled: boolean
-  countdownTheme: string
   skipMemo: boolean
   timezone: string
-  customThemes: Record<string, string>[]
+  // NOTE: the daemon's Rust TimerSettings still serializes legacy
+  // countdown fields (countdownEnabled/countdownTheme/customThemes);
+  // the renderer ignores them since the countdown feature was removed
+  // (stopwatch rework, presence/multiplayer S0).
 }
 
 /** Matches Rust `AppSettings` (camelCase via serde rename) */

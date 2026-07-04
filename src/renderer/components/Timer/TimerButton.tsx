@@ -1,28 +1,15 @@
 import { useState, useEffect } from 'react'
-import { useTimerStore, getElapsedMs, getRemainingMs, formatElapsed } from '@/stores/timer'
-
-const DURATION_PRESETS = [
-  { label: '5m', ms: 5 * 60 * 1000 },
-  { label: '10m', ms: 10 * 60 * 1000 },
-  { label: '15m', ms: 15 * 60 * 1000 },
-  { label: '30m', ms: 30 * 60 * 1000 },
-  { label: '45m', ms: 45 * 60 * 1000 },
-  { label: '1h', ms: 60 * 60 * 1000 },
-  { label: '2h', ms: 2 * 60 * 60 * 1000 },
-  { label: '3h', ms: 3 * 60 * 60 * 1000 },
-]
+import { useTimerStore, getElapsedMs, formatElapsed } from '@/stores/timer'
 
 export default function TimerButton(): React.JSX.Element | null {
   const status = useTimerStore((s) => s.status)
   const visible = useTimerStore((s) => s.visible)
   const pausedElapsed = useTimerStore((s) => s.pausedElapsed)
   const resumeTime = useTimerStore((s) => s.resumeTime)
-  const targetDurationMs = useTimerStore((s) => s.targetDurationMs)
+  const startTimer = useTimerStore((s) => s.startTimer)
   const pauseTimer = useTimerStore((s) => s.pauseTimer)
   const resumeTimer = useTimerStore((s) => s.resumeTimer)
   const stopTimer = useTimerStore((s) => s.stopTimer)
-  const startWithDuration = useTimerStore((s) => s.startWithDuration)
-  const showExtend = useTimerStore((s) => s.showExtend)
   const showMemoDialog = useTimerStore((s) => s.showMemoDialog)
 
   // Re-render every second when running
@@ -32,15 +19,6 @@ export default function TimerButton(): React.JSX.Element | null {
     const interval = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(interval)
   }, [status])
-
-  // Show extend dialog when countdown reaches zero
-  useEffect(() => {
-    if (status !== 'running' || targetDurationMs == null) return
-    const remaining = getRemainingMs({ status, pausedElapsed, resumeTime, targetDurationMs })
-    if (remaining <= 0) {
-      showExtend()
-    }
-  }, [status, targetDurationMs, pausedElapsed, resumeTime, showExtend])
 
   if (!visible) return null
 
@@ -54,48 +32,35 @@ export default function TimerButton(): React.JSX.Element | null {
   const btnClass =
     'flex h-6 items-center justify-center transition-colors'
 
-  // Idle state: clock icon + duration presets
+  // Idle state: single start button (clock icon) — starts the stopwatch
   if (status === 'idle') {
     return (
-      <div className="flex items-center gap-1 no-drag">
-        {/* Clock icon */}
-        <svg
-          className="w-3.5 h-3.5 text-[var(--color-text-muted)] flex-shrink-0"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+      <div className="flex items-center no-drag">
+        <button
+          onClick={startTimer}
+          className={`${btnClass} w-5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]`}
+          style={noDrag}
+          title="Start stopwatch"
         >
-          <circle cx="12" cy="12" r="10" />
-          <polyline points="12 6 12 12 16 14" />
-        </svg>
-
-        {/* Duration presets */}
-        <div className="flex items-center gap-px">
-          {DURATION_PRESETS.map((preset) => (
-            <button
-              key={preset.label}
-              onClick={() => startWithDuration(preset.ms)}
-              className="px-1.5 py-0.5 text-[10px] font-mono tabular-nums text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors"
-              style={noDrag}
-              title={`Start ${preset.label} countdown`}
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
+          <svg
+            className="w-3.5 h-3.5 flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+        </button>
       </div>
     )
   }
 
-  // Running or paused: show controls + countdown remaining
-  const elapsed = getElapsedMs({ status, pausedElapsed, resumeTime })
-  const isCountdown = targetDurationMs != null
-  const displayMs = isCountdown
-    ? Math.max(0, targetDurationMs - elapsed)
-    : elapsed
+  // Running or paused: show controls + elapsed readout
+  const displayMs = getElapsedMs({ status, pausedElapsed, resumeTime })
   const displayText = formatElapsed(displayMs)
 
   return (
@@ -138,10 +103,12 @@ export default function TimerButton(): React.JSX.Element | null {
         </svg>
       </button>
 
-      {/* Countdown / elapsed display */}
+      {/* Elapsed display */}
       <span
         className={`text-[11px] font-mono tabular-nums px-1 select-none ${
-          status === 'paused' ? 'text-red-400/60 animate-pulse' : 'text-red-400'
+          status === 'paused'
+            ? 'text-[var(--color-text-muted)] animate-pulse'
+            : 'text-[var(--color-text-secondary)]'
         }`}
       >
         {displayText}

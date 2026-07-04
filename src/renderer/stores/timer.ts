@@ -30,17 +30,6 @@ export interface TimeEntry {
   createdAt: number
 }
 
-export interface CountdownThemeConfig {
-  name: string
-  backgroundColor: string
-  textColor: string
-  fontFamily: string
-  countdownTexts: string[]   // e.g. ["T-minus 3", "T-minus 2", "T-minus 1"]
-  finalText: string          // e.g. "LIFTOFF!"
-  animationPreset: 'fade' | 'zoom' | 'slide'
-  flowTitles?: string[]      // shown when timer expires, e.g. ["You're on fire!", "Locked in."]
-}
-
 export type TimerStatus = 'idle' | 'running' | 'paused'
 
 interface TimerState {
@@ -49,20 +38,14 @@ interface TimerState {
   startTime: number | null       // unix ms when timer started
   pausedElapsed: number          // accumulated ms before current resume
   resumeTime: number | null      // unix ms when last resumed
-  targetDurationMs: number | null // countdown target in ms (null = count up)
 
   // Settings (from backend)
   visible: boolean
-  countdownEnabled: boolean
-  countdownTheme: string
   skipMemo: boolean
   timezone: string               // IANA timezone or '' for browser default
-  customThemes: CountdownThemeConfig[]
 
   // UI state
-  showCountdown: boolean
   showMemoDialog: boolean
-  showExtendDialog: boolean
   stoppedElapsed: number | null  // ms elapsed at stop (for memo dialog display)
 
   // History
@@ -70,20 +53,13 @@ interface TimerState {
 
   // Actions
   initFromSettings: () => Promise<void>
-  beginCountdownOrStart: () => void
-  startWithDuration: (durationMs: number) => void
   startTimer: () => void
   pauseTimer: () => void
   resumeTimer: () => void
   stopTimer: () => void
   stopTimerSilently: () => Promise<void>
-  dismissCountdown: () => void
-  cancelCountdown: () => void
   saveEntry: (memo?: string) => Promise<void>
   dismissMemoDialog: () => void
-  showExtend: () => void
-  extendTimer: (additionalMs: number) => void
-  dismissExtendDialog: () => void
 
   // History actions
   fetchEntries: (start?: number, end?: number, projectId?: string) => Promise<void>
@@ -102,7 +78,6 @@ export interface TimerSyncPayload {
   startTime: number | null
   pausedElapsed: number
   resumeTime: number | null
-  targetDurationMs: number | null
 }
 
 function generateId(): string {
@@ -115,7 +90,6 @@ function broadcastTimerState(state: TimerState): void {
     startTime: state.startTime,
     pausedElapsed: state.pausedElapsed,
     resumeTime: state.resumeTime,
-    targetDurationMs: state.targetDurationMs,
   }
   invoke('broadcast_sync', {
     channel: 'sync:timer',
@@ -146,15 +120,6 @@ export function getElapsedMs(state: { status: TimerStatus; pausedElapsed: number
     return state.pausedElapsed + (Date.now() - state.resumeTime)
   }
   return state.pausedElapsed
-}
-
-/**
- * Get remaining milliseconds for a countdown timer. Returns 0 if elapsed exceeds target.
- */
-export function getRemainingMs(state: { status: TimerStatus; pausedElapsed: number; resumeTime: number | null; targetDurationMs: number | null }): number {
-  if (state.targetDurationMs == null) return 0
-  const elapsed = getElapsedMs(state)
-  return Math.max(0, state.targetDurationMs - elapsed)
 }
 
 /**
@@ -210,20 +175,14 @@ export const useTimerStore = create<TimerState>((set, get) => ({
   startTime: null,
   pausedElapsed: 0,
   resumeTime: null,
-  targetDurationMs: null,
 
   // Settings defaults
   visible: true,
-  countdownEnabled: true,
-  countdownTheme: 'rocket',
   skipMemo: false,
   timezone: '',
-  customThemes: [],
 
   // UI
-  showCountdown: false,
   showMemoDialog: false,
-  showExtendDialog: false,
   stoppedElapsed: null,
 
   // History
@@ -235,11 +194,8 @@ export const useTimerStore = create<TimerState>((set, get) => ({
       const timer = result.timer ?? {}
       set({
         visible: timer.visible ?? true,
-        countdownEnabled: timer.countdownEnabled ?? true,
-        countdownTheme: timer.countdownTheme ?? 'rocket',
         skipMemo: timer.skipMemo ?? false,
         timezone: timer.timezone ?? '',
-        customThemes: (timer.customThemes ?? []) as unknown as CountdownThemeConfig[],
       })
       // Phase 2.5 fix (finding #547): flip the persist gate only
       // on success. Catch branches do NOT flip it — that's the
@@ -250,35 +206,6 @@ export const useTimerStore = create<TimerState>((set, get) => ({
     }
   },
 
-  beginCountdownOrStart: () => {
-    const state = get()
-    if (state.status !== 'idle') return
-    if (state.countdownEnabled) {
-      set({ showCountdown: true })
-    } else {
-      get().startTimer()
-    }
-  },
-
-  startWithDuration: (durationMs: number) => {
-    const state = get()
-    if (state.status !== 'idle') return
-    set({ targetDurationMs: durationMs })
-    if (state.countdownEnabled) {
-      set({ showCountdown: true })
-    } else {
-      const now = Date.now()
-      set({
-        status: 'running',
-        startTime: now,
-        pausedElapsed: 0,
-        resumeTime: now,
-        showCountdown: false,
-      })
-      broadcastTimerState(get())
-    }
-  },
-
   startTimer: () => {
     const now = Date.now()
     set({
@@ -286,7 +213,6 @@ export const useTimerStore = create<TimerState>((set, get) => ({
       startTime: now,
       pausedElapsed: 0,
       resumeTime: now,
-      showCountdown: false,
     })
     broadcastTimerState(get())
   },
@@ -366,18 +292,9 @@ export const useTimerStore = create<TimerState>((set, get) => ({
       startTime: null,
       pausedElapsed: 0,
       resumeTime: null,
-      targetDurationMs: null,
       showMemoDialog: false,
       stoppedElapsed: null,
     })
-  },
-
-  dismissCountdown: () => {
-    set({ showCountdown: false })
-  },
-
-  cancelCountdown: () => {
-    set({ showCountdown: false })
   },
 
   saveEntry: async (memo?: string) => {
@@ -411,7 +328,6 @@ export const useTimerStore = create<TimerState>((set, get) => ({
       startTime: null,
       pausedElapsed: 0,
       resumeTime: null,
-      targetDurationMs: null,
       showMemoDialog: false,
       stoppedElapsed: null,
     })
@@ -421,38 +337,6 @@ export const useTimerStore = create<TimerState>((set, get) => ({
   dismissMemoDialog: () => {
     // Save without memo
     get().saveEntry()
-  },
-
-  showExtend: () => {
-    const state = get()
-    if (state.status !== 'running') return
-    // Pause the timer while showing the extend dialog
-    const elapsed = getElapsedMs(state)
-    set({
-      status: 'paused',
-      pausedElapsed: elapsed,
-      resumeTime: null,
-      showExtendDialog: true,
-    })
-  },
-
-  extendTimer: (additionalMs: number) => {
-    const state = get()
-    // Add more time to the target and resume
-    const newTarget = (state.targetDurationMs ?? 0) + additionalMs
-    set({
-      status: 'running',
-      targetDurationMs: newTarget,
-      resumeTime: Date.now(),
-      showExtendDialog: false,
-    })
-    broadcastTimerState(get())
-  },
-
-  dismissExtendDialog: () => {
-    // User chose to stop — proceed to normal stop flow
-    set({ showExtendDialog: false })
-    get().stopTimer()
   },
 
   fetchEntries: async (start?: number, end?: number, projectId?: string) => {
@@ -531,7 +415,6 @@ export const useTimerStore = create<TimerState>((set, get) => ({
       startTime: payload.startTime,
       pausedElapsed: payload.pausedElapsed,
       resumeTime: payload.resumeTime,
-      targetDurationMs: payload.targetDurationMs,
     })
   },
 }))

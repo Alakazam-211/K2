@@ -137,6 +137,19 @@ impl EventListener for DaemonEventListener {
         // never broadcast: a query answer is transport back to the child,
         // not session output, so viewers must not observe it (and
         // `subscriber_count()` stays a pure client-attachment signal).
+        //
+        // INVARIANT — no DCS replies (slice 5, grok gotcha): grok echoes
+        // any unconsumed DCS reply (`ESC P … ST`, e.g. an XTVERSION
+        // answer) into its composer as literal text. K2's emulator can
+        // never trigger that: every `PtyWrite` alacritty_terminal 0.26
+        // produces is CSI-shaped (`ESC [ …` — DA1/DA2, DSR/CPR, DECRPM,
+        // XTWINOPS, kitty flags); it implements no DECRQSS/XTVERSION
+        // responder, and the OSC-shaped ColorRequest/ClipboardLoad
+        // events are never answered by the daemon (sessions_grid_ws
+        // ignores them by policy). Pinned by
+        // `query_replies_are_never_dcs_shaped` below — if a dependency
+        // bump ever adds a DCS responder, that test fails and DCS must
+        // be gated away from grok panes before shipping.
         if let AlacEvent::PtyWrite(text) = event {
             if let Some(reply) = self.reply_tx.get() {
                 reply(text);
@@ -2097,6 +2110,62 @@ mod tests {
             other => panic!(
                 "PtyWrite must not reach the viewer broadcast, got {other:?}"
             ),
+        }
+    }
+
+    /// Slice 5 — the grok DCS gotcha, pinned. Grok echoes unconsumed
+    /// DCS replies (`ESC P … ST`, e.g. XTVERSION `ESC P>|… ST`) into
+    /// its composer as literal text, so K2's query-reply layer must
+    /// NEVER emit a DCS-shaped answer. We drive the parser with the
+    /// query families a TUI might send — XTVERSION (`CSI > 0 q`),
+    /// DECRQSS (`DCS $ q m ST`), DA1/DA2, DECRQM, DSR-6 — and assert
+    /// every produced reply is CSI-shaped (`ESC [`), none DCS-shaped
+    /// (`ESC P`). If a vte/alacritty bump ever adds a DECRQSS/XTVERSION
+    /// responder this fails loudly, and DCS must be gated away from
+    /// grok panes before shipping.
+    #[test]
+    fn query_replies_are_never_dcs_shaped() {
+        use alacritty_terminal::vte::ansi::Processor;
+
+        let (tx, _events_rx) = broadcast::channel::<AlacEvent>(16);
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel::<String>();
+        let reply_slot = Arc::new(std::sync::OnceLock::new());
+        assert!(reply_slot
+            .set(Box::new(move |text: String| {
+                reply_tx.send(text).expect("capture query reply");
+            }) as QueryReplySink)
+            .is_ok());
+        let listener = DaemonEventListener {
+            tx,
+            reply_tx: reply_slot,
+        };
+
+        let size = TermSize { cols: 80, rows: 24 };
+        let mut term = Term::new(TermConfig::default(), &size, listener);
+        let mut parser: Processor = Processor::new();
+        // XTVERSION, DECRQSS(SGR), DA1, DA2, DECRQM(?2004), DSR-6.
+        parser.advance(
+            &mut term,
+            b"\x1b[>0q\x1bP$qm\x1b\\\x1b[c\x1b[>c\x1b[?2004$p\x1b[6n",
+        );
+
+        let mut replies = Vec::new();
+        while let Ok(r) = reply_rx.try_recv() {
+            replies.push(r);
+        }
+        assert!(
+            !replies.is_empty(),
+            "the query batch must produce at least the DA/DSR answers"
+        );
+        for r in &replies {
+            assert!(
+                !r.starts_with("\x1bP"),
+                "query reply must never be DCS-shaped (grok echoes DCS as composer text): {r:?}"
+            );
+            assert!(
+                r.starts_with("\x1b["),
+                "every reply alacritty produces today is CSI-shaped: {r:?}"
+            );
         }
     }
 

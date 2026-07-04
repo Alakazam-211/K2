@@ -331,6 +331,84 @@ fn parsed_session_exists(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Slice 5 — per-provider injection profile (wake/inject readiness)
+// ─────────────────────────────────────────────────────────────────────
+
+/// How the daemon's wake/injection path decides a freshly-spawned
+/// agent TUI is READY to receive an injected message (2026-07 TUI
+/// signal studies; consulted by `workspace_msg::deliver_post_wake` and
+/// `wake_headless`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InjectionProfile {
+    /// `true` — the provider's `ESC[?2004h` (bracketed paste) flip is a
+    /// trustworthy "input box mounted" signal, so the injector may poll
+    /// `bracketed_paste_active()` (with the settle floor below) and
+    /// inject as soon as it flips:
+    ///   - claude: ?2004h genuinely follows input-box mount (original
+    ///     activity study) — the shipping poll works; DO NOT regress.
+    ///   - grok: ?2004h at ~1.1s, trustworthy for "UI mounted".
+    ///   - cursor-agent: ?2004h is set only once the composer exists
+    ///     (a TRUSTED dir; in an untrusted dir it never flips — the
+    ///     poll correctly waits, then times out to best-effort).
+    ///
+    /// `false` — ?2004h LIES for this provider and must not be treated
+    /// as readiness; the injector waits the full settle floor instead:
+    ///   - codex: ?2004h at 0.4s while startup dialogs still block
+    ///     input for 9-13s (dialogs eat keystrokes as hotkeys).
+    ///   - gemini: same early-?2004h pathology as pi (set while the
+    ///     trust/auth dialog still swallows input).
+    ///   - pi: enables ?2004h at startup, before real readiness.
+    ///   - hermes: prompt_toolkit toggles ?2004h per repaint and holds
+    ///     it ON during the model wait — useless as a ready signal.
+    pub ready_via_bracketed_paste: bool,
+    /// Conservative minimum post-spawn settle before the first
+    /// injection (the floor for polling providers; the whole wait for
+    /// non-polling ones). Study-derived: hermes needs ~7s before its
+    /// first message lands (prompt ~3.6s + ~3s agent init); codex/
+    /// gemini get 2s headroom past their dialog storms; claude keeps
+    /// the shipping 400ms floor exactly.
+    pub post_spawn_settle: Duration,
+}
+
+/// Unknown-provider default = the claude-shaped behavior every provider
+/// got before slice 5 (poll bracketed paste with the 400ms floor,
+/// bounded by the caller's wake timeout) — safe degradation, no new
+/// assumptions about agents we never studied.
+pub const DEFAULT_INJECTION_PROFILE: InjectionProfile = InjectionProfile {
+    ready_via_bracketed_paste: true,
+    post_spawn_settle: Duration::from_millis(400),
+};
+
+/// Resolve the injection profile for a provider key
+/// (`workspace_sessions.harness` / [`ProviderResume::provider`] value).
+/// Unknown providers get [`DEFAULT_INJECTION_PROFILE`].
+pub fn injection_profile_for_provider(provider: &str) -> InjectionProfile {
+    match provider {
+        // Poll-trustworthy providers (see field doc for evidence).
+        "claude" => DEFAULT_INJECTION_PROFILE,
+        "grok" => DEFAULT_INJECTION_PROFILE,
+        "cursor" => InjectionProfile {
+            ready_via_bracketed_paste: true,
+            post_spawn_settle: Duration::from_millis(1000),
+        },
+        // ?2004h liars — readiness is the settle floor alone.
+        "codex" | "gemini" => InjectionProfile {
+            ready_via_bracketed_paste: false,
+            post_spawn_settle: Duration::from_millis(2000),
+        },
+        "pi" => InjectionProfile {
+            ready_via_bracketed_paste: false,
+            post_spawn_settle: Duration::from_millis(1500),
+        },
+        "hermes" => InjectionProfile {
+            ready_via_bracketed_paste: false,
+            post_spawn_settle: Duration::from_millis(7000),
+        },
+        _ => DEFAULT_INJECTION_PROFILE,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Post-hoc session adoption (non-premint providers + the claude eager
 // read-back). Core generalization of the daemon's claude-only
 // `wake_headless::defer_stamp_adopted_session`.
@@ -822,5 +900,77 @@ mod tests {
             .expect("row exists");
         assert_eq!(row.session_id.as_deref(), Some(sid), "session_id stamped");
         assert_eq!(row.harness, "grok", "harness stamped truthfully alongside the id");
+    }
+
+    // ── Slice 5 — injection profiles (per-provider readiness) ────────
+
+    #[test]
+    fn injection_profile_claude_is_exactly_the_shipping_behavior() {
+        // DO NOT regress claude: poll bracketed paste with the 400ms
+        // settle floor — byte-identical to the pre-slice-5 wake path.
+        let p = injection_profile_for_provider("claude");
+        assert!(p.ready_via_bracketed_paste);
+        assert_eq!(p.post_spawn_settle, Duration::from_millis(400));
+        assert_eq!(p, DEFAULT_INJECTION_PROFILE);
+    }
+
+    #[test]
+    fn injection_profile_poll_trust_matches_the_studies() {
+        // ?2004h trustworthy: claude (original study), grok (~1.1s,
+        // "UI mounted"), cursor (trusted dir → composer exists).
+        for provider in ["claude", "grok", "cursor"] {
+            assert!(
+                injection_profile_for_provider(provider).ready_via_bracketed_paste,
+                "{provider} must poll bracketed paste for readiness"
+            );
+        }
+        // ?2004h liars: codex/gemini/pi set it before real readiness,
+        // hermes toggles it per repaint.
+        for provider in ["codex", "gemini", "pi", "hermes"] {
+            assert!(
+                !injection_profile_for_provider(provider).ready_via_bracketed_paste,
+                "{provider} must NOT trust bracketed paste as readiness"
+            );
+        }
+    }
+
+    #[test]
+    fn injection_profile_settles_are_study_derived() {
+        // hermes: ~7s first-message (prompt ~3.6s + ~3s agent init).
+        assert_eq!(
+            injection_profile_for_provider("hermes").post_spawn_settle,
+            Duration::from_millis(7000)
+        );
+        // codex/gemini: 2s headroom past their dialog storms.
+        assert_eq!(
+            injection_profile_for_provider("codex").post_spawn_settle,
+            Duration::from_millis(2000)
+        );
+        assert_eq!(
+            injection_profile_for_provider("gemini").post_spawn_settle,
+            Duration::from_millis(2000)
+        );
+        assert_eq!(
+            injection_profile_for_provider("pi").post_spawn_settle,
+            Duration::from_millis(1500)
+        );
+        assert_eq!(
+            injection_profile_for_provider("cursor").post_spawn_settle,
+            Duration::from_millis(1000)
+        );
+    }
+
+    #[test]
+    fn injection_profile_unknown_provider_degrades_to_claude_shaped_default() {
+        // Safe degradation: an unstudied agent keeps exactly the
+        // pre-slice-5 behavior (poll + 400ms floor, bounded by the
+        // caller's wake timeout).
+        for provider in ["aider", "goose", "", "not-a-real-agent"] {
+            assert_eq!(
+                injection_profile_for_provider(provider),
+                DEFAULT_INJECTION_PROFILE,
+                "unknown provider {provider:?} must get the default profile"
+            );
+        }
     }
 }

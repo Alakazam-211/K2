@@ -504,18 +504,34 @@ mod tests {
     fn prefix_resolution_unique_ambiguous_notfound() {
         let p = pid("prefix");
         let a = ask(&p, "first");
-        let b = ask(&p, "second");
+        let _b = ask(&p, "second");
 
         // Full id resolves to itself; a UNIQUE short prefix resolves.
         assert_eq!(resolve_id_prefix(&a.id), Ok(a.id.clone()));
-        // Find the shortest prefix of `a` that differs from `b`.
-        let uniq_len = a
-            .id
-            .chars()
-            .zip(b.id.chars())
-            .position(|(x, y)| x != y)
-            .expect("uuids differ")
-            + 1;
+        // Find the shortest prefix of `a` unique across ALL rows in the
+        // shared test DB — sibling tests insert feedback rows too, so
+        // deriving the prefix only against `_b` (as this test originally
+        // did) collided with other tests' ids and flaked as Ambiguous.
+        let all_ids: Vec<String> = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let mut stmt = conn.prepare("SELECT id FROM feedback").expect("prep");
+            let ids = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .expect("query")
+                .filter_map(Result::ok)
+                .collect();
+            ids
+        };
+        let uniq_len = (1..=a.id.len())
+            .find(|&n| {
+                all_ids
+                    .iter()
+                    .filter(|id| id.starts_with(&a.id[..n]))
+                    .count()
+                    == 1
+            })
+            .expect("the full id is unique");
         let uniq = &a.id[..uniq_len];
         assert_eq!(resolve_id_prefix(uniq), Ok(a.id.clone()));
 

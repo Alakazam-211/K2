@@ -98,6 +98,52 @@ export function shouldShowRoster(roster: RosterUser[], supported: boolean): bool
   return supported && roster.length > 1
 }
 
+// ── Workspace-nav presence (S6) — path matcher + selector ─────────────────
+//
+// Roster rows carry `workspaces: string[]` — the `?path=` values of the
+// user's live per-workspace event subscriptions. The nav joins those to
+// its rows by the SAME prefix rule the daemon uses to route events to
+// those subscriptions (`session_events_ws.rs::event_matches_workspace`),
+// applied in BOTH directions: a user subscribed to a nested worktree
+// shows on the parent project's row, and a user subscribed to the
+// project shows on rows at or under it.
+
+/** Max mini avatars on a nav row before the `+N` overflow chip (S6). */
+export const MAX_WORKSPACE_AVATARS = 3
+
+/** One direction of the join: does `subscribed` cover `path`? EXACT
+ *  mirror of the daemon's `event_matches_workspace` normalization
+ *  (`crates/k2-daemon/src/session_events_ws.rs`): trim ALL trailing
+ *  slashes off the subscribed path, then match when the trimmed paths
+ *  are equal OR `path` starts with `<trimmed>/` — the appended slash
+ *  enforces the segment boundary (`/a/b` must NOT cover `/a/bc`). An
+ *  empty subscribed path normalizes to the `/` prefix (covers every
+ *  absolute path), same as the daemon. */
+function pathCovers(subscribed: string, path: string): boolean {
+  const trimmed = subscribed.replace(/\/+$/, '')
+  const prefixWithSlash = trimmed === '' ? '/' : `${trimmed}/`
+  return path.replace(/\/+$/, '') === trimmed || path.startsWith(prefixWithSlash)
+}
+
+/** Symmetric prefix overlap: true when either path sits at or under the
+ *  other (after the daemon's trailing-slash normalization). Pure —
+ *  unit-tested directly. */
+export function workspacePathsOverlap(a: string, b: string): boolean {
+  return pathCovers(a, b) || pathCovers(b, a)
+}
+
+/** The roster rows to show on a nav row for `path` (daemon ordering
+ *  preserved). A user with multiple windows carries every subscribed
+ *  workspace in one row, so they appear on EVERY matching nav row. An
+ *  empty row path selects nobody (only subscriptions normalize to the
+ *  match-all `/`, never nav rows). */
+export function usersForWorkspace(roster: RosterUser[], path: string): RosterUser[] {
+  if (!path) return []
+  return roster.filter(
+    (u) => Array.isArray(u.workspaces) && u.workspaces.some((w) => workspacePathsOverlap(w, path)),
+  )
+}
+
 // ── Event wiring (module-scope, mirrors active-agents conventions) ────────
 //
 // Registered once at import. The registries are pure-callback singletons

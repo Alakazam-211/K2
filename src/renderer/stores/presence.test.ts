@@ -57,7 +57,10 @@ import {
   usePresenceStore,
   rosterDisplay,
   shouldShowRoster,
+  workspacePathsOverlap,
+  usersForWorkspace,
   MAX_ROSTER_AVATARS,
+  MAX_WORKSPACE_AVATARS,
   type RosterUser,
 } from './presence'
 import {
@@ -302,5 +305,86 @@ describe('presence roster — overflow math (10 visible + N)', () => {
     expect(shouldShowRoster(users(1), true)).toBe(false) // just the owner
     expect(shouldShowRoster(users(2), true)).toBe(true)
     expect(shouldShowRoster(users(2), false)).toBe(false) // older daemon
+  })
+})
+
+// ── S6 — workspace-nav presence: path matcher + selector ─────────────────
+//
+// `workspacePathsOverlap` must mirror the daemon's
+// `event_matches_workspace` normalization (session_events_ws.rs) exactly:
+// trim trailing slashes, equal-after-trim OR prefix-plus-`/`. The daemon's
+// own tests (`workspace_path_filter_rules_match_cli_endpoint`) pin the
+// same cases from the Rust side.
+
+describe('presence S6 — workspacePathsOverlap (event_matches_workspace mirror)', () => {
+  it('exact match', () => {
+    expect(workspacePathsOverlap('/x/foo', '/x/foo')).toBe(true)
+  })
+
+  it('nested worktree under the project path matches BOTH directions', () => {
+    // Subscribed to the project → covers the worktree row…
+    expect(workspacePathsOverlap('/x/foo', '/x/foo/worktrees/wt-1')).toBe(true)
+    // …and subscribed to the worktree → shows on the project row.
+    expect(workspacePathsOverlap('/x/foo/worktrees/wt-1', '/x/foo')).toBe(true)
+  })
+
+  it('trailing-slash normalization (either side, including doubled slashes)', () => {
+    expect(workspacePathsOverlap('/x/foo/', '/x/foo')).toBe(true)
+    expect(workspacePathsOverlap('/x/foo', '/x/foo/')).toBe(true)
+    expect(workspacePathsOverlap('/x/foo//', '/x/foo')).toBe(true)
+    expect(workspacePathsOverlap('/x/foo/', '/x/foo/bar')).toBe(true)
+  })
+
+  it('unrelated sibling prefix is NOT a match (/a/bc vs /a/b — segment boundary)', () => {
+    expect(workspacePathsOverlap('/a/b', '/a/bc')).toBe(false)
+    expect(workspacePathsOverlap('/a/bc', '/a/b')).toBe(false)
+    // The daemon's own pinned case: foo-website is not under foo.
+    expect(workspacePathsOverlap('/x/foo', '/x/foo-website/x')).toBe(false)
+  })
+
+  it('disjoint paths never match', () => {
+    expect(workspacePathsOverlap('/x/foo', '/x/other')).toBe(false)
+  })
+})
+
+describe('presence S6 — usersForWorkspace selector', () => {
+  const roster: RosterUser[] = [
+    row('owner', { workspaces: ['/x/foo'] }),
+    // Multi-window user viewing TWO workspaces — must appear on both rows.
+    row('alice', { windowCount: 2, workspaces: ['/x/foo/worktrees/wt-1', '/y/bar'] }),
+    row('bob', { workspaces: ['/y/bar/'] }), // trailing slash on the wire
+    row('carol', { workspaces: [] }), // app-socket only, no workspace views
+  ]
+
+  it('joins by the symmetric prefix rule (project row picks up nested-worktree viewers)', () => {
+    expect(usersForWorkspace(roster, '/x/foo').map((u) => u.user)).toEqual(['owner', 'alice'])
+  })
+
+  it('a multi-window user appears in EVERY matching workspace row', () => {
+    expect(usersForWorkspace(roster, '/x/foo/worktrees/wt-1').map((u) => u.user)).toEqual([
+      'owner', // subscribed to the project ABOVE the worktree — covers it
+      'alice',
+    ])
+    expect(usersForWorkspace(roster, '/y/bar').map((u) => u.user)).toEqual(['alice', 'bob'])
+  })
+
+  it('daemon roster ordering is preserved; non-viewers and non-matches drop out', () => {
+    const hit = usersForWorkspace(roster, '/y/bar')
+    expect(hit.map((u) => u.user)).toEqual(['alice', 'bob']) // carol (no views) absent
+    expect(usersForWorkspace(roster, '/z/unrelated')).toEqual([])
+  })
+
+  it('an empty row path selects nobody (never match-all)', () => {
+    expect(usersForWorkspace(roster, '')).toEqual([])
+  })
+
+  it('nav clusters cap at 3 avatars before the +N chip (rosterDisplay reuse)', () => {
+    expect(MAX_WORKSPACE_AVATARS).toBe(3)
+    const five = Array.from({ length: 5 }, (_, i) =>
+      row(`u${i}`, { workspaces: ['/x/foo'] }),
+    )
+    const { visible, overflow } = rosterDisplay(usersForWorkspace(five, '/x/foo'), MAX_WORKSPACE_AVATARS)
+    expect(visible.length).toBe(3)
+    expect(overflow).toBe(2)
   })
 })

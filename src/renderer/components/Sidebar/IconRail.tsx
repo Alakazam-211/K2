@@ -8,7 +8,9 @@ import { useTabsStore } from '../../stores/tabs'
 import { useCommandPaletteStore } from '../../stores/command-palette'
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 import { useRemoveWorkspaceDialogStore } from '../../stores/remove-workspace-dialog'
-import { useGitInfo, useGitChanges } from '../../hooks/useGit'
+import { useGitInfo } from '../../hooks/useGit'
+import { usePresenceStore, usersForWorkspace } from '../../stores/presence'
+import { presenceDisplayName } from '../Presence/PresenceAvatar'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { showContextMenu } from '../../lib/context-menu'
@@ -33,27 +35,31 @@ function ProjectIcon({
   shortcutIndex?: number
 }): React.JSX.Element {
   const { data: gitInfo } = useGitInfo(project.path)
-  const { data: changes } = useGitChanges(project.path)
   const agentStatus = useActiveAgentsStore((s) => s.getProjectStatus(project.id))
+  const roster = usePresenceStore((s) => s.roster)
+  const presenceSupported = usePresenceStore((s) => s.supported)
 
   const hasDirtyFiles =
     gitInfo?.isRepo && (gitInfo.changedFiles + gitInfo.untrackedFiles) > 0
 
-  const added = changes.filter(
-    (f) => f.status === 'added' || f.status === 'untracked'
-  ).length
-  const deleted = changes.filter((f) => f.status === 'deleted').length
+  // S6 — who's viewing this workspace (same path join as the sidebar's
+  // avatar cluster; replaces the old +N/-N diff-count fragment).
+  const usersHere = useMemo(
+    () => usersForWorkspace(roster, project.path),
+    [roster, project.path]
+  )
 
-  // Build tooltip: "WorkspaceName • branch • +N/-N changes"
+  // Build tooltip: "WorkspaceName • branch • Alice, Bob" (or "5 here")
   const tooltipParts = [project.name]
   if (gitInfo?.isRepo && gitInfo.currentBranch) {
     tooltipParts.push(gitInfo.currentBranch)
   }
-  if (added > 0 || deleted > 0) {
-    const diffParts: string[] = []
-    if (added > 0) diffParts.push(`+${added}`)
-    if (deleted > 0) diffParts.push(`-${deleted}`)
-    tooltipParts.push(`${diffParts.join('/')} changes`)
+  if (presenceSupported && usersHere.length > 0) {
+    tooltipParts.push(
+      usersHere.length <= 3
+        ? usersHere.map((u) => presenceDisplayName(u.user)).join(', ')
+        : `${usersHere.length} here`
+    )
   }
   const tooltip = tooltipParts.join(' \u2022 ')
 

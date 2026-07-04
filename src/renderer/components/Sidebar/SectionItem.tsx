@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { useProjectsStore, type WorkspaceSection } from '@/stores/projects'
 import { useGitInfo } from '@/hooks/useGit'
 import { showContextMenu } from '@/lib/context-menu'
+import PresenceWorkspaceAvatars from '@/components/Presence/PresenceWorkspaceAvatars'
 
 // ── Preset section colors ────────────────────────────────────────────────────
 
@@ -193,7 +194,12 @@ export default function SectionItem({
                   </span>
                 )}
 
-                <WorkspaceGitBadge path={workspacePath} />
+                {/* S6 — presence avatars share the right-aligned area with
+                    the changed-files badge (different feature; badge stays). */}
+                <span className="ml-auto flex items-center gap-1 flex-shrink-0">
+                  <PresenceWorkspaceAvatars path={workspacePath} />
+                  <WorkspaceGitBadge path={workspacePath} />
+                </span>
               </button>
             )
           })}

@@ -2,8 +2,6 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useSettingsStore } from '@/stores/settings'
-import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
-import { useTabsStore } from '@/stores/tabs'
 import { useAssistantStore } from '@/stores/assistant'
 import { useToastStore } from '@/stores/toast'
 import { useActiveAgentsStore } from '@/stores/active-agents'
@@ -21,10 +19,11 @@ import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
 import { showContextMenu } from '@/lib/context-menu'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { startCloneTo, startCloneToThisComputer } from '@/lib/start-clone-to'
-import { useGitInfo, useGitChanges } from '@/hooks/useGit'
+import { useGitInfo } from '@/hooks/useGit'
 import ResizeHandle from './ResizeHandle'
 import WorktreeDialog from './WorktreeDialog'
 import ProjectAvatar from './ProjectAvatar'
+import PresenceWorkspaceAvatars from '@/components/Presence/PresenceWorkspaceAvatars'
 import SectionItem from './SectionItem'
 import FocusGroupDropdown from './FocusGroupDropdown'
 import ActiveBar from './ActiveBar'
@@ -92,63 +91,7 @@ function WorkspaceStatusDot({ path }: { path?: string }): React.JSX.Element | nu
   )
 }
 
-// ── Diff stats for single-button workspaces ────────────────────────────────────
-
-function DiffStats({ path }: { path: string }): React.JSX.Element | null {
-  const { data: changes } = useGitChanges(path)
-  // Default agent resolved through the one seam (id-first, legacy-token
-  // tolerant, first-enabled fallback), scoped to this workspace's project.
-  const resolvedAgent = useResolvedAgentCommand(undefined, { projectPath: path })
-  const [hovered, setHovered] = useState(false)
-
-  const added = changes.filter((f) => f.status === 'added' || f.status === 'untracked').length
-  const deleted = changes.filter((f) => f.status === 'deleted').length
-
-  if (added === 0 && deleted === 0) return null
-
-  const handleAiCommit = (e: React.MouseEvent) => {
-    e.stopPropagation()
-
-    if (!resolvedAgent) return
-    const { command, args } = resolvedAgent
-
-    const MAX_FILES = 80
-    const fileLines = changes.slice(0, MAX_FILES).map((f) => `${f.status}: ${f.path}`)
-    if (changes.length > MAX_FILES) {
-      fileLines.push(`...and ${changes.length - MAX_FILES} more files`)
-    }
-
-    const prompt = `Review the following changes in this repository and create a well-structured commit with an appropriate commit message.\n\nChanged files:\n${fileLines.join('\n')}`
-
-    const tabsStore = useTabsStore.getState()
-    const activeGroup = tabsStore.activeGroupIndex
-    tabsStore.addTabToGroup(activeGroup, path, {
-      title: 'AI Commit',
-      command,
-      args: [...args, prompt]
-    })
-  }
-
-  return (
-    <span
-      className="flex items-center gap-1 text-[10px] tabular-nums font-medium flex-shrink-0 px-1.5 py-0.5 bg-white/[0.06] font-mono cursor-pointer"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onClick={handleAiCommit}
-    >
-      {hovered ? (
-        <span className="text-[var(--color-accent)] whitespace-nowrap">AI Commit</span>
-      ) : (
-        <>
-          {added > 0 && <span className="text-green-400">+{added}</span>}
-          {deleted > 0 && <span className="text-red-400">-{deleted}</span>}
-        </>
-      )}
-    </span>
-  )
-}
-
-// ── Agent status or diff stats (shows spinner when agent is working) ─────────
+// ── Agent status (shows spinner when agent is working) ───────────────────────
 
 /** Shows braille spinner or "done" label — for placement next to shortcut numbers */
 function AgentSpinner({ projectId }: { projectId: string }): React.JSX.Element | null {
@@ -171,58 +114,6 @@ function AgentSpinner({ projectId }: { projectId: string }): React.JSX.Element |
   }
 
   return null
-}
-
-/** Shows diff stats (always visible, even when agent is running — spinner is on a separate row) */
-function AgentOrDiffStats({ projectId, path }: { projectId: string; path: string }): React.JSX.Element | null {
-  return <DiffStats path={path} />
-}
-
-// ── Aggregated diff stats across all worktrees ──────────────────────────────
-
-function AggregatedDiffStats({
-  paths
-}: {
-  paths: string[]
-}): React.JSX.Element | null {
-  // We call useGitChanges for each path — this works because the array is stable
-  // We render a sub-component per path and aggregate in a wrapper
-  return <AggregatedDiffStatsInner paths={paths} />
-}
-
-function AggregatedDiffStatsInner({ paths }: { paths: string[] }): React.JSX.Element | null {
-  let totalAdded = 0
-  let totalDeleted = 0
-
-  for (const path of paths) {
-    const { data: changes } = useGitChanges(path)
-    totalAdded += changes.filter((f) => f.status === 'added' || f.status === 'untracked').length
-    totalDeleted += changes.filter((f) => f.status === 'deleted').length
-  }
-
-  if (totalAdded === 0 && totalDeleted === 0) return null
-
-  return (
-    <span className="flex items-center gap-1 text-[10px] tabular-nums font-medium flex-shrink-0">
-      {totalAdded > 0 && <span className="text-green-400">+{totalAdded}</span>}
-      {totalDeleted > 0 && <span className="text-red-400">-{totalDeleted}</span>}
-    </span>
-  )
-}
-
-// ── Ahead/Behind indicators ──────────────────────────────────────────────────
-
-function AheadBehind({ path }: { path: string }): React.JSX.Element | null {
-  const { data } = useGitInfo(path)
-  if (!data?.isRepo) return null
-  if (data.ahead === 0 && data.behind === 0) return null
-
-  return (
-    <span className="flex items-center gap-1 text-[10px] tabular-nums font-medium flex-shrink-0">
-      {data.ahead > 0 && <span className="text-green-400">{'\u2191'}{data.ahead}</span>}
-      {data.behind > 0 && <span className="text-red-400">{'\u2193'}{data.behind}</span>}
-    </span>
-  )
 }
 
 // ── Single Workspace Item (worktreeMode === 0) ─────────────────────────────────
@@ -350,7 +241,7 @@ function SingleProjectItem({
         <div className="flex flex-col justify-center min-w-0 flex-1">
           <div className="flex items-center gap-2 w-full">
             <span className="truncate flex-1">{project.name}</span>
-            <AgentOrDiffStats projectId={project.id} path={project.path} />
+            <PresenceWorkspaceAvatars path={project.path} />
           </div>
           <div className="flex items-center gap-1">
             {gitInfo?.isRepo && gitInfo.currentBranch && (
@@ -446,7 +337,7 @@ function WorkspaceButton({
             {workspace.name.replace(/^agent\/[^/]+\//, '')}
           </span>
 
-          <AgentOrDiffStats projectId={workspace.projectId} path={workspacePath} />
+          <PresenceWorkspaceAvatars path={workspacePath} />
           <AgentSpinner projectId={workspace.projectId} />
           {shortcutIndex !== undefined && shortcutIndex < 9 && (
             <span className="text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0 py-0.5" style={{ paddingLeft: 8, paddingRight: 8 }}>
@@ -597,11 +488,6 @@ function ProjectItem({
       }
     },
     [project, assignWorkspaceToSection, fetchProjects]
-  )
-
-  // Collect worktree paths for aggregated diff stats
-  const workspacePaths = project.workspaces.map(
-    (ws) => ws.worktreePath ?? project.path
   )
 
   // Split worktrees into ungrouped and grouped by section

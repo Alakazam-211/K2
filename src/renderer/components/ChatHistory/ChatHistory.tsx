@@ -55,6 +55,7 @@ const PROVIDER_CONFIG: Record<string, ProviderConfig> = {
   gemini: { command: 'gemini', label: 'Gemini', resumeFlag: '--resume' },
   pi: { command: 'pi', label: 'Pi', resumeFlag: '--session' },
   codex: { command: 'codex', label: 'Codex', resumeSubcommand: 'resume' },
+  hermes: { command: 'hermes', label: 'Hermes', resumeFlag: '--resume' },
 }
 
 /// Get the preset args (e.g. --dangerously-skip-permissions) for a provider command.
@@ -141,6 +142,8 @@ interface ChatStoragePaths {
   piChatsDirs: string[]
   codexSessionsDirs: string[]
   codexHistoryFile: string | null
+  grokSessionsDirs: string[]
+  hermesStateDb: string | null
 }
 
 function SearchIcon(): React.JSX.Element {
@@ -385,6 +388,8 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     for (const dir of paths.piChatsDirs) locationLines.push(`- Pi chats: ${dir}`)
     if (paths.codexHistoryFile) locationLines.push(`- Codex prompt index: ${paths.codexHistoryFile}`)
     for (const dir of paths.codexSessionsDirs) locationLines.push(`- Codex sessions: ${dir}`)
+    for (const dir of paths.grokSessionsDirs) locationLines.push(`- Grok sessions: ${dir}`)
+    if (paths.hermesStateDb) locationLines.push(`- Hermes sessions DB (SQLite): ${paths.hermesStateDb}`)
 
     const prompt = [
       `Search through my conversation history for: "${searchQuery.trim()}"`,

@@ -68,6 +68,9 @@ export const RESUMABLE_CLI_TOOLS: Record<string, ResumableCliTool> = {
   'pi': { resumeFlag: '--session', provider: 'pi' },
   // Codex resume is a subcommand: `codex resume <uuid>`.
   'codex': { resumeSubcommand: 'resume', provider: 'codex' },
+  // Hermes resumes by id (or title): `hermes --resume <session>`. Its
+  // `--continue` is most-recent GLOBAL (not cwd-scoped) — never use it.
+  'hermes': { resumeFlag: '--resume', provider: 'hermes' },
 }
 
 // ── Agent activity ────────────────────────────────────────────────
@@ -81,6 +84,10 @@ export const KNOWN_AGENT_COMMANDS = new Set([
   // Cloud CLI agents
   'claude', 'cursor-agent', 'grok', 'codex', 'gemini', 'copilot',
   'aider', 'opencode', 'gpt', 'goose', 'pi',
+  // Nous Research's Hermes Agent. NOTE: `hermes` is also the name of
+  // Meta's JS engine binary — a rare false positive here only makes
+  // the close-warning fire, never breaks anything.
+  'hermes',
   // Local/on-device LLM tools
   'ollama', 'llamafile', 'llama-cli', 'interpreter',
   'tenere', 'llm-tui-rs',

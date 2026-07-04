@@ -98,6 +98,10 @@ Status: PLAN — nothing built yet.
 - **No user-avatar component exists.** Build `PresenceAvatar` forking `ProjectAvatar`'s
   initials-fallback (`Sidebar/ProjectAvatar.tsx:78,107-125`): circular, size prop, role-colored
   2px border. Role colors (proposal): owner amber/gold, admin purple, member blue, viewer gray.
+  **V1 is initials-ONLY by decree (Rosson 2026-07-04)**: profile images arrive later from K2
+  Connect Cloud accounts (the future identity source alongside Federation Groups; daemon-local
+  user/pass stays forever). Keep an optional `imageUrl` prop in the component shape so Cloud
+  avatars drop in without rework, but build nothing image-fetching now.
 - No tests assert on DiffStats or row DOM — swap is test-silent.
 
 ### E. Resize / pin-to-size — one clamp point, three claim paths to suppress

@@ -5155,6 +5155,7 @@ cmd_help() {
         read)                     cmd_help_read ;;
         inbox)                    cmd_help_inbox ;;
         agent)                    cmd_help_agent ;;
+        feedback)                 cmd_help_feedback ;;
         workspace)                cmd_help_workspace ;;
         skills)                   cmd_help_skills ;;
         settings)                 cmd_help_settings ;;
@@ -5639,6 +5640,54 @@ cmd_schema() {
         {"name": "--dry-run", "arg": null, "description": "Show what would happen; change nothing."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
+    },
+    {
+      "name": "feedback ask",
+      "usage": "k2 feedback ask <title> [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--wait [--timeout <s>]] [--json]",
+      "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
+      "args": [{"name": "title", "required": true}],
+      "flags": [
+        {"name": "--body", "arg": "text", "description": "Longer context/details (the ask's body)."},
+        {"name": "--body-file", "arg": "file", "description": "Read the body from a file (long or formatted context)."},
+        {"name": "--kind", "arg": "kind", "description": "question | approval | fyi (default: question). fyi expects no answer."},
+        {"name": "--options", "arg": "a,b,c", "description": "Specific choices the human taps instead of typing."},
+        {"name": "--priority", "arg": "1-5", "description": "1 = urgent ... 5 = whenever (default: 3)."},
+        {"name": "--wait", "arg": null, "description": "Block until answered; print the BARE answer to stdout (safe for \$(...) capture). Closed without an answer -> exit 1 + {\"error\":{\"code\":\"closed_unanswered\"}} on stderr."},
+        {"name": "--timeout", "arg": "seconds", "description": "With --wait: give up after N seconds (exit 1, {\"error\":{\"code\":\"timeout\"}} on stderr; the item stays waiting)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "feedback list",
+      "usage": "k2 feedback list [--all] [--status <s>] [--json]",
+      "description": "List this workspace's feedback items, newest first. Default shows open items (waiting + answered).",
+      "args": [],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Include resolved and dismissed items."},
+        {"name": "--status", "arg": "status", "description": "Filter to one status: waiting | answered | resolved | dismissed."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "feedback show",
+      "usage": "k2 feedback show <id> [--json]",
+      "description": "Show one feedback item: the ask, its status/answer, and the full discussion thread. <id> accepts a short unique prefix (ambiguous prefix = exit 4 with candidates in the hint).",
+      "args": [{"name": "id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output (includes the comments array)."}]
+    },
+    {
+      "name": "feedback comment",
+      "usage": "k2 feedback comment <id> \"<text>\" [--json]",
+      "description": "Add a message to a feedback item's discussion thread. Bumps the message count only; does not change status (only NEW items fire notifications).",
+      "args": [{"name": "id", "required": true}, {"name": "text", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "feedback resolve",
+      "usage": "k2 feedback resolve <id> [--json]",
+      "description": "Mark a feedback item resolved (you got what you needed). Drops out of the default list view; still visible with --all.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "checkin",
@@ -8244,6 +8293,13 @@ AGENTS
   agent                                 Hire, configure, list, retire this server's agents
                                         (hire/conf/get/set/list/retire — see `k2 agent --help`)
 
+ASK A HUMAN
+  feedback ask "<title>"                File a durable ask for human input (survives
+                                        your session; supports --options/--wait)
+  feedback list                         This workspace's asks + their status
+  feedback show <id>                    One ask: status, answer, discussion thread
+                                        (ask/list/show/comment/resolve — see `k2 feedback --help`)
+
 WORKSPACE
   workspace list                        Yellow pages: every workspace + status
   workspace list --running              Filter to live agents
@@ -8732,6 +8788,646 @@ print(f\"total queued: {d.get('total_queued',0)}\")"
     esac
 }
 
+# ── Feedback (F1) — ask a human for input, durably ───────────────────
+#
+# `k2 feedback` files agent→human asks as durable items on this
+# server's Feedback page (prd-agent-feedback-notifications, mockup:
+# .k2/notes/feedback-cli-mockup.md — the help text below is that
+# mockup VERBATIM; it passed the 36/36 comprehension gate).
+#
+# Contract highlights (pinned):
+# - Success output human-readable; --json flips it to JSON.
+# - ERRORS are ALWAYS JSON on stderr ({"error":{"code","hint"}})
+#   regardless of --json.
+# - Exit codes: 0 ok · 1 error · 2 bad usage · 4 not found (ambiguous
+#   id prefix = 4 too, candidates in the hint).
+# - `ask --wait` prints the BARE answer to stdout (exit 0);
+#   resolved/dismissed WITHOUT an answer → empty stdout +
+#   {"error":{"code":"closed_unanswered"}} on stderr + exit 1;
+#   --timeout → {"error":{"code":"timeout"}} + exit 1, item STAYS
+#   waiting.
+
+_feedback_err() {
+    local code="$1" hint="$2"
+    CODE="$code" HINT="$hint" python3 -c 'import json,os
+print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT"]}}))' >&2 \
+        || echo "Error ($code): $hint" >&2
+}
+
+# Session auto-detection (feedback F1): the asking session's id + kind
+# from the environment, first match wins:
+#   1. K2_SESSION_ID — the daemon stages this into SANDBOX cells
+#      (v1_sandboxes/policy.rs: guest runs `claude --session-id $K2_SESSION_ID`).
+#   2. CLAUDE_SESSION_ID — reserved hook-context spelling (PRD §4.2).
+#   3. CLAUDE_CODE_SESSION_ID — what Claude Code actually exports into
+#      Bash-tool subshells; in a K2 canonical (pinned-chat) session it
+#      equals the forced `claude --session-id <id>`.
+# Nothing found → both stay empty (a session-less ask must still work).
+_feedback_detect_session() {
+    FB_SESSION_ID=""
+    FB_SESSION_KIND=""
+    if [ -n "${K2_SESSION_ID:-}" ]; then
+        FB_SESSION_ID="$K2_SESSION_ID"; FB_SESSION_KIND="sandbox"
+    elif [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+        FB_SESSION_ID="$CLAUDE_SESSION_ID"; FB_SESSION_KIND="canonical"
+    elif [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+        FB_SESSION_ID="$CLAUDE_CODE_SESSION_ID"; FB_SESSION_KIND="canonical"
+    fi
+}
+
+cmd_feedback_ask() {
+    if _wants_help "$@"; then cmd_help_feedback_ask; exit 0; fi
+    local title="" body="" body_file="" kind="" options="" priority=""
+    local wait=false timeout="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --body)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--body requires a value"; exit 2; }
+                body="$2"; shift 2 ;;
+            --body-file)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--body-file requires a file path"; exit 2; }
+                body_file="$2"; shift 2 ;;
+            --kind)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--kind requires a value (question | approval | fyi)"; exit 2; }
+                kind="$2"; shift 2 ;;
+            --options)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--options requires a comma-separated list (e.g. \"Ship it,Hold\")"; exit 2; }
+                options="$2"; shift 2 ;;
+            --priority)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--priority requires a value (1-5)"; exit 2; }
+                priority="$2"; shift 2 ;;
+            --wait) wait=true; shift ;;
+            --timeout)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--timeout requires a value in seconds"; exit 2; }
+                timeout="$2"; shift 2 ;;
+            --json) as_json=true; shift ;;
+            -*)
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 feedback ask <title> [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--wait [--timeout s]] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$title" ]; then title="$1"; else
+                    _feedback_err "usage" "unexpected extra argument '$1' — quote the title if it contains spaces"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$title" ]; then
+        _feedback_err "usage" "ask requires a <title>"
+        exit 2
+    fi
+    case "${kind:-question}" in
+        question|approval|fyi) ;;
+        *)
+            _feedback_err "usage" "invalid --kind '$kind' — valid: question, approval, fyi"
+            exit 2 ;;
+    esac
+    if [ -n "$priority" ]; then
+        case "$priority" in
+            1|2|3|4|5) ;;
+            *)
+                _feedback_err "usage" "--priority must be 1-5"
+                exit 2 ;;
+        esac
+    fi
+    if [ -n "$body" ] && [ -n "$body_file" ]; then
+        _feedback_err "usage" "--body and --body-file are mutually exclusive"
+        exit 2
+    fi
+    if [ -n "$body_file" ]; then
+        if [ ! -f "$body_file" ]; then
+            _feedback_err "usage" "--body-file: no such file '$body_file'"
+            exit 2
+        fi
+        body="$(cat "$body_file")" || {
+            _feedback_err "usage" "--body-file: cannot read '$body_file'"
+            exit 2
+        }
+    fi
+    if [ -n "$timeout" ]; then
+        if ! $wait; then
+            _feedback_err "usage" "--timeout only makes sense with --wait"
+            exit 2
+        fi
+        case "$timeout" in
+            ''|*[!0-9]*|0)
+                _feedback_err "usage" "--timeout must be a positive number of seconds"
+                exit 2 ;;
+        esac
+    fi
+    _feedback_detect_session
+    FB_TITLE="$title" FB_BODY="$body" FB_KIND="$kind" FB_OPTIONS="$options" \
+    FB_PRIORITY="$priority" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
+    FB_PROJECT="$PROJECT" FB_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
+    FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" \
+    ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
+import json, os, sys, time
+import urllib.error, urllib.parse, urllib.request
+
+base = os.environ["ABASE"]
+token = os.environ["ATOKEN"]
+as_json = os.environ.get("FB_JSON") == "true"
+wait = os.environ.get("FB_WAIT") == "true"
+timeout = os.environ.get("FB_TIMEOUT", "")
+
+def die(err, exit_code=None):
+    # Errors are ALWAYS JSON on stderr, regardless of --json.
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    sys.stderr.write(json.dumps({"error": err}) + "\n")
+    if exit_code is None:
+        code = err.get("code")
+        exit_code = 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1
+    sys.exit(exit_code)
+
+def request(method, route, params=None, body=None):
+    qs = urllib.parse.urlencode(dict(params or {}, token=token))
+    url = base + route + "?" + qs
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+        headers={"Content-Type": "application/json"} if data else {})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            return {"error": {"code": "error", "hint": "HTTP %s on %s" % (e.code, route)}}
+    except Exception:
+        return None
+
+payload = {
+    "project": os.environ["FB_PROJECT"],
+    "title": os.environ["FB_TITLE"],
+}
+if os.environ.get("FB_BODY"):
+    payload["body"] = os.environ["FB_BODY"]
+if os.environ.get("FB_KIND"):
+    payload["kind"] = os.environ["FB_KIND"]
+if os.environ.get("FB_PRIORITY"):
+    payload["priority"] = int(os.environ["FB_PRIORITY"])
+if os.environ.get("FB_OPTIONS"):
+    opts = [o.strip() for o in os.environ["FB_OPTIONS"].split(",") if o.strip()]
+    if opts:
+        payload["options"] = opts
+if os.environ.get("FB_AGENT"):
+    payload["agentName"] = os.environ["FB_AGENT"]
+# Session auto-detection result (may be absent — must not fail the ask).
+if os.environ.get("FB_SESSION_ID"):
+    payload["sessionId"] = os.environ["FB_SESSION_ID"]
+    if os.environ.get("FB_SESSION_KIND"):
+        payload["sessionKind"] = os.environ["FB_SESSION_KIND"]
+
+d = request("POST", "/cli/feedback/create", body=payload)
+if d is None:
+    die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})
+if d.get("error"):
+    die(d["error"])
+if not d.get("ok"):
+    die({"code": "error", "hint": "unexpected daemon response: %r" % json.dumps(d)[:200]})
+
+fid = d["id"]
+
+if not wait:
+    if as_json:
+        print(json.dumps(d))
+    else:
+        short = fid[:8]
+        print('Filed feedback %s — "%s" (%s, priority %s, %s)'
+              % (short, d.get("title", ""), d.get("kind", "?"),
+                 d.get("priority", "?"), d.get("status", "?")))
+        print("A human will be notified. Check back with: k2 feedback show %s" % short)
+    sys.exit(0)
+
+# ── --wait: poll `show` (~2s) until answered / closed / timeout ──────
+# Pinned contract: BARE answer to stdout + exit 0 on answered (also on
+# resolved/dismissed WITH an answer); closed WITHOUT an answer →
+# {"error":{"code":"closed_unanswered"}} on stderr + exit 1; timeout →
+# {"error":{"code":"timeout"}} on stderr + exit 1 and the item STAYS
+# waiting (we just stop polling). Transient poll failures are retried —
+# a daemon blip must not fake a closed_unanswered.
+deadline = time.time() + int(timeout) if timeout else None
+while True:
+    d = request("GET", "/cli/feedback/show", params={"id": fid})
+    if isinstance(d, dict) and d.get("ok"):
+        status = d.get("status")
+        answer = d.get("answer")
+        if status == "answered" and answer:
+            print(answer)
+            sys.exit(0)
+        if status in ("resolved", "dismissed"):
+            if answer:
+                print(answer)
+                sys.exit(0)
+            sys.stderr.write('{"error":{"code":"closed_unanswered"}}\n')
+            sys.exit(1)
+    if deadline is not None and time.time() >= deadline:
+        sys.stderr.write('{"error":{"code":"timeout"}}\n')
+        sys.exit(1)
+    nap = 2.0
+    if deadline is not None:
+        nap = max(0.1, min(nap, deadline - time.time()))
+    time.sleep(nap)
+PYEOF
+}
+
+cmd_feedback_list() {
+    if _wants_help "$@"; then cmd_help_feedback_list; exit 0; fi
+    local all=false status="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --all) all=true; shift ;;
+            --status)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--status requires a value (waiting | answered | resolved | dismissed)"; exit 2; }
+                status="$2"; shift 2 ;;
+            --json) as_json=true; shift ;;
+            -*)
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 feedback list [--all] [--status <s>] [--json]"
+                exit 2 ;;
+            *)
+                _feedback_err "usage" "unexpected argument '$1' — usage: k2 feedback list [--all] [--status <s>] [--json]"
+                exit 2 ;;
+        esac
+    done
+    if [ -n "$status" ]; then
+        case "$status" in
+            waiting|answered|resolved|dismissed) ;;
+            *)
+                _feedback_err "usage" "invalid --status '$status' — valid: waiting, answered, resolved, dismissed"
+                exit 2 ;;
+        esac
+    fi
+    local resp
+    # bash 3.2 (macOS /bin/bash) + `set -u` rejects empty-array
+    # expansion, so branch instead of building an args array.
+    if [ -n "$status" ]; then
+        resp=$(cli_request "/cli/feedback/list" "status=$(urlencode "$status")") || resp=""
+    elif $all; then
+        resp=$(cli_request "/cli/feedback/list" "all=1") || resp=""
+    else
+        resp=$(cli_request "/cli/feedback/list") || resp=""
+    fi
+    if [ -z "$resp" ]; then
+        _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
+        exit 1
+    fi
+    RESP="$resp" AS_JSON="$as_json" python3 - <<'PYEOF'
+import json, os, sys
+raw = os.environ["RESP"]
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.stderr.write(json.dumps({"error": {"code": "bad_response",
+        "hint": "daemon returned an unparseable response: %r" % raw[:200]}}) + "\n")
+    sys.exit(1)
+err = d.get("error")
+if err is not None:
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    sys.stderr.write(json.dumps({"error": err}) + "\n")
+    code = err.get("code")
+    sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+if os.environ.get("AS_JSON") == "true":
+    print(json.dumps(d))
+    sys.exit(0)
+print("ID        STATUS    PRI  KIND      TITLE")
+for i in d.get("items", []):
+    print("%-10s%-10s%2s   %-10s%s" % (
+        str(i.get("id", ""))[:8], i.get("status", "?"),
+        i.get("priority", "?"), i.get("kind", "?"), i.get("title", "")))
+PYEOF
+}
+
+cmd_feedback_show() {
+    if _wants_help "$@"; then cmd_help_feedback_show; exit 0; fi
+    local id="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 feedback show <id> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"; else
+                    _feedback_err "usage" "unexpected extra argument '$1' — usage: k2 feedback show <id>"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$id" ]; then
+        _feedback_err "usage" "show requires an <id> (from ask/list; a short unique prefix works)"
+        exit 2
+    fi
+    local resp
+    resp=$(cli_request "/cli/feedback/show" "id=$(urlencode "$id")") || resp=""
+    if [ -z "$resp" ]; then
+        _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
+        exit 1
+    fi
+    RESP="$resp" AS_JSON="$as_json" python3 - <<'PYEOF'
+import json, os, sys, time
+raw = os.environ["RESP"]
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.stderr.write(json.dumps({"error": {"code": "bad_response",
+        "hint": "daemon returned an unparseable response: %r" % raw[:200]}}) + "\n")
+    sys.exit(1)
+err = d.get("error")
+if err is not None:
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    sys.stderr.write(json.dumps({"error": err}) + "\n")
+    code = err.get("code")
+    sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+if os.environ.get("AS_JSON") == "true":
+    print(json.dumps(d))
+    sys.exit(0)
+
+def ago(ts):
+    s = int(time.time() - ts)
+    if s < 60: return "just now"
+    if s < 3600: return "%dm ago" % (s // 60)
+    if s < 172800: return "%dh ago" % (s // 3600)
+    return "%dd ago" % (s // 86400)
+
+print("feedback : %s  (%s)" % (str(d.get("id", ""))[:8], d.get("status", "?")))
+print("title    : %s" % d.get("title", ""))
+print("kind     : %s · priority %s" % (d.get("kind", "?"), d.get("priority", "?")))
+asked = "%s" % (d.get("agentName") or "?")
+if d.get("sessionId"):
+    asked += " · session %s" % str(d["sessionId"])[:8]
+asked += " · %s" % ago(d.get("createdAt", 0))
+print("asked by : %s" % asked)
+if d.get("options"):
+    print("options  : %s" % " | ".join(d["options"]))
+if d.get("answer"):
+    print("answer   : %s" % d["answer"])
+print()
+print("thread:")
+for c in d.get("comments", []):
+    lines = str(c.get("body", "")).splitlines() or [""]
+    print("  %-9s%-10s%s" % (c.get("author", "?"), "(%s)" % ago(c.get("at", 0)), lines[0]))
+    for extra in lines[1:]:
+        print(" " * 21 + extra)
+PYEOF
+}
+
+cmd_feedback_comment() {
+    if _wants_help "$@"; then cmd_help_feedback_comment; exit 0; fi
+    local id="" text="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 feedback comment <id> <text> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"
+                elif [ -z "$text" ]; then text="$1"
+                else
+                    _feedback_err "usage" "unexpected extra argument '$1' — quote the comment text"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$id" ] || [ -z "$text" ]; then
+        _feedback_err "usage" "usage: k2 feedback comment <id> \"<text>\""
+        exit 2
+    fi
+    # Author attribution: the CLI is the AGENT interface, so default to
+    # the agent identity (env override → workspace folder basename, the
+    # product-default agent display name). The renderer's thread panel
+    # posts author="owner" via the route directly.
+    local author="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}"
+    [ -z "$author" ] && author="$(basename "$PROJECT")"
+    local body resp
+    body=$(FB_ID="$id" FB_TEXT="$text" FB_AUTHOR="$author" python3 -c 'import json,os
+print(json.dumps({"id": os.environ["FB_ID"], "body": os.environ["FB_TEXT"], "author": os.environ["FB_AUTHOR"]}))')
+    resp=$(cli_post_json "/cli/feedback/comment" "$body") || resp=""
+    if [ -z "$resp" ]; then
+        _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
+        exit 1
+    fi
+    RESP="$resp" AS_JSON="$as_json" python3 - <<'PYEOF'
+import json, os, sys
+d = json.loads(os.environ["RESP"])
+err = d.get("error")
+if err is not None:
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    sys.stderr.write(json.dumps({"error": err}) + "\n")
+    code = err.get("code")
+    sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+if os.environ.get("AS_JSON") == "true":
+    print(json.dumps(d))
+else:
+    print("Added comment to %s." % str(d.get("id", ""))[:8])
+PYEOF
+}
+
+cmd_feedback_resolve() {
+    if _wants_help "$@"; then cmd_help_feedback_resolve; exit 0; fi
+    local id="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 feedback resolve <id> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"; else
+                    _feedback_err "usage" "unexpected extra argument '$1' — usage: k2 feedback resolve <id>"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$id" ]; then
+        _feedback_err "usage" "resolve requires an <id> (from ask/list; a short unique prefix works)"
+        exit 2
+    fi
+    local body resp
+    body=$(FB_ID="$id" python3 -c 'import json,os
+print(json.dumps({"id": os.environ["FB_ID"]}))')
+    resp=$(cli_post_json "/cli/feedback/resolve" "$body") || resp=""
+    if [ -z "$resp" ]; then
+        _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
+        exit 1
+    fi
+    RESP="$resp" AS_JSON="$as_json" python3 - <<'PYEOF'
+import json, os, sys
+d = json.loads(os.environ["RESP"])
+err = d.get("error")
+if err is not None:
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    sys.stderr.write(json.dumps({"error": err}) + "\n")
+    code = err.get("code")
+    sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+if os.environ.get("AS_JSON") == "true":
+    print(json.dumps(d))
+else:
+    print("Resolved %s." % str(d.get("id", ""))[:8])
+PYEOF
+}
+
+cmd_help_feedback() {
+    cat <<'EOF'
+k2 feedback — ask a human for input and get an answer back
+
+An agent uses this when it needs a person: a question, an approval, a heads-up.
+The ask becomes a durable item on this server's Feedback page (it does NOT
+disappear like a terminal prompt). A human answers there — in-line or by opening
+your session — and the answer comes back to you.
+
+USAGE
+  k2 feedback <command> [args] [flags]
+
+COMMANDS
+  ask <title>            File a new feedback item asking for human input
+  list                   List this workspace's feedback items (newest first)
+  show <id>              Show one item: the ask, its status, and the full thread
+  comment <id> <text>    Add a message to an item's discussion thread (bumps the
+                         card's message count; only NEW items fire notifications)
+  resolve <id>           Mark an item resolved (you got what you needed)
+
+ADDRESSING
+  <id> is a feedback id (from `ask`/`list` output). A short unique prefix works.
+
+GLOBAL FLAGS
+  --json                 Machine-readable output (single JSON object)
+
+OUTPUT CONTRACT
+  Success output is human-readable by default; --json switches it to JSON.
+  ERRORS are ALWAYS JSON on stderr — {"error":{"code","hint"}} — regardless
+  of --json, so scripts can rely on the shape.
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage · 4 not found (ambiguous id prefix = 4 too,
+  with the matching candidates listed in the hint)
+
+Run 'k2 feedback <command> --help' for details on a command.
+EOF
+}
+
+cmd_help_feedback_ask() {
+    cat <<'EOF'
+File a feedback item asking a human for input. Returns immediately with the new
+item's id (the human answers later) — UNLESS you pass --wait, which blocks until
+the item is answered or resolved.
+
+The workspace and your session are auto-detected from the environment, so the
+human can jump straight into your session to talk to you if they prefer.
+
+USAGE
+  k2 feedback ask <title> [flags]
+
+ARGUMENTS
+  <title>                One-line summary of what you need (the notification text)
+
+FLAGS
+  --body <text>          Longer context/details (the ask's body)
+  --body-file <file>     Read the body from a file (for long or formatted context)
+  --kind <kind>          question | approval | fyi   (default: question).
+                         fyi = no answer expected: it sits on the human's page
+                         until THEY dismiss/resolve it (or you resolve it
+                         yourself). --wait on a fyi is pointless.
+  --options <a,b,c>      Offer specific choices the human taps instead of typing
+                         (e.g. --options "Ship it,Hold,Needs changes")
+  --priority <1-5>       1 = urgent … 5 = whenever   (default: 3)
+  --wait                 Block until the item is answered, then print the BARE
+                         answer to stdout (exit 0) — safe for $(...) capture.
+                         If the item is resolved/dismissed WITHOUT an answer,
+                         stdout stays empty, a {"error":{"code":"closed_unanswered"}}
+                         prints to stderr, and the exit code is 1.
+  --timeout <seconds>    With --wait: give up after N seconds. On timeout stdout
+                         stays empty, {"error":{"code":"timeout"}} prints to
+                         stderr, exit 1 — and the item STAYS open (waiting); the
+                         human can still answer and you can read it later with
+                         `show`. Always check the exit code before trusting a
+                         captured answer.
+  --json                 JSON output
+
+EXAMPLES
+  k2 feedback ask "Deploy to prod now?" --kind approval --options "Yes,No,Wait for me" --priority 1
+  k2 feedback ask "Which color for the CTA?" --body-file ./context.md
+  ANSWER=$(k2 feedback ask "Proceed with the migration?" --options "Go,Stop" --wait)
+EOF
+}
+
+cmd_help_feedback_list() {
+    cat <<'EOF'
+List this workspace's feedback items, newest first. Default shows open items
+(waiting + answered); pass --all to include resolved/dismissed.
+
+USAGE
+  k2 feedback list [flags]
+
+FLAGS
+  --all                  Include resolved and dismissed items
+  --status <status>      Filter to one status: waiting | answered | resolved | dismissed
+  --json                 JSON output
+EOF
+}
+
+cmd_help_feedback_show() {
+    cat <<'EOF'
+Show one feedback item: the ask, its status/answer, and the full discussion
+thread. Use it to read the answer after `ask` returned (or after a --wait
+timed out).
+
+USAGE
+  k2 feedback show <id> [flags]
+
+ARGUMENTS
+  <id>                   A feedback id from `ask`/`list`. A short unique prefix
+                         works; an ambiguous prefix fails (exit 4) listing the
+                         matching candidates in the hint.
+
+FLAGS
+  --json                 JSON output (includes the comments array)
+EOF
+}
+
+cmd_help_feedback_comment() {
+    cat <<'EOF'
+Add a message to a feedback item's discussion thread. Bumps the card's
+message count only — commenting does NOT change the item's status and does
+not fire a notification (only NEW items notify).
+
+USAGE
+  k2 feedback comment <id> "<text>" [flags]
+
+ARGUMENTS
+  <id>                   A feedback id from `ask`/`list` (short unique prefix ok)
+  <text>                 The message (quote it)
+
+FLAGS
+  --json                 JSON output
+EOF
+}
+
+cmd_help_feedback_resolve() {
+    cat <<'EOF'
+Mark a feedback item resolved — you got what you needed (or the ask no longer
+applies). Resolved items drop out of the default `list` view (still visible
+with --all). The recorded answer, if any, is kept.
+
+USAGE
+  k2 feedback resolve <id> [flags]
+
+ARGUMENTS
+  <id>                   A feedback id from `ask`/`list` (short unique prefix ok)
+
+FLAGS
+  --json                 JSON output
+EOF
+}
+
 # ── Router ───────────────────────────────────────────────────────────
 
 case "${1:-help}" in
@@ -8765,6 +9461,22 @@ case "${1:-help}" in
             *)
                 echo "Unknown agent subcommand: ${2:-}" >&2
                 cmd_help_agent >&2
+                exit 2 ;;
+        esac
+        ;;
+    feedback)
+        # Feedback F1 — durable agent→human asks (ask/list/show/
+        # comment/resolve). See `k2 feedback --help`.
+        case "${2:-}" in
+            ask)     shift 2; cmd_feedback_ask "$@" ;;
+            list)    shift 2; cmd_feedback_list "$@" ;;
+            show)    shift 2; cmd_feedback_show "$@" ;;
+            comment) shift 2; cmd_feedback_comment "$@" ;;
+            resolve) shift 2; cmd_feedback_resolve "$@" ;;
+            --help|-h|'') cmd_help_feedback; exit 0 ;;
+            *)
+                echo "Unknown feedback subcommand: ${2:-}" >&2
+                cmd_help_feedback >&2
                 exit 2 ;;
         esac
         ;;

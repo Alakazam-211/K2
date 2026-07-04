@@ -205,14 +205,20 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
     //     Slice 3: gated on the profile command mapping to a
     //     ProviderResume adapter (was claude-only) — custom launch
     //     commands (AGENT.md `launch:` bash etc.) keep their profile
-    //     args untouched. BASENAME GUARD: the resolver picks its OWN
-    //     command (the stored harness wins for an existing canonical
-    //     session), so we splice its args ONLY when its command matches
-    //     the profile's — e.g. an AGENT.md/claude profile over a
-    //     grok-harness canonical session must NOT get grok flags. The
-    //     mismatch case spawns the profile bare (Slice-2 degraded
-    //     behavior); reconciling command ownership at this site is
-    //     Slice 3b.
+    //     args untouched.
+    //
+    //     Slice 3b — COMMAND OWNERSHIP RECONCILED: the resolver picks
+    //     its OWN command (the stored `workspace_sessions.harness` wins
+    //     for an existing canonical session, sourcing that provider's
+    //     command from the enabled preset roster). When it disagrees
+    //     with the profile command, the HARNESS WINS for the
+    //     canonical/pinned key — e.g. a claude-default profile over a
+    //     grok-harness canonical session respawns GROK resuming the
+    //     grok conversation, instead of 3a's degraded bare-claude
+    //     spawn. The guard survives as the fallback: when the resolver
+    //     CAN'T produce a launch (unknown harness / saved-but-missing
+    //     explicit session → Err), we spawn the profile bare and leave
+    //     the saved identity untouched (non-destructive, see above).
     let profile_is_resumable = profile
         .command
         .as_deref()
@@ -237,11 +243,24 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
                     profile.args = Some(resolved.args);
                 } else {
                     log_debug!(
-                        "[daemon/canonical] resume resolver picked {} but the launch \
-                         profile runs {:?} for {project_path}; spawning the profile \
-                         bare (no resume splice)",
-                        resolved.command,
+                        "[daemon/canonical] canonical session's harness ({}) overrides \
+                         the launch profile command {:?} for {project_path}: \
+                         spawning {} session={} resumed_existing={}",
+                        resolved.provider,
                         profile.command,
+                        resolved.command,
+                        resolved.resume_session,
+                        resolved.resumed_existing,
+                    );
+                    profile.command = Some(resolved.command.clone());
+                    profile.args = Some(resolved.args);
+                }
+                // Self-minting provider on a fresh spawn: adopt the id
+                // it creates on disk (stamps session_id + harness).
+                if resolved.pending_session_discovery {
+                    k2_core::workspace::provider_resume::defer_adopt_discovered_session(
+                        resolved.provider.clone(),
+                        project_path.to_string(),
                     );
                 }
             }

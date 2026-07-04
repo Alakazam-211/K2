@@ -227,6 +227,155 @@ async fn ensure_canonical_session_honors_projects_default_agent() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Slice 3b — command ownership: the stored HARNESS wins for the
+// canonical key when it disagrees with the launch profile.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Scratch-HOME guard (controlled on-disk provider stores). TEST_LOCK
+/// serializes every test in this binary, so the env mutation is safe.
+struct HomeGuard {
+    original: Option<std::ffi::OsString>,
+    home: PathBuf,
+}
+
+impl HomeGuard {
+    fn new(label: &str) -> Self {
+        let home = std::env::temp_dir().join(format!(
+            "k2so-canonical-home-{}-{}-{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let original = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+        Self { original, home }
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match self.original.take() {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&self.home);
+    }
+}
+
+/// Shim an agent binary (execs `cat`) onto PATH.
+fn install_agent_shim(binary: &str) -> PathBuf {
+    let shim_dir = std::env::temp_dir().join(format!(
+        "k2so-canonical-shim-{}-{}-{}",
+        binary,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    let shim = shim_dir.join(binary);
+    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let prev = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
+    shim_dir
+}
+
+/// A workspace whose launch profile resolves to CLAUDE (no `launch:`
+/// block, no workspace default → level-4 fallback) but whose CANONICAL
+/// SESSION is GROK (harness='grok' + grok conversation on disk): the
+/// ensure respawn must run GROK resuming that conversation — the
+/// harness wins over the profile for the canonical key (Slice 3b; 3a
+/// spawned the profile bare here, losing the session).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ensure_canonical_session_harness_wins_over_profile_command() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("harness-wins");
+    let _shim = install_agent_shim("grok");
+
+    let workspace_id = "canon-test-ws-harness-wins";
+    let project = setup_project(workspace_id, "harness-wins", "custom");
+    // AGENT.md WITHOUT a `launch:` block → profile = default agent
+    // resolution → literal claude (scratch HOME has no settings.json,
+    // no projects.default_agent set).
+    let dir = project.join(".k2so/agent");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("AGENT.md"),
+        "---\nname: scout\ntype: custom\n---\n# scout\n",
+    )
+    .unwrap();
+    let project_path = project.to_string_lossy().into_owned();
+
+    // The canonical session is grok: harness + on-disk conversation.
+    let sid = "01920000-bbbb-7000-8000-000000000abc";
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        let grok_dir = home
+            .join(".grok")
+            .join("sessions")
+            .join("%2Ffixture")
+            .join(sid);
+        std::fs::create_dir_all(&grok_dir).unwrap();
+        std::fs::write(
+            grok_dir.join("summary.json"),
+            serde_json::json!({
+                "info": { "id": sid, "cwd": project_path },
+                "last_active_at": "2026-07-03T10:00:00Z",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let row_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+             VALUES (?1, ?2, ?3, 'grok', 'user', 'sleeping', unixepoch()) \
+             ON CONFLICT(project_id) DO UPDATE SET session_id = ?3, harness = 'grok'",
+            rusqlite::params![row_id, workspace_id, sid],
+        )
+        .unwrap();
+    }
+
+    let outcome = ensure_canonical_session(&project_path)
+        .expect("ensure must succeed for a grok-harness canonical session");
+    assert!(!outcome.reused, "cold map must spawn fresh");
+
+    let live = v2_session_map::lookup_by_agent_name(workspace_id)
+        .expect("canonical session must be registered");
+    assert_eq!(
+        live.program.as_deref(),
+        Some("grok"),
+        "the HARNESS (canonical session's agent) must win over the \
+         claude profile command; argv={:?}",
+        live.args
+    );
+    let resume_idx = live
+        .args
+        .iter()
+        .position(|a| a == "--resume")
+        .unwrap_or_else(|| panic!("grok respawn must resume the saved session: {:?}", live.args));
+    assert_eq!(
+        live.args.get(resume_idx + 1).map(String::as_str),
+        Some(sid),
+        "respawn must resume the stored grok conversation: {:?}",
+        live.args
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Idempotency: second call on a live workspace returns reused=true
 // ─────────────────────────────────────────────────────────────────────
 

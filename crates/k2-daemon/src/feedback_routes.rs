@@ -19,7 +19,12 @@
 //! human's first comment on a waiting question/approval — fires
 //! `HookEvent::FeedbackAnswered` (`{id, projectPath}`); `resolve`
 //! fires `HookEvent::FeedbackStatusChanged` (`{id, projectPath,
-//! status}`) for resolve / dismiss / reopen-to-waiting.
+//! status}`) for resolve / dismiss / reopen-to-waiting; every STORED
+//! comment — the `comment` route (agent- and human-authored) and the
+//! `answer` route (a recorded answer also creates a thread entry) —
+//! additionally fires `HookEvent::FeedbackCommented` (`{id,
+//! projectPath, author}`), an internal refresh signal that never
+//! drives the desktop notification (only `FeedbackCreated` notifies).
 //!
 //! F3 injection (PRD §4.3, §7 decision 1) + the comment-thread model:
 //! every HUMAN-authored message (an answer OR a comment) ALWAYS
@@ -185,6 +190,26 @@ fn project_name_path(project_id: &str) -> (Option<String>, Option<String>) {
         |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
     )
     .unwrap_or((None, None))
+}
+
+/// `feedback:commented` on the /events broadcast (`{id, projectPath,
+/// author}`) — fired whenever a comment is STORED on a thread: the
+/// comment route (agent- and human-authored alike) and the answer
+/// route (a recorded answer also creates a thread entry). INTERNAL
+/// refresh signal only — the renderer refetches the open thread and
+/// bumps list comment counts; it must never drive the desktop
+/// notification (frozen contract: only NEW items notify, via
+/// `FeedbackCreated`).
+fn emit_commented(feedback_id: &str, author: &str) {
+    let path = feedback::get_item(feedback_id).and_then(|i| project_name_path(&i.project_id).1);
+    k2_core::agent_hooks::emit(
+        k2_core::agent_hooks::HookEvent::FeedbackCommented,
+        serde_json::json!({
+            "id": feedback_id,
+            "projectPath": path,
+            "author": author,
+        }),
+    );
 }
 
 /// The `show` wire shape (mockup contract): the item's fields flat at
@@ -453,15 +478,18 @@ pub fn handle_comment(body: &[u8]) -> CliResponse {
     // Agent comment — store only, current shape (no delivery fields).
     if !is_human {
         return match feedback::add_comment(&full_id, author, &b.body) {
-            Ok(c) => CliResponse::ok_json(
-                serde_json::json!({
-                    "ok": true,
-                    "id": full_id,
-                    "commentId": c.id,
-                    "author": c.author,
-                })
-                .to_string(),
-            ),
+            Ok(c) => {
+                emit_commented(&full_id, &c.author);
+                CliResponse::ok_json(
+                    serde_json::json!({
+                        "ok": true,
+                        "id": full_id,
+                        "commentId": c.id,
+                        "author": c.author,
+                    })
+                    .to_string(),
+                )
+            }
             Err(e) => usage_error(e),
         };
     }
@@ -502,6 +530,10 @@ pub fn handle_comment(body: &[u8]) -> CliResponse {
             }),
         );
     }
+    // feedback:commented rides every stored comment (see
+    // [`emit_commented`]) — also before the injection, so an open
+    // thread panel refreshes without waiting on a slow wake.
+    emit_commented(&item.id, &comment.author);
 
     // Shared F3 delivery — the comment lands in the asking session,
     // framed with the owner's display name (same server-side
@@ -557,7 +589,7 @@ pub fn handle_answer(body: &[u8]) -> CliResponse {
         Err(e) => return prefix_error_response(&b.id, e),
     };
     let author = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let (item, _comment) = match feedback::set_answer(&full_id, author.unwrap_or("owner"), &b.answer)
+    let (item, comment) = match feedback::set_answer(&full_id, author.unwrap_or("owner"), &b.answer)
     {
         Ok(pair) => pair,
         Err(e) => return usage_error(e),
@@ -574,6 +606,10 @@ pub fn handle_answer(body: &[u8]) -> CliResponse {
             "projectPath": path,
         }),
     );
+    // set_answer also stored a thread entry, so feedback:commented
+    // fires too (see [`emit_commented`]) — an open thread panel picks
+    // up the answer without a reselect.
+    emit_commented(&item.id, &comment.author);
 
     // F3 — the answer ALWAYS injects into the asking session (PRD §7
     // decision 1), best-effort AFTER the store + emit: a delivery
@@ -673,6 +709,56 @@ pub fn handle_resolve(body: &[u8]) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex as StdMutex, OnceLock};
+
+    // ── Event-capture sink ────────────────────────────────────────────
+    //
+    // The agent-hooks sink slot is process-global and NO other test in
+    // the k2-daemon binary registers one, so a single capture sink is
+    // installed once and never torn down. Tests run in parallel and all
+    // emissions land here — assertions filter by their own (unique)
+    // feedback id, so cross-test traffic is invisible.
+
+    static CAPTURED: OnceLock<StdMutex<Vec<(String, serde_json::Value)>>> = OnceLock::new();
+
+    fn captured() -> &'static StdMutex<Vec<(String, serde_json::Value)>> {
+        CAPTURED.get_or_init(|| StdMutex::new(Vec::new()))
+    }
+
+    fn install_capture_sink() {
+        static INSTALLED: OnceLock<()> = OnceLock::new();
+        INSTALLED.get_or_init(|| {
+            struct Capture;
+            impl k2_core::agent_hooks::AgentHookEventSink for Capture {
+                fn emit(
+                    &self,
+                    event: k2_core::agent_hooks::HookEvent,
+                    payload: serde_json::Value,
+                ) {
+                    captured()
+                        .lock()
+                        .expect("capture sink lock")
+                        .push((event.event_name().to_string(), payload));
+                }
+            }
+            k2_core::agent_hooks::set_sink(Box::new(Capture));
+        });
+    }
+
+    /// Snapshot the capture-buffer length BEFORE a mutation…
+    fn event_mark() -> usize {
+        captured().lock().expect("capture sink lock").len()
+    }
+
+    /// …then collect the events emitted since, for one feedback id
+    /// (in emission order).
+    fn events_since(mark: usize, id: &str) -> Vec<(String, serde_json::Value)> {
+        captured().lock().expect("capture sink lock")[mark..]
+            .iter()
+            .filter(|(_, p)| p["id"] == id)
+            .cloned()
+            .collect()
+    }
 
     fn unique(label: &str) -> (String, String) {
         let id = uuid::Uuid::new_v4();
@@ -1215,6 +1301,99 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
             assert_eq!(v["error"]["code"], "usage", "status '{bad}'");
         }
+    }
+
+    /// `feedback:commented` fires for every STORED comment on the
+    /// comment route — agent- AND human-authored — with the frozen
+    /// `{id, projectPath, author}` payload, and NEVER re-fires
+    /// `feedback:created` (the only event the renderer's desktop
+    /// notification listens to — that seam is the event NAME).
+    #[test]
+    fn feedback_comment_routes_emit_commented_event() {
+        install_capture_sink();
+        let (name, path) = unique("commented-event");
+        insert_project(&name, &path);
+        let created = create_via_route(&path, "Which port?", serde_json::json!({}));
+        let id = created["id"].as_str().expect("id").to_string();
+
+        // Agent comment → exactly ONE new event for this id:
+        // feedback:commented, author = the agent's name.
+        let mark = event_mark();
+        let resp = handle_comment(
+            serde_json::json!({ "id": id, "body": "leaning 8080", "author": "scout" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
+        let events = events_since(mark, &id);
+        assert_eq!(
+            events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["feedback:commented"],
+            "agent comment must emit commented and nothing else: {events:?}"
+        );
+        assert_eq!(events[0].1["id"], id.as_str());
+        assert_eq!(events[0].1["projectPath"], path.as_str());
+        assert_eq!(events[0].1["author"], "scout");
+
+        // Human FIRST comment on the waiting question → answers, so
+        // feedback:answered AND feedback:commented — still never
+        // feedback:created (comments must not notify).
+        let mark = event_mark();
+        let resp = handle_comment(
+            serde_json::json!({ "id": id, "body": "8080" }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
+        let events = events_since(mark, &id);
+        assert_eq!(
+            events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["feedback:answered", "feedback:commented"],
+            "human first comment answers + comments: {events:?}"
+        );
+        assert_eq!(events[1].1["projectPath"], path.as_str());
+        assert_eq!(events[1].1["author"], "owner");
+
+        // Human FOLLOW-UP on the answered item → commented only.
+        let mark = event_mark();
+        let resp = handle_comment(
+            serde_json::json!({ "id": id, "body": "and 8081 for metrics" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
+        let events = events_since(mark, &id);
+        assert_eq!(
+            events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["feedback:commented"],
+            "follow-up must not re-answer or notify: {events:?}"
+        );
+        assert_eq!(events[0].1["author"], "owner");
+    }
+
+    /// The answer route also creates a thread entry, so it fires
+    /// `feedback:commented` right after its `feedback:answered` — and
+    /// never `feedback:created`.
+    #[test]
+    fn feedback_answer_route_emits_commented_event() {
+        install_capture_sink();
+        let (name, path) = unique("answer-commented");
+        insert_project(&name, &path);
+        let created = create_via_route(&path, "Ship the fix?", serde_json::json!({}));
+        let id = created["id"].as_str().expect("id").to_string();
+
+        let mark = event_mark();
+        let resp = handle_answer(
+            serde_json::json!({ "id": id, "answer": "Ship it" }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "answer failed: {}", resp.body);
+        let events = events_since(mark, &id);
+        assert_eq!(
+            events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["feedback:answered", "feedback:commented"],
+            "answer stores a thread entry too: {events:?}"
+        );
+        assert_eq!(events[1].1["id"], id.as_str());
+        assert_eq!(events[1].1["projectPath"], path.as_str());
+        assert_eq!(events[1].1["author"], "owner");
     }
 
     /// Status filter validation + fyi kind flows through list.

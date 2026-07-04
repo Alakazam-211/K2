@@ -67,9 +67,27 @@ export function FeedbackItemView({
     }
   }, [id])
 
+  // Item switch (the parent keys this view by id) → fetch immediately.
   useEffect(() => {
     void load()
-  }, [load, revision])
+  }, [load])
+
+  // Event-driven refresh: any feedback event (commented / answered /
+  // status-changed / created) bumps the store revision, and the OPEN
+  // thread refetches so a new reply appears without reselecting the
+  // item. Bursts coalesce on a trailing 300ms window — N rapid
+  // comments fire ONE fetch (each bump resets the timer via the
+  // cleanup). Only `item` is replaced by the refetch; the composer's
+  // draft lives in ThreadTab state, so mid-typed text survives.
+  const seenRevision = useRef(revision)
+  useEffect(() => {
+    if (revision === seenRevision.current) return
+    seenRevision.current = revision
+    const timer = setTimeout(() => {
+      void load()
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [revision, load])
 
   const projectPath = item?.projectPath ?? listRow.projectPath
   const workspaceName = item?.workspace ?? listRow.projectName

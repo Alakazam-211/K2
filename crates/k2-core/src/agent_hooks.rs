@@ -88,6 +88,14 @@ pub enum HookEvent {
     /// Lets every window's Feedback list + waiting-count badge refresh
     /// live (answered has its own `FeedbackAnswered` event).
     FeedbackStatusChanged,
+    /// Feedback: fires whenever a comment is stored on an item's thread
+    /// — `/cli/feedback/comment` (agent- AND human-authored) plus
+    /// `/cli/feedback/answer` (a recorded answer also creates a thread
+    /// entry). Payload: `{id, projectPath, author}`. INTERNAL refresh
+    /// signal only: the renderer refetches the open thread / bumps list
+    /// comment counts; it must NEVER trigger the desktop notification
+    /// (frozen contract: only NEW items notify, via `FeedbackCreated`).
+    FeedbackCommented,
 }
 
 impl HookEvent {
@@ -109,6 +117,7 @@ impl HookEvent {
             Self::FeedbackCreated => "feedback:created",
             Self::FeedbackAnswered => "feedback:answered",
             Self::FeedbackStatusChanged => "feedback:status-changed",
+            Self::FeedbackCommented => "feedback:commented",
         }
     }
 }

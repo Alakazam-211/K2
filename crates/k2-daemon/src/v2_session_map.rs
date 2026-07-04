@@ -123,6 +123,44 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
         let db = k2_core::db::shared();
         let conn = db.lock();
         if let Some(project_id) = k2_core::workspace::agent_identity::resolve_project_id(&conn, &cwd) {
+            // S7a pin-to-size — restore a persisted pin (migration 0065)
+            // onto the fresh DaemonPtySession, so a pin survives daemon
+            // restart. Runs for EVERY registration shape — ad-hoc tabs
+            // AND the canonical pinned chat (whose pin-only row is
+            // written by `set_pinned_size`; see its doc) — hence it
+            // sits BEFORE the canonical-key early return below. The
+            // broadcast inside set_pinned is a no-op here (no grid-WS
+            // subscriber exists yet at registration time); fresh
+            // attachers learn the pin from the WS `pin_initial` frame.
+            let persisted_pin = k2_core::db::schema::WorkspaceTabSession::get(
+                &conn,
+                &project_id,
+                &pane_group_id,
+            )
+            .ok()
+            .flatten()
+            .and_then(|row| match (row.pinned_cols, row.pinned_rows) {
+                (Some(c), Some(r)) if c > 0 && r > 0 => {
+                    Some((c, r, row.pinned_set_by))
+                }
+                _ => None,
+            });
+            if let Some((pin_cols, pin_rows, pin_set_by)) = persisted_pin {
+                if session.pinned() != Some((pin_cols, pin_rows)) {
+                    log_debug!(
+                        "[v2-map] register: restoring persisted pin {}x{} onto session {} (key={})",
+                        pin_cols,
+                        pin_rows,
+                        session.session_id,
+                        key,
+                    );
+                    DaemonPtySession::set_pinned(
+                        &session,
+                        Some((pin_cols, pin_rows)),
+                        pin_set_by,
+                    );
+                }
+            }
             // pinned-chat-identity-ssot PRD §4.3.2 (GH#24): the canonical
             // pinned chat (`agent_name == project_id`) must NOT double-book
             // its identity in `workspace_tab_sessions`. Its single source
@@ -174,6 +212,12 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
                 args_json,
                 cwd: Some(cwd),
                 last_seen_at: 0, // ignored — table default is unixepoch()
+                // S7a: fresh registrations never write pin state; the
+                // upsert's conflict-UPDATE also leaves these columns
+                // alone, so a live pin can't be clobbered here.
+                pinned_cols: None,
+                pinned_rows: None,
+                pinned_set_by: None,
             };
             let _ = k2_core::db::schema::WorkspaceTabSession::upsert(&conn, &row);
         }

@@ -467,6 +467,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // `feedback_comments` (per-item discussion thread, FK CASCADE) +
         // the (project_id, status, created_at) list index. Additive.
         ("0064_feedback", include_str!("../../drizzle_sql/0064_feedback.sql")),
+        // 0065 (presence/multiplayer S7a, prd-presence-multiplayer-v1
+        // §5.5): pin-to-size persistence — `pinned_cols`/`pinned_rows`/
+        // `pinned_set_by` on `workspace_tab_sessions` (all NULL =
+        // unpinned; existing rows backfill to NULL). Read back at
+        // session registration so a pin survives daemon restart.
+        ("0065_pinned_size", include_str!("../../drizzle_sql/0065_pinned_size.sql")),
     ];
 
     for (name, sql) in migrations {

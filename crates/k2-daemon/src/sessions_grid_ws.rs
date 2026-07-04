@@ -103,6 +103,23 @@ pub(crate) enum Outbound<'a> {
     /// Renderer just replaces its mirror — no decision-making in
     /// the client.
     LabelChanged { label: String },
+    /// S7a pin-to-size — current pin state at WS-connect time. Sent
+    /// once, right after `LabelInitial`, ONLY when the session is
+    /// pinned (absence = unpinned, so an older client / unpinned
+    /// session sees a byte-identical connect sequence). `set_by` is
+    /// "owner" or the pinning connect-user's username.
+    PinInitial { cols: u16, rows: u16, set_by: Option<String> },
+    /// S7a pin-to-size — pin state changed mid-session (the
+    /// `LabelChanged` pattern, fed by the session's pin broadcast).
+    /// Pinned: `{"cols":N,"rows":N,"cleared":false}`. Unpinned:
+    /// `{"cleared":true}` (cols/rows omitted).
+    PinChanged {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cols: Option<u16>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rows: Option<u16>,
+        cleared: bool,
+    },
     /// Bell character (`\a`, OSC 7). Mirrors how iTerm decides
     /// "agent is now waiting for input": Claude rings the bell
     /// when it's done and ready for a reply. Renderer can use
@@ -430,6 +447,9 @@ pub async fn serve_session_grid_connection(
     // CLI route or another process sets the session's label, we
     // need to push `LabelChanged` to this client.
     let mut labels_rx = session.subscribe_labels();
+    // S7a: subscribe to pin-state changes (same pattern) so this
+    // client's pin UI converges when any caller pins/unpins.
+    let mut pins_rx = session.subscribe_pins();
 
     let pane_id = format!("kessel-{}", session.session_id);
 
@@ -495,6 +515,24 @@ pub async fn serve_session_grid_connection(
     .is_err()
     {
         return;
+    }
+    // S7a: tell a fresh subscriber about an existing pin, right
+    // after the label (the same initial-state slot). Only sent when
+    // pinned — an unpinned session's connect sequence is unchanged.
+    if let Some((pin_cols, pin_rows)) = session.pinned() {
+        if send_outbound(
+            &mut write,
+            &Outbound::PinInitial {
+                cols: pin_cols,
+                rows: pin_rows,
+                set_by: session.pinned_set_by(),
+            },
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
     }
     let first_snap_ms = __t_first_snap.elapsed().as_secs_f64() * 1000.0;
     log_debug!(
@@ -696,6 +734,52 @@ pub async fn serve_session_grid_connection(
                         // Session dropped — main loop will see the
                         // events_rx Closed too. Don't break here;
                         // let the event loop terminate cleanly.
+                    }
+                }
+            }
+            // S7a: pin-state changes (from /cli/terminal/pin-size or a
+            // restart-restore). Push to this client so every window's
+            // pin UI + letterboxing converge without polling.
+            pin = pins_rx.recv() => {
+                match pin {
+                    Ok(state) => {
+                        let frame = match state {
+                            Some((c, r)) => Outbound::PinChanged {
+                                cols: Some(c),
+                                rows: Some(r),
+                                cleared: false,
+                            },
+                            None => Outbound::PinChanged {
+                                cols: None,
+                                rows: None,
+                                cleared: true,
+                            },
+                        };
+                        if send_outbound(&mut write, &frame).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Fell behind on pin events — re-emit the
+                        // current authoritative state so the client
+                        // converges (mirror of the label Lagged arm).
+                        let frame = match session.pinned() {
+                            Some((c, r)) => Outbound::PinChanged {
+                                cols: Some(c),
+                                rows: Some(r),
+                                cleared: false,
+                            },
+                            None => Outbound::PinChanged {
+                                cols: None,
+                                rows: None,
+                                cleared: true,
+                            },
+                        };
+                        let _ = send_outbound(&mut write, &frame).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Session dropped — the events_rx arm owns
+                        // the graceful shutdown; don't break here.
                     }
                 }
             }
@@ -1320,6 +1404,125 @@ mod tests {
             assert_eq!(t.columns() as u16, 80, "PTY size unchanged on dimless claim");
             assert_eq!(t.screen_lines() as u16, 24);
         }
+    }
+
+    // ── S7a pin-to-size — the claim paths cannot move a pinned PTY ──
+    //
+    // The clamp sits in `DaemonPtySession::request_resize`, which is
+    // the single funnel for all four resize paths. These tests cover
+    // the two claim-shaped callers that live in THIS crate's WS layer:
+    // the SetActive claim snap and the detach-promotion restore. (The
+    // typing input-claim path calls request_resize with the same
+    // shape as SetActive; the integration test drives it over a real
+    // socket.)
+
+    #[cfg(unix)]
+    #[test]
+    fn setactive_claim_cannot_resize_a_pinned_session() {
+        use k2_core::terminal::Dimensions;
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_test_session();
+        DaemonPtySession::set_pinned(&s, Some((100, 30)), Some("owner".into()));
+        assert_dims_settle(&s, (100, 30), "pin");
+
+        // A claim WITH dims still claims (arbitration state is
+        // untouched by the pin) but its snap-resize is clamped.
+        let outcome = apply_set_active(&s, 7, true, Some(140), Some(45));
+        assert_eq!(outcome, SetActiveOutcome::Claim);
+        assert_eq!(s.active_subscriber.load(Relaxed), 7, "claim still lands");
+        // The viewer's declared viewport is still recorded (unpin
+        // restores from it later)...
+        assert_eq!(s.active_cols.load(Relaxed), 140);
+        assert_eq!(s.active_rows.load(Relaxed), 45);
+        // ...but the PTY must not move. Outwait the debounce window so
+        // a deferred flush can't sneak the resize in either.
+        std::thread::sleep(std::time::Duration::from_millis(
+            k2_core::terminal::daemon_pty::RESIZE_DEBOUNCE_MS * 2 + 50,
+        ));
+        {
+            let tm = s.term();
+            let t = tm.lock();
+            assert_eq!(
+                (t.columns() as u16, t.screen_lines() as u16),
+                (100, 30),
+                "SetActive claim must not resize a pinned session"
+            );
+        }
+
+        // Unpin: the active claimer's declared viewport is restored —
+        // "clears back to the juggling".
+        DaemonPtySession::set_pinned(&s, None, None);
+        assert_dims_settle(&s, (140, 45), "unpin restores the claimer's dims");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detach_promotion_cannot_resize_a_pinned_session() {
+        use k2_core::terminal::Dimensions;
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_test_session();
+        // Desktop (7) then phone (9) claim; both snaps precede the pin.
+        apply_set_active(&s, 7, true, Some(120), Some(40));
+        apply_set_active(&s, 9, true, Some(40), Some(10));
+        assert_dims_settle(&s, (40, 10), "phone claim");
+
+        DaemonPtySession::set_pinned(&s, Some((100, 30)), Some("owner".into()));
+        assert_dims_settle(&s, (100, 30), "pin");
+
+        // Phone disconnects: the election still promotes the desktop
+        // (arbitration is pin-agnostic) but the restore-resize to the
+        // survivor's dims is clamped — the class keeps its 100x30.
+        DaemonPtySession::detach_subscriber(&s, 9);
+        assert_eq!(s.active_subscriber.load(Relaxed), 7, "survivor promoted");
+        std::thread::sleep(std::time::Duration::from_millis(
+            k2_core::terminal::daemon_pty::RESIZE_DEBOUNCE_MS * 2 + 50,
+        ));
+        {
+            let tm = s.term();
+            let t = tm.lock();
+            assert_eq!(
+                (t.columns() as u16, t.screen_lines() as u16),
+                (100, 30),
+                "detach-promotion must not resize a pinned session"
+            );
+        }
+    }
+
+    /// S7a — FROZEN WIRE SHAPES for the pin frames the renderer (S7b)
+    /// will parse. `pin_changed` carries `{cols,rows,cleared:false}`
+    /// when pinned and exactly `{"cleared":true}` when cleared;
+    /// `pin_initial` carries the state + attribution at connect time.
+    #[test]
+    fn pin_frames_serialize_to_frozen_contract() {
+        let pinned = Outbound::PinChanged {
+            cols: Some(100),
+            rows: Some(30),
+            cleared: false,
+        };
+        assert_eq!(
+            serde_json::to_string(&pinned).expect("serialize"),
+            r#"{"event":"pin_changed","payload":{"cols":100,"rows":30,"cleared":false}}"#
+        );
+        let cleared = Outbound::PinChanged {
+            cols: None,
+            rows: None,
+            cleared: true,
+        };
+        assert_eq!(
+            serde_json::to_string(&cleared).expect("serialize"),
+            r#"{"event":"pin_changed","payload":{"cleared":true}}"#
+        );
+        let initial = Outbound::PinInitial {
+            cols: 100,
+            rows: 30,
+            set_by: Some("owner".to_string()),
+        };
+        assert_eq!(
+            serde_json::to_string(&initial).expect("serialize"),
+            r#"{"event":"pin_initial","payload":{"cols":100,"rows":30,"set_by":"owner"}}"#
+        );
     }
 
     #[cfg(unix)]

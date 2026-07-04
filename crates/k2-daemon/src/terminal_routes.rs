@@ -336,6 +336,177 @@ pub fn handle_sessions_label(params: &HashMap<String, String>) -> CliResponse {
     )
 }
 
+/// S7a pin-to-size (prd-presence-multiplayer-v1 §5.5) — the wire body
+/// for `POST /cli/terminal/pin-size`. Two shapes:
+///   pin:   `{"session":"<uuid>","cols":100,"rows":30}`
+///   unpin: `{"session":"<uuid>","clear":true}`
+#[derive(Debug, serde::Deserialize)]
+struct PinSizeBody {
+    session: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    #[serde(default)]
+    clear: bool,
+}
+
+/// Validation bounds for a pin. Wider than any sane preset (the S7b
+/// dropdown tops out at 160×48) but tight enough that a typo'd or
+/// hostile value can't blow up Term reflow / snapshot payloads.
+const PIN_COLS_MIN: u16 = 20;
+const PIN_COLS_MAX: u16 = 500;
+const PIN_ROWS_MIN: u16 = 5;
+const PIN_ROWS_MAX: u16 = 200;
+
+/// Handler for `POST /cli/terminal/pin-size` (S7a).
+///
+/// Pins (or unpins) a v2 session's PTY to fixed cols×rows:
+/// applies LIVE via [`DaemonPtySession::set_pinned`] (whose
+/// `request_resize` clamp then holds the grid there against every
+/// resize path) AND persists to `workspace_tab_sessions`
+/// (migration 0065) so the pin survives daemon restart —
+/// `v2_session_map::register` re-applies it on respawn.
+///
+/// `set_by` is resolved by the dispatcher from the auth token
+/// ("owner" | connect-user username — never the request body, D3).
+/// Method + auth gates live in the dispatcher arm (require_post +
+/// token_ok, per the POST-only house rule); role tightening to
+/// claimer-capable users lands with S4/S5.
+///
+/// Responses:
+///   200 `{"success":true,"pinned":{"cols":N,"rows":N,"setBy":"…"},"persisted":bool}`
+///   200 `{"success":true,"pinned":null,"persisted":bool}` (cleared)
+///   400 on malformed body / unknown session / out-of-bounds dims.
+pub fn handle_pin_size(body: &[u8], set_by: &str) -> CliResponse {
+    let req: PinSizeBody = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return CliResponse::bad_request(format!(
+                "parse pin-size body: {e}"
+            ))
+        }
+    };
+    let session_id = match SessionId::parse(&req.session) {
+        Some(id) => id,
+        None => {
+            return CliResponse::bad_request(
+                "invalid session id (expected UUID)",
+            )
+        }
+    };
+    // Resolve the session AND its map key (the key drives the
+    // persistence row lookup below).
+    let entry = crate::v2_session_map::snapshot()
+        .into_iter()
+        .find(|(_, s)| s.session_id == session_id);
+    let Some((agent_name, session)) = entry else {
+        return CliResponse::bad_request(
+            "session not found in v2_session_map (pin-size is v2-only)",
+        );
+    };
+
+    if req.clear {
+        k2_core::terminal::DaemonPtySession::set_pinned(&session, None, None);
+        let persisted = persist_pin(&agent_name, &session, None);
+        return CliResponse::ok_json(
+            serde_json::json!({
+                "success": true,
+                "pinned": serde_json::Value::Null,
+                "persisted": persisted,
+            })
+            .to_string(),
+        );
+    }
+
+    let (cols, rows) = match (req.cols, req.rows) {
+        (Some(c), Some(r)) => (c, r),
+        _ => {
+            return CliResponse::bad_request(
+                "missing cols/rows (or pass \"clear\":true to unpin)",
+            )
+        }
+    };
+    if !(PIN_COLS_MIN..=PIN_COLS_MAX).contains(&cols)
+        || !(PIN_ROWS_MIN..=PIN_ROWS_MAX).contains(&rows)
+    {
+        return CliResponse::bad_request(format!(
+            "cols/rows out of bounds (cols {PIN_COLS_MIN}..={PIN_COLS_MAX}, \
+             rows {PIN_ROWS_MIN}..={PIN_ROWS_MAX}; got {cols}x{rows})"
+        ));
+    }
+
+    k2_core::terminal::DaemonPtySession::set_pinned(
+        &session,
+        Some((cols, rows)),
+        Some(set_by.to_string()),
+    );
+    let persisted = persist_pin(&agent_name, &session, Some((cols, rows, set_by)));
+    CliResponse::ok_json(
+        serde_json::json!({
+            "success": true,
+            "pinned": { "cols": cols, "rows": rows, "setBy": set_by },
+            "persisted": persisted,
+        })
+        .to_string(),
+    )
+}
+
+/// Persist a pin (or its clearing) to `workspace_tab_sessions`,
+/// keyed the same way `v2_session_map::register` stamps rows:
+/// project_id resolved from the session's cwd, pane_group_id from
+/// the map key (`tab-<pgid>` → `<pgid>`, else the key itself —
+/// which covers the canonical pinned chat's bare project_id key).
+/// Returns whether a row was written; a session whose cwd isn't a
+/// registered workspace pins LIVE-ONLY (no row → no restore), which
+/// the route surfaces as `"persisted": false` rather than failing
+/// the live pin.
+fn persist_pin(
+    agent_name: &str,
+    session: &std::sync::Arc<k2_core::terminal::daemon_pty::DaemonPtySession>,
+    pin: Option<(u16, u16, &str)>,
+) -> bool {
+    let Some(cwd) = session
+        .cwd
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+    else {
+        return false;
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Some(project_id) =
+        k2_core::workspace::agent_identity::resolve_project_id(&conn, &cwd)
+    else {
+        log_debug!(
+            "[pin-size] session={} cwd={} resolves to no workspace; pin is live-only",
+            session.session_id,
+            cwd,
+        );
+        return false;
+    };
+    let pane_group_id = crate::session_events::pane_group_id_from_agent(agent_name)
+        .unwrap_or_else(|| agent_name.to_string());
+    match k2_core::db::schema::WorkspaceTabSession::set_pinned_size(
+        &conn,
+        &project_id,
+        &pane_group_id,
+        agent_name,
+        Some(&cwd),
+        pin,
+    ) {
+        Ok(()) => true,
+        Err(e) => {
+            log_debug!(
+                "[pin-size] persist failed for session={} (project={} pane_group={}): {e}",
+                session.session_id,
+                project_id,
+                pane_group_id,
+            );
+            false
+        }
+    }
+}
+
 pub fn handle_sessions_resize(params: &HashMap<String, String>) -> CliResponse {
     let id_str = match params.get("session").or_else(|| params.get("id")) {
         Some(s) if !s.is_empty() => s.as_str(),

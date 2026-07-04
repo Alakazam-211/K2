@@ -452,6 +452,10 @@ async fn handle_one_request(
             | "/cli/terminal/log"
             | "/cli/terminal/lifecycle-write"
             | "/cli/terminal/set-focus"
+            // S7a (presence/multiplayer §5.5) — pin a v2 session's PTY
+            // to fixed cols×rows (or clear). JSON-bodied POST;
+            // require_post + token_ok in the dedicated arm below.
+            | "/cli/terminal/pin-size"
             // Phase 2 Unit 7c — heartbeat-launchd installer + orphan-
             // agents sweep. Body-bearing writes; method-gated below.
             | "/cli/heartbeat/install-launchd"
@@ -2220,6 +2224,51 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let r = crate::terminal_lifecycle_routes::handle_set_focus(&body_bytes);
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // S7a (presence/multiplayer §5.5) — POST /cli/terminal/pin-size:
+        // pin a v2 session's PTY to fixed cols×rows / clear the pin.
+        // require_post (405 on GET, feedback_post_only_route_guards) +
+        // token_ok (owner OR connect-user session; role tightening to
+        // claimer-capable users lands with S4/S5). The recorded
+        // `set_by` attribution is resolved from the TOKEN, never the
+        // body (D3 — same rule as send-message's `from`). Handler
+        // writes SQLite → spawn_blocking, like /cli/feedback/*.
+        "/cli/terminal/pin-size" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let set_by = if super::http::token_is_owner(&query, state.token.as_str()) {
+                "owner".to_string()
+            } else {
+                // token_ok passed and it isn't the owner token, so this
+                // is a live connect-user session; resolve its username.
+                // The unreachable-in-practice None (revoked in the gap
+                // between the two checks) records the neutral "user".
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .unwrap_or_else(|| "user".to_string())
+            };
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || {
+                crate::terminal_routes::handle_pin_size(&body_bytes, &set_by)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") })
+                    .to_string(),
+            });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // Phase 2 Unit 7c — heartbeat-launchd installer routes.

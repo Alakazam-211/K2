@@ -488,6 +488,27 @@ pub struct DaemonPtySession {
     pub active_cols: std::sync::atomic::AtomicU16,
     pub active_rows: std::sync::atomic::AtomicU16,
 
+    /// S7a pin-to-size (prd-presence-multiplayer-v1 §5.5) — the
+    /// daemon-canonical pinned grid geometry. `0` = unpinned (the
+    /// same sentinel convention as `active_cols`/`active_rows`).
+    /// While BOTH are nonzero, [`Self::request_resize`] (and the
+    /// underlying [`Self::resize`], belt-and-suspenders) clamp every
+    /// incoming target to these dims — which makes all four resize
+    /// paths (grid-WS Resize, typing input-claim snap, SetActive
+    /// claim, detach-promotion) natural no-ops via the existing
+    /// same-dims skip. Set via [`Self::set_pinned`] only.
+    pinned_cols: std::sync::atomic::AtomicU16,
+    pinned_rows: std::sync::atomic::AtomicU16,
+    /// Who pinned ("owner" | connect-user username), for display.
+    /// `None` when unpinned.
+    pinned_set_by: Mutex<Option<String>>,
+    /// Broadcast channel for pin changes (the `label_tx` pattern):
+    /// [`Self::set_pinned`] pushes the new state — `Some((cols,
+    /// rows))` on pin, `None` on clear — so every grid-WS
+    /// subscriber's select loop wakes and emits a `pin_changed`
+    /// frame to its client without polling.
+    pin_tx: broadcast::Sender<Option<(u16, u16)>>,
+
     /// Per-subscriber viewport registry (orca study, "Relevance to
     /// K2" #1/#8). Keyed by the WS handler's `subscriber_id`; the
     /// handler upserts via [`Self::note_viewport`] and removes via
@@ -767,6 +788,10 @@ impl DaemonPtySession {
         let (label_tx, _label_rx_drop) = broadcast::channel::<String>(16);
         drop(_label_rx_drop);
 
+        // S7a: same shape for pin changes (rare, human-triggered).
+        let (pin_tx, _pin_rx_drop) = broadcast::channel::<Option<(u16, u16)>>(16);
+        drop(_pin_rx_drop);
+
         Ok(Arc::new(Self {
             session_id: cfg.session_id,
             cwd: cfg.cwd,
@@ -784,6 +809,10 @@ impl DaemonPtySession {
             viewer_count: std::sync::atomic::AtomicUsize::new(0),
             active_cols: std::sync::atomic::AtomicU16::new(0),
             active_rows: std::sync::atomic::AtomicU16::new(0),
+            pinned_cols: std::sync::atomic::AtomicU16::new(0),
+            pinned_rows: std::sync::atomic::AtomicU16::new(0),
+            pinned_set_by: Mutex::new(None),
+            pin_tx,
             viewports: Mutex::new(HashMap::new()),
             viewport_clock: std::sync::atomic::AtomicU64::new(0),
             resize_gate: Mutex::new(ResizeGate {
@@ -807,6 +836,114 @@ impl DaemonPtySession {
     /// wake and emit `LabelChanged` to their clients.
     pub fn subscribe_labels(&self) -> broadcast::Receiver<String> {
         self.label_tx.subscribe()
+    }
+
+    /// S7a — subscribe to pin-state changes. Receivers see every
+    /// [`Self::set_pinned`] that happened after they subscribed:
+    /// `Some((cols, rows))` on pin, `None` on clear. Subscribed by
+    /// the grid-WS handler so every window's pin UI converges,
+    /// mirroring [`Self::subscribe_labels`].
+    pub fn subscribe_pins(&self) -> broadcast::Receiver<Option<(u16, u16)>> {
+        self.pin_tx.subscribe()
+    }
+
+    /// S7a — current pin state. `Some((cols, rows))` while pinned,
+    /// `None` otherwise. Lock-free (two atomic loads).
+    pub fn pinned(&self) -> Option<(u16, u16)> {
+        use std::sync::atomic::Ordering;
+        let cols = self.pinned_cols.load(Ordering::Relaxed);
+        let rows = self.pinned_rows.load(Ordering::Relaxed);
+        if cols > 0 && rows > 0 {
+            Some((cols, rows))
+        } else {
+            None
+        }
+    }
+
+    /// S7a — who set the current pin ("owner" | connect-user
+    /// username). `None` when unpinned.
+    pub fn pinned_set_by(&self) -> Option<String> {
+        self.pinned_set_by.lock().clone()
+    }
+
+    /// S7a — pin (or unpin) this session's PTY to fixed dims.
+    ///
+    /// - `Some((cols, rows))`: records the pin, broadcasts on
+    ///   `pin_tx`, and applies the dims immediately through
+    ///   [`Self::request_resize`] (whose clamp then holds the PTY
+    ///   there no matter what any window does).
+    /// - `None`: clears the pin, broadcasts, and re-resizes to the
+    ///   current active viewer's declared viewport if one exists —
+    ///   falling back to the most-recently-seen viewport with known
+    ///   dims (the same eligibility + recency policy as
+    ///   [`elect_on_detach`]) — so unpinning "clears back to the
+    ///   juggling" UX cleanly. With no eligible viewer the dims are
+    ///   left as-is (a reattaching viewer claims + resizes anyway).
+    ///
+    /// Takes `&Arc<Self>` because the resize goes through the
+    /// debounced front door, which may park a flusher thread.
+    pub fn set_pinned(
+        session: &Arc<Self>,
+        dims: Option<(u16, u16)>,
+        set_by: Option<String>,
+    ) {
+        use std::sync::atomic::Ordering;
+        match dims {
+            Some((cols, rows)) => {
+                let cols = cols.max(1);
+                let rows = rows.max(1);
+                // rows first, cols second: `pinned()` keys "pinned"
+                // on cols ≠ 0, so a racing reader never observes
+                // (new cols, unset rows).
+                session.pinned_rows.store(rows, Ordering::Relaxed);
+                session.pinned_cols.store(cols, Ordering::Relaxed);
+                *session.pinned_set_by.lock() = set_by;
+                // Best-effort broadcast (Err = zero subscribers).
+                let _ = session.pin_tx.send(Some((cols, rows)));
+                log_debug!(
+                    "[v2-pin] session={} pinned to {}x{}",
+                    session.session_id,
+                    cols,
+                    rows,
+                );
+                // Apply now. The clamp below maps any target to the
+                // pinned dims, so passing them directly is exact.
+                Self::request_resize(session, cols, rows);
+            }
+            None => {
+                // cols first so `pinned()` flips to unpinned before
+                // rows clears (mirror of the pin ordering above).
+                session.pinned_cols.store(0, Ordering::Relaxed);
+                session.pinned_rows.store(0, Ordering::Relaxed);
+                *session.pinned_set_by.lock() = None;
+                let _ = session.pin_tx.send(None);
+                // Restore the live viewers' geometry: prefer the
+                // active claimer's declared viewport, else the most
+                // recent eligible one (elect_on_detach's policy).
+                let restore = {
+                    let reg = session.viewports.lock();
+                    let active =
+                        session.active_subscriber.load(Ordering::Relaxed);
+                    reg.get(&active)
+                        .filter(|vp| vp.cols > 0 && vp.rows > 0)
+                        .map(|vp| (vp.cols, vp.rows))
+                        .or_else(|| {
+                            reg.iter()
+                                .filter(|(_, vp)| vp.cols > 0 && vp.rows > 0)
+                                .max_by_key(|(id, vp)| (vp.last_seen, **id))
+                                .map(|(_, vp)| (vp.cols, vp.rows))
+                        })
+                };
+                log_debug!(
+                    "[v2-pin] session={} unpinned (restore={:?})",
+                    session.session_id,
+                    restore,
+                );
+                if let Some((cols, rows)) = restore {
+                    Self::request_resize(session, cols, rows);
+                }
+            }
+        }
     }
 
     /// Read the authoritative label. Cheap (RwLock read + clone of
@@ -920,6 +1057,14 @@ impl DaemonPtySession {
     pub fn resize(&self, cols: u16, rows: u16) {
         use alacritty_terminal::vte::ansi::{ClearMode, Handler};
 
+        // S7a pin clamp, belt-and-suspenders. All production resize
+        // paths already route through `request_resize` (whose clamp
+        // is the real chokepoint), but `resize()` stays public — a
+        // direct caller must not be able to move a pinned PTY either.
+        let (cols, rows) = match self.pinned() {
+            Some(pinned) => pinned,
+            None => (cols, rows),
+        };
         let cols = cols.max(1);
         let rows = rows.max(1);
 
@@ -1086,6 +1231,15 @@ impl DaemonPtySession {
     /// context — WS loop, disconnect teardown, sync tests — and only
     /// exists for ~120ms per burst.
     pub fn request_resize(session: &Arc<Self>, cols: u16, rows: u16) {
+        // S7a pin clamp — THE chokepoint. While pinned, every
+        // incoming target is replaced by the pinned dims, so all
+        // four resize paths (grid-WS Resize, typing input-claim
+        // snap, SetActive claim, detach-promotion) reduce to the
+        // same-dims skip below and the PTY never leaves the pin.
+        let (cols, rows) = match session.pinned() {
+            Some(pinned) => pinned,
+            None => (cols, rows),
+        };
         let cols = cols.max(1);
         let rows = rows.max(1);
         let mut gate = session.resize_gate.lock();
@@ -2071,6 +2225,149 @@ mod tests {
         DaemonPtySession::request_resize(&s, 100, 30);
         assert_eq!(term_dims(&s), (100, 30));
         assert_eq!(s.resize_generation(), 1);
+    }
+
+    // ── S7a pin-to-size (prd-presence-multiplayer-v1 §5.5) ──────────
+    //
+    // The clamp lives at the top of `request_resize` (and, belt-and-
+    // suspenders, `resize`), so a pinned session's PTY cannot be moved
+    // by ANY resize path. These tests pin that contract at the session
+    // level; the daemon crate's grid-WS tests cover the SetActive /
+    // detach-promotion callers, and the integration test covers the
+    // route + wire.
+
+    #[cfg(unix)]
+    #[test]
+    fn set_pinned_applies_immediately_and_clamps_request_resize() {
+        let s = spawn_cat_session();
+        assert_eq!(s.pinned(), None, "fresh session must be unpinned");
+
+        DaemonPtySession::set_pinned(&s, Some((100, 30)), Some("owner".into()));
+        assert_eq!(s.pinned(), Some((100, 30)));
+        assert_eq!(s.pinned_set_by().as_deref(), Some("owner"));
+        assert_dims_settle(&s, (100, 30), "pin must apply its dims");
+        let applied_at_pin = s.resizes_applied();
+
+        // Any resize target now clamps to the pin — which equals the
+        // live dims, so the same-dims skip applies NOTHING: no apply
+        // count bump, no pending flush.
+        DaemonPtySession::request_resize(&s, 140, 45);
+        assert_eq!(
+            s.resizes_applied(),
+            applied_at_pin,
+            "resize while pinned must be a clamped no-op"
+        );
+        assert_eq!(term_dims(&s), (100, 30));
+        // Outwait the debounce window: no deferred flush may move a
+        // pinned PTY either.
+        std::thread::sleep(Duration::from_millis(RESIZE_DEBOUNCE_MS * 2));
+        assert_eq!(
+            term_dims(&s),
+            (100, 30),
+            "pinned dims must hold across the debounce window"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_resize_is_clamped_while_pinned() {
+        let s = spawn_cat_session();
+        DaemonPtySession::set_pinned(&s, Some((100, 30)), None);
+        assert_dims_settle(&s, (100, 30), "pin");
+        // A direct resize() caller (bypassing the front door) must
+        // also be clamped — the pin is inescapable.
+        s.resize(150, 50);
+        assert_eq!(
+            term_dims(&s),
+            (100, 30),
+            "direct resize() must clamp to the pin"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unpin_restores_active_viewer_viewport() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_cat_session();
+        // Viewer 7 is the active claimer at 120x40 (the pre-pin
+        // "juggling" state the unpin must clear back to).
+        s.note_viewport(7, 120, 40);
+        s.active_subscriber.store(7, Relaxed);
+        DaemonPtySession::request_resize(&s, 120, 40);
+        assert_dims_settle(&s, (120, 40), "active viewer fit");
+
+        DaemonPtySession::set_pinned(&s, Some((100, 30)), Some("owner".into()));
+        assert_dims_settle(&s, (100, 30), "pin");
+
+        // Unpin: dims must return to the active viewer's declared
+        // viewport without any client having to re-send a Resize.
+        DaemonPtySession::set_pinned(&s, None, None);
+        assert_eq!(s.pinned(), None);
+        assert_eq!(s.pinned_set_by(), None, "attribution clears with the pin");
+        assert_dims_settle(&s, (120, 40), "unpin restores active viewport");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unpin_falls_back_to_most_recent_viewport_without_active_claim() {
+        let s = spawn_cat_session();
+        // Two viewers declared dims but nobody holds the claim (the
+        // elect_on_detach eligibility + recency policy applies): the
+        // most recent (9) wins.
+        s.note_viewport(7, 100, 30);
+        s.note_viewport(9, 90, 25);
+        DaemonPtySession::set_pinned(&s, Some((60, 20)), None);
+        assert_dims_settle(&s, (60, 20), "pin");
+        DaemonPtySession::set_pinned(&s, None, None);
+        assert_dims_settle(&s, (90, 25), "unpin restores most-recent viewport");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unpin_with_no_viewer_leaves_dims_and_reopens_resizing() {
+        let s = spawn_cat_session();
+        DaemonPtySession::set_pinned(&s, Some((100, 30)), None);
+        assert_dims_settle(&s, (100, 30), "pin");
+
+        // No viewports registered: unpin leaves dims as-is (a
+        // reattaching viewer claims + resizes anyway)...
+        DaemonPtySession::set_pinned(&s, None, None);
+        assert_eq!(s.pinned(), None);
+        std::thread::sleep(Duration::from_millis(RESIZE_DEBOUNCE_MS * 2));
+        assert_eq!(term_dims(&s), (100, 30), "no viewer — dims left as-is");
+
+        // ...and the next resize applies normally again.
+        DaemonPtySession::request_resize(&s, 90, 25);
+        assert_dims_settle(&s, (90, 25), "resize after unpin must apply");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pin_changes_broadcast_on_the_pin_channel() {
+        let s = spawn_cat_session();
+        let mut rx = s.subscribe_pins();
+
+        DaemonPtySession::set_pinned(&s, Some((100, 30)), Some("teacher".into()));
+        DaemonPtySession::set_pinned(&s, None, None);
+
+        // Both events must be observable, in order — the grid-WS
+        // subscriber loop turns these into pin_changed frames.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut seen: Vec<Option<(u16, u16)>> = Vec::new();
+        while seen.len() < 2 {
+            match rx.try_recv() {
+                Ok(ev) => seen.push(ev),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    if Instant::now() >= deadline {
+                        panic!("pin broadcast incomplete within 2s; saw {seen:?}");
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("pin broadcast died: {e}"),
+            }
+        }
+        assert_eq!(seen, vec![Some((100, 30)), None]);
     }
 
     /// A DSR-6 (`\x1b[6n`) parsed by the Term must produce a CPR answer

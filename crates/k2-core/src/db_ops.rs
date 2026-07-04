@@ -1734,6 +1734,9 @@ mod leaked_tab_prune_tests {
                     args_json: None,
                     cwd: None,
                     last_seen_at: 0,
+                    pinned_cols: None,
+                    pinned_rows: None,
+                    pinned_set_by: None,
                 },
             )
             .expect("seed resumable tab session");

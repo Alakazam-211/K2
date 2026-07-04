@@ -761,6 +761,16 @@ pub struct WorkspaceTabSession {
     pub args_json: Option<String>,
     pub cwd: Option<String>,
     pub last_seen_at: i64,
+    /// S7a pin-to-size (migration 0065): the pinned grid geometry.
+    /// Both `Some` + nonzero = pinned; anything else = unpinned.
+    /// Written ONLY by `set_pinned_size` — the registration `upsert`
+    /// deliberately never touches these, so a re-register can't
+    /// silently unpin a session.
+    pub pinned_cols: Option<u16>,
+    pub pinned_rows: Option<u16>,
+    /// Attribution for the pin: "owner" or the connect-user's
+    /// daemon-resolved username. `None` when unpinned.
+    pub pinned_set_by: Option<String>,
 }
 
 impl WorkspaceTabSession {
@@ -770,14 +780,20 @@ impl WorkspaceTabSession {
     /// args. `session_id` is updated separately via `stamp_session_id`
     /// once the CLI tool (claude / codex) reports it; first-time
     /// upserts come through as `None` here.
+    ///
+    /// S7a: the pin columns ride the INSERT (fresh rows are unpinned —
+    /// callers pass `None`) but are NOT in the conflict-UPDATE set, so
+    /// a re-register never clobbers a live pin. Pins are written only
+    /// via [`Self::set_pinned_size`].
     pub fn upsert(
         conn: &Connection,
         row: &WorkspaceTabSession,
     ) -> Result<()> {
         conn.execute(
             "INSERT INTO workspace_tab_sessions \
-                (project_id, pane_group_id, agent_name, session_id, command, args_json, cwd, last_seen_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch()) \
+                (project_id, pane_group_id, agent_name, session_id, command, args_json, cwd, last_seen_at, \
+                 pinned_cols, pinned_rows, pinned_set_by) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), ?8, ?9, ?10) \
              ON CONFLICT(project_id, pane_group_id) DO UPDATE SET \
                 agent_name = excluded.agent_name, \
                 session_id = COALESCE(excluded.session_id, workspace_tab_sessions.session_id), \
@@ -793,7 +809,49 @@ impl WorkspaceTabSession {
                 row.command,
                 row.args_json,
                 row.cwd,
+                row.pinned_cols,
+                row.pinned_rows,
+                row.pinned_set_by,
             ],
+        )?;
+        Ok(())
+    }
+
+    /// S7a pin-to-size (migration 0065) — persist or clear the pinned
+    /// grid geometry for `(project_id, pane_group_id)`.
+    ///
+    /// Upserting (rather than a bare UPDATE) covers the canonical
+    /// pinned chat, whose identity deliberately does NOT keep a tab
+    /// row (GH#24): pinning it creates a PIN-ONLY row (command/args/
+    /// session_id all NULL, which restart-recovery already treats as
+    /// "no saved launch" and routes to the canonical resume resolver),
+    /// so the pin still survives a daemon restart without re-creating
+    /// the double-booked identity GH#24 removed.
+    ///
+    /// `pin = None` clears all three columns (unpinned).
+    pub fn set_pinned_size(
+        conn: &Connection,
+        project_id: &str,
+        pane_group_id: &str,
+        agent_name: &str,
+        cwd: Option<&str>,
+        pin: Option<(u16, u16, &str)>,
+    ) -> Result<()> {
+        let (cols, rows, set_by) = match pin {
+            Some((c, r, by)) => (Some(c), Some(r), Some(by.to_string())),
+            None => (None, None, None),
+        };
+        conn.execute(
+            "INSERT INTO workspace_tab_sessions \
+                (project_id, pane_group_id, agent_name, session_id, command, args_json, cwd, last_seen_at, \
+                 pinned_cols, pinned_rows, pinned_set_by) \
+             VALUES (?1, ?2, ?3, NULL, NULL, NULL, ?4, unixepoch(), ?5, ?6, ?7) \
+             ON CONFLICT(project_id, pane_group_id) DO UPDATE SET \
+                pinned_cols = excluded.pinned_cols, \
+                pinned_rows = excluded.pinned_rows, \
+                pinned_set_by = excluded.pinned_set_by, \
+                last_seen_at = unixepoch()",
+            params![project_id, pane_group_id, agent_name, cwd, cols, rows, set_by],
         )?;
         Ok(())
     }
@@ -808,7 +866,8 @@ impl WorkspaceTabSession {
     ) -> Result<Option<WorkspaceTabSession>> {
         let mut stmt = conn.prepare(
             "SELECT project_id, pane_group_id, agent_name, session_id, \
-                    command, args_json, cwd, last_seen_at \
+                    command, args_json, cwd, last_seen_at, \
+                    pinned_cols, pinned_rows, pinned_set_by \
              FROM workspace_tab_sessions \
              WHERE project_id = ?1 AND pane_group_id = ?2",
         )?;
@@ -822,6 +881,9 @@ impl WorkspaceTabSession {
                 args_json: r.get(5)?,
                 cwd: r.get(6)?,
                 last_seen_at: r.get(7)?,
+                pinned_cols: r.get(8)?,
+                pinned_rows: r.get(9)?,
+                pinned_set_by: r.get(10)?,
             })
         })?;
         match rows.next() {
@@ -843,7 +905,8 @@ impl WorkspaceTabSession {
     ) -> Result<Option<WorkspaceTabSession>> {
         let mut stmt = conn.prepare(
             "SELECT project_id, pane_group_id, agent_name, session_id, \
-                    command, args_json, cwd, last_seen_at \
+                    command, args_json, cwd, last_seen_at, \
+                    pinned_cols, pinned_rows, pinned_set_by \
              FROM workspace_tab_sessions \
              WHERE project_id = ?1 AND agent_name = ?2",
         )?;
@@ -857,6 +920,9 @@ impl WorkspaceTabSession {
                 args_json: r.get(5)?,
                 cwd: r.get(6)?,
                 last_seen_at: r.get(7)?,
+                pinned_cols: r.get(8)?,
+                pinned_rows: r.get(9)?,
+                pinned_set_by: r.get(10)?,
             })
         })?;
         match rows.next() {

@@ -354,6 +354,10 @@ async fn handle_one_request(
             // K2SO #629 — change a connect-user's role. Owner-only (gated
             // per-handler below); method-gated POST.
             | "/cli/users/set-role"
+            // Presence S4 — toggle a viewer-role user's ephemeral edit
+            // grant. Owner-or-admin (require_manage) + POST-gated
+            // per-handler below (feedback_post_only_route_guards).
+            | "/cli/presence/grant"
             // K2SO #620 — owner-only password-policy write. GET (read) goes
             // through the GET arm below; POST is method-gated per-handler.
             | "/cli/users/policy"
@@ -1862,6 +1866,24 @@ async fn handle_one_request(
             };
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let r = crate::presence::handle_kick(actor_role, &body_bytes);
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // POST /cli/presence/grant — S4 (presence/multiplayer arc §4).
+        // Toggle a viewer-role user's ephemeral edit grant:
+        // `{"username":..,"granted":bool}` → `{"success":true,...}`.
+        // Owner-or-admin (`require_manage`, the users-management gate);
+        // POST-gated per feedback_post_only_route_guards. Target
+        // validation (exists + role viewer + currently connected) lives
+        // in the handler — grants attach to a live connection and are
+        // auto-revoked when the user's last connection deregisters.
+        "/cli/presence/grant" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            let actor_role = match super::http::require_manage(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                Some(r) => r,
+                None => return DispatchOutcome::Done,
+            };
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = crate::presence::handle_grant(actor_role, &body_bytes);
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // GET /cli/auth/whoami — AUTHORIZED (owner OR connect-user). Lets

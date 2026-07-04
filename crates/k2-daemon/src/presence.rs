@@ -198,12 +198,63 @@ pub fn register(
 /// Remove a connection and re-broadcast the roster. No-op (no
 /// broadcast) when the id is already gone. Called from
 /// [`PresenceGuard::drop`]; not part of the handler-facing API.
+///
+/// S4 auto-revoke: grants live only as long as the connection (PRD §4
+/// grant lifecycle) — when the departing entry was the user's LAST live
+/// connection, their ephemeral edit grant is dropped here, so a viewer
+/// who disconnects always reconnects ungranted.
 fn deregister(conn_id: u64) {
     let removed = {
         let mut map = registry().lock().unwrap_or_else(|e| e.into_inner());
         map.remove(&conn_id)
     };
-    if removed.is_some() {
+    let Some(entry) = removed else { return };
+    if let PresenceIdentity::ConnectUser { username, .. } = &entry.identity {
+        if !has_live_connection(username) {
+            let revoked = {
+                let mut set = granted().lock().unwrap_or_else(|e| e.into_inner());
+                set.remove(username)
+            };
+            if revoked {
+                log_debug!(
+                    "[daemon/presence] auto-revoked edit grant for '{username}' \
+                     (last connection deregistered)"
+                );
+            }
+        }
+    }
+    broadcast_roster();
+}
+
+/// Whether `username` currently holds ANY live registered connection
+/// (app-level or workspace). The grant route uses this to enforce
+/// "a grant must attach to a live presence".
+pub fn has_live_connection(username: &str) -> bool {
+    let map = registry().lock().unwrap_or_else(|e| e.into_inner());
+    map.values().any(|e| {
+        matches!(&e.identity, PresenceIdentity::ConnectUser { username: u, .. } if u == username)
+    })
+}
+
+/// Grant or revoke `username`'s ephemeral edit access (S4) and
+/// re-broadcast the roster so every window's `grantedEdit` updates live.
+/// No-op (no broadcast) when the set already matches. Target validation
+/// (viewer role, live connection) lives in [`handle_grant`]; this is the
+/// raw mutation — the auto-revoke in [`deregister`] is the only other
+/// writer of the set.
+pub fn set_granted(username: &str, granted_flag: bool) {
+    let changed = {
+        let mut set = granted().lock().unwrap_or_else(|e| e.into_inner());
+        if granted_flag {
+            set.insert(username.to_string())
+        } else {
+            set.remove(username)
+        }
+    };
+    if changed {
+        log_debug!(
+            "[daemon/presence] edit grant for '{username}' set to {granted_flag}"
+        );
         broadcast_roster();
     }
 }
@@ -399,6 +450,68 @@ pub fn handle_kick(
     )
 }
 
+#[derive(serde::Deserialize)]
+struct GrantReq {
+    username: String,
+    granted: bool,
+}
+
+/// `POST /cli/presence/grant` (S4) — body `{"username":..,"granted":bool}`
+/// → `{"success":true,"username":..,"granted":..}`.
+///
+/// The dispatcher gates method (POST-only) + authorization
+/// (`require_manage`: owner token OR Admin/Owner session) and passes the
+/// actor's resolved role in. Here we validate the TARGET:
+///
+/// - must exist AND have role Viewer — grants only apply to viewer-role
+///   users; Member and above can already edit (400 otherwise);
+/// - must hold a live presence connection — grants attach to a live
+///   connection and die with it (the [`deregister`] auto-revoke), so
+///   granting a disconnected user is meaningless (400);
+/// - `can_act_on(actor, target)` re-checked for defense in depth (403) —
+///   trivially true today since the target is always Viewer.
+pub fn handle_grant(
+    actor_role: Role,
+    body: &[u8],
+) -> crate::cli_response::CliResponse {
+    use crate::cli_response::CliResponse;
+
+    let req: GrantReq = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let Some(target_role) = k2_core::connect_users::role_for_user(&req.username) else {
+        return CliResponse::bad_request(format!("user '{}' not found", req.username));
+    };
+    if target_role != Role::Viewer {
+        return CliResponse::bad_request(format!(
+            "user '{}' has role '{}' — edit grants only apply to viewer-role users \
+             (members and above can already edit)",
+            req.username,
+            target_role.as_wire()
+        ));
+    }
+    if !k2_core::connect_users::can_act_on(actor_role, target_role) {
+        return CliResponse::forbidden();
+    }
+    if !has_live_connection(&req.username) {
+        return CliResponse::bad_request(format!(
+            "user '{}' is not connected — an edit grant attaches to a live \
+             connection and is revoked when it closes",
+            req.username
+        ));
+    }
+    set_granted(&req.username, req.granted);
+    CliResponse::ok_json(
+        serde_json::json!({
+            "success": true,
+            "username": req.username,
+            "granted": req.granted,
+        })
+        .to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,6 +635,100 @@ mod tests {
         assert!(roster().iter().any(|r| r.user == "carol"));
         assert_eq!(close_connections_for("nobody-here"), 0);
         drop((ga, gb, go));
+    }
+
+    fn viewer(name: &str) -> PresenceIdentity {
+        PresenceIdentity::ConnectUser {
+            username: name.into(),
+            role: Role::Viewer,
+        }
+    }
+
+    #[test]
+    fn set_granted_flips_roster_granted_edit_and_is_idempotent() {
+        let _g = lock();
+        let guard = register(viewer("vera"), PresenceKind::AppSocket, ch());
+        let vera = |rows: &[RosterUser]| -> RosterUser {
+            rows.iter().find(|r| r.user == "vera").expect("vera row").clone()
+        };
+        // Viewer role rides the wire; starts ungranted.
+        let row = vera(&roster());
+        assert_eq!(row.role, "viewer");
+        assert!(!row.granted_edit);
+
+        set_granted("vera", true);
+        assert!(vera(&roster()).granted_edit, "grant must surface in the roster");
+        // Idempotent re-grant is a no-op (no state corruption).
+        set_granted("vera", true);
+        assert!(vera(&roster()).granted_edit);
+
+        set_granted("vera", false);
+        assert!(!vera(&roster()).granted_edit, "revoke must surface in the roster");
+
+        drop(guard);
+        assert!(roster().iter().all(|r| r.user != "vera"));
+    }
+
+    #[test]
+    fn owner_row_granted_edit_stays_hard_false() {
+        let _g = lock();
+        let guard = register(PresenceIdentity::Owner, PresenceKind::AppSocket, ch());
+        // Even a (nonsensical) direct set never surfaces on the owner row —
+        // the owner needs no grant.
+        set_granted("owner", true);
+        let rows = roster();
+        let owner = rows.iter().find(|r| r.user == "owner").expect("owner row");
+        assert!(!owner.granted_edit, "owner grantedEdit is hard-false");
+        set_granted("owner", false); // clean the set back up
+        drop(guard);
+    }
+
+    #[test]
+    fn last_disconnect_auto_revokes_the_grant() {
+        let _g = lock();
+        let g1 = register(viewer("vlad"), PresenceKind::AppSocket, ch());
+        let g2 = register(
+            viewer("vlad"),
+            PresenceKind::WorkspaceSocket { path: "/x/ws".into() },
+            ch(),
+        );
+        set_granted("vlad", true);
+        assert!(has_live_connection("vlad"));
+
+        // Dropping ONE of two connections keeps the grant (grants are
+        // per-USER; they die only with the LAST connection).
+        drop(g2);
+        let rows = roster();
+        let vlad = rows.iter().find(|r| r.user == "vlad").expect("vlad row");
+        assert!(vlad.granted_edit, "grant survives while a connection remains");
+
+        // Dropping the LAST connection auto-revokes: a reconnect comes
+        // back ungranted.
+        drop(g1);
+        assert!(!has_live_connection("vlad"));
+        let g3 = register(viewer("vlad"), PresenceKind::AppSocket, ch());
+        let rows = roster();
+        let vlad = rows.iter().find(|r| r.user == "vlad").expect("vlad row");
+        assert!(
+            !vlad.granted_edit,
+            "grant must be auto-revoked when the last connection deregisters"
+        );
+        drop(g3);
+    }
+
+    #[test]
+    fn handle_grant_validates_target_and_wire_shape() {
+        let _g = lock();
+        // Malformed body → 400 regardless of registry state.
+        let r = handle_grant(Role::Owner, b"not json");
+        assert_eq!(r.status, "400 Bad Request");
+        // A connected NON-viewer target → 400 with the role in the message
+        // (role_for_user hits the connect-users store; an unseeded HOME
+        // yields not-found which is also a 400 — both reject non-viewers).
+        let guard = register(member("marge"), PresenceKind::AppSocket, ch());
+        let r = handle_grant(Role::Owner, br#"{"username":"marge","granted":true}"#);
+        assert_eq!(r.status, "400 Bad Request", "body: {}", r.body);
+        drop(guard);
     }
 
     #[test]

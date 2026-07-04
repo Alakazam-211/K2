@@ -11,7 +11,11 @@
 //!   3. a `?path=` workspace subscription surfaces in `workspaces` and
 //!      leaves on close,
 //!   4. `close_connections_for` tears both of a user's sockets down and
-//!      the roster updates.
+//!      the roster updates,
+//!   5. (S4) viewer-role rows + `POST /cli/presence/grant`: grant flips
+//!      `grantedEdit` in the broadcast, the last disconnect auto-revokes,
+//!   6. (S4) grant-route gates: member-role target → 400, disconnected
+//!      target → 400, member actor → 403, GET → 405.
 //!
 //! ISOLATION: the presence registry, session-events bus, connect-user
 //! stores, and `$HOME` are process-wide — every test serializes on
@@ -427,6 +431,194 @@ async fn workspace_socket_path_appears_and_leaves_with_the_socket() {
             .await;
 
             let _ = ws_app.close(None).await;
+        });
+
+        await_registry_empty("after closing sockets");
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 5 (S4) — viewer role + edit grant: broadcast + auto-revoke on last
+// disconnect
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_grant_broadcasts_and_last_disconnect_auto_revokes() {
+    let _g = lock();
+    with_temp_home(|| {
+        await_registry_empty("at test start");
+        let viewer = seed_user_session("pres_viewer", "password123", Role::Viewer);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        futures_block(async {
+            let mut ws_owner = connect_events_ws(d.port, OWNER_TOKEN, "").await;
+            let mut ws_viewer = connect_events_ws(d.port, &viewer, "").await;
+
+            // The viewer role rides the roster wire; starts ungranted.
+            let roster = get_roster(d.port, OWNER_TOKEN);
+            let v = row(&roster, "pres_viewer").expect("viewer row present");
+            assert_eq!(v["role"], "viewer");
+            assert_eq!(v["grantedEdit"], false);
+
+            // Grant (owner token) → success body + broadcast flips
+            // grantedEdit to true on the viewer's row.
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/presence/grant?token={OWNER_TOKEN}"),
+                Some(r#"{"username":"pres_viewer","granted":true}"#),
+            );
+            assert_eq!(r.status, 200, "grant must succeed; body={}", r.body);
+            let body: serde_json::Value = serde_json::from_str(&r.body).expect("JSON");
+            assert_eq!(body["success"], true);
+            assert_eq!(body["username"], "pres_viewer");
+            assert_eq!(body["granted"], true);
+            next_presence_matching(&mut ws_owner, "grantedEdit flips true", |roster| {
+                row(roster, "pres_viewer").is_some_and(|v| v["grantedEdit"] == true)
+            })
+            .await;
+
+            // Snapshot agrees with the broadcast.
+            let roster = get_roster(d.port, OWNER_TOKEN);
+            let v = row(&roster, "pres_viewer").expect("viewer row");
+            assert_eq!(v["grantedEdit"], true);
+
+            // Revoke via the same route (granted:false) → broadcast false.
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/presence/grant?token={OWNER_TOKEN}"),
+                Some(r#"{"username":"pres_viewer","granted":false}"#),
+            );
+            assert_eq!(r.status, 200, "revoke must succeed; body={}", r.body);
+            next_presence_matching(&mut ws_owner, "grantedEdit flips false", |roster| {
+                row(roster, "pres_viewer").is_some_and(|v| v["grantedEdit"] == false)
+            })
+            .await;
+
+            // Re-grant, then close the viewer's LAST socket → the grant is
+            // auto-revoked: a reconnect comes back grantedEdit=false.
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/presence/grant?token={OWNER_TOKEN}"),
+                Some(r#"{"username":"pres_viewer","granted":true}"#),
+            );
+            assert_eq!(r.status, 200, "re-grant must succeed; body={}", r.body);
+            next_presence_matching(&mut ws_owner, "re-grant lands", |roster| {
+                row(roster, "pres_viewer").is_some_and(|v| v["grantedEdit"] == true)
+            })
+            .await;
+            ws_viewer.close(None).await.expect("close viewer ws");
+            next_presence_matching(&mut ws_owner, "viewer departs", |roster| {
+                row(roster, "pres_viewer").is_none()
+            })
+            .await;
+
+            let mut ws_viewer2 = connect_events_ws(d.port, &viewer, "").await;
+            let roster = get_roster(d.port, OWNER_TOKEN);
+            let v = row(&roster, "pres_viewer").expect("viewer reconnected");
+            assert_eq!(
+                v["grantedEdit"], false,
+                "grant must be auto-revoked on the last disconnect: {v}"
+            );
+
+            let _ = ws_viewer2.close(None).await;
+            let _ = ws_owner.close(None).await;
+        });
+
+        await_registry_empty("after closing sockets");
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 6 (S4) — grant-route gates: target role/connection + actor + method
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grant_route_gates_target_actor_and_method() {
+    let _g = lock();
+    with_temp_home(|| {
+        await_registry_empty("at test start");
+        let member = seed_user_session("pres_gmember", "password123", Role::Member);
+        // A viewer who exists but never connects (the disconnected target).
+        let _viewer_offline =
+            seed_user_session("pres_goffline", "password123", Role::Viewer);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        futures_block(async {
+            let mut ws_member = connect_events_ws(d.port, &member, "").await;
+
+            // Member-role target (connected) → 400: grants only apply to
+            // viewer-role users.
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/presence/grant?token={OWNER_TOKEN}"),
+                Some(r#"{"username":"pres_gmember","granted":true}"#),
+            );
+            assert_eq!(r.status, 400, "member target must 400; body={}", r.body);
+            assert!(
+                r.body.contains("viewer-role"),
+                "message must explain the viewer-only rule: {}",
+                r.body
+            );
+
+            // Viewer-role target with NO live connection → 400.
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/presence/grant?token={OWNER_TOKEN}"),
+                Some(r#"{"username":"pres_goffline","granted":true}"#),
+            );
+            assert_eq!(
+                r.status, 400,
+                "disconnected target must 400; body={}",
+                r.body
+            );
+            assert!(
+                r.body.contains("not connected"),
+                "message must explain the live-connection rule: {}",
+                r.body
+            );
+
+            // Unknown target → 400.
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/presence/grant?token={OWNER_TOKEN}"),
+                Some(r#"{"username":"pres_ghost","granted":true}"#),
+            );
+            assert_eq!(r.status, 400, "unknown target must 400; body={}", r.body);
+
+            // Member ACTOR → 403 (require_manage: owner/admin only).
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/presence/grant?token={member}"),
+                Some(r#"{"username":"pres_goffline","granted":true}"#),
+            );
+            assert_eq!(r.status, 403, "member actor must 403; body={}", r.body);
+
+            // No/garbage token → 403.
+            let r = http(
+                d.port,
+                "POST",
+                "/cli/presence/grant?token=garbage",
+                Some(r#"{"username":"pres_goffline","granted":true}"#),
+            );
+            assert_eq!(r.status, 403, "garbage token must 403; body={}", r.body);
+
+            // GET → 405 (POST-only mutating route).
+            let r = http(
+                d.port,
+                "GET",
+                &format!("/cli/presence/grant?token={OWNER_TOKEN}"),
+                None,
+            );
+            assert_eq!(r.status, 405, "GET must 405; body={}", r.body);
+
+            let _ = ws_member.close(None).await;
         });
 
         await_registry_empty("after closing sockets");

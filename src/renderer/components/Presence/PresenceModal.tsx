@@ -15,6 +15,7 @@ import { useEffect } from 'react'
 import { usePresenceStore, type RosterUser } from '@/stores/presence'
 import PresenceAvatar, { ROLE_COLORS, presenceDisplayName } from './PresenceAvatar'
 import PresenceKickButton from './PresenceKickButton'
+import PresenceGrantToggle from './PresenceGrantToggle'
 
 interface PresenceModalProps {
   onClose: () => void
@@ -170,10 +171,11 @@ function PresenceRow({ user }: { user: RosterUser }): React.JSX.Element {
         </div>
       </div>
 
-      {/* Right-aligned actions area — S3's Kick button (self-gating: it
-          renders null unless the viewer's role may kick this row); S4
-          slots the edit-grant toggle alongside. */}
+      {/* Right-aligned actions area — each moderation control self-gates
+          (grant toggle: viewer rows + managing onlooker only; kick:
+          viewer's role may kick this row). */}
       <div className="flex flex-shrink-0 items-center gap-1.5">
+        <PresenceGrantToggle user={user} />
         <PresenceKickButton user={user} />
       </div>
     </div>

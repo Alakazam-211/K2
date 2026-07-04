@@ -202,16 +202,15 @@ Status: PLAN — nothing built yet.
 Dependencies: S1 → S2 → S3/S4 → S5; S6 needs S1(+S2's avatar); S7 independent of S2-S6 (can run
 parallel); S0 anytime. Suggested waves: [S0, S1] → [S2, S7-daemon] → [S3, S4] → [S5, S6, S7-UI].
 
-## Open questions for Rosson (with recommendations)
+## Open questions — ALL DECIDED by Rosson 2026-07-04 (see PRD §10)
 
-1. **AI Commit button** loses its home when DiffStats leaves the nav. Recommend: move it into the
-   ChangesPanel header (its natural context); alternative: keep as hover-flip on the avatar
-   cluster (weird) or drop.
-2. **CountdownOverlay (3-2-1 themes)**: delete with the countdown, or keep as stopwatch-start
-   flourish? Recommend delete + settings cleanup.
-3. **Role colors**: proposal owner=amber, admin=purple, member=blue, viewer=gray — pick/veto.
-4. **Viewer-mode semantics** (default member in viewer mode): recommend no-input AND no-resize
-   (claim gives both back) — matches "claimer owns the grid" mental model.
+1. **AI Commit button**: DROPPED entirely (not relocated).
+2. **CountdownOverlay (3-2-1 themes)**: DELETE with the countdown + settings cleanup.
+3. **Role colors**: owner=amber-gold, admin=purple, member=blue, viewer=gray.
+4. **Viewer-mode semantics**: no-input AND no-resize; claimer mode grants both.
+
+PRD: `.k2/prds/prd-presence-multiplayer-v1.md` — the build SSOT. This note remains the
+substrate/file:line reference.
 
 ## Testing strategy
 

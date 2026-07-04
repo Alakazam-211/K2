@@ -259,6 +259,15 @@ pub fn set_granted(username: &str, granted_flag: bool) {
     }
 }
 
+/// Whether `username` currently holds an ephemeral edit grant (S5).
+/// Cheap read for the grid-WS claimer-capability gate, which re-checks
+/// on EVERY gated frame so a revoke bites a LIVE connection immediately
+/// (no reconnect required).
+pub fn is_granted(username: &str) -> bool {
+    let set = granted().lock().unwrap_or_else(|e| e.into_inner());
+    set.contains(username)
+}
+
 /// Fire the close handle of every live connection belonging to
 /// `username` (connect-users only — the owner is not kickable). Returns
 /// how many were fired. Entries are NOT removed here: each WS loop

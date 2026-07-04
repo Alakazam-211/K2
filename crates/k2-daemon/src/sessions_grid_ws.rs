@@ -120,6 +120,20 @@ pub(crate) enum Outbound<'a> {
         rows: Option<u16>,
         cleared: bool,
     },
+    /// S5 viewer/claimer — mode ACK. Sent once at connect (right after
+    /// the pin slot) and again on EVERY inbound `set_mode`, so the UI
+    /// always renders the daemon's truth. `mode` is the connection's
+    /// STORED mode ("viewer" | "claimer"); `capable` is whether the
+    /// connection may currently ACT as a claimer (owner/stream token,
+    /// role >= Member, or viewer-role with a live edit grant). A
+    /// non-capable connection can store mode=claimer, but the gates
+    /// re-check capability per frame — `capable:false` tells the UI to
+    /// render the claimer option disabled.
+    Mode { mode: &'static str, capable: bool },
+    /// S5 viewer/claimer — informational frame sent ONCE per connection
+    /// the first time a non-claimer's `input` is dropped, so the UI can
+    /// hint "view-only". Repeat drops are silent.
+    InputDenied { reason: &'static str },
     /// Bell character (`\a`, OSC 7). Mirrors how iTerm decides
     /// "agent is now waiting for input": Claude rings the bell
     /// when it's done and ready for a reply. Renderer can use
@@ -177,6 +191,14 @@ enum Inbound {
         #[serde(default)]
         rows: Option<u16>,
     },
+    /// S5 viewer/claimer — set THIS connection's per-window mode
+    /// (PRD §5.3). `mode` is `"viewer"` or `"claimer"`; anything else
+    /// is ignored (the ACK still reports the stored truth). A
+    /// connection ACTS as a claimer only while mode == claimer AND it
+    /// is claimer-capable at that instant — flipping to claimer while
+    /// not capable stays effectively viewer. Every `set_mode` is ACKed
+    /// with `{"event":"mode","payload":{"mode":..,"capable":bool}}`.
+    SetMode { mode: String },
     /// k1 wire — the client applied a frame batch; `version` is the
     /// highest frame version it has rendered. Sent once per rAF
     /// flush (not per message). Drives the ack-gated pacing: the
@@ -221,6 +243,53 @@ fn clipboard_frame(text: String) -> Option<Outbound<'static>> {
 /// 1 because 0 is the "no claim" sentinel value.
 static NEXT_SUBSCRIBER_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
+
+/// S5 viewer/claimer — the auth CLASS this grid connection presented at
+/// accept. The class is fixed for the socket's lifetime; whether the
+/// connection may currently act as a claimer is recomputed at every
+/// gate via [`connection_claimer_capable`], so mid-session role changes
+/// and grant revokes bite a LIVE connection immediately.
+#[derive(Debug, Clone)]
+enum ConnIdentity {
+    /// Authorized with the daemon owner token.
+    Owner,
+    /// Authorized with a live connect-user session token. Capability is
+    /// resolved per gate from the stored role + the ephemeral grant set.
+    ConnectUser { username: String },
+    /// Authorized with a P3b per-session STREAM token. Treated as
+    /// claimer-capable: it is a deliberate session-scoped bearer
+    /// credential minted for external (/v1/sandboxes) drivers whose
+    /// whole point is to drive exactly this session.
+    StreamToken,
+    /// No credential class resolved (a session can be revoked between
+    /// the dispatcher gate and identity resolution). Never
+    /// claimer-capable; the 5s re-auth tick tears the socket down.
+    Unknown,
+}
+
+/// Whether `identity` may ACT as a claimer right now (PRD §4 matrix):
+/// owner/stream token → always; connect user → role >= Member, or
+/// Viewer holding a live edit grant. Recomputed at each gate — the
+/// role/grant lookups only run for the connect-user class (the local
+/// owner path short-circuits with zero I/O), and gated frames arrive
+/// at human rates, so the per-frame store read is cheap.
+fn connection_claimer_capable(identity: &ConnIdentity) -> bool {
+    match identity {
+        ConnIdentity::Owner | ConnIdentity::StreamToken => true,
+        ConnIdentity::ConnectUser { username } => {
+            match k2_core::connect_users::role_for_user(username) {
+                // User removed / store unreadable mid-session — fail
+                // closed (the re-auth tick will close the socket).
+                None => false,
+                Some(role) => {
+                    role >= k2_core::connect_users::Role::Member
+                        || crate::presence::is_granted(username)
+                }
+            }
+        }
+        ConnIdentity::Unknown => false,
+    }
+}
 
 /// The state transition a `SetActive` frame implies, given the
 /// session's current `active_subscriber` value and the requesting
@@ -390,6 +459,33 @@ pub async fn serve_session_grid_connection(
         }
     };
 
+    // S5 viewer/claimer — resolve the connection's auth CLASS once at
+    // accept (classification, not an auth check: the dispatcher already
+    // gated the upgrade on exactly these three credential kinds).
+    // Capability is deliberately NOT computed here — the gates call
+    // `connection_claimer_capable` per frame so role changes / grant
+    // revokes apply to live sockets.
+    let identity: ConnIdentity = if !token.is_empty()
+        && crate::routes::http::ct_eq_token(&token, &owner_token)
+    {
+        ConnIdentity::Owner
+    } else if let Some(username) = k2_core::connect_users::validate_session(&token) {
+        ConnIdentity::ConnectUser { username }
+    } else if crate::stream_token::authorizes_session(&token, &session_id) {
+        ConnIdentity::StreamToken
+    } else {
+        ConnIdentity::Unknown
+    };
+    // Per-connection mode (PRD §5.3): owner connections default to
+    // claimer (local windows keep today's behavior); everyone else —
+    // connect users of ANY role and stream-token drivers — starts as a
+    // viewer until the client opts in with `set_mode`. The connection
+    // ACTS as a claimer only while mode==claimer AND capable.
+    let mut mode_claimer = matches!(identity, ConnIdentity::Owner);
+    // One-time (per connection) `input_denied` hint — repeats drop
+    // silently so a key-mashing viewer can't flood the socket.
+    let mut input_denied_sent = false;
+
     // 0.37.11 — claim a unique subscriber id for this connection.
     // The id stays stable for the WS's lifetime; the renderer's
     // `SetActive` frame stamps this value into the session's
@@ -533,6 +629,21 @@ pub async fn serve_session_grid_connection(
         {
             return;
         }
+    }
+    // S5 — mode handshake: tell a fresh subscriber its starting mode +
+    // current claimer-capability (same initial-state slot as label/pin)
+    // so the UI can render the truth before the user touches anything.
+    if send_outbound(
+        &mut write,
+        &Outbound::Mode {
+            mode: if mode_claimer { "claimer" } else { "viewer" },
+            capable: connection_claimer_capable(&identity),
+        },
+    )
+    .await
+    .is_err()
+    {
+        return;
     }
     let first_snap_ms = __t_first_snap.elapsed().as_secs_f64() * 1000.0;
     log_debug!(
@@ -915,6 +1026,37 @@ pub async fn serve_session_grid_connection(
                         let parsed: Result<Inbound, _> = serde_json::from_str(&text);
                         match parsed {
                             Ok(Inbound::Input { text }) => {
+                                // S5 — viewer gate: a non-claimer's input is
+                                // dropped WHOLE, including the claim-steal +
+                                // snap-resize below (a viewer must not be able
+                                // to commandeer the active slot by typing).
+                                // Capability is recomputed per frame so a
+                                // grant/revoke bites this live connection.
+                                if !(mode_claimer
+                                    && connection_claimer_capable(&identity))
+                                {
+                                    if !input_denied_sent {
+                                        input_denied_sent = true;
+                                        if send_outbound(
+                                            &mut write,
+                                            &Outbound::InputDenied {
+                                                reason: "viewer",
+                                            },
+                                        )
+                                        .await
+                                        .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    log_debug!(
+                                        "[daemon/sessions_grid_ws] input dropped \
+                                         (viewer) session={} sub={}",
+                                        session.session_id,
+                                        subscriber_id,
+                                    );
+                                    continue;
+                                }
                                 // PRD §6.4 — typing IS an active-viewer claim.
                                 // Across two machines both clients can be
                                 // window-focused at once, so a focus-only model
@@ -973,6 +1115,23 @@ pub async fn serve_session_grid_connection(
                                 my_cols = cols;
                                 my_rows = rows;
                                 session.note_viewport(subscriber_id, cols, rows);
+                                // S5 — viewer gate: `note_viewport` above STILL
+                                // ran (the viewport registry powers letterbox
+                                // rendering + the detach election) but a
+                                // non-claimer's resize is ignored — viewer mode
+                                // means no input AND no resize (PRD §4).
+                                if !(mode_claimer
+                                    && connection_claimer_capable(&identity))
+                                {
+                                    log_debug!(
+                                        "[v2-perf] side=daemon stage=resize_ignored \
+                                         session={} from_sub={} \
+                                         (viewer-mode resize dropped)",
+                                        session.session_id,
+                                        subscriber_id,
+                                    );
+                                    continue;
+                                }
                                 // 0.37.11 — only the active subscriber
                                 // can resize. `active = 0` means "no
                                 // claim yet" — accept (first-resize-
@@ -1025,6 +1184,28 @@ pub async fn serve_session_grid_connection(
                                 // transition with a pure helper (unit-tested
                                 // below), apply only real state changes, and
                                 // only log when something actually changed.
+                                // S5 — viewer gate: a non-claimer's CLAIM is
+                                // refused before any arbitration mutation.
+                                // The declared viewport is still recorded
+                                // (same registry the Resize gate feeds), and
+                                // releases (`active:false`) always pass — a
+                                // connection that lost capability mid-claim
+                                // must still be able to let go.
+                                if active
+                                    && !(mode_claimer
+                                        && connection_claimer_capable(&identity))
+                                {
+                                    if let (Some(c), Some(r)) = (cols, rows) {
+                                        session.note_viewport(subscriber_id, c, r);
+                                    }
+                                    log_debug!(
+                                        "[v2-perf] side=daemon stage=claim_refused \
+                                         session={} sub={} (viewer-mode claim)",
+                                        session.session_id,
+                                        subscriber_id,
+                                    );
+                                    continue;
+                                }
                                 apply_set_active(
                                     &session,
                                     subscriber_id,
@@ -1032,6 +1213,45 @@ pub async fn serve_session_grid_connection(
                                     cols,
                                     rows,
                                 );
+                            }
+                            Ok(Inbound::SetMode { mode }) => {
+                                // S5 — per-window mode flip. Unknown values
+                                // leave the stored mode untouched; EVERY
+                                // set_mode is ACKed with the stored truth +
+                                // live capability so the UI can render
+                                // "claimer requested but not capable"
+                                // honestly (the gates re-check capability
+                                // per frame regardless of stored mode).
+                                match mode.as_str() {
+                                    "claimer" => mode_claimer = true,
+                                    "viewer" => mode_claimer = false,
+                                    other => {
+                                        log_debug!(
+                                            "[daemon/sessions_grid_ws] set_mode \
+                                             with unknown mode {other:?} ignored \
+                                             (session {})",
+                                            session.session_id,
+                                        );
+                                    }
+                                }
+                                if send_outbound(
+                                    &mut write,
+                                    &Outbound::Mode {
+                                        mode: if mode_claimer {
+                                            "claimer"
+                                        } else {
+                                            "viewer"
+                                        },
+                                        capable: connection_claimer_capable(
+                                            &identity,
+                                        ),
+                                    },
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    break;
+                                }
                             }
                             Ok(Inbound::Ack { version }) => {
                                 // k1 pacing. Acks from a non-k1 client
@@ -1599,6 +1819,63 @@ mod tests {
                 Err(e) => panic!("event broadcast died: {e}"),
             }
         }
+    }
+
+    /// S5 — FROZEN WIRE SHAPES for the viewer/claimer frames the
+    /// renderer parses: the mode ACK (connect-time + per `set_mode`)
+    /// and the one-time `input_denied` hint.
+    #[test]
+    fn mode_frames_serialize_to_frozen_contract() {
+        assert_eq!(
+            serde_json::to_string(&Outbound::Mode {
+                mode: "viewer",
+                capable: false,
+            })
+            .expect("serialize"),
+            r#"{"event":"mode","payload":{"mode":"viewer","capable":false}}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Outbound::Mode {
+                mode: "claimer",
+                capable: true,
+            })
+            .expect("serialize"),
+            r#"{"event":"mode","payload":{"mode":"claimer","capable":true}}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Outbound::InputDenied { reason: "viewer" })
+                .expect("serialize"),
+            r#"{"event":"input_denied","payload":{"reason":"viewer"}}"#
+        );
+    }
+
+    /// S5 — the inbound `set_mode` shape the renderer emits.
+    #[test]
+    fn set_mode_deserializes_both_modes() {
+        let parsed: Inbound =
+            serde_json::from_str(r#"{"action":"set_mode","mode":"claimer"}"#)
+                .expect("set_mode claimer must parse");
+        match parsed {
+            Inbound::SetMode { mode } => assert_eq!(mode, "claimer"),
+            other => panic!("expected SetMode, got {other:?}"),
+        }
+        let parsed: Inbound =
+            serde_json::from_str(r#"{"action":"set_mode","mode":"viewer"}"#)
+                .expect("set_mode viewer must parse");
+        match parsed {
+            Inbound::SetMode { mode } => assert_eq!(mode, "viewer"),
+            other => panic!("expected SetMode, got {other:?}"),
+        }
+    }
+
+    /// S5 — capability matrix for the non-user classes (the pure part;
+    /// the connect-user rows need a seeded store and live in the
+    /// viewer_claimer integration suite).
+    #[test]
+    fn owner_and_stream_token_are_always_claimer_capable() {
+        assert!(connection_claimer_capable(&ConnIdentity::Owner));
+        assert!(connection_claimer_capable(&ConnIdentity::StreamToken));
+        assert!(!connection_claimer_capable(&ConnIdentity::Unknown));
     }
 
     #[cfg(unix)]

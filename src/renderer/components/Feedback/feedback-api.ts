@@ -169,6 +169,24 @@ export function groupByStatus<T extends { status: FeedbackStatus }>(
   return grouped
 }
 
+/** Per-status counts for the page's status-filter chips (AFSROW-style:
+ *  every status shows its count, plus the total for "All"). Counted
+ *  AFTER the workspace + search filters so the chips describe exactly
+ *  what toggling them would reveal. */
+export interface StatusCounts {
+  all: number
+  waiting: number
+  answered: number
+  resolved: number
+  dismissed: number
+}
+
+export function countByStatus<T extends { status: FeedbackStatus }>(rows: T[]): StatusCounts {
+  const counts: StatusCounts = { all: rows.length, waiting: 0, answered: 0, resolved: 0, dismissed: 0 }
+  for (const row of rows) counts[row.status]++
+  return counts
+}
+
 /** One-tap option buttons are live only while the ask still waits. */
 export function optionsActionable(item: {
   status: FeedbackStatus

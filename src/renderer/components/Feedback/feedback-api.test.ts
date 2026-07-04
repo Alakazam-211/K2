@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  countByStatus,
   filterBySearch,
   groupByStatus,
   optionsActionable,
@@ -33,6 +34,33 @@ describe('groupByStatus', () => {
     expect(g.waiting.map((r) => r.id)).toEqual(['w'])
     expect(g.answered.map((r) => r.id)).toEqual(['a'])
     expect(g.closed.map((r) => r.id)).toEqual(['r', 'd'])
+  })
+})
+
+describe('countByStatus', () => {
+  it('counts every status plus the total, zeroes included', () => {
+    const rows = [
+      { status: 'waiting' as FeedbackStatus },
+      { status: 'waiting' as FeedbackStatus },
+      { status: 'answered' as FeedbackStatus },
+      { status: 'dismissed' as FeedbackStatus },
+    ]
+    expect(countByStatus(rows)).toEqual({
+      all: 4,
+      waiting: 2,
+      answered: 1,
+      resolved: 0,
+      dismissed: 1,
+    })
+  })
+  it('an empty list is all zeroes', () => {
+    expect(countByStatus([])).toEqual({
+      all: 0,
+      waiting: 0,
+      answered: 0,
+      resolved: 0,
+      dismissed: 0,
+    })
   })
 })
 

@@ -19,10 +19,12 @@ import { useProjectsStore } from '@/stores/projects'
 import { useFeedbackStore } from '@/stores/feedback'
 import { formatRelativeTime } from '@/components/AgentOps/ops-api'
 import {
+  countByStatus,
   fetchAllFeedback,
   filterBySearch,
   groupByStatus,
   type FeedbackListRow,
+  type FeedbackStatus,
 } from './feedback-api'
 import { FeedbackItemView } from './FeedbackItemView'
 import { KindBadge, PriorityBadge, StatusBadge } from './badges'
@@ -114,6 +116,9 @@ export default function FeedbackPage(): React.JSX.Element | null {
   const [workspaceFilter, setWorkspaceFilter] = useState<string>('all')
   // Tokenized free-text search across title / agent / workspace / id.
   const [search, setSearch] = useState('')
+  // Status filter — one status or 'all'; the chips show per-status
+  // counts (AFSROW idiom), counted after workspace + search filtering.
+  const [statusFilter, setStatusFilter] = useState<FeedbackStatus | 'all'>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
 
@@ -165,15 +170,26 @@ export default function FeedbackPage(): React.JSX.Element | null {
       setRows(null)
       setError(null)
       setSearch('')
+      setStatusFilter('all')
     }
   }, [isOpen])
 
-  const filtered = useMemo(() => {
+  // Workspace + search first; the status chips count THIS set (so each
+  // chip says exactly how many cards selecting it reveals), then the
+  // active status chip narrows it.
+  const searched = useMemo(() => {
     if (!rows) return null
     const byWorkspace =
       workspaceFilter === 'all' ? rows : rows.filter((r) => r.projectId === workspaceFilter)
     return filterBySearch(byWorkspace, search)
   }, [rows, workspaceFilter, search])
+
+  const statusCounts = useMemo(() => (searched ? countByStatus(searched) : null), [searched])
+
+  const filtered = useMemo(() => {
+    if (!searched) return null
+    return statusFilter === 'all' ? searched : searched.filter((r) => r.status === statusFilter)
+  }, [searched, statusFilter])
 
   const grouped = useMemo(() => (filtered ? groupByStatus(filtered) : null), [filtered])
 
@@ -241,10 +257,11 @@ export default function FeedbackPage(): React.JSX.Element | null {
           Below lg the columns stack 50/50 (the app window can go down to
           800px wide); each half keeps its own internal scroll. */}
       <div className="flex-1 min-h-0 grid grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_720px] lg:grid-rows-[minmax(0,1fr)]">
-        {/* LEFT COLUMN — fixed [search + workspace filter] row above the
-            scrollable card list. */}
+        {/* LEFT COLUMN — fixed filter rows (search + workspace filter,
+            then the status chips) above the scrollable card list. */}
         <div className="flex flex-col min-h-0 min-w-0">
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
+          <div className="flex flex-col gap-2 px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
+            <div className="flex items-center gap-2">
             <div className="relative flex-1 min-w-0">
               <input
                 type="text"
@@ -281,6 +298,37 @@ export default function FeedbackPage(): React.JSX.Element | null {
                 </option>
               ))}
             </select>
+            </div>
+
+            {/* Status filter — per-status counts always visible (the
+                AFSROW board idiom); one status, or All. */}
+            <div className="flex items-center gap-1 flex-wrap">
+              {(['all', 'waiting', 'answered', 'resolved', 'dismissed'] as const).map((s) => {
+                const active = statusFilter === s
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setStatusFilter(s)}
+                    className={`flex items-center gap-1.5 px-2 py-1 text-[10px] font-medium border transition-colors cursor-pointer ${
+                      active
+                        ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                        : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)]'
+                    }`}
+                    title={s === 'all' ? 'Show every status' : `Show only ${s} items`}
+                  >
+                    <span className="capitalize">{s === 'all' ? 'All' : s}</span>
+                    <span
+                      className={`tabular-nums ${
+                        active ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'
+                      }`}
+                    >
+                      {statusCounts ? statusCounts[s] : 0}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto min-h-0 px-3 pb-3">

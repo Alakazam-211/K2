@@ -82,6 +82,100 @@ export function isWideCp(cp: number): boolean {
   )
 }
 
+// ── Per-character cell classifier (DOM painter) ─────────────────────
+//
+// Run-level column anchoring (rowRender.tsx) contains fallback-font
+// drift BETWEEN runs, but WITHIN a run glyphs still flow at the
+// font's natural advance. When a TUI re-colors animated art every
+// frame (grok's shimmering braille logo), the run boundaries
+// re-slice each frame, so a different amount of internal overflow
+// gets clipped at different places — glyphs pop in/out of view and
+// the art appears to breathe. The fix is to anchor each CHARACTER of
+// such a run to its own cell rect; this classifier says which runs
+// need it.
+//
+// A run needs per-char cells when its text contains any code point
+// whose rendered advance can't be trusted to equal its column count
+// in the user's monospace font — i.e. glyphs that routinely come
+// from a FALLBACK font (braille, powerline PUA) or that the primary
+// font may draw at a non-cell advance (wide CJK/emoji — kept
+// consistent with isWideCp, the same table rowClusters uses, so
+// render geometry and hit-testing agree).
+
+// Printable-ASCII fast path: the overwhelmingly common run. One
+// regex test, no allocation, and `test` on a non-global regex keeps
+// no lastIndex state.
+const ASCII_PRINTABLE_RE = /^[\x20-\x7E]*$/
+
+/** True when this code point's advance in a monospace font can't be
+ *  trusted to equal its terminal-column span. */
+export function isUntrustedAdvanceCp(cp: number): boolean {
+  return (
+    // Box drawing (U+2500–257F), block elements (U+2580–259F) and
+    // geometric shapes (U+25A0–25FF) — contiguous, so one range.
+    // Fonts without native coverage fall back at arbitrary advances.
+    (cp >= 0x2500 && cp <= 0x25ff) ||
+    // Braille patterns — grok's logo art; essentially always a
+    // fallback glyph on macOS (Apple Braille), advance ≠ cell.
+    (cp >= 0x2800 && cp <= 0x28ff) ||
+    // Private Use Area — powerline / Nerd Font symbols, patched-font
+    // territory with arbitrary advances.
+    (cp >= 0xe000 && cp <= 0xf8ff) ||
+    // Anything the column math already treats as wide (CJK, emoji):
+    // those cells span 2 columns and the glyph advance is whatever
+    // the CJK/emoji font says, so pin each to its own 2-col rect.
+    isWideCp(cp)
+  )
+}
+
+/** Should this run be rendered as one span PER CHARACTER instead of
+ *  a single flowing span? Pure function of the text — called per run
+ *  per frame by the DOM painter, so it must stay allocation-free. */
+export function runNeedsPerCharCells(text: string): boolean {
+  if (ASCII_PRINTABLE_RE.test(text)) return false
+  for (let i = 0; i < text.length; i++) {
+    const cp = text.codePointAt(i) as number
+    if (cp > 0xffff) i++ // skip the low surrogate
+    if (isUntrustedAdvanceCp(cp)) return true
+  }
+  return false
+}
+
+/** One per-character cell of a run: its text (a single code point
+ *  plus any zero-width followers), its column offset WITHIN the run,
+ *  and its column width. */
+export interface RunCell {
+  text: string
+  col: number
+  width: number
+}
+
+/** Split one run into per-character cells for anchored rendering.
+ *  Same width table and zero-width folding as rowClusters (so cell
+ *  columns agree with hit-testing); unannotated runs are one column
+ *  per code point by the wire contract. If the daemon's `cols` ever
+ *  disagreed with our width table the divergence stays INSIDE this
+ *  run — the next run's offset comes from the wire span
+ *  (runColOffsets), so it can never become cross-run drift. */
+export function runCells(run: ColRun): RunCell[] {
+  const annotated = run.cols !== undefined
+  const out: RunCell[] = []
+  let col = 0
+  for (const ch of run.text) {
+    const cp = ch.codePointAt(0) ?? 0
+    const w = annotated ? (isZeroWidthCp(cp) ? 0 : isWideCp(cp) ? 2 : 1) : 1
+    if (w === 0 && out.length > 0) {
+      // Zero-width follower: render with its base char's cell.
+      out[out.length - 1].text += ch
+      continue
+    }
+    const width = Math.max(w, 1)
+    out.push({ text: ch, col, width })
+    col += width
+  }
+  return out
+}
+
 /** Char count of a run in code points (what the wire's `cols`
  *  contract compares against). */
 function codePointCount(text: string): number {

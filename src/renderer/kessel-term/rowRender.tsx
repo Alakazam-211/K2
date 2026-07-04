@@ -20,11 +20,25 @@
 // and run backgrounds become exactly cell-aligned (crisper TUI box
 // edges as a bonus).
 //
-// Granularity stays per-RUN (1–10 spans/row), never per-character —
-// the daemon's run segmentation already bounds the span count.
+// Granularity is per-RUN (1–10 spans/row) for ordinary text — the
+// daemon's run segmentation already bounds the span count. EXOTIC
+// runs (braille art, box/block/geometric symbols, powerline PUA,
+// wide CJK/emoji — see runNeedsPerCharCells) get one span PER
+// CHARACTER instead: within a single run, fallback glyphs still flow
+// at the fallback font's advance, and when a TUI re-colors animated
+// art every frame (grok's shimmering logo) the run boundaries
+// re-slice per frame, so different internal overflow gets clipped in
+// different places — glyphs pop in/out and the art breathes. Cell-
+// anchoring every character makes the geometry a pure function of
+// (column, cellWidth), invariant under run re-slicing.
 
 import React from 'react'
-import { runColOffsets, runColSpan } from './runCols'
+import {
+  runCells,
+  runColOffsets,
+  runColSpan,
+  runNeedsPerCharCells,
+} from './runCols'
 
 /** The visual subset of the wire CellRun this renderer needs
  *  (structurally satisfied by TerminalPane's CellRun). */
@@ -110,6 +124,71 @@ function renderRowRuns(
   for (let i = 0; i < row.length; i++) {
     const run = row[i]
     const style = runStyle(run, defaultFg, defaultBg)
+    if (offsets && runNeedsPerCharCells(run.text)) {
+      // PER-CHARACTER CELL ANCHORING (exotic runs only): each code
+      // point gets its own absolutely-positioned cell rect, so its
+      // placement depends only on its column — never on how the
+      // frame happened to slice the row into runs, and never on a
+      // neighbor glyph's fallback advance. `textAlign: center`
+      // clips an over-wide fallback glyph SYMMETRICALLY (its optical
+      // center stays on the cell center, so contiguous art like
+      // braille degrades evenly instead of piling all the loss on
+      // the right edge); for a glyph whose advance already equals
+      // its cell, centering is a no-op.
+      const startCol = offsets[i]
+      const bg = style.backgroundColor
+      if (bg !== undefined) {
+        // One underlay span carries the run's background across its
+        // full box (glyph spans stay transparent). Per-cell
+        // backgrounds would need N adjacent boxes at fractional-px
+        // edges — hairline seams at some zoom/DPR combinations —
+        // and the underlay is at most ONE extra node, only emitted
+        // when there is a background at all (runStyle already
+        // resolved inverse-video into backgroundColor, so inverse
+        // runs get their block via the same underlay).
+        const span = runColSpan(run)
+        if (span > 0) {
+          spans.push(
+            <span
+              key={`a${absRow}s${i}u`}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: startCol * cellWidth,
+                width: span * cellWidth,
+                height: '100%',
+                backgroundColor: bg,
+                opacity: style.opacity,
+              }}
+            />,
+          )
+        }
+        delete style.backgroundColor
+      }
+      const cells = runCells(run)
+      for (let c = 0; c < cells.length; c++) {
+        const cell = cells[c]
+        spans.push(
+          <span
+            key={`a${absRow}s${i}c${c}`}
+            style={{
+              ...style,
+              position: 'absolute',
+              top: 0,
+              left: (startCol + cell.col) * cellWidth,
+              width: cell.width * cellWidth,
+              height: '100%',
+              overflow: 'hidden',
+              whiteSpace: 'pre',
+              textAlign: 'center',
+            }}
+          >
+            {cell.text}
+          </span>,
+        )
+      }
+      continue
+    }
     if (offsets) {
       // Anchor the run to its true grid rect. The clip means a
       // fallback glyph whose advance ≠ one cell stays inside its own

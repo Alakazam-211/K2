@@ -54,15 +54,18 @@ function renderRow(row: RenderRun[], cellWidth = CELL_W, cellHeight = CELL_H) {
 describe('TerminalRow column anchoring', () => {
   it('anchors the run after braille art at its model column, independent of the braille run\'s natural width', () => {
     // 5 braille code points (incl. U+2800 BRAILLE BLANK padding) = 5
-    // columns. The daemon omits `cols` (span == char count); the
-    // following run must sit at 5 × cellWidth regardless of how any
-    // font would advance the braille glyphs.
+    // columns. Braille is exotic → one span per char, each at its
+    // own cell; the following ASCII run must sit at 5 × cellWidth
+    // regardless of how any font would advance the braille glyphs.
     const { spans } = renderRow([run('⠋⠙⠀⠀⠈'), run('MENU')])
-    expect(spans).toHaveLength(2)
-    expect(spans[0].style.left).toBe('0px')
-    expect(spans[0].style.width).toBe(`${5 * CELL_W}px`)
-    expect(spans[1].style.left).toBe(`${5 * CELL_W}px`)
-    expect(spans[1].style.width).toBe(`${4 * CELL_W}px`)
+    expect(spans).toHaveLength(6)
+    for (let c = 0; c < 5; c++) {
+      expect(spans[c].style.left).toBe(`${c * CELL_W}px`)
+      expect(spans[c].style.width).toBe(`${CELL_W}px`)
+    }
+    expect(spans[5].style.left).toBe(`${5 * CELL_W}px`)
+    expect(spans[5].style.width).toBe(`${4 * CELL_W}px`)
+    expect(spans[5].textContent).toBe('MENU')
   })
 
   it('positions every run absolutely with overflow clipped to its cell rect', () => {
@@ -75,14 +78,20 @@ describe('TerminalRow column anchoring', () => {
   })
 
   it('advances by the wire cols span after a wide-char run, not the char count', () => {
-    // 日本 = 2 chars, 4 columns → the next run starts at column 4.
+    // 日本 = 2 chars, 4 columns. Wide chars are exotic → one span
+    // per char, each 2 cells wide; the next run starts at column 4.
     const { spans } = renderRow([run('日本', { cols: 4 }), run('!')])
-    expect(spans[0].style.width).toBe(`${4 * CELL_W}px`)
-    expect(spans[1].style.left).toBe(`${4 * CELL_W}px`)
+    expect(spans).toHaveLength(3)
+    expect(spans[0].style.left).toBe('0px')
+    expect(spans[0].style.width).toBe(`${2 * CELL_W}px`)
+    expect(spans[1].style.left).toBe(`${2 * CELL_W}px`)
+    expect(spans[1].style.width).toBe(`${2 * CELL_W}px`)
+    expect(spans[2].style.left).toBe(`${4 * CELL_W}px`)
   })
 
   it('accumulates offsets across mixed annotated/unannotated runs', () => {
-    // ab | 日本(4) | cd → starts 0, 2, 6.
+    // ab | 日本(4) | cd → run starts 0, 2, 6; the wide run splits
+    // into per-char cells at columns 2 and 4.
     const { spans } = renderRow([
       run('ab'),
       run('日本', { cols: 4 }),
@@ -91,8 +100,10 @@ describe('TerminalRow column anchoring', () => {
     expect(spans.map((s) => s.style.left)).toEqual([
       '0px',
       `${2 * CELL_W}px`,
+      `${4 * CELL_W}px`,
       `${6 * CELL_W}px`,
     ])
+    expect(spans.map((s) => s.textContent)).toEqual(['ab', '日', '本', 'cd'])
   })
 
   it('fixes the row box at one cell height with relative positioning', () => {
@@ -123,5 +134,122 @@ describe('TerminalRow column anchoring', () => {
     // Legacy ch-width pinning still applies to annotated runs.
     expect(spans[1].style.width).toBe('4ch')
     expect(spans[1].style.display).toBe('inline-block')
+  })
+})
+
+describe('TerminalRow per-character cell anchoring (exotic runs)', () => {
+  // The shimmer defect these tests pin: grok's braille logo animates
+  // its colors, so every frame the SAME characters arrive sliced
+  // into DIFFERENT runs. With one flowing span per run, each frame
+  // clipped the fallback font's internal overflow at different run
+  // boundaries → glyphs popped in/out and the art grew/shrank as it
+  // shimmered. Per-char cells make each glyph's rect a function of
+  // its column alone, so geometry is invariant under re-slicing.
+
+  const BRAILLE_10 = '⠋⠙⠚⠀⠓⠛⠀⠊⠋⠁' // 10 code points, 10 columns
+
+  function glyphGeometry(row: RenderRun[]): Array<[string, string, string]> {
+    // [text, left, width] of every glyph span (skip bg underlays,
+    // which are empty).
+    const { spans } = renderRow(row)
+    return spans
+      .filter((s) => s.textContent !== '')
+      .map((s) => [s.textContent ?? '', s.style.left, s.style.width])
+  }
+
+  it('renders one span per braille char, each at its exact column', () => {
+    const { spans } = renderRow([run(BRAILLE_10)])
+    expect(spans).toHaveLength(10)
+    spans.forEach((s, c) => {
+      expect(s.style.left).toBe(`${c * CELL_W}px`)
+      expect(s.style.width).toBe(`${CELL_W}px`)
+      expect(s.style.position).toBe('absolute')
+      expect(s.style.overflow).toBe('hidden')
+      expect(s.style.whiteSpace).toBe('pre')
+      expect(s.style.textAlign).toBe('center')
+    })
+  })
+
+  it('SHIMMER INVARIANCE: per-char geometry is identical however the same text is sliced into runs', () => {
+    // One 10-char braille run vs the same chars split 3/4/3 with
+    // different colors (what a shimmer animation does every frame).
+    const whole = glyphGeometry([run(BRAILLE_10)])
+    const sliced = glyphGeometry([
+      run(BRAILLE_10.slice(0, 3), { fg: 0xff0000 }),
+      run(BRAILLE_10.slice(3, 7), { fg: 0x00ff00 }),
+      run(BRAILLE_10.slice(7), { fg: 0x0000ff }),
+    ])
+    expect(sliced).toEqual(whole)
+    // And a different slicing again (2/5/3) — still identical.
+    const resliced = glyphGeometry([
+      run(BRAILLE_10.slice(0, 2), { fg: 0x123456 }),
+      run(BRAILLE_10.slice(2, 7)),
+      run(BRAILLE_10.slice(7), { bold: true }),
+    ])
+    expect(resliced).toEqual(whole)
+  })
+
+  it('keeps a plain ASCII run as ONE flowing span', () => {
+    const { spans } = renderRow([run('ls -la | grep foo')])
+    expect(spans).toHaveLength(1)
+    expect(spans[0].textContent).toBe('ls -la | grep foo')
+  })
+
+  it('gives each wide (CJK) char a 2-cell rect', () => {
+    const { spans } = renderRow([run('日本語', { cols: 6 })])
+    expect(spans).toHaveLength(3)
+    spans.forEach((s, c) => {
+      expect(s.style.left).toBe(`${c * 2 * CELL_W}px`)
+      expect(s.style.width).toBe(`${2 * CELL_W}px`)
+    })
+  })
+
+  it('paints the run background as ONE underlay spanning the full run box, glyph spans transparent', () => {
+    const { spans } = renderRow([run('⠋⠙⠈', { bg: 0x102030 })])
+    expect(spans).toHaveLength(4)
+    const underlay = spans[0]
+    expect(underlay.textContent).toBe('')
+    expect(underlay.style.backgroundColor).toBe('rgb(16, 32, 48)')
+    expect(underlay.style.left).toBe('0px')
+    expect(underlay.style.width).toBe(`${3 * CELL_W}px`)
+    for (const glyph of spans.slice(1)) {
+      expect(glyph.style.backgroundColor).toBe('')
+    }
+  })
+
+  it('inverse-video exotic run gets its block from the underlay (swapped colors)', () => {
+    const { spans } = renderRow([run('⠋⠙', { inverse: true })])
+    expect(spans).toHaveLength(3)
+    // Inverse with default colors: bg becomes the default fg.
+    expect(spans[0].style.backgroundColor).toBe('rgb(224, 224, 224)')
+    for (const glyph of spans.slice(1)) {
+      expect(glyph.style.backgroundColor).toBe('')
+      expect(glyph.style.color).toBe('rgb(0, 0, 0)')
+    }
+  })
+
+  it('folds a zero-width follower into its base char\'s cell', () => {
+    // e + combining acute + 日 : 3 code points over 3 columns.
+    const { spans } = renderRow([run('é日', { cols: 3 })])
+    expect(spans).toHaveLength(2)
+    expect(spans[0].textContent).toBe('é')
+    expect(spans[0].style.width).toBe(`${CELL_W}px`)
+    expect(spans[1].textContent).toBe('日')
+    expect(spans[1].style.left).toBe(`${CELL_W}px`)
+    expect(spans[1].style.width).toBe(`${2 * CELL_W}px`)
+  })
+
+  it('iterates by code point, not UTF-16 unit (non-BMP emoji)', () => {
+    // 😀 = one code point, two UTF-16 units, two columns.
+    const { spans } = renderRow([run('😀🚀', { cols: 4 })])
+    expect(spans).toHaveLength(2)
+    expect(spans[0].textContent).toBe('😀')
+    expect(spans[1].style.left).toBe(`${2 * CELL_W}px`)
+    expect(spans[1].style.width).toBe(`${2 * CELL_W}px`)
+  })
+
+  it('does not split exotic runs in the unmeasured (pre-layout) fallback', () => {
+    const { spans } = renderRow([run('⠋⠙⠈')], 0, 0)
+    expect(spans).toHaveLength(1)
   })
 })

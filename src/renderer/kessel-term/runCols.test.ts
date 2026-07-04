@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 import {
   colToTextIndex,
   rowColSpan,
+  runCells,
   runColOffsets,
   runColSpan,
+  runNeedsPerCharCells,
   sliceRowByCols,
   type ColRun,
 } from './runCols'
@@ -150,5 +152,86 @@ describe('sliceRowByCols', () => {
     expect(sliceRowByCols(wideRow, 4, 4)).toBe('')
     expect(sliceRowByCols(wideRow, 6, 2)).toBe('')
     expect(sliceRowByCols([], 0, 5)).toBe('')
+  })
+})
+
+describe('runNeedsPerCharCells', () => {
+  it('is false for printable ASCII (the fast path) and for the empty string', () => {
+    expect(runNeedsPerCharCells('')).toBe(false)
+    expect(runNeedsPerCharCells('ls -la | grep "foo" ~!@#$%^&*()')).toBe(false)
+  })
+
+  it('is false for plain non-ASCII text whose advance is trustworthy', () => {
+    expect(runNeedsPerCharCells('café naïve')).toBe(false) // Latin-1 accents
+    expect(runNeedsPerCharCells('Ω λ π')).toBe(false) // Greek
+    expect(runNeedsPerCharCells('привет')).toBe(false) // Cyrillic
+    expect(runNeedsPerCharCells('—…‘’“”')).toBe(false) // punctuation
+  })
+
+  it('is true for braille patterns (U+2800–28FF), including BRAILLE BLANK', () => {
+    expect(runNeedsPerCharCells('⠋⠙⠚')).toBe(true)
+    expect(runNeedsPerCharCells('⠀')).toBe(true)
+    expect(runNeedsPerCharCells('mixed ⣿ ascii')).toBe(true)
+  })
+
+  it('is true for box drawing, block elements and geometric shapes', () => {
+    expect(runNeedsPerCharCells('┌─┐')).toBe(true) // box drawing
+    expect(runNeedsPerCharCells('▀▄█▓')).toBe(true) // block elements
+    expect(runNeedsPerCharCells('■▶◆')).toBe(true) // geometric shapes
+  })
+
+  it('is true for private-use (powerline / Nerd Font) glyphs', () => {
+    expect(runNeedsPerCharCells('')).toBe(true) // powerline arrow
+    expect(runNeedsPerCharCells('')).toBe(true) // PUA upper bound
+  })
+
+  it('is true for wide chars — same set the column math treats as wide', () => {
+    expect(runNeedsPerCharCells('日本')).toBe(true) // CJK
+    expect(runNeedsPerCharCells('안녕')).toBe(true) // Hangul
+    expect(runNeedsPerCharCells('😀')).toBe(true) // non-BMP emoji
+  })
+
+  it('is false for zero-width combining content alone (rides its base cell)', () => {
+    expect(runNeedsPerCharCells('é')).toBe(false)
+    expect(runNeedsPerCharCells('́')).toBe(false)
+  })
+})
+
+describe('runCells', () => {
+  it('splits an unannotated run one column per code point', () => {
+    expect(runCells({ text: '⠋⠙⠈' })).toEqual([
+      { text: '⠋', col: 0, width: 1 },
+      { text: '⠙', col: 1, width: 1 },
+      { text: '⠈', col: 2, width: 1 },
+    ])
+  })
+
+  it('gives wide chars 2-column cells in annotated runs', () => {
+    expect(runCells({ text: 'a日b', cols: 4 })).toEqual([
+      { text: 'a', col: 0, width: 1 },
+      { text: '日', col: 1, width: 2 },
+      { text: 'b', col: 3, width: 1 },
+    ])
+  })
+
+  it('folds zero-width followers into the preceding cell', () => {
+    expect(runCells({ text: 'éx', cols: 2 })).toEqual([
+      { text: 'é', col: 0, width: 1 },
+      { text: 'x', col: 1, width: 1 },
+    ])
+  })
+
+  it('iterates by code point: a non-BMP emoji is ONE cell of width 2', () => {
+    expect(runCells({ text: '😀!', cols: 3 })).toEqual([
+      { text: '😀', col: 0, width: 2 },
+      { text: '!', col: 2, width: 1 },
+    ])
+  })
+
+  it('cell columns agree with the run span used for the NEXT run\'s offset', () => {
+    const run: ColRun = { text: '日本', cols: 4 }
+    const cells = runCells(run)
+    const last = cells[cells.length - 1]
+    expect(last.col + last.width).toBe(runColSpan(run))
   })
 })

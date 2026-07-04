@@ -18,6 +18,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 import {
   agentDisplayName,
   setAgentDisplayName,
+  setChatSession,
   resumeChatArgs,
   reconcileColdBootSession,
   type ResumeChatArgs,
@@ -48,6 +49,29 @@ describe('workspace-agent — Plan B host-aware migration', () => {
     expect(daemonCliGet).toHaveBeenCalledWith('workspace/set-agent-display-name', {
       project: '/work/proj',
       name: 'lead',
+    })
+  })
+
+  // Slice 4 — multi-agent canonical picker: the dropdown persists the
+  // picked session's PROVIDER alongside its id so the daemon stamps
+  // workspace_sessions.harness and the resume resolver speaks the
+  // right grammar on the next ensure.
+  it('setChatSession sends the picked provider alongside the session id', async () => {
+    daemonCliGet.mockResolvedValueOnce({ success: true })
+    await setChatSession('/work/proj', 'sid-9', 'pi')
+    expect(daemonCliGet).toHaveBeenCalledWith('workspace/set-chat-session', {
+      project: '/work/proj',
+      session_id: 'sid-9',
+      provider: 'pi',
+    })
+  })
+
+  it('setChatSession OMITS provider when not given (keep stored harness)', async () => {
+    daemonCliGet.mockResolvedValueOnce({ success: true })
+    await setChatSession('/work/proj', 'sid-9')
+    expect(daemonCliGet).toHaveBeenCalledWith('workspace/set-chat-session', {
+      project: '/work/proj',
+      session_id: 'sid-9',
     })
   })
 
@@ -85,17 +109,56 @@ describe('reconcileColdBootSession (GH#679 revive + GH#681 no-phantom-resume)', 
     // JSON still carries the pre-switch `layout-old`. On cold boot SQLite wins.
     const result = reconcileColdBootSession(
       'layout-old',
-      ca({ resumeSession: 'sqlite-new', resumedExisting: true }),
+      ca({
+        resumeSession: 'sqlite-new',
+        resumedExisting: true,
+        args: ['--resume', 'sqlite-new'],
+      }),
     )
-    expect(result).toEqual({ kind: 'resume', sessionId: 'sqlite-new' })
+    expect(result).toEqual({
+      kind: 'resume',
+      sessionId: 'sqlite-new',
+      command: 'claude',
+      args: ['--resume', 'sqlite-new'],
+    })
   })
 
   it('RESUMES the layout hint when SQLite matches it (no-op, real conversation)', () => {
     const result = reconcileColdBootSession(
       'same-sid',
-      ca({ resumeSession: 'same-sid', resumedExisting: true }),
+      ca({
+        resumeSession: 'same-sid',
+        resumedExisting: true,
+        args: ['--resume', 'same-sid'],
+      }),
     )
-    expect(result).toEqual({ kind: 'resume', sessionId: 'same-sid' })
+    expect(result).toEqual({
+      kind: 'resume',
+      sessionId: 'same-sid',
+      command: 'claude',
+      args: ['--resume', 'same-sid'],
+    })
+  })
+
+  // Slice 4 — the resume decision carries the DAEMON's command+args
+  // verbatim, so a non-claude canonical session cold-boots in its own
+  // harness grammar (the renderer never rebuilds claude argv).
+  it('resume decision trusts the daemon command/args for a non-claude harness', () => {
+    const result = reconcileColdBootSession(
+      'layout-old',
+      ca({
+        command: 'codex',
+        args: ['resume', 'codex-sid'],
+        resumeSession: 'codex-sid',
+        resumedExisting: true,
+      }),
+    )
+    expect(result).toEqual({
+      kind: 'resume',
+      sessionId: 'codex-sid',
+      command: 'codex',
+      args: ['resume', 'codex-sid'],
+    })
   })
 
   it('GH#681: does NOT --resume when SQLite pre-allocated a FRESH UUID (resumedExisting=false)', () => {
@@ -112,8 +175,9 @@ describe('reconcileColdBootSession (GH#679 revive + GH#681 no-phantom-resume)', 
     )
     expect(result).toEqual({
       kind: 'fresh',
-      args: ['--dangerously-skip-permissions', '--session-id', 'pre-allocated-uuid'],
       sessionId: 'pre-allocated-uuid',
+      command: 'claude',
+      args: ['--dangerously-skip-permissions', '--session-id', 'pre-allocated-uuid'],
     })
     // Hard guard: the resulting args must never contain --resume.
     if (result.kind === 'fresh') {

@@ -45,19 +45,27 @@ export async function setAgentDisplayName(
   })
 }
 
-/** #657 — persist the pinned chat tab's canonical Claude session id to
- *  the daemon DB (`workspace_sessions.session_id`). Called on the
- *  dismiss-reap path BEFORE the chat PTY is closed so `claude --resume`
- *  has a target when the workspace is re-opened. (GET-with-mutation,
+/** #657 — persist the pinned chat tab's canonical session id to the
+ *  daemon DB (`workspace_sessions.session_id`). Called on the
+ *  dismiss-reap path BEFORE the chat PTY is closed so the resume has a
+ *  target when the workspace is re-opened. (GET-with-mutation,
  *  mirroring `setAgentDisplayName` — the daemon route reads query
- *  params.) Resolves to the daemon's update result. */
+ *  params.) Resolves to the daemon's update result.
+ *
+ *  Slice 4 (agent-degeneralization) — `provider` is the harness that
+ *  owns the picked session ("claude"/"pi"/"codex"/…). When present the
+ *  daemon persists it to `workspace_sessions.harness` alongside the id
+ *  so the resume resolver picks the right ProviderResume adapter.
+ *  Omitted = keep the stored harness (backward compatible). */
 export async function setChatSession(
   projectPath: string,
   sessionId: string,
+  provider?: string,
 ): Promise<void> {
   await daemonCliGet('workspace/set-chat-session', {
     project: projectPath,
     session_id: sessionId,
+    ...(provider ? { provider } : {}),
   })
 }
 
@@ -72,10 +80,20 @@ export interface ResumeChatArgs {
    *  to decide whether the daemon's canonical session should override the
    *  renderer's layout hint (GH#679). */
   resumedExisting?: boolean
+  /** Slice 3 (additive) — the harness that owns the resolved session
+   *  ("claude"/"pi"/"codex"/…). The daemon's `command`/`args` already
+   *  speak this provider's grammar; the renderer never rebuilds argv. */
+  provider?: string
+  /** Slice 3 (additive) — `true` when the provider mints its own session
+   *  ids (pi/codex/gemini/cursor fresh spawn): the daemon spawned bare
+   *  and will adopt the discovered id post-hoc. */
+  pendingSessionDiscovery?: boolean
 }
 
-/** Resolve the `claude --resume <session>` (or fresh `claude`) launch args
- *  for the workspace's pinned chat tab. camelCase response. */
+/** Resolve the resume (or fresh) launch args for the workspace's pinned
+ *  chat tab. The daemon's multi-agent resolver returns the stored
+ *  harness's own command + grammar (Slice 3) — `claude --resume <id>`,
+ *  `codex resume <id>`, `pi --session <id>`, … camelCase response. */
 export async function resumeChatArgs(projectPath: string): Promise<ResumeChatArgs> {
   return daemonCliGet<ResumeChatArgs>('workspace/resume-chat-args', {
     project: projectPath,
@@ -83,23 +101,27 @@ export async function resumeChatArgs(projectPath: string): Promise<ResumeChatArg
 }
 
 /** The cold-boot Step-0 launch decision. The pinned chat must only
- *  `--resume` a session that ACTUALLY EXISTS on disk; otherwise claude
- *  errors with "No conversation found with session ID: <uuid>"
- *  (GH#681). The daemon already knows the answer via `resumedExisting`,
+ *  resume a session that ACTUALLY EXISTS on disk; otherwise the agent
+ *  errors (claude: "No conversation found with session ID: <uuid>",
+ *  GH#681). The daemon already knows the answer via `resumedExisting`,
  *  so this decision encodes WHICH command shape to spawn:
  *
- *   - `resume`   → `claude --dangerously-skip-permissions --resume <sessionId>`
- *                  (a real prior conversation — preserves GH#679 revive).
- *   - `fresh`    → spawn the daemon's returned `args` verbatim
- *                  (`--session-id <new>` — a clean NEW session pinned to
- *                  the persisted UUID; NEVER `--resume`).
- *   - `fallback` → daemon read failed; we couldn't verify the session.
- *                  Resume the layout hint to preserve offline / DB-race
- *                  resilience (the canonical-lane-restore design).
+ *   - `resume`   → spawn the daemon's `command` + `args` verbatim (a
+ *                  real prior conversation — preserves GH#679 revive).
+ *                  The args already speak the session's own provider
+ *                  grammar (Slice 4: no renderer-built claude argv).
+ *   - `fresh`    → spawn the daemon's `command` + `args` verbatim
+ *                  (premint `--session-id <new>` for claude/grok, bare
+ *                  spawn for self-minting providers; NEVER a resume).
+ *   - `fallback` → daemon read failed; we couldn't verify the session
+ *                  OR resolve its harness. Resume the layout hint to
+ *                  preserve offline / DB-race resilience (the
+ *                  canonical-lane-restore design) — the caller degrades
+ *                  to claude grammar, the only honest offline guess.
  */
 export type ColdBootDecision =
-  | { kind: 'resume'; sessionId: string }
-  | { kind: 'fresh'; args: string[]; sessionId: string }
+  | { kind: 'resume'; sessionId: string; command: string; args: string[] }
+  | { kind: 'fresh'; sessionId: string; command: string; args: string[] }
   | { kind: 'fallback'; sessionId: string }
 
 /** GH#679 + GH#681 — cold-boot revive reconciliation. Given the
@@ -132,15 +154,19 @@ export function reconcileColdBootSession(
   }
   if (canonical.resumedExisting) {
     // A real prior conversation. SQLite wins when it differs from the
-    // layout hint; otherwise the hint and the canonical agree.
+    // layout hint; otherwise the hint and the canonical agree. The
+    // daemon's command+args already resume THAT session in the stored
+    // harness's own grammar (Slice 4) — spawn them verbatim.
     const sessionId = canonical.resumeSession || layoutHint
-    return { kind: 'resume', sessionId }
+    return { kind: 'resume', sessionId, command: canonical.command, args: canonical.args }
   }
-  // resumedExisting === false → fresh pre-allocated session. Use the
-  // daemon's args directly (they are `--session-id <new>`). NEVER resume.
+  // resumedExisting === false → fresh session. Use the daemon's
+  // command+args directly (premint `--session-id <new>` or a bare
+  // self-minting spawn). NEVER resume.
   return {
     kind: 'fresh',
-    args: canonical.args,
     sessionId: canonical.resumeSession || layoutHint,
+    command: canonical.command,
+    args: canonical.args,
   }
 }

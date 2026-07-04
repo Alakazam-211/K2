@@ -92,12 +92,19 @@ pub fn spawn_wake_via_session_stream(
     // that competes with the user's tab in find_live_for_resume).
     // See longer rationale in wake::spawn_wake_headless.
     //
-    // Slice 3: `--print`/`--session-id` + the positional prompt are
-    // Claude grammar — a non-claude default spawns the preset's own
-    // command+args bare (no pre-minted id, wake prompt NOT delivered)
-    // until the ProviderResume adapter lands.
-    let claude_grammar = resolved.is_claude();
-    let args = if claude_grammar {
+    // Slice 3b: `--print` + the positional prompt stay Claude grammar
+    // (byte-identical argv). A non-claude default routes through the
+    // ProviderResume adapter: premint providers (grok) pin the
+    // pre-allocated uuid with their own flag; self-minting providers
+    // spawn bare and adopt the discovered id post-hoc; unknown
+    // providers spawn bare with no invented flags. The wake prompt is
+    // still only deliverable positionally (claude) on this legacy
+    // path — non-claude spawns receive no prompt (Kessel-T0 opt-in
+    // surface; per-agent prompt delivery is Slice 5).
+    let adapter = k2_core::workspace::provider_resume::provider_resume_for_command(
+        &resolved.command,
+    );
+    let (args, session_id_pinned) = if resolved.is_claude() {
         let mut args = resolved.args.clone();
         k2_core::workspace::agent_resolve::ensure_flag(
             &mut args,
@@ -109,9 +116,12 @@ pub fn spawn_wake_via_session_stream(
             pinned_session_id.clone(),
             wake_prompt.to_string(),
         ]);
-        args
+        (args, true)
     } else {
-        resolved.args.clone()
+        match adapter.and_then(|a| a.premint_args(&resolved.args, &pinned_session_id)) {
+            Some(args) => (args, true),
+            None => (resolved.args.clone(), false),
+        }
     };
     let outcome = spawn_agent_session_v2_blocking(SpawnWorkspaceSessionRequest {
         agent_name: agent_name.to_string(),
@@ -131,11 +141,12 @@ pub fn spawn_wake_via_session_stream(
         Some("system".to_string()),
     );
 
-    // Synchronous per-heartbeat session stamp. Slice 3: the pinned id
-    // was only actually passed (via --session-id) under Claude grammar;
-    // don't stamp a ghost id for a foreign agent.
+    // Synchronous per-heartbeat session stamp. Slice 3b: the pinned id
+    // was only actually passed when a premint flag carried it (claude
+    // `--session-id`, grok `--session-id`); don't stamp a ghost id for
+    // a bare self-minting spawn.
     if let Some(hb_name) = heartbeat_name {
-        if claude_grammar {
+        if session_id_pinned {
             let db = k2_core::db::shared();
             let conn = db.lock();
             if let Some(project_id) =
@@ -145,6 +156,19 @@ pub fn spawn_wake_via_session_stream(
                     &conn, &project_id, hb_name, &pinned_session_id,
                 );
             }
+        }
+    }
+
+    // Slice 3b: self-minting providers (pi/codex/gemini/cursor) get
+    // their on-disk id adopted into the workspace_sessions SSOT a beat
+    // after spawn. No-op for premint providers (id already pinned) and
+    // unknown commands (nothing to discover).
+    if !session_id_pinned {
+        if let Some(a) = adapter {
+            k2_core::workspace::provider_resume::defer_adopt_discovered_session(
+                a.provider.to_string(),
+                project_path.to_string(),
+            );
         }
     }
 
@@ -232,19 +256,47 @@ pub fn handle_agents_launch(
     };
 
     let mut command = str_field(&launch_info, "command", "claude").to_string();
-    let cwd = str_field(&launch_info, "cwd", project_path).to_string();
+    let mut cwd = str_field(&launch_info, "cwd", project_path).to_string();
     let mut args = str_array(&launch_info, "args");
 
-    // Slice 3: build_launch composes Claude flag grammar
+    // Slice 3b: build_launch composes Claude flag grammar
     // (--dangerously-skip-permissions / --append-system-prompt /
-    // --resume / --fork-session + a positional wake message). When the
-    // RESOLVED default is not claude, spawn the preset's own
-    // command+args bare in the branch-selected cwd instead — no resume
-    // and no wake-prompt injection (correct-but-degraded) until the
-    // ProviderResume adapter teaches build_launch per-agent grammar.
+    // --resume / --fork-session + a positional wake message) — kept
+    // byte-identical for a claude default (and for an explicit
+    // `command` param). When the RESOLVED default is NOT claude, the
+    // launch routes through the canonical resume resolver instead: the
+    // stored harness / workspace default picks the agent, the
+    // ProviderResume adapter supplies its resume/premint grammar, and
+    // self-minting providers spawn bare with post-hoc id adoption. A
+    // provider unknown to the adapter table still spawns the preset's
+    // own command+args bare (no invented flags). The kickoff prompt
+    // stays claude-only (per-agent prompt delivery is Slice 5).
     if let Some(r) = resolved.as_ref().filter(|r| !r.is_claude()) {
-        command = r.command.clone();
-        args = r.args.clone();
+        let routed = k2_core::workspace::provider_resume::provider_resume_for_command(
+            &r.command,
+        )
+        .and_then(|_| {
+            k2_core::workspace::resume_chat::resolve_resume_chat_args(project_path).ok()
+        });
+        match routed {
+            Some(rr) => {
+                command = rr.command.clone();
+                args = rr.args.clone();
+                cwd = rr.cwd.clone();
+                if rr.pending_session_discovery {
+                    k2_core::workspace::provider_resume::defer_adopt_discovered_session(
+                        rr.provider.clone(),
+                        project_path.to_string(),
+                    );
+                }
+            }
+            None => {
+                // Unknown provider (or resolver error): bare preset
+                // spawn in the branch-selected cwd — Slice-2 parity.
+                command = r.command.clone();
+                args = r.args.clone();
+            }
+        }
     }
 
     let project_id = {
@@ -341,11 +393,12 @@ pub fn handle_agents_delegate(
     // `command: "claude"` today, so this fallback is defensive-only —
     // but if the delegate JSON ever omits the command, the
     // workspace/global default agent fills it instead of a bare
-    // literal. Slice 3: the delegate arg vector speaks Claude flag
-    // grammar (--append-system-prompt + positional kickoff), so a
-    // non-claude resolved default spawns the preset's own command+args
-    // bare in the delegated worktree (no task prompt injection) until
-    // the ProviderResume adapter carries per-agent grammar.
+    // literal. Slice 3b judgment call: a delegated worktree is a FRESH,
+    // unregistered workspace (project_id deliberately None below) with
+    // nothing to resume and no workspace_sessions row to premint/adopt
+    // into — so a non-claude resolved default deliberately spawns the
+    // preset's own command+args bare (no invented flags, no task-prompt
+    // injection; delegate kickoff grammar per agent is Slice 5).
     let command = match launch_info.get("command").and_then(|v| v.as_str()) {
         Some(c) => c.to_string(),
         None => {

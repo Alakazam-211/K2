@@ -113,18 +113,20 @@ pub fn spawn_wake_headless(
     // set this env var to a benign command (e.g. `cat`) so the
     // test can exercise the v2 spawn + post-spawn DB writes
     // without requiring `claude` on PATH or burning API calls.
-    // Production never sets this. `claude_grammar` tracks whether the
-    // spawned command speaks Claude's flag/session-id grammar — the
-    // pinned-session stamps below are gated on it (test override keeps
-    // legacy stamping behavior so the integration test's assertions
-    // stay meaningful).
-    let (command, args, claude_grammar) =
+    // Production never sets this. `session_id_pinned` tracks whether
+    // the pinned uuid was actually passed to the child (claude's
+    // `--session-id`, or another premint provider's flag via the
+    // Slice-3 ProviderResume adapter) — the pinned-session stamps
+    // below are gated on it (test override keeps legacy stamping
+    // behavior so the integration test's assertions stay meaningful).
+    let (command, args, session_id_pinned) =
         match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
             Ok(c) if !c.is_empty() => (c, Vec::<String>::new(), true),
             _ if resolved.is_claude() => {
                 let mut args = resolved.args.clone();
                 // Headless wakes can't answer permission prompts —
                 // guarantee the flag even on a customized preset.
+                // CLAUDE-ONLY; never invented for other providers.
                 k2_core::workspace::agent_resolve::ensure_flag(
                     &mut args,
                     "--dangerously-skip-permissions",
@@ -134,12 +136,22 @@ pub fn spawn_wake_headless(
                 (resolved.command.clone(), args, true)
             }
             _ => {
-                // Slice 3: `--session-id` pre-mint (and the skip-
-                // permissions flag) are Claude grammar. A non-claude
-                // default spawns the preset's own command+args bare;
-                // its session id is only discoverable post-hoc, which
-                // lands with the ProviderResume adapter.
-                (resolved.command.clone(), resolved.args.clone(), false)
+                // Slice 3b: non-claude defaults speak their own dialect
+                // via the ProviderResume adapter. Premint providers
+                // (grok) pin the pre-allocated uuid with their own
+                // flag; self-minting providers (pi/codex/gemini/
+                // cursor) and unknown commands spawn the preset's
+                // command+args bare — their session id is adopted
+                // post-hoc below (`defer_stamp_adopted_session`).
+                let premint =
+                    k2_core::workspace::provider_resume::provider_resume_for_command(
+                        &resolved.command,
+                    )
+                    .and_then(|a| a.premint_args(&resolved.args, &pinned_session_id));
+                match premint {
+                    Some(args) => (resolved.command.clone(), args, true),
+                    None => (resolved.command.clone(), resolved.args.clone(), false),
+                }
             }
         };
 
@@ -246,13 +258,16 @@ pub fn spawn_wake_headless(
         let db = k2_core::db::shared();
         let conn = db.lock();
         if let Some(pid) = project_id.as_deref() {
-            // Slice 3: last_session_id is a CLAUDE resume id — only
-            // stamp it when the spawned command speaks Claude grammar
-            // (the pinned uuid was actually passed via --session-id).
-            // A non-claude spawn writes no id; the planner's JSONL
-            // self-heal keeps subsequent fires on the fresh path until
-            // the ProviderResume adapter can adopt foreign ids.
-            if claude_grammar {
+            // Slice 3b: last_session_id is only stamped when the pinned
+            // uuid was actually passed to the child (claude or any
+            // premint provider, e.g. grok) — a bare self-minting spawn
+            // writes no id, so the planner's on-disk self-heal keeps
+            // subsequent fires on the fresh path. The heartbeat resume
+            // path probes the id with the RESOLVED default agent's
+            // adapter (`heartbeat_launch::smart_launch`), so a stale
+            // cross-provider id degrades to a fresh fire, never a
+            // wrong-grammar resume.
+            if session_id_pinned {
                 let _ = k2_core::db::schema::AgentHeartbeat::save_session_id(
                     &conn, pid, hb_name, &pinned_session_id,
                 );
@@ -299,14 +314,30 @@ pub fn spawn_wake_headless(
     // make `workspace_sessions.session_id` the single source of truth
     // (pinned-chat-identity-ssot PRD §4.1a; GH#24). This call keeps the
     // wake path's behavior identical — same agent_name keying, same ~5s
-    // window, same `save_session_id` persistence.
-    // Slice 3: the deferred read-back probes CLAUDE's on-disk session
-    // dir (`newest_claude_session_on_disk`) — for a non-claude spawn it
-    // could adopt an unrelated claude conversation, so it's gated on
-    // claude grammar until the ProviderResume adapter does per-agent
-    // post-hoc id discovery.
-    if heartbeat_name.is_none() && claude_grammar {
-        defer_stamp_adopted_session(project_path.to_string(), agent_name.to_string());
+    // window, same persistence.
+    // Slice 3b: the read-back routes through the ProviderResume
+    // adapter, keyed on the provider of the command that ACTUALLY
+    // spawned — claude keeps its exact `newest_claude_session_on_disk`
+    // probe; other known providers (grok/pi/codex/gemini/cursor) adopt
+    // via their own on-disk walkers; an unknown command no-ops (there
+    // is nothing to discover, and probing claude's dir could adopt an
+    // unrelated conversation). The test override keeps the historical
+    // claude keying so the integration tests' assertions stay
+    // meaningful.
+    if heartbeat_name.is_none() {
+        let adoption_provider: Option<&'static str> = if is_test_override {
+            Some("claude")
+        } else {
+            k2_core::workspace::provider_resume::provider_resume_for_command(&command)
+                .map(|a| a.provider)
+        };
+        if let Some(provider) = adoption_provider {
+            defer_stamp_adopted_session(
+                project_path.to_string(),
+                agent_name.to_string(),
+                provider,
+            );
+        }
     }
 
     // The Arc dropping silently retires the unused outcome metadata.
@@ -316,86 +347,75 @@ pub fn spawn_wake_headless(
 }
 
 /// Deferred post-spawn read-back: stamp `workspace_sessions.session_id`
-/// with the Claude session the spawned PTY **actually adopted on disk**.
+/// (+ a truthful `harness`) with the session the spawned PTY **actually
+/// adopted on disk**.
 ///
 /// This is the eager write-truth-at-the-source half of the pinned-chat
 /// identity SSOT (see `.k2so/prds/pinned-chat-identity-ssot.md` §4.1a).
-/// Claude writes its `.jsonl` a beat after spawn (the session id only
-/// lands once the conversation persists), so we sleep ~5s on a detached
-/// thread, probe the on-disk session dir via
-/// `chat_history::newest_claude_session_on_disk(path)`, then persist the
-/// discovered id through `WorkspaceSession::update_session_id`.
+/// Agents write their on-disk session record a beat after spawn (the
+/// session id only lands once the conversation persists), so we sleep
+/// ~5s on a detached thread, probe the PROVIDER's on-disk store via the
+/// Slice-3 adapter (`provider_resume::adopt_discovered_session` →
+/// `ProviderResume::newest_on_disk`), then persist the discovered id.
 ///
-/// NOTE (smoke-test finding, GH#24): this used to call
-/// `detect_active_session("claude", …)`, which keys on
-/// `~/.claude/history.jsonl` — and that file has no entry for a freshly
-/// spawned, not-yet-messaged chat within the ~5s window, so the eager
-/// stamp was a silent no-op. `newest_claude_session_on_disk` scans
-/// `~/.claude/projects/<hash>/*.jsonl` by mtime, so it catches the
-/// `--session-id`-created file immediately and the stamp actually fires.
+/// Slice 3b: previously this hardcoded claude's
+/// `newest_claude_session_on_disk` probe; the adapter route keeps
+/// claude's probe byte-identical (the adapter's `"claude"` arm IS
+/// `newest_claude_session_on_disk` — GH#24 smoke-test finding: the
+/// projects-dir scan, NOT the lagging `history.jsonl`-keyed detect) and
+/// adds each other provider's own walker. The only delta for claude is
+/// that the stamp now also writes `harness = 'claude'` — truthful, and
+/// identical to the column's default. An unknown `provider` no-ops.
 ///
 /// WHY this matters (GH#24): identity used to be argv-derived and
-/// scattered across three stores, none of which recorded the id Claude
-/// *actually* used. Stamping the adopted id here makes
+/// scattered across three stores, none of which recorded the id the
+/// agent *actually* used. Stamping the adopted id here makes
 /// `workspace_sessions.session_id` truthful at the source, so the
-/// resolver's `claude_session_file_exists` happy-path hits on the next
-/// resolve — no re-mint, no re-resume loop. The 0.39.40 resolver
-/// converge fallback (`resume_chat.rs`) stays as the lazy safety net for
-/// any path that misses this eager stamp.
-///
-/// Shared by the wake path (chat-tab wakes, `heartbeat_name = None`,
-/// passing the real agent folder name) and
-/// `pinned_chat::ensure_pinned_chat` (after a fresh `!reused` spawn,
-/// passing the canonical `project_id` as the agent_name).
+/// resolver's exists-check happy-path hits on the next resolve — no
+/// re-mint, no re-resume loop. The 0.39.40 resolver converge fallback
+/// (`resume_chat.rs`) stays as the lazy safety net for any path that
+/// misses this eager stamp.
 ///
 /// `agent_name` is used only for log context; the persist itself is
 /// keyed on the `project_id` resolved from `project_path` (the
-/// `workspace_sessions` row is `project_id`-unique). We deliberately do
-/// **not** route through `k2so_agents_save_session_id` here: that helper
-/// guards on an on-disk agent dir (`AGENT.md`/`SKILL.md`), which the
-/// pinned-chat canonical key (`agent_name == project_id`) has no reason
-/// to own. Persisting via `update_session_id` keyed on `project_id` is
-/// behavior-equivalent for the wake path (a registered workspace always
-/// has the row) and correct for the pinned chat (identity lives in that
-/// one row — the SSOT).
+/// `workspace_sessions` row is `project_id`-unique).
 ///
 /// Fire-and-forget: errors are logged, never surfaced — the lazy
 /// resolver self-heal (`resume_chat.rs`, 0.39.40) covers a miss.
-pub fn defer_stamp_adopted_session(project_path: String, agent_name: String) {
+pub fn defer_stamp_adopted_session(
+    project_path: String,
+    agent_name: String,
+    provider: &str,
+) {
+    if k2_core::workspace::provider_resume::provider_resume_for_provider(provider)
+        .is_none()
+    {
+        log_debug!(
+            "[daemon/wake] deferred session adoption for {} skipped: unknown provider {:?}",
+            agent_name,
+            provider
+        );
+        return;
+    }
+    let provider = provider.to_string();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(5));
-        let detected =
-            k2_core::chat_history::newest_claude_session_on_disk(&project_path);
-        let Some(session_id) = detected else { return };
-        if session_id.is_empty() {
-            return;
-        }
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let Some(project_id) =
-            k2_core::workspace::agent_identity::resolve_project_id(&conn, &project_path)
-        else {
-            log_debug!(
-                "[daemon/wake] save session id for {} skipped: unregistered project {}",
-                agent_name,
-                project_path
-            );
-            return;
-        };
-        match k2_core::db::schema::WorkspaceSession::update_session_id(
-            &conn,
-            &project_id,
-            &session_id,
+        match k2_core::workspace::provider_resume::adopt_discovered_session(
+            &provider,
+            &project_path,
         ) {
-            Ok(_) => log_debug!(
-                "[daemon/wake] saved session id for {}: {}",
+            Some(session_id) => log_debug!(
+                "[daemon/wake] saved {} session id for {}: {}",
+                provider,
                 agent_name,
                 session_id
             ),
-            Err(e) => log_debug!(
-                "[daemon/wake] save session id for {} failed: {}",
+            None => log_debug!(
+                "[daemon/wake] deferred {} session adoption for {} found nothing to stamp \
+                 (no on-disk session yet, or unregistered project {})",
+                provider,
                 agent_name,
-                e
+                project_path
             ),
         }
     });

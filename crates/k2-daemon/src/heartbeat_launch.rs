@@ -185,13 +185,36 @@ pub fn smart_launch_with_origin(
         .as_deref()
         .and_then(find_live_for_resume);
 
-    // JSONL existence for the self-heal branch — a saved session whose
-    // JSONL was never written (daemon restart in the spawn → wakeup-write
-    // window) would make `claude --resume <ghost>` fail; the planner
-    // routes that to a fresh fire instead.
+    // On-disk existence for the self-heal branch — a saved session
+    // whose on-disk conversation was never written (daemon restart in
+    // the spawn → wakeup-write window) would make a `--resume <ghost>`
+    // fail; the planner routes that to a fresh fire instead.
+    //
+    // Slice 3b: the probe goes through the RESOLVED default agent's
+    // ProviderResume adapter (was a hardcoded
+    // `claude_session_file_exists`). A claude default keeps the
+    // byte-identical probe; a non-claude default probes its own store
+    // (so a grok-preminted `last_session_id` verifies against grok's
+    // sessions dir); an unknown provider can never verify → treated as
+    // missing, so the planner self-heals to a fresh fire (clearing the
+    // ghost id) instead of attempting a wrong-grammar resume. The same
+    // gate also self-heals a CROSS-provider stale id (default agent
+    // changed after the id was stamped): the new provider's store
+    // doesn't contain it → fresh fire.
+    let resolved_default = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_resolve::resolve_agent_command(&conn, project_path)
+    };
     let saved_jsonl_exists = saved_session
         .as_deref()
-        .map(|s| k2_core::chat_history::claude_session_file_exists(s, project_path))
+        .map(|s| {
+            k2_core::workspace::provider_resume::provider_resume_for_command(
+                &resolved_default.command,
+            )
+            .map(|adapter| adapter.session_file_exists(s, project_path))
+            .unwrap_or(false)
+        })
         .unwrap_or(false);
 
     // ── Pure branch selection ──────────────────────────────────────────
@@ -244,12 +267,12 @@ pub fn smart_launch_with_origin(
                 // Unreachable: planner returned Inject only when a
                 // candidate existed. Defensive fall-through to resume.
                 run_resume_and_fire(project_path, &project_id, &agent_name, &hb,
-                    &wakeup_abs, &session_id, catchup_of)
+                    &wakeup_abs, &session_id, &resolved_default, catchup_of)
             }
         }
         LaunchDecision::ResumeAndFire { claude_session_id } => {
             run_resume_and_fire(project_path, &project_id, &agent_name, &hb,
-                &wakeup_abs, &claude_session_id, catchup_of)
+                &wakeup_abs, &claude_session_id, &resolved_default, catchup_of)
         }
         // The pure planner never returns the Skipped* variants — those
         // are produced earlier in this function before branch selection.
@@ -400,18 +423,13 @@ fn find_live_for_resume(session_id: &str) -> Option<(String, session_lookup::Liv
     // the user wonders where their wakeup went.
     let mut matches: Vec<(String, session_lookup::LiveSession)> = Vec::new();
     for (agent, live) in session_lookup::snapshot_all() {
-        let args = live.args();
-        let mut i = 0;
-        let mut found = false;
-        while i + 1 < args.len() {
-            if (args[i] == "--session-id" || args[i] == "--resume")
-                && args[i + 1] == session_id
-            {
-                found = true;
-                break;
-            }
-            i += 1;
-        }
+        // Slice 3b: grammar-aware match (adds pi's `--session`, codex's
+        // leading `resume <id>` subcommand, `-r`) — strictly widens the
+        // old `--session-id`/`--resume` pair scan.
+        let found = k2_core::workspace::provider_resume::argv_references_session(
+            &live.args(),
+            session_id,
+        );
         // 0.39.x dismiss-reap safety: only argv-matched PTYs whose
         // child is actually alive count. A registered-but-dead session
         // (ChildExit observed, unregister not yet run) must NOT be
@@ -615,6 +633,68 @@ fn run_inject(
     })
 }
 
+/// How the wakeup prompt reaches a resumed session
+/// ([`plan_resume_fire`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumePromptDelivery {
+    /// Claude's `--print` one-shot: the prompt rides argv as the
+    /// positional user turn; claude responds + exits (ephemeral PTY).
+    PositionalArg,
+    /// Every other known provider: interactive resume, prompt written
+    /// into the PTY after a startup settle (the same two-phase write
+    /// `wake_headless` uses). No flags are invented.
+    PtyWrite(String),
+}
+
+/// Pure argv assembly for the ResumeAndFire branch (Slice 3b).
+///
+/// - claude → BYTE-IDENTICAL to the pre-Slice-3 hardcode:
+///   `<preset args> --dangerously-skip-permissions? --print --resume
+///   <sid> <prompt>` (the skip flag is guaranteed once, claude-only),
+///   delivered positionally.
+/// - any other provider with a ProviderResume adapter → the adapter's
+///   own resume grammar (`grok --resume <sid>`, `codex resume <sid>`,
+///   `pi --session <sid>`), spawned interactively with the prompt
+///   PTY-written post-spawn.
+/// - unknown provider → `None`; the caller degrades to a fresh fire
+///   (the Slice-2 gate behavior, now scoped to genuinely unknown
+///   commands like hermes).
+pub fn plan_resume_fire(
+    resolved: &k2_core::workspace::agent_resolve::ResolvedAgentCommand,
+    session_id: &str,
+    prompt: &str,
+) -> Option<(Vec<String>, ResumePromptDelivery)> {
+    if resolved.is_claude() {
+        // Resume + --print: rejoin the saved conversation, deliver the
+        // wakeup as the next user turn, claude responds + exits. PTY is
+        // ephemeral so it doesn't accumulate stale entries in the
+        // daemon session map. Base args come from the resolved preset
+        // (so a customized claude preset keeps its flags); headless
+        // fires can't answer permission prompts, so the skip flag is
+        // guaranteed (CLAUDE-ONLY — never invented for others).
+        let mut args = resolved.args.clone();
+        k2_core::workspace::agent_resolve::ensure_flag(
+            &mut args,
+            "--dangerously-skip-permissions",
+        );
+        args.extend([
+            "--print".to_string(),
+            "--resume".to_string(),
+            session_id.to_string(),
+            prompt.to_string(),
+        ]);
+        return Some((args, ResumePromptDelivery::PositionalArg));
+    }
+    let adapter = k2_core::workspace::provider_resume::provider_resume_for_command(
+        &resolved.command,
+    )?;
+    Some((
+        adapter.resume_args(&resolved.args, session_id),
+        ResumePromptDelivery::PtyWrite(prompt.to_string()),
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_resume_and_fire(
     project_path: &str,
     project_id: &str,
@@ -622,49 +702,21 @@ fn run_resume_and_fire(
     hb: &AgentHeartbeat,
     wakeup_abs: &Path,
     session_id: &str,
+    resolved: &k2_core::workspace::agent_resolve::ResolvedAgentCommand,
     catchup_of: Option<&str>,
 ) -> serde_json::Value {
     let Some(prompt) = wake::compose_wake_prompt_from_path(wakeup_abs) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
 
-    // Agent-degeneralization S2: the resume spawn used to hardcode
-    // `claude`; resolve the workspace/global default instead.
-    let resolved = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::workspace::agent_resolve::resolve_agent_command(&conn, project_path)
-    };
-    // Slice 3: ResumeAndFire speaks Claude flag grammar (`--print` /
-    // `--resume <claude-session>`), and the saved id IS a claude
-    // session (the planner verified its JSONL). When the resolved
-    // default is NOT claude, degrade to a fresh fire — the fresh path
-    // spawns the preset's own command+args bare and delivers the
-    // wakeup via PTY write, no Claude flags. Proper foreign-agent
-    // resume lands with the ProviderResume adapter.
-    if !resolved.is_claude() {
+    // Slice 3b: the resume argv + prompt-delivery mode come from the
+    // provider adapter (claude byte-identical; other known providers
+    // resume interactively in their own grammar). A resolved default
+    // with NO adapter (hermes, custom commands) can't resume the saved
+    // session — degrade to a fresh fire, exactly the Slice-2 gate.
+    let Some((args, delivery)) = plan_resume_fire(resolved, session_id, &prompt) else {
         return run_fresh_fire(project_path, project_id, agent_name, hb, wakeup_abs, catchup_of);
-    }
-
-    // Resume + --print: rejoin the saved conversation, deliver the
-    // wakeup as the next user turn, claude responds + exits. PTY is
-    // ephemeral so it doesn't accumulate stale entries in the daemon
-    // session map. The user's tab (if/when they open one) becomes
-    // the canonical long-lived view via openHeartbeatTab's interactive
-    // --resume. Base args come from the resolved preset (so a
-    // customized claude preset keeps its flags); headless fires can't
-    // answer permission prompts, so the skip flag is guaranteed.
-    let mut args = resolved.args.clone();
-    k2_core::workspace::agent_resolve::ensure_flag(
-        &mut args,
-        "--dangerously-skip-permissions",
-    );
-    args.extend([
-        "--print".to_string(),
-        "--resume".to_string(),
-        session_id.to_string(),
-        prompt,
-    ]);
+    };
 
     // 0.37.8 — register the resumed PTY under the heartbeat's own
     // canonical key (`<project_id>:hb:<name>`) so it doesn't collide
@@ -691,6 +743,29 @@ fn run_resume_and_fire(
 
     match outcome {
         Ok(out) => {
+            // Slice 3b — non-claude resume is interactive; deliver the
+            // wakeup into the freshly-resumed PTY with the same
+            // two-phase settle write `wake_headless` uses (body →
+            // 150ms → CR after a startup beat). Claude's --print path
+            // carried the prompt positionally and skips this.
+            if let ResumePromptDelivery::PtyWrite(prompt) = delivery {
+                if let Some(session) =
+                    crate::v2_session_map::lookup_by_session_id(&out.session_id)
+                {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(1500));
+                        session.write(prompt.into_bytes());
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                        session.write(b"\r".to_vec());
+                    });
+                } else {
+                    k2_core::log_debug!(
+                        "[heartbeat] post-resume lookup miss for session={} — wakeup body not delivered",
+                        out.session_id
+                    );
+                }
+            }
+
             // 0.37.8 — heartbeat fires don't touch workspace_sessions;
             // that row is the chat tab's lane. The pre-fix
             // `k2so_agents_lock` call stamped the chat tab's
@@ -1097,5 +1172,93 @@ mod decision_tests {
             saved_jsonl_exists: false,
         };
         assert_eq!(plan_launch_decision(&inputs), LaunchDecision::FreshFire);
+    }
+
+    // ── plan_resume_fire — Slice 3b adapter-aware resume argv ────────
+
+    use k2_core::workspace::agent_resolve::{ResolvedAgentCommand, ResolvedAgentSource};
+
+    fn resolved_cmd(command: &str, args: &[&str]) -> ResolvedAgentCommand {
+        ResolvedAgentCommand {
+            command: command.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            preset_id: None,
+            source: ResolvedAgentSource::FallbackClaude,
+        }
+    }
+
+    /// CLAUDE PIN — the ResumeAndFire argv must stay byte-identical to
+    /// the pre-Slice-3 hardcode, prompt delivered positionally.
+    #[test]
+    fn plan_resume_fire_claude_argv_is_byte_identical() {
+        let r = resolved_cmd("claude", &["--dangerously-skip-permissions"]);
+        let (args, delivery) =
+            plan_resume_fire(&r, "SID-123", "WAKE BODY").expect("claude always plans");
+        assert_eq!(
+            args,
+            vec![
+                "--dangerously-skip-permissions".to_string(),
+                "--print".to_string(),
+                "--resume".to_string(),
+                "SID-123".to_string(),
+                "WAKE BODY".to_string(),
+            ],
+            "claude resume-and-fire argv must be byte-identical to pre-Slice-3"
+        );
+        assert_eq!(delivery, ResumePromptDelivery::PositionalArg);
+
+        // A customized claude preset keeps its flags and the skip flag
+        // is guaranteed exactly once.
+        let r = resolved_cmd("claude", &["--model", "opus"]);
+        let (args, _) = plan_resume_fire(&r, "S", "P").unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "--model".to_string(),
+                "opus".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+                "--print".to_string(),
+                "--resume".to_string(),
+                "S".to_string(),
+                "P".to_string(),
+            ]
+        );
+    }
+
+    /// A grok default resumes with grok's own flag grammar — no claude
+    /// flags (`--print`/`--dangerously-skip-permissions`) invented; the
+    /// prompt is PTY-written post-spawn.
+    #[test]
+    fn plan_resume_fire_grok_uses_adapter_grammar_no_claude_flags() {
+        let r = resolved_cmd("grok", &["--always-approve"]);
+        let (args, delivery) =
+            plan_resume_fire(&r, "GROK-SID", "WAKE").expect("grok has an adapter");
+        assert_eq!(
+            args,
+            vec![
+                "--always-approve".to_string(),
+                "--resume".to_string(),
+                "GROK-SID".to_string(),
+            ]
+        );
+        assert_eq!(delivery, ResumePromptDelivery::PtyWrite("WAKE".to_string()));
+    }
+
+    /// Codex resumes subcommand-style, dropping preset args (TS argv
+    /// convention).
+    #[test]
+    fn plan_resume_fire_codex_is_subcommand_style() {
+        let r = resolved_cmd("codex", &["--dangerously-bypass-approvals-and-sandbox"]);
+        let (args, delivery) = plan_resume_fire(&r, "CDX", "WAKE").unwrap();
+        assert_eq!(args, vec!["resume".to_string(), "CDX".to_string()]);
+        assert_eq!(delivery, ResumePromptDelivery::PtyWrite("WAKE".to_string()));
+    }
+
+    /// Unknown providers (hermes, custom commands) can't resume — the
+    /// caller must degrade to a fresh fire (Slice-2 gate parity).
+    #[test]
+    fn plan_resume_fire_unknown_provider_returns_none() {
+        assert!(plan_resume_fire(&resolved_cmd("hermes", &[]), "S", "P").is_none());
+        assert!(plan_resume_fire(&resolved_cmd("my-agent", &["--x"]), "S", "P").is_none());
     }
 }

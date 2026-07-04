@@ -2716,8 +2716,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     if (!snapCols || !snapRows || !cw || !ch) return identity
     // Same available-box formula as the ResizeObserver's cols/rows
     // fit, so a grid sized to THIS pane always computes fit ≥ 1 and
-    // renders unscaled.
-    const availW = Math.max(0, containerSize.width - 8)
+    // renders unscaled. Width subtracts only the LEFT 4px pad — the
+    // right edge is padding-free so the column math gets that width
+    // (the centered remainder supplies the visual right breathing room).
+    const availW = Math.max(0, containerSize.width - 4)
     const availH = Math.max(0, containerSize.height - 8)
     if (!availW || !availH) return identity
     const gridW = snapCols * cw
@@ -3637,7 +3639,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         timer = null
         const rect = entries[0]?.contentRect
         if (!rect || rect.width === 0 || rect.height === 0) return
-        const availW = Math.max(0, rect.width - 8)
+        const availW = Math.max(0, rect.width - 4)
         const availH = Math.max(0, rect.height - 8)
         const newCols = Math.floor(availW / cellMetrics.width)
         const newRows = Math.floor(availH / cellMetrics.height)
@@ -3938,7 +3940,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // edges instead of exposing the theme background as a seam.
       backgroundColor: hexToCss(seamBg ?? config.colors.background),
       whiteSpace: 'pre',
-      padding: '4px',
+      // Right edge is padding-free: its width goes to the column math;
+      // visual breathing room there comes from the centered remainder.
+      padding: '4px 0 4px 4px',
       position: 'relative',
       overflow: 'hidden',
       flex: 1,

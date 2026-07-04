@@ -91,6 +91,13 @@ pub enum MsgReason {
     /// caller just opted out. Permanent for THIS call (re-firing without
     /// `--wake` won't change anything); the remedy is `--wake` / `k2 talk`.
     DormantNoWake,
+    /// Slice 5 hard-safety rule: the recipient grok pane is sitting on
+    /// an OPEN permission gate whose default selection is
+    /// "always-approve" — any submit keystroke we inject (the trailing
+    /// CR, or the insurance CR) could grant blanket approval. Delivery
+    /// is HELD (nothing written); transient like [`Self::PtyStalled`] —
+    /// re-fire once a human resolves the gate.
+    HitlGateOpen,
 }
 
 impl MsgReason {
@@ -102,6 +109,7 @@ impl MsgReason {
             Self::PtyDied => "pty_died",
             Self::PtyStalled => "pty_stalled",
             Self::DormantNoWake => "dormant_no_wake",
+            Self::HitlGateOpen => "hitl_gate_open",
         }
     }
 
@@ -124,6 +132,9 @@ impl MsgReason {
             }
             Self::DormantNoWake => {
                 "Peer's canonical session is asleep. Re-run with `--wake` (or use `k2 talk`, which auto-wakes) to wake it and deliver."
+            }
+            Self::HitlGateOpen => {
+                "Recipient is sitting on an open permission gate (grok `⚠ Action Required` — its default answer is always-approve, so K2 held the message rather than risk auto-approving). Resolve the gate in the terminal, then re-send."
             }
         }
     }
@@ -432,6 +443,11 @@ enum InjectOutcome {
     /// (D2) → caller reports `pty_stalled`. The waiter never acquired
     /// the lock, so it holds nothing.
     Stalled,
+    /// Slice 5 hard-safety rule (a): the recipient grok pane's screen
+    /// shows an OPEN permission gate — NOTHING was written (the gate's
+    /// default selection is always-approve; our submit CRs could grant
+    /// it) → caller reports `hitl_gate_open`. Held, not eaten.
+    GateHold,
 }
 
 /// Composer 1a (D1/M1) — per-RESOLVED-session injection locks.
@@ -852,6 +868,54 @@ fn attempt_delivery(
 // into a still-alive child IS a successful send. PTY death is still a
 // loud `pty_died`.
 
+// ── Slice 5 — grok permission-gate hold (hard-safety rule a) ─────────
+
+/// How many bottom screen rows the gate scan reads. The gate's option
+/// rows + footer render near the bottom of grok's TUI; bounding the
+/// scan keeps old transcript content from false-holding.
+const GROK_GATE_SCAN_ROWS: usize = 15;
+
+/// Is `live` a grok pane sitting on an OPEN permission gate?
+///
+/// Two-factor: (1) the pane's spawn command must resolve to the grok
+/// provider — so a claude/other pane whose transcript QUOTES the gate
+/// strings can never be held — and (2) the bottom of the rendered
+/// screen carries a gate marker ([`screen_shows_grok_gate`]). The
+/// grok study's title signal (`⚠ Action Required - ` prefix) is not
+/// consulted here because the daemon's label state machine may hold a
+/// user-locked label; the screen markers are always present while the
+/// gate is open.
+fn grok_gate_open(live: &session_lookup::LiveSession) -> bool {
+    let is_grok = live
+        .command()
+        .and_then(|c| k2_core::workspace::provider_resume::provider_resume_for_command(&c))
+        .map(|p| p.provider == "grok")
+        .unwrap_or(false);
+    if !is_grok {
+        return false;
+    }
+    screen_shows_grok_gate(&live.visible_text_rows())
+}
+
+/// Pure screen classifier for the grok permission gate (verbatim
+/// markers from the 2026-07 study, matched case-insensitively in the
+/// last [`GROK_GATE_SCAN_ROWS`] rows):
+///   - the gate footer `1/3:select │ Ctrl+o:yolo │ Ctrl+c:cancel`
+///     (`ctrl+o:yolo` is grok-unique), or
+///   - the always-approve radio row
+///     `1 (●) Yes, and don't ask again` (any radio state).
+fn screen_shows_grok_gate(rows: &[String]) -> bool {
+    rows.iter()
+        .rev()
+        .take(GROK_GATE_SCAN_ROWS)
+        .any(|row| {
+            let lower = row.to_lowercase();
+            lower.contains("ctrl+o:yolo")
+                || lower.contains("(●) yes, and don't ask again")
+                || lower.contains("(○) yes, and don't ask again")
+        })
+}
+
 /// Inject `payload` + submit into `live`, with paste framing and an
 /// insurance Enter for latency — **serialized by the per-session
 /// injection lock** (Composer 1a, D1/D2/D5/D7).
@@ -912,10 +976,38 @@ fn inject_and_submit_with_timeout(
 
 /// The actual framed write + submit. ALWAYS called while holding the
 /// per-session injection lock (via [`inject_and_submit_with_timeout`]).
+///
+/// Slice 5 safety note (rule c): the D5 sanitizer below strips EVERY
+/// raw `ESC` from the payload before the `ESC[200~ … ESC[201~` frame is
+/// added, so no payload byte can close the paste early — every `j`,
+/// digit, or other hotkey-shaped character in the message stays INSIDE
+/// bracketed paste and reaches the TUI as literal text, never as a
+/// keystroke (the gemini study showed a bare injected `j` moving a
+/// trust radio; the paste framing is what prevents that here). When the
+/// recipient does NOT advertise bracketed paste the payload goes raw —
+/// which is today's behavior for plain composers; the grok gate-hold
+/// above is the guard for the one screen where raw keystrokes are
+/// catastrophic. Pinned by
+/// `framed_injection_payload_cannot_escape_the_paste_frame`.
 fn inject_framed_locked(
     live: &session_lookup::LiveSession,
     payload: &str,
 ) -> InjectOutcome {
+    // Slice 5 hard-safety rule (a): NEVER write into a grok pane whose
+    // screen shows an open permission gate. Grok's gate default is
+    // "1 (●) Yes, and don't ask again for anything (always-approve
+    // mode)" — the submit CR (or the insurance CR) landing on it would
+    // grant blanket approval. Hold instead; the caller reports
+    // `hitl_gate_open` and the sender re-fires after a human resolves
+    // the gate. Checked INSIDE the lock so a gate that opens while a
+    // send is queued is still caught.
+    if grok_gate_open(live) {
+        log_debug!(
+            "[msg/inject] session={} grok permission gate open — holding delivery (hitl_gate_open)",
+            live.session_id()
+        );
+        return InjectOutcome::GateHold;
+    }
     // D5 — strip raw ESC BEFORE framing so an embedded `ESC[201~` can't
     // close the paste early and splice live keystrokes.
     let clean = sanitize_inject_text(payload);
@@ -991,6 +1083,7 @@ pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgR
         }
         InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
         InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
+        InjectOutcome::GateHold => MsgResponse::fail(MsgReason::HitlGateOpen),
     }
 }
 
@@ -1017,6 +1110,10 @@ fn inject_live(
         InjectOutcome::Stalled => {
             log_debug!("[msg/inject_live] injection lock stalled — pty_stalled");
             return MsgResponse::fail(MsgReason::PtyStalled);
+        }
+        InjectOutcome::GateHold => {
+            log_debug!("[msg/inject_live] grok permission gate open — hitl_gate_open");
+            return MsgResponse::fail(MsgReason::HitlGateOpen);
         }
     }
 
@@ -1069,42 +1166,62 @@ fn relookup_live(project_id: &str, saved_session: Option<&str>) -> Option<sessio
 }
 
 /// Issue #9 — wait until a freshly woken session is READY, then inject the
-/// body through the SHARED per-session lock (D7). Readiness signal:
-/// `claude`'s TUI enables bracketed-paste mode once it has drawn, so we
-/// poll `bracketed_paste_active()` (with a minimum settle floor) up to
-/// `wake_timeout`. Replaces the pre-#9 fixed 1500ms blind sleep with a
-/// real, bounded readiness wait. Returns the [`InjectOutcome`] so the
-/// caller maps it to the canonical response.
+/// body through the SHARED per-session lock (D7).
+///
+/// Slice 5: readiness is now PER-PROVIDER via
+/// [`k2_core::workspace::provider_resume::InjectionProfile`]:
+/// - `ready_via_bracketed_paste == true` (claude/grok/cursor + the
+///   unknown-provider default — claude's shipping behavior, unchanged):
+///   poll `bracketed_paste_active()` after the settle floor, up to
+///   `wake_timeout`, then inject best-effort. For claude the ?2004h
+///   flip genuinely follows input-box mount (original study) — this
+///   path is byte-identical to pre-slice-5.
+/// - `ready_via_bracketed_paste == false` (codex/gemini/pi/hermes):
+///   ?2004h LIES for these providers (set before real readiness, or
+///   toggled per repaint), so readiness is the profile's conservative
+///   settle floor alone — the WAKE_MIN_SETTLE pattern with a
+///   study-derived, per-provider duration (hermes ~7s first-message;
+///   codex/gemini 2s; pi 1.5s).
+///
+/// Returns the [`InjectOutcome`] so the caller maps it to the
+/// canonical response.
 fn deliver_post_wake(
     live: &session_lookup::LiveSession,
     payload: &str,
     wake_timeout: Duration,
+    profile: &k2_core::workspace::provider_resume::InjectionProfile,
 ) -> InjectOutcome {
     let start = std::time::Instant::now();
-    // Minimum settle even if paste mode flips immediately.
-    std::thread::sleep(WAKE_MIN_SETTLE);
-    loop {
-        if !live.is_child_alive() {
-            return InjectOutcome::PtyDied;
+    // Minimum settle even if paste mode flips immediately. Never below
+    // the historical 400ms floor.
+    std::thread::sleep(profile.post_spawn_settle.max(WAKE_MIN_SETTLE));
+    if profile.ready_via_bracketed_paste {
+        loop {
+            if !live.is_child_alive() {
+                return InjectOutcome::PtyDied;
+            }
+            // Ready once the TUI advertises bracketed-paste (claude/grok/
+            // cursor set it once the input box is drawn). This is the same
+            // signal the injector relies on for framing.
+            if live.bracketed_paste_active() {
+                break;
+            }
+            if start.elapsed() >= wake_timeout {
+                // Best-effort: timed out waiting for the ready signal — inject
+                // anyway (bounded, never blocks forever) rather than dropping
+                // the message. Matches the pre-#9 "sleep then send" intent.
+                log_debug!(
+                    "[msg/wake] session={} readiness wait hit {}ms ceiling — injecting best-effort",
+                    live.session_id(),
+                    wake_timeout.as_millis()
+                );
+                break;
+            }
+            std::thread::sleep(WAKE_POLL_INTERVAL);
         }
-        // Ready once the TUI advertises bracketed-paste (claude/cursor do
-        // this after the input box is drawn). This is the same signal the
-        // injector relies on for framing.
-        if live.bracketed_paste_active() {
-            break;
-        }
-        if start.elapsed() >= wake_timeout {
-            // Best-effort: timed out waiting for the ready signal — inject
-            // anyway (bounded, never blocks forever) rather than dropping
-            // the message. Matches the pre-#9 "sleep then send" intent.
-            log_debug!(
-                "[msg/wake] session={} readiness wait hit {}ms ceiling — injecting best-effort",
-                live.session_id(),
-                wake_timeout.as_millis()
-            );
-            break;
-        }
-        std::thread::sleep(WAKE_POLL_INTERVAL);
+    } else if !live.is_child_alive() {
+        // Non-polling provider: the settle above WAS the readiness wait.
+        return InjectOutcome::PtyDied;
     }
     // D7: post-wake delivery funnels through the SAME locked
     // `inject_and_submit` as live sends, so the just-woken session's
@@ -1175,6 +1292,7 @@ fn wake_and_fire(
             }
             InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
             InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
+            InjectOutcome::GateHold => MsgResponse::fail(MsgReason::HitlGateOpen),
         };
     }
 
@@ -1200,12 +1318,27 @@ fn wake_and_fire(
     // exercise the wake path without a real agent binary. `cat` never
     // advertises bracketed-paste readiness, so the readiness ceiling is
     // clamped to keep tests fast. Production never sets this.
-    let (spawn_command, spawn_args, wake_timeout) =
+    //
+    // Slice 5: the injection profile rides the same seam — real wakes
+    // speak the resolved provider's readiness dialect; the test
+    // override keeps the claude-shaped default (it spawns `cat`, not
+    // the provider).
+    let (spawn_command, spawn_args, wake_timeout, inject_profile) =
         match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
-            Ok(c) if !c.is_empty() => {
-                (c, Vec::new(), wake_timeout.min(Duration::from_millis(1500)))
-            }
-            _ => (resolved.command.clone(), resolved.args.clone(), wake_timeout),
+            Ok(c) if !c.is_empty() => (
+                c,
+                Vec::new(),
+                wake_timeout.min(Duration::from_millis(1500)),
+                k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE,
+            ),
+            _ => (
+                resolved.command.clone(),
+                resolved.args.clone(),
+                wake_timeout,
+                k2_core::workspace::provider_resume::injection_profile_for_provider(
+                    &resolved.provider,
+                ),
+            ),
         };
 
     let wake_start = std::time::Instant::now();
@@ -1288,9 +1421,21 @@ fn wake_and_fire(
         return MsgResponse::fail(MsgReason::SpawnFailed);
     };
 
+    // Slice 5 documented-deferred (hard-safety rule b): grok's FIRST
+    // send in a fresh cwd is intercepted by a project-directory picker
+    // ("Run Grok Build in a project directory?" — study modal #1). Its
+    // default answer, "use current directory", is SAFE, and the
+    // injector's submit-CR + insurance-CR sequence answers it with that
+    // default in practice — but K2 does not yet explicitly detect the
+    // picker and re-deliver the body afterwards, so a first-ever wake
+    // into a brand-new grok workspace may leave the message typed into
+    // the picker rather than the composer. Deliberately deferred (not
+    // half-built): detection needs a live-grok validation pass; the
+    // permission GATE (rule a, the dangerous one) is enforced above in
+    // the injection chokepoint.
     let payload = format_message(from, text, command);
     let _ = Path::new(project_path);
-    match deliver_post_wake(&live, &payload, wake_timeout) {
+    match deliver_post_wake(&live, &payload, wake_timeout, &inject_profile) {
         InjectOutcome::Delivered => {
             let wake_ms = wake_start.elapsed().as_millis() as u64;
             log_debug!(
@@ -1316,6 +1461,13 @@ fn wake_and_fire(
                 target_id
             );
             MsgResponse::fail(MsgReason::PtyStalled)
+        }
+        InjectOutcome::GateHold => {
+            log_debug!(
+                "[daemon/workspace-msg] grok permission gate open during post-wake inject for session={}",
+                target_id
+            );
+            MsgResponse::fail(MsgReason::HitlGateOpen)
         }
     }
 }
@@ -2232,7 +2384,12 @@ mod tests {
 
         let live2 = live.clone();
         let handle = std::thread::spawn(move || {
-            deliver_post_wake(&live2, "[from owner] hi", Duration::from_millis(150))
+            deliver_post_wake(
+                &live2,
+                "[from owner] hi",
+                Duration::from_millis(150),
+                &k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE,
+            )
         });
 
         // Past the readiness settle (WAKE_MIN_SETTLE=400ms) it has reached
@@ -2251,6 +2408,168 @@ mod tests {
             "once the shared lock frees, the post-wake body delivers"
         );
         live.0.kill();
+    }
+
+    // ── Slice 5 — per-provider readiness selection ───────────────────
+
+    #[cfg(unix)]
+    #[test]
+    fn deliver_post_wake_non_polling_profile_skips_the_paste_poll() {
+        // `cat` NEVER advertises bracketed paste. With a polling
+        // (claude-shaped) profile the readiness wait runs to the
+        // wake_timeout ceiling; with a non-polling profile (codex/
+        // gemini/pi/hermes shape) readiness is the settle floor alone —
+        // so with a LONG wake_timeout the send must still return fast.
+        // This pins the profile-driven strategy selection.
+        use k2_core::workspace::provider_resume::InjectionProfile;
+        let live = spawn_cat_live();
+        let profile = InjectionProfile {
+            ready_via_bracketed_paste: false,
+            post_spawn_settle: Duration::from_millis(100),
+        };
+        let t0 = std::time::Instant::now();
+        let out = deliver_post_wake(
+            &live,
+            "[from owner] hi",
+            Duration::from_secs(30), // poll ceiling — must NOT be waited on
+            &profile,
+        );
+        assert_eq!(out, InjectOutcome::Delivered);
+        assert!(
+            t0.elapsed() < Duration::from_secs(5),
+            "non-polling profile must inject after the settle floor, not the 30s poll ceiling (took {:?})",
+            t0.elapsed()
+        );
+        live.0.kill();
+    }
+
+    // ── Slice 5 — grok permission-gate hold (hard-safety rule a) ─────
+
+    #[test]
+    fn grok_gate_screen_classifier_fires_on_the_verbatim_gate() {
+        // Verbatim from tui-signal-study-grok-hermes-cursor.md.
+        let rows: Vec<String> = [
+            "Run rm -rf build?",
+            "",
+            "1 (●) Yes, and don't ask again for anything (always-approve mode)",
+            "2 (○) Yes, proceed",
+            "3 (○) No, reject (type to add feedback)",
+            "",
+            "1/3:select │ Ctrl+o:yolo │ Ctrl+c:cancel",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert!(screen_shows_grok_gate(&rows), "the open gate must be detected");
+    }
+
+    #[test]
+    fn grok_gate_screen_classifier_ignores_benign_grok_screens() {
+        let busy: Vec<String> = [
+            "◆ Thinking…",
+            "⠙ Waiting for response… 0.0s   [stop]",
+            "Esc:cancel │ Ctrl+.:shortcuts",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert!(!screen_shows_grok_gate(&busy), "a busy grok screen is not a gate");
+
+        let idle: Vec<String> =
+            ["hello!", "❯", ""].iter().map(|s| s.to_string()).collect();
+        assert!(!screen_shows_grok_gate(&idle), "an idle composer is not a gate");
+    }
+
+    #[test]
+    fn grok_gate_markers_outside_the_bottom_window_do_not_hold() {
+        // A gate string buried in OLD transcript rows (above the bottom
+        // scan window) must not hold delivery — only a LIVE gate at the
+        // bottom of the screen counts.
+        let mut rows: Vec<String> = vec![
+            "earlier: 1/3:select │ Ctrl+o:yolo │ Ctrl+c:cancel".to_string(),
+        ];
+        rows.extend((0..GROK_GATE_SCAN_ROWS).map(|i| format!("output line {i}")));
+        assert!(
+            !screen_shows_grok_gate(&rows),
+            "stale gate text above the scan window must not hold"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_grok_pane_displaying_gate_text_is_not_held() {
+        // Provider gating: the hold applies ONLY to grok panes. A pane
+        // whose child is NOT grok (here: `cat`, which happily echoes the
+        // gate text onto its screen) must deliver normally even with the
+        // gate strings visible — a claude transcript QUOTING the gate
+        // can never block sends.
+        let live = spawn_cat_live();
+        live.write(b"1/3:select | Ctrl+o:yolo | Ctrl+c:cancel\n")
+            .expect("prime the screen with gate-looking text");
+        std::thread::sleep(Duration::from_millis(300));
+        let out = inject_and_submit_with_timeout(
+            &live,
+            "[from owner] hi",
+            Duration::from_secs(2),
+        );
+        assert_eq!(
+            out,
+            InjectOutcome::Delivered,
+            "a non-grok pane must never be gate-held"
+        );
+        live.0.kill();
+    }
+
+    #[test]
+    fn hitl_gate_open_reason_serializes_with_actionable_hint() {
+        let r = MsgResponse::fail(MsgReason::HitlGateOpen);
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["success"], false);
+        assert_eq!(json["reason"], "hitl_gate_open");
+        let hint = json["hint"].as_str().expect("hint present");
+        assert!(
+            hint.contains("permission gate"),
+            "hint must explain the hold: {hint}"
+        );
+        // Transient (retry-eligible), like pty_stalled — NOT permanent.
+        assert!(!MsgReason::HitlGateOpen.is_permanent());
+    }
+
+    // ── Slice 5 — rule (c): payload can never escape the paste frame ─
+
+    #[test]
+    fn framed_injection_payload_cannot_escape_the_paste_frame() {
+        // The framed body is `ESC[200~ <sanitized> ESC[201~`. Because
+        // the sanitizer strips EVERY raw ESC from the payload, no
+        // payload byte can open/close an escape sequence — every lone
+        // `j` / digit / hotkey-shaped char stays INSIDE the paste frame
+        // and arrives as literal text (the gemini study showed a bare
+        // `j` moving a trust radio; this framing is the guard).
+        let hostile = "j 1 2 3 \x1b[201~\rj\x1b[200~ 9";
+        let clean = sanitize_inject_text(hostile);
+        assert!(
+            !clean.contains('\u{1b}'),
+            "sanitizer must strip every raw ESC"
+        );
+        // Reconstruct the exact framed body inject_framed_locked builds.
+        let mut body = Vec::with_capacity(clean.len() + 12);
+        body.extend_from_slice(b"\x1b[200~");
+        body.extend_from_slice(clean.as_bytes());
+        body.extend_from_slice(b"\x1b[201~");
+        // The ONLY ESC bytes in the frame are the two markers we added:
+        // the payload region carries none, so nothing inside can close
+        // the paste early.
+        let esc_positions: Vec<usize> = body
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b == 0x1b)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            esc_positions,
+            vec![0, body.len() - 6],
+            "exactly the two frame markers may contain ESC"
+        );
     }
 
     #[test]

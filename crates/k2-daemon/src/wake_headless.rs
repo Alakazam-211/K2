@@ -219,9 +219,24 @@ pub fn spawn_wake_headless(
             crate::v2_session_map::lookup_by_session_id(&outcome.session_id)
         {
             let prompt = wake_prompt.to_string();
+            // Slice 5: per-provider startup settle. Claude keeps the
+            // historical 1500ms (its TUI needs ~1s to accept input);
+            // slower-starting providers get their study-derived floor
+            // (hermes ~7s: prompt ~3.6s + ~3s agent init) via the
+            // injection profile keyed off the SPAWNED command.
+            let provider_settle =
+                k2_core::workspace::provider_resume::provider_resume_for_command(&command)
+                    .map(|p| {
+                        k2_core::workspace::provider_resume::injection_profile_for_provider(
+                            p.provider,
+                        )
+                        .post_spawn_settle
+                    })
+                    .unwrap_or_default();
+            let settle = provider_settle.max(std::time::Duration::from_millis(1500));
             std::thread::spawn(move || {
-                // Wait for claude TUI to draw its initial prompt.
-                std::thread::sleep(std::time::Duration::from_millis(1500));
+                // Wait for the agent TUI to draw its initial prompt.
+                std::thread::sleep(settle);
                 session.write(prompt.into_bytes());
                 std::thread::sleep(std::time::Duration::from_millis(150));
                 session.write(b"\r".to_vec());

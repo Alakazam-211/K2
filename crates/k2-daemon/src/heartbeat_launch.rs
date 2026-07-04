@@ -1254,11 +1254,25 @@ mod decision_tests {
         assert_eq!(delivery, ResumePromptDelivery::PtyWrite("WAKE".to_string()));
     }
 
-    /// Unknown providers (hermes, custom commands) can't resume — the
-    /// caller must degrade to a fresh fire (Slice-2 gate parity).
+    /// Unknown providers (custom commands) can't resume — the caller
+    /// must degrade to a fresh fire (Slice-2 gate parity). Stale-assert
+    /// note: hermes moved OUT of this bucket when Slice 6 gave it a
+    /// ProviderResume adapter (`hermes --resume <id>`), so it now plans
+    /// a resume like the rest of the Big 7.
     #[test]
     fn plan_resume_fire_unknown_provider_returns_none() {
-        assert!(plan_resume_fire(&resolved_cmd("hermes", &[]), "S", "P").is_none());
+        assert!(plan_resume_fire(&resolved_cmd("aider", &[]), "S", "P").is_none());
         assert!(plan_resume_fire(&resolved_cmd("my-agent", &["--x"]), "S", "P").is_none());
+    }
+
+    /// Hermes gained an adapter in Slice 6: flag-style resume, preset
+    /// args kept.
+    #[test]
+    fn plan_resume_fire_hermes_is_flag_style() {
+        let (args, delivery) =
+            plan_resume_fire(&resolved_cmd("hermes", &[]), "HRM-SID", "WAKE")
+                .expect("hermes has an adapter since Slice 6");
+        assert_eq!(args, vec!["--resume".to_string(), "HRM-SID".to_string()]);
+        assert_eq!(delivery, ResumePromptDelivery::PtyWrite("WAKE".to_string()));
     }
 }

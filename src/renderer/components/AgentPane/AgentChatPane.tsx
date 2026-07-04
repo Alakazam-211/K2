@@ -8,7 +8,8 @@ import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { agentChatId } from '@/lib/terminal-id'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { agentDisplayName, resumeChatArgs, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
+import { agentDisplayName, resumeChatArgs, setChatSession, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
+import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useActiveStore } from '@/stores/active'
 import { useServerSupports } from '@/lib/server-capabilities'
@@ -27,7 +28,7 @@ import {
 interface AgentChatPaneProps {
   agentName: string
   projectPath: string
-  /** 0.37.12 — Claude session id restored from the serialized layout.
+  /** 0.37.12 — canonical session id restored from the serialized layout.
    *  When present, AgentChatPane skips the
    *  `k2so_agents_resume_chat_args` daemon roundtrip and builds the
    *  launch config directly so the same session resumes immediately.
@@ -53,7 +54,9 @@ interface AgentChatPaneProps {
 }
 
 /**
- * Chat pinned tab — runs the workspace agent's persistent Claude session.
+ * Chat pinned tab — runs the workspace agent's persistent canonical
+ * session (any provider's harness since agent-degeneralization Slice 4;
+ * the daemon resolves which command to spawn from the stored harness).
  *
  * Replaces the "Chat" sub-tab from the pre-0.36.0 single AgentPane.
  * Sibling tab is `AgentInboxPane`; both are pinned by `tabs.ts`.
@@ -156,7 +159,10 @@ interface ChatHeaderProps {
   currentSessionId: string | null
   onRefresh: () => void
   refreshing: boolean
-  onSwitchSession: (newSessionId: string) => void
+  /** Slice 4 — the picked row's provider rides along so the daemon can
+   *  persist workspace_sessions.harness with the id (the canonical
+   *  session's agent may differ from the workspace default). */
+  onSwitchSession: (newSessionId: string, provider: string) => void
 }
 
 interface HistorySession {
@@ -164,6 +170,8 @@ interface HistorySession {
   title: string
   timestamp: number
   messageCount: number
+  /** Discovery provider id ("claude"/"cursor"/"gemini"/"pi"/"codex"/…). */
+  provider: string
 }
 
 function ChatHeader({
@@ -180,6 +188,11 @@ function ChatHeader({
   // 0.37.12 — fetch chat history for the dropdown title + popover list.
   // Runs on mount, when the current session changes (title converges
   // after the first message), and when the popover opens.
+  //
+  // Slice 4 (agent-degeneralization) — EVERY provider's sessions are
+  // listed (chat/list is the multi-provider aggregator), still scoped to
+  // this workspace path. Any of them can become the canonical session;
+  // rows missing a provider (older daemons) degrade to "claude".
   useEffect(() => {
     let cancelled = false
     void daemonCliGet<Array<{
@@ -187,14 +200,14 @@ function ChatHeader({
       title: string
       timestamp: number
       messageCount: number
-      provider: string
+      provider?: string
     }>>('chat/list', { project_path: projectPath })
       .then((rows) => {
         if (cancelled) return
-        const claudeOnly = rows
-          .filter((r) => r.provider === 'claude' || !r.provider)
+        const sorted = rows
+          .map((r) => ({ ...r, provider: r.provider || 'claude' }))
           .sort((a, b) => b.timestamp - a.timestamp)
-        setHistorySessions(claudeOnly)
+        setHistorySessions(sorted)
       })
       .catch((err) => {
         console.warn('[AgentChatPane] chat/list failed:', err)
@@ -222,7 +235,7 @@ function ChatHeader({
       <button
         type="button"
         onClick={() => setHistoryOpen((v) => !v)}
-        title="Switch pinned chat to a different past Claude session"
+        title="Switch pinned chat to a different past session (any agent)"
         aria-label="Switch pinned chat session"
         aria-haspopup="listbox"
         aria-expanded={historyOpen}
@@ -247,13 +260,13 @@ function ChatHeader({
               const isCurrent = s.sessionId === currentSessionId
               return (
                 <button
-                  key={s.sessionId}
+                  key={`${s.provider}:${s.sessionId}`}
                   type="button"
                   role="option"
                   aria-selected={isCurrent}
                   onClick={() => {
                     setHistoryOpen(false)
-                    onSwitchSession(s.sessionId)
+                    onSwitchSession(s.sessionId, s.provider)
                   }}
                   className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 transition-colors no-drag cursor-pointer ${
                     isCurrent
@@ -261,6 +274,8 @@ function ChatHeader({
                       : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'
                   }`}
                 >
+                  {/* Slice 4 — provider mark so mixed-agent lists scan. */}
+                  <ProviderIcon provider={s.provider} size={12} />
                   <span className="flex-1 truncate">{s.title || 'Untitled chat'}</span>
                   <span className="flex-shrink-0 text-[9px] text-[var(--color-text-muted)] opacity-70">
                     {s.messageCount}
@@ -280,7 +295,7 @@ function ChatHeader({
         type="button"
         onClick={onRefresh}
         disabled={refreshing}
-        title="Restart chat session — kills the current Claude process and spawns a fresh resume. Use after typing `exit` or when the session is unresponsive."
+        title="Restart chat session — kills the current agent process and spawns a fresh resume. Use after typing `exit` or when the session is unresponsive."
         aria-label="Refresh chat session"
         className="inline-flex items-center justify-center h-5 w-5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
       >
@@ -336,9 +351,14 @@ function useDisplayName(projectPath: string, agentName: string): string {
 //
 // POST /cli/workspace/ensure-pinned-chat ← { project, forceRespawn? }
 // → { sessionId, claudeSessionId, resumedExisting, command, args,
-//     cols, rows, reused }
+//     cols, rows, reused, provider?, pendingSessionDiscovery? }
 interface EnsurePinnedChatResponse {
   sessionId: string
+  /** The canonical conversation id. WIRE KEY keeps the historical
+   *  `claudeSessionId` name (frozen daemon contract) even though the
+   *  session may belong to ANY harness since Slice 3 — the renderer
+   *  maps it to its provider-neutral `canonicalSessionId` state at
+   *  this boundary and never leaks the claude-flavored name further. */
   claudeSessionId: string
   resumedExisting: boolean
   command: string
@@ -346,6 +366,10 @@ interface EnsurePinnedChatResponse {
   cols: number
   rows: number
   reused: boolean
+  /** Slice 3 (additive) — harness that owns the ensured session. */
+  provider?: string
+  /** Slice 3 (additive) — self-minting fresh spawn; id adopted post-hoc. */
+  pendingSessionDiscovery?: boolean
 }
 
 async function ensurePinnedChat(
@@ -405,7 +429,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // `error` → ensure failed.
   type Phase =
     | { kind: 'ensuring' }
-    | { kind: 'ready'; sessionId: string; claudeSessionId: string }
+    | { kind: 'ready'; sessionId: string; canonicalSessionId: string }
     | { kind: 'idle' }
     | { kind: 'error'; message: string }
   const [phase, setPhase] = useState<Phase>({ kind: 'ensuring' })
@@ -448,10 +472,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     onDaemonSessionRemovedRef.current = onDaemonSessionRemoved
   }, [onDaemonSessionRemoved])
 
-  // The claude session id currently pinned (from the last ensure / the
-  // SessionAdded event). Drives the dropdown highlight + title lookup.
-  const claudeSessionId =
-    phase.kind === 'ready' ? phase.claudeSessionId : null
+  // The canonical conversation id currently pinned (from the last ensure
+  // / the SessionAdded event) — any harness's session since Slice 4.
+  // Drives the dropdown highlight + title lookup.
+  const canonicalSessionId =
+    phase.kind === 'ready' ? phase.canonicalSessionId : null
 
   // ── ensure() — the one daemon RPC this component leans on ────────────
   // Idempotent on the daemon side. `forceRespawn` kills + respawns. The
@@ -471,7 +496,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         setPhase({
           kind: 'ready',
           sessionId: res.sessionId,
-          claudeSessionId: res.claudeSessionId,
+          // Boundary map: the wire key stays `claudeSessionId` (frozen
+          // daemon contract) but the state is provider-neutral.
+          canonicalSessionId: res.claudeSessionId,
         })
         // #689 — record which session we're now attached to so the
         // SessionAdded echo for THIS session is recognised as our own
@@ -525,7 +552,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         setPhase({
           kind: 'ready',
           sessionId: event.session_id,
-          claudeSessionId: event.session_id,
+          canonicalSessionId: event.session_id,
         })
         setAttachNonce((n) => n + 1)
       },
@@ -556,19 +583,20 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   }, [refreshing, ensure])
 
   // Dropdown switch → persist via set-chat-session, then forceRespawn so
-  // the daemon respawns on the newly-selected session.
+  // the daemon respawns on the newly-selected session. Slice 4: the
+  // picked row's PROVIDER rides along so the daemon persists
+  // workspace_sessions.harness with the id — the respawn's
+  // ensure-pinned-chat then resolves THAT harness's command+grammar
+  // (a pi pick respawns `pi --session <id>`, not claude).
   const handleSwitchSession = useCallback(
-    async (newSessionId: string): Promise<void> => {
-      if (!newSessionId || newSessionId === claudeSessionId) return
+    async (newSessionId: string, provider: string): Promise<void> => {
+      if (!newSessionId || newSessionId === canonicalSessionId) return
       setRefreshing(true)
       setPhase({ kind: 'ensuring' })
       try {
-        // HOST-AWARE persist of the pinned session (same route the legacy
-        // path uses). GET because the route reads query params.
-        await daemonCliGet('workspace/set-chat-session', {
-          project: projectPath,
-          session_id: newSessionId,
-        })
+        // HOST-AWARE persist of the pinned session (same client the legacy
+        // path uses; the route reads query params).
+        await setChatSession(projectPath, newSessionId, provider)
       } catch (err) {
         console.error('[AgentChatPane] switchToSession DB update failed:', err)
         setRefreshing(false)
@@ -583,7 +611,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       await ensure(true, true)
       setRefreshing(false)
     },
-    [claudeSessionId, projectPath, ensure],
+    [canonicalSessionId, projectPath, ensure],
   )
 
   // The shared header (agent name + session dropdown + refresh) is rendered
@@ -595,10 +623,10 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     <ChatHeader
       displayName={displayName}
       projectPath={projectPath}
-      currentSessionId={claudeSessionId}
+      currentSessionId={canonicalSessionId}
       onRefresh={() => void handleRefresh()}
       refreshing={refreshing}
-      onSwitchSession={(sid) => void handleSwitchSession(sid)}
+      onSwitchSession={(sid, provider) => void handleSwitchSession(sid, provider)}
     />
   )
 
@@ -744,13 +772,17 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   // (fetch + popover state + title). The legacy body only needs the CURRENT
   // session id to highlight + to compute the no-op short-circuit on switch.
   //
-  // The Claude session id currently driving the live PTY — derived from
-  // launchConfig.args (`--resume <X>` or `--session-id <X>`).
+  // The session id currently driving the live PTY — derived from
+  // launchConfig.args. Slice 4: the daemon's cold-boot args may speak any
+  // provider's grammar, so scan every session-selection shape: flag-style
+  // `--resume/--session-id <X>` (claude/grok/cursor/gemini), `--session <X>`
+  // (pi), and the codex `resume <X>` subcommand (first token only).
   const currentSessionId = useMemo<string | null>(() => {
     const args = launchConfig?.args
     if (!args) return null
+    if (args[0] === 'resume' && args[1]) return args[1]
     for (let i = 0; i + 1 < args.length; i++) {
-      if (args[i] === '--resume' || args[i] === '--session-id') {
+      if (args[i] === '--resume' || args[i] === '--session-id' || args[i] === '--session') {
         return args[i + 1]
       }
     }
@@ -806,15 +838,14 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
 
   // Switch the pinned chat tab to a different past session. <ChatHeader>
   // closes its own popover before invoking this, so no dropdown state here.
-  const switchToSession = useCallback(async (newSessionId: string): Promise<void> => {
+  // Slice 4: the picked row's provider is persisted with the id so the
+  // refresh's daemon resolve speaks that harness's grammar.
+  const switchToSession = useCallback(async (newSessionId: string, provider: string): Promise<void> => {
     if (!newSessionId || newSessionId === currentSessionId) {
       return
     }
     try {
-      await daemonCliGet('workspace/set-chat-session', {
-        project: projectPath,
-        session_id: newSessionId,
-      })
+      await setChatSession(projectPath, newSessionId, provider)
     } catch (err) {
       console.error('[AgentChatPane] switchToSession DB update failed:', err)
       return
@@ -873,19 +904,27 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         }
         if (cancelled) return
 
-        if (decision.kind === 'fresh') {
-          console.info(
-            '[AgentChatPane] cold-boot fresh session (resumedExisting=false):',
-            decision.sessionId,
-            '— launching with --session-id, NOT --resume',
-          )
+        if (decision.kind === 'fallback') {
+          // Daemon unreachable — we can't know the stored harness, so
+          // degrade to claude grammar on the layout hint (the only
+          // honest offline guess; pre-Slice-4 behavior preserved).
           setLaunchConfig({
             command: 'claude',
-            args: decision.args,
+            args: ['--dangerously-skip-permissions', '--resume', decision.sessionId],
             cwd: projectPath,
           })
         } else {
-          if (decision.kind === 'resume' && decision.sessionId !== restoredSessionId) {
+          // Slice 4 — TRUST the daemon's per-harness decision: its
+          // command+args already speak the canonical session's own
+          // provider grammar (resume AND fresh). No renderer-built
+          // claude argv on this path anymore.
+          if (decision.kind === 'fresh') {
+            console.info(
+              '[AgentChatPane] cold-boot fresh session (resumedExisting=false):',
+              decision.sessionId,
+              '— spawning the daemon\'s fresh args, NOT a resume',
+            )
+          } else if (decision.sessionId !== restoredSessionId) {
             console.info(
               '[AgentChatPane] cold-boot revive: SQLite session',
               decision.sessionId,
@@ -894,8 +933,8 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
             )
           }
           setLaunchConfig({
-            command: 'claude',
-            args: ['--dangerously-skip-permissions', '--resume', decision.sessionId],
+            command: decision.command,
+            args: decision.args,
             cwd: projectPath,
           })
         }
@@ -966,7 +1005,10 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         console.warn('[AgentChatPane] resume_chat_args failed, falling back:', err)
       }
 
-      // Step 3: Last-resort fallback — fresh session
+      // Step 3: Last-resort fallback — fresh session. The daemon read
+      // failed, so the stored harness is unknowable; claude grammar is
+      // the deliberate offline degradation (matches the cold-boot
+      // `fallback` decision above).
       if (!cancelled) {
         setLaunchConfig({
           command: 'claude',
@@ -1023,7 +1065,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       currentSessionId={currentSessionId}
       onRefresh={() => void handleRefresh()}
       refreshing={refreshing}
-      onSwitchSession={(sid) => void switchToSession(sid)}
+      onSwitchSession={(sid, provider) => void switchToSession(sid, provider)}
     />
   )
 

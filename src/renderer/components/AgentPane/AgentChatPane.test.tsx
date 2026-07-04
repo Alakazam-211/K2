@@ -70,6 +70,12 @@ const h = vi.hoisted(() => {
     // Pinned-chat retention — controllable canonical-Active mirror. The
     // daemon-owned path derives `retainWhileHidden` from membership here.
     activeIds: { value: new Set<string>() },
+    // Slice 4 — host-aware set-chat-session client (workspace-agent.ts).
+    // The dropdown switch persists the picked session id + PROVIDER
+    // through this, no longer via a raw daemonCliGet call.
+    setChatSession: vi.fn<(project: string, sessionId: string, provider?: string) => Promise<void>>(
+      async () => undefined,
+    ),
   }
 })
 
@@ -143,12 +149,22 @@ vi.mock('@/kessel/daemon-ws', () => ({
 }))
 vi.mock('@/lib/workspace-agent', () => ({
   agentDisplayName: vi.fn(async () => 'Agent One'),
+  setChatSession: h.setChatSession,
   resumeChatArgs: vi.fn(async () => ({ command: 'claude', args: ['--resume', 'claude-legacy'], cwd: '/ws', resumeSession: 'claude-legacy', resumedExisting: true })),
-  reconcileColdBootSession: (hint: string, c: { resumeSession?: string; resumedExisting?: boolean; args?: string[] } | null) => {
+  // Mirrors the Slice-4 shape: resume/fresh carry the daemon's
+  // command+args verbatim (per-harness grammar).
+  reconcileColdBootSession: (hint: string, c: { command?: string; resumeSession?: string; resumedExisting?: boolean; args?: string[] } | null) => {
     if (!c) return { kind: 'fallback', sessionId: hint }
-    if (c.resumedExisting) return { kind: 'resume', sessionId: c.resumeSession || hint }
-    return { kind: 'fresh', args: c.args ?? [], sessionId: c.resumeSession || hint }
+    if (c.resumedExisting) return { kind: 'resume', sessionId: c.resumeSession || hint, command: c.command ?? 'claude', args: c.args ?? [] }
+    return { kind: 'fresh', sessionId: c.resumeSession || hint, command: c.command ?? 'claude', args: c.args ?? [] }
   },
+}))
+// Slice 4 — provider icon stub: renders an inspectable marker instead of
+// dragging the AgentIcon svg-asset graph into jsdom.
+vi.mock('@/components/AgentIcon/ProviderIcon', () => ({
+  ProviderIcon: ({ provider }: { provider: string }) => (
+    <span data-testid="provider-icon" data-provider={provider} />
+  ),
 }))
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async () => null),
@@ -164,6 +180,7 @@ beforeEach(() => {
   h.supported.value = true
   h.daemonCliPost.mockClear()
   h.daemonCliGet.mockClear()
+  h.setChatSession.mockClear()
   h.unsubscribe.mockClear()
   h.sessionHandlers.current = null
   h.terminalProps.current = null
@@ -259,13 +276,90 @@ describe('#683 daemon-owned path — refresh & switch issue forceRespawn', () =>
     fireEvent.click(screen.getByText('Older chat'))
 
     await waitFor(() => {
-      // persisted via set-chat-session
-      const setCall = h.daemonCliGet.mock.calls.find((c) => c[0] === 'workspace/set-chat-session')
-      expect(setCall).toBeTruthy()
-      const params = (setCall?.[1] ?? {}) as { session_id?: string }
-      expect(params.session_id).toBe('other-sess')
+      // persisted via the setChatSession client (id + provider)
+      expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'other-sess', 'claude')
       // then a forceRespawn ensure
       expect(lastEnsureCall()?.forceRespawn).toBe(true)
+    })
+  })
+})
+
+// ── Slice 4 (agent-degeneralization) — multi-agent canonical dropdown ─────
+//
+// The picker lists EVERY provider's sessions for the workspace (the
+// claude-only filter is gone), renders a provider mark per row, and a
+// pick persists the row's provider alongside the id so the daemon stamps
+// workspace_sessions.harness and respawns in that harness's grammar.
+
+describe('Slice 4 — multi-agent canonical-session dropdown', () => {
+  const MIXED_ROWS = [
+    { sessionId: 'claude-sess', title: 'Claude chat', timestamp: 3, messageCount: 5, provider: 'claude' },
+    { sessionId: 'pi-sess', title: 'Pi chat', timestamp: 2, messageCount: 4, provider: 'pi' },
+    { sessionId: 'codex-sess', title: 'Codex chat', timestamp: 1, messageCount: 2, provider: 'codex' },
+  ]
+
+  it('lists ALL providers’ sessions with a provider icon per row (no claude filter)', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string): Promise<unknown> => {
+      if (route === 'chat/list') return MIXED_ROWS
+      return undefined
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+
+    fireEvent.click(screen.getByLabelText('Switch pinned chat session'))
+    await waitFor(() => expect(screen.queryByText('Pi chat')).not.toBeNull())
+
+    // Every provider's session renders — the old filter dropped pi/codex.
+    expect(screen.queryByText('Claude chat')).not.toBeNull()
+    expect(screen.queryByText('Codex chat')).not.toBeNull()
+
+    // Each row carries its provider's icon.
+    const icons = screen.getAllByTestId('provider-icon')
+    expect(icons.map((el) => el.getAttribute('data-provider'))).toEqual([
+      'claude', 'pi', 'codex',
+    ])
+  })
+
+  it('picking a NON-claude row persists its provider via set-chat-session then respawns', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string): Promise<unknown> => {
+      if (route === 'chat/list') return MIXED_ROWS
+      return undefined
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.daemonCliPost.mockClear()
+
+    fireEvent.click(screen.getByLabelText('Switch pinned chat session'))
+    await waitFor(() => expect(screen.queryByText('Pi chat')).not.toBeNull())
+    fireEvent.click(screen.getByText('Pi chat'))
+
+    await waitFor(() => {
+      expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'pi-sess', 'pi')
+      // The respawn goes through ensure-pinned-chat — the DAEMON resolves
+      // the stored harness's command; the renderer sends no command/args.
+      expect(lastEnsureCall()?.forceRespawn).toBe(true)
+    })
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-command')).toBe('NONE')
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-args')).toBe('NONE')
+  })
+
+  it('rows without a provider (older daemon) degrade to claude', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string): Promise<unknown> => {
+      if (route === 'chat/list') {
+        return [{ sessionId: 'legacy-sess', title: 'Legacy chat', timestamp: 1, messageCount: 1 }]
+      }
+      return undefined
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+
+    fireEvent.click(screen.getByLabelText('Switch pinned chat session'))
+    await waitFor(() => expect(screen.queryByText('Legacy chat')).not.toBeNull())
+    expect(screen.getByTestId('provider-icon').getAttribute('data-provider')).toBe('claude')
+
+    fireEvent.click(screen.getByText('Legacy chat'))
+    await waitFor(() => {
+      expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'legacy-sess', 'claude')
     })
   })
 })

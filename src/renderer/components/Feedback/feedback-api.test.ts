@@ -4,11 +4,13 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  filterBySearch,
   groupByStatus,
   optionsActionable,
   replyMode,
   sortNewestFirst,
   type FeedbackKind,
+  type FeedbackListRow,
   type FeedbackStatus,
 } from './feedback-api'
 
@@ -52,6 +54,32 @@ describe('replyMode', () => {
     expect(replyMode(item('answered', 'question'))).toBe('comment')
     expect(replyMode(item('resolved', 'approval'))).toBe('comment')
     expect(replyMode(item('dismissed', 'question'))).toBe('comment')
+  })
+})
+
+describe('filterBySearch', () => {
+  const rows: Pick<FeedbackListRow, 'id' | 'title' | 'agentName' | 'projectName' | 'kind' | 'status'>[] = [
+    { id: 'fb-abc123', title: 'Ship the release?', agentName: 'Cortana', projectName: 'K2', kind: 'approval', status: 'waiting' },
+    { id: 'fb-def456', title: 'Which DB schema wins', agentName: 'Appa', projectName: 'Fleet', kind: 'question', status: 'answered' },
+  ]
+
+  it('empty / whitespace query returns all rows unfiltered', () => {
+    expect(filterBySearch(rows, '')).toEqual(rows)
+    expect(filterBySearch(rows, '   ')).toEqual(rows)
+  })
+
+  it('every term must match, terms can hit different fields, any order', () => {
+    expect(filterBySearch(rows, 'cortana release').map((r) => r.id)).toEqual(['fb-abc123'])
+    expect(filterBySearch(rows, 'release cortana').map((r) => r.id)).toEqual(['fb-abc123'])
+    expect(filterBySearch(rows, 'cortana schema')).toEqual([])
+  })
+
+  it('matches case-insensitively across title, agent, workspace, kind, status, and id', () => {
+    expect(filterBySearch(rows, 'APPA').map((r) => r.id)).toEqual(['fb-def456'])
+    expect(filterBySearch(rows, 'fleet').map((r) => r.id)).toEqual(['fb-def456'])
+    expect(filterBySearch(rows, 'approval').map((r) => r.id)).toEqual(['fb-abc123'])
+    expect(filterBySearch(rows, 'answered').map((r) => r.id)).toEqual(['fb-def456'])
+    expect(filterBySearch(rows, 'def456').map((r) => r.id)).toEqual(['fb-def456'])
   })
 })
 

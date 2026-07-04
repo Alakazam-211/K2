@@ -187,3 +187,21 @@ export function optionsActionable(item: {
 }): boolean {
   return item.status === 'waiting' && (item.options?.length ?? 0) > 0
 }
+
+/** Tokenized, order-independent AND search over the list. The query is
+ *  split on whitespace; a row matches only if EVERY term is a substring
+ *  of its combined lowercased haystack (title/agent/workspace/kind/
+ *  status/id), so each term can hit a different field. Empty query = no
+ *  filter. Substring-only — no fuzzy matching. */
+export function filterBySearch<
+  T extends Pick<FeedbackListRow, 'id' | 'title' | 'agentName' | 'projectName' | 'kind' | 'status'>,
+>(rows: T[], query: string): T[] {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return rows
+  return rows.filter((r) => {
+    const haystack = [r.title, r.agentName, r.projectName, r.kind, r.status, r.id]
+      .join(' ')
+      .toLowerCase()
+    return terms.every((t) => haystack.includes(t))
+  })
+}

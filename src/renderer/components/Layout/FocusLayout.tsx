@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { usePanelsStore } from '../../stores/panels'
 import TimerButton from '@/components/Timer/TimerButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
+import ModeToggle from '@/components/Presence/ModeToggle'
 
 interface FocusLayoutProps {
   children: ReactNode
@@ -123,6 +124,9 @@ export default function FocusLayout({
               )}
             </svg>
           </button>
+
+          {/* S5 — per-window viewer/claimer mode toggle (last control) */}
+          <ModeToggle />
         </div>
       </div>
 

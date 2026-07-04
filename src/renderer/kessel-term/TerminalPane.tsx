@@ -52,6 +52,11 @@ import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useTabsStore } from '@/stores/tabs'
 import { useWindowFocusStore } from '@/stores/window-focus'
+import {
+  useWindowModeStore,
+  isViewerModeActive,
+  initWindowModeDefault,
+} from '@/stores/window-mode'
 import { useSessionLabelsStore } from '@/stores/session-labels'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { detectWorkingSignal, GROK_PERMISSION_TITLE_RE } from '@/lib/agent-signals'
@@ -200,6 +205,10 @@ type OutboundMsg =
   // cols/rows omitted).
   | { event: 'pin_initial'; payload: { cols: number; rows: number; set_by: string | null } }
   | { event: 'pin_changed'; payload: { cols?: number; rows?: number; cleared: boolean } }
+  // S5 viewer/claimer — mode ACK (connect-time + per set_mode) and the
+  // one-time "your input was dropped" hint for non-claimer connections.
+  | { event: 'mode'; payload: { mode: 'viewer' | 'claimer'; capable: boolean } }
+  | { event: 'input_denied'; payload: { reason: string } }
 
 // ── Helpers ───────────────────────────────────────────────────────
 // (hexToCss / runStyle / renderRowRuns / TerminalRow moved to
@@ -1463,6 +1472,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         usePinnedSizeStore.getState().setPin(sessionId, pin)
       }
       applyPinFrame(null)
+      // S5 — declare this window's mode on the fresh daemon-side
+      // subscriber (whose default is viewer for non-owner tokens),
+      // BEFORE the active-claim re-prime below so the daemon judges
+      // the claim under the right mode. Only a RESOLVED mode is sent;
+      // unresolved relies on the daemon defaults.
+      try {
+        const wm = useWindowModeStore.getState()
+        if (wm.resolved) {
+          ws.send(JSON.stringify({ action: 'set_mode', mode: wm.mode }))
+        }
+      } catch {
+        // Half-open socket — the set_mode store subscription re-sends
+        // on the next mode change; daemon defaults hold until then.
+      }
       // Issue #8: re-prime using the FULL predicate (visible AND
       // pane-focused AND window-focused), not window-focus alone.
       // A backgrounded pane that reconnects (e.g. WebKit dropped the
@@ -1743,6 +1766,25 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             // consumer can run a spawn-loop circuit breaker. Fired via
             // the ref to avoid stale-closure / re-subscribe churn.
             onChildExitRef.current?.(parsed.payload.exit_code)
+            break
+          }
+          case 'mode': {
+            // S5 — daemon truth for this connection's mode +
+            // capability (connect-time and per set_mode ACK). Mirror
+            // capability into the window-mode store (drives the
+            // ModeToggle disabled state) and latch/clear the pill.
+            useWindowModeStore.getState().setCapable(parsed.payload.capable)
+            if (!parsed.payload.capable) {
+              setReadOnlyHint(true)
+            } else if (parsed.payload.mode === 'claimer') {
+              setReadOnlyHint(false)
+            }
+            break
+          }
+          case 'input_denied': {
+            // S5 — one-time-per-connection "your keystrokes were
+            // dropped" signal from the daemon gate.
+            setReadOnlyHint(true)
             break
           }
           case 'error':
@@ -2154,8 +2196,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     })
   }, [useWebgl, snapshot, scrollPx, painterTheme, cellMetrics, selectionVersion])
 
+  // S5 — subtle read-only hint. Latched when the daemon reports this
+  // connection can't drive the terminal (an `input_denied` frame, or a
+  // mode ACK with `capable:false`); cleared when a mode ACK confirms a
+  // capable claimer. Rendered as a bottom-left pill (the passive-pill
+  // convention in the overlay block below).
+  const [readOnlyHint, setReadOnlyHint] = useState(false)
+
   // ── Send input / resize ───────────────────────────────────────
   const sendInput = useCallback((text: string) => {
+    // S5 — viewer mode sends nothing (advisory; the daemon gate is
+    // authoritative and also covers clients that skip this check).
+    if (isViewerModeActive()) return
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
     ws.send(JSON.stringify({ action: 'input', text }))
@@ -2280,6 +2332,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // (and would arm a pointless 500ms resize hold). Measurements
       // above still flow so an unpin picks up current dims.
       if (pinnedSizeRef.current) return
+      // S5 — viewer mode emits no resize (recorded above so a later
+      // flip to claimer claims with current dims; daemon-authoritative).
+      if (isViewerModeActive()) return
       // Only the visible pane in the focused window emits (pinned-chat
       // retention: a background pane parked in the retainer's hidden
       // host sends NOTHING — after its own release the session is
@@ -2411,11 +2466,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // `set_active(false)`; only the visible+focused pane claims.
     const recomputeAndSendActive = (): void => {
       const windowFocused = useWindowFocusStore.getState().isFocused
-      const desired = computeDesiredActive({
-        visible: tabVisibleRef.current,
-        paneFocused: paneFocusedRef.current,
-        windowFocused,
-      })
+      // S5 — a viewer-mode window never claims (and a mode flip to
+      // viewer computes `false`, releasing any claim we held). The
+      // window-mode subscription in the set_mode effect re-runs this
+      // on every mode change.
+      const desired =
+        computeDesiredActive({
+          visible: tabVisibleRef.current,
+          paneFocused: paneFocusedRef.current,
+          windowFocused,
+        }) && !isViewerModeActive()
       sendSetActive(desired)
     }
     // Expose the latest implementation to the boot effect's WS-connect
@@ -2519,6 +2579,33 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     recomputeAndSendActiveRef.current()
   }, [isFocused, isTabVisible])
+
+  // S5 — per-window viewer/claimer mode. Mirror the store to the wire:
+  // send `set_mode` when the RESOLVED mode changes (the boot effect
+  // covers fresh sockets with a post-open send), then recompute the
+  // active claim — flipping to viewer releases it, flipping to claimer
+  // may claim. Unresolved sends nothing: the daemon's own defaults
+  // (owner → claimer, everyone else → viewer) already rule.
+  useEffect(() => {
+    initWindowModeDefault()
+    const sendMode = (): void => {
+      const s = useWindowModeStore.getState()
+      if (!s.resolved) return
+      const ws = wsRef.current
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      ws.send(JSON.stringify({ action: 'set_mode', mode: s.mode }))
+    }
+    // Mount-time declare (covers the WS-already-open remount path).
+    sendMode()
+    const unsub = useWindowModeStore.subscribe((state, prev) => {
+      if (state.mode !== prev.mode || state.resolved !== prev.resolved) {
+        sendMode()
+        recomputeAndSendActiveRef.current()
+      }
+    })
+    return unsub
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Foreground catch-up (pinned-chat retention): a hidden pane records
   // measurements without emitting (see sendResize), so if its box
@@ -4492,6 +4579,30 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           }}
         >
           ⌀ {pinnedSize.cols}×{pinnedSize.rows}
+        </div>
+      )}
+      {/* S5 — read-only hint: the daemon reported this connection
+          can't drive the terminal (viewer mode / no edit access).
+          Passive-pill styling, bottom-LEFT so it coexists with the
+          viewing-at pill. */}
+      {readOnlyHint && (
+        <div
+          data-terminal-readonly-pill=""
+          style={{
+            position: 'absolute',
+            bottom: 6,
+            left: 8,
+            padding: '2px 6px',
+            background: 'rgba(0,0,0,0.8)',
+            color: '#9a9a9a',
+            fontSize: '10px',
+            fontFamily: 'monospace',
+            zIndex: 999,
+            pointerEvents: 'none',
+            borderRadius: '3px',
+          }}
+        >
+          view-only
         </div>
       )}
       {scrollbarThumb && (

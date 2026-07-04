@@ -13,6 +13,7 @@ import { useFeedbackStore, initFeedbackEvents } from '@/stores/feedback'
 import { useProjectsStore } from '@/stores/projects'
 import TimerButton from '@/components/Timer/TimerButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
+import ModeToggle from '@/components/Presence/ModeToggle'
 import ServerSwitcher from './ServerSwitcher'
 
 interface TopBarProps {
@@ -278,6 +279,9 @@ export default function TopBar({
             )}
           </svg>
         </button>
+
+        {/* S5 — per-window viewer/claimer mode toggle (last control) */}
+        <ModeToggle />
       </div>
     </div>
   )

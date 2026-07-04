@@ -117,6 +117,9 @@ vi.mock('@/stores/connect-host', () => ({
   useConnectHostStore: {
     getState: () => ({ activeHost: 'local' }),
   },
+  // S5 — the window-mode store (imported via TerminalPane) registers a
+  // host-switch listener at module scope.
+  onActiveHostChange: () => () => {},
 }))
 
 import { TerminalPane } from './TerminalPane'

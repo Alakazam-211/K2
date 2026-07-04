@@ -14,36 +14,172 @@
 // the right panel in place — no navigation. Zero selection shows a
 // dashed empty state; the selection survives filters hiding its card.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useFeedbackStore } from '@/stores/feedback'
+import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/components/AgentOps/ops-api'
+import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import {
   countByStatus,
   fetchAllFeedback,
   filterBySearch,
   groupByStatus,
+  resolveFeedback,
   type FeedbackListRow,
   type FeedbackStatus,
 } from './feedback-api'
 import { FeedbackItemView } from './FeedbackItemView'
-import { WorkspaceFilterDropdown } from './WorkspaceFilterDropdown'
-import { KindBadge, PriorityBadge, StatusBadge } from './badges'
+import { WorkspaceFilterDropdown, type FilterableWorkspace } from './WorkspaceFilterDropdown'
+import { KindBadge, PriorityBadge } from './badges'
 
 const TOPBAR_HEIGHT = 38
+
+// ── Per-card status dropdown ──────────────────────────────────────────────
+
+/** The manually selectable statuses (canonical four, NOT customizable):
+ *  Waiting reopens a closed item; Resolved/Dismissed close it. Answered
+ *  is DISPLAYED when it's the current state but never selectable — it's
+ *  only reachable through an actual reply (a manual answered with a
+ *  null answer would break the `ask --wait` contract). */
+const SELECTABLE_STATUSES = ['waiting', 'resolved', 'dismissed'] as const
+
+/** StatusBadge's palette, shared by the trigger so the dropdown reads
+ *  as the card's status badge with a chevron. */
+function statusChipClass(status: FeedbackStatus): string {
+  return status === 'waiting'
+    ? 'bg-orange-400/10 text-orange-400'
+    : status === 'answered'
+      ? 'bg-green-400/10 text-green-400'
+      : 'bg-white/[0.06] text-[var(--color-text-muted)]'
+}
+
+function CardStatusDropdown({
+  row,
+  onMutated,
+}: {
+  row: FeedbackListRow
+  onMutated: () => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  const setStatus = async (status: (typeof SELECTABLE_STATUSES)[number]): Promise<void> => {
+    if (busy || status === row.status) {
+      setOpen(false)
+      return
+    }
+    setBusy(true)
+    try {
+      await resolveFeedback(row.id, status)
+      onMutated()
+    } catch (e) {
+      useToastStore
+        .getState()
+        .addToast(`Status change failed: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setBusy(false)
+      setOpen(false)
+    }
+  }
+
+  return (
+    // stopPropagation everywhere — interacting with the status control
+    // must not select/deselect the card underneath.
+    <div ref={rootRef} className="relative flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => setOpen((o) => !o)}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide cursor-pointer disabled:opacity-50 ${statusChipClass(row.status)}`}
+        title="Change status"
+      >
+        {row.status}
+        <svg
+          className={`w-2 h-2 transition-transform ${open ? 'rotate-180' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-0.5 z-20 min-w-[120px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-lg py-0.5">
+          {/* Answered shows as the current state but is not offered. */}
+          {row.status === 'answered' && (
+            <div
+              className="flex items-center gap-2 px-2 py-1.5 text-[11px] text-green-400 opacity-70 cursor-default select-none"
+              title="Answered is set by an actual reply, not by hand"
+            >
+              <span className="flex-1">Answered</span>
+              <CheckGlyph />
+            </div>
+          )}
+          {SELECTABLE_STATUSES.map((s) => {
+            const current = row.status === s
+            return (
+              <button
+                key={s}
+                type="button"
+                disabled={busy}
+                onClick={() => void setStatus(s)}
+                className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left capitalize transition-colors cursor-pointer disabled:opacity-50 ${
+                  current
+                    ? 'text-[var(--color-text-primary)] bg-white/[0.04]'
+                    : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
+                }`}
+                title={s === 'waiting' ? 'Reopen — back to waiting' : undefined}
+              >
+                <span className="flex-1">{s}</span>
+                {current && <CheckGlyph />}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CheckGlyph(): React.JSX.Element {
+  return (
+    <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  )
+}
 
 // ── List card ─────────────────────────────────────────────────────────────
 
 function FeedbackCard({
   row,
+  workspace,
   nowSec,
   selected,
   onSelect,
+  onMutated,
 }: {
   row: FeedbackListRow
+  /** The host workspace's store row (icon/color) — undefined when the
+   *  project has been unregistered since the ask was filed. */
+  workspace: FilterableWorkspace | undefined
   nowSec: number
   selected: boolean
   onSelect: () => void
+  onMutated: () => void
 }): React.JSX.Element {
   const dimmed = row.status === 'resolved' || row.status === 'dismissed'
   return (
@@ -55,22 +191,35 @@ function FeedbackCard({
           : 'border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
       } ${dimmed && !selected ? 'opacity-60' : ''}`}
     >
-      {/* Top row: kind + priority left, status right (card anatomy). */}
-      <div className="flex items-center gap-2">
-        <KindBadge kind={row.kind} />
+      {/* Top row: the host WORKSPACE (icon + name — instantly see where
+          the ask comes from) left, priority + status dropdown right. */}
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          {workspace && (
+            <ProjectAvatar
+              projectPath={workspace.path}
+              projectName={workspace.name}
+              projectColor={workspace.color}
+              projectId={workspace.id}
+              iconUrl={workspace.iconUrl}
+              size={18}
+            />
+          )}
+          <span className="text-[11px] text-[var(--color-text-secondary)] truncate">
+            {row.projectName}
+          </span>
+        </div>
         <PriorityBadge priority={row.priority} />
-        <div className="flex-1" />
-        <StatusBadge status={row.status} />
+        <CardStatusDropdown row={row} onMutated={onMutated} />
       </div>
       {/* The ask itself is the card body. */}
       <p className="mt-2 text-sm text-[var(--color-text-primary)] break-words" title={row.title}>
         {row.title}
       </p>
-      {/* Footer meta: submitter · workspace · when, comment count right. */}
+      {/* Footer meta: kind tag + submitter · when, comment count right. */}
       <div className="mt-2 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)] min-w-0">
+        <KindBadge kind={row.kind} />
         <span className="truncate">{row.agentName}</span>
-        <span className="opacity-60 flex-shrink-0">·</span>
-        <span className="truncate opacity-80">{row.projectName}</span>
         <span className="opacity-60 flex-shrink-0">·</span>
         <span className="tabular-nums flex-shrink-0">
           {formatRelativeTime(row.createdAt, nowSec)}
@@ -200,6 +349,15 @@ export default function FeedbackPage(): React.JSX.Element | null {
     () => (selectedId ? rows?.find((r) => r.id === selectedId) ?? null : null),
     [rows, selectedId],
   )
+
+  // Store rows by id for the cards' workspace avatar (icon + color).
+  const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
+
+  // Shared post-mutation refresh (card status dropdown + item view).
+  const onMutated = useCallback((): void => {
+    void loadList()
+    void useFeedbackStore.getState().refreshWaitingCount()
+  }, [loadList])
 
   if (!isOpen) return null
 
@@ -357,9 +515,11 @@ export default function FeedbackPage(): React.JSX.Element | null {
                         <FeedbackCard
                           key={row.id}
                           row={row}
+                          workspace={projectById.get(row.projectId)}
                           nowSec={nowSec}
                           selected={selectedId === row.id}
                           onSelect={() => setSelectedId(row.id)}
+                          onMutated={onMutated}
                         />
                       ))}
                     </div>
@@ -380,10 +540,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
               listRow={selectedRow}
               nowSec={nowSec}
               revision={revision}
-              onMutated={() => {
-                void loadList()
-                void useFeedbackStore.getState().refreshWaitingCount()
-              }}
+              onMutated={onMutated}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center m-4 border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-muted)] text-center px-6">

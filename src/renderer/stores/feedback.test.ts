@@ -81,15 +81,20 @@ describe('feedback store event wiring', () => {
     api.fetchWaitingCount.mockClear()
   })
 
-  it('subscribes to all four feedback events', () => {
-    for (const name of [
-      'feedback:created',
-      'feedback:answered',
-      'feedback:status-changed',
-      'feedback:commented',
-    ]) {
-      expect(bus.listeners.has(name), `listener for ${name}`).toBe(true)
-    }
+  it('subscribes to all four feedback events', async () => {
+    // listen() registration rides a dynamic-import .then chain — under
+    // full-suite CPU pressure it can settle a beat after beforeEach's
+    // single-macrotask flush, so poll instead of asserting a snapshot.
+    await vi.waitFor(() => {
+      for (const name of [
+        'feedback:created',
+        'feedback:answered',
+        'feedback:status-changed',
+        'feedback:commented',
+      ]) {
+        expect(bus.listeners.has(name), `listener for ${name}`).toBe(true)
+      }
+    })
   })
 
   it('feedback:commented bumps revision without touching the badge', async () => {

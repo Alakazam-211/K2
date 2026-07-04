@@ -27,6 +27,7 @@ import {
   type FeedbackStatus,
 } from './feedback-api'
 import { FeedbackItemView } from './FeedbackItemView'
+import { WorkspaceFilterDropdown } from './WorkspaceFilterDropdown'
 import { KindBadge, PriorityBadge, StatusBadge } from './badges'
 
 const TOPBAR_HEIGHT = 38
@@ -284,20 +285,14 @@ export default function FeedbackPage(): React.JSX.Element | null {
                 </button>
               )}
             </div>
-            {/* Workspace filter (a project filter joins later). */}
-            <select
+            {/* Workspace filter — custom dropdown mirroring the
+                Settings → Workspaces list (search, focus groups,
+                icons). A project filter joins later. */}
+            <WorkspaceFilterDropdown
+              projects={projects}
               value={workspaceFilter}
-              onChange={(e) => setWorkspaceFilter(e.target.value)}
-              className="px-2 py-1.5 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)] outline-none cursor-pointer flex-shrink-0"
-              title="Filter by workspace"
-            >
-              <option value="all">All workspaces</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              onChange={setWorkspaceFilter}
+            />
             </div>
 
             {/* Status filter — per-status counts always visible (the

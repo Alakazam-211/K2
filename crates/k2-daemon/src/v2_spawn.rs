@@ -263,6 +263,225 @@ pub fn can_sandbox() -> bool {
     }
 }
 
+/// 0.38.5 restart-recovery, extracted from `spawn_session` (Slice 3b) so the
+/// command/args resolution is unit-testable without a real PTY spawn.
+///
+/// When a spawn request arrives with NO command (the v2 default for terminal
+/// items) after a daemon restart, substitute the persisted launch so we re-run
+/// e.g. `claude --resume <id>` instead of dropping the user into a bare shell:
+///
+/// - **Ad-hoc tabs** (`agent_name == tab-<...>`) recover command + args from
+///   `workspace_tab_sessions`, splicing the row's argv-derived session id back
+///   in — now via the ProviderResume adapter's grammar (flag style appends
+///   `--resume <id>`, byte-identical for claude; subcommand style rebuilds
+///   `resume <id>` for codex). A command UNKNOWN to the adapter table gets NO
+///   splice (never invent flags for unknown providers) and replays its saved
+///   args bare.
+/// - **The pinned chat** (`agent_name == project_id`, no tab row after Phase 3)
+///   routes through the canonical resume resolver
+///   (`resume_chat::resolve_resume_chat_args`) — the pinned-chat identity SSOT
+///   (`workspace_sessions.session_id` + `harness`) picks the agent AND the
+///   argv, so a grok-harness pinned chat recovers as `grok --resume <sid>`,
+///   claude recovers byte-identically
+///   (`--dangerously-skip-permissions --resume <sid>` / `--session-id <mint>`),
+///   and self-minting providers recover bare with post-hoc id adoption.
+///   Pre-3b the non-claude case recovered bare with NO resume (the Slice-2
+///   gate); the claude case spliced the SSOT id without an exists-check —
+///   the resolver now also converges a ghost id to the newest real on-disk
+///   session (GH#24 semantics) instead of resuming a conversation that no
+///   longer exists.
+///
+/// Returns `None` for an unregistered cwd or when nothing is recoverable
+/// (spawn falls through to a bare shell, as before).
+pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, Vec<String>)> {
+    use k2_core::workspace::provider_resume::provider_resume_for_command;
+
+    // Scoped lock: the resolver below takes its own DB lock, so every
+    // read happens in this block and the lock is dropped before it runs.
+    let (project_id, tab_cmd, tab_args_json, tab_session_id) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let project_id =
+            k2_core::workspace::agent_identity::resolve_project_id(&conn, cwd)?;
+        let tab_row = k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
+            &conn,
+            &project_id,
+            agent_name,
+        )
+        .ok()
+        .flatten();
+        (
+            project_id,
+            tab_row.as_ref().and_then(|r| r.command.clone()),
+            tab_row.as_ref().and_then(|r| r.args_json.clone()),
+            tab_row.as_ref().and_then(|r| r.session_id.clone()),
+        )
+    };
+    // pinned-chat-identity-ssot PRD §4.3.1 (GH#24): the canonical pinned
+    // chat (`agent_name == project_id`) sources its resume id from the
+    // SSOT — `workspace_sessions.session_id` — NOT from
+    // `workspace_tab_sessions`. Ad-hoc Cmd+T tabs have no
+    // workspace_sessions row and legitimately recover from the tab table.
+    let is_pinned = agent_name == project_id;
+
+    // Tab-row path (legacy/pre-Phase-3 rows; ad-hoc tabs): replay the
+    // saved command, splice the session id in the command's own grammar.
+    if let Some(saved_cmd) = tab_cmd {
+        let mut saved_args: Vec<String> = tab_args_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_else(|| {
+                // Tab row without args: the standard pinned-chat base
+                // flags so a recovered claude still runs headlessly.
+                vec!["--dangerously-skip-permissions".to_string()]
+            });
+        let resume_id: Option<String> = if is_pinned {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::db::schema::WorkspaceSession::get(&conn, &project_id)
+                .ok()
+                .flatten()
+                .and_then(|row| row.session_id)
+                .filter(|s| !s.is_empty())
+        } else {
+            tab_session_id
+        };
+        if let Some(sid) = resume_id.as_deref() {
+            match provider_resume_for_command(&saved_cmd) {
+                Some(adapter) => {
+                    // Drop any persisted premint pair (`--session-id <v>`
+                    // for claude/grok) — it is replaced by an unambiguous
+                    // resume of the same conversation.
+                    if let Some(flag) = adapter.premint_flag() {
+                        let mut i = 0;
+                        while i + 1 < saved_args.len() {
+                            if saved_args[i] == flag {
+                                saved_args.remove(i); // flag
+                                saved_args.remove(i); // value
+                            } else {
+                                i += 1;
+                            }
+                        }
+                    }
+                    if !adapter.argv_carries_session_identity(&saved_args) {
+                        saved_args = adapter.resume_args(&saved_args, sid);
+                    }
+                }
+                None => {
+                    // Unknown provider: replay the saved args verbatim —
+                    // splicing `--resume` into an unknown CLI could be
+                    // anything from a no-op to a crash (never invent
+                    // flags for unknown providers).
+                    log_debug!(
+                        "[v2-spawn] restart-recovery: command {:?} maps to no resume adapter; \
+                         replaying saved args without a resume splice",
+                        saved_cmd
+                    );
+                }
+            }
+        }
+        log_debug!(
+            "[v2-spawn] restart-recovery: project={} agent={} pinned={} resume_source={} replayed command={} args={:?}",
+            project_id,
+            agent_name,
+            is_pinned,
+            if is_pinned { "workspace_sessions(SSOT)" } else { "workspace_tab_sessions" },
+            saved_cmd,
+            saved_args
+        );
+        return Some((saved_cmd, saved_args));
+    }
+
+    // Pinned no-tab-row (Phase 3): the canonical resume resolver owns
+    // command + argv + identity (harness wins; converge/premint/pending
+    // discovery — see fn doc).
+    if is_pinned {
+        match k2_core::workspace::resume_chat::resolve_resume_chat_args(cwd) {
+            Ok(resolved) => {
+                if resolved.pending_session_discovery {
+                    k2_core::workspace::provider_resume::defer_adopt_discovered_session(
+                        resolved.provider.clone(),
+                        cwd.to_string(),
+                    );
+                }
+                log_debug!(
+                    "[v2-spawn] restart-recovery: project={} agent={} pinned=true \
+                     resume_source=resume_resolver provider={} replayed command={} args={:?}",
+                    project_id,
+                    agent_name,
+                    resolved.provider,
+                    resolved.command,
+                    resolved.args
+                );
+                return Some((resolved.command, resolved.args));
+            }
+            Err(e) => {
+                log_debug!(
+                    "[v2-spawn] restart-recovery: resume resolve failed for {} — \
+                     falling through to a bare spawn: {}",
+                    cwd,
+                    e
+                );
+                return None;
+            }
+        }
+    }
+    None
+}
+
+/// 0.38.8 — Cmd+T session continuity, Slice-3b generalized. When the spawn
+/// command maps to a PREMINT-capable provider (claude + grok — the adapter
+/// table's premint column) and argv carries NO session identity in that
+/// provider's grammar, mint a fresh UUID and inject the provider's premint
+/// flag (`--session-id <uuid>`) so the agent persists its conversation to a
+/// known-id record. The `v2_session_map::register` hook reads the injected
+/// flag and stamps `workspace_tab_sessions.session_id`, which makes
+/// restart-recovery splice a resume on the next daemon restart. Self-minting
+/// providers (pi/codex/gemini/cursor) and unknown commands are untouched —
+/// no invented flags.
+///
+/// Command gating is basename-aware via the adapter lookup (a
+/// path-qualified `~/bin/claude` premints too; the pre-3b literal
+/// `== "claude"` compare missed it).
+pub(crate) fn autoinject_premint_session_id(
+    command: Option<&str>,
+    args: &mut Vec<String>,
+    agent_name: &str,
+    cwd: &str,
+) {
+    let Some(adapter) = command
+        .and_then(k2_core::workspace::provider_resume::provider_resume_for_command)
+    else {
+        return;
+    };
+    let Some(flag) = adapter.premint_flag() else { return };
+    if adapter.argv_carries_session_identity(args) {
+        return;
+    }
+    // Grok-specific identity spellings the shared check doesn't cover:
+    // `-s` (short premint), `-c/--continue` (resume-most-recent),
+    // `--fork-session` — all already decide the session, so injecting a
+    // premint would conflict (study §CLI grammar). Claude's token set is
+    // unchanged (byte-identical gate: --session-id / --resume / -r).
+    if adapter.provider == "grok"
+        && args
+            .iter()
+            .any(|a| a == "-s" || a == "-c" || a == "--continue" || a == "--fork-session")
+    {
+        return;
+    }
+    let new_sid = uuid::Uuid::new_v4().to_string();
+    log_debug!(
+        "[v2-spawn] auto-injected {}={} for agent={} cwd={}",
+        flag,
+        new_sid,
+        agent_name,
+        cwd
+    );
+    args.push(flag.to_string());
+    args.push(new_sid);
+}
+
 /// Handler for `POST /cli/sessions/v2/spawn` — parse the wire body then defer to
 /// [`spawn_session`]. Thin wrapper: ALL spawn plumbing lives in `spawn_session`
 /// so `/v1/sandboxes` reuses it verbatim with a host-trusted request, and the v2
@@ -371,158 +590,16 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     let mut command = req.command.clone();
     let mut args = req.args.clone().unwrap_or_default();
     if command.is_none() {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        if let Some(project_id) = k2_core::workspace::agent_identity::resolve_project_id(&conn, &req.cwd) {
-            // pinned-chat-identity-ssot PRD §4.3.1 (GH#24): the canonical
-            // pinned chat (`agent_name == project_id`) sources its
-            // `--resume` id from the SINGLE SOURCE OF TRUTH —
-            // `workspace_sessions.session_id` — NOT from
-            // `workspace_tab_sessions`. Recovery used to read the tab
-            // table's argv-derived id, which is the coupling that let the
-            // daemon-owned pinned chat (#683) bypass the canonical column
-            // for identity. Command/cwd may still come from the tab row if
-            // one happens to exist (legacy/pre-Phase-3), but after Phase 3
-            // the pinned row is no longer written, so we default to
-            // `claude` + the request cwd and splice `--resume <ssot-id>`.
-            // Ad-hoc Cmd+T tabs (`agent_name == tab-<...>`) are untouched
-            // below — they have no workspace_sessions row and legitimately
-            // recover from workspace_tab_sessions.
-            let is_pinned = req.agent_name == project_id;
-
-            // Default the command from the tab row when present; the
-            // pinned chat falls back to `claude` so recovery works even
-            // with no tab row (Phase 3).
-            let tab_row = k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
-                &conn,
-                &project_id,
-                &req.agent_name,
-            )
-            .ok()
-            .flatten();
-
-            // Source the resume id: SSOT for the pinned chat, the tab
-            // row's argv-derived id for ad-hoc tabs.
-            let resume_id: Option<String> = if is_pinned {
-                k2_core::db::schema::WorkspaceSession::get(&conn, &project_id)
-                    .ok()
-                    .flatten()
-                    .and_then(|row| row.session_id)
-                    .filter(|s| !s.is_empty())
-            } else {
-                tab_row.as_ref().and_then(|r| r.session_id.clone())
-            };
-
-            // Pick the command + base args. Tab row wins when it carries a
-            // command; the pinned chat's no-tab-row fallback (Phase 3)
-            // used to hardcode `claude` — agent-degeneralization S2
-            // resolves the workspace/global default agent instead
-            // (projects.default_agent → AppSettings.default_agent →
-            // claude). The bool tracks whether the recovered command may
-            // receive the `--resume` splice below.
-            let recovered: Option<(String, Vec<String>, bool)> = if let Some(cmd) =
-                tab_row.as_ref().and_then(|r| r.command.clone())
-            {
-                // Tab-row path — unchanged legacy behavior.
-                let saved_args: Vec<String> = tab_row
-                    .as_ref()
-                    .and_then(|r| r.args_json.as_deref())
-                    .and_then(|s| serde_json::from_str(s).ok())
-                    .unwrap_or_else(|| {
-                        // Tab row without args: the standard pinned-chat
-                        // base flags so a recovered claude still runs
-                        // headlessly.
-                        vec!["--dangerously-skip-permissions".to_string()]
-                    });
-                Some((cmd, saved_args, true))
-            } else if is_pinned {
-                let resolved = k2_core::workspace::agent_resolve::resolve_agent_command(
-                    &conn,
-                    &project_id,
-                );
-                if resolved.is_claude() {
-                    let mut base = resolved.args.clone();
-                    // Recovered pinned claude must stay headless even on
-                    // a customized preset.
-                    k2_core::workspace::agent_resolve::ensure_flag(
-                        &mut base,
-                        "--dangerously-skip-permissions",
-                    );
-                    Some((resolved.command, base, true))
-                } else {
-                    // Slice 3: `--resume` (and the SSOT resume id itself)
-                    // are Claude grammar — a non-claude default recovers
-                    // the pinned chat with the preset's own command+args
-                    // bare (fresh conversation, no resume) until the
-                    // ProviderResume adapter lands.
-                    Some((resolved.command, resolved.args, false))
-                }
-            } else {
-                None
-            };
-
-            if let Some((saved_cmd, mut saved_args, may_splice_resume)) = recovered {
-                // If we have a resume id, strip any existing
-                // `--session-id` flag (we replace it with `--resume` for
-                // unambiguous resumption) and splice in `--resume <id>`.
-                // The base args carry --dangerously-skip-permissions and
-                // similar flags we want to keep.
-                if let Some(sid) = resume_id.as_deref().filter(|_| may_splice_resume) {
-                    // Drop any --session-id <value> pair.
-                    let mut i = 0;
-                    while i + 1 < saved_args.len() {
-                        if saved_args[i] == "--session-id" {
-                            saved_args.remove(i); // flag
-                            saved_args.remove(i); // value
-                        } else {
-                            i += 1;
-                        }
-                    }
-                    let already_has_resume = saved_args
-                        .iter()
-                        .any(|a| a == "--resume" || a == "-r");
-                    if !already_has_resume {
-                        saved_args.push("--resume".to_string());
-                        saved_args.push(sid.to_string());
-                    }
-                }
-                log_debug!(
-                    "[v2-spawn] restart-recovery: project={} agent={} pinned={} resume_source={} replayed command={} args={:?}",
-                    project_id,
-                    req.agent_name,
-                    is_pinned,
-                    if is_pinned { "workspace_sessions(SSOT)" } else { "workspace_tab_sessions" },
-                    saved_cmd,
-                    saved_args
-                );
-                command = Some(saved_cmd);
-                args = saved_args;
-            }
+        if let Some((saved_cmd, saved_args)) = recovered_launch(&req.agent_name, &req.cwd) {
+            command = Some(saved_cmd);
+            args = saved_args;
         }
     }
 
-    // 0.38.8 — Cmd+T session continuity. When spawning `claude` with
-    // no `--session-id` and no `--resume` (the common Cmd+T-from-the-
-    // Tauri-renderer shape), mint a fresh UUID and inject
-    // `--session-id <uuid>` so claude persists its conversation to a
-    // known-id JSONL. The v2_session_map::register hook reads the
-    // injected flag and stamps `workspace_tab_sessions.session_id`,
-    // which makes the restart-recovery branch above splice
-    // `--resume <uuid>` on the next daemon restart. Net: Cmd+T tabs
-    // resume the same conversation after app updates / kickstart.
-    if command.as_deref() == Some("claude") {
-        let has_session_id = args.iter().any(|a| a == "--session-id");
-        let has_resume = args.iter().any(|a| a == "--resume" || a == "-r");
-        if !has_session_id && !has_resume {
-            let new_sid = uuid::Uuid::new_v4().to_string();
-            log_debug!(
-                "[v2-spawn] auto-injected --session-id={} for agent={} cwd={}",
-                new_sid, req.agent_name, req.cwd
-            );
-            args.push("--session-id".to_string());
-            args.push(new_sid);
-        }
-    }
+    // 0.38.8 — Cmd+T session continuity, Slice-3b generalized to every
+    // PREMINT-capable provider (claude + grok). See
+    // `autoinject_premint_session_id`.
+    autoinject_premint_session_id(command.as_deref(), &mut args, &req.agent_name, &req.cwd);
 
     // 2026-07-02 PTY-leak breaker — refuse to HOLD unbounded abandoned
     // bare shells for one workspace. The split-pane restore re-mint loop
@@ -1581,4 +1658,91 @@ mod tests {
     // crates/k2so-daemon/tests/ where a running tokio runtime and
     // the ability to fork a shell are available. They gate A7's
     // parity work.
+
+    // ── autoinject_premint_session_id (0.38.8 / Slice 3b) ────────────
+
+    fn args_of(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// CLAUDE PIN — the pre-3b behavior byte-for-byte: bare claude gets
+    /// `--session-id <uuid>` appended; an existing `--session-id` /
+    /// `--resume` / `-r` suppresses the inject.
+    #[test]
+    fn autoinject_claude_pin() {
+        let mut args = args_of(&["--dangerously-skip-permissions"]);
+        autoinject_premint_session_id(Some("claude"), &mut args, "tab-x", "/w");
+        assert_eq!(args.len(), 3, "flag + uuid appended: {args:?}");
+        assert_eq!(args[0], "--dangerously-skip-permissions");
+        assert_eq!(args[1], "--session-id");
+        assert_eq!(args[2].len(), 36, "a v4 uuid value: {args:?}");
+
+        for suppressor in [
+            args_of(&["--session-id", "X"]),
+            args_of(&["--resume", "X"]),
+            args_of(&["-r", "X"]),
+        ] {
+            let mut args = suppressor.clone();
+            autoinject_premint_session_id(Some("claude"), &mut args, "tab-x", "/w");
+            assert_eq!(args, suppressor, "existing identity must suppress inject");
+        }
+    }
+
+    /// Slice 3b widening: grok (the other premint provider) gets the
+    /// same continuity mint; its own identity spellings suppress it.
+    #[test]
+    fn autoinject_grok_premints_and_respects_grok_identity_flags() {
+        let mut args = args_of(&["--always-approve"]);
+        autoinject_premint_session_id(Some("grok"), &mut args, "tab-x", "/w");
+        assert_eq!(
+            args[1], "--session-id",
+            "grok premints via --session-id: {args:?}"
+        );
+        assert_eq!(args.len(), 3);
+
+        for suppressor in [
+            args_of(&["--resume", "X"]),
+            args_of(&["-s", "X"]),
+            args_of(&["-c"]),
+            args_of(&["--continue"]),
+            args_of(&["--fork-session"]),
+        ] {
+            let mut args = suppressor.clone();
+            autoinject_premint_session_id(Some("grok"), &mut args, "tab-x", "/w");
+            assert_eq!(args, suppressor, "grok identity flag must suppress inject");
+        }
+    }
+
+    /// Self-minting providers + unknown commands + bare shells are
+    /// NEVER given invented flags.
+    #[test]
+    fn autoinject_leaves_self_minting_and_unknown_commands_untouched() {
+        for cmd in [
+            Some("pi"),
+            Some("codex"),
+            Some("gemini"),
+            Some("cursor-agent"),
+            Some("hermes"),
+            Some("bash"),
+            None,
+        ] {
+            let mut args = args_of(&["--whatever"]);
+            autoinject_premint_session_id(cmd, &mut args, "tab-x", "/w");
+            assert_eq!(args, args_of(&["--whatever"]), "cmd={cmd:?} must be untouched");
+        }
+    }
+
+    /// Basename gating: a path-qualified claude premints too (the
+    /// pre-3b literal `== "claude"` compare missed it — deliberate fix).
+    #[test]
+    fn autoinject_matches_path_qualified_claude() {
+        let mut args = Vec::new();
+        autoinject_premint_session_id(
+            Some("/usr/local/bin/claude"),
+            &mut args,
+            "tab-x",
+            "/w",
+        );
+        assert_eq!(args.first().map(String::as_str), Some("--session-id"));
+    }
 }

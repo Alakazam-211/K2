@@ -572,6 +572,97 @@ async fn restart_recovery_resumes_pinned_chat_from_ssot() {
     v2_session_map::clear_for_tests();
 }
 
+/// Slice 3b — restart-recovery honors the RECOVERED HARNESS: a pinned
+/// chat whose canonical session is GROK (harness='grok', grok
+/// conversation on disk) recovers as `grok --resume <sid>` through the
+/// resolver, not 3a's degraded bare-claude spawn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restart_recovery_pinned_grok_harness_recovers_grok_grammar() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("recover-grok");
+    let _shim = install_agent_shim("grok");
+
+    let workspace_id = "pinned-recover-grok-ws";
+    let project = setup_project(workspace_id, "recover-grok");
+    let project_path = project.to_string_lossy().into_owned();
+
+    // Prior GROK conversation: on-disk summary.json + SSOT row whose
+    // harness names grok. No workspace_tab_sessions row (Phase 3).
+    let prior = "01920000-cccc-7000-8000-000000000abc";
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        let dir = home
+            .join(".grok")
+            .join("sessions")
+            .join("%2Ffixture")
+            .join(prior);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("summary.json"),
+            serde_json::json!({
+                "info": { "id": prior, "cwd": project_path },
+                "last_active_at": "2026-07-03T10:00:00Z",
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let row_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+             VALUES (?1, ?2, ?3, 'grok', 'user', 'running', unixepoch()) \
+             ON CONFLICT(project_id) DO UPDATE SET session_id = ?3, harness = 'grok'",
+            rusqlite::params![row_id, workspace_id, prior],
+        )
+        .unwrap();
+    }
+
+    let body = serde_json::json!({
+        "agent_name": workspace_id,
+        "cwd": project_path,
+        // command intentionally absent → recovery branch fires.
+    })
+    .to_string();
+    let resp = k2_daemon::v2_spawn::handle_v2_spawn(body.as_bytes());
+    assert_eq!(
+        resp.status, "200 OK",
+        "recovery spawn must succeed, got: {} / {}",
+        resp.status, resp.body
+    );
+
+    let live = v2_session_map::lookup_by_agent_name(workspace_id)
+        .expect("recovered canonical session must be registered");
+    assert_eq!(
+        live.program.as_deref(),
+        Some("grok"),
+        "the recovered HARNESS picks the binary — grok, not claude; argv={:?}",
+        live.args
+    );
+    let resume_idx = live
+        .args
+        .iter()
+        .position(|a| a == "--resume")
+        .unwrap_or_else(|| panic!("grok recovery must resume flag-style: {:?}", live.args));
+    assert_eq!(
+        live.args.get(resume_idx + 1).map(String::as_str),
+        Some(prior),
+        "recovery must resume the SSOT grok id, got argv: {:?}",
+        live.args
+    );
+    assert!(
+        !live.args.iter().any(|a| a == "--dangerously-skip-permissions"),
+        "claude-only flag must not leak into a grok recovery: {:?}",
+        live.args
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Issue B (daemon-multi-client-arbitration §6) — EXPLICIT SELECTION WINS.
 //

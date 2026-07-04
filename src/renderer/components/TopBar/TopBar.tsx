@@ -368,21 +368,21 @@ function FeedbackTopBarButton(): React.JSX.Element {
     void useFeedbackStore.getState().refreshWaitingCount()
   }, [projects])
 
+  // A labeled button (not an icon) — the ask queue is a destination,
+  // and the visible word carries it. Same tokens/height as the icon
+  // buttons around it; the waiting-count badge behaves exactly as
+  // before (visible with the count, hidden at 0).
   return (
     <button
       onClick={() => useFeedbackStore.getState().open()}
-      className="relative flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+      className="relative flex h-6 items-center justify-center px-2 text-[11px] font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
       style={{
         // @ts-expect-error -- Electron-specific CSS property
         WebkitAppRegion: 'no-drag'
       }}
       title="Feedback — agents waiting on you"
     >
-      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        <path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5" />
-        <line x1="12" y1="15" x2="12" y2="15.01" />
-      </svg>
+      Feedback
       {waitingCount > 0 && (
         <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-white bg-orange-500 rounded-full px-0.5">
           {waitingCount > 99 ? '99+' : waitingCount}

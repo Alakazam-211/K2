@@ -9,6 +9,8 @@ import { useReviewQueueStore } from '@/stores/review-queue'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useAgentOpsStore } from '@/stores/agent-ops'
+import { useFeedbackStore, initFeedbackEvents } from '@/stores/feedback'
+import { useProjectsStore } from '@/stores/projects'
 import TimerButton from '@/components/Timer/TimerButton'
 import ServerSwitcher from './ServerSwitcher'
 
@@ -146,6 +148,8 @@ export default function TopBar({
         <RunningAgentsTopBarButton />
         {/* Agent Ops — fleet view */}
         <AgentOpsTopBarButton />
+        {/* Feedback — agent→human ask queue */}
+        <FeedbackTopBarButton />
         {/* Back / Forward navigation */}
         <NavButtons />
       </div>
@@ -340,6 +344,50 @@ function AgentOpsTopBarButton(): React.JSX.Element {
       <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
         <path d="M3 12h4l2 5 4-12 2 7h6" />
       </svg>
+    </button>
+  )
+}
+
+function FeedbackTopBarButton(): React.JSX.Element {
+  const waitingCount = useFeedbackStore((s) => s.waitingCount)
+  const projects = useProjectsStore((s) => s.projects)
+
+  // Wire the feedback:created/answered listeners once (idempotent) and
+  // (re)count waiting items whenever the registered-projects set changes
+  // — the count is a per-workspace list fan-out, so it must re-run when
+  // workspaces appear/disappear. Only the MAIN window fires the desktop
+  // notification (a second window would double-notify).
+  useEffect(() => {
+    let isMain = true
+    try {
+      isMain = getCurrentWindow().label === 'main'
+    } catch {
+      /* outside Tauri (tests) — default main */
+    }
+    initFeedbackEvents(isMain)
+    void useFeedbackStore.getState().refreshWaitingCount()
+  }, [projects])
+
+  return (
+    <button
+      onClick={() => useFeedbackStore.getState().open()}
+      className="relative flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+      style={{
+        // @ts-expect-error -- Electron-specific CSS property
+        WebkitAppRegion: 'no-drag'
+      }}
+      title="Feedback — agents waiting on you"
+    >
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        <path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5" />
+        <line x1="12" y1="15" x2="12" y2="15.01" />
+      </svg>
+      {waitingCount > 0 && (
+        <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-white bg-orange-500 rounded-full px-0.5">
+          {waitingCount > 99 ? '99+' : waitingCount}
+        </span>
+      )}
     </button>
   )
 }

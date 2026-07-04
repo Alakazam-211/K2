@@ -48,6 +48,7 @@ import { useRunningAgentsStore } from './stores/running-agents'
 import RunningAgentsPanel from './components/RunningAgentsPanel/RunningAgentsPanel'
 import AgentOps from './components/AgentOps/AgentOps'
 import { useAgentOpsStore } from './stores/agent-ops'
+import FeedbackPage from './components/Feedback/FeedbackPage'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
 import { useTabsStore, initApiSandboxTabAdoption } from './stores/tabs'
@@ -218,6 +219,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
       <ReviewQueueModal />
       <RunningAgentsPanel />
       <AgentOps />
+      <FeedbackPage />
       <ContextMenu />
       <ConfirmDialog />
       <WhatsNewModal />
@@ -876,6 +878,7 @@ export default function App(): React.JSX.Element {
       <ReviewQueueModal />
       <RunningAgentsPanel />
       <AgentOps />
+      <FeedbackPage />
       <ContextMenu />
       <ConfirmDialog />
       <WhatsNewModal />

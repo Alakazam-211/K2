@@ -3,6 +3,8 @@ import { useTabsStore, type TerminalItemData } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
 import { useActiveAgentsStore } from '@/stores/active-agents'
+import { usePinnedSizeStore } from '@/stores/pinned-size'
+import { openPinSizeMenu, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import { agentChatId } from '@/lib/terminal-id'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { invoke } from '@tauri-apps/api/core'
@@ -15,6 +17,24 @@ import AgentIcon from '@/components/AgentIcon/AgentIcon'
 interface TabBarProps {
   cwd: string
   groupIndex?: number
+}
+
+/** Pushpin glyph — head, shoulder, needle. Same mark PaneTabBar uses
+ *  so the pin entry point reads identically on both tab bars. */
+function PinGlyph(): React.JSX.Element {
+  return (
+    <svg
+      width="8"
+      height="8"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+    >
+      <path d="M4 1.5 h4 l-0.75 3.5 L9 6.5 H3 l1.75-1.5 Z" />
+      <line x1="6" y1="6.5" x2="6" y2="10.5" />
+    </svg>
+  )
 }
 
 export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element {
@@ -35,6 +55,49 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   // an `agent` item, NOT a `terminal` item, so the generic working-detection
   // below (which only inspects terminal panes) never sees it.
   const projectId = useProjectsStore((s) => s.projects.find((p) => p.path === cwd)?.id ?? null)
+
+  // ── Pin-to-size menu (S7c, PRD presence-multiplayer §5.5) ──────────────
+  //
+  // S7b put the pin menu on PaneTabBar, which only renders when a tab
+  // HAS SPLITS. Single-pane tabs — the common case, including the pinned
+  // agent chat — are managed by THIS bar, so the same entry point lives
+  // here too (menu construction + POST shared via pinSizeMenu.ts).
+  // Resolution success (terminalId→daemon-sessionId in the pinned-size
+  // store, registered by TerminalPane at spawn-resolve) doubles as the
+  // "is there a live Kessel session?" gate for showing the button.
+  const pinSessions = usePinnedSizeStore((s) => s.sessions)
+  const pins = usePinnedSizeStore((s) => s.pins)
+  const projects = useProjectsStore((s) => s.projects)
+
+  // Transient inline hint for pin-size failures (cleared after 4s) —
+  // same component-local mechanism as PaneTabBar.
+  const [pinHint, setPinHint] = useState<string | null>(null)
+  const pinHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flashPinHint = useCallback((msg: string) => {
+    setPinHint(msg)
+    if (pinHintTimerRef.current) clearTimeout(pinHintTimerRef.current)
+    pinHintTimerRef.current = setTimeout(() => setPinHint(null), 4000)
+  }, [])
+  useEffect(
+    () => () => {
+      if (pinHintTimerRef.current) clearTimeout(pinHintTimerRef.current)
+    },
+    []
+  )
+
+  const handlePinMenu = useCallback(
+    (e: React.MouseEvent, sessionId: string) => {
+      e.stopPropagation()
+      const anchor = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      void openPinSizeMenu({
+        x: anchor.left,
+        y: anchor.bottom + 4,
+        sessionId,
+        onError: flashPinHint,
+      })
+    },
+    [flashPinHint]
+  )
 
   // Heartbeat-tab detection key: a Set of every heartbeat's
   // `lastSessionId` (the Claude `--resume` target stamped in the DB
@@ -428,6 +491,27 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
             ),
           )
 
+          // S7c — pin-size entry point for SINGLE-PANE tabs only. Split
+          // tabs already carry per-pane pin buttons on their PaneTabBar;
+          // a tab-level button there would be ambiguous about which
+          // pane it pins. Resolution (terminal item → terminalId,
+          // agent chat item → agent-chat:<projectId>) is shared with
+          // PaneTabBar via pinSizeMenu.ts; null = no button.
+          const soleGroup =
+            tab.paneGroups.size === 1 ? Array.from(tab.paneGroups.values())[0] : null
+          const pinItem = soleGroup
+            ? soleGroup.items[
+                Math.min(soleGroup.activeItemIndex, soleGroup.items.length - 1)
+              ] ?? null
+            : null
+          const pinSessionId = pinItem
+            ? resolvePinSessionId(pinItem, pinSessions, projects)
+            : null
+          const pinnedSize = pinSessionId ? pins[pinSessionId] ?? null : null
+          const pinTitle = pinnedSize
+            ? `Pinned to ${pinnedSize.cols}×${pinnedSize.rows} — click to change`
+            : 'Pin size'
+
           // Pinned system agent tab — compact with just icon.
           // Post-0.36.0 the agent UI is split across two pinned tabs;
           // each gets its own icon based on the agent item's section.
@@ -505,6 +589,33 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 title={tab.title}
               >
                 {iconSvg}
+                {/* S7c — pin-size menu for the pinned agent Chat tab
+                    (its AgentChatPane hosts a Kessel TerminalPane).
+                    The compact icon tab has no room for an inline
+                    trailing button, so the pin sits in the top-right
+                    corner: hover-revealed while unpinned (mirrors how
+                    this bar tucks secondary affordances away), always
+                    visible in accent while pinned. */}
+                {pinSessionId && (
+                  <button
+                    className={`absolute top-0 right-0 items-center justify-center hover:bg-white/10 ${
+                      pinnedSize ? 'flex' : 'hidden group-hover:flex'
+                    }`}
+                    style={{
+                      width: '12px',
+                      height: '12px',
+                      color: pinnedSize
+                        ? 'var(--color-accent)'
+                        : 'var(--color-text-muted)',
+                    }}
+                    onClick={(e) => handlePinMenu(e, pinSessionId)}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    title={pinTitle}
+                    data-tab-pin-size=""
+                  >
+                    <PinGlyph />
+                  </button>
+                )}
                 {/* Activity underline */}
                 {systemTabActive && (
                   <div className="absolute bottom-0 left-1 right-1 h-[2px] bg-[var(--color-accent)] rounded-full" />
@@ -620,6 +731,25 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   {tab.title}
                 </span>
               )}
+              {/* S7c — pin-size menu entry point. Always visible when
+                  the tab resolves to a live Kessel session (same
+                  convention as this bar's close button and as
+                  PaneTabBar's pin button); accent-colored while
+                  pinned. */}
+              {pinSessionId && (
+                <button
+                  className="ml-2 flex h-4 w-4 flex-shrink-0 items-center justify-center hover:bg-white/10"
+                  style={{
+                    color: pinnedSize ? 'var(--color-accent)' : undefined,
+                  }}
+                  onClick={(e) => handlePinMenu(e, pinSessionId)}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  title={pinTitle}
+                  data-tab-pin-size=""
+                >
+                  <PinGlyph />
+                </button>
+              )}
               {/* Heartbeat tabs are "minimize, don't kill" — the
                   daemon-owned PTY keeps running so the heartbeat
                   keeps firing on schedule. Visually distinguish with
@@ -697,6 +827,17 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           )
         })}
       </div>
+
+      {/* S7c — transient pin-size failure hint (auto-clears). */}
+      {pinHint && (
+        <span
+          className="shrink-0 px-2 truncate"
+          style={{ color: '#f66', fontSize: '10px', maxWidth: '260px' }}
+          data-tab-pin-hint=""
+        >
+          {pinHint}
+        </span>
+      )}
 
       {/* Only show split/unsplit on the rightmost group's tab bar */}
       {groupIndex === splitCount - 1 && (

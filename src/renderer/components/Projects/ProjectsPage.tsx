@@ -13,8 +13,10 @@
 // layout blob as percent-width pane columns (kessel canonical-terminal
 // attach + htmlDoc panes), with drag-and-drop, coalesced save-layout,
 // and apply-on-open staleness (§6.2/§6.3). P7 fills the Feedback tab:
-// ProjectFeedbackTab, the member-scoped feedback board (§6.6). The
-// gear panel is P8's slot. Remaining seams keep their TODOs.
+// ProjectFeedbackTab, the member-scoped feedback board (§6.6). P8
+// fills the gear panel: ProjectSettings, the §6.5 master-detail
+// per-project Settings surface (deep-linked here with the open
+// project preselected).
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { usePageViewStore } from '@/stores/page-view'
@@ -25,6 +27,7 @@ import ProjectNav, { CreateProjectForm } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
 import ProjectChatDrawer from './ProjectChatDrawer'
 import { ProjectFeedbackTab } from '@/components/Feedback/ProjectFeedbackTab'
+import ProjectSettings from './ProjectSettings'
 import { fetchProjectGroupShow, type ProjectGroupShow } from './projects-api'
 
 const TOPBAR_HEIGHT = 38
@@ -77,49 +80,6 @@ function DashboardTab({ show }: { show: ProjectGroupShow }): React.JSX.Element {
           composer draft survives them (SelectedProjectView is keyed by
           group id upstream: a project switch is a fresh drawer). */}
       <ProjectChatDrawer show={show} />
-    </div>
-  )
-}
-
-function SettingsPlaceholder({
-  show,
-  onClose,
-}: {
-  show: ProjectGroupShow
-  onClose: () => void
-}): React.JSX.Element {
-  // TODO(P8): the per-project Settings page — master-detail copied from
-  // the Workspaces settings column viewer (§6.5): dashboards (Main row),
-  // members add/remove w/ the PoC-successor rule, PoC dropdown, the
-  // html-docs browser, delete project. The gear deep-links here with
-  // this project preselected. This panel is its slot.
-  return (
-    <div className="flex-1 flex flex-col min-h-0 p-3">
-      <div className="flex items-center gap-2 flex-shrink-0 pb-2">
-        <span className="text-[11px] font-semibold text-[var(--color-text-primary)]">
-          {show.name} — Settings
-        </span>
-        <span className="flex-1" />
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex items-center justify-center w-6 h-6 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] transition-colors cursor-pointer"
-          title="Close settings (Esc)"
-        >
-          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <line x1="2" y1="2" x2="10" y2="10" />
-            <line x1="10" y1="2" x2="2" y2="10" />
-          </svg>
-        </button>
-      </div>
-      <div className="flex-1 flex items-center justify-center border border-dashed border-[var(--color-border)] text-center px-8">
-        <div>
-          <p className="text-sm text-[var(--color-text-secondary)]">Project settings</p>
-          <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-70">
-            Dashboards, members, Point of Contact, and pinned HTML docs are managed here soon.
-          </p>
-        </div>
-      </div>
     </div>
   )
 }
@@ -212,7 +172,9 @@ function SelectedProjectView({
       </div>
 
       {settingsOpen ? (
-        <SettingsPlaceholder show={show} onClose={() => setSettingsOpen(false)} />
+        /* P8 (§6.5) — the per-project Settings surface, deep-linked
+           with THIS project preselected (its left list can switch). */
+        <ProjectSettings show={show} onClose={() => setSettingsOpen(false)} />
       ) : tab === 'dashboard' ? (
         <DashboardTab show={show} />
       ) : (

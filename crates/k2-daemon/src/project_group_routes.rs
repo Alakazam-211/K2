@@ -37,7 +37,9 @@
 //!   — `dashboard/save-layout` (freshness on next open, never a live
 //!   rearrange).
 //! - `project-group:groups-changed` `{groupId?}` — create / rename /
-//!   delete / pin / sort (nav-list liveness).
+//!   delete / pin / sort / dashboard rename (nav-list + open-`show`
+//!   liveness; §4.2 has no dashboards-changed event, so the dashboard
+//!   rename rides the structural sibling).
 //!
 //! PoC injection (§4.3, trigger matrix frozen): every stored chat
 //! message from anyone EXCEPT the PoC best-effort injects into the PoC
@@ -146,6 +148,27 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
         }
 
+        // GET /cli/project-group/html-docs?group=<id|name|prefix>
+        // P8 (§4.1/§6.5) — the pinned-HTML browser: every `isPinnedFile`
+        // file-viewer item read out of the MEMBER workspaces'
+        // `workspace_layouts` blobs (member workspaces only in V1 —
+        // resolved Q3), enriched with the workspace's registry name +
+        // agent display name for the Settings picker.
+        "/cli/project-group/html-docs" => {
+            let selector = str_param(params, "group");
+            if selector.is_empty() {
+                return Some(usage_error("missing group (a project name, id, or unique prefix)"));
+            }
+            let group_id = match project_groups::resolve_group(&selector) {
+                Ok(id) => id,
+                Err(e) => return Some(resolve_error_response(&selector, e)),
+            };
+            match build_html_docs_json(&group_id) {
+                Ok(v) => CliResponse::ok_json(v.to_string()),
+                Err(resp) => resp,
+            }
+        }
+
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
         "/cli/project-group/create"
@@ -157,7 +180,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/project-group/remove-member"
         | "/cli/project-group/set-poc"
         | "/cli/project-group/msg"
-        | "/cli/project-group/dashboard/save-layout" => CliResponse::method_not_allowed(),
+        | "/cli/project-group/dashboard/save-layout"
+        | "/cli/project-group/dashboard/rename" => CliResponse::method_not_allowed(),
 
         _ => return None,
     };
@@ -179,6 +203,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/project-group/set-poc" => handle_set_poc(body),
         "/cli/project-group/msg" => handle_msg(body),
         "/cli/project-group/dashboard/save-layout" => handle_save_layout(body),
+        "/cli/project-group/dashboard/rename" => handle_dashboard_rename(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -301,6 +326,109 @@ fn build_show_json(group_id: &str) -> Result<serde_json::Value, CliResponse> {
         map.insert("dashboards".to_string(), serde_json::json!(dashboards));
     }
     Ok(v)
+}
+
+/// Every `isPinnedFile` file-viewer path inside ONE `workspace_layouts`
+/// blob (P8, §4.1/§6.5 — the #587 pinned-HTML-tab shape: a tab flagged
+/// `isPinnedFile: true` whose pane-group items are
+/// `{type:"file-viewer", filePath}`). Walks the top-level `tabs` array
+/// plus every `extraGroups[].tabs` (split-view groups persist there).
+/// Unparseable/foreign blobs yield nothing — the browser is advisory
+/// and must never error a Settings read over one bad layout row.
+fn pinned_html_paths(layout_json: &str) -> Vec<String> {
+    let Ok(layout) = serde_json::from_str::<serde_json::Value>(layout_json) else {
+        return Vec::new();
+    };
+    let mut tab_arrays: Vec<&serde_json::Value> = Vec::new();
+    if let Some(tabs) = layout.get("tabs") {
+        tab_arrays.push(tabs);
+    }
+    if let Some(groups) = layout.get("extraGroups").and_then(|v| v.as_array()) {
+        for group in groups {
+            if let Some(tabs) = group.get("tabs") {
+                tab_arrays.push(tabs);
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    for tabs in tab_arrays {
+        let Some(tabs) = tabs.as_array() else { continue };
+        for tab in tabs {
+            if tab.get("isPinnedFile").and_then(|v| v.as_bool()) != Some(true) {
+                continue;
+            }
+            let Some(pane_groups) = tab.get("paneGroups").and_then(|v| v.as_object()) else {
+                continue;
+            };
+            for pg in pane_groups.values() {
+                let Some(items) = pg.get("items").and_then(|v| v.as_array()) else { continue };
+                for item in items {
+                    if item.get("type").and_then(|v| v.as_str()) != Some("file-viewer") {
+                        continue;
+                    }
+                    if let Some(path) = item.get("filePath").and_then(|v| v.as_str()) {
+                        if !path.is_empty() {
+                            paths.push(path.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    paths
+}
+
+/// The `html-docs` wire shape (P8): one row per DISTINCT
+/// (member workspace, filePath) pinned-HTML doc across the member's
+/// `workspace_layouts` rows, member order preserved —
+/// `{workspaceId, workspaceName, agentName, filePath, fileName}`.
+fn build_html_docs_json(group_id: &str) -> Result<serde_json::Value, CliResponse> {
+    let members = project_groups::list_members(group_id).map_err(core_error)?;
+    let mut docs: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    for m in &members {
+        let (name, path) = workspace_name_path(&m.workspace_id);
+        let agent_name = path
+            .as_deref()
+            .map(k2_core::workspace::display::agent_display_name);
+        // Every layout row for the member workspace (one per
+        // per-project workspace/worktree row) — scoped lock, loud on
+        // DB failure (test discipline: never a silent empty browser).
+        let blobs: Vec<String> = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT layout_json FROM workspace_layouts \
+                     WHERE project_id = ?1 ORDER BY rowid ASC",
+                )
+                .map_err(|e| {
+                    CliResponse::internal_error(format!("workspace_layouts prepare: {e}"))
+                })?;
+            let rows = stmt
+                .query_map(rusqlite::params![m.workspace_id], |r| r.get::<_, String>(0))
+                .map_err(|e| {
+                    CliResponse::internal_error(format!("workspace_layouts query: {e}"))
+                })?;
+            rows.filter_map(Result::ok).collect()
+        };
+        for blob in &blobs {
+            for file_path in pinned_html_paths(blob) {
+                if !seen.insert((m.workspace_id.clone(), file_path.clone())) {
+                    continue;
+                }
+                let file_name = file_path.rsplit('/').next().unwrap_or(&file_path).to_string();
+                docs.push(serde_json::json!({
+                    "workspaceId": m.workspace_id,
+                    "workspaceName": name,
+                    "agentName": agent_name,
+                    "filePath": file_path,
+                    "fileName": file_name,
+                }));
+            }
+        }
+    }
+    Ok(serde_json::json!({ "ok": true, "groupId": group_id, "docs": docs }))
 }
 
 fn emit(event: k2_core::agent_hooks::HookEvent, payload: serde_json::Value) {
@@ -903,6 +1031,67 @@ pub fn handle_save_layout(body: &[u8]) -> CliResponse {
                 }),
             );
             let mut v = serde_json::to_value(&saved).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(map) = v.as_object_mut() {
+                map.insert("ok".to_string(), serde_json::json!(true));
+            }
+            CliResponse::ok_json(v.to_string())
+        }
+        Err(e) => core_error(e),
+    }
+}
+
+/// `POST /cli/project-group/dashboard/rename` body.
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct DashboardRenameBody {
+    group: String,
+    dashboard_id: String,
+    name: String,
+}
+
+/// Handler for `POST /cli/project-group/dashboard/rename` — P8's §6.5
+/// Settings Main-row rename (create/delete/reorder stay V1.1).
+/// Dashboard-id-addressed like save-layout (and owner-or-admin gated
+/// in the same dispatcher arm); the dashboard must belong to the
+/// addressed group. Emits `project-group:groups-changed` (§4.2 has no
+/// dashboards-changed event — the structural sibling refreshes open
+/// `show` views). Never injects; never touches layout/revision.
+pub fn handle_dashboard_rename(body: &[u8]) -> CliResponse {
+    let b: DashboardRenameBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    if b.group.is_empty() {
+        return usage_error("missing 'group' (a project name, id, or unique prefix)");
+    }
+    if b.dashboard_id.is_empty() {
+        return usage_error("missing 'dashboardId'");
+    }
+    if b.name.trim().is_empty() {
+        return usage_error("rename requires a non-empty dashboard <name>");
+    }
+    let group_id = match project_groups::resolve_group(&b.group) {
+        Ok(id) => id,
+        Err(e) => return resolve_error_response(&b.group, e),
+    };
+    let Some(dashboard) = project_groups::get_dashboard(&b.dashboard_id) else {
+        return error_response(
+            "404 Not Found",
+            "not_found",
+            format!("no dashboard with id {}", b.dashboard_id),
+        );
+    };
+    if dashboard.group_id != group_id {
+        return error_response(
+            "404 Not Found",
+            "not_found",
+            format!("dashboard {} does not belong to project '{}'", b.dashboard_id, b.group),
+        );
+    }
+    match project_groups::rename_dashboard(&b.dashboard_id, &b.name) {
+        Ok(renamed) => {
+            emit_groups_changed(&group_id);
+            let mut v = serde_json::to_value(&renamed).unwrap_or_else(|_| serde_json::json!({}));
             if let Some(map) = v.as_object_mut() {
                 map.insert("ok".to_string(), serde_json::json!(true));
             }
@@ -1554,6 +1743,199 @@ mod tests {
         assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
     }
 
+    /// Dashboard rename through the route (P8 §6.5): renamed row +
+    /// groups-changed event; validation misses are loud; a dashboard
+    /// belonging to another group 404s; a sibling's name 409s.
+    #[test]
+    fn project_group_dashboard_rename_route() {
+        install_capture_sink();
+        let g = create_group_via_route(&gname("dashrename"));
+        let gid = g["id"].as_str().expect("id").to_string();
+        let dash_id = ok_json(show(&gid))["dashboards"][0]["id"]
+            .as_str()
+            .expect("dashboard id")
+            .to_string();
+
+        // Rename → 200 with the renamed row, ONE groups-changed event,
+        // and the new name riding the next show. Revision untouched.
+        let mark = event_mark();
+        let renamed = ok_json(post_json(
+            "/cli/project-group/dashboard/rename",
+            serde_json::json!({ "group": gid, "dashboardId": dash_id, "name": "War room" }),
+        ));
+        assert_eq!(renamed["name"], "War room");
+        assert_eq!(renamed["id"], dash_id.as_str());
+        assert_eq!(renamed["revision"], 0, "rename must not bump revision");
+        let events = events_for_group(mark, &gid);
+        assert_eq!(
+            events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["project-group:groups-changed"],
+            "dashboard rename emits groups-changed only: {events:?}"
+        );
+        let shown = ok_json(show(&gid));
+        assert_eq!(shown["dashboards"][0]["name"], "War room");
+
+        // Missing/blank fields → usage.
+        for body in [
+            serde_json::json!({ "dashboardId": dash_id, "name": "x" }),
+            serde_json::json!({ "group": gid, "name": "x" }),
+            serde_json::json!({ "group": gid, "dashboardId": dash_id, "name": "  " }),
+        ] {
+            let resp = post_json("/cli/project-group/dashboard/rename", body);
+            assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage");
+        }
+
+        // Unknown dashboard id → 404; ANOTHER group's dashboard under
+        // this group → 404 (the save-layout ownership rule).
+        let other = create_group_via_route(&gname("dashrename-other"));
+        let other_id = other["id"].as_str().expect("id").to_string();
+        let other_dash = ok_json(show(&other_id))["dashboards"][0]["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+        for (group, dash) in [(&gid, "nope"), (&gid, other_dash.as_str())] {
+            let resp = post_json(
+                "/cli/project-group/dashboard/rename",
+                serde_json::json!({ "group": group, "dashboardId": dash, "name": "x" }),
+            );
+            assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+        }
+
+        // A sibling dashboard's name in the SAME group → 409 name_taken.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO project_group_dashboards (id, group_id, name, layout_json, \
+                 revision, position, created_at, updated_at) \
+                 VALUES (?1, ?2, 'Ops', '{}', 0, 1, 1000, 1000)",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), gid],
+            )
+            .expect("insert sibling dashboard");
+        }
+        let resp = post_json(
+            "/cli/project-group/dashboard/rename",
+            serde_json::json!({ "group": gid, "dashboardId": dash_id, "name": "Ops" }),
+        );
+        assert_eq!(resp.status, "409 Conflict", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "name_taken");
+        assert_eq!(
+            ok_json(show(&gid))["dashboards"][0]["name"],
+            "War room",
+            "refused rename changes nothing"
+        );
+    }
+
+    /// P8 §4.1 — the html-docs read: `isPinnedFile` file-viewer items
+    /// out of MEMBER workspaces' layout blobs only, deduped per
+    /// (workspace, path), split-view extraGroups included, non-pinned
+    /// and non-member docs excluded, bad blobs skipped.
+    #[test]
+    fn project_group_html_docs_route() {
+        let g = create_group_via_route(&gname("htmldocs"));
+        let gid = g["id"].as_str().expect("id").to_string();
+        let (member_id, member_name, _) = insert_workspace("docs-member");
+        let (outsider_id, ..) = insert_workspace("docs-outsider");
+        ok_json(post_json(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": gid, "workspace": member_id }),
+        ));
+
+        let pinned_tab = |path: &str| {
+            serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "isPinnedFile": true,
+                "paneGroups": { "pg": { "id": "pg", "items": [
+                    { "id": "i", "type": "file-viewer", "filePath": path }
+                ], "activeItemIndex": 0 } } })
+        };
+        // A REGULAR (unpinned) file-viewer tab — must not surface.
+        let plain_tab = serde_json::json!({ "id": "tab-plain",
+            "paneGroups": { "pg2": { "id": "pg2", "items": [
+                { "id": "i2", "type": "file-viewer", "filePath": "/tmp/unpinned.html" }
+            ], "activeItemIndex": 0 } } });
+        let member_layout = serde_json::json!({
+            "version": 2,
+            "tabs": [pinned_tab("/tmp/status.html"), plain_tab],
+            "extraGroups": [{ "tabs": [pinned_tab("/tmp/split.html")] }],
+        });
+        // A second layout row (another worktree workspace) repeating
+        // status.html — the dedupe case — plus one more doc.
+        let member_layout_2 = serde_json::json!({
+            "version": 2,
+            "tabs": [pinned_tab("/tmp/status.html"), pinned_tab("/tmp/burndown.html")],
+        });
+        let outsider_layout =
+            serde_json::json!({ "version": 2, "tabs": [pinned_tab("/tmp/outsider.html")] });
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            // workspace_layouts FKs both columns (0009): workspace_id →
+            // the legacy per-project `workspaces` rows — seed one per
+            // layout row.
+            let mut insert = |project_id: &str, blob: String| {
+                let ws_id = uuid::Uuid::new_v4().to_string();
+                conn.execute(
+                    "INSERT INTO workspaces (id, project_id, name) VALUES (?1, ?2, 'main')",
+                    rusqlite::params![ws_id, project_id],
+                )
+                .expect("insert workspaces row");
+                conn.execute(
+                    "INSERT INTO workspace_layouts (id, project_id, workspace_id, \
+                     layout_json, updated_at) VALUES (?1, ?2, ?3, ?4, 1000)",
+                    rusqlite::params![uuid::Uuid::new_v4().to_string(), project_id, ws_id, blob],
+                )
+                .expect("insert layout row");
+            };
+            insert(&member_id, member_layout.to_string());
+            insert(&member_id, member_layout_2.to_string());
+            insert(&member_id, "{not json".to_string());
+            insert(&outsider_id, outsider_layout.to_string());
+        }
+
+        let resp = dispatch("/cli/project-group/html-docs", &get_params(&[("group", &gid)]))
+            .expect("html-docs route claimed");
+        let v = ok_json(resp);
+        assert_eq!(v["groupId"], gid.as_str());
+        let docs = v["docs"].as_array().expect("docs");
+        let paths: Vec<&str> = docs
+            .iter()
+            .map(|d| d["filePath"].as_str().expect("filePath"))
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["/tmp/status.html", "/tmp/split.html", "/tmp/burndown.html"],
+            "member docs only, deduped, layout-row order: {docs:?}"
+        );
+        assert!(docs.iter().all(|d| d["workspaceId"] == member_id.as_str()));
+        assert_eq!(docs[0]["workspaceName"], member_name.as_str());
+        assert_eq!(docs[0]["fileName"], "status.html");
+        assert!(
+            docs[0]["agentName"].as_str().is_some_and(|s| !s.is_empty()),
+            "agentName enriched: {}",
+            docs[0]
+        );
+
+        // Addressing misses are the shared shapes.
+        let resp = dispatch("/cli/project-group/html-docs", &get_params(&[]))
+            .expect("route claimed");
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+        let unknown = format!("zzz-no-such-{}", uuid::Uuid::new_v4());
+        let resp = dispatch("/cli/project-group/html-docs", &get_params(&[("group", &unknown)]))
+            .expect("route claimed");
+        assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+
+        // A memberless group answers ok with an empty list.
+        let empty = create_group_via_route(&gname("htmldocs-empty"));
+        let empty_id = empty["id"].as_str().expect("id");
+        let v = ok_json(
+            dispatch("/cli/project-group/html-docs", &get_params(&[("group", empty_id)]))
+                .expect("route claimed"),
+        );
+        assert_eq!(v["docs"].as_array().expect("docs").len(), 0);
+    }
+
     /// GET on the POST-only mutations answers an explicit 405 through
     /// the read dispatch chain (feedback_post_only_route_guards), and
     /// the POST dispatcher 404s unknown paths.
@@ -1571,6 +1953,7 @@ mod tests {
             "/cli/project-group/set-poc",
             "/cli/project-group/msg",
             "/cli/project-group/dashboard/save-layout",
+            "/cli/project-group/dashboard/rename",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");

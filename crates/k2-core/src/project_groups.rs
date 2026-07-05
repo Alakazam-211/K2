@@ -750,6 +750,62 @@ pub fn get_dashboard(dashboard_id: &str) -> Option<ProjectGroupDashboard> {
     conn.query_row(&sql, params![dashboard_id], row_to_dashboard).ok()
 }
 
+/// Rename a dashboard (P8 — the §6.5 Settings Main-row rename; V1.1
+/// create/delete/reorder land beside it). `dashboard_id` must be a
+/// FULL id. The new name obeys the same non-empty rule as groups and
+/// must be unique WITHIN the dashboard's group (the 0066
+/// `UNIQUE (group_id, name)` constraint — `name_taken` on collision;
+/// renaming a dashboard to its own name is a fine no-op). Never
+/// touches `layout_json` / `revision` — a rename is metadata, not a
+/// layout write.
+pub fn rename_dashboard(
+    dashboard_id: &str,
+    new_name: &str,
+) -> Result<ProjectGroupDashboard, String> {
+    let new_name = new_name.trim();
+    if new_name.is_empty() {
+        return Err("usage: dashboard name must not be empty".to_string());
+    }
+    let now = now_secs();
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let group_id: String = conn
+        .query_row(
+            "SELECT group_id FROM project_group_dashboards WHERE id = ?1",
+            params![dashboard_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| format!("no dashboard with id {dashboard_id}"))?;
+    let taken: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM project_group_dashboards \
+             WHERE group_id = ?1 AND name = ?2 AND id != ?3",
+            params![group_id, new_name, dashboard_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if taken {
+        return Err(format!(
+            "name_taken: a dashboard named '{new_name}' already exists in this project"
+        ));
+    }
+    conn.execute(
+        "UPDATE project_group_dashboards SET name = ?2, updated_at = ?3 WHERE id = ?1",
+        params![dashboard_id, new_name, now],
+    )
+    .map_err(|e| {
+        // The UNIQUE (group_id, name) constraint backstops a race
+        // between the check above and the update.
+        if e.to_string().contains("UNIQUE") {
+            format!("name_taken: a dashboard named '{new_name}' already exists in this project")
+        } else {
+            format!("dashboard rename failed: {e}")
+        }
+    })?;
+    drop(conn);
+    get_dashboard(dashboard_id).ok_or_else(|| "dashboard vanished after rename".to_string())
+}
+
 /// Save a dashboard layout: LAST-WRITE-WINS, revision++ (the monotonic
 /// staleness counter clients compare on `layout-changed`).
 /// `dashboard_id` must be a FULL id. Core validates the blob is
@@ -1107,6 +1163,54 @@ mod tests {
         // Unknown dashboard fails loudly.
         assert!(save_dashboard_layout("nope", EMPTY_LAYOUT_V1).is_err());
         assert!(get_dashboard("nope").is_none());
+    }
+
+    #[test]
+    fn rename_dashboard_rules() {
+        let g = create_group(&gname("dashname")).expect("create");
+        let main = list_dashboards(&g.id).expect("dashboards").remove(0);
+
+        // Plain rename: name + updated_at move; layout/revision don't.
+        let renamed = rename_dashboard(&main.id, "Release war room").expect("rename");
+        assert_eq!(renamed.name, "Release war room");
+        assert_eq!(renamed.revision, main.revision, "rename must not bump revision");
+        assert_eq!(renamed.layout_json, main.layout_json, "rename must not touch the layout");
+        assert_eq!(get_dashboard(&main.id).expect("get").name, "Release war room");
+
+        // Whitespace trims; empty/blank is refused loudly.
+        let renamed = rename_dashboard(&main.id, "  Ops  ").expect("trimmed rename");
+        assert_eq!(renamed.name, "Ops");
+        assert!(rename_dashboard(&main.id, "   ").is_err());
+
+        // Renaming to its OWN name is a fine no-op.
+        let same = rename_dashboard(&main.id, "Ops").expect("own-name rename");
+        assert_eq!(same.name, "Ops");
+
+        // A sibling dashboard in the SAME group can't take the name —
+        // stable name_taken code (UNIQUE (group_id, name), 0066).
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO project_group_dashboards (id, group_id, name, layout_json, \
+                 revision, position, created_at, updated_at) \
+                 VALUES (?1, ?2, 'Second', ?3, 0, 1, 1000, 1000)",
+                params![uuid::Uuid::new_v4().to_string(), g.id, EMPTY_LAYOUT_V1],
+            )
+            .expect("insert sibling dashboard");
+        }
+        let err = rename_dashboard(&main.id, "Second").expect_err("dup within group refused");
+        assert!(err.starts_with("name_taken"), "got: {err}");
+        assert_eq!(get_dashboard(&main.id).expect("get").name, "Ops", "refusal changes nothing");
+
+        // The same name in ANOTHER group is fine (uniqueness is
+        // per-group).
+        let other = create_group(&gname("dashname-other")).expect("create other");
+        let other_main = list_dashboards(&other.id).expect("dashboards").remove(0);
+        assert_eq!(rename_dashboard(&other_main.id, "Ops").expect("cross-group ok").name, "Ops");
+
+        // Unknown id fails loudly.
+        assert!(rename_dashboard("nope", "x").is_err());
     }
 
     #[test]

@@ -530,9 +530,9 @@ async fn handle_one_request(
             // save-layout carries the layout blob) so long values dodge
             // the request-head cap and never URL-log. token_ok (owner OR
             // connect-user) + require_post in the dedicated arm below;
-            // save-layout additionally owner-or-admin (§6.3 resolved
-            // Q2). Reads (list/show/messages) are GETs via
-            // crate::cli::dispatch (project_group_routes).
+            // the dashboard/* mutations additionally owner-or-admin
+            // (§6.3 resolved Q2). Reads (list/show/messages/html-docs)
+            // are GETs via crate::cli::dispatch (project_group_routes).
             | "/cli/project-group/create"
             | "/cli/project-group/rename"
             | "/cli/project-group/delete"
@@ -543,6 +543,7 @@ async fn handle_one_request(
             | "/cli/project-group/set-poc"
             | "/cli/project-group/msg"
             | "/cli/project-group/dashboard/save-layout"
+            | "/cli/project-group/dashboard/rename"
             | "/cli/inbox/compose"
             | "/cli/inbox/move"
             | "/cli/inbox/archive"
@@ -2920,11 +2921,11 @@ async fn handle_one_request(
         }
         // Projects V1 P2 — `/cli/project-group/*` mutations (create /
         // rename / delete / pin / sort / add-member / remove-member /
-        // set-poc / msg / dashboard/save-layout). JSON-bodied POSTs;
-        // token_ok (owner OR connect-user session — connect users see
-        // projects too, PRD §4.1) + require_post per
-        // feedback_post_only_route_guards. `dashboard/save-layout` is
-        // additionally owner-or-admin-gated (PRD §6.3 resolved Q2:
+        // set-poc / msg / dashboard/save-layout / dashboard/rename).
+        // JSON-bodied POSTs; token_ok (owner OR connect-user session —
+        // connect users see projects too, PRD §4.1) + require_post per
+        // feedback_post_only_route_guards. The `dashboard/*` mutations
+        // are additionally owner-or-admin-gated (PRD §6.3 resolved Q2:
         // owners and admins rearrange/save; viewers and non-admin
         // users see but cannot save). Handlers run in spawn_blocking
         // (SQLite writes + the PoC injection's wake path can block).
@@ -2943,7 +2944,8 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            if p == "/cli/project-group/dashboard/save-layout"
+            if (p == "/cli/project-group/dashboard/save-layout"
+                || p == "/cli/project-group/dashboard/rename")
                 && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
             {
                 let _ = stream.read(&mut buf).await;
@@ -2951,7 +2953,7 @@ async fn handle_one_request(
                     &mut *stream,
                     "403 Forbidden",
                     "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"dashboard layouts can only be saved by the owner or an admin"}}"#,
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"dashboards can only be changed by the owner or an admin"}}"#,
                 )
                 .await;
                 return DispatchOutcome::Done;

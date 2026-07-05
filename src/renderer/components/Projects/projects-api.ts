@@ -106,6 +106,75 @@ export async function pinProjectGroup(group: string, pinned: boolean): Promise<v
   await daemonCliPost('project-group/pin', { group, pinned })
 }
 
+/** POST /cli/project-group/rename — `{group, name}` → the renamed
+ *  group. Throws on `name_taken` (P8 Settings surfaces it inline). */
+export async function renameProjectGroup(group: string, name: string): Promise<ProjectGroup> {
+  return daemonCliPost<ProjectGroup>('project-group/rename', { group, name })
+}
+
+/** POST /cli/project-group/delete — cascades the group's member/
+ *  message/dashboard rows only, NEVER the workspaces themselves
+ *  (locked default, §6.5 danger zone). */
+export async function deleteProjectGroup(group: string): Promise<void> {
+  await daemonCliPost('project-group/delete', { group })
+}
+
+/** POST /cli/project-group/add-member — `workspace` accepts a name,
+ *  absolute path, or workspace UUID; the FIRST member of an empty
+ *  group auto-becomes the PoC (daemon rule). */
+export async function addProjectGroupMember(group: string, workspace: string): Promise<void> {
+  await daemonCliPost('project-group/add-member', { group, workspace })
+}
+
+/** POST /cli/project-group/remove-member — removing the PoC throws the
+ *  409 `poc_successor_required` backstop (the Settings UI disables the
+ *  button first; §6.5). */
+export async function removeProjectGroupMember(group: string, workspace: string): Promise<void> {
+  await daemonCliPost('project-group/remove-member', { group, workspace })
+}
+
+/** POST /cli/project-group/set-poc — the reassignment dropdown's
+ *  write; the target must already be a member (`not_a_member`). */
+export async function setProjectGroupPoc(group: string, workspace: string): Promise<void> {
+  await daemonCliPost('project-group/set-poc', { group, workspace })
+}
+
+/** POST /cli/project-group/dashboard/rename — P8's §6.5 Main-row
+ *  rename (owner-or-admin gated daemon-side, like save-layout). Emits
+ *  `project-group:groups-changed`, so open `show` views refetch. */
+export async function renameProjectGroupDashboard(
+  group: string,
+  dashboardId: string,
+  name: string,
+): Promise<ProjectGroupDashboard> {
+  return daemonCliPost<ProjectGroupDashboard>('project-group/dashboard/rename', {
+    group,
+    dashboardId,
+    name,
+  })
+}
+
+/** One pinned-HTML doc from `GET /cli/project-group/html-docs` — an
+ *  `isPinnedFile` file-viewer item out of a MEMBER workspace's
+ *  `workspace_layouts` blob (§4.1/§6.5, member-only per resolved Q3). */
+export interface ProjectGroupHtmlDoc {
+  workspaceId: string
+  workspaceName: string | null
+  agentName: string | null
+  filePath: string
+  fileName: string
+}
+
+/** GET /cli/project-group/html-docs?group= — the §6.5 pinned-HTML
+ *  browser's rows, deduped per (workspace, path), member order. */
+export async function fetchProjectGroupHtmlDocs(group: string): Promise<ProjectGroupHtmlDoc[]> {
+  const res = await daemonCliGet<{ ok: boolean; docs: ProjectGroupHtmlDoc[] }>(
+    'project-group/html-docs',
+    { group },
+  )
+  return res.docs ?? []
+}
+
 /** POST /cli/project-group/dashboard/save-layout — canonical
  *  last-write-wins save (§6.3a): the daemon bumps `revision` and emits
  *  `project-group:layout-changed {groupId, dashboardId, revision}`.

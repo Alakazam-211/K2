@@ -11,7 +11,10 @@
 //   - message-created marks the group unread (the Projects-tab badge)
 //     UNLESS the user is viewing that group on the Projects page, in
 //     which case it's seen on arrival — and it never refetches the list;
-//   - selectGroup marks the group seen (clears its unread bit).
+//   - selectGroup marks the group seen (clears its unread bit);
+//   - P6 (§6.4): seen semantics gate on the chat drawer being VISIBLE —
+//     a collapsed drawer accrues unread (its dot) even for the viewed
+//     group, and expanding it marks the selected group seen.
 //
 // vitest env is node — the Tauri event bus + the api module + the
 // connect-host store are mocked at the module boundary.
@@ -70,6 +73,7 @@ describe('project-groups store event wiring', () => {
       groups: [],
       selectedGroupId: null,
       unreadGroupIds: new Set<string>(),
+      chatCollapsed: false,
     })
   })
 
@@ -168,6 +172,57 @@ describe('project-groups store event wiring', () => {
     const s = useProjectGroupsStore.getState()
     expect(s.selectedGroupId).toBe('g1')
     expect(s.unreadGroupIds.has('g1')).toBe(false)
+    expect(s.unreadGroupIds.has('g2')).toBe(true)
+  })
+
+  // ── P6 (§6.4) — seen semantics gate on the chat drawer being visible ──
+
+  it('message-created for the viewed group goes UNREAD while the drawer is collapsed', () => {
+    usePageViewStore.setState({ page: 'projects' })
+    useProjectGroupsStore.setState({ selectedGroupId: 'g1', chatCollapsed: true })
+    fire('project-group:message-created', {
+      groupId: 'g1',
+      groupName: 'release',
+      messageId: 'm4',
+      author: 'scout',
+    })
+    // The collapsed drawer shows the unread dot — NOT seen on arrival.
+    expect(useProjectGroupsStore.getState().unreadGroupIds.has('g1')).toBe(true)
+  })
+
+  it('selectGroup does NOT mark seen while the drawer is collapsed', () => {
+    useProjectGroupsStore.setState({
+      unreadGroupIds: new Set(['g1']),
+      chatCollapsed: true,
+    })
+    useProjectGroupsStore.getState().selectGroup('g1')
+    const s = useProjectGroupsStore.getState()
+    expect(s.selectedGroupId).toBe('g1')
+    expect(s.unreadGroupIds.has('g1')).toBe(true)
+  })
+
+  it('expanding the drawer marks the selected group seen (and only it)', () => {
+    useProjectGroupsStore.setState({
+      selectedGroupId: 'g1',
+      unreadGroupIds: new Set(['g1', 'g2']),
+      chatCollapsed: true,
+    })
+    useProjectGroupsStore.getState().setChatCollapsed(false)
+    const s = useProjectGroupsStore.getState()
+    expect(s.chatCollapsed).toBe(false)
+    expect(s.unreadGroupIds.has('g1')).toBe(false)
+    expect(s.unreadGroupIds.has('g2')).toBe(true)
+  })
+
+  it('collapsing the drawer never touches unread state', () => {
+    useProjectGroupsStore.setState({
+      selectedGroupId: 'g1',
+      unreadGroupIds: new Set(['g2']),
+      chatCollapsed: false,
+    })
+    useProjectGroupsStore.getState().setChatCollapsed(true)
+    const s = useProjectGroupsStore.getState()
+    expect(s.chatCollapsed).toBe(true)
     expect(s.unreadGroupIds.has('g2')).toBe(true)
   })
 })

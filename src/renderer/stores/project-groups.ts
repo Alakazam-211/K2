@@ -49,6 +49,23 @@ function stampLastSeen(groupId: string): void {
   }
 }
 
+// ── P6 (§6.4) — per-client chat-drawer collapse state ─────────────────────
+// A plain client preference (not host-keyed, not canonical): whether the
+// Dashboard tab's chat drawer is collapsed. It gates SEEN semantics —
+// messages are only "seen on arrival" while the drawer is actually
+// visible (page open + group selected + drawer expanded); a collapsed
+// drawer accrues the unread dot instead.
+
+const CHAT_COLLAPSED_KEY = 'k2:project-groups:chat-collapsed'
+
+function readChatCollapsed(): boolean {
+  try {
+    return localStorage.getItem(CHAT_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 /** P5 (§6.2) — a member-row click asking the dashboard to open/focus
  *  that member's canonical pane. The nonce distinguishes repeat clicks
  *  on the same member; the dashboard CONSUMES the request (clears it)
@@ -70,10 +87,18 @@ interface ProjectGroupsState {
   revision: number
   /** Pending open-member-pane click (P5 §6.2) — see MemberPaneRequest. */
   paneRequest: MemberPaneRequest | null
+  /** P6 (§6.4) — the Dashboard tab's chat drawer, per-client persisted.
+   *  While true, arriving messages go UNREAD even for the viewed group
+   *  (the collapsed drawer shows the dot); expanding marks seen. */
+  chatCollapsed: boolean
   fetchGroups: () => Promise<void>
-  /** Select a project in the nav; selecting marks it seen (§4.4). */
+  /** Select a project in the nav; selecting marks it seen (§4.4) —
+   *  unless the chat drawer is collapsed (its messages stay unseen). */
   selectGroup: (groupId: string | null) => void
   markGroupSeen: (groupId: string) => void
+  /** Collapse/expand the chat drawer (persisted per client); expanding
+   *  marks the selected group seen — its messages are now on screen. */
+  setChatCollapsed: (collapsed: boolean) => void
   /** Member-row click → the dashboard opens/focuses that pane. */
   requestMemberPane: (workspaceId: string) => void
   clearPaneRequest: () => void
@@ -85,6 +110,7 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   unreadGroupIds: new Set<string>(),
   revision: 0,
   paneRequest: null,
+  chatCollapsed: readChatCollapsed(),
   fetchGroups: async () => {
     // Capture the host so a slow response from the PREVIOUS host can
     // never land after a switch (projects-store idiom).
@@ -111,7 +137,9 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
     // Switching projects drops any pending pane request — it addressed
     // the previous project's dashboard.
     set({ selectedGroupId: groupId, paneRequest: null })
-    if (groupId) get().markGroupSeen(groupId)
+    // A collapsed drawer means the messages are NOT on screen — the
+    // unread dot/badge must survive selection (§6.4).
+    if (groupId && !get().chatCollapsed) get().markGroupSeen(groupId)
   },
   markGroupSeen: (groupId) => {
     stampLastSeen(groupId)
@@ -122,6 +150,18 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       return { unreadGroupIds: next }
     })
   },
+  setChatCollapsed: (collapsed) => {
+    try {
+      localStorage.setItem(CHAT_COLLAPSED_KEY, collapsed ? '1' : '0')
+    } catch {
+      /* ignore — collapse state degrades to per-session */
+    }
+    set({ chatCollapsed: collapsed })
+    if (!collapsed) {
+      const sel = get().selectedGroupId
+      if (sel) get().markGroupSeen(sel)
+    }
+  },
   requestMemberPane: (workspaceId) => {
     set((s) => ({ paneRequest: { workspaceId, nonce: (s.paneRequest?.nonce ?? 0) + 1 } }))
   },
@@ -130,7 +170,8 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
 
 // Host switch: everything here is keyed by the previous host's group ids
 // — reset. The revision bump makes an open Projects page refetch against
-// the new host.
+// the new host. `chatCollapsed` deliberately survives — it's a plain
+// per-client UI preference, not host data.
 onActiveHostChange(() => {
   useProjectGroupsStore.setState((s) => ({
     groups: null,
@@ -200,8 +241,13 @@ export function initProjectGroupEvents(): void {
     listen<MessageCreatedPayload>('project-group:message-created', (event) => {
       const { groupId } = event.payload
       const store = useProjectGroupsStore.getState()
+      // "Viewing" = the messages are actually on screen: Projects page
+      // open, this group selected, AND the chat drawer expanded (§6.4 —
+      // a collapsed drawer accrues the unread dot instead).
       const viewingIt =
-        usePageViewStore.getState().page === 'projects' && store.selectedGroupId === groupId
+        usePageViewStore.getState().page === 'projects' &&
+        store.selectedGroupId === groupId &&
+        !store.chatCollapsed
       if (viewingIt) {
         // On screen right now — it's seen the moment it lands.
         store.markGroupSeen(groupId)

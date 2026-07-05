@@ -22,6 +22,7 @@ import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import ProjectNav, { CreateProjectForm } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
+import ProjectChatDrawer from './ProjectChatDrawer'
 import { fetchProjectGroupShow, type ProjectGroupShow } from './projects-api'
 
 const TOPBAR_HEIGHT = 38
@@ -66,6 +67,14 @@ function DashboardTab({ show }: { show: ProjectGroupShow }): React.JSX.Element {
           </p>
         </div>
       )}
+
+      {/* P6 (§6.4) — the project chat drawer lives on the Dashboard tab
+          (NOT a separate tab). Chat is PER-PROJECT, so it renders even
+          when the dashboard row is missing. Not keyed by dashboard —
+          `show` refetches update props without remounting, so the
+          composer draft survives them (SelectedProjectView is keyed by
+          group id upstream: a project switch is a fresh drawer). */}
+      <ProjectChatDrawer show={show} />
     </div>
   )
 }

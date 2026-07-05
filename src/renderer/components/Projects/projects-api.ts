@@ -61,6 +61,27 @@ export interface ProjectGroupMessage {
   createdAt: number
 }
 
+/** One page of the chat stream, oldest-first (`MessagePage` wire shape).
+ *  `truncated` = more rows matched than the effective limit allowed. */
+export interface ProjectGroupMessagesPage {
+  messages: ProjectGroupMessage[]
+  truncated: boolean
+}
+
+/** The `msg` POST response: the stored row + the §4.3 delivery outcome
+ *  (`delivered` / `deliveryReason` / `deliveredSessionId`) — a delivery
+ *  failure never fails the store, so this is always an Ok shape. */
+export interface PostedProjectGroupMessage {
+  id: string
+  groupId: string
+  author: string
+  body: string
+  createdAt: number
+  delivered: boolean
+  deliveryReason: string | null
+  deliveredSessionId: string | null
+}
+
 /** GET /cli/project-group/list — all groups, pinned-first then
  *  sort_order then name (daemon-side ordering; the nav renders as-is). */
 export async function fetchProjectGroups(): Promise<ProjectGroup[]> {
@@ -100,6 +121,35 @@ export async function saveDashboardLayout(
     dashboardId,
     layoutJson,
   })
+}
+
+/** GET /cli/project-group/messages — the single chat stream,
+ *  oldest-first. No `after` → the LATEST `limit` (default 20, max 500);
+ *  `after` is strictly-greater unix seconds (the incremental path). The
+ *  P6 drawer loads the recent page and "loads earlier" by re-reading
+ *  the tail with a bigger limit (there is no `before` param). */
+export async function fetchProjectGroupMessages(
+  group: string,
+  opts: { after?: number; limit?: number } = {},
+): Promise<ProjectGroupMessagesPage> {
+  const res = await daemonCliGet<{
+    ok: boolean
+    messages: ProjectGroupMessage[]
+    truncated: boolean
+  }>('project-group/messages', { group, after: opts.after, limit: opts.limit })
+  return { messages: res.messages ?? [], truncated: res.truncated ?? false }
+}
+
+/** POST /cli/project-group/msg — post to the project chat AS THE HUMAN
+ *  OWNER (`author` omitted → the daemon defaults it to `owner`, the app
+ *  drawer's attribution seam). The daemon stores, emits
+ *  `project-group:message-created`, then best-effort injects into the
+ *  PoC's canonical session; the outcome rides the response (§4.3/§6.4). */
+export async function postProjectGroupMessage(
+  group: string,
+  body: string,
+): Promise<PostedProjectGroupMessage> {
+  return daemonCliPost<PostedProjectGroupMessage>('project-group/msg', { group, body })
 }
 
 /** §4.4 badge reconciliation: a group is UNREAD when it has ≥1 chat

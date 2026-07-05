@@ -1,0 +1,475 @@
+// Projects V1 P4 (prd-projects-v1 §6.1, resolved Q4) — the Projects
+// page's LEFT NAV, mimicking Sidebar.tsx's anatomy exactly: canonical
+// Pinned section on top (project_groups.pinned — the projects.pinned
+// precedent, Sidebar.tsx:698), the unpinned project list below, NO
+// Active section, and the bottom-drawer slot (ActiveBar's position)
+// holding the SELECTED project's member agents in ActiveBar styling —
+// always ALL members, never activity-gated. Drag-to-reorder + dragging
+// members onto the dashboard are P5 (Sidebar's handleProjectMouseDown
+// threshold pattern); rows keep the same visual idiom so P5 only adds
+// the mouse mechanics.
+
+import React, { useMemo, useState } from 'react'
+import { useProjectsStore } from '@/stores/projects'
+import { useProjectGroupsStore } from '@/stores/project-groups'
+import { useToastStore } from '@/stores/toast'
+import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import {
+  createProjectGroup,
+  createErrorMessage,
+  partitionPinned,
+  pinProjectGroup,
+  type ProjectGroup,
+  type ProjectGroupMemberInfo,
+} from './projects-api'
+
+export const PROJECT_NAV_WIDTH = 280
+
+// ── Group row (SingleProjectItem's visual idiom, group-shaped) ────────────
+
+/** Initials square standing in for ProjectAvatar — groups have no
+ *  path/icon; a neutral monogram keeps the row anatomy identical. */
+function GroupGlyph({ name, selected }: { name: string; selected: boolean }): React.JSX.Element {
+  return (
+    <span
+      className={`flex items-center justify-center flex-shrink-0 text-[13px] font-semibold ${
+        selected
+          ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)]'
+          : 'bg-white/[0.06] text-[var(--color-text-secondary)]'
+      }`}
+      style={{ width: 32, height: 32 }}
+    >
+      {(name.trim()[0] ?? '?').toUpperCase()}
+    </span>
+  )
+}
+
+function PinGlyph({ filled }: { filled: boolean }): React.JSX.Element {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 24 24"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 17v5" />
+      <path d="M9 3h6l-1 7 3 3H7l3-3-1-7z" />
+    </svg>
+  )
+}
+
+function GroupRow({
+  group,
+  selected,
+  unread,
+  onSelect,
+}: {
+  group: ProjectGroup
+  selected: boolean
+  unread: boolean
+  onSelect: () => void
+}): React.JSX.Element {
+  const [hovered, setHovered] = useState(false)
+  const [pinBusy, setPinBusy] = useState(false)
+
+  const togglePin = async (e: React.MouseEvent): Promise<void> => {
+    e.stopPropagation()
+    if (pinBusy) return
+    setPinBusy(true)
+    try {
+      await pinProjectGroup(group.id, !group.pinned)
+      // groups-changed also fires; refetch now so the row moves sections
+      // without waiting out the coalesce window.
+      await useProjectGroupsStore.getState().fetchGroups()
+    } catch (err) {
+      useToastStore
+        .getState()
+        .addToast(
+          `${group.pinned ? 'Unpin' : 'Pin'} failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        )
+    } finally {
+      setPinBusy(false)
+    }
+  }
+
+  return (
+    <div className="no-drag" data-group-id={group.id}>
+      <button
+        className={`w-full flex items-stretch gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
+          selected
+            ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
+            : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
+        }`}
+        style={{
+          borderLeft: selected ? '2px solid var(--color-accent)' : '2px solid transparent',
+        }}
+        onClick={onSelect}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
+        <div className="flex items-center flex-shrink-0">
+          <GroupGlyph name={group.name} selected={selected} />
+        </div>
+        <div className="flex flex-col justify-center min-w-0 flex-1">
+          <div className="flex items-center gap-2 w-full">
+            <span className="truncate flex-1">{group.name}</span>
+            {unread && (
+              <span
+                className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"
+                title="New project messages"
+              />
+            )}
+            {(hovered || group.pinned) && (
+              <span
+                onClick={(e) => void togglePin(e)}
+                className={`flex-shrink-0 flex h-4 w-4 items-center justify-center transition-colors cursor-pointer ${
+                  group.pinned
+                    ? 'text-[var(--color-accent)] hover:text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+                } ${pinBusy ? 'opacity-50' : ''}`}
+                title={group.pinned ? 'Unpin' : 'Pin to top'}
+              >
+                <PinGlyph filled={group.pinned} />
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] font-mono text-[var(--color-text-muted)]">
+              {group.memberCount} {group.memberCount === 1 ? 'member' : 'members'}
+            </span>
+          </div>
+        </div>
+      </button>
+    </div>
+  )
+}
+
+// ── Member drawer (the ActiveBar slot — §6.1, resolved Q4/Q18) ────────────
+
+function MemberRow({
+  member,
+  isPoc,
+}: {
+  member: ProjectGroupMemberInfo
+  isPoc: boolean
+}): React.JSX.Element {
+  // Icon/color come from the workspace-registry store row (the member
+  // enrichment carries name/path only).
+  const workspace = useProjectsStore((s) => s.projects.find((p) => p.id === member.workspaceId))
+  const displayName = member.agentName ?? member.name ?? member.workspaceId.slice(0, 8)
+
+  const handleClick = (): void => {
+    // TODO(P5): open/focus this member's CANONICAL terminal pane in the
+    // dashboard (one pane per agent — the attachAgentName idempotent
+    // spawn idiom, §6.2). No-op in the P4 shell.
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      className="no-drag w-full flex items-center gap-2 px-2 py-1 text-left transition-colors cursor-default select-none text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]"
+      title={member.path ?? undefined}
+    >
+      <ProjectAvatar
+        projectPath={member.path ?? ''}
+        projectName={member.name ?? displayName}
+        projectColor={workspace?.color ?? 'var(--color-text-muted)'}
+        projectId={member.workspaceId}
+        iconUrl={workspace?.iconUrl ?? null}
+        size={18}
+      />
+      <span className="text-[11px] truncate flex-1">{displayName}</span>
+      {isPoc && (
+        <span
+          className="flex-shrink-0 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
+          title="Point of Contact — project chat is injected into this agent's session"
+        >
+          PoC
+        </span>
+      )}
+    </button>
+  )
+}
+
+function MemberDrawer({
+  members,
+  pocWorkspaceId,
+}: {
+  members: ProjectGroupMemberInfo[]
+  pocWorkspaceId: string | null
+}): React.JSX.Element | null {
+  const [collapsed, setCollapsed] = useState(false)
+  if (members.length === 0) return null
+
+  return (
+    <div className="border-t border-[var(--color-border)] flex flex-col">
+      <button
+        className="no-drag w-full flex items-center gap-1.5 px-3 pt-2 pb-1 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+        onClick={() => setCollapsed((prev) => !prev)}
+      >
+        <span className="text-[10px] font-semibold tracking-wider text-[var(--color-text-muted)] uppercase">
+          Members
+        </span>
+        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono">
+          {members.length}
+        </span>
+        <span className="flex-1" />
+        <svg
+          className="w-2.5 h-2.5 text-[var(--color-text-muted)] flex-shrink-0"
+          style={{ transition: 'transform 0.2s ease', transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)' }}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+      <div
+        style={{
+          overflow: 'hidden',
+          maxHeight: collapsed ? 0 : 320,
+          transition: 'max-height 0.2s ease',
+        }}
+      >
+        <div className="px-1 pb-1 overflow-y-auto" style={{ maxHeight: 320 }}>
+          {members.map((m) => (
+            <MemberRow key={m.workspaceId} member={m} isPoc={m.workspaceId === pocWorkspaceId} />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── "+ New project" (inline create, surfaces name_taken — §6.1) ──────────
+
+/** Inline name input + Create. POSTs `project-group/create`, surfaces
+ *  `name_taken` inline, refetches + selects the new group on success.
+ *  Shared by the nav affordance and the page's no-projects empty state. */
+export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX.Element {
+  const [name, setName] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (): Promise<void> => {
+    const trimmed = name.trim()
+    if (!trimmed || busy) return
+    setBusy(true)
+    try {
+      const group = await createProjectGroup(trimmed)
+      const store = useProjectGroupsStore.getState()
+      await store.fetchGroups()
+      store.selectGroup(group.id)
+      onDone()
+    } catch (err) {
+      setError(createErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <input
+        autoFocus
+        type="text"
+        value={name}
+        disabled={busy}
+        onChange={(e) => {
+          setName(e.target.value)
+          setError(null)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') void submit()
+          // stopPropagation so the page-level Esc (back to Agents)
+          // doesn't also fire — Esc here just cancels the input.
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            onDone()
+          }
+        }}
+        placeholder="Project name…"
+        className="w-full px-2.5 py-1.5 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)] disabled:opacity-50"
+      />
+      {error && <p className="text-[10px] text-red-400 leading-snug">{error}</p>}
+      <div className="flex items-center gap-1.5">
+        <button
+          className="flex-1 px-2 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/25 transition-colors disabled:opacity-50"
+          disabled={busy || name.trim().length === 0}
+          onClick={() => void submit()}
+        >
+          Create
+        </button>
+        <button
+          className="px-2 py-1 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+          disabled={busy}
+          onClick={onDone}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function NewProjectAffordance(): React.JSX.Element {
+  const [editing, setEditing] = useState(false)
+
+  if (!editing) {
+    return (
+      <div className="p-3 border-t border-[var(--color-border)]">
+        <button
+          className="no-drag w-full flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors"
+          onClick={() => setEditing(true)}
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          New Project
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-3 border-t border-[var(--color-border)]">
+      <CreateProjectForm onDone={() => setEditing(false)} />
+    </div>
+  )
+}
+
+// ── The nav ───────────────────────────────────────────────────────────────
+
+export default function ProjectNav({
+  members,
+  pocWorkspaceId,
+}: {
+  /** Members of the SELECTED project (the page owns the `show` fetch). */
+  members: ProjectGroupMemberInfo[] | null
+  pocWorkspaceId: string | null
+}): React.JSX.Element {
+  const groups = useProjectGroupsStore((s) => s.groups)
+  const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
+  const selectGroup = useProjectGroupsStore((s) => s.selectGroup)
+  const unreadGroupIds = useProjectGroupsStore((s) => s.unreadGroupIds)
+
+  // Pinned-section collapse persists across launches (Sidebar's
+  // agentsPinnedCollapsed idiom).
+  const [pinnedCollapsed, setPinnedCollapsedRaw] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('k2:projects-nav:pinnedCollapsed') === '1'
+    } catch {
+      return false
+    }
+  })
+  const setPinnedCollapsed = (v: boolean): void => {
+    setPinnedCollapsedRaw(v)
+    try {
+      localStorage.setItem('k2:projects-nav:pinnedCollapsed', v ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const { pinned, unpinned } = useMemo(() => partitionPinned(groups ?? []), [groups])
+
+  return (
+    <div
+      className="relative flex flex-col h-full flex-shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-surface)]"
+      style={{ width: PROJECT_NAV_WIDTH }}
+    >
+      {/* Pinned projects — canonical section, always on top (Q4). */}
+      {pinned.length > 0 && (
+        <div className="border-b border-[var(--color-border)]">
+          <button
+            type="button"
+            onClick={() => setPinnedCollapsed(!pinnedCollapsed)}
+            className="no-drag w-full flex items-center gap-1.5 px-4 pt-3 pb-2 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+            aria-expanded={!pinnedCollapsed}
+          >
+            <span className="text-[10px] font-semibold tracking-wider text-[var(--color-text-muted)] uppercase">
+              Pinned
+            </span>
+            <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono">
+              {pinned.length}
+            </span>
+            <span className="flex-1" />
+            <svg
+              className="w-2.5 h-2.5 text-[var(--color-text-muted)] flex-shrink-0"
+              style={{ transition: 'transform 0.2s ease', transform: pinnedCollapsed ? 'rotate(0deg)' : 'rotate(90deg)' }}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+          <div
+            style={{
+              overflow: 'hidden',
+              maxHeight: pinnedCollapsed ? 0 : 1200,
+              transition: 'max-height 0.2s ease',
+            }}
+          >
+            {/* TODO(P5): drag-to-reorder within sections — Sidebar's
+                handleProjectMouseDown threshold + drop-index pattern. */}
+            {pinned.map((group) => (
+              <GroupRow
+                key={group.id}
+                group={group}
+                selected={group.id === selectedGroupId}
+                unread={unreadGroupIds.has(group.id)}
+                onSelect={() => selectGroup(group.id)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Section header (FocusGroupSelector's plain-label idiom). */}
+      <div className="px-4 pt-3 pb-2 no-drag">
+        <span className="text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)] uppercase">
+          Projects
+        </span>
+      </div>
+
+      {/* Unpinned project list */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
+        {unpinned.map((group, idx) => (
+          <React.Fragment key={group.id}>
+            <GroupRow
+              group={group}
+              selected={group.id === selectedGroupId}
+              unread={unreadGroupIds.has(group.id)}
+              onSelect={() => selectGroup(group.id)}
+            />
+            {idx < unpinned.length - 1 && <div className="border-b border-[var(--color-border)]" />}
+          </React.Fragment>
+        ))}
+
+        {groups !== null && groups.length === 0 && (
+          <div className="px-3 py-6 text-center">
+            <p className="text-xs text-[var(--color-text-muted)]">No projects yet</p>
+            <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-60">
+              Create one to group agents into an effort
+            </p>
+          </div>
+        )}
+        {groups === null && (
+          <div className="px-3 py-6 text-center">
+            <p className="text-xs text-[var(--color-text-muted)]">Loading projects…</p>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom-drawer slot (ActiveBar's position): the selected
+          project's members — ALL of them, never activity-gated. */}
+      {selectedGroupId && members && (
+        <MemberDrawer members={members} pocWorkspaceId={pocWorkspaceId} />
+      )}
+
+      <NewProjectAffordance />
+    </div>
+  )
+}

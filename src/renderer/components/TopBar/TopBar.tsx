@@ -9,12 +9,11 @@ import { useReviewQueueStore } from '@/stores/review-queue'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useAgentOpsStore } from '@/stores/agent-ops'
-import { useFeedbackStore, initFeedbackEvents } from '@/stores/feedback'
-import { useProjectsStore } from '@/stores/projects'
 import TimerButton from '@/components/Timer/TimerButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import ServerSwitcher from './ServerSwitcher'
+import PageTabs from './PageTabs'
 
 interface TopBarProps {
   projectName?: string
@@ -150,8 +149,9 @@ export default function TopBar({
         <RunningAgentsTopBarButton />
         {/* Agent Ops — fleet view */}
         <AgentOpsTopBarButton />
-        {/* Feedback — agent→human ask queue */}
-        <FeedbackTopBarButton />
+        {/* §6.0 — the 3-tab page switcher (Agents | Projects | Feedback).
+            Absorbs the v0.40.26 Feedback button; badges ride the tabs. */}
+        <PageTabs />
         {/* Back / Forward navigation */}
         <NavButtons />
       </div>
@@ -357,49 +357,9 @@ function AgentOpsTopBarButton(): React.JSX.Element {
   )
 }
 
-function FeedbackTopBarButton(): React.JSX.Element {
-  const waitingCount = useFeedbackStore((s) => s.waitingCount)
-  const projects = useProjectsStore((s) => s.projects)
-
-  // Wire the feedback:created/answered listeners once (idempotent) and
-  // (re)count waiting items whenever the registered-projects set changes
-  // — the count is a per-workspace list fan-out, so it must re-run when
-  // workspaces appear/disappear. Only the MAIN window fires the desktop
-  // notification (a second window would double-notify).
-  useEffect(() => {
-    let isMain = true
-    try {
-      isMain = getCurrentWindow().label === 'main'
-    } catch {
-      /* outside Tauri (tests) — default main */
-    }
-    initFeedbackEvents(isMain)
-    void useFeedbackStore.getState().refreshWaitingCount()
-  }, [projects])
-
-  // A labeled button (not an icon) — the ask queue is a destination,
-  // and the visible word carries it. Same tokens/height as the icon
-  // buttons around it; the waiting-count badge behaves exactly as
-  // before (visible with the count, hidden at 0).
-  return (
-    <button
-      onClick={() => useFeedbackStore.getState().open()}
-      className="relative flex h-6 items-center justify-center px-2 text-[11px] font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-      style={{
-        // @ts-expect-error -- Electron-specific CSS property
-        WebkitAppRegion: 'no-drag'
-      }}
-      title="Feedback — agents waiting on you"
-    >
-      Feedback
-      {waitingCount > 0 && (
-        <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-white bg-orange-500 rounded-full px-0.5">
-          {waitingCount > 99 ? '99+' : waitingCount}
-        </span>
-      )}
-    </button>
-  )
-}
+// FeedbackTopBarButton (v0.40.26) was absorbed into the §6.0 page
+// switcher — see PageTabs.tsx (the Feedback tab keeps its waiting-count
+// badge and the event-wiring effect verbatim).
 
 function NavButtons(): React.JSX.Element {
   const canBack = useTabsStore((s) => s.canGoBack())

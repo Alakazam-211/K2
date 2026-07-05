@@ -15,11 +15,15 @@
 
 import { create } from 'zustand'
 import { useProjectsStore } from '@/stores/projects'
+import { usePageViewStore } from '@/stores/page-view'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import { fetchWaitingCount } from '@/components/Feedback/feedback-api'
 
 interface FeedbackState {
-  /** Whether the full-page Feedback view is shown. */
+  /** Whether the full-page Feedback view is shown. Mirrors
+   *  `usePageViewStore.page === 'feedback'` (§6.0 switcher — the SSOT);
+   *  kept as a field so pre-switcher consumers (the page gate, the
+   *  notification visibility check, tests) read it unchanged. */
   isOpen: boolean
   /** Waiting-item count across all workspaces (top-bar badge; 0 hides). */
   waitingCount: number
@@ -36,9 +40,16 @@ export const useFeedbackStore = create<FeedbackState>((set) => ({
   isOpen: false,
   waitingCount: 0,
   revision: 0,
-  open: () => set({ isOpen: true }),
-  close: () => set({ isOpen: false }),
-  toggle: () => set((s) => ({ isOpen: !s.isOpen })),
+  // open/close/toggle delegate to the page-view SSOT (§6.0): opening the
+  // Feedback page IS selecting the Feedback tab; closing returns to the
+  // Agents page (today's default view). The subscription below mirrors
+  // the result back into `isOpen`.
+  open: () => usePageViewStore.getState().setPage('feedback'),
+  close: () => usePageViewStore.getState().setPage('agents'),
+  toggle: () =>
+    usePageViewStore
+      .getState()
+      .setPage(usePageViewStore.getState().page === 'feedback' ? 'agents' : 'feedback'),
   refreshWaitingCount: async () => {
     const projects = useProjectsStore.getState().projects
     try {
@@ -49,6 +60,15 @@ export const useFeedbackStore = create<FeedbackState>((set) => ({
     }
   },
 }))
+
+// Keep `isOpen` in lockstep with the page-view store (one-way: page is
+// the SSOT; the mutators above only ever write through it).
+usePageViewStore.subscribe((s) => {
+  const isOpen = s.page === 'feedback'
+  if (useFeedbackStore.getState().isOpen !== isOpen) {
+    useFeedbackStore.setState({ isOpen })
+  }
+})
 
 /** Event payload contract — frozen in feedback_routes.rs. */
 interface FeedbackCreatedPayload {

@@ -20,6 +20,8 @@ import { useFeedbackStore } from '@/stores/feedback'
 import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/components/AgentOps/ops-api'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
+import PageTabs from '@/components/TopBar/PageTabs'
 import {
   countByStatus,
   fetchAllFeedback,
@@ -394,19 +396,13 @@ export default function FeedbackPage(): React.JSX.Element | null {
           <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
             K2
           </span>
-          {/* Back — returns to the previous app view (page-level). */}
-          <button
-            type="button"
-            onClick={close}
-            className="flex items-center gap-1 px-1.5 py-1 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] transition-colors cursor-pointer no-drag"
-            title="Back (Esc)"
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 2 3 5 6 8" />
-            </svg>
-            Back
-          </button>
-          <span className="text-[11px] text-[var(--color-text-secondary)]">Feedback</span>
+          {/* §6.0 — the server dropdown + page switcher stay visible on
+              every page; the Feedback tab reads selected here. (Replaces
+              the old Back button — Esc still returns to Agents.) */}
+          <ServerSwitcher />
+          <div className="no-drag">
+            <PageTabs />
+          </div>
         </div>
 
         <div className="flex items-center gap-2 no-drag">

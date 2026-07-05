@@ -49,6 +49,15 @@ function stampLastSeen(groupId: string): void {
   }
 }
 
+/** P5 (§6.2) — a member-row click asking the dashboard to open/focus
+ *  that member's canonical pane. The nonce distinguishes repeat clicks
+ *  on the same member; the dashboard CONSUMES the request (clears it)
+ *  so a later remount never replays a stale one. */
+export interface MemberPaneRequest {
+  workspaceId: string
+  nonce: number
+}
+
 interface ProjectGroupsState {
   /** null = not fetched yet (the page shows a loading state). */
   groups: ProjectGroup[] | null
@@ -59,10 +68,15 @@ interface ProjectGroupsState {
   unreadGroupIds: Set<string>
   /** Bumped on every project-group event so open views refetch. */
   revision: number
+  /** Pending open-member-pane click (P5 §6.2) — see MemberPaneRequest. */
+  paneRequest: MemberPaneRequest | null
   fetchGroups: () => Promise<void>
   /** Select a project in the nav; selecting marks it seen (§4.4). */
   selectGroup: (groupId: string | null) => void
   markGroupSeen: (groupId: string) => void
+  /** Member-row click → the dashboard opens/focuses that pane. */
+  requestMemberPane: (workspaceId: string) => void
+  clearPaneRequest: () => void
 }
 
 export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
@@ -70,6 +84,7 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   selectedGroupId: null,
   unreadGroupIds: new Set<string>(),
   revision: 0,
+  paneRequest: null,
   fetchGroups: async () => {
     // Capture the host so a slow response from the PREVIOUS host can
     // never land after a switch (projects-store idiom).
@@ -93,7 +108,9 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
     }
   },
   selectGroup: (groupId) => {
-    set({ selectedGroupId: groupId })
+    // Switching projects drops any pending pane request — it addressed
+    // the previous project's dashboard.
+    set({ selectedGroupId: groupId, paneRequest: null })
     if (groupId) get().markGroupSeen(groupId)
   },
   markGroupSeen: (groupId) => {
@@ -105,6 +122,10 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       return { unreadGroupIds: next }
     })
   },
+  requestMemberPane: (workspaceId) => {
+    set((s) => ({ paneRequest: { workspaceId, nonce: (s.paneRequest?.nonce ?? 0) + 1 } }))
+  },
+  clearPaneRequest: () => set({ paneRequest: null }),
 }))
 
 // Host switch: everything here is keyed by the previous host's group ids
@@ -116,6 +137,7 @@ onActiveHostChange(() => {
     selectedGroupId: null,
     unreadGroupIds: new Set<string>(),
     revision: s.revision + 1,
+    paneRequest: null,
   }))
 })
 
@@ -163,6 +185,15 @@ export function initProjectGroupEvents(): void {
     listen('project-group:groups-changed', () => bumpAndCoalesceRefetch()).catch(warn)
     listen('project-group:members-changed', () => bumpAndCoalesceRefetch()).catch(warn)
     listen('project-group:poc-changed', () => bumpAndCoalesceRefetch()).catch(warn)
+    // P5 (§6.3) — a layout save (this client's or another's) → revision
+    // bump ONLY, so the open page refetches its `show` view and the
+    // dashboard's freshness logic sees the new dashboard revision. NO
+    // list refetch (layout changes no list metadata) and explicitly NO
+    // live rearrange — an open dashboard only marks itself stale;
+    // the latest layout applies on project open/switch.
+    listen('project-group:layout-changed', () => {
+      useProjectGroupsStore.setState((s) => ({ revision: s.revision + 1 }))
+    }).catch(warn)
     // Chat messages → unread bookkeeping (badge) + revision (the P6
     // drawer refetches on it). NOT a list refetch — a message changes no
     // list metadata.

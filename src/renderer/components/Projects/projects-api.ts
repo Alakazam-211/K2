@@ -85,6 +85,23 @@ export async function pinProjectGroup(group: string, pinned: boolean): Promise<v
   await daemonCliPost('project-group/pin', { group, pinned })
 }
 
+/** POST /cli/project-group/dashboard/save-layout — canonical
+ *  last-write-wins save (§6.3a): the daemon bumps `revision` and emits
+ *  `project-group:layout-changed {groupId, dashboardId, revision}`.
+ *  Owner-or-admin gated daemon-side; the response is the saved
+ *  dashboard row (its `revision` feeds the echo guard). */
+export async function saveDashboardLayout(
+  group: string,
+  dashboardId: string,
+  layoutJson: string,
+): Promise<ProjectGroupDashboard> {
+  return daemonCliPost<ProjectGroupDashboard>('project-group/dashboard/save-layout', {
+    group,
+    dashboardId,
+    layoutJson,
+  })
+}
+
 /** §4.4 badge reconciliation: a group is UNREAD when it has ≥1 chat
  *  message newer than the per-client last-seen cursor. One
  *  `messages?after=&limit=1` probe per group (the feedback waiting-count

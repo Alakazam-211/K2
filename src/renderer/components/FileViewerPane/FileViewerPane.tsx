@@ -70,8 +70,10 @@ export type { FileCategory, ViewMode } from './fileCategory'
  *  has non-empty text. Used to suppress the markdown-preview
  *  auto-refresh while the user is dragging or copying — ReactMarkdown
  *  re-renders rebuild the DOM and the selection collapses, which
- *  silently breaks Cmd+C from the preview. */
-function hasSelectionWithin(container: HTMLElement | null): boolean {
+ *  silently breaks Cmd+C from the preview. Exported for the Projects
+ *  dashboard's htmlDoc panes (P5), which reuse the same poll-with-
+ *  selection-guard machinery. */
+export function hasSelectionWithin(container: HTMLElement | null): boolean {
   if (!container) return false
   const sel = window.getSelection()
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false

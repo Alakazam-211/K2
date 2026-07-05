@@ -4,16 +4,19 @@
 // precedent, Sidebar.tsx:698), the unpinned project list below, NO
 // Active section, and the bottom-drawer slot (ActiveBar's position)
 // holding the SELECTED project's member agents in ActiveBar styling —
-// always ALL members, never activity-gated. Drag-to-reorder + dragging
-// members onto the dashboard are P5 (Sidebar's handleProjectMouseDown
-// threshold pattern); rows keep the same visual idiom so P5 only adds
-// the mouse mechanics.
+// always ALL members, never activity-gated. P5 wired the member rows:
+// click opens/focuses the member's canonical pane in the dashboard;
+// drag (Sidebar's handleProjectMouseDown threshold pattern, bridged
+// via dashboard-dnd.ts) drops it onto a §6.2 drop target. Group-list
+// drag-to-reorder awaits a sort-order route (V1.1).
 
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useRef, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useToastStore } from '@/stores/toast'
+import { useWindowModeStore } from '@/stores/window-mode'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import { completeMemberDrag, useDashboardDndStore } from './dashboard-dnd'
 import {
   createProjectGroup,
   createErrorMessage,
@@ -162,17 +165,74 @@ function MemberRow({
   // enrichment carries name/path only).
   const workspace = useProjectsStore((s) => s.projects.find((p) => p.id === member.workspaceId))
   const displayName = member.agentName ?? member.name ?? member.workspaceId.slice(0, 8)
+  // Presence read-only signal (window-mode.ts): viewers can still CLICK
+  // (focus an existing pane — the dashboard decides), but never DRAG.
+  const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
+  // A completed drag fires a trailing click on the same button —
+  // swallow exactly that one.
+  const suppressClickRef = useRef(false)
 
   const handleClick = (): void => {
-    // TODO(P5): open/focus this member's CANONICAL terminal pane in the
-    // dashboard (one pane per agent — the attachAgentName idempotent
-    // spawn idiom, §6.2). No-op in the P4 shell.
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false
+      return
+    }
+    // P5 (§6.1/§6.2): open (or focus — one pane per agent) this
+    // member's canonical terminal pane in the dashboard. The mounted
+    // ProjectDashboard consumes the request.
+    useProjectGroupsStore.getState().requestMemberPane(member.workspaceId)
+  }
+
+  // P5 (§6.2) — drag a member into the dashboard: Sidebar's
+  // handleProjectMouseDown threshold pattern; the pointer streams into
+  // the dashboard-dnd store (the dashboard renders drop-target hints)
+  // and mouseup offers the drop to the mounted dashboard.
+  const handleMouseDown = (e: React.MouseEvent): void => {
+    if (readOnly || e.button !== 0) return
+    const startX = e.clientX
+    const startY = e.clientY
+    let started = false
+
+    const handleMouseMove = (ev: MouseEvent): void => {
+      if (!started && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 5)) {
+        started = true
+        suppressClickRef.current = true
+        document.body.style.cursor = 'grabbing'
+        document.body.style.userSelect = 'none'
+      }
+      if (!started) return
+      useDashboardDndStore
+        .getState()
+        .setMemberDrag({ workspaceId: member.workspaceId, x: ev.clientX, y: ev.clientY })
+    }
+
+    const handleMouseUp = (ev: MouseEvent): void => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      if (!started) return
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      completeMemberDrag(member.workspaceId, ev.clientX, ev.clientY)
+      useDashboardDndStore.getState().setMemberDrag(null)
+      // The trailing click (mousedown+mouseup on this button) is
+      // swallowed by the flag; re-arm on the next tick in case the
+      // browser skips it (pointer released off-button).
+      setTimeout(() => {
+        suppressClickRef.current = false
+      }, 0)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
   }
 
   return (
     <button
       onClick={handleClick}
-      className="no-drag w-full flex items-center gap-2 px-2 py-1 text-left transition-colors cursor-default select-none text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]"
+      onMouseDown={handleMouseDown}
+      className={`no-drag w-full flex items-center gap-2 px-2 py-1 text-left transition-colors select-none text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] ${
+        readOnly ? 'cursor-default' : 'cursor-pointer'
+      }`}
       title={member.path ?? undefined}
     >
       <ProjectAvatar
@@ -412,8 +472,9 @@ export default function ProjectNav({
               transition: 'max-height 0.2s ease',
             }}
           >
-            {/* TODO(P5): drag-to-reorder within sections — Sidebar's
-                handleProjectMouseDown threshold + drop-index pattern. */}
+            {/* TODO(V1.1): drag-to-reorder within sections — Sidebar's
+                handleProjectMouseDown threshold + drop-index pattern
+                (needs a sort-order route; P2 shipped pin only). */}
             {pinned.map((group) => (
               <GroupRow
                 key={group.id}

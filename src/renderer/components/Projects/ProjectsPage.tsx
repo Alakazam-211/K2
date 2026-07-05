@@ -9,10 +9,11 @@
 // Dashboard | Feedback tabs (the FeedbackItemView two-tab idiom) plus a
 // gear opening the per-project Settings slot.
 //
-// P4 ships the SHELL: the Dashboard tab renders the project's dashboards
-// from `show` ('Main' only in V1) with a placeholder pane region P5
-// fills (DnD columns + kessel attach); the Feedback tab is P7's slot;
-// the gear panel is P8's slot. Each seam is marked with a TODO.
+// P5 fills the Dashboard tab: ProjectDashboard renders the canonical
+// layout blob as percent-width pane columns (kessel canonical-terminal
+// attach + htmlDoc panes), with drag-and-drop, coalesced save-layout,
+// and apply-on-open staleness (§6.2/§6.3). The Feedback tab is P7's
+// slot; the gear panel is P8's slot. Remaining seams keep their TODOs.
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { usePageViewStore } from '@/stores/page-view'
@@ -20,6 +21,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import ProjectNav, { CreateProjectForm } from './ProjectNav'
+import ProjectDashboard from './ProjectDashboard'
 import { fetchProjectGroupShow, type ProjectGroupShow } from './projects-api'
 
 const TOPBAR_HEIGHT = 38
@@ -29,13 +31,12 @@ type ProjectTab = 'dashboard' | 'feedback'
 // ── Selected-project main area ────────────────────────────────────────────
 
 function DashboardTab({ show }: { show: ProjectGroupShow }): React.JSX.Element {
-  const poc = show.members.find((m) => m.workspaceId === show.pocWorkspaceId)
-  const pocName = poc ? (poc.agentName ?? poc.name ?? 'the PoC') : null
+  // V1 renders the first (single 'Main') dashboard; the selector row
+  // surfaces it — multi-dashboard UI is V1.1 (routes are id-addressed).
+  const dashboard = show.dashboards[0] ?? null
 
   return (
     <div className="flex-1 flex flex-col min-h-0 p-3 gap-2">
-      {/* Dashboard selector row — V1 surfaces the single 'Main' row;
-          multi-dashboard UI is V1.1 (schema/routes are id-addressed). */}
       <div className="flex items-center gap-1 flex-shrink-0">
         {show.dashboards.map((d, idx) => (
           <span
@@ -52,25 +53,19 @@ function DashboardTab({ show }: { show: ProjectGroupShow }): React.JSX.Element {
         ))}
       </div>
 
-      {/* TODO(P5): the pane region — drag-and-drop percent-width columns
-          of panes (agent canonical terminals via the attachAgentName
-          idiom + pinned-HTML FileViewerPane reuse), parsed from
-          dashboards[0].layoutJson (§6.2/§6.3), save-layout on change,
-          apply-on-open, stale-on-layout-changed. This placeholder is the
-          slot it replaces. */}
-      <div
-        data-projects-dashboard-panes
-        className="flex-1 flex items-center justify-center border border-dashed border-[var(--color-border)] text-center px-8"
-      >
-        <div>
-          <p className="text-sm text-[var(--color-text-secondary)]">No panes yet</p>
-          <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-70">
-            {pocName
-              ? `A fresh dashboard starts with ${pocName}'s canonical terminal — pane layout arrives in the next slice.`
-              : 'Add a member to this project — its agent becomes the Point of Contact and the first pane.'}
+      {/* P5 — the pane grid (§6.2/§6.3). Keyed by dashboard id so a
+          project/dashboard switch is a fresh mount = apply-on-open;
+          `show` refetches (same key) update props WITHOUT re-adopting
+          the layout — the dashboard only marks itself stale. */}
+      {dashboard ? (
+        <ProjectDashboard key={dashboard.id} show={show} dashboard={dashboard} />
+      ) : (
+        <div className="flex-1 flex items-center justify-center border border-dashed border-[var(--color-border)] text-center px-8">
+          <p className="text-xs text-[var(--color-text-muted)]">
+            This project has no dashboard yet.
           </p>
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -147,6 +142,16 @@ function SelectedProjectView({
 
   // Selection switches arrive as a fresh mount (the page keys this view
   // by group id), so tab/settings state resets per project.
+
+  // P5 — a member-row click (open/focus its canonical pane) always
+  // lands on the Dashboard tab; the mounted ProjectDashboard consumes
+  // the request itself.
+  const paneRequestNonce = useProjectGroupsStore((s) => s.paneRequest?.nonce ?? null)
+  useEffect(() => {
+    if (paneRequestNonce === null) return
+    setTab('dashboard')
+    setSettingsOpen(false)
+  }, [paneRequestNonce])
 
   if (error) {
     return (
@@ -360,7 +365,15 @@ export default function ProjectsPage(): React.JSX.Element | null {
               Select a project to open its dashboard.
             </div>
           ) : (
-            <SelectedProjectView key={selectedGroup.id} show={show} error={showError} />
+            /* Same staleness guard as the nav's member drawer: while a
+               selection switch's `show` fetch is in flight, render the
+               loading state — never the PREVIOUS project's data (P5:
+               that would briefly mount the wrong project's panes). */
+            <SelectedProjectView
+              key={selectedGroup.id}
+              show={show?.id === selectedGroup.id ? show : null}
+              error={showError}
+            />
           )}
         </div>
       </div>

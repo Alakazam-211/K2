@@ -4,7 +4,8 @@ import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { usePinnedSizeStore } from '@/stores/pinned-size'
-import { openPinSizeMenu, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
+import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
+import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
 import { agentChatId } from '@/lib/terminal-id'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { invoke } from '@tauri-apps/api/core'
@@ -17,24 +18,6 @@ import AgentIcon from '@/components/AgentIcon/AgentIcon'
 interface TabBarProps {
   cwd: string
   groupIndex?: number
-}
-
-/** Pushpin glyph — head, shoulder, needle. Same mark PaneTabBar uses
- *  so the pin entry point reads identically on both tab bars. */
-function PinGlyph(): React.JSX.Element {
-  return (
-    <svg
-      width="8"
-      height="8"
-      viewBox="0 0 12 12"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-    >
-      <path d="M4 1.5 h4 l-0.75 3.5 L9 6.5 H3 l1.75-1.5 Z" />
-      <line x1="6" y1="6.5" x2="6" y2="10.5" />
-    </svg>
-  )
 }
 
 export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element {
@@ -56,18 +39,19 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   // below (which only inspects terminal panes) never sees it.
   const projectId = useProjectsStore((s) => s.projects.find((p) => p.path === cwd)?.id ?? null)
 
-  // ── Pin-to-size menu (S7c, PRD presence-multiplayer §5.5) ──────────────
+  // ── Pin-to-size, right-click entry (PRD presence-multiplayer §5.5) ─────
   //
-  // S7b put the pin menu on PaneTabBar, which only renders when a tab
-  // HAS SPLITS. Single-pane tabs — the common case, including the pinned
-  // agent chat — are managed by THIS bar, so the same entry point lives
-  // here too (menu construction + POST shared via pinSizeMenu.ts).
-  // Resolution success (terminalId→daemon-sessionId in the pinned-size
-  // store, registered by TerminalPane at spawn-resolve) doubles as the
-  // "is there a live Kessel session?" gate for showing the button.
+  // The pushpin icon-button (v0.40.27) is gone: pinning lives in the
+  // tab's context menu now — "Pin Dimensions…" opens PinDimensionsModal,
+  // "Unpin Dimensions" clears instantly. PaneTabBar covers split-pane
+  // tabs the same way; SINGLE-pane tabs (the common case, including the
+  // pinned agent chat) are managed by THIS bar. Resolution success
+  // (terminalId→daemon-sessionId in the pinned-size store, registered
+  // by TerminalPane at spawn-resolve) doubles as the "is there a live
+  // Kessel session?" gate for offering the menu entry.
   const pinSessions = usePinnedSizeStore((s) => s.sessions)
-  const pins = usePinnedSizeStore((s) => s.pins)
   const projects = useProjectsStore((s) => s.projects)
+  const [pinModalSessionId, setPinModalSessionId] = useState<string | null>(null)
 
   // Transient inline hint for pin-size failures (cleared after 4s) —
   // same component-local mechanism as PaneTabBar.
@@ -85,18 +69,38 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     []
   )
 
-  const handlePinMenu = useCallback(
-    (e: React.MouseEvent, sessionId: string) => {
-      e.stopPropagation()
-      const anchor = (e.currentTarget as HTMLElement).getBoundingClientRect()
-      void openPinSizeMenu({
-        x: anchor.left,
-        y: anchor.bottom + 4,
-        sessionId,
-        onError: flashPinHint,
+  // Unpin is an instant action from the context menu — no modal.
+  // Failures surface through the same transient hint.
+  const handleUnpin = useCallback(
+    (sessionId: string) => {
+      applyPinSize(sessionId, null).catch((err) => {
+        flashPinHint(
+          `Unpin failed: ${err instanceof Error ? err.message : String(err)}`
+        )
       })
     },
     [flashPinHint]
+  )
+
+  // The compact system-agent (Chat) tab has no other context-menu items
+  // — its menu is just the pin entry.
+  const handleSystemTabContextMenu = useCallback(
+    async (e: React.MouseEvent, sessionId: string) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const pinned = usePinnedSizeStore.getState().pins[sessionId] ?? null
+      const clickedId = await showContextMenu([
+        pinned
+          ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
+          : { id: 'pin-dimensions', label: 'Pin Dimensions…' },
+      ])
+      if (clickedId === 'pin-dimensions') {
+        setPinModalSessionId(sessionId)
+      } else if (clickedId === 'unpin-dimensions') {
+        handleUnpin(sessionId)
+      }
+    },
+    [handleUnpin]
   )
 
   // Heartbeat-tab detection key: a Set of every heartbeat's
@@ -313,7 +317,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     [removeTabFromGroup, groupIndex]
   )
 
-  const handleTabContextMenu = useCallback(async (e: React.MouseEvent, tabId: string) => {
+  const handleTabContextMenu = useCallback(async (e: React.MouseEvent, tabId: string, pinSessionId: string | null) => {
     e.preventDefault()
     e.stopPropagation()
 
@@ -359,10 +363,23 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         { id: 'close-others', label: 'Close Other Tabs' },
         { id: 'close-all', label: 'Close All Tabs' },
       ] : []),
+      // Pin-to-size — only when the tab resolves to a live Kessel
+      // session. "Pin Dimensions…" opens the modal; while pinned the
+      // entry flips to an instant Unpin.
+      ...(pinSessionId ? [
+        { id: 'pin-separator', label: '', type: 'separator' as const },
+        usePinnedSizeStore.getState().pins[pinSessionId]
+          ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
+          : { id: 'pin-dimensions', label: 'Pin Dimensions…' },
+      ] : []),
     ]
 
     const clickedId = await showContextMenu(menuItems)
-    if (clickedId === 'rename') {
+    if (clickedId === 'pin-dimensions' && pinSessionId) {
+      setPinModalSessionId(pinSessionId)
+    } else if (clickedId === 'unpin-dimensions' && pinSessionId) {
+      handleUnpin(pinSessionId)
+    } else if (clickedId === 'rename') {
       // Enter inline-edit mode for this (regular) tab. The label→input
       // swap and commit/cancel wiring live in the tab render branch.
       setEditingTabId(tabId)
@@ -424,7 +441,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         }
       }
     }
-  }, [groupIndex, removeTabFromGroup])
+  }, [groupIndex, removeTabFromGroup, handleUnpin])
 
   // Scroll active tab into view when it changes
   useEffect(() => {
@@ -491,12 +508,12 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
             ),
           )
 
-          // S7c — pin-size entry point for SINGLE-PANE tabs only. Split
-          // tabs already carry per-pane pin buttons on their PaneTabBar;
-          // a tab-level button there would be ambiguous about which
+          // Pin-to-size context-menu entry for SINGLE-PANE tabs only.
+          // Split tabs get the same entry on their PaneTabBar items;
+          // a tab-level entry there would be ambiguous about which
           // pane it pins. Resolution (terminal item → terminalId,
           // agent chat item → agent-chat:<projectId>) is shared with
-          // PaneTabBar via pinSizeMenu.ts; null = no button.
+          // PaneTabBar via pinSizeMenu.ts; null = no menu entry.
           const soleGroup =
             tab.paneGroups.size === 1 ? Array.from(tab.paneGroups.values())[0] : null
           const pinItem = soleGroup
@@ -507,10 +524,6 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           const pinSessionId = pinItem
             ? resolvePinSessionId(pinItem, pinSessions, projects)
             : null
-          const pinnedSize = pinSessionId ? pins[pinSessionId] ?? null : null
-          const pinTitle = pinnedSize
-            ? `Pinned to ${pinnedSize.cols}×${pinnedSize.rows} — click to change`
-            : 'Pin size'
 
           // Pinned system agent tab — compact with just icon.
           // Post-0.36.0 the agent UI is split across two pinned tabs;
@@ -586,36 +599,18 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     : 'text-[var(--color-text-muted)] hover:bg-white/[0.04] hover:text-[var(--color-text-secondary)]'
                 }`}
                 onClick={() => setActiveTabInGroup(groupIndex, tab.id)}
+                // Pin-to-size for the pinned agent Chat tab (its
+                // AgentChatPane hosts a Kessel TerminalPane) — the
+                // compact tab has no other context-menu items, so
+                // right-click offers just Pin/Unpin Dimensions.
+                onContextMenu={
+                  pinSessionId
+                    ? (e) => void handleSystemTabContextMenu(e, pinSessionId)
+                    : undefined
+                }
                 title={tab.title}
               >
                 {iconSvg}
-                {/* S7c — pin-size menu for the pinned agent Chat tab
-                    (its AgentChatPane hosts a Kessel TerminalPane).
-                    The compact icon tab has no room for an inline
-                    trailing button, so the pin sits in the top-right
-                    corner: hover-revealed while unpinned (mirrors how
-                    this bar tucks secondary affordances away), always
-                    visible in accent while pinned. */}
-                {pinSessionId && (
-                  <button
-                    className={`absolute top-0 right-0 items-center justify-center hover:bg-white/10 ${
-                      pinnedSize ? 'flex' : 'hidden group-hover:flex'
-                    }`}
-                    style={{
-                      width: '12px',
-                      height: '12px',
-                      color: pinnedSize
-                        ? 'var(--color-accent)'
-                        : 'var(--color-text-muted)',
-                    }}
-                    onClick={(e) => handlePinMenu(e, pinSessionId)}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    title={pinTitle}
-                    data-tab-pin-size=""
-                  >
-                    <PinGlyph />
-                  </button>
-                )}
                 {/* Activity underline */}
                 {systemTabActive && (
                   <div className="absolute bottom-0 left-1 right-1 h-[2px] bg-[var(--color-accent)] rounded-full" />
@@ -635,7 +630,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04]'
               } ${isDragged ? 'opacity-30' : ''}`}
               onClick={() => setActiveTabInGroup(groupIndex, tab.id)}
-              onContextMenu={(e) => handleTabContextMenu(e, tab.id)}
+              onContextMenu={(e) => handleTabContextMenu(e, tab.id, pinSessionId)}
               onMouseDown={(e) => handleTabMouseDown(e, index, tab.id, tab.title)}
             >
               {showDropBefore && <div className="absolute left-0 top-1 bottom-1 w-[2px] bg-[var(--color-accent)] z-10" />}
@@ -731,25 +726,6 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   {tab.title}
                 </span>
               )}
-              {/* S7c — pin-size menu entry point. Always visible when
-                  the tab resolves to a live Kessel session (same
-                  convention as this bar's close button and as
-                  PaneTabBar's pin button); accent-colored while
-                  pinned. */}
-              {pinSessionId && (
-                <button
-                  className="ml-2 flex h-4 w-4 flex-shrink-0 items-center justify-center hover:bg-white/10"
-                  style={{
-                    color: pinnedSize ? 'var(--color-accent)' : undefined,
-                  }}
-                  onClick={(e) => handlePinMenu(e, pinSessionId)}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  title={pinTitle}
-                  data-tab-pin-size=""
-                >
-                  <PinGlyph />
-                </button>
-              )}
               {/* Heartbeat tabs are "minimize, don't kill" — the
                   daemon-owned PTY keeps running so the heartbeat
                   keeps firing on schedule. Visually distinguish with
@@ -828,7 +804,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         })}
       </div>
 
-      {/* S7c — transient pin-size failure hint (auto-clears). */}
+      {/* Transient unpin-failure hint (auto-clears). */}
       {pinHint && (
         <span
           className="shrink-0 px-2 truncate"
@@ -903,6 +879,13 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           <line x1="1" y1="6" x2="11" y2="6" />
         </svg>
       </button>
+      {/* Pin Dimensions modal — opened from a tab's context menu */}
+      {pinModalSessionId && (
+        <PinDimensionsModal
+          sessionId={pinModalSessionId}
+          onClose={() => setPinModalSessionId(null)}
+        />
+      )}
       {/* Agent close confirmation dialog */}
       {pendingClose && (
         <AgentCloseDialog

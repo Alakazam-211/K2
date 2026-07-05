@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTabsStore } from '@/stores/tabs'
 import { usePinnedSizeStore } from '@/stores/pinned-size'
 import { useProjectsStore } from '@/stores/projects'
-import { openPinSizeMenu, resolvePinSessionId } from './pinSizeMenu'
+import { useContextMenuStore } from '@/stores/context-menu'
+import { applyPinSize, resolvePinSessionId } from './pinSizeMenu'
+import PinDimensionsModal from './PinDimensionsModal'
 
 // ── Types (from tabs store — will be available after store refactor) ──
 
@@ -85,17 +87,20 @@ export function PaneTabBar({
     [onClose]
   )
 
-  // ── Pin-to-size menu (S7b; shared with the workspace TabBar via
-  // pinSizeMenu.ts since S7c) ────────────────────────────────────────────
+  // ── Pin-to-size, right-click entry (shared with the workspace TabBar
+  // via pinSizeMenu.ts) ──────────────────────────────────────────────────
   //
-  // Pin state arrives via the pane's grid-WS pin frames, mirrored into
+  // The per-item pushpin button (v0.40.27) is gone: right-clicking a
+  // pane tab opens a context menu with "Pin Dimensions…" (opens
+  // PinDimensionsModal) or "Unpin Dimensions" (instant). Pin state
+  // arrives via the pane's grid-WS pin frames, mirrored into
   // `usePinnedSizeStore` by TerminalPane — no polling here. The same
   // store carries the terminalId→daemon-sessionId mapping (registered
   // at spawn-resolve), which is also the "is there a live session?"
-  // gate for showing the button at all.
+  // gate for offering the menu at all.
   const pinSessions = usePinnedSizeStore((s) => s.sessions)
-  const pins = usePinnedSizeStore((s) => s.pins)
   const projects = useProjectsStore((s) => s.projects)
+  const [pinModalSessionId, setPinModalSessionId] = useState<string | null>(null)
 
   // Transient inline hint for pin-size failures (cleared after 4s).
   const [pinHint, setPinHint] = useState<string | null>(null)
@@ -112,18 +117,40 @@ export function PaneTabBar({
     []
   )
 
-  const handlePinMenu = useCallback(
-    (e: React.MouseEvent, sessionId: string) => {
-      e.stopPropagation()
-      const anchor = (e.currentTarget as HTMLElement).getBoundingClientRect()
-      void openPinSizeMenu({
-        x: anchor.left,
-        y: anchor.bottom + 4,
-        sessionId,
-        onError: flashPinHint,
+  // Unpin is an instant action from the context menu — no modal.
+  // Failures surface through the same transient hint.
+  const handleUnpin = useCallback(
+    (sessionId: string) => {
+      applyPinSize(sessionId, null).catch((err) => {
+        flashPinHint(
+          `Unpin failed: ${err instanceof Error ? err.message : String(err)}`
+        )
       })
     },
     [flashPinHint]
+  )
+
+  // Pane tabs have no other right-click behavior — the menu is just
+  // the pin entry, gated on the item resolving to a live session.
+  const handleItemContextMenu = useCallback(
+    async (e: React.MouseEvent, sessionId: string) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const x = e.clientX
+      const y = e.clientY
+      const pinned = usePinnedSizeStore.getState().pins[sessionId] ?? null
+      const clickedId = await useContextMenuStore.getState().show(x, y, [
+        pinned
+          ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
+          : { id: 'pin-dimensions', label: 'Pin Dimensions…' },
+      ])
+      if (clickedId === 'pin-dimensions') {
+        setPinModalSessionId(sessionId)
+      } else if (clickedId === 'unpin-dimensions') {
+        handleUnpin(sessionId)
+      }
+    },
+    [handleUnpin]
   )
 
   // Cross-pane drag detection: track mousedown on an item for potential drag-to-move
@@ -199,10 +226,9 @@ export function PaneTabBar({
       <div className="flex flex-1 items-center overflow-x-auto">
         {items.map((item, index) => {
           const isActive = index === activeItemIndex
-          // S7b — pin-size entry point, only on items with a LIVE
+          // Pin-to-size context menu, only on items with a LIVE
           // Kessel session (the store mapping doubles as the gate).
           const pinSessionId = resolvePinSessionId(item, pinSessions, projects)
-          const pin = pinSessionId ? pins[pinSessionId] ?? null : null
           return (
             <div
               key={item.id}
@@ -221,42 +247,15 @@ export function PaneTabBar({
               }}
               onClick={() => onActivate(index)}
               onMouseDown={(e) => handleItemMouseDown(e, item.id)}
+              onContextMenu={
+                pinSessionId
+                  ? (e) => void handleItemContextMenu(e, pinSessionId)
+                  : undefined
+              }
             >
               <span className="truncate" style={{ lineHeight: '24px' }}>
                 {getTabLabel(item)}
               </span>
-
-              {pinSessionId && (
-                <button
-                  className="ml-1 flex items-center justify-center shrink-0 hover:bg-white/10"
-                  style={{
-                    width: '14px',
-                    height: '14px',
-                    color: pin ? 'var(--color-accent)' : undefined,
-                  }}
-                  onClick={(e) => handlePinMenu(e, pinSessionId)}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  title={
-                    pin
-                      ? `Pinned to ${pin.cols}×${pin.rows} — click to change`
-                      : 'Pin size'
-                  }
-                  data-pane-tab-pin-size=""
-                >
-                  {/* Pushpin glyph — head, shoulder, needle. */}
-                  <svg
-                    width="8"
-                    height="8"
-                    viewBox="0 0 12 12"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  >
-                    <path d="M4 1.5 h4 l-0.75 3.5 L9 6.5 H3 l1.75-1.5 Z" />
-                    <line x1="6" y1="6.5" x2="6" y2="10.5" />
-                  </svg>
-                </button>
-              )}
 
               <button
                 className="ml-1.5 flex items-center justify-center shrink-0 hover:bg-white/10"
@@ -281,7 +280,7 @@ export function PaneTabBar({
         })}
       </div>
 
-      {/* S7b — transient pin-size failure hint (auto-clears). */}
+      {/* Transient unpin-failure hint (auto-clears). */}
       {pinHint && (
         <span
           className="shrink-0 px-2 truncate"
@@ -315,6 +314,14 @@ export function PaneTabBar({
             <line x1="9" y1="1" x2="1" y2="9" />
           </svg>
         </button>
+      )}
+
+      {/* Pin Dimensions modal — opened from an item's context menu */}
+      {pinModalSessionId && (
+        <PinDimensionsModal
+          sessionId={pinModalSessionId}
+          onClose={() => setPinModalSessionId(null)}
+        />
       )}
     </div>
   )

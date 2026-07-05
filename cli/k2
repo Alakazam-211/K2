@@ -5179,6 +5179,7 @@ cmd_help() {
         inbox)                    cmd_help_inbox ;;
         agent)                    cmd_help_agent ;;
         feedback)                 cmd_help_feedback ;;
+        project)                  cmd_help_project ;;
         workspace)                cmd_help_workspace ;;
         skills)                   cmd_help_skills ;;
         settings)                 cmd_help_settings ;;
@@ -5711,6 +5712,66 @@ cmd_schema() {
       "description": "Mark a feedback item resolved (you got what you needed). Drops out of the default list view; still visible with --all.",
       "args": [{"name": "id", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "project create",
+      "usage": "k2 project create <name> [--json]",
+      "description": "Create an empty project: a named group of agent workspaces with ONE shared chat stream and exactly one Point of Contact (PoC) agent. Names are unique per server, case-insensitive. The FIRST member added becomes the PoC. Errors are always JSON on stderr. Exit codes: 0 ok, 1 error/refused, 2 bad usage, 4 name unresolvable.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "project list",
+      "usage": "k2 project list [--json]",
+      "description": "List this server's projects: member count, PoC, and a pinned marker.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output ({ok,projects:[...]})."}]
+    },
+    {
+      "name": "project show",
+      "usage": "k2 project show <project> [--json]",
+      "description": "One project: members (PoC marked) and the last few chat messages. <project> is a name; case-insensitive; any unique prefix works; an exact match always beats prefix resolution.",
+      "args": [{"name": "project", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output (members + recent messages)."}]
+    },
+    {
+      "name": "project add",
+      "usage": "k2 project add <project> <workspace> [--json]",
+      "description": "Add a member workspace to a project. The FIRST member added automatically becomes the PoC; re-adding an existing member is a reported no-op (exit 0).",
+      "args": [{"name": "project", "required": true}, {"name": "workspace", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output (changed/members/poc/becamePoc)."}]
+    },
+    {
+      "name": "project remove",
+      "usage": "k2 project remove <project> <workspace> [--json]",
+      "description": "Remove a member (membership only; the workspace itself is untouched). Removing the CURRENT PoC is refused (exit 1, code poc_successor_required) until 'k2 project poc' names a successor.",
+      "args": [{"name": "project", "required": true}, {"name": "workspace", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "project poc",
+      "usage": "k2 project poc <project> [<workspace>] [--json]",
+      "description": "Without <workspace>: print the current PoC's name, bare on stdout (script-friendly). With <workspace>: reassign the PoC to that member (must already be a member; takes effect for the NEXT message).",
+      "args": [{"name": "project", "required": true}, {"name": "workspace", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "project msg",
+      "usage": "k2 project msg [<project>] <text> [--json]",
+      "description": "Post to a project's chat AS your workspace (auto-detected from K2_PROJECT_PATH, falling back to the current directory). One arg = <text> with the project auto-detected from your memberships (exactly one; none = exit 4 no_project, several = exit 4 ambiguous_project); two args = <project> <text>; three-plus = exit 2 (quote your message). <text> of \"-\" reads the body from stdin. delivered:false + deliveryReason:author-is-poc is a NORMAL success (the PoC never self-injects).",
+      "args": [{"name": "project", "required": false}, {"name": "text", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output (includes delivered / deliveryReason / deliveredSessionId)."}]
+    },
+    {
+      "name": "project read",
+      "usage": "k2 project read [<project>] [--after <ts>] [--limit <n>] [--json]",
+      "description": "Read a project's chat, oldest first (default: the 20 most recent). Catch-up pattern: keep the last message's at timestamp and pass --after <ts> (strictly greater; the default limit becomes the max 500 with --after; truncated:true + a continue hint when more remain). Project may be omitted under the same auto-detect rule as msg.",
+      "args": [{"name": "project", "required": false}],
+      "flags": [
+        {"name": "--after", "arg": "ts", "description": "Only messages with at greater than <ts> (unix seconds)."},
+        {"name": "--limit", "arg": "n", "description": "How many of the most recent messages to show (default 20, or 500 when --after is given; max 500)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
     },
     {
       "name": "checkin",
@@ -8335,6 +8396,12 @@ ASK A HUMAN
   feedback show <id>                    One ask: status, answer, discussion thread
                                         (ask/list/show/comment/resolve — see `k2 feedback --help`)
 
+PROJECTS
+  project msg [<project>] "text"        Post to your project's shared chat (delivered
+                                        live to the project's PoC agent)
+  project read [<project>]              Catch up on the chat, oldest first (--after)
+                                        (create/list/show/add/remove/poc — see `k2 project --help`)
+
 WORKSPACE
   workspace list                        Yellow pages: every workspace + status
   workspace list --running              Filter to live agents
@@ -9466,6 +9533,901 @@ FLAGS
 EOF
 }
 
+# ── Projects V1 (P3) — `k2 project` command group ────────────────────
+#
+# `k2 project` posts to and manages this server's PROJECTS: named
+# groups of agent workspaces with ONE shared chat stream and exactly
+# one Point of Contact (PoC) agent (prd-projects-v1 §5; mockup:
+# .k2/notes/project-cli-mockup.md — the help text below is that mockup
+# VERBATIM; it passed the 36/36 comprehension gate). Thin client over
+# the P2 daemon routes (/cli/project-group/*): the DAEMON owns all
+# selector resolution (full-id | exact-name NOCASE beats prefix |
+# unique name prefix) — the CLI never re-implements it.
+#
+# Contract highlights (pinned):
+# - Success output human-readable; --json flips it to JSON.
+# - ERRORS are ALWAYS JSON on stderr ({"error":{"code","hint"}})
+#   regardless of --json.
+# - Exit codes: 0 ok · 1 resolved-but-refused-or-failed
+#   (poc_successor_required, not_a_member, name_taken) · 2 bad usage ·
+#   4 name unresolvable (not_found / ambiguous / no_project /
+#   ambiguous_project — fix the name and retry).
+# - `msg` argument rules (exact): ONE positional arg = always <text>
+#   (project auto-detected); TWO = the first is ALWAYS <project>;
+#   THREE-PLUS = exit 2 with the quote-your-message hint. <text> of
+#   "-" reads the body from stdin.
+# - "delivered": false + "deliveryReason": "author-is-poc" is a NORMAL
+#   success (the PoC's own posts never self-inject), NOT a failure.
+
+_project_err() {
+    local code="$1" hint="$2"
+    CODE="$code" HINT="$hint" python3 -c 'import json,os
+print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT"]}},
+                 ensure_ascii=False, separators=(",", ":")))' >&2 \
+        || echo "Error ($code): $hint" >&2
+}
+
+# Shared HTTP driver for every project verb. Inputs ride P_* variables
+# (visible here via bash dynamic scope from the calling cmd_project_*),
+# re-exported onto the python3 invocation. Sender identity is the
+# workspace auto-detected at the top of this script (K2_PROJECT_PATH →
+# cwd walk-up — the same detection `k2 feedback` uses).
+_project_py() {
+    ABASE="$BASE_URL" ATOKEN="$TOKEN" P_WS_PATH="$PROJECT" \
+    P_AGENT_NAME="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
+    P_VERB="${P_VERB:-}" P_JSON="${P_JSON:-false}" \
+    P_NAME="${P_NAME:-}" P_ARG_PROJECT="${P_ARG_PROJECT:-}" \
+    P_ARG_WORKSPACE="${P_ARG_WORKSPACE:-}" P_TEXT="${P_TEXT:-}" \
+    P_MSG_FORM="${P_MSG_FORM:-}" P_TEXT_STDIN="${P_TEXT_STDIN:-false}" \
+    P_AFTER="${P_AFTER:-}" P_LIMIT="${P_LIMIT:-}" \
+    python3 - <<'PYEOF'
+import json, os, sys, time
+import urllib.error, urllib.parse, urllib.request
+
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+base = os.environ["ABASE"]
+token = os.environ["ATOKEN"]
+verb = os.environ["P_VERB"]
+as_json = os.environ.get("P_JSON") == "true"
+ws_path = os.environ.get("P_WS_PATH", "")
+
+# Exit-code contract (mockup): 4 = a name could not be resolved (fix
+# the name and retry) · 2 = bad usage · 1 = resolved but refused or
+# failed (poc_successor_required / not_a_member / name_taken / ...).
+EXIT4 = ("not_found", "ambiguous", "ambiguous_id", "no_project", "ambiguous_project")
+
+def dumps(obj):
+    # Compact separators — the mockup's JSON shapes are compact
+    # ({"ok":true,...} / {"error":{"code",...}}), byte-for-byte.
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+def die(err):
+    # Errors are ALWAYS JSON on stderr, regardless of --json.
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    code = err.get("code", "error")
+    if code == "ambiguous_id":
+        # Daemon spelling → the mockup's stable code for an ambiguous
+        # project prefix (hint passes through, candidates included).
+        code = "ambiguous"
+    sys.stderr.write(dumps({"error": {"code": code, "hint": err.get("hint", "")}}) + "\n")
+    sys.exit(4 if code in EXIT4 else 2 if code == "usage" else 1)
+
+def request(method, route, params=None, body=None):
+    qs = urllib.parse.urlencode(dict(params or {}, token=token))
+    url = base + route + "?" + qs
+    data = dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+        headers={"Content-Type": "application/json"} if data else {})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            return {"error": {"code": "error", "hint": "HTTP %s on %s" % (e.code, route)}}
+    except Exception:
+        return None
+
+def call(method, route, params=None, body=None):
+    d = request(method, route, params, body)
+    if d is None:
+        die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})
+    if d.get("error"):
+        die(d["error"])
+    if not d.get("ok"):
+        die({"code": "error", "hint": "unexpected daemon response: %s" % dumps(d)[:200]})
+    return d
+
+def mname(m):
+    # Member display name: agent display name → registry name → folder.
+    return (m.get("agentName") or m.get("name")
+            or os.path.basename((m.get("path") or "").rstrip("/")) or "?")
+
+def member_by_id(show, workspace_id):
+    for m in show.get("members", []):
+        if m.get("workspaceId") == workspace_id:
+            return m
+    return None
+
+def poc_member(show):
+    pid = show.get("pocWorkspaceId")
+    return member_by_id(show, pid) if pid else None
+
+def poc_name(show):
+    m = poc_member(show)
+    return mname(m) if m else None
+
+def fetch_show(selector):
+    return call("GET", "/cli/project-group/show", params={"group": selector})
+
+def same_path(a, b):
+    try:
+        return os.path.realpath(a) == os.path.realpath(b)
+    except Exception:
+        return a == b
+
+def my_member(show):
+    for m in show.get("members", []):
+        p = m.get("path") or ""
+        if p and ws_path and same_path(p, ws_path):
+            return m
+    return None
+
+def detect_project():
+    # The auto-detect rule (mockup NOTES #5, single source of truth):
+    # the detected sender workspace's memberships — exactly one → use
+    # it; zero → no_project exit 4; two-plus → ambiguous_project exit 4
+    # with the candidate names in the hint. Exit 4 (not 2): the
+    # invocation is well-formed, the project just can't be resolved.
+    d = call("GET", "/cli/project-group/list")
+    hits = []
+    for g in d.get("groups", []):
+        s = fetch_show(g.get("id"))
+        if my_member(s) is not None:
+            hits.append(s)
+    if not hits:
+        die({"code": "no_project",
+             "hint": "this workspace is not a member of any project; pass the project name"})
+    if len(hits) > 1:
+        die({"code": "ambiguous_project",
+             "hint": "member of: %s — pass the project name"
+                     % ", ".join(h.get("name", "?") for h in hits)})
+    return hits[0]
+
+def ago(ts):
+    s = int(time.time() - ts)
+    if s < 60: return "just now"
+    if s < 3600: return "%dm ago" % (s // 60)
+    if s < 172800: return "%dh ago" % (s // 3600)
+    return "%dd ago" % (s // 86400)
+
+def home_path(p):
+    home = os.path.expanduser("~")
+    if p and p.startswith(home + "/"):
+        return "~" + p[len(home):]
+    return p or "?"
+
+def print_message_rows(msgs):
+    for m in msgs:
+        lines = str(m.get("body", "")).splitlines() or [""]
+        print("  %-9s%-11s%s" % (m.get("author", "?"),
+                                 "(%s)" % ago(m.get("createdAt", 0)), lines[0]))
+        for extra in lines[1:]:
+            print(" " * 22 + extra)
+
+if verb == "create":
+    d = call("POST", "/cli/project-group/create", body={"name": os.environ["P_NAME"]})
+    if as_json:
+        print(dumps({"ok": True, "id": d.get("id"), "name": d.get("name"),
+                     "members": int(d.get("memberCount") or 0), "poc": None}))
+    else:
+        print("Created project %s (no members yet)." % d.get("name"))
+        print("Add the first member — it will become the PoC: k2 project add %s <workspace>"
+              % d.get("name"))
+
+elif verb == "list":
+    d = call("GET", "/cli/project-group/list")
+    rows = []
+    for g in d.get("groups", []):
+        pn = None
+        if g.get("pocWorkspaceId"):
+            pn = poc_name(fetch_show(g.get("id")))
+        rows.append({"id": g.get("id"), "name": g.get("name") or "?",
+                     "members": int(g.get("memberCount") or 0),
+                     "poc": pn, "pinned": bool(g.get("pinned"))})
+    if as_json:
+        print(dumps({"ok": True, "projects": rows}))
+    elif not rows:
+        print("No projects yet. Create one: k2 project create <name>")
+    else:
+        w = max(max(len(r["name"]) for r in rows), len("NAME")) + 2
+        print(("    %-" + str(w) + "s%-9s%s") % ("NAME", "MEMBERS", "POC"))
+        for r in rows:
+            line = ("%s%-" + str(w) + "s%-9s%s") % (
+                " *  " if r["pinned"] else "    ", r["name"], r["members"], r["poc"] or "")
+            print(line.rstrip())
+
+elif verb == "show":
+    show = fetch_show(os.environ["P_ARG_PROJECT"])
+    recent = call("GET", "/cli/project-group/messages",
+                  params={"group": show.get("id"), "limit": "3"})
+    msgs = recent.get("messages", [])
+    members = show.get("members", [])
+    pid = show.get("pocWorkspaceId")
+    pm = poc_member(show)
+    if as_json:
+        print(dumps({
+            "ok": True, "id": show.get("id"), "name": show.get("name"),
+            "pinned": bool(show.get("pinned")),
+            "poc": ({"name": mname(pm), "path": pm.get("path")} if pm else None),
+            "members": [{"name": mname(m), "path": m.get("path"),
+                         "isPoc": m.get("workspaceId") == pid} for m in members],
+            "recent": [{"id": m.get("id"), "author": m.get("author"),
+                        "body": m.get("body"), "at": m.get("createdAt")} for m in msgs],
+        }))
+    else:
+        name = show.get("name") or "?"
+        print("project : %s%s" % (name, "  (pinned)" if show.get("pinned") else ""))
+        print("poc     : %s" % (poc_name(show) or "(none)"))
+        print("members : %d" % len(members))
+        if members:
+            names = [mname(m) for m in members]
+            paths = [home_path(m.get("path")) for m in members]
+            nw = max(len(n) for n in names) + 4
+            pw = max(len(p) for p in paths) + 4
+            for m, n, p in zip(members, names, paths):
+                marker = "(PoC)" if m.get("workspaceId") == pid else ""
+                line = ("  %-" + str(nw) + "s%-" + str(pw) + "s%s") % (n, p, marker)
+                print(line.rstrip())
+        if msgs:
+            print()
+            print("last messages (see `k2 project read %s` for more):" % name)
+            print_message_rows(msgs)
+
+elif verb == "add":
+    d = call("POST", "/cli/project-group/add-member",
+             body={"group": os.environ["P_ARG_PROJECT"],
+                   "workspace": os.environ["P_ARG_WORKSPACE"]})
+    show = fetch_show(d.get("groupId"))
+    m = member_by_id(show, d.get("workspaceId"))
+    wsname = mname(m) if m else os.environ["P_ARG_WORKSPACE"]
+    name = show.get("name") or "?"
+    count = len(show.get("members", []))
+    pn = poc_name(show)
+    already = bool(d.get("alreadyMember"))
+    became = bool(d.get("becamePoc"))
+    if as_json:
+        print(dumps({"ok": True, "changed": not already, "project": name,
+                     "workspace": wsname, "members": count, "poc": pn,
+                     "becamePoc": became}))
+    elif already:
+        print("%s is already a member of %s — nothing to do." % (wsname, name))
+    elif became:
+        print("Added %s to %s (first member — %s is now the PoC)." % (wsname, name, wsname))
+    else:
+        print("Added %s to %s (member %d of %d · PoC: %s)."
+              % (wsname, name, count, count, pn or "?"))
+
+elif verb == "remove":
+    # show BEFORE the removal: the member's display name is gone after.
+    show = fetch_show(os.environ["P_ARG_PROJECT"])
+    d = call("POST", "/cli/project-group/remove-member",
+             body={"group": show.get("id"),
+                   "workspace": os.environ["P_ARG_WORKSPACE"]})
+    m = member_by_id(show, d.get("workspaceId"))
+    wsname = mname(m) if m else os.environ["P_ARG_WORKSPACE"]
+    name = show.get("name") or "?"
+    if as_json:
+        print(dumps({"ok": True, "project": name, "workspace": wsname}))
+    else:
+        print("Removed %s from %s." % (wsname, name))
+
+elif verb == "poc":
+    show = fetch_show(os.environ["P_ARG_PROJECT"])
+    target = os.environ.get("P_ARG_WORKSPACE", "")
+    name = show.get("name") or "?"
+    if not target:
+        pn = poc_name(show)
+        if as_json:
+            print(dumps({"ok": True, "project": name, "poc": pn}))
+        elif pn:
+            # Bare name on stdout — safe for $(...) capture.
+            print(pn)
+    else:
+        old = poc_name(show)
+        d = call("POST", "/cli/project-group/set-poc",
+                 body={"group": show.get("id"), "workspace": target})
+        m = member_by_id(show, d.get("pocWorkspaceId"))
+        new = mname(m) if m else target
+        if as_json:
+            print(dumps({"ok": True, "project": name, "poc": new}))
+        else:
+            print("PoC of %s: %s → %s. New chat posts now inject into %s's session."
+                  % (name, old or "(none)", new, new))
+
+elif verb == "msg":
+    text = os.environ["P_TEXT"]
+    proj = os.environ.get("P_ARG_PROJECT", "")
+    form = os.environ.get("P_MSG_FORM", "one")
+    from_stdin = os.environ.get("P_TEXT_STDIN") == "true"
+    if proj:
+        d = request("GET", "/cli/project-group/show", {"group": proj})
+        if d is None:
+            die({"code": "daemon_unreachable",
+                 "hint": "no response from the K2 daemon (is it running?)"})
+        err = d.get("error")
+        if err:
+            if isinstance(err, str):
+                err = {"code": "error", "hint": err}
+            if err.get("code") == "not_found" and form == "two" and not from_stdin:
+                # Two-arg call whose first token doesn't resolve as a
+                # project: suggest the fully-quoted form too (mockup).
+                whole = ("%s %s" % (proj, text)).replace('"', '\\"')
+                err = dict(err, hint='%s — if that was part of your message, '
+                           'quote the whole thing: k2 project msg "%s"'
+                           % (err.get("hint", ""), whole))
+            die(err)
+        show = d
+    else:
+        show = detect_project()
+    me = my_member(show)
+    if me is not None:
+        # Registry name round-trips through the daemon's workspace
+        # resolver (membership is re-checked route-side).
+        author = me.get("name") or mname(me)
+    else:
+        # Not a member here (or an unregistered directory) — send the
+        # best identity we have and let the daemon refuse (not_a_member).
+        author = (os.environ.get("P_AGENT_NAME")
+                  or os.path.basename(ws_path.rstrip("/")) or "?")
+    d = call("POST", "/cli/project-group/msg",
+             body={"group": show.get("id"), "body": text, "author": author})
+    name = d.get("groupName") or show.get("name") or "?"
+    delivered = bool(d.get("delivered"))
+    reason = d.get("deliveryReason")
+    if not delivered and reason is not None and reason not in ("author-is-poc", "no_poc"):
+        reason = "delivery-failed"  # the mockup's stable failure value
+    if as_json:
+        out = {"ok": True, "id": d.get("id"), "project": name,
+               "author": d.get("author"), "delivered": delivered}
+        if not delivered and reason:
+            out["deliveryReason"] = reason
+        if d.get("deliveredSessionId"):
+            out["deliveredSessionId"] = d.get("deliveredSessionId")
+        print(dumps(out))
+    elif delivered:
+        print("Posted to %s — delivered to PoC %s." % (name, poc_name(show) or "?"))
+    elif reason == "author-is-poc":
+        print("Posted to %s. (You are the PoC — your own posts are never injected back to you.)"
+              % name)
+    elif reason == "delivery-failed":
+        print("Posted to %s — stored, but the PoC's session could not be reached" % name)
+        print("(it will catch up with `k2 project read`).")
+    else:
+        print("Posted to %s." % name)
+
+elif verb == "read":
+    proj = os.environ.get("P_ARG_PROJECT", "")
+    show = fetch_show(proj) if proj else detect_project()
+    params = {"group": show.get("id")}
+    if os.environ.get("P_AFTER"):
+        params["after"] = os.environ["P_AFTER"]
+    if os.environ.get("P_LIMIT"):
+        params["limit"] = os.environ["P_LIMIT"]
+    d = call("GET", "/cli/project-group/messages", params=params)
+    msgs = d.get("messages", [])
+    name = show.get("name") or "?"
+    truncated = bool(d.get("truncated"))
+    if as_json:
+        out = {"ok": True, "project": name,
+               "messages": [{"id": m.get("id"), "author": m.get("author"),
+                             "body": m.get("body"), "at": m.get("createdAt")}
+                            for m in msgs]}
+        if truncated:
+            out["truncated"] = True
+            if msgs:
+                out["hint"] = ("more messages remain — continue with --after %s"
+                               % msgs[-1].get("createdAt"))
+        print(dumps(out))
+    else:
+        print("project %s — %d most recent messages (oldest first):" % (name, len(msgs)))
+        print()
+        print_message_rows(msgs)
+        if truncated and msgs:
+            print()
+            print("(more messages remain — continue with: k2 project read %s --after %s)"
+                  % (name, msgs[-1].get("createdAt")))
+
+else:
+    die({"code": "usage", "hint": "unknown project verb '%s'" % verb})
+PYEOF
+}
+
+cmd_project_create() {
+    if _wants_help "$@"; then cmd_help_project_create; exit 0; fi
+    local name="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _project_err "usage" "unknown flag '$1' — usage: k2 project create <name> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then name="$1"; else
+                    _project_err "usage" "unexpected extra argument '$1' — quote names containing spaces"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$name" ]; then
+        _project_err "usage" "create requires a <name> (quote names containing spaces)"
+        exit 2
+    fi
+    local P_VERB="create" P_JSON="$as_json" P_NAME="$name"
+    _project_py
+}
+
+cmd_project_list() {
+    if _wants_help "$@"; then cmd_help_project_list; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *)
+                _project_err "usage" "unexpected argument '$1' — usage: k2 project list [--json]"
+                exit 2 ;;
+        esac
+    done
+    local P_VERB="list" P_JSON="$as_json"
+    _project_py
+}
+
+cmd_project_show() {
+    if _wants_help "$@"; then cmd_help_project_show; exit 0; fi
+    local project="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _project_err "usage" "unknown flag '$1' — usage: k2 project show <project> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$project" ]; then project="$1"; else
+                    _project_err "usage" "unexpected extra argument '$1' — quote names containing spaces"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$project" ]; then
+        _project_err "usage" "show requires a <project> (a name; a unique prefix works)"
+        exit 2
+    fi
+    local P_VERB="show" P_JSON="$as_json" P_ARG_PROJECT="$project"
+    _project_py
+}
+
+cmd_project_add() {
+    if _wants_help "$@"; then cmd_help_project_add; exit 0; fi
+    local project="" workspace="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _project_err "usage" "unknown flag '$1' — usage: k2 project add <project> <workspace> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$project" ]; then project="$1"
+                elif [ -z "$workspace" ]; then workspace="$1"
+                else
+                    _project_err "usage" "unexpected extra argument '$1' — quote names containing spaces (\"QA Bot\")"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$project" ] || [ -z "$workspace" ]; then
+        _project_err "usage" "add requires <project> and <workspace>"
+        exit 2
+    fi
+    local P_VERB="add" P_JSON="$as_json" P_ARG_PROJECT="$project" P_ARG_WORKSPACE="$workspace"
+    _project_py
+}
+
+cmd_project_remove() {
+    if _wants_help "$@"; then cmd_help_project_remove; exit 0; fi
+    local project="" workspace="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _project_err "usage" "unknown flag '$1' — usage: k2 project remove <project> <workspace> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$project" ]; then project="$1"
+                elif [ -z "$workspace" ]; then workspace="$1"
+                else
+                    _project_err "usage" "unexpected extra argument '$1' — quote names containing spaces (\"QA Bot\")"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$project" ] || [ -z "$workspace" ]; then
+        _project_err "usage" "remove requires <project> and <workspace>"
+        exit 2
+    fi
+    local P_VERB="remove" P_JSON="$as_json" P_ARG_PROJECT="$project" P_ARG_WORKSPACE="$workspace"
+    _project_py
+}
+
+cmd_project_poc() {
+    if _wants_help "$@"; then cmd_help_project_poc; exit 0; fi
+    local project="" workspace="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _project_err "usage" "unknown flag '$1' — usage: k2 project poc <project> [<workspace>] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$project" ]; then project="$1"
+                elif [ -z "$workspace" ]; then workspace="$1"
+                else
+                    _project_err "usage" "unexpected extra argument '$1' — quote names containing spaces (\"QA Bot\")"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$project" ]; then
+        _project_err "usage" "poc requires a <project> (add <workspace> to reassign)"
+        exit 2
+    fi
+    local P_VERB="poc" P_JSON="$as_json" P_ARG_PROJECT="$project" P_ARG_WORKSPACE="$workspace"
+    _project_py
+}
+
+cmd_project_msg() {
+    if _wants_help "$@"; then cmd_help_project_msg; exit 0; fi
+    # Argument rules (exact, mockup): one positional → it is ALWAYS
+    # <text>; two → the first is ALWAYS <project>; three or more →
+    # exit 2 with the quote-your-message hint. "-" (the stdin sentinel)
+    # is a positional, never a flag.
+    local as_json=false count=0 first="" second="" joined=""
+    while [ $# -gt 0 ]; do
+        if [ "$1" = "--json" ]; then
+            as_json=true
+        elif [ "$1" != "-" ] && [ "${1#-}" != "$1" ]; then
+            _project_err "usage" "unknown flag '$1' — usage: k2 project msg [<project>] <text> [--json]"
+            exit 2
+        else
+            count=$((count + 1))
+            if [ "$count" -eq 1 ]; then first="$1"
+            elif [ "$count" -eq 2 ]; then second="$1"; fi
+            joined="${joined}${joined:+ }$1"
+        fi
+        shift
+    done
+    if [ "$count" -eq 0 ]; then
+        _project_err "usage" "msg requires <text> (or \"-\" to read it from stdin)"
+        exit 2
+    fi
+    if [ "$count" -ge 3 ]; then
+        _project_err "usage" "too many arguments — did you mean: k2 project msg \"$joined\"?"
+        exit 2
+    fi
+    local project="" text="" form="one" from_stdin=false
+    if [ "$count" -eq 1 ]; then
+        text="$first"
+    else
+        form="two"; project="$first"; text="$second"
+    fi
+    if [ "$text" = "-" ]; then
+        text="$(cat)"; from_stdin=true
+    fi
+    local P_VERB="msg" P_JSON="$as_json" P_ARG_PROJECT="$project" P_TEXT="$text" \
+          P_MSG_FORM="$form" P_TEXT_STDIN="$from_stdin"
+    _project_py
+}
+
+cmd_project_read() {
+    if _wants_help "$@"; then cmd_help_project_read; exit 0; fi
+    local project="" after="" limit="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --after)
+                [ $# -ge 2 ] || { _project_err "usage" "--after requires a unix-seconds timestamp"; exit 2; }
+                after="$2"; shift 2 ;;
+            --limit)
+                [ $# -ge 2 ] || { _project_err "usage" "--limit requires a number"; exit 2; }
+                limit="$2"; shift 2 ;;
+            --json) as_json=true; shift ;;
+            -*)
+                _project_err "usage" "unknown flag '$1' — usage: k2 project read [<project>] [--after <ts>] [--limit <n>] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$project" ]; then project="$1"; else
+                    _project_err "usage" "unexpected extra argument '$1' — usage: k2 project read [<project>] [--after <ts>] [--limit <n>] [--json]"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    local P_VERB="read" P_JSON="$as_json" P_ARG_PROJECT="$project" P_AFTER="$after" P_LIMIT="$limit"
+    _project_py
+}
+
+cmd_help_project() {
+    cat <<'EOF'
+k2 project — post to and manage this server's projects (named groups of agents)
+
+A project groups agent workspaces into one effort with ONE shared chat stream.
+Every project has exactly one Point of Contact (PoC) agent: anything anyone
+ELSE posts to the chat is delivered straight into the PoC's live session, so
+the PoC always hears the room (the PoC's own posts are never echoed back).
+If you are a member agent: `msg` posts to the chat, `read` catches you up.
+The other commands manage the group itself.
+
+USAGE
+  k2 project <command> [args] [flags]
+
+COMMANDS
+  create <name>                  Create an empty project
+  list                           List this server's projects (members, PoC, pinned)
+  show <project>                 One project: members, PoC, last few messages
+  add <project> <workspace>      Add a member workspace (the FIRST member added
+                                 automatically becomes the PoC)
+  remove <project> <workspace>   Remove a member. Removing the current PoC is
+                                 REFUSED until you name a successor with `poc`
+  poc <project> [<workspace>]    Print the current PoC — or, with <workspace>,
+                                 reassign the PoC to that member
+  msg [<project>] <text>         Post to the project chat. <project> may be
+                                 omitted when your workspace belongs to exactly
+                                 ONE project (rule spelled out in `msg --help`)
+  read [<project>]               Read the chat, oldest first (--after to catch up
+                                 on messages since your last read)
+
+ADDRESSING
+  <project> is a project name. Names match case-insensitively, and any UNIQUE
+  PREFIX works ("0.41" matches "0.41-release"). An ambiguous prefix fails with
+  exit 4 and lists the matching candidates in the hint. An EXACT name match
+  ALWAYS wins, even when it is also a prefix of other names ("Atlas" resolves
+  to Atlas even with Atlas-docs present); prefix resolution only engages when
+  there is no exact match.
+  <workspace> is an agent name or a path — same rules as `k2 agent`: anything
+  containing "/" is treated as a path; names match case-insensitively; quote
+  names containing spaces ("QA Bot").
+
+WHO YOU ARE
+  msg and read act AS your workspace, auto-detected from K2_PROJECT_PATH
+  (falling back to the current directory) — the same detection `k2 feedback`
+  uses. Only members (and the server owner via the app) can post.
+
+GLOBAL FLAGS
+  --json                 Machine-readable output (single JSON object)
+
+OUTPUT CONTRACT
+  Success output is human-readable by default; --json switches it to JSON.
+  ERRORS are ALWAYS JSON on stderr — {"error":{"code","hint"}} — regardless
+  of --json, so scripts can rely on the shape.
+  Success means ok:true. On msg, "delivered": false with "deliveryReason":
+  "author-is-poc" is NORMAL (your own post never injects back to you) —
+  it is NOT a failure.
+
+EXIT CODES
+  0 ok · 1 error (including refusals like removing the PoC or posting as a
+  non-member) · 2 bad usage · 4 not found / ambiguous (candidates in the hint)
+  4 = a name could not be resolved (fix the name and retry) · 1 = resolved
+  but refused or failed
+
+Run 'k2 project <command> --help' for details on a command.
+EOF
+}
+
+cmd_help_project_create() {
+    cat <<'EOF'
+Create an empty project. Add members with `k2 project add` — the first member
+you add automatically becomes the Point of Contact (reassign later with `poc`).
+
+Project names are unique per server, case-insensitively ("Kessel" and "kessel"
+collide). Pick something short: everyone will type it in `msg`.
+
+USAGE
+  k2 project create <name> [flags]
+
+ARGUMENTS
+  <name>                 The project's name (quote names containing spaces)
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 project create 0.41-release
+  k2 project create "Kessel Perf"
+EOF
+}
+
+cmd_help_project_list() {
+    cat <<'EOF'
+List this server's projects: member count, PoC, and a pinned marker (*) for
+projects pinned in the app's Projects nav.
+
+USAGE
+  k2 project list [flags]
+
+FLAGS
+  --json                 JSON output
+EOF
+}
+
+cmd_help_project_show() {
+    cat <<'EOF'
+Show one project: its members (PoC marked), and the last few chat messages.
+For the full chat stream use `k2 project read`.
+
+USAGE
+  k2 project show <project> [flags]
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 project show 0.41-release
+  k2 project show 0.41            (unique prefix works)
+EOF
+}
+
+cmd_help_project_add() {
+    cat <<'EOF'
+Add a member workspace to a project. A workspace can belong to many projects.
+
+The FIRST member added to an empty project automatically becomes the PoC —
+the output says so when it happens. Adding an existing member again is a
+no-op (reported, exit 0).
+
+USAGE
+  k2 project add <project> <workspace> [flags]
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 project add 0.41-release Appa
+  k2 project add 0.41-release ~/agents/scout
+EOF
+}
+
+cmd_help_project_remove() {
+    cat <<'EOF'
+Remove a member workspace from a project. The workspace itself is untouched —
+this only ends its membership (and its right to post to this project's chat).
+
+Removing the CURRENT PoC is refused (exit 1, code "poc_successor_required"):
+first hand off with `k2 project poc <project> <successor>`, then remove.
+A project's SOLE member is its PoC and cannot be removed (there is no
+successor to name); delete the project from the app's Settings page instead.
+
+USAGE
+  k2 project remove <project> <workspace> [flags]
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 project remove 0.41-release "QA Bot"
+EOF
+}
+
+cmd_help_project_poc() {
+    cat <<'EOF'
+Without <workspace>: print the current PoC's name — bare, script-friendly
+(like `k2 agent get`). With <workspace>: reassign the PoC to that member.
+
+The PoC is the project's injection target: every chat post by anyone else is
+delivered into the PoC's session. The target must already be a member (add it
+first). Reassignment takes effect for the NEXT message.
+
+USAGE
+  k2 project poc <project> [<workspace>] [flags]
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 project poc 0.41-release            (prints: Appa)
+  k2 project poc 0.41-release scout      (scout is now the PoC)
+EOF
+}
+
+cmd_help_project_msg() {
+    cat <<'EOF'
+Post a message to a project's chat. This is the command member agents use to
+report progress, hand off, or raise something to the team.
+
+You post AS your workspace (auto-detected from K2_PROJECT_PATH, falling back
+to the current directory). Your message is stored in the project chat and —
+unless you ARE the PoC — delivered live into the PoC's session, waking it if
+dormant. The PoC's own posts are stored for everyone to read but never
+injected back into itself. A successful post is ok:true; "delivered": false
+with "deliveryReason": "author-is-poc" is NORMAL — not a failure.
+
+USAGE
+  k2 project msg [<project>] <text> [flags]
+
+ARGUMENT RULES (exact)
+  two arguments   → the first is ALWAYS <project>, the second is <text>
+  one argument    → it is ALWAYS <text>; the project is auto-detected
+  three or more   → exit 2 (usage). Almost always an unquoted message — the
+                    hint suggests the quoted form
+                    (did you mean: k2 project msg "build done"?)
+  <text> of "-"   → the message body is read from stdin (works in both forms;
+                    to send a literal "-", send it via stdin)
+
+QUOTING
+  <text> is ONE argument — always quote multi-word messages ("build done",
+  not build done). If a two-argument call's first token doesn't resolve as a
+  project, the error's hint suggests the fully-quoted form too.
+
+WHICH PROJECT? (when <project> is omitted)
+  Your workspace's own memberships decide:
+    member of exactly ONE project → that project is used (echoed in the output)
+    member of NONE                → {"code":"no_project"}        exit 4
+    member of TWO OR MORE         → {"code":"ambiguous_project"} exit 4, with
+                                    the candidate names in the hint
+  Passing <project> explicitly always works and is the safe form in scripts.
+
+FLAGS
+  --json                 JSON output (includes the delivery outcome:
+                         delivered / deliveryReason / deliveredSessionId)
+
+EXAMPLES
+  k2 project msg "Build is green on all three targets."
+  k2 project msg 0.41-release "Starting the notarize pass now."
+  git log --oneline -5 | k2 project msg 0.41-release -
+EOF
+}
+
+cmd_help_project_read() {
+    cat <<'EOF'
+Read a project's chat, oldest first. Default: the 20 most recent messages.
+
+The project may be omitted under the same rule as `msg`: if your workspace
+belongs to exactly ONE project, that one is read; none = exit 4 "no_project";
+several = exit 4 "ambiguous_project" with candidates in the hint.
+
+CATCHING UP (the agent pattern)
+  Each message carries an `at` timestamp (unix seconds, in --json). Keep the
+  last `at` you saw and pass it back: `read --after <ts>` returns only newer
+  messages. There is no --follow; poll with --after when you wake.
+  With --after, the DEFAULT limit becomes the max (500), not 20 — a catch-up
+  read is meant to return everything new. If more than the limit match, the
+  output carries "truncated": true and a hint to continue from the last
+  message's `at`.
+
+USAGE
+  k2 project read [<project>] [flags]
+
+FLAGS
+  --after <ts>           Only messages with `at` greater than <ts> (unix seconds)
+  --limit <n>            How many of the most recent messages to show
+                         (default 20 — or 500 when --after is given; max 500)
+  --json                 JSON output
+
+EXAMPLES
+  k2 project read 0.41-release
+  k2 project read --after 1720000000 --json
+EOF
+}
+
 # ── Router ───────────────────────────────────────────────────────────
 
 case "${1:-help}" in
@@ -9515,6 +10477,26 @@ case "${1:-help}" in
             *)
                 echo "Unknown feedback subcommand: ${2:-}" >&2
                 cmd_help_feedback >&2
+                exit 2 ;;
+        esac
+        ;;
+    project)
+        # Projects V1 P3 — named groups of agent workspaces with ONE
+        # shared chat + one PoC (create/list/show/add/remove/poc/msg/
+        # read). See `k2 project --help`. NOT the legacy workspace
+        # registry (`/cli/projects/*`).
+        case "${2:-}" in
+            create) shift 2; cmd_project_create "$@" ;;
+            list)   shift 2; cmd_project_list "$@" ;;
+            show)   shift 2; cmd_project_show "$@" ;;
+            add)    shift 2; cmd_project_add "$@" ;;
+            remove) shift 2; cmd_project_remove "$@" ;;
+            poc)    shift 2; cmd_project_poc "$@" ;;
+            msg)    shift 2; cmd_project_msg "$@" ;;
+            read)   shift 2; cmd_project_read "$@" ;;
+            --help|-h|'') cmd_help_project; exit 0 ;;
+            *)
+                _project_err "usage" "unknown command '${2:-}' — see k2 project --help"
                 exit 2 ;;
         esac
         ;;

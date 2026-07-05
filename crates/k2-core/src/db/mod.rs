@@ -473,6 +473,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // unpinned; existing rows backfill to NULL). Read back at
         // session registration so a pin survives daemon restart.
         ("0065_pinned_size", include_str!("../../drizzle_sql/0065_pinned_size.sql")),
+        // 0066 (projects V1 P1, prd-projects-v1 §3): `project_groups`
+        // (named groups of workspaces; poc_workspace_id is a PLAIN column,
+        // no FK — enforcement is route-level per resolved Q6) +
+        // `project_group_members` (many-to-many, UNIQUE pair, CASCADE) +
+        // `project_group_messages` (ONE chat stream per group) +
+        // `project_group_dashboards` (canonical shared layouts; V1
+        // auto-creates 'Main'). NOT the legacy `projects`/`workspaces`
+        // tables — those stay untouched. Additive.
+        ("0066_project_groups", include_str!("../../drizzle_sql/0066_project_groups.sql")),
     ];
 
     for (name, sql) in migrations {

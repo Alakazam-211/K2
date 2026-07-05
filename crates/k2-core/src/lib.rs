@@ -104,6 +104,11 @@ pub mod perf;
 // Phase 2.5 follow-up — daemon port stability (sub-fix A of finding #547).
 pub mod port_claim;
 pub mod project_config;
+// Projects V1 P1 (prd-projects-v1) — named GROUPS of workspaces
+// (`project_groups`, NOT the legacy `projects` workspace registry):
+// membership + PoC rules, the per-group chat stream, and canonical
+// shared dashboards.
+pub mod project_groups;
 pub mod projects_ops;
 pub mod push;
 pub mod review_checklist;

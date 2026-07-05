@@ -524,6 +524,25 @@ async fn handle_one_request(
             | "/cli/feedback/comment"
             | "/cli/feedback/answer"
             | "/cli/feedback/resolve"
+            // Projects V1 P2 (prd-projects-v1 §4.1) — project-GROUP
+            // mutations (NOT the legacy /cli/projects/* workspace
+            // registry). JSON-bodied POSTs (msg carries free chat text;
+            // save-layout carries the layout blob) so long values dodge
+            // the request-head cap and never URL-log. token_ok (owner OR
+            // connect-user) + require_post in the dedicated arm below;
+            // save-layout additionally owner-or-admin (§6.3 resolved
+            // Q2). Reads (list/show/messages) are GETs via
+            // crate::cli::dispatch (project_group_routes).
+            | "/cli/project-group/create"
+            | "/cli/project-group/rename"
+            | "/cli/project-group/delete"
+            | "/cli/project-group/pin"
+            | "/cli/project-group/sort"
+            | "/cli/project-group/add-member"
+            | "/cli/project-group/remove-member"
+            | "/cli/project-group/set-poc"
+            | "/cli/project-group/msg"
+            | "/cli/project-group/dashboard/save-layout"
             | "/cli/inbox/compose"
             | "/cli/inbox/move"
             | "/cli/inbox/archive"
@@ -2889,6 +2908,58 @@ async fn handle_one_request(
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
                 crate::feedback_routes::dispatch_post(&p_owned, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
+        // Projects V1 P2 — `/cli/project-group/*` mutations (create /
+        // rename / delete / pin / sort / add-member / remove-member /
+        // set-poc / msg / dashboard/save-layout). JSON-bodied POSTs;
+        // token_ok (owner OR connect-user session — connect users see
+        // projects too, PRD §4.1) + require_post per
+        // feedback_post_only_route_guards. `dashboard/save-layout` is
+        // additionally owner-or-admin-gated (PRD §6.3 resolved Q2:
+        // owners and admins rearrange/save; viewers and non-admin
+        // users see but cannot save). Handlers run in spawn_blocking
+        // (SQLite writes + the PoC injection's wake path can block).
+        p if is_post && post_allowed && p.starts_with("/cli/project-group/") => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            if p == "/cli/project-group/dashboard/save-layout"
+                && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
+            {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"dashboard layouts can only be saved by the owner or an admin"}}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::project_group_routes::dispatch_post(&p_owned, &body_bytes)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

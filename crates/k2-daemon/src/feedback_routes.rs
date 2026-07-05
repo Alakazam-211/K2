@@ -709,54 +709,23 @@ pub fn handle_resolve(body: &[u8]) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex as StdMutex, OnceLock};
 
     // ── Event-capture sink ────────────────────────────────────────────
     //
-    // The agent-hooks sink slot is process-global and NO other test in
-    // the k2-daemon binary registers one, so a single capture sink is
-    // installed once and never torn down. Tests run in parallel and all
-    // emissions land here — assertions filter by their own (unique)
-    // feedback id, so cross-test traffic is invisible.
+    // The agent-hooks sink slot is process-global and last-writer-wins,
+    // so the ONE capture sink for the whole k2-daemon test binary lives
+    // in `crate::test_support` (shared with project_group_routes'
+    // tests). Assertions filter by their own (unique) feedback id, so
+    // cross-test traffic is invisible.
 
-    static CAPTURED: OnceLock<StdMutex<Vec<(String, serde_json::Value)>>> = OnceLock::new();
+    use crate::test_support::{event_mark, install_capture_sink};
 
-    fn captured() -> &'static StdMutex<Vec<(String, serde_json::Value)>> {
-        CAPTURED.get_or_init(|| StdMutex::new(Vec::new()))
-    }
-
-    fn install_capture_sink() {
-        static INSTALLED: OnceLock<()> = OnceLock::new();
-        INSTALLED.get_or_init(|| {
-            struct Capture;
-            impl k2_core::agent_hooks::AgentHookEventSink for Capture {
-                fn emit(
-                    &self,
-                    event: k2_core::agent_hooks::HookEvent,
-                    payload: serde_json::Value,
-                ) {
-                    captured()
-                        .lock()
-                        .expect("capture sink lock")
-                        .push((event.event_name().to_string(), payload));
-                }
-            }
-            k2_core::agent_hooks::set_sink(Box::new(Capture));
-        });
-    }
-
-    /// Snapshot the capture-buffer length BEFORE a mutation…
-    fn event_mark() -> usize {
-        captured().lock().expect("capture sink lock").len()
-    }
-
-    /// …then collect the events emitted since, for one feedback id
+    /// Collect the events emitted since `mark`, for one feedback id
     /// (in emission order).
     fn events_since(mark: usize, id: &str) -> Vec<(String, serde_json::Value)> {
-        captured().lock().expect("capture sink lock")[mark..]
-            .iter()
+        crate::test_support::events_since(mark)
+            .into_iter()
             .filter(|(_, p)| p["id"] == id)
-            .cloned()
             .collect()
     }
 

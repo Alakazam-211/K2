@@ -103,6 +103,13 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::feedback_routes::dispatch(path, params) {
         return resp;
     }
+    // Projects V1 P2 — `/cli/project-group/*` reads (list/show/
+    // messages) + the 405 guards for its POST-only mutations reached
+    // via the GET chain. NOT the legacy `/cli/projects/*` workspace-
+    // registry surface (PRD §2b naming collision).
+    if let Some(resp) = crate::project_group_routes::dispatch(path, params) {
+        return resp;
+    }
 
     if let Some(resp) = crate::misc_routes::dispatch(path, params) {
         return resp;

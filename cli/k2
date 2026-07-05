@@ -4828,13 +4828,36 @@ except Exception:
         exit 4
     fi
     target_path="$resolved"
+    local resp
     if [ -n "$mode" ]; then
-        cli_request "/cli/workspace/remove" \
+        resp=$(cli_request "/cli/workspace/remove" \
             "path=$(urlencode "$target_path")" \
-            "mode=$(urlencode "$mode")"
+            "mode=$(urlencode "$mode")")
     else
-        cli_request "/cli/workspace/remove" "path=$(urlencode "$target_path")"
+        resp=$(cli_request "/cli/workspace/remove" "path=$(urlencode "$target_path")")
     fi
+    # Surface daemon refusals cleanly (exit 1) instead of echoing raw
+    # error JSON with exit 0 — notably the Projects V1 §4.5 PoC guard
+    # ({"error":{"code":"poc_of_projects","hint":"X is the Point of
+    # Contact for: A, B. Reassign the PoC first."}}).
+    local err_hint
+    err_hint=$(printf '%s' "$resp" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+e = d.get("error")
+if not e:
+    sys.exit(0)
+if isinstance(e, dict):
+    print(e.get("hint") or e.get("code") or "daemon refused the removal")
+else:
+    print(e)' 2>/dev/null)
+    if [ -n "$err_hint" ]; then
+        echo "Error: $err_hint" >&2
+        exit 1
+    fi
+    printf '%s\n' "$resp"
 }
 
 cmd_workspace_open() {

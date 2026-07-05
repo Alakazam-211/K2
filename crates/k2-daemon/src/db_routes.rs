@@ -898,6 +898,27 @@ pub fn handle_projects_delete(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    // Projects V1 §4.5 — the PoC removal guard: a workspace that is
+    // the Point of Contact of any project group cannot be removed
+    // from the server until every affected project has a successor.
+    // This is the UI's removal path (RemoveWorkspaceDialog).
+    {
+        let display = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT path FROM projects WHERE id = ?1",
+                rusqlite::params![b.id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+        }
+        .map(|path| k2_core::workspace::display::agent_display_name(&path))
+        .unwrap_or_else(|| b.id.clone());
+        if let Some(resp) = crate::project_group_routes::poc_removal_block(&b.id, &display) {
+            return resp;
+        }
+    }
     let result = pops::projects_delete(&b.id);
     if result.is_ok() {
         emit_projects_changed();

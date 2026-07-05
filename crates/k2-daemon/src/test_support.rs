@@ -86,3 +86,53 @@ pub(crate) fn with_temp_home<F: FnOnce()>(f: F) {
     let _home = TempHome::new();
     f();
 }
+
+// ── Shared agent-hooks capture sink ───────────────────────────────────
+//
+// The agent-hooks sink slot (`k2_core::agent_hooks::set_sink`) is
+// PROCESS-GLOBAL and last-writer-wins — so every event-asserting test
+// module in the k2-daemon binary must share ONE capture sink (a module
+// installing its own would silently steal emissions from the others).
+// Tests run in parallel and all emissions land in the shared buffer;
+// each assertion filters by its own (unique) entity id, so cross-test
+// traffic is invisible. Used by `feedback_routes` and
+// `project_group_routes` tests.
+
+use std::sync::OnceLock;
+
+static CAPTURED_EVENTS: OnceLock<Mutex<Vec<(String, serde_json::Value)>>> = OnceLock::new();
+
+fn captured_events() -> &'static Mutex<Vec<(String, serde_json::Value)>> {
+    CAPTURED_EVENTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Install the crate-wide capture sink (idempotent — installs once per
+/// process; every later call is a no-op so the single-sink invariant
+/// holds).
+pub(crate) fn install_capture_sink() {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        struct Capture;
+        impl k2_core::agent_hooks::AgentHookEventSink for Capture {
+            fn emit(&self, event: k2_core::agent_hooks::HookEvent, payload: serde_json::Value) {
+                captured_events()
+                    .lock()
+                    .expect("capture sink lock")
+                    .push((event.event_name().to_string(), payload));
+            }
+        }
+        k2_core::agent_hooks::set_sink(Box::new(Capture));
+    });
+}
+
+/// Snapshot the capture-buffer length BEFORE a mutation…
+pub(crate) fn event_mark() -> usize {
+    captured_events().lock().expect("capture sink lock").len()
+}
+
+/// …then collect every `(wire_name, payload)` emitted since. Callers
+/// filter by their own unique entity id (`payload["id"]`,
+/// `payload["groupId"]`, …) so parallel tests never see each other.
+pub(crate) fn events_since(mark: usize) -> Vec<(String, serde_json::Value)> {
+    captured_events().lock().expect("capture sink lock")[mark..].to_vec()
+}

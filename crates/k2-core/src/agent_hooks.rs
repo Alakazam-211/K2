@@ -96,6 +96,33 @@ pub enum HookEvent {
     /// comment counts; it must NEVER trigger the desktop notification
     /// (frozen contract: only NEW items notify, via `FeedbackCreated`).
     FeedbackCommented,
+    /// Projects V1 P2 (prd-projects-v1 §4.2): fires when a message is
+    /// stored on a project group's single chat stream
+    /// (`/cli/project-group/msg`). Payload: `{groupId, groupName,
+    /// messageId, author}`. Drives the Projects-tab badge + the live
+    /// chat drawer's coalesced refetch. Emitted BEFORE the best-effort
+    /// PoC injection, so an open drawer refreshes without waiting on a
+    /// slow wake.
+    ProjectGroupMessageCreated,
+    /// Projects V1 P2: fires when a group's membership changes
+    /// (`add-member` / `remove-member`). Payload: `{groupId}`. Drives
+    /// the nav member strip + the project Feedback-tab filter refresh.
+    ProjectGroupMembersChanged,
+    /// Projects V1 P2: fires when a group's Point of Contact changes —
+    /// `set-poc`, or the first member auto-becoming PoC on `add-member`.
+    /// Payload: `{groupId, pocWorkspaceId}`. Drives the PoC dropdown +
+    /// the injection-target display.
+    ProjectGroupPocChanged,
+    /// Projects V1 P2: fires when a dashboard layout is saved
+    /// (`dashboard/save-layout`, revision++). Payload: `{groupId,
+    /// dashboardId, revision}`. Freshness signal for the NEXT
+    /// open/switch (apply-on-open) — explicitly NOT a live rearrange.
+    ProjectGroupLayoutChanged,
+    /// Projects V1 P2: structural change to the group LIST — create /
+    /// rename / delete / pin / sort. Payload: `{groupId?}`. Drives nav
+    /// list liveness (the structural sibling of `sync:projects`; an
+    /// implementation addition beyond the ledger's four, PRD §4.2).
+    ProjectGroupsChanged,
 }
 
 impl HookEvent {
@@ -118,6 +145,11 @@ impl HookEvent {
             Self::FeedbackAnswered => "feedback:answered",
             Self::FeedbackStatusChanged => "feedback:status-changed",
             Self::FeedbackCommented => "feedback:commented",
+            Self::ProjectGroupMessageCreated => "project-group:message-created",
+            Self::ProjectGroupMembersChanged => "project-group:members-changed",
+            Self::ProjectGroupPocChanged => "project-group:poc-changed",
+            Self::ProjectGroupLayoutChanged => "project-group:layout-changed",
+            Self::ProjectGroupsChanged => "project-group:groups-changed",
         }
     }
 }
@@ -466,6 +498,27 @@ mod tests {
             "cli:terminal-spawn-background"
         );
         assert_eq!(HookEvent::CliAiCommit.event_name(), "cli:ai-commit");
+        // Projects V1 P2 — the five project-group wire names (PRD §4.2).
+        assert_eq!(
+            HookEvent::ProjectGroupMessageCreated.event_name(),
+            "project-group:message-created"
+        );
+        assert_eq!(
+            HookEvent::ProjectGroupMembersChanged.event_name(),
+            "project-group:members-changed"
+        );
+        assert_eq!(
+            HookEvent::ProjectGroupPocChanged.event_name(),
+            "project-group:poc-changed"
+        );
+        assert_eq!(
+            HookEvent::ProjectGroupLayoutChanged.event_name(),
+            "project-group:layout-changed"
+        );
+        assert_eq!(
+            HookEvent::ProjectGroupsChanged.event_name(),
+            "project-group:groups-changed"
+        );
     }
 
     #[test]

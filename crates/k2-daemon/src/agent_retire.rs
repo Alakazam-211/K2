@@ -21,6 +21,12 @@
 //!   `.env*`, ssh key material (`id_rsa`/`id_dsa`/`id_ecdsa`/
 //!   `id_ed25519`), and `*.pem|*.key|*.p12|*.pfx`. `.git/` is skipped.
 //!
+//! Ahead of both (Projects V1 §4.5): the **PoC removal guard** — a
+//! workspace that is the Point of Contact of any project group refuses
+//! with 409 `poc_of_projects` ("X is the Point of Contact for: A, B.
+//! Reassign the PoC first."). NOT `--force`-overridable; the only way
+//! through is `set-poc`-ing a successor (no auto-reassignment).
+//!
 //! `force: true` overrides both guards. `dryRun: true` previews the
 //! full plan (guards evaluated + would-do actions) and touches nothing;
 //! its verdict mirrors the real run (a dry-run that WOULD refuse
@@ -259,6 +265,18 @@ pub fn handle_agent_retire(body: &[u8]) -> CliResponse {
         return crate::workspace_routes::workspace_not_found_response(&b.q);
     };
     let name = k2_core::workspace::display::agent_display_name(&path);
+
+    // Projects V1 §4.5 — the PoC removal guard, FIRST (before the
+    // git/secrets guards): a workspace that is the Point of Contact of
+    // any project group cannot be retired until every affected project
+    // has a successor. Deliberately NOT `--force`-overridable — the
+    // only way through is reassigning the PoC (no auto-reassignment).
+    if let Some(project_id) = crate::canonical_session::lookup_project_id(&path) {
+        if let Some(resp) = crate::project_group_routes::poc_removal_block(&project_id, &name) {
+            return resp;
+        }
+    }
+
     let folder_exists = Path::new(&path).is_dir();
 
     // ── Guards (always evaluated — the response reports them even

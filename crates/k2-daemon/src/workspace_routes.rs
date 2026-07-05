@@ -331,6 +331,23 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 ));
             }
             let target = str_param(params, "path");
+            // Projects V1 §4.5 — the PoC removal guard: refuse to
+            // deregister a workspace that is the Point of Contact of
+            // any project group until a successor is named. This is
+            // the `k2 workspace remove` path.
+            let project_id = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace::agent_identity::resolve_project_id(&conn, &target)
+            };
+            if let Some(project_id) = project_id {
+                let display = k2_core::workspace::display::agent_display_name(&target);
+                if let Some(resp) =
+                    crate::project_group_routes::poc_removal_block(&project_id, &display)
+                {
+                    return Some(resp);
+                }
+            }
             match k2_core::workspace::lifecycle::remove_workspace_db_only(&target) {
                 Ok(body) => CliResponse::ok_json(body),
                 Err(e) => CliResponse::bad_request(e),

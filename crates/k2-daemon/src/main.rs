@@ -76,6 +76,7 @@ mod pinned_chat;
 // roster broadcast. Registered from the `/cli/sessions/events` WS handler.
 mod presence;
 mod project_config_routes;
+mod project_group_routes;
 mod providers;
 mod review_checklist_routes;
 mod routes;

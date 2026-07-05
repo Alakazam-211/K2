@@ -207,6 +207,9 @@ export default function TopBar({
         {/* Timer */}
         <TimerButton />
 
+        {/* Per-window viewer/claimer mode toggle */}
+        <ModeToggle />
+
         {/* Separator between timer and panel toggles */}
         <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
 
@@ -279,9 +282,6 @@ export default function TopBar({
             )}
           </svg>
         </button>
-
-        {/* S5 — per-window viewer/claimer mode toggle (last control) */}
-        <ModeToggle />
       </div>
     </div>
   )

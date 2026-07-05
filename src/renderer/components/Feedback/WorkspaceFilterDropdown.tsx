@@ -8,12 +8,21 @@
 // workspace icon with its colored border via ProjectAvatar. An "All
 // workspaces" row sits on top. Square corners, dark, K2 tokens.
 //
+// Projects V1 P7 (prd-projects-v1 §6.6): a visually distinct "Projects"
+// section sits between the All row and the workspace sections — picking
+// a project filters the board to its MEMBER workspaces (a pure
+// client-side filter; the page resolves membership via
+// /cli/project-group/show). Project values ride the same string-value
+// channel as workspace ids under a `project:` prefix.
+//
 // Data comes from the SAME stores the settings page reads
 // (useProjectsStore via the parent's `projects` prop +
-// useFocusGroupsStore for groups/enabled) — no duplicated plumbing.
+// useFocusGroupsStore for groups/enabled + useProjectGroupsStore for
+// the project-group rows) — no duplicated plumbing.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useFocusGroupsStore, type FocusGroup } from '@/stores/focus-groups'
+import { useProjectGroupsStore } from '@/stores/project-groups'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 
 /** The slice of a project row the dropdown needs (a subset of the
@@ -43,6 +52,60 @@ export function workspaceMatchesSearch(ws: { name: string; path: string }, query
   if (!query.trim()) return true
   const q = query.toLowerCase()
   return ws.name.toLowerCase().includes(q) || ws.path.toLowerCase().includes(q)
+}
+
+// ── Projects V1 P7 (§6.6) — project-group filter values ───────────────────
+
+/** The slice of a project-group row the dropdown needs (a subset of the
+ *  project-groups store's shape, passed straight in). */
+export interface FilterableProjectGroup {
+  id: string
+  name: string
+  memberCount: number
+}
+
+/** Project filter values ride the same string channel as workspace ids;
+ *  the prefix keeps them unambiguous (workspace ids never contain it). */
+const PROJECT_FILTER_PREFIX = 'project:'
+
+export function projectFilterValue(groupId: string): string {
+  return `${PROJECT_FILTER_PREFIX}${groupId}`
+}
+
+/** The group id when `value` is a project filter, else null. */
+export function parseProjectFilter(value: string): string | null {
+  return value.startsWith(PROJECT_FILTER_PREFIX)
+    ? value.slice(PROJECT_FILTER_PREFIX.length)
+    : null
+}
+
+/** Pure section builder for the Projects section (unit-tested):
+ *  substring match on the name, alphabetical (the dropdown's workspace
+ *  ordering idiom — the nav's pinned-first order is a nav concern). */
+export function filterProjectGroupsForFilter(
+  groups: FilterableProjectGroup[],
+  query: string,
+): FilterableProjectGroup[] {
+  const q = query.trim().toLowerCase()
+  return groups
+    .filter((g) => !q || g.name.toLowerCase().includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** The board's client-side workspace filter (unit-tested): 'all' passes
+ *  everything; a `project:` value keeps rows whose host workspace is a
+ *  MEMBER of that project (null membership = still resolving → empty);
+ *  anything else is a single workspace id. */
+export function rowsForWorkspaceFilter<T extends { projectId: string }>(
+  rows: T[],
+  value: string,
+  projectMemberIds: ReadonlySet<string> | null,
+): T[] {
+  if (value === 'all') return rows
+  if (parseProjectFilter(value) !== null) {
+    return rows.filter((r) => projectMemberIds?.has(r.projectId) ?? false)
+  }
+  return rows.filter((r) => r.projectId === value)
 }
 
 /** Pure section builder (unit-tested): focus-group grouping when
@@ -80,7 +143,7 @@ export function groupWorkspacesForFilter(
 
 interface WorkspaceFilterDropdownProps {
   projects: FilterableWorkspace[]
-  /** 'all' or a project id. */
+  /** 'all', a workspace id, or `project:<groupId>` (§6.6). */
   value: string
   onChange: (value: string) => void
 }
@@ -92,6 +155,9 @@ export function WorkspaceFilterDropdown({
 }: WorkspaceFilterDropdownProps): React.JSX.Element {
   const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
   const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
+  // Project-group rows for the Projects section (null until the boot
+  // fetch lands — render as empty, the badge wiring keeps it fresh).
+  const projectGroups = useProjectGroupsStore((s) => s.groups)
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -104,16 +170,30 @@ export function WorkspaceFilterDropdown({
     [projects, focusGroups, focusGroupsEnabled, query],
   )
 
+  const groupRows = useMemo(
+    () => filterProjectGroupsForFilter(projectGroups ?? [], query),
+    [projectGroups, query],
+  )
+
   // Flattened selectable values for ArrowUp/Down + Enter (the settings
   // search's keyboard feel). The All row only shows without a query.
   const showAllRow = !query.trim()
   const flatValues = useMemo(() => {
     const vals: string[] = showAllRow ? ['all'] : []
+    for (const g of groupRows) vals.push(projectFilterValue(g.id))
     for (const s of sections) for (const ws of s.workspaces) vals.push(ws.id)
     return vals
-  }, [sections, showAllRow])
+  }, [sections, groupRows, showAllRow])
 
-  const selected = value === 'all' ? null : projects.find((p) => p.id === value) ?? null
+  const selectedGroupId = parseProjectFilter(value)
+  const selectedGroup =
+    selectedGroupId !== null
+      ? (projectGroups ?? []).find((g) => g.id === selectedGroupId) ?? null
+      : null
+  const selected =
+    value === 'all' || selectedGroupId !== null
+      ? null
+      : projects.find((p) => p.id === value) ?? null
 
   // Focus the search on open; reset transient state on close.
   useEffect(() => {
@@ -197,7 +277,7 @@ export function WorkspaceFilterDropdown({
         type="button"
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)] outline-none cursor-pointer hover:text-[var(--color-text-primary)] transition-colors max-w-[180px]"
-        title="Filter by workspace"
+        title="Filter by workspace or project"
       >
         {selected && (
           <ProjectAvatar
@@ -209,7 +289,10 @@ export function WorkspaceFilterDropdown({
             size={16}
           />
         )}
-        <span className="truncate">{selected ? selected.name : 'All workspaces'}</span>
+        {selectedGroup && <ProjectGroupGlyph size={16} />}
+        <span className="truncate">
+          {selected ? selected.name : selectedGroup ? selectedGroup.name : 'All workspaces'}
+        </span>
         <svg
           className={`w-2.5 h-2.5 flex-shrink-0 text-[var(--color-text-muted)] transition-transform ${open ? 'rotate-180' : ''}`}
           fill="none"
@@ -257,6 +340,43 @@ export function WorkspaceFilterDropdown({
               </button>
             )}
 
+            {/* Projects section (§6.6) — visually distinct: accent
+                header + group glyph rows; picking one filters the board
+                to that project's member workspaces. */}
+            {groupRows.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 select-none">
+                  <span className="w-1 h-3 flex-shrink-0 bg-[var(--color-accent)]" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] flex-1 truncate">
+                    Projects
+                  </span>
+                  <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
+                    {groupRows.length}
+                  </span>
+                </div>
+                {groupRows.map((g) => {
+                  const gv = projectFilterValue(g.id)
+                  const kbIdx = flatValues.indexOf(gv)
+                  return (
+                    <button
+                      key={g.id}
+                      type="button"
+                      data-ws-filter-value={gv}
+                      onClick={() => pick(gv)}
+                      className={rowClass(value === gv, kbIdx >= 0 && kbIdx === keyboardIndex)}
+                      title={`Only feedback from ${g.name}'s member workspaces`}
+                    >
+                      <ProjectGroupGlyph size={20} />
+                      <span className="text-xs truncate flex-1">{g.name}</span>
+                      <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
+                        {g.memberCount}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
             {sections.map((section) => (
               <div key={section.key}>
                 {section.label !== null && (
@@ -297,7 +417,7 @@ export function WorkspaceFilterDropdown({
               </div>
             ))}
 
-            {sections.length === 0 && (
+            {sections.length === 0 && groupRows.length === 0 && (
               <div className="px-2 py-4 text-center text-[10px] text-[var(--color-text-muted)]">
                 No workspaces match
               </div>
@@ -306,5 +426,22 @@ export function WorkspaceFilterDropdown({
         </div>
       )}
     </div>
+  )
+}
+
+/** Stand-in glyph for project rows (stacked layers — distinct from the
+ *  workspace avatars), sized to align with ProjectAvatar rows. */
+function ProjectGroupGlyph({ size }: { size: number }): React.JSX.Element {
+  return (
+    <span
+      className="flex-shrink-0 flex items-center justify-center border border-[var(--color-accent)]/40 text-[var(--color-accent)]"
+      style={{ width: size, height: size }}
+    >
+      <svg width={size - 8} height={size - 8} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polygon points="12 2 2 7 12 12 22 7 12 2" />
+        <polyline points="2 17 12 22 22 17" />
+        <polyline points="2 12 12 17 22 12" />
+      </svg>
+    </span>
   )
 }

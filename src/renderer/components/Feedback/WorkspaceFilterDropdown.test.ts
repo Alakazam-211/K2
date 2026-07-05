@@ -1,11 +1,18 @@
 // Pure-logic tests for the workspace-filter dropdown's section builder
 // (grouping / ordering / search — the ergonomics mirrored from the
-// Settings → Workspaces list). No DOM. Fail-loud: exact equality.
+// Settings → Workspaces list) and the P7 (§6.6) project-group filter
+// (value encoding, section builder, member-scoped row filter). No DOM.
+// Fail-loud: exact equality.
 
 import { describe, it, expect } from 'vitest'
 import {
+  filterProjectGroupsForFilter,
   groupWorkspacesForFilter,
+  parseProjectFilter,
+  projectFilterValue,
+  rowsForWorkspaceFilter,
   workspaceMatchesSearch,
+  type FilterableProjectGroup,
   type FilterableWorkspace,
 } from './WorkspaceFilterDropdown'
 import type { FocusGroup } from '@/stores/focus-groups'
@@ -75,5 +82,68 @@ describe('workspaceMatchesSearch', () => {
     expect(workspaceMatchesSearch(w, 'FLEET')).toBe(true)
     expect(workspaceMatchesSearch(w, 'dev/fleet')).toBe(true)
     expect(workspaceMatchesSearch(w, 'cortana')).toBe(false)
+  })
+})
+
+// ── Projects V1 P7 (§6.6) — project-group filter ──────────────────────────
+
+function pg(id: string, name: string, memberCount = 2): FilterableProjectGroup {
+  return { id, name, memberCount }
+}
+
+describe('projectFilterValue / parseProjectFilter', () => {
+  it('round-trips a group id through the value channel', () => {
+    expect(parseProjectFilter(projectFilterValue('pg-1'))).toBe('pg-1')
+  })
+
+  it('non-project values parse to null', () => {
+    expect(parseProjectFilter('all')).toBeNull()
+    expect(parseProjectFilter('p-workspace-uuid')).toBeNull()
+    expect(parseProjectFilter('')).toBeNull()
+  })
+})
+
+describe('filterProjectGroupsForFilter', () => {
+  const pgs = [pg('pg-z', 'Zephyr'), pg('pg-a', 'Apollo'), pg('pg-k', 'K2 Launch')]
+
+  it('sorts alphabetically; empty query keeps every group', () => {
+    expect(filterProjectGroupsForFilter(pgs, '').map((g) => g.name)).toEqual([
+      'Apollo',
+      'K2 Launch',
+      'Zephyr',
+    ])
+  })
+
+  it('matches on name substring, case-insensitively', () => {
+    expect(filterProjectGroupsForFilter(pgs, 'LAUNCH').map((g) => g.id)).toEqual(['pg-k'])
+    expect(filterProjectGroupsForFilter(pgs, 'nope')).toEqual([])
+  })
+})
+
+describe('rowsForWorkspaceFilter', () => {
+  const rows = [
+    { id: 'f1', projectId: 'ws-a' },
+    { id: 'f2', projectId: 'ws-b' },
+    { id: 'f3', projectId: 'ws-c' },
+    { id: 'f4', projectId: 'ws-a' },
+  ]
+
+  it("'all' passes every row through untouched", () => {
+    expect(rowsForWorkspaceFilter(rows, 'all', null)).toEqual(rows)
+  })
+
+  it('a workspace id keeps only that host workspace', () => {
+    expect(rowsForWorkspaceFilter(rows, 'ws-a', null).map((r) => r.id)).toEqual(['f1', 'f4'])
+  })
+
+  it('a project value keeps rows from MEMBER workspaces only', () => {
+    const members = new Set(['ws-a', 'ws-c'])
+    expect(
+      rowsForWorkspaceFilter(rows, projectFilterValue('pg-1'), members).map((r) => r.id),
+    ).toEqual(['f1', 'f3', 'f4'])
+  })
+
+  it('a project value with unresolved membership (null) shows nothing', () => {
+    expect(rowsForWorkspaceFilter(rows, projectFilterValue('pg-1'), null)).toEqual([])
   })
 })

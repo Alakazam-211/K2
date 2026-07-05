@@ -12,8 +12,9 @@
 // P5 fills the Dashboard tab: ProjectDashboard renders the canonical
 // layout blob as percent-width pane columns (kessel canonical-terminal
 // attach + htmlDoc panes), with drag-and-drop, coalesced save-layout,
-// and apply-on-open staleness (§6.2/§6.3). The Feedback tab is P7's
-// slot; the gear panel is P8's slot. Remaining seams keep their TODOs.
+// and apply-on-open staleness (§6.2/§6.3). P7 fills the Feedback tab:
+// ProjectFeedbackTab, the member-scoped feedback board (§6.6). The
+// gear panel is P8's slot. Remaining seams keep their TODOs.
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { usePageViewStore } from '@/stores/page-view'
@@ -23,6 +24,7 @@ import PageTabs from '@/components/TopBar/PageTabs'
 import ProjectNav, { CreateProjectForm } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
 import ProjectChatDrawer from './ProjectChatDrawer'
+import { ProjectFeedbackTab } from '@/components/Feedback/ProjectFeedbackTab'
 import { fetchProjectGroupShow, type ProjectGroupShow } from './projects-api'
 
 const TOPBAR_HEIGHT = 38
@@ -75,23 +77,6 @@ function DashboardTab({ show }: { show: ProjectGroupShow }): React.JSX.Element {
           composer draft survives them (SelectedProjectView is keyed by
           group id upstream: a project switch is a fresh drawer). */}
       <ProjectChatDrawer show={show} />
-    </div>
-  )
-}
-
-function FeedbackTabPlaceholder({ show }: { show: ProjectGroupShow }): React.JSX.Element {
-  // TODO(P7): the project-scoped feedback list — fetchAllFeedback
-  // restricted to this project's member workspaces + the recycled
-  // FeedbackItemView master-detail (§6.6). This placeholder is its slot.
-  return (
-    <div className="flex-1 flex items-center justify-center m-3 border border-dashed border-[var(--color-border)] text-center px-8">
-      <div>
-        <p className="text-sm text-[var(--color-text-secondary)]">Project feedback</p>
-        <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-70">
-          Open asks from {show.name}&rsquo;s {show.members.length}{' '}
-          {show.members.length === 1 ? 'member' : 'members'} will show here.
-        </p>
-      </div>
     </div>
   )
 }
@@ -231,7 +216,10 @@ function SelectedProjectView({
       ) : tab === 'dashboard' ? (
         <DashboardTab show={show} />
       ) : (
-        <FeedbackTabPlaceholder show={show} />
+        /* P7 (§6.6) — the member-scoped feedback board. Keyed upstream
+           by group id (SelectedProjectView), so a project switch is a
+           fresh list; `show` refetches only update the members prop. */
+        <ProjectFeedbackTab members={show.members} />
       )}
     </div>
   )

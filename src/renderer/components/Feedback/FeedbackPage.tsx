@@ -32,7 +32,14 @@ import {
   type FeedbackStatus,
 } from './feedback-api'
 import { FeedbackItemView } from './FeedbackItemView'
-import { WorkspaceFilterDropdown, type FilterableWorkspace } from './WorkspaceFilterDropdown'
+import {
+  parseProjectFilter,
+  rowsForWorkspaceFilter,
+  WorkspaceFilterDropdown,
+  type FilterableWorkspace,
+} from './WorkspaceFilterDropdown'
+import { fetchProjectGroupShow } from '@/components/Projects/projects-api'
+import { useProjectGroupsStore } from '@/stores/project-groups'
 import { KindBadge, PriorityBadge } from './badges'
 
 const TOPBAR_HEIGHT = 38
@@ -178,7 +185,7 @@ function CheckGlyph(): React.JSX.Element {
 
 // ── List card ─────────────────────────────────────────────────────────────
 
-function FeedbackCard({
+export function FeedbackCard({
   row,
   workspace,
   nowSec,
@@ -254,7 +261,7 @@ function FeedbackCard({
   )
 }
 
-function SectionHeader({ label, count }: { label: string; count: number }): React.JSX.Element {
+export function SectionHeader({ label, count }: { label: string; count: number }): React.JSX.Element {
   return (
     <div className="flex items-center gap-2 px-1 pt-4 pb-1.5">
       <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
@@ -275,9 +282,13 @@ export default function FeedbackPage(): React.JSX.Element | null {
 
   const [rows, setRows] = useState<FeedbackListRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Workspace filter — project id, or 'all' (the default; a project
-  // filter joins later with the projects feature).
+  // Workspace filter — a workspace id, `project:<groupId>` (§6.6), or
+  // 'all' (the default).
   const [workspaceFilter, setWorkspaceFilter] = useState<string>('all')
+  // Member workspace ids of the selected project filter — resolved via
+  // /cli/project-group/show when a project is picked; null = no project
+  // filter active OR still resolving.
+  const [projectMemberIds, setProjectMemberIds] = useState<Set<string> | null>(null)
   // Tokenized free-text search across title / agent / workspace / id.
   const [search, setSearch] = useState('')
   // Status filter — one status or 'all'; the chips show per-status
@@ -305,6 +316,33 @@ export default function FeedbackPage(): React.JSX.Element | null {
     if (!isOpen) return
     void loadList()
   }, [isOpen, revision, projects, loadList])
+
+  // Resolve the selected project filter's membership (§6.6) — refreshed
+  // on project-group events (members-changed rides pgRevision) so the
+  // filter tracks membership live. A failed resolve logs and leaves the
+  // set null (= empty result), never blanking the page.
+  const pgRevision = useProjectGroupsStore((s) => s.revision)
+  const projectFilterId = parseProjectFilter(workspaceFilter)
+  useEffect(() => {
+    if (!isOpen || projectFilterId === null) {
+      setProjectMemberIds(null)
+      return
+    }
+    let cancelled = false
+    fetchProjectGroupShow(projectFilterId)
+      .then((show) => {
+        if (cancelled) return
+        setProjectMemberIds(new Set(show.members.map((m) => m.workspaceId)))
+      })
+      .catch((err) => {
+        if (cancelled) return
+        console.warn('[feedback] project-filter membership resolve failed:', err)
+        setProjectMemberIds(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen, projectFilterId, pgRevision])
 
   // Relative-time ticker (AgentOps idiom) — labels only, no refetch.
   useEffect(() => {
@@ -343,10 +381,8 @@ export default function FeedbackPage(): React.JSX.Element | null {
   // active status chip narrows it.
   const searched = useMemo(() => {
     if (!rows) return null
-    const byWorkspace =
-      workspaceFilter === 'all' ? rows : rows.filter((r) => r.projectId === workspaceFilter)
-    return filterBySearch(byWorkspace, search)
-  }, [rows, workspaceFilter, search])
+    return filterBySearch(rowsForWorkspaceFilter(rows, workspaceFilter, projectMemberIds), search)
+  }, [rows, workspaceFilter, projectMemberIds, search])
 
   const statusCounts = useMemo(() => (searched ? countByStatus(searched) : null), [searched])
 
@@ -453,7 +489,8 @@ export default function FeedbackPage(): React.JSX.Element | null {
             </div>
             {/* Workspace filter — custom dropdown mirroring the
                 Settings → Workspaces list (search, focus groups,
-                icons). A project filter joins later. */}
+                icons), plus the Projects section (§6.6): picking a
+                project filters to its member workspaces. */}
             <WorkspaceFilterDropdown
               projects={projects}
               value={workspaceFilter}

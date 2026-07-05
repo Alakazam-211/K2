@@ -95,6 +95,11 @@ export default function TopBar({
         <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">K2</span>
         {/* K2 Connect server switcher (This Mac / saved servers / add) */}
         <ServerSwitcher />
+        {/* §6.0 — the 3-tab page switcher (Agents | Projects | Feedback).
+            Canonical anatomy: K2 | server picker | tabs | page buttons —
+            the tabs sit right of the server picker on every page.
+            Absorbs the v0.40.26 Feedback button; badges ride the tabs. */}
+        <PageTabs />
         {/* Primary sidebar toggle */}
         <button
           onClick={onTogglePrimarySidebar}
@@ -149,9 +154,6 @@ export default function TopBar({
         <RunningAgentsTopBarButton />
         {/* Agent Ops — fleet view */}
         <AgentOpsTopBarButton />
-        {/* §6.0 — the 3-tab page switcher (Agents | Projects | Feedback).
-            Absorbs the v0.40.26 Feedback button; badges ride the tabs. */}
-        <PageTabs />
         {/* Back / Forward navigation */}
         <NavButtons />
       </div>

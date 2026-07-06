@@ -508,6 +508,15 @@ pub struct DaemonPtySession {
     /// subscriber's select loop wakes and emits a `pin_changed`
     /// frame to its client without polling.
     pin_tx: broadcast::Sender<Option<(u16, u16)>>,
+    /// Companion T0 — ephemeral "claim session" pin ownership. When
+    /// nonzero, the current pin was set by THIS grid-WS subscriber id
+    /// (the socket's `claim_pin` action) and auto-clears when that
+    /// subscriber detaches ([`Self::detach_subscriber`]). `0` = the
+    /// pin (if any) is a normal, manually-cleared one. Every plain
+    /// [`Self::set_pinned`] resets this to `0` — a normal pin replaces
+    /// an ephemeral one (last write wins) and an unpin clears it;
+    /// [`Self::set_pinned_ephemeral`] re-stamps the owner afterwards.
+    ephemeral_pin_owner: std::sync::atomic::AtomicU64,
 
     /// Per-subscriber viewport registry (orca study, "Relevance to
     /// K2" #1/#8). Keyed by the WS handler's `subscriber_id`; the
@@ -813,6 +822,7 @@ impl DaemonPtySession {
             pinned_rows: std::sync::atomic::AtomicU16::new(0),
             pinned_set_by: Mutex::new(None),
             pin_tx,
+            ephemeral_pin_owner: std::sync::atomic::AtomicU64::new(0),
             viewports: Mutex::new(HashMap::new()),
             viewport_clock: std::sync::atomic::AtomicU64::new(0),
             resize_gate: Mutex::new(ResizeGate {
@@ -871,7 +881,10 @@ impl DaemonPtySession {
     /// - `Some((cols, rows))`: records the pin, broadcasts on
     ///   `pin_tx`, and applies the dims immediately through
     ///   [`Self::request_resize`] (whose clamp then holds the PTY
-    ///   there no matter what any window does).
+    ///   there no matter what any window does). Idempotent: a re-pin
+    ///   to the CURRENT dims refreshes attribution only — no
+    ///   broadcast, no resize window (companion T0 — the mobile
+    ///   claim-pin re-fires on every keyboard transition).
     /// - `None`: clears the pin, broadcasts, and re-resizes to the
     ///   current active viewer's declared viewport if one exists —
     ///   falling back to the most-recently-seen viewport with known
@@ -888,10 +901,27 @@ impl DaemonPtySession {
         set_by: Option<String>,
     ) {
         use std::sync::atomic::Ordering;
+        // Companion T0 — any explicit pin write supersedes ephemeral
+        // ownership (last write wins): a normal pin replaces an
+        // ephemeral one and an unpin clears it. `set_pinned_ephemeral`
+        // re-stamps the owner after delegating here.
+        session.ephemeral_pin_owner.store(0, Ordering::Relaxed);
         match dims {
             Some((cols, rows)) => {
                 let cols = cols.max(1);
                 let rows = rows.max(1);
+                // Companion T0 — idempotent re-pin. The mobile
+                // claim-pin re-fires on every keyboard show/hide;
+                // identical dims must neither re-broadcast (event
+                // spam) nor reopen a resize window. Attribution still
+                // refreshes (a different setter taking over the same
+                // geometry) and the clamp is re-asserted through
+                // `request_resize`'s same-dims skip below.
+                if session.pinned() == Some((cols, rows)) {
+                    *session.pinned_set_by.lock() = set_by;
+                    Self::request_resize(session, cols, rows);
+                    return;
+                }
                 // rows first, cols second: `pinned()` keys "pinned"
                 // on cols ≠ 0, so a racing reader never observes
                 // (new cols, unset rows).
@@ -944,6 +974,52 @@ impl DaemonPtySession {
                 }
             }
         }
+    }
+
+    /// Companion T0 — the grid-WS subscriber id that owns the current
+    /// ephemeral pin; `0` when the pin (if any) is a normal one (or
+    /// there is no pin). Lock-free.
+    pub fn ephemeral_pin_owner(&self) -> u64 {
+        self.ephemeral_pin_owner
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Companion T0 — EPHEMERAL "claim session" pin: pin this
+    /// session's PTY to `cols`×`rows` on behalf of the grid-WS
+    /// subscriber `subscriber_id` (the socket IS the identity).
+    ///
+    /// Semantics are [`Self::set_pinned`]'s — broadcast on `pin_tx`,
+    /// immediate apply, inescapable clamp in [`Self::request_resize`],
+    /// idempotent on identical dims — plus the ownership stamp:
+    ///
+    /// - When `subscriber_id`'s socket detaches,
+    ///   [`Self::detach_subscriber`] auto-clears the pin (broadcasting
+    ///   the cleared state) and the normal election restores the
+    ///   survivors' geometry.
+    /// - Re-claiming on the same socket updates the dims in place
+    ///   (mobile keyboard show/hide, rotation) — one broadcast per
+    ///   real change, none for identical dims.
+    /// - A later plain [`Self::set_pinned`] — a normal pin from the
+    ///   pin-size route OR a manual unpin — supersedes the ownership
+    ///   (last write wins), so today's unpin rights are unchanged.
+    ///
+    /// Never persisted: an ephemeral pin's owner cannot outlive the
+    /// daemon, so restart-restore only ever resurrects normal pins.
+    pub fn set_pinned_ephemeral(
+        session: &Arc<Self>,
+        cols: u16,
+        rows: u16,
+        set_by: Option<String>,
+        subscriber_id: u64,
+    ) {
+        Self::set_pinned(session, Some((cols, rows)), set_by);
+        // Stamp AFTER the delegate (which zeroes the slot). No writer
+        // race: only `subscriber_id`'s own WS task calls this, and its
+        // detach (the only reader that clears on this id) runs after
+        // that task's loop exits.
+        session
+            .ephemeral_pin_owner
+            .store(subscriber_id, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Read the authoritative label. Cheap (RwLock read + clone of
@@ -1166,6 +1242,27 @@ impl DaemonPtySession {
             let current = session.active_subscriber.load(Ordering::Relaxed);
             elect_on_detach(&reg, subscriber_id, current)
         };
+        // Companion T0 — ephemeral claim-pin auto-clear. If the
+        // DEPARTING subscriber owns the ephemeral pin, clear it now:
+        // AFTER the registry drop above (so the unpin restore can't
+        // resurrect the departed viewport) and BEFORE the election
+        // apply below (so the promotion resize isn't clamped by a pin
+        // whose owner just left). `set_pinned(None)` broadcasts the
+        // cleared `pin_changed` and restores the survivors' geometry;
+        // the CAS lets a manual unpin / replacement pin that raced
+        // this detach win cleanly (no double-clear, no spurious event).
+        if session
+            .ephemeral_pin_owner
+            .compare_exchange(
+                subscriber_id,
+                0,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            Self::set_pinned(session, None, None);
+        }
         match successor {
             Some((id, vp)) => {
                 // CAS from the departing id so a viewer that claimed
@@ -2368,6 +2465,213 @@ mod tests {
             }
         }
         assert_eq!(seen, vec![Some((100, 30)), None]);
+    }
+
+    // ── Companion T0 — ephemeral "claim session" pin ────────────────
+    //
+    // An ephemeral pin is a normal pin PLUS an owner stamp (the
+    // setting grid-WS subscriber id): it clamps identically, but
+    // auto-clears when its setter detaches, after which the normal
+    // election restores the survivors. Manual unpin and normal pins
+    // supersede it (last write wins). The daemon crate's grid-WS tests
+    // cover the `claim_pin` socket action that feeds this.
+
+    /// Drain exactly `want` pin-broadcast events (bounded wait, loud
+    /// failure — mirrors `pin_changes_broadcast_on_the_pin_channel`).
+    #[cfg(unix)]
+    fn recv_pin_events(
+        rx: &mut broadcast::Receiver<Option<(u16, u16)>>,
+        want: usize,
+    ) -> Vec<Option<(u16, u16)>> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut seen: Vec<Option<(u16, u16)>> = Vec::new();
+        while seen.len() < want {
+            match rx.try_recv() {
+                Ok(ev) => seen.push(ev),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    if Instant::now() >= deadline {
+                        panic!(
+                            "pin broadcast incomplete within 2s; \
+                             saw {seen:?} (wanted {want})"
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("pin broadcast died: {e}"),
+            }
+        }
+        seen
+    }
+
+    /// Assert NO pin event arrives within a settle window — the
+    /// idempotence / quiet-path contract (no event spam).
+    #[cfg(unix)]
+    fn assert_no_pin_event(
+        rx: &mut broadcast::Receiver<Option<(u16, u16)>>,
+        what: &str,
+    ) {
+        std::thread::sleep(Duration::from_millis(RESIZE_DEBOUNCE_MS * 2));
+        match rx.try_recv() {
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {}
+            other => panic!("{what}: expected no pin event, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ephemeral_pin_clamps_resizes_like_a_normal_pin() {
+        let s = spawn_cat_session();
+        DaemonPtySession::set_pinned_ephemeral(&s, 100, 30, Some("owner".into()), 9);
+        assert_eq!(s.pinned(), Some((100, 30)));
+        assert_eq!(s.pinned_set_by().as_deref(), Some("owner"));
+        assert_eq!(s.ephemeral_pin_owner(), 9);
+        assert_dims_settle(&s, (100, 30), "ephemeral pin must apply its dims");
+
+        // Every other client's resize clamps exactly like a normal pin.
+        DaemonPtySession::request_resize(&s, 140, 45);
+        std::thread::sleep(Duration::from_millis(RESIZE_DEBOUNCE_MS * 2));
+        assert_eq!(
+            term_dims(&s),
+            (100, 30),
+            "resize while ephemerally pinned must clamp"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn setter_detach_auto_clears_ephemeral_pin_and_restores_survivor() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_cat_session();
+        let mut rx = s.subscribe_pins();
+        // Desktop 7 at 100x30; phone 9 claims active + ephemeral-pins
+        // to its own dims.
+        s.note_viewport(7, 100, 30);
+        s.note_viewport(9, 40, 10);
+        s.active_subscriber.store(9, Relaxed);
+        DaemonPtySession::set_pinned_ephemeral(&s, 40, 10, Some("owner".into()), 9);
+        assert_dims_settle(&s, (40, 10), "ephemeral pin");
+
+        // The phone's socket drops: the pin auto-clears (broadcast!),
+        // the election promotes the desktop, and the PTY restores.
+        DaemonPtySession::detach_subscriber(&s, 9);
+        assert_eq!(s.pinned(), None, "pin must auto-clear on setter detach");
+        assert_eq!(s.pinned_set_by(), None, "attribution clears with the pin");
+        assert_eq!(s.ephemeral_pin_owner(), 0, "ownership cleared");
+        assert_eq!(s.active_subscriber.load(Relaxed), 7, "survivor promoted");
+        assert_dims_settle(&s, (100, 30), "survivor dims restored");
+        // Wire truth for the remaining subscribers: pinned, then cleared.
+        assert_eq!(
+            recv_pin_events(&mut rx, 2),
+            vec![Some((40, 10)), None],
+            "pin_changed must fire for the pin AND the auto-clear"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn other_subscriber_detach_leaves_ephemeral_pin_in_place() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_cat_session();
+        s.note_viewport(7, 100, 30);
+        s.note_viewport(9, 40, 10);
+        s.active_subscriber.store(9, Relaxed);
+        DaemonPtySession::set_pinned_ephemeral(&s, 40, 10, None, 9);
+        assert_dims_settle(&s, (40, 10), "ephemeral pin");
+
+        // A NON-owning viewer leaving must not perturb the pin.
+        DaemonPtySession::detach_subscriber(&s, 7);
+        assert_eq!(s.pinned(), Some((40, 10)), "pin survives other detaches");
+        assert_eq!(s.ephemeral_pin_owner(), 9, "ownership untouched");
+        assert_eq!(term_dims(&s), (40, 10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manual_unpin_clears_ephemeral_pin_and_later_detach_stays_quiet() {
+        let s = spawn_cat_session();
+        DaemonPtySession::set_pinned_ephemeral(&s, 40, 10, None, 9);
+        assert_dims_settle(&s, (40, 10), "ephemeral pin");
+
+        // "The user on the other end unpins" — today's route calls
+        // exactly this. Ownership clears with the pin...
+        DaemonPtySession::set_pinned(&s, None, None);
+        assert_eq!(s.pinned(), None);
+        assert_eq!(s.ephemeral_pin_owner(), 0, "manual unpin drops ownership");
+
+        // ...so the setter's eventual detach is pin-quiet: no spurious
+        // second `pin_changed` for a pin that's already gone.
+        let mut rx = s.subscribe_pins();
+        DaemonPtySession::detach_subscriber(&s, 9);
+        assert_no_pin_event(&mut rx, "detach after manual unpin");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normal_pin_replaces_ephemeral_and_survives_setter_detach() {
+        let s = spawn_cat_session();
+        DaemonPtySession::set_pinned_ephemeral(&s, 40, 10, None, 9);
+        assert_dims_settle(&s, (40, 10), "ephemeral pin");
+
+        // A normal pin (pin-size route) lands afterwards: last write
+        // wins, the pin is no longer ephemeral...
+        DaemonPtySession::set_pinned(&s, Some((100, 30)), Some("owner".into()));
+        assert_eq!(s.ephemeral_pin_owner(), 0, "normal pin demotes ownership");
+        assert_dims_settle(&s, (100, 30), "normal pin applies");
+
+        // ...so the former setter's detach must NOT clear it
+        // (regression: normal pins keep today's semantics exactly).
+        DaemonPtySession::detach_subscriber(&s, 9);
+        std::thread::sleep(Duration::from_millis(RESIZE_DEBOUNCE_MS * 2));
+        assert_eq!(
+            s.pinned(),
+            Some((100, 30)),
+            "normal pin must survive the ex-owner's detach"
+        );
+        assert_eq!(term_dims(&s), (100, 30));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reclaim_updates_dims_in_place_and_same_dims_is_silent() {
+        let s = spawn_cat_session();
+        let mut rx = s.subscribe_pins();
+        // Watcher 7 at 100x30 keeps trying to resize throughout.
+        s.note_viewport(7, 100, 30);
+
+        DaemonPtySession::set_pinned_ephemeral(&s, 40, 10, None, 9);
+        assert_dims_settle(&s, (40, 10), "initial claim");
+
+        // Keyboard opens: the SAME subscriber re-claims at new dims —
+        // update in place (no unpin/repin churn), exactly ONE event.
+        DaemonPtySession::set_pinned_ephemeral(&s, 40, 18, None, 9);
+        assert_eq!(s.pinned(), Some((40, 18)), "re-claim updates the pin");
+        assert_eq!(s.ephemeral_pin_owner(), 9, "ownership unchanged");
+        assert_dims_settle(&s, (40, 18), "PTY follows the re-claim");
+        assert_eq!(
+            recv_pin_events(&mut rx, 2),
+            vec![Some((40, 10)), Some((40, 18))],
+            "one pin_changed per real dims change"
+        );
+
+        // Other clients stay clamped at the NEW dims.
+        DaemonPtySession::request_resize(&s, 100, 30);
+        std::thread::sleep(Duration::from_millis(RESIZE_DEBOUNCE_MS * 2));
+        assert_eq!(term_dims(&s), (40, 18), "others clamp to the re-claim");
+
+        // Keyboard bounce with unchanged dims: cheap + idempotent — no
+        // broadcast, no resize window, ownership intact.
+        let applied_before = s.resizes_applied();
+        DaemonPtySession::set_pinned_ephemeral(&s, 40, 18, None, 9);
+        assert_no_pin_event(&mut rx, "same-dims re-claim");
+        assert_eq!(s.pinned(), Some((40, 18)));
+        assert_eq!(s.ephemeral_pin_owner(), 9);
+        assert_eq!(
+            s.resizes_applied(),
+            applied_before,
+            "same-dims re-claim must not apply a resize"
+        );
     }
 
     /// A DSR-6 (`\x1b[6n`) parsed by the Term must produce a CPR answer

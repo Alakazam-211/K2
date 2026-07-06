@@ -352,10 +352,12 @@ struct PinSizeBody {
 /// Validation bounds for a pin. Wider than any sane preset (the S7b
 /// dropdown tops out at 160×48) but tight enough that a typo'd or
 /// hostile value can't blow up Term reflow / snapshot payloads.
-const PIN_COLS_MIN: u16 = 20;
-const PIN_COLS_MAX: u16 = 500;
-const PIN_ROWS_MIN: u16 = 5;
-const PIN_ROWS_MAX: u16 = 200;
+/// `pub(crate)`: the grid-WS `claim_pin` action (companion T0)
+/// enforces the SAME bounds so the two pin entry points can't drift.
+pub(crate) const PIN_COLS_MIN: u16 = 20;
+pub(crate) const PIN_COLS_MAX: u16 = 500;
+pub(crate) const PIN_ROWS_MIN: u16 = 5;
+pub(crate) const PIN_ROWS_MAX: u16 = 200;
 
 /// Handler for `POST /cli/terminal/pin-size` (S7a).
 ///

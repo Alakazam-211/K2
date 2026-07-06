@@ -199,6 +199,26 @@ enum Inbound {
     /// not capable stays effectively viewer. Every `set_mode` is ACKed
     /// with `{"event":"mode","payload":{"mode":..,"capable":bool}}`.
     SetMode { mode: String },
+    /// Companion T0 — EPHEMERAL "claim session" pin. Pins the PTY to
+    /// `cols`×`rows` via the pin-to-size machinery, bound to THIS
+    /// subscriber: when this socket detaches the pin auto-clears
+    /// (`pin_changed` `{cleared:true}` to the survivors) and the
+    /// normal election restores their dims. The socket IS the setter's
+    /// identity — no id exchange needed, and disconnect detection is
+    /// the existing teardown path.
+    ///
+    /// Gated like `input`/a claim (mode == claimer AND
+    /// claimer-capable); dims validated against the pin-size route's
+    /// bounds. Re-sending from the same socket updates the dims in
+    /// place (mobile keyboard show/hide, rotation) — identical dims
+    /// are a silent no-op, so keyboard bounce can't spam `pin_changed`.
+    /// The claim also takes the active-subscriber slot (a claimed
+    /// session is being DRIVEN by this socket). Ack = the
+    /// `pin_changed` broadcast every subscriber (including the setter)
+    /// receives. Normal pins/unpins via `POST /cli/terminal/pin-size`
+    /// are unchanged and supersede this (last write wins) — "the user
+    /// on the other end" can still unpin.
+    ClaimPin { cols: u16, rows: u16 },
     /// k1 wire — the client applied a frame batch; `version` is the
     /// highest frame version it has rendered. Sent once per rAF
     /// flush (not per message). Drives the ack-gated pacing: the
@@ -424,6 +444,70 @@ fn apply_set_active(
         SetActiveOutcome::NoOp => {}
     }
     outcome
+}
+
+/// Companion T0 — the `set_by` attribution for a socket-set ephemeral
+/// pin, resolved from the connection's daemon-verified identity (D3:
+/// never from the frame). Mirrors the pin-size dispatcher arm: owner
+/// token → "owner", connect-user → their username; a P3b stream token
+/// records "stream" (deliberate session-scoped external driver).
+fn pin_attribution(identity: &ConnIdentity) -> String {
+    match identity {
+        ConnIdentity::Owner => "owner".to_string(),
+        ConnIdentity::ConnectUser { username } => username.clone(),
+        ConnIdentity::StreamToken => "stream".to_string(),
+        // Unreachable through the gate (Unknown is never
+        // claimer-capable); neutral fallback mirrors the HTTP arm.
+        ConnIdentity::Unknown => "user".to_string(),
+    }
+}
+
+/// Apply a `ClaimPin { cols, rows }` frame: declare the viewport, take
+/// the active-subscriber slot (a claimed session is being driven by
+/// this socket), and set the EPHEMERAL pin bound to `subscriber_id`.
+/// Dims out of the pin-size route's bounds are rejected whole
+/// (returns `false`; the caller logs and drops the frame). Extracted
+/// from the WS loop so the pin + claim + auto-clear behavior is
+/// unit-testable against a real `DaemonPtySession` without a socket
+/// (the `apply_set_active` pattern).
+fn apply_claim_pin(
+    session: &std::sync::Arc<DaemonPtySession>,
+    subscriber_id: u64,
+    cols: u16,
+    rows: u16,
+    set_by: String,
+) -> bool {
+    use crate::terminal_routes::{
+        PIN_COLS_MAX, PIN_COLS_MIN, PIN_ROWS_MAX, PIN_ROWS_MIN,
+    };
+    if !(PIN_COLS_MIN..=PIN_COLS_MAX).contains(&cols)
+        || !(PIN_ROWS_MIN..=PIN_ROWS_MAX).contains(&rows)
+    {
+        return false;
+    }
+    // The claim half: same session mutations as an input-claim — the
+    // viewport registry entry feeds the detach election, and the
+    // active slot marks this socket as the driver. The resize itself
+    // rides `set_pinned_ephemeral` (whose clamp makes any concurrent
+    // target converge on the pinned dims anyway).
+    session.note_viewport(subscriber_id, cols, rows);
+    session
+        .active_subscriber
+        .store(subscriber_id, std::sync::atomic::Ordering::Relaxed);
+    session
+        .active_cols
+        .store(cols, std::sync::atomic::Ordering::Relaxed);
+    session
+        .active_rows
+        .store(rows, std::sync::atomic::Ordering::Relaxed);
+    DaemonPtySession::set_pinned_ephemeral(
+        session,
+        cols,
+        rows,
+        Some(set_by),
+        subscriber_id,
+    );
+    true
 }
 
 pub async fn serve_session_grid_connection(
@@ -1253,6 +1337,47 @@ pub async fn serve_session_grid_connection(
                                     break;
                                 }
                             }
+                            Ok(Inbound::ClaimPin { cols, rows }) => {
+                                // Companion T0 — ephemeral claim-pin.
+                                // Gated exactly like a claim: a viewer
+                                // must never pin (PRD §1 W1 — viewer
+                                // role never claims, never pins).
+                                // Capability recomputed per frame so a
+                                // grant/revoke bites this live socket.
+                                if !(mode_claimer
+                                    && connection_claimer_capable(&identity))
+                                {
+                                    log_debug!(
+                                        "[daemon/sessions_grid_ws] claim_pin \
+                                         refused (viewer) session={} sub={}",
+                                        session.session_id,
+                                        subscriber_id,
+                                    );
+                                    continue;
+                                }
+                                // Track our declared dims like a Resize
+                                // would (input-claim snap consistency).
+                                my_cols = cols;
+                                my_rows = rows;
+                                if !apply_claim_pin(
+                                    &session,
+                                    subscriber_id,
+                                    cols,
+                                    rows,
+                                    pin_attribution(&identity),
+                                ) {
+                                    log_debug!(
+                                        "[daemon/sessions_grid_ws] claim_pin \
+                                         dims out of bounds ({cols}x{rows}) \
+                                         dropped session={} sub={}",
+                                        session.session_id,
+                                        subscriber_id,
+                                    );
+                                }
+                                // Ack rides the pin broadcast: every
+                                // subscriber (this one included) gets
+                                // `pin_changed` via the pins_rx arm.
+                            }
                             Ok(Inbound::Ack { version }) => {
                                 // k1 pacing. Acks from a non-k1 client
                                 // are ignored (none exist today; the
@@ -1708,6 +1833,163 @@ mod tests {
                 "detach-promotion must not resize a pinned session"
             );
         }
+    }
+
+    // ── Companion T0 — `claim_pin` (ephemeral pin) socket action ────
+    //
+    // `apply_claim_pin` is the WS loop's whole handler body after the
+    // claimer gate: bounds check, viewport + active-slot claim, then
+    // `set_pinned_ephemeral`. The auto-clear-on-detach policy itself
+    // is pinned by the k2-core daemon_pty tests; these cover the
+    // action-level contract the companion codes against.
+
+    /// Frozen inbound wire shape: `{"action":"claim_pin","cols":N,"rows":N}`.
+    #[test]
+    fn claim_pin_inbound_parses_frozen_contract() {
+        let parsed: Inbound = serde_json::from_str(
+            r#"{"action":"claim_pin","cols":40,"rows":18}"#,
+        )
+        .expect("claim_pin frame must parse");
+        match parsed {
+            Inbound::ClaimPin { cols, rows } => {
+                assert_eq!((cols, rows), (40, 18));
+            }
+            other => panic!("expected ClaimPin, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claim_pin_pins_claims_active_and_clamps_others() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_test_session();
+        assert!(
+            apply_claim_pin(&s, 9, 40, 10, "owner".to_string()),
+            "in-bounds claim_pin must apply"
+        );
+        // Pinned to the phone's dims, attributed, ephemeral-owned...
+        assert_eq!(s.pinned(), Some((40, 10)));
+        assert_eq!(s.pinned_set_by().as_deref(), Some("owner"));
+        assert_eq!(s.ephemeral_pin_owner(), 9);
+        // ...and the setter took the active slot (it is driving).
+        assert_eq!(s.active_subscriber.load(Relaxed), 9);
+        assert_dims_settle(&s, (40, 10), "claim_pin applies its dims");
+
+        // Another client's resize clamps — server-enforced, exactly
+        // like a normal pin.
+        DaemonPtySession::request_resize(&s, 140, 45);
+        std::thread::sleep(std::time::Duration::from_millis(
+            k2_core::terminal::daemon_pty::RESIZE_DEBOUNCE_MS * 2 + 50,
+        ));
+        {
+            use k2_core::terminal::Dimensions;
+            let tm = s.term();
+            let t = tm.lock();
+            assert_eq!(
+                (t.columns() as u16, t.screen_lines() as u16),
+                (40, 10),
+                "resize while claim-pinned must clamp"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claim_pin_setter_detach_auto_clears_and_elects_survivor() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_test_session();
+        // Desktop 7 declared 120x40; phone 9 claim-pins to 40x10.
+        apply_set_active(&s, 7, true, Some(120), Some(40));
+        assert!(apply_claim_pin(&s, 9, 40, 10, "owner".to_string()));
+        assert_dims_settle(&s, (40, 10), "claim pin");
+        let mut pins = s.subscribe_pins();
+
+        // The phone's socket drops — the WS teardown calls exactly
+        // this. Pin auto-clears, `pin_changed` (cleared) reaches the
+        // survivors, and the election restores the desktop's dims.
+        DaemonPtySession::detach_subscriber(&s, 9);
+        assert_eq!(s.pinned(), None, "ephemeral pin cleared on detach");
+        assert_eq!(s.active_subscriber.load(Relaxed), 7, "survivor promoted");
+        assert_dims_settle(&s, (120, 40), "survivor dims restored");
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match pins.try_recv() {
+                Ok(ev) => {
+                    assert_eq!(ev, None, "the auto-clear must broadcast cleared");
+                    break;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    if std::time::Instant::now() >= deadline {
+                        panic!("no pin_changed broadcast within 2s of detach");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(e) => panic!("pin broadcast died: {e}"),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claim_pin_reclaim_updates_dims_in_place_same_dims_silent() {
+        let s = spawn_test_session();
+        assert!(apply_claim_pin(&s, 9, 40, 10, "owner".to_string()));
+        assert_dims_settle(&s, (40, 10), "initial claim");
+        let mut pins = s.subscribe_pins();
+
+        // Keyboard opens: same socket re-claims at new dims — the pin
+        // updates in place (no unpin/repin churn, exactly one event).
+        assert!(apply_claim_pin(&s, 9, 40, 18, "owner".to_string()));
+        assert_eq!(s.pinned(), Some((40, 18)), "re-claim updates the pin");
+        assert_eq!(s.ephemeral_pin_owner(), 9, "still the same owner");
+        assert_dims_settle(&s, (40, 18), "PTY follows the re-claim");
+        assert_eq!(
+            pins.try_recv().expect("one pin_changed for the dims change"),
+            Some((40, 18))
+        );
+
+        // Keyboard bounce with unchanged dims: silent no-op.
+        assert!(apply_claim_pin(&s, 9, 40, 18, "owner".to_string()));
+        std::thread::sleep(std::time::Duration::from_millis(
+            k2_core::terminal::daemon_pty::RESIZE_DEBOUNCE_MS * 2,
+        ));
+        assert!(
+            matches!(
+                pins.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "same-dims re-claim must not broadcast"
+        );
+        // Other clients remain clamped at the claimed dims.
+        DaemonPtySession::request_resize(&s, 120, 40);
+        std::thread::sleep(std::time::Duration::from_millis(
+            k2_core::terminal::daemon_pty::RESIZE_DEBOUNCE_MS * 2 + 50,
+        ));
+        {
+            use k2_core::terminal::Dimensions;
+            let tm = s.term();
+            let t = tm.lock();
+            assert_eq!(
+                (t.columns() as u16, t.screen_lines() as u16),
+                (40, 18),
+                "others stay clamped after the re-claim"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claim_pin_rejects_out_of_bounds_dims_whole() {
+        let s = spawn_test_session();
+        // Below the pin-size route's floor / above its ceiling — the
+        // frame is dropped whole, nothing is pinned or claimed.
+        assert!(!apply_claim_pin(&s, 9, 2, 2, "owner".to_string()));
+        assert!(!apply_claim_pin(&s, 9, 1000, 10, "owner".to_string()));
+        assert_eq!(s.pinned(), None, "out-of-bounds claim must not pin");
+        assert_eq!(s.ephemeral_pin_owner(), 0);
     }
 
     /// S7a — FROZEN WIRE SHAPES for the pin frames the renderer (S7b)

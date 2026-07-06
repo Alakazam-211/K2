@@ -213,6 +213,18 @@ k2 heartbeat signal fire <name>                # fire now (skip schedule window)
 k2 heartbeat signal wake                       # auto-wake (no name needed)
 ```
 Run `k2 heartbeat --help` for the full surface.
+
+## Agent presets (which agent program a workspace launches)
+```
+k2 preset list                   # the server's launchable agent roster
+k2 preset show <preset>          # command + declared env/danger-flags/readiness
+k2 agent hire <dir> --agent <preset>   # point a workspace at a preset
+```
+Custom/local-LLM agents (e.g. aider against an Ollama server) are added with
+`k2 preset add` — mutations need owner/admin. The full contract a custom agent
+must honor (PTY spawn, prompt intake, `k2 respond`, declared danger flags) is
+`docs/agent-contract.md` in the K2 repository; `k2 preset --help` has the
+command surface.
 "#
     .to_string()
 }
@@ -1388,6 +1400,16 @@ mod tests {
         assert!(
             body.contains("K2_HOOK_TOKEN"),
             "k2-cli skill must name K2_HOOK_TOKEN as the API-session marker",
+        );
+        // W6 (0.40.30): the agent-preset surface + custom-agent contract
+        // pointer (SKILL_VERSION_WORKSPACE bumped 7→8 for this section).
+        assert!(
+            body.contains("k2 preset list"),
+            "k2-cli skill must document the `k2 preset` surface",
+        );
+        assert!(
+            body.contains("docs/agent-contract.md"),
+            "k2-cli skill must point custom agents at the agent contract",
         );
     }
 

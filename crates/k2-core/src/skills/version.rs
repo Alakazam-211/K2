@@ -65,7 +65,10 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// sections.
 /// Bumped to 7 in 0.40.30: the loadable k2-cli skill gains the
 /// "Respond to your API caller" (`k2 respond [--final]`) section.
-pub const SKILL_VERSION_WORKSPACE: u32 = 7;
+/// Bumped to 8 in 0.40.30 (W6): the loadable k2-cli skill gains the
+/// "Agent presets" section (`k2 preset`, `hire --agent`, and the
+/// docs/agent-contract.md pointer for custom/local-LLM agents).
+pub const SKILL_VERSION_WORKSPACE: u32 = 8;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

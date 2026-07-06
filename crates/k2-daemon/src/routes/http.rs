@@ -173,6 +173,63 @@ pub(crate) fn actor_role(
     k2_core::connect_users::role_for_session(tok)
 }
 
+/// K2 Cloud S1 — the RESTRICTED-SESSION chokepoint for
+/// `must_change_password` (prd-k2-cloud-hosted-servers §6).
+///
+/// While a connect-user's `must_change_password` flag is set, their
+/// session token still AUTHENTICATES but may only reach the three
+/// self-service routes needed to satisfy the rotation:
+///
+///   - `GET  /cli/auth/whoami`          (client renders the prompt)
+///   - `POST /cli/auth/change-password` (the way out)
+///   - `POST /cli/auth/logout`          (bail per-device)
+///
+/// Every OTHER route sees `403 {"error":"password_change_required"}`.
+///
+/// Called ONCE from the dispatcher — after the readiness gate, before
+/// the route match — so it covers the whole `/cli/*` + WS surface
+/// without touching any route arm (the single-chokepoint requirement).
+///
+/// Returns `Some(CliResponse)` when the request must be REJECTED, else
+/// `None` (proceed to normal dispatch). It never AUTHORIZES anything:
+///
+/// - The OWNER token is never restricted → `None`.
+/// - A missing/empty/unknown token → `None`; the per-route auth gates
+///   keep rejecting those exactly as before.
+/// - A valid session whose user is unflagged → `None`.
+pub(crate) fn session_password_gate(
+    path: &str,
+    query: &str,
+    owner_token: &str,
+) -> Option<crate::cli_response::CliResponse> {
+    // Routes a restricted session may still reach. `/cli/auth/login` is
+    // listed too: it's public (credential-authed, not session-authed), so
+    // a stray `?token=` on it must not turn a login attempt into a 403.
+    if matches!(
+        path,
+        "/cli/auth/whoami"
+            | "/cli/auth/change-password"
+            | "/cli/auth/logout"
+            | "/cli/auth/login"
+    ) {
+        return None;
+    }
+    let tok = extract_token(query)?;
+    if tok.is_empty() || ct_eq_token(tok, owner_token) {
+        // No credential / the owner token — never restricted.
+        return None;
+    }
+    let username = k2_core::connect_users::validate_session(tok)?;
+    if k2_core::connect_users::must_change_password(&username) {
+        return Some(crate::cli_response::CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: r#"{"error":"password_change_required"}"#.to_string(),
+        });
+    }
+    None
+}
+
 /// OWNER-or-manager authorization guard (K2SO #629). Returns the actor's
 /// resolved [`Role`](k2_core::connect_users::Role) when the request is
 /// authorized to MANAGE users (owner token OR a session whose user

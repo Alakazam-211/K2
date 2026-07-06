@@ -715,6 +715,20 @@ async fn handle_one_request(
         return DispatchOutcome::Done;
     }
 
+    // K2 Cloud S1 — restricted must-change-password sessions. A live
+    // connect-user session whose account is flagged `must_change_password`
+    // may only reach whoami / change-password / logout (+ the public
+    // login); everything else 403s with `password_change_required`. The
+    // owner token and unauthenticated/unknown tokens pass straight
+    // through to the normal per-route gates. ONE chokepoint here covers
+    // the entire route match below (HTTP + WS upgrades) — see
+    // `super::http::session_password_gate`.
+    if let Some(r) = super::http::session_password_gate(&path, &query, state.token.as_str()) {
+        let _ = stream.read(&mut buf).await;
+        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        return DispatchOutcome::Done;
+    }
+
     match path.as_str() {
         "/ping" => {
             let _ = stream.read(&mut buf).await;

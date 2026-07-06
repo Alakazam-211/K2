@@ -47,18 +47,36 @@ pub fn handle_list() -> CliResponse {
 struct AddReq {
     username: String,
     password: String,
+    /// K2 Cloud S1: opt-in forced first-login rotation. Optional +
+    /// defaults false so every existing caller is unchanged.
+    #[serde(default, rename = "mustChangePassword")]
+    must_change_password: bool,
 }
 
-/// `POST /cli/users/add` `{username,password}` → `{"success":true}`.
+/// `POST /cli/users/add` `{username,password[,mustChangePassword]}` →
+/// `{"success":true}`. When `mustChangePassword` is true the new
+/// account is flagged: its sessions are restricted to whoami /
+/// change-password / logout until the password is rotated (K2 Cloud S1).
 pub fn handle_add(body: &[u8]) -> CliResponse {
     let req: AddReq = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     match connect_users::add_user(&req.username, &req.password) {
-        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
-        Err(e) => CliResponse::bad_request(e),
+        Ok(()) => {}
+        Err(e) => return CliResponse::bad_request(e),
     }
+    if req.must_change_password {
+        // The user was just created, so a failure here is an unexpected
+        // store error — surface it LOUDLY rather than reporting success
+        // for an account that silently missed its restriction.
+        if let Err(e) = connect_users::set_must_change_password(&req.username, true) {
+            return CliResponse::internal_error(format!(
+                "user created but mustChangePassword could not be set: {e}"
+            ));
+        }
+    }
+    CliResponse::ok_json(r#"{"success":true}"#.to_string())
 }
 
 #[derive(serde::Deserialize)]
@@ -242,9 +260,12 @@ fn login_failed() -> CliResponse {
 
 /// `POST /cli/auth/login` `{username,password}` (PUBLIC — no token gate).
 ///
-/// On success: `200 {token, username, expiresAt}`. On any failure (bad
-/// body, unknown user, wrong password, disabled account): a generic
-/// `401 {"error":"invalid username or password"}`.
+/// On success: `200 {token, username, expiresAt, mustChangePassword}`.
+/// `mustChangePassword` (K2 Cloud S1) is an ALWAYS-PRESENT boolean —
+/// `true` means the just-issued session is restricted to whoami /
+/// change-password / logout until the password is rotated. On any
+/// failure (bad body, unknown user, wrong password, disabled account):
+/// a generic `401 {"error":"invalid username or password"}`.
 ///
 /// The dispatcher adds a small fixed delay before returning THIS response
 /// when it's a 401, to blunt online brute force (richer rate-limiting is
@@ -283,6 +304,9 @@ pub fn handle_login(body: &[u8]) -> CliResponse {
             "token": token,
             "username": username,
             "expiresAt": expires_at,
+            // K2 Cloud S1: always-present boolean so clients can branch
+            // without feature-detecting field absence.
+            "mustChangePassword": connect_users::must_change_password(&username),
         })
         .to_string(),
     )
@@ -617,24 +641,34 @@ pub fn handle_logout(token: &str) -> CliResponse {
 }
 
 /// `GET /cli/auth/whoami` (authorized — owner OR connect-user) →
-/// `{username, owner, role}`.
+/// `{username, owner, role, mustChangePassword}`.
 ///
-/// - Owner token → `{"username":null,"owner":true,"role":"owner"}`.
-/// - Connect-user session → `{"username":"<name>","owner":false,"role":"<role>"}`.
+/// - Owner token → `{"username":null,"owner":true,"role":"owner",
+///   "mustChangePassword":false}`.
+/// - Connect-user session → `{"username":"<name>","owner":false,
+///   "role":"<role>","mustChangePassword":<bool>}`.
 ///
 /// The dispatcher resolves which by checking the owner token first, then
 /// the session; it passes the result in. `role` (K2SO #629) lets the client
 /// gate the Users/Access management UI + the role selector.
+/// `mustChangePassword` (K2 Cloud S1, always-present boolean) lets the
+/// client render the forced-rotation prompt — whoami stays reachable
+/// while the session is otherwise restricted.
 pub fn handle_whoami(
     username: Option<String>,
     owner: bool,
     role: connect_users::Role,
 ) -> CliResponse {
+    let must_change = username
+        .as_deref()
+        .map(connect_users::must_change_password)
+        .unwrap_or(false);
     CliResponse::ok_json(
         serde_json::json!({
             "username": username,
             "owner": owner,
             "role": role.as_wire(),
+            "mustChangePassword": must_change,
         })
         .to_string(),
     )
@@ -783,5 +817,72 @@ mod tests {
     fn change_password_malformed_body_is_400() {
         let r = handle_change_password(Some("alice".to_string()), b"not json");
         assert_eq!(r.status, "400 Bad Request");
+    }
+
+    // ── K2 Cloud S1 — mustChangePassword wire shapes ─────────────────
+
+    #[test]
+    fn add_accepts_must_change_password_and_flags_the_user() {
+        with_temp_home(|| {
+            // Opt-in true → flagged.
+            let r = handle_add(
+                br#"{"username":"mcp_new","password":"password1","mustChangePassword":true}"#,
+            );
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            assert!(r.body.contains("\"success\":true"), "got: {}", r.body);
+            assert!(connect_users::must_change_password("mcp_new"));
+
+            // Field absent → default false (existing callers unchanged).
+            let r = handle_add(br#"{"username":"mcp_plain","password":"password1"}"#);
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            assert!(!connect_users::must_change_password("mcp_plain"));
+        });
+    }
+
+    #[test]
+    fn login_response_carries_always_present_must_change_password() {
+        with_temp_home(|| {
+            connect_users::add_user("mcp_login", "password1").expect("add");
+
+            // Unflagged → the field is PRESENT and false (pinned: always-
+            // present boolean, never omitted).
+            let r = handle_login(br#"{"username":"mcp_login","password":"password1"}"#);
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+            assert_eq!(
+                v["mustChangePassword"],
+                serde_json::json!(false),
+                "must be an always-present boolean: {v}"
+            );
+            assert!(v["token"].is_string(), "login still returns a token: {v}");
+
+            // Flagged → true.
+            connect_users::set_must_change_password("mcp_login", true).expect("flag");
+            let r = handle_login(br#"{"username":"mcp_login","password":"password1"}"#);
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+            assert_eq!(v["mustChangePassword"], serde_json::json!(true));
+        });
+    }
+
+    #[test]
+    fn whoami_carries_must_change_password() {
+        with_temp_home(|| {
+            connect_users::add_user("mcp_who", "password1").expect("add");
+            connect_users::set_must_change_password("mcp_who", true).expect("flag");
+
+            let r = handle_whoami(
+                Some("mcp_who".to_string()),
+                false,
+                connect_users::Role::Member,
+            );
+            let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+            assert_eq!(v["mustChangePassword"], serde_json::json!(true));
+
+            // Owner identity is NEVER flagged.
+            let r = handle_whoami(None, true, connect_users::Role::Owner);
+            let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+            assert_eq!(v["mustChangePassword"], serde_json::json!(false));
+        });
     }
 }

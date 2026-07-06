@@ -18,22 +18,20 @@ import { getCachedGroupIcon, setCachedGroupIcon } from './group-icon-cache'
 import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 
-// The workspace default-color palette's accent family — hand-picked to
-// read on the dark surface; the hash keeps a group's color stable
-// across sessions and clients (it derives from the canonical group id).
-// Exported for the Settings color-swatch row (§6.7.7 — picking from the
-// same palette the fallback hashes into keeps the nav coherent).
+// THE SAME default palette workspaces offer (Settings → Workspaces color
+// row) so projects and workspaces share one color language; the hash
+// keeps a group's fallback color stable across sessions and clients
+// (it derives from the canonical group id). Exported for the Settings
+// color-swatch row (§6.7.7 — the custom-hex input covers everything else).
 export const GROUP_AVATAR_COLORS = [
-  '#e06c75',
-  '#d19a66',
-  '#e5c07b',
-  '#98c379',
-  '#56b6c2',
-  '#61afef',
-  '#c678dd',
-  '#be5046',
-  '#4ec9b0',
-  '#c586c0',
+  '#3b82f6',
+  '#ef4444',
+  '#22c55e',
+  '#f59e0b',
+  '#a855f7',
+  '#ec4899',
+  '#06b6d4',
+  '#64748b',
 ]
 
 /** Stable per-group color: FNV-ish hash of the group id → palette. */

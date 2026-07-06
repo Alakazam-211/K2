@@ -64,6 +64,7 @@ import {
   type LayoutSaver,
 } from './dashboard-layout'
 import { registerMemberDropHandler, useDashboardDndStore } from './dashboard-dnd'
+import { resolveEscFocusPane } from './project-tabs'
 import {
   saveDashboardLayout,
   type ProjectGroupDashboard,
@@ -478,6 +479,55 @@ export default function ProjectDashboard({
     setFreshness((s) => adoptRevision(s, dashboard.revision))
   }, [dashboard.layoutJson, dashboard.revision, show.pocWorkspaceId])
 
+  // ── §6.7.4 — last-used pane tracking + Esc-to-pane ─────────────────────
+  // Every open/focus path notes the pane on the store (keyed by
+  // dashboard id, session-only); Esc focuses it — falling back to the
+  // dashboard's first terminal pane, no-op when there is none. The
+  // actual keyboard handoff goes to the pane's kessel shadow textarea
+  // (where TerminalPane routes keystrokes).
+  const notePaneFocus = useCallback(
+    (workspaceId: string): void => {
+      useProjectGroupsStore.getState().notePaneFocus(dashboard.id, workspaceId)
+    },
+    [dashboard.id],
+  )
+
+  const focusPaneInput = useCallback((workspaceId: string): void => {
+    const col = document.querySelector<HTMLElement>(`[data-dash-pane-ws="${workspaceId}"]`)
+    col?.querySelector<HTMLTextAreaElement>('textarea')?.focus()
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      // Inputs keep Esc local via stopPropagation (composer, renames,
+      // create form); belt-and-braces for the rest: never steal Esc
+      // from an editable target — crucially including the pane's own
+      // kessel shadow textarea, whose Esc belongs to the TUI.
+      const from = e.target as HTMLElement | null
+      if (
+        from &&
+        (from.tagName === 'INPUT' ||
+          from.tagName === 'TEXTAREA' ||
+          from.tagName === 'SELECT' ||
+          from.isContentEditable)
+      ) {
+        return
+      }
+      const last =
+        useProjectGroupsStore.getState().lastFocusedPaneByDashboard[dashboard.id] ?? null
+      const target = resolveEscFocusPane(columnsRef.current, last)
+      if (target === null) return
+      e.preventDefault()
+      const index = findTerminalColumn(columnsRef.current, target)
+      if (index >= 0) flashFocus(index)
+      notePaneFocus(target)
+      focusPaneInput(target)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [dashboard.id, flashFocus, notePaneFocus, focusPaneInput])
+
   // ── Member-click pane requests (nav drawer → open/focus — §6.1) ────────
   const paneRequest = useProjectGroupsStore((s) => s.paneRequest)
   useEffect(() => {
@@ -486,6 +536,7 @@ export default function ProjectDashboard({
     const existing = findTerminalColumn(columnsRef.current, paneRequest.workspaceId)
     if (existing >= 0) {
       flashFocus(existing)
+      notePaneFocus(paneRequest.workspaceId)
       return
     }
     if (readOnlyRef.current) {
@@ -500,7 +551,8 @@ export default function ProjectDashboard({
     })
     applyColumns(next, true)
     flashFocus(next.length - 1)
-  }, [paneRequest, applyColumns, flashFocus])
+    notePaneFocus(paneRequest.workspaceId)
+  }, [paneRequest, applyColumns, flashFocus, notePaneFocus])
 
   // ── DnD: markers + drops ───────────────────────────────────────────────
   const gridRef = useRef<HTMLDivElement>(null)
@@ -544,9 +596,12 @@ export default function ProjectDashboard({
       if (!target) return
       const result = dropMember(columnsRef.current, workspaceId, target)
       if (result.changed) applyColumns(result.columns, true)
-      if (result.focusIndex >= 0) flashFocus(result.focusIndex)
+      if (result.focusIndex >= 0) {
+        flashFocus(result.focusIndex)
+        notePaneFocus(workspaceId)
+      }
     })
-  }, [targetAtPoint, applyColumns, flashFocus])
+  }, [targetAtPoint, applyColumns, flashFocus, notePaneFocus])
 
   // Header drag → reorder columns (Sidebar threshold + boundary index).
   const startPaneDrag = useCallback(
@@ -716,6 +771,7 @@ export default function ProjectDashboard({
               <React.Fragment key={columnKeys[i]}>
                 <div
                   data-dash-col
+                  data-dash-pane-ws={isTerminalPane(pane) ? pane.workspaceId : undefined}
                   className="flex flex-col min-w-0 min-h-0"
                   style={{
                     flexGrow: col.widthPct,
@@ -723,6 +779,12 @@ export default function ProjectDashboard({
                     flexBasis: 0,
                     opacity: paneDragIndex === i ? 0.4 : 1,
                   }}
+                  // §6.7.4 — any click inside a terminal pane makes it
+                  // the dashboard's last-used pane (capture: the
+                  // header/body handlers must not swallow it).
+                  onMouseDownCapture={
+                    isTerminalPane(pane) ? () => notePaneFocus(pane.workspaceId) : undefined
+                  }
                 >
                   <PaneChrome
                     title={title}

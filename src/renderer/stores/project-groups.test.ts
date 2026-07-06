@@ -225,4 +225,45 @@ describe('project-groups store event wiring', () => {
     expect(s.chatCollapsed).toBe(true)
     expect(s.unreadGroupIds.has('g2')).toBe(true)
   })
+
+  // ── §6.7.1 — the Projects-nav collapse toggle ─────────────────────────
+
+  it('setNavCollapsed flips the per-client flag and never touches unread/seen state', () => {
+    useProjectGroupsStore.setState({
+      selectedGroupId: 'g1',
+      unreadGroupIds: new Set(['g1']),
+      navCollapsed: false,
+    })
+    useProjectGroupsStore.getState().setNavCollapsed(true)
+    let s = useProjectGroupsStore.getState()
+    expect(s.navCollapsed).toBe(true)
+    // Unlike the chat toggle, the nav has NO seen semantics.
+    expect(s.unreadGroupIds.has('g1')).toBe(true)
+    useProjectGroupsStore.getState().setNavCollapsed(false)
+    s = useProjectGroupsStore.getState()
+    expect(s.navCollapsed).toBe(false)
+    expect(s.unreadGroupIds.has('g1')).toBe(true)
+  })
+
+  // ── §6.7.4 — last-used pane tracking (Esc-to-pane) ────────────────────
+
+  it('notePaneFocus tracks the last pane PER dashboard', () => {
+    useProjectGroupsStore.setState({ lastFocusedPaneByDashboard: {} })
+    const store = useProjectGroupsStore.getState()
+    store.notePaneFocus('dash-1', 'w1')
+    store.notePaneFocus('dash-2', 'w9')
+    store.notePaneFocus('dash-1', 'w2') // later click wins
+    expect(useProjectGroupsStore.getState().lastFocusedPaneByDashboard).toEqual({
+      'dash-1': 'w2',
+      'dash-2': 'w9',
+    })
+  })
+
+  it('notePaneFocus is a state no-op when the pane is already the last one', () => {
+    useProjectGroupsStore.setState({ lastFocusedPaneByDashboard: { 'dash-1': 'w1' } })
+    const before = useProjectGroupsStore.getState().lastFocusedPaneByDashboard
+    useProjectGroupsStore.getState().notePaneFocus('dash-1', 'w1')
+    // Same object identity — no churn for subscribers.
+    expect(useProjectGroupsStore.getState().lastFocusedPaneByDashboard).toBe(before)
+  })
 })

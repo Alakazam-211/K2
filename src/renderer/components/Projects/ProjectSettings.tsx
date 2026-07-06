@@ -15,20 +15,23 @@
 // selected project's management surface. The left list can switch
 // projects without touching the Projects page's nav selection.
 //
-// The right panel manages, per §6.5:
+// The right panel manages, per §6.5 (+§6.7.6):
 //   - Project: rename + canonical nav pin (routes existed since P2).
-//   - Dashboards: the project's dashboard rows (V1 = the single 'Main')
-//     with rename (the new dashboard/rename route); create/delete/
-//     reorder are V1.1 and land HERE (the seam below).
+//   - Dashboards: the SAME shape as the Projects page — a TAB per
+//     dashboard (`position` order) + an add affordance; each tab's
+//     panel manages THAT dashboard: rename (dashboard/rename), reorder
+//     (left/right moves → dashboard/reorder with the full id order),
+//     the pinned-HTML browser (GET html-docs, member workspaces only,
+//     resolved Q3) whose "Add to <name>" appends an
+//     {kind:"htmlDoc",workspaceId,filePath} column via the P5 layout
+//     machinery + save-layout (project-settings.ts), and delete
+//     (dashboard/delete) — refused for the LAST dashboard (button
+//     disabled at one; the daemon 409 `last_dashboard` backstops).
 //   - Members: add (picker over the registered-workspace list) /
 //     remove, with the PoC-successor rule surfaced — removing the PoC
 //     is DISABLED with the explanation until a successor is chosen
 //     (daemon 409 poc_successor_required is the backstop).
 //   - PoC: the reassignment dropdown (members only) → set-poc.
-//   - Pinned HTML pages: the new GET html-docs route's rows (member
-//     workspaces only, resolved Q3) with "Add to dashboard" — appends
-//     an {kind:"htmlDoc",workspaceId,filePath} column via the P5
-//     layout machinery + save-layout (project-settings.ts).
 //   - Danger zone: delete project — removes the group, its member
 //     rows, messages, and dashboards; NEVER the workspaces (locked
 //     default, ledger §11).
@@ -49,16 +52,20 @@ import { useWindowModeStore } from '@/stores/window-mode'
 import {
   addProjectGroupMember,
   createErrorMessage,
+  createProjectGroupDashboard,
   daemonErrorInfo,
   deleteProjectGroup,
+  deleteProjectGroupDashboard,
   fetchProjectGroupHtmlDocs,
   fetchProjectGroupShow,
   pinProjectGroup,
   removeProjectGroupMember,
   renameProjectGroup,
   renameProjectGroupDashboard,
+  reorderProjectGroupDashboards,
   saveDashboardLayout,
   setProjectGroupPoc,
+  type ProjectGroupDashboard,
   type ProjectGroupHtmlDoc,
   type ProjectGroupShow,
 } from './projects-api'
@@ -68,6 +75,7 @@ import {
   filterGroupsByQuery,
   removeMemberBlockedReason,
 } from './project-settings'
+import { moveDashboardId, orderedDashboards } from './project-tabs'
 
 /** Uniform section header (the ProjectsSection h3 idiom). */
 function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
@@ -183,6 +191,364 @@ function InlineRename({
   )
 }
 
+// ── Dashboards block (§6.7.6 — a tab per dashboard + add) ────────────────
+
+/** Inline "add dashboard" affordance: a + tab that expands into a name
+ *  input; POSTs dashboard/create, surfaces `name_taken` inline, selects
+ *  the new tab on success (the CreateProjectForm idiom, tab-shaped). */
+function AddDashboardTab({
+  groupId,
+  onCreated,
+}: {
+  groupId: string
+  onCreated: (dashboard: ProjectGroupDashboard) => void
+}): React.JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (): Promise<void> => {
+    const trimmed = name.trim()
+    if (!trimmed || busy) return
+    setBusy(true)
+    try {
+      const dashboard = await createProjectGroupDashboard(groupId, trimmed)
+      setEditing(false)
+      setName('')
+      setError(null)
+      onCreated(dashboard)
+    } catch (err) {
+      setError(createErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="flex items-center gap-1 px-2 py-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
+        title="Add dashboard"
+      >
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+        </svg>
+      </button>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-1 flex-shrink-0">
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          type="text"
+          value={name}
+          disabled={busy}
+          onChange={(e) => {
+            setName(e.target.value)
+            setError(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void submit()
+            else if (e.key === 'Escape') {
+              // Local Esc: cancel the add WITHOUT closing Settings.
+              e.stopPropagation()
+              setEditing(false)
+              setName('')
+              setError(null)
+            }
+          }}
+          placeholder="Dashboard name…"
+          className="w-32 px-2 py-1 text-[11px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag"
+        />
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={busy || name.trim().length === 0}
+          className="px-2 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50"
+        >
+          {busy ? 'Adding…' : 'Add'}
+        </button>
+      </div>
+      {error && <p className="text-[10px] text-red-400">{error}</p>}
+    </div>
+  )
+}
+
+/** §6.7.6 — the Dashboards block, the SAME shape as the Projects page's
+ *  tab row: one tab per dashboard (`position` order) + an add
+ *  affordance (owners/admins; viewers read-only). Each tab's panel
+ *  manages THAT dashboard: rename, reorder (left/right moves — the
+ *  reorder route takes the full id order), the pinned-HTML browser
+ *  ("Add to this dashboard" targets it), and delete — refused for the
+ *  last dashboard (button disabled at one; the daemon's 409
+ *  `last_dashboard` is the backstop and surfaces as a toast). */
+function DashboardsBlock({
+  detail,
+  readOnly,
+  docs,
+  docsError,
+}: {
+  detail: ProjectGroupShow
+  readOnly: boolean
+  docs: ProjectGroupHtmlDoc[] | null
+  docsError: string | null
+}): React.JSX.Element {
+  const dashboards = useMemo(
+    () => orderedDashboards(detail.dashboards),
+    [detail.dashboards],
+  )
+  const orderedIds = useMemo(() => dashboards.map((d) => d.id), [dashboards])
+
+  // The selected dashboard tab — heals to the first when the selection
+  // was deleted elsewhere (event refetch replaces `detail`).
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const active = dashboards.find((d) => d.id === selectedId) ?? dashboards[0] ?? null
+
+  const [busy, setBusy] = useState(false)
+  // Per-doc transient outcome ("Added" flash / already-there note).
+  const [docNote, setDocNote] = useState<{ key: string; note: string } | null>(null)
+
+  const reorder = useCallback(
+    async (dashboardId: string, direction: -1 | 1): Promise<void> => {
+      const order = moveDashboardId(orderedIds, dashboardId, direction)
+      if (order === null || busy) return
+      setBusy(true)
+      try {
+        await reorderProjectGroupDashboards(detail.id, order)
+        // groups-changed refetches `detail` with the new positions.
+      } catch (err) {
+        useToastStore.getState().addToast(`Reorder failed: ${errorMessage(err)}`, 'error')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [detail.id, orderedIds, busy],
+  )
+
+  const deleteDashboard = useCallback(
+    async (dashboard: ProjectGroupDashboard): Promise<void> => {
+      const confirmed = await useConfirmDialogStore.getState().confirm({
+        title: `Delete dashboard "${dashboard.name}"?`,
+        message:
+          'This removes the dashboard and its layout. Sessions and workspaces are never touched.',
+        confirmLabel: 'Delete dashboard',
+        destructive: true,
+      })
+      if (!confirmed) return
+      try {
+        await deleteProjectGroupDashboard(detail.id, dashboard.id)
+        setSelectedId(null) // heal to the first surviving tab
+      } catch (err) {
+        const { code } = daemonErrorInfo(err)
+        useToastStore
+          .getState()
+          .addToast(
+            code === 'last_dashboard'
+              ? 'A project keeps at least one dashboard — this is the last one.'
+              : `Delete failed: ${errorMessage(err)}`,
+            'error',
+          )
+      }
+    },
+    [detail.id],
+  )
+
+  const addDocToDashboard = useCallback(
+    async (doc: ProjectGroupHtmlDoc, dashboard: ProjectGroupDashboard): Promise<void> => {
+      const key = `${doc.workspaceId}:${doc.filePath}`
+      const { layoutJson, added } = appendHtmlDocColumn(
+        dashboard.layoutJson,
+        detail.pocWorkspaceId,
+        doc,
+      )
+      if (!added) {
+        setDocNote({ key, note: `Already on ${dashboard.name}` })
+        return
+      }
+      try {
+        await saveDashboardLayout(detail.id, dashboard.id, layoutJson)
+        setDocNote({ key, note: `Added to ${dashboard.name}` })
+      } catch (err) {
+        useToastStore
+          .getState()
+          .addToast(`Add to dashboard failed: ${errorMessage(err)}`, 'error')
+      }
+    },
+    [detail.id, detail.pocWorkspaceId],
+  )
+
+  const activeIndex = active ? orderedIds.indexOf(active.id) : -1
+  const lastOne = dashboards.length === 1
+
+  return (
+    <div className="space-y-2">
+      <SectionTitle>Dashboards</SectionTitle>
+
+      {/* The tab row — the page's dashboards-as-tabs shape (§6.7.6). */}
+      <div className="flex items-center gap-1 border-b border-[var(--color-border)] overflow-x-auto">
+        {dashboards.map((d) => (
+          <button
+            key={d.id}
+            type="button"
+            onClick={() => setSelectedId(d.id)}
+            className={`px-3 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer whitespace-nowrap ${
+              active?.id === d.id
+                ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+            }`}
+          >
+            {d.name}
+          </button>
+        ))}
+        {!readOnly && (
+          <AddDashboardTab groupId={detail.id} onCreated={(d) => setSelectedId(d.id)} />
+        )}
+      </div>
+
+      {active === null ? (
+        <p className="text-[11px] text-[var(--color-text-muted)] italic">No dashboards.</p>
+      ) : (
+        <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
+          {/* ── Name (rename) + reorder + revision ── */}
+          <div className="flex items-center gap-3 px-3 py-2">
+            {readOnly ? (
+              <span className="text-xs text-[var(--color-text-primary)] truncate">
+                {active.name}
+              </span>
+            ) : (
+              <InlineRename
+                value={active.name}
+                label="dashboard"
+                onSave={async (name) => {
+                  await renameProjectGroupDashboard(detail.id, active.id, name)
+                }}
+              />
+            )}
+            <span className="flex-1" />
+            {!readOnly && dashboards.length > 1 && (
+              <div className="flex items-center gap-0.5 flex-shrink-0">
+                <button
+                  type="button"
+                  disabled={busy || activeIndex <= 0}
+                  onClick={() => void reorder(active.id, -1)}
+                  className="flex h-5 w-5 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                  title="Move left"
+                >
+                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="6 2 3 5 6 8" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || activeIndex >= dashboards.length - 1}
+                  onClick={() => void reorder(active.id, 1)}
+                  className="flex h-5 w-5 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                  title="Move right"
+                >
+                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="4 2 7 5 4 8" />
+                  </svg>
+                </button>
+              </div>
+            )}
+            <span className="text-[9px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
+              rev {active.revision}
+            </span>
+          </div>
+
+          {/* ── Pinned HTML pages → THIS dashboard (§6.7.6) ── */}
+          <div className="px-3 py-2 space-y-1.5">
+            <p className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+              Pinned HTML pages
+            </p>
+            {docsError ? (
+              <p className="text-[11px] text-red-400">Failed to load pinned pages: {docsError}</p>
+            ) : docs === null ? (
+              <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+            ) : docs.length === 0 ? (
+              <p className="text-[11px] text-[var(--color-text-muted)] opacity-70">
+                No pinned HTML pages — members pin .html files as tabs in their workspaces,
+                and they show up here.
+              </p>
+            ) : (
+              <div className="divide-y divide-[var(--color-border)]">
+                {docs.map((doc) => {
+                  const key = `${doc.workspaceId}:${doc.filePath}`
+                  return (
+                    <div key={key} className="flex items-center gap-2 py-1.5 min-w-0">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs text-[var(--color-text-primary)] truncate">
+                            {doc.fileName}
+                          </span>
+                          <span className="text-[10px] text-[var(--color-text-muted)] truncate">
+                            {doc.agentName ?? doc.workspaceName ?? ''}
+                          </span>
+                        </div>
+                        <p
+                          className="text-[10px] text-[var(--color-text-muted)] truncate"
+                          title={doc.filePath}
+                        >
+                          {doc.filePath}
+                        </p>
+                      </div>
+                      {docNote?.key === key && (
+                        <span className="text-[10px] text-[var(--color-accent)] flex-shrink-0">
+                          {docNote.note}
+                        </span>
+                      )}
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => void addDocToDashboard(doc, active)}
+                          className="px-2 py-0.5 text-[10px] text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer flex-shrink-0"
+                        >
+                          Add to {active.name}
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* ── Delete THIS dashboard ── */}
+          {!readOnly && (
+            <div className="flex items-center gap-3 px-3 py-2">
+              <p className="flex-1 text-[10px] text-[var(--color-text-muted)]">
+                Deleting removes this dashboard and its layout — never sessions or workspaces.
+              </p>
+              <button
+                type="button"
+                disabled={lastOne}
+                onClick={() => void deleteDashboard(active)}
+                title={
+                  lastOne
+                    ? 'A project keeps at least one dashboard.'
+                    : `Delete "${active.name}"`
+                }
+                className={`px-2 py-0.5 text-[10px] flex-shrink-0 transition-colors ${
+                  lastOne
+                    ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
+                    : 'text-red-400 border border-red-400/30 hover:bg-red-400/10 cursor-pointer'
+                }`}
+              >
+                Delete dashboard
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── The right panel (selected project's management) ──────────────────────
 
 function ProjectSettingsDetail({
@@ -216,46 +582,6 @@ function ProjectSettingsDetail({
       cancelled = true
     }
   }, [detail.id, revision])
-
-  // "Add to dashboard" target — V1 shows the single 'Main' row; the
-  // select is already dashboard-id-addressed for V1.1.
-  const [targetDashboardId, setTargetDashboardId] = useState<string>(
-    detail.dashboards[0]?.id ?? '',
-  )
-  useEffect(() => {
-    if (!detail.dashboards.some((d) => d.id === targetDashboardId)) {
-      setTargetDashboardId(detail.dashboards[0]?.id ?? '')
-    }
-  }, [detail.dashboards, targetDashboardId])
-
-  // Per-doc transient outcome ("Added" flash / already-there note).
-  const [docNote, setDocNote] = useState<{ key: string; note: string } | null>(null)
-
-  const addDocToDashboard = useCallback(
-    async (doc: ProjectGroupHtmlDoc): Promise<void> => {
-      const dashboard = detail.dashboards.find((d) => d.id === targetDashboardId)
-      if (!dashboard) return
-      const key = `${doc.workspaceId}:${doc.filePath}`
-      const { layoutJson, added } = appendHtmlDocColumn(
-        dashboard.layoutJson,
-        detail.pocWorkspaceId,
-        doc,
-      )
-      if (!added) {
-        setDocNote({ key, note: `Already on ${dashboard.name}` })
-        return
-      }
-      try {
-        await saveDashboardLayout(detail.id, dashboard.id, layoutJson)
-        setDocNote({ key, note: `Added to ${dashboard.name}` })
-      } catch (err) {
-        useToastStore
-          .getState()
-          .addToast(`Add to dashboard failed: ${errorMessage(err)}`, 'error')
-      }
-    },
-    [detail.id, detail.dashboards, detail.pocWorkspaceId, targetDashboardId],
-  )
 
   // ── Members: add picker + remove ─────────────────────────────────────
   const [adding, setAdding] = useState(false)
@@ -401,41 +727,10 @@ function ProjectSettingsDetail({
         </div>
       </div>
 
-      {/* ── Dashboards (V1: the single 'Main' row, rename allowed) ── */}
-      <div className="space-y-2">
-        <SectionTitle>Dashboards</SectionTitle>
-        <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-          {detail.dashboards.map((d) => (
-            <div key={d.id} className="flex items-center gap-3 px-3 py-2">
-              {readOnly ? (
-                <span className="text-xs text-[var(--color-text-primary)] truncate">{d.name}</span>
-              ) : (
-                <InlineRename
-                  value={d.name}
-                  label="dashboard"
-                  onSave={async (name) => {
-                    await renameProjectGroupDashboard(detail.id, d.id, name)
-                  }}
-                />
-              )}
-              <span className="flex-1" />
-              <span className="text-[9px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
-                rev {d.revision}
-              </span>
-            </div>
-          ))}
-          {detail.dashboards.length === 0 && (
-            <div className="px-3 py-2 text-[11px] text-[var(--color-text-muted)] italic">
-              No dashboards.
-            </div>
-          )}
-        </div>
-        {/* V1.1 seam: create / delete / reorder land HERE — the routes
-            and schema are dashboard-id-addressed already (§4.1). */}
-        <p className="text-[10px] text-[var(--color-text-muted)] opacity-70">
-          Creating, deleting, and reordering dashboards arrives in V1.1.
-        </p>
-      </div>
+      {/* ── Dashboards (§6.7.6 — the SAME shape as the page: a tab per
+          dashboard + an add affordance; each tab's panel manages THAT
+          dashboard) ── */}
+      <DashboardsBlock detail={detail} readOnly={readOnly} docs={docs} docsError={docsError} />
 
       {/* ── Members ── */}
       <div className="space-y-2">
@@ -591,78 +886,6 @@ function ProjectSettingsDetail({
           Every project chat message (except the PoC&rsquo;s own) is injected into the
           PoC&rsquo;s session.
         </p>
-      </div>
-
-      {/* ── Pinned HTML pages (the html-docs browser) ── */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <SectionTitle>Pinned HTML pages</SectionTitle>
-          <span className="flex-1" />
-          {detail.dashboards.length > 1 && (
-            <select
-              value={targetDashboardId}
-              onChange={(e) => setTargetDashboardId(e.target.value)}
-              className="px-1.5 py-0.5 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-secondary)] focus:outline-none no-drag cursor-pointer"
-              title="Target dashboard"
-            >
-              {detail.dashboards.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-        {docsError ? (
-          <p className="text-[11px] text-red-400">Failed to load pinned pages: {docsError}</p>
-        ) : docs === null ? (
-          <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
-        ) : docs.length === 0 ? (
-          <p className="text-[11px] text-[var(--color-text-muted)] opacity-70">
-            No pinned HTML pages — members pin .html files as tabs in their workspaces, and
-            they show up here.
-          </p>
-        ) : (
-          <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-            {docs.map((doc) => {
-              const key = `${doc.workspaceId}:${doc.filePath}`
-              return (
-                <div key={key} className="flex items-center gap-2 px-3 py-2 min-w-0">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-xs text-[var(--color-text-primary)] truncate">
-                        {doc.fileName}
-                      </span>
-                      <span className="text-[10px] text-[var(--color-text-muted)] truncate">
-                        {doc.agentName ?? doc.workspaceName ?? ''}
-                      </span>
-                    </div>
-                    <p
-                      className="text-[10px] text-[var(--color-text-muted)] truncate"
-                      title={doc.filePath}
-                    >
-                      {doc.filePath}
-                    </p>
-                  </div>
-                  {docNote?.key === key && (
-                    <span className="text-[10px] text-[var(--color-accent)] flex-shrink-0">
-                      {docNote.note}
-                    </span>
-                  )}
-                  {!readOnly && detail.dashboards.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => void addDocToDashboard(doc)}
-                      className="px-2 py-0.5 text-[10px] text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer flex-shrink-0"
-                    >
-                      Add to dashboard
-                    </button>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
       </div>
 
       {/* ── Danger zone ── */}

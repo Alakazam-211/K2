@@ -18,6 +18,7 @@ import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { showContextMenu } from '@/lib/context-menu'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import ProjectGroupAvatar from './ProjectGroupAvatar'
 import { completeMemberDrag, useDashboardDndStore } from './dashboard-dnd'
 import {
   createProjectGroup,
@@ -29,25 +30,10 @@ import {
 } from './projects-api'
 
 export const PROJECT_NAV_WIDTH = 280
+/** Collapsed-rail width (IconRail's RAIL_WIDTH). */
+export const PROJECT_NAV_RAIL_WIDTH = 48
 
 // ── Group row (SingleProjectItem's visual idiom, group-shaped) ────────────
-
-/** Initials square standing in for ProjectAvatar — groups have no
- *  path/icon; a neutral monogram keeps the row anatomy identical. */
-function GroupGlyph({ name, selected }: { name: string; selected: boolean }): React.JSX.Element {
-  return (
-    <span
-      className={`flex items-center justify-center flex-shrink-0 text-[13px] font-semibold ${
-        selected
-          ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)]'
-          : 'bg-white/[0.06] text-[var(--color-text-secondary)]'
-      }`}
-      style={{ width: 32, height: 32 }}
-    >
-      {(name.trim()[0] ?? '?').toUpperCase()}
-    </span>
-  )
-}
 
 function PinGlyph({ filled }: { filled: boolean }): React.JSX.Element {
   return (
@@ -137,7 +123,9 @@ function GroupRow({
         onMouseLeave={() => setHovered(false)}
       >
         <div className="flex items-center flex-shrink-0">
-          <GroupGlyph name={group.name} selected={selected} />
+          {/* §6.7.1 — initials + stable per-group color (the shared
+              avatar component the collapsed rail also renders). */}
+          <ProjectGroupAvatar name={group.name} groupId={group.id} size={32} />
         </div>
         <div className="flex flex-col justify-center min-w-0 flex-1">
           <div className="flex items-center gap-2 w-full">
@@ -418,6 +406,89 @@ function NewProjectAffordance(): React.JSX.Element {
   return (
     <div className="p-3 border-t border-[var(--color-border)]">
       <CreateProjectForm onDone={() => setEditing(false)} />
+    </div>
+  )
+}
+
+// ── Collapsed icon rail (§6.7.1 — the IconRail idiom, group-shaped) ──────
+
+function RailIcon({
+  group,
+  selected,
+  unread,
+  onSelect,
+}: {
+  group: ProjectGroup
+  selected: boolean
+  unread: boolean
+  onSelect: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className={`no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 transition-colors ${
+        selected
+          ? 'bg-white/[0.12]'
+          : 'hover:bg-white/[0.06]'
+      }`}
+      onClick={onSelect}
+      title={`${group.name} • ${group.memberCount} ${group.memberCount === 1 ? 'member' : 'members'}`}
+    >
+      <ProjectGroupAvatar name={group.name} groupId={group.id} size={20} />
+      {unread && (
+        <span
+          className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"
+          title="New project messages"
+        />
+      )}
+    </button>
+  )
+}
+
+/** §6.7.1 — the collapsed Projects nav: a narrow vertical strip of
+ *  group avatars (IconRail's anatomy: pinned zone on top, divider,
+ *  unpinned list — the SAME order as the expanded nav), click to
+ *  select, tooltip with the name. The member drawer and create
+ *  affordance live only in the expanded nav. */
+export function ProjectNavRail(): React.JSX.Element {
+  const groups = useProjectGroupsStore((s) => s.groups)
+  const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
+  const selectGroup = useProjectGroupsStore((s) => s.selectGroup)
+  const unreadGroupIds = useProjectGroupsStore((s) => s.unreadGroupIds)
+
+  const { pinned, unpinned } = useMemo(() => partitionPinned(groups ?? []), [groups])
+
+  return (
+    <div
+      className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] py-2 flex-shrink-0"
+      style={{ width: PROJECT_NAV_RAIL_WIDTH }}
+    >
+      {pinned.length > 0 && (
+        <div className="flex flex-col items-center gap-0.5 pb-1.5 w-full">
+          {pinned.map((group) => (
+            <RailIcon
+              key={group.id}
+              group={group}
+              selected={group.id === selectedGroupId}
+              unread={unreadGroupIds.has(group.id)}
+              onSelect={() => selectGroup(group.id)}
+            />
+          ))}
+          <div className="w-6 border-b border-[var(--color-border)] mt-1" />
+        </div>
+      )}
+
+      <div className="flex-1 flex flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden w-full">
+        {unpinned.map((group) => (
+          <RailIcon
+            key={group.id}
+            group={group}
+            selected={group.id === selectedGroupId}
+            unread={unreadGroupIds.has(group.id)}
+            onSelect={() => selectGroup(group.id)}
+          />
+        ))}
+      </div>
     </div>
   )
 }

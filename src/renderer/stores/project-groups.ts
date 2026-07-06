@@ -66,6 +66,21 @@ function readChatCollapsed(): boolean {
   }
 }
 
+// ── §6.7.1 — per-client Projects-nav collapse state ────────────────────────
+// Same idiom as chatCollapsed: a plain client preference (not host-keyed,
+// not canonical) — whether the Projects page hides its left nav. The
+// Agents page's sidebar-collapse counterpart, persisted per client.
+
+const NAV_COLLAPSED_KEY = 'k2:project-groups:nav-collapsed'
+
+function readNavCollapsed(): boolean {
+  try {
+    return localStorage.getItem(NAV_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 /** P5 (§6.2) — a member-row click asking the dashboard to open/focus
  *  that member's canonical pane. The nonce distinguishes repeat clicks
  *  on the same member; the dashboard CONSUMES the request (clears it)
@@ -87,18 +102,29 @@ interface ProjectGroupsState {
   revision: number
   /** Pending open-member-pane click (P5 §6.2) — see MemberPaneRequest. */
   paneRequest: MemberPaneRequest | null
-  /** P6 (§6.4) — the Dashboard tab's chat drawer, per-client persisted.
+  /** P6 (§6.4) — the project chat panel (§6.7.3: a right-hand side
+   *  panel, toggled from the Projects top bar), per-client persisted.
    *  While true, arriving messages go UNREAD even for the viewed group
-   *  (the collapsed drawer shows the dot); expanding marks seen. */
+   *  (the closed panel's toggle shows the dot); opening marks seen. */
   chatCollapsed: boolean
+  /** §6.7.1 — the Projects page's left nav, per-client persisted. */
+  navCollapsed: boolean
+  /** §6.7.4 — the last-clicked/focused terminal pane per DASHBOARD
+   *  (workspaceId, keyed by dashboard id), so Esc can focus it. Plain
+   *  session state — never persisted. */
+  lastFocusedPaneByDashboard: Record<string, string>
   fetchGroups: () => Promise<void>
   /** Select a project in the nav; selecting marks it seen (§4.4) —
-   *  unless the chat drawer is collapsed (its messages stay unseen). */
+   *  unless the chat panel is closed (its messages stay unseen). */
   selectGroup: (groupId: string | null) => void
   markGroupSeen: (groupId: string) => void
-  /** Collapse/expand the chat drawer (persisted per client); expanding
-   *  marks the selected group seen — its messages are now on screen. */
+  /** Close/open the chat panel (persisted per client); opening marks
+   *  the selected group seen — its messages are now on screen. */
   setChatCollapsed: (collapsed: boolean) => void
+  /** Collapse/expand the Projects left nav (persisted per client). */
+  setNavCollapsed: (collapsed: boolean) => void
+  /** §6.7.4 — note the last-used terminal pane of a dashboard. */
+  notePaneFocus: (dashboardId: string, workspaceId: string) => void
   /** Member-row click → the dashboard opens/focuses that pane. */
   requestMemberPane: (workspaceId: string) => void
   clearPaneRequest: () => void
@@ -111,6 +137,8 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   revision: 0,
   paneRequest: null,
   chatCollapsed: readChatCollapsed(),
+  navCollapsed: readNavCollapsed(),
+  lastFocusedPaneByDashboard: {},
   fetchGroups: async () => {
     // Capture the host so a slow response from the PREVIOUS host can
     // never land after a switch (projects-store idiom).
@@ -162,6 +190,26 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       if (sel) get().markGroupSeen(sel)
     }
   },
+  setNavCollapsed: (collapsed) => {
+    try {
+      localStorage.setItem(NAV_COLLAPSED_KEY, collapsed ? '1' : '0')
+    } catch {
+      /* ignore — collapse state degrades to per-session */
+    }
+    set({ navCollapsed: collapsed })
+  },
+  notePaneFocus: (dashboardId, workspaceId) => {
+    set((s) =>
+      s.lastFocusedPaneByDashboard[dashboardId] === workspaceId
+        ? {}
+        : {
+            lastFocusedPaneByDashboard: {
+              ...s.lastFocusedPaneByDashboard,
+              [dashboardId]: workspaceId,
+            },
+          },
+    )
+  },
   requestMemberPane: (workspaceId) => {
     set((s) => ({ paneRequest: { workspaceId, nonce: (s.paneRequest?.nonce ?? 0) + 1 } }))
   },
@@ -170,8 +218,8 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
 
 // Host switch: everything here is keyed by the previous host's group ids
 // — reset. The revision bump makes an open Projects page refetch against
-// the new host. `chatCollapsed` deliberately survives — it's a plain
-// per-client UI preference, not host data.
+// the new host. `chatCollapsed`/`navCollapsed` deliberately survive —
+// they're plain per-client UI preferences, not host data.
 onActiveHostChange(() => {
   useProjectGroupsStore.setState((s) => ({
     groups: null,
@@ -179,6 +227,7 @@ onActiveHostChange(() => {
     unreadGroupIds: new Set<string>(),
     revision: s.revision + 1,
     paneRequest: null,
+    lastFocusedPaneByDashboard: {},
   }))
 })
 

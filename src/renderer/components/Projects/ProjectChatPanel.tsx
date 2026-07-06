@@ -1,0 +1,333 @@
+// Projects V1 P6 (prd-projects-v1 §6.4, reshaped by §6.7.3) — the
+// project chat as a full-height RIGHT-HAND side panel of the dashboard
+// area (was a bottom drawer), recycling the feedback thread UI
+// (FeedbackItemView's Thread tab):
+//
+//   - ONE message stream per project, oldest-first, author-attributed
+//     ('owner' renders as "You" in accent — the feedback idiom). The
+//     chat is per-PROJECT: the panel renders across all dashboard tabs
+//     (mounted beside the tab area, never per-dashboard).
+//   - Opens on the recent tail (GET messages, default 20); "Show
+//     earlier" widens the tail window (`limit` stepping — the route has
+//     no `before` param) up to the daemon's 500 cap, preserving scroll.
+//   - Live: `project-group:message-created` bumps the store revision;
+//     the panel coalesce-refetches on a trailing 300ms window (N rapid
+//     messages → ONE fetch — the FeedbackItemView idiom). DRAFT
+//     PROTECTION: the composer draft lives in panel-local state;
+//     refetches only ever replace `messages`.
+//   - Composer posts as the human owner (`author` omitted → the daemon
+//     defaults 'owner'), ⌘/Ctrl+Enter to send (the feedback composer's
+//     send idiom). The msg response's delivery outcome renders the §6.4
+//     line under the sent message: "delivered to <PoC>" / "PoC session
+//     unreachable" (mapping in project-chat.ts).
+//   - Open/closed rides store.chatCollapsed (persisted per client,
+//     §6.7.3): the PARENT gates the mount on it, and the top-bar toggle
+//     carries the unread dot while closed. The seen semantics are
+//     unchanged — a mounted panel means the messages are on screen.
+//   - Presence viewers (resolved viewer-mode window, the P5 idiom) can
+//     read; the composer is hidden behind a read-only note.
+
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useProjectGroupsStore } from '@/stores/project-groups'
+import { useWindowModeStore } from '@/stores/window-mode'
+import { formatRelativeTime } from '@/components/AgentOps/ops-api'
+import {
+  fetchProjectGroupMessages,
+  postProjectGroupMessage,
+  type ProjectGroupMessage,
+  type ProjectGroupShow,
+} from './projects-api'
+import {
+  MESSAGES_DEFAULT_LIMIT,
+  canLoadEarlier,
+  deliveredLine,
+  mergeMessages,
+  nextEarlierLimit,
+  pocLabel,
+} from './project-chat'
+
+export const CHAT_PANEL_WIDTH = 320
+
+/** The most recent post's delivery outcome, rendered under its message. */
+interface LastPost {
+  messageId: string
+  delivered: boolean
+  deliveryReason: string | null
+}
+
+export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): React.JSX.Element {
+  const revision = useProjectGroupsStore((s) => s.revision)
+  // Presence-arc read-only signal (the P5 idiom): a RESOLVED viewer-mode
+  // window reads the stream but never posts.
+  const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
+
+  // null = never fetched (loading state on first expand).
+  const [messages, setMessages] = useState<ProjectGroupMessage[] | null>(null)
+  const [truncated, setTruncated] = useState(false)
+  const [limit, setLimit] = useState(MESSAGES_DEFAULT_LIMIT)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+
+  // Composer state — deliberately drawer-local so live refetches can
+  // never eat a mid-typed draft (§6.4 draft protection).
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
+  const [lastPost, setLastPost] = useState<LastPost | null>(null)
+
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
+  useEffect(() => {
+    const id = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const limitRef = useRef(limit)
+  limitRef.current = limit
+
+  const load = useCallback(
+    async (lim: number): Promise<void> => {
+      try {
+        const page = await fetchProjectGroupMessages(show.id, { limit: lim })
+        // Merge, don't replace: earlier-loaded history survives a live
+        // refetch whose window is smaller than what's on screen.
+        setMessages((prev) => mergeMessages(prev ?? [], page.messages))
+        setTruncated(page.truncated)
+        setLoadError(null)
+      } catch (e) {
+        setLoadError(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [show.id],
+  )
+
+  // Mount → fetch the recent tail. (The panel only mounts while open —
+  // §6.7.3: a closed chat stays lean; the store's unread bookkeeping
+  // needs no message bodies.)
+  useEffect(() => {
+    if (messages === null) void load(limitRef.current)
+  }, [messages, load])
+
+  // Event-driven refresh (the FeedbackItemView idiom): any project-group
+  // event bumps the store revision; the open panel refetches on a
+  // trailing 300ms window — each bump resets the timer via the cleanup,
+  // so a burst fires ONE fetch. Only `messages` is replaced; the draft
+  // lives in its own state and survives.
+  const seenRevision = useRef(revision)
+  useEffect(() => {
+    if (revision === seenRevision.current) return
+    seenRevision.current = revision
+    const timer = setTimeout(() => {
+      void load(limitRef.current)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [revision, load])
+
+  // Keep the newest message in view when the TAIL grows (initial load or
+  // a new message) — but not when history is prepended (loadEarlier
+  // preserves its own scroll anchor). Runs after paint (rAF) so
+  // scrollHeight reflects the freshly-rendered list.
+  const lastId = messages && messages.length > 0 ? messages[messages.length - 1].id : null
+  const prevLastId = useRef<string | null>(null)
+  useEffect(() => {
+    if (lastId === null || lastId === prevLastId.current) return
+    prevLastId.current = lastId
+    requestAnimationFrame(() => {
+      const el = scrollRef.current
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  }, [lastId])
+
+  const loadEarlier = useCallback(async (): Promise<void> => {
+    if (loadingEarlier) return
+    const next = nextEarlierLimit(limitRef.current)
+    setLimit(next)
+    setLoadingEarlier(true)
+    // Anchor the viewport: prepended history must not yank the scroll.
+    const el = scrollRef.current
+    const prevHeight = el?.scrollHeight ?? 0
+    const prevTop = el?.scrollTop ?? 0
+    try {
+      await load(next)
+      requestAnimationFrame(() => {
+        const anchored = scrollRef.current
+        if (anchored) anchored.scrollTop = prevTop + (anchored.scrollHeight - prevHeight)
+      })
+    } finally {
+      setLoadingEarlier(false)
+    }
+  }, [loadingEarlier, load])
+
+  const send = useCallback((): void => {
+    const text = draft.trim()
+    if (!text || busy) return
+    setBusy(true)
+    setSendError(null)
+    postProjectGroupMessage(show.id, text)
+      .then((posted) => {
+        setDraft('')
+        setLastPost({
+          messageId: posted.id,
+          delivered: posted.delivered,
+          deliveryReason: posted.deliveryReason,
+        })
+        // Show the sent message (with its delivered line) immediately —
+        // the event-driven refetch confirms it moments later.
+        setMessages((prev) =>
+          mergeMessages(prev ?? [], [
+            {
+              id: posted.id,
+              groupId: posted.groupId,
+              author: posted.author,
+              body: posted.body,
+              createdAt: posted.createdAt,
+            },
+          ]),
+        )
+        useProjectGroupsStore.getState().markGroupSeen(show.id)
+      })
+      .catch((e) => setSendError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }, [draft, busy, show.id])
+
+  const poc = pocLabel(show.members, show.pocWorkspaceId)
+  const showEarlier = canLoadEarlier(limit, truncated)
+  const atCeiling = truncated && !showEarlier
+
+  return (
+    <div
+      className="flex-shrink-0 flex flex-col min-h-0 h-full border-l border-[var(--color-border)] bg-[var(--color-bg-surface)]"
+      style={{ width: CHAT_PANEL_WIDTH }}
+    >
+      {/* Header row — identity only; open/close lives on the top-bar
+          toggle (§6.7.3). */}
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] flex-shrink-0">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--color-text-muted)] flex-shrink-0">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+        </svg>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
+          Project chat
+        </span>
+        <span className="flex-1" />
+        {poc && (
+          <span className="text-[9px] text-[var(--color-text-muted)] truncate">
+            PoC: {poc}
+          </span>
+        )}
+      </div>
+
+      <div className="flex-1 flex flex-col min-h-0">
+        {/* The stream, oldest-first. */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 px-3 py-2">
+          {loadError ? (
+            <div className="text-[11px] text-red-400">Failed to load chat: {loadError}</div>
+          ) : messages === null ? (
+            <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+              Loading chat…
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-center px-6">
+              <p className="text-[11px] text-[var(--color-text-muted)]">
+                No messages yet — everything posted here also lands in the PoC&rsquo;s session.
+              </p>
+            </div>
+          ) : (
+            <>
+              {showEarlier && (
+                <div className="flex justify-center mb-2">
+                  <button
+                    type="button"
+                    disabled={loadingEarlier}
+                    onClick={() => void loadEarlier()}
+                    className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-text-secondary)] bg-white/[0.04] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)] disabled:opacity-50 transition-colors cursor-pointer"
+                  >
+                    {loadingEarlier ? 'Loading…' : 'Show earlier messages'}
+                  </button>
+                </div>
+              )}
+              {atCeiling && (
+                <div className="mb-2 text-center text-[9px] text-[var(--color-text-muted)] opacity-70">
+                  Showing the latest 500 messages — earlier history isn&rsquo;t shown.
+                </div>
+              )}
+              <div className="flex flex-col gap-2">
+                {messages.map((m) => {
+                  const isOwner = m.author === 'owner'
+                  const delivery =
+                    lastPost?.messageId === m.id
+                      ? deliveredLine(lastPost.delivered, lastPost.deliveryReason, poc)
+                      : null
+                  return (
+                    <div key={m.id} className="flex flex-col">
+                      <div className="flex items-baseline gap-2">
+                        <span
+                          className={`text-[10px] font-semibold ${
+                            isOwner
+                              ? 'text-[var(--color-accent)]'
+                              : 'text-[var(--color-text-secondary)]'
+                          }`}
+                        >
+                          {isOwner ? 'You' : m.author}
+                        </span>
+                        <span className="text-[9px] text-[var(--color-text-muted)] tabular-nums">
+                          {formatRelativeTime(m.createdAt, nowSec)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-[var(--color-text-primary)] whitespace-pre-wrap break-words mt-0.5">
+                        {m.body}
+                      </div>
+                      {delivery && (
+                        <div className="mt-0.5 text-[9px] text-[var(--color-text-muted)] opacity-80 italic">
+                          {delivery}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Composer — the human owner's seam; hidden for viewers. */}
+        <div className="border-t border-[var(--color-border)] px-3 py-2 flex-shrink-0">
+          {readOnly ? (
+            <div className="text-[10px] text-[var(--color-text-muted)] py-1">
+              Viewing read-only — posting is disabled.
+            </div>
+          ) : (
+            <>
+              {sendError && <div className="mb-1.5 text-[11px] text-red-400">{sendError}</div>}
+              <div className="flex items-end gap-2">
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault()
+                      send()
+                    }
+                    // Keep Esc local — the page-level Esc focuses the
+                    // dashboard's last-used terminal pane (§6.7.4).
+                    if (e.key === 'Escape') e.stopPropagation()
+                  }}
+                  placeholder={`Message ${show.name} — it lands in the PoC's session (⌘⏎ to send)`}
+                  rows={2}
+                  className="flex-1 px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none placeholder:text-[var(--color-text-muted)]"
+                />
+                <button
+                  type="button"
+                  disabled={busy || draft.trim().length === 0}
+                  onClick={send}
+                  className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                >
+                  Send
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

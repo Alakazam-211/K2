@@ -10,7 +10,16 @@ vi.mock('@/lib/daemon-cli', () => ({
   daemonCliPost: vi.fn(),
 }))
 
-import { createErrorMessage, daemonErrorInfo, partitionPinned } from './projects-api'
+import {
+  createErrorMessage,
+  createProjectGroupDashboard,
+  daemonErrorInfo,
+  partitionPinned,
+  reorderProjectGroupDashboards,
+} from './projects-api'
+import { daemonCliPost } from '@/lib/daemon-cli'
+
+const post = vi.mocked(daemonCliPost)
 
 describe('daemonErrorInfo', () => {
   it('recovers code + hint from the project-group error contract', () => {
@@ -45,6 +54,33 @@ describe('createErrorMessage', () => {
 
   it('passes through other errors verbatim', () => {
     expect(createErrorMessage(new Error('connection refused'))).toBe('connection refused')
+  })
+})
+
+describe('dashboard route wrappers (§6.7.6 contract shapes)', () => {
+  it('create posts {group, name} and unwraps the {ok, dashboard} envelope', async () => {
+    const dashboard = { id: 'd2', groupId: 'g1', name: 'Ops', position: 1 }
+    post.mockResolvedValueOnce({ ok: true, dashboard })
+    await expect(createProjectGroupDashboard('g1', 'Ops')).resolves.toBe(dashboard)
+    expect(post).toHaveBeenCalledWith('project-group/dashboard/create', {
+      group: 'g1',
+      name: 'Ops',
+    })
+  })
+
+  it('reorder posts the FULL id order and unwraps {ok, dashboards}', async () => {
+    const dashboards = [{ id: 'd2' }, { id: 'd1' }]
+    post.mockResolvedValueOnce({ ok: true, dashboards })
+    await expect(reorderProjectGroupDashboards('g1', ['d2', 'd1'])).resolves.toBe(dashboards)
+    expect(post).toHaveBeenCalledWith('project-group/dashboard/reorder', {
+      group: 'g1',
+      order: ['d2', 'd1'],
+    })
+  })
+
+  it('reorder degrades a dashboards-less body to an empty list', async () => {
+    post.mockResolvedValueOnce({ ok: true })
+    await expect(reorderProjectGroupDashboards('g1', ['d1'])).resolves.toEqual([])
   })
 })
 

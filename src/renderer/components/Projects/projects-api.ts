@@ -154,6 +154,46 @@ export async function renameProjectGroupDashboard(
   })
 }
 
+/** POST /cli/project-group/dashboard/create — `{group, name}` → the
+ *  new dashboard (§6.7.6; owner-or-admin gated like save-layout).
+ *  Throws on 409 `name_taken` (Settings surfaces it inline). Emits
+ *  `project-group:groups-changed`, so open `show` views refetch. */
+export async function createProjectGroupDashboard(
+  group: string,
+  name: string,
+): Promise<ProjectGroupDashboard> {
+  const res = await daemonCliPost<{ ok: boolean; dashboard: ProjectGroupDashboard }>(
+    'project-group/dashboard/create',
+    { group, name },
+  )
+  return res.dashboard
+}
+
+/** POST /cli/project-group/dashboard/delete — deleting a project's
+ *  LAST dashboard is refused with 409 `last_dashboard` (§6.7.6; the
+ *  Settings UI also disables the button when only one exists). Never
+ *  touches sessions/workspaces. */
+export async function deleteProjectGroupDashboard(
+  group: string,
+  dashboardId: string,
+): Promise<void> {
+  await daemonCliPost('project-group/dashboard/delete', { group, dashboardId })
+}
+
+/** POST /cli/project-group/dashboard/reorder — `{group, order}` writes
+ *  the full id order → the reordered dashboard rows (new `position`s).
+ *  Owner-or-admin gated; emits `project-group:groups-changed`. */
+export async function reorderProjectGroupDashboards(
+  group: string,
+  order: string[],
+): Promise<ProjectGroupDashboard[]> {
+  const res = await daemonCliPost<{ ok: boolean; dashboards: ProjectGroupDashboard[] }>(
+    'project-group/dashboard/reorder',
+    { group, order },
+  )
+  return res.dashboards ?? []
+}
+
 /** One pinned-HTML doc from `GET /cli/project-group/html-docs` — an
  *  `isPinnedFile` file-viewer item out of a MEMBER workspace's
  *  `workspace_layouts` blob (§4.1/§6.5, member-only per resolved Q3). */

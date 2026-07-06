@@ -1643,39 +1643,74 @@ async fn handle_one_request(
         // `start`. GET must NOT read a body (read_post_body blocks on a
         // bodyless keep-alive GET); only POST drains the body.
         "/cli/tunnel/config" => {
-            // Auth split (K2SO #617): POST MUTATES the host's tunnel
-            // binding (token + subdomain) → OWNER-ONLY. GET returns a
-            // redacted, read-only view → authorized (a connect-user may
-            // read it). So: POST gates on `token_is_owner`, GET on the
-            // extended `token_ok`. A connect-user POSTing here gets 403.
-            let authorized = if is_post {
-                super::http::token_is_owner(&query, state.token.as_str())
-            } else {
-                super::http::token_ok(&query, state.token.as_str())
-            };
-            if !authorized {
-                if is_post {
+            // Auth split (K2SO #617, POST relaxed for K2 Cloud re-pair):
+            // POST MUTATES the host's tunnel binding (token + subdomain)
+            // → OWNERSHIP-TIER: the on-box owner token OR an Owner-ROLE
+            // connect session (`owner_role_identity`, the 8ca53aa bar —
+            // NOT Admin: tunnel identity is ownership-level). Hosted (K2
+            // Cloud) customers re-pair a subdomain through the `k2cloud`
+            // Owner-role session and never hold the daemon token; the
+            // subsequent re-dial goes through /cli/daemon/restart, so
+            // start/stop stay strictly owner-token-only (a remote session
+            // severing its own tunnel is a footgun). GET returns a
+            // redacted, read-only view → authorized (`token_ok`; a
+            // connect-user may read it). A must-change-password session
+            // never reaches here (session_password_gate chokepoint).
+            // Config changes log the NON-secret acting identity — never
+            // the token value.
+            let post_actor: Option<String> = if is_post {
+                let Some(actor) =
+                    super::http::owner_role_identity(&query, state.token.as_str())
+                else {
                     let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    super::http::send_response(
+                        &mut *stream,
+                        "403 Forbidden",
+                        "application/json",
+                        r#"{"error":"invalid or missing token"}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                };
+                Some(actor)
+            } else {
+                if !super::http::token_ok(&query, state.token.as_str()) {
+                    super::http::send_response(
+                        &mut *stream,
+                        "403 Forbidden",
+                        "application/json",
+                        r#"{"error":"invalid or missing token"}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
                 }
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"invalid or missing token"}"#,
-                )
-                .await;
-                return DispatchOutcome::Done;
-            }
+                None
+            };
             let resp = if is_post {
                 let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
                 match serde_json::from_slice::<k2_core::tunnel::TunnelConfigUpdate>(&body_bytes) {
-                    Ok(upd) => match k2_core::tunnel::set_config(upd) {
-                        Ok(view) => crate::cli::CliResponse::ok_json(
-                            serde_json::to_string(&view)
-                                .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}")),
-                        ),
-                        Err(e) => crate::cli::CliResponse::bad_request(e),
-                    },
+                    Ok(upd) => {
+                        // Non-secret change summary for the audit line
+                        // (subdomain is public; the token NEVER logs —
+                        // only whether one was supplied).
+                        let sub = upd.subdomain.clone();
+                        let token_updated =
+                            upd.token.as_deref().is_some_and(|t| !t.trim().is_empty());
+                        match k2_core::tunnel::set_config(upd) {
+                            Ok(view) => {
+                                let actor = post_actor.as_deref().unwrap_or("owner-token");
+                                k2_core::log_debug!(
+                                    "[tunnel] config updated by {actor} (subdomain={}, tokenUpdated={token_updated})",
+                                    sub.as_deref().unwrap_or("<unchanged>"),
+                                );
+                                crate::cli::CliResponse::ok_json(
+                                    serde_json::to_string(&view)
+                                        .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}")),
+                                )
+                            }
+                            Err(e) => crate::cli::CliResponse::bad_request(e),
+                        }
+                    }
                     Err(e) => {
                         crate::cli::CliResponse::bad_request(format!("invalid JSON body: {e}"))
                     }

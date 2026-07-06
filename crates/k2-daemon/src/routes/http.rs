@@ -128,6 +128,24 @@ pub(crate) fn token_is_owner_or_admin(query: &str, owner_token: &str) -> bool {
 /// reaches this gate: [`session_password_gate`] rejects it at the
 /// dispatcher chokepoint first.
 pub(crate) fn api_key_manager_identity(query: &str, owner_token: &str) -> Option<String> {
+    owner_role_identity(query, owner_token)
+}
+
+/// OWNERSHIP-TIER gate + acting-identity resolver (the 8ca53aa F4 shape,
+/// generalized): authorizes the owner TOKEN (`Some("owner-token")`) OR a
+/// live connect-user session whose role passes `can_change_roles` — Owner
+/// ONLY, the `/cli/users/set-role` bar; Admin does NOT pass — yielding
+/// `Some("user:<username>")`. Everything else (Admin/Member/Viewer
+/// sessions, unknown/empty tokens, `k2sk_…` API keys — a key is neither
+/// the owner token nor a session) → `None` (reject).
+///
+/// Used by `/cli/api-keys/*` (key management) and `POST /cli/tunnel/config`
+/// (K2 Cloud subdomain re-pair — the hosted `k2cloud` service user holds an
+/// Owner-ROLE session, never the on-box daemon token). The returned string
+/// is NON-secret (never the token) and feeds the audit log lines. A
+/// must-change-password Owner session never reaches this gate:
+/// [`session_password_gate`] rejects it at the dispatcher chokepoint first.
+pub(crate) fn owner_role_identity(query: &str, owner_token: &str) -> Option<String> {
     let tok = extract_token(query)?;
     if tok.is_empty() {
         return None;
@@ -153,9 +171,11 @@ pub(crate) fn api_key_manager_identity(query: &str, owner_token: &str) -> Option
 /// remote connect-user — who logged in over the public tunnel with a
 /// username+password and holds a session token — actually USE the daemon.
 ///
-/// Owner-only routes (ALL `/cli/users/*` + tunnel start/stop/config-POST)
-/// must NOT use this; they use [`token_is_owner`] so a connect-user is
-/// barred from user management + tunnel control.
+/// Owner-only routes (ALL `/cli/users/*` + tunnel start/stop) must NOT use
+/// this; they use [`token_is_owner`] so a connect-user is barred from user
+/// management + tunnel control. Tunnel config-POST uses the ownership-tier
+/// [`owner_role_identity`] (owner token OR Owner-ROLE session — the K2
+/// Cloud re-pair path); Admin/Member sessions stay barred there too.
 pub(crate) fn token_ok(query: &str, owner_token: &str) -> bool {
     let Some(tok) = extract_token(query) else {
         return false;

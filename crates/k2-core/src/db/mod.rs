@@ -496,6 +496,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // relay gateway stays stateless. Token-indexed for the
         // dead-token (410 Unregistered) prune path. Additive.
         ("0068_push_devices", include_str!("../../drizzle_sql/0068_push_devices.sql")),
+        // 0069 (host sessions F1, prd-v1-api-completion §3): per-workspace
+        // `projects.api_skip_permissions` — the OWNER opt-in for API-spawned
+        // HOST sessions to keep the agent preset's dangerous auto-approve
+        // flags. NULL (the backfill) reads as OFF (fail-closed); the
+        // host-session policy resolver strips the flags unless set. Additive.
+        (
+            "0069_project_api_skip_permissions",
+            include_str!("../../drizzle_sql/0069_project_api_skip_permissions.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

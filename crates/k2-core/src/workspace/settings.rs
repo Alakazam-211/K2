@@ -64,6 +64,11 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // Sandbox v2 (PRD §G2 #1) — per-workspace sandbox FS mode. Values:
         // 'overlay' | 'ro+scratch' (default 'overlay'). See `get_workspace_fs_mode`.
         "sandbox_fs_mode",
+        // Host sessions F1 (prd-v1-api-completion §3) — owner opt-in for
+        // API-spawned HOST sessions to keep the agent preset's dangerous
+        // auto-approve flags. Values: '1' | '0' (default 0/OFF, fail-closed).
+        // See `get_api_skip_permissions`.
+        "api_skip_permissions",
     ]
 }
 
@@ -106,6 +111,14 @@ pub fn update_project_setting(
     if field == "allow_remote_instruct" && value != "0" && value != "1" {
         return Err(format!(
             "allow_remote_instruct must be '0' or '1', got {value:?}"
+        ));
+    }
+    // Same discipline for the host-session skip-permissions opt-in
+    // (migration 0069) — it gates dangerous auto-approve flags, so a typo
+    // must never leave it in an undefined state.
+    if field == "api_skip_permissions" && value != "0" && value != "1" {
+        return Err(format!(
+            "api_skip_permissions must be '0' or '1', got {value:?}"
         ));
     }
     // Validate value for the new enum-like setting so a typo doesn't
@@ -271,6 +284,26 @@ pub fn get_allow_remote_instruct(project_path: &str) -> bool {
     let conn = db.lock();
     conn.query_row(
         "SELECT allow_remote_instruct FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// Host sessions F1 (prd-v1-api-completion §3) — read the PER-WORKSPACE
+/// "API host sessions may keep dangerous auto-approve flags" opt-in for
+/// `project_path`. Returns `false` (fail-closed) when the project isn't
+/// registered or the column reads NULL (the 0069 backfill). When OFF (the
+/// default) the host-session policy resolver STRIPS the known auto-approve
+/// flags (`--dangerously-skip-permissions`, …) from the workspace's resolved
+/// agent command — on the host the agent's own permission prompts are a
+/// safety layer, unlike inside a microVM cell.
+pub fn get_api_skip_permissions(project_path: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT api_skip_permissions FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| row.get::<_, i64>(0),
     )

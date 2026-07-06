@@ -1,0 +1,15 @@
+-- Host sessions F1 (prd-v1-api-completion §3) — per-workspace opt-in for
+-- API-spawned HOST sessions to keep the agent preset's dangerous
+-- auto-approve flags (`--dangerously-skip-permissions` and friends).
+--
+-- Unlike microVM cells (where the jail is the security boundary and the
+-- in-cell agent always runs headless), a non-sandboxed HOST session runs
+-- directly on the operator's machine — the agent's own permission prompts
+-- ARE a safety layer there. So the host-session policy resolver STRIPS the
+-- known auto-approve flags from the workspace's resolved agent command
+-- unless the workspace OWNER explicitly opts in with this flag.
+--
+-- Values: 0/1 int (write-validated in `update_project_setting`).
+-- Nullable, NO DEFAULT: NULL reads as 0/OFF (fail-closed) — existing rows
+-- backfill to NULL and stay OFF without a data migration.
+ALTER TABLE projects ADD COLUMN api_skip_permissions INTEGER;

@@ -35,6 +35,10 @@
 set -euo pipefail
 
 K2_RUN_USER="${K2_RUN_USER:-k2}"
+# Unit name is parameterized so a test provision can run side-by-side
+# with an existing daemon on the same box (e.g. K2_RUN_USER=k2std
+# K2_UNIT_NAME=k2-daemon-std) without touching its unit.
+K2_UNIT_NAME="${K2_UNIT_NAME:-k2-daemon}"
 FRP_VERSION="${FRP_VERSION:-0.61.1}"
 K2_VERSION="${K2_VERSION:-}"
 RAW_BASE="https://raw.githubusercontent.com/Alakazam-211/K2/main"
@@ -143,8 +147,8 @@ PYEOF
 fi
 
 # ── 7. system-level supervisor unit (sandboxes OFF — no K2_SANDBOX*) ─
-log "writing /etc/systemd/system/k2-daemon.service"
-cat > /etc/systemd/system/k2-daemon.service <<EOF
+log "writing /etc/systemd/system/${K2_UNIT_NAME}.service"
+cat > "/etc/systemd/system/${K2_UNIT_NAME}.service" <<EOF
 [Unit]
 Description=K2 daemon (headless server)
 After=network-online.target
@@ -163,15 +167,15 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable k2-daemon >/dev/null 2>&1
+systemctl enable "$K2_UNIT_NAME" >/dev/null 2>&1
 
 if [ "$BAKE_ONLY" = 1 ]; then
 	log "bake complete — image is ready to snapshot (daemon enabled, not personalized)"
 	exit 0
 fi
 
-log "starting k2-daemon"
-systemctl restart k2-daemon
+log "starting ${K2_UNIT_NAME}"
+systemctl restart "$K2_UNIT_NAME"
 
 # ── 8. wait for daemon readiness ─────────────────────────────────────
 log "waiting for daemon.port + daemon.token"
@@ -179,7 +183,7 @@ for _ in $(seq 1 60); do
 	[ -s "$K2_HOME/.k2/daemon.port" ] && [ -s "$K2_HOME/.k2/daemon.token" ] && break
 	sleep 1
 done
-[ -s "$K2_HOME/.k2/daemon.port" ] || die "daemon did not publish its port in 60s (journalctl -u k2-daemon)"
+[ -s "$K2_HOME/.k2/daemon.port" ] || die "daemon did not publish its port in 60s (journalctl -u ${K2_UNIT_NAME})"
 PORT=$(cat "$K2_HOME/.k2/daemon.port")
 TOKEN=$(cat "$K2_HOME/.k2/daemon.token")
 BASE="http://127.0.0.1:${PORT}"
@@ -229,7 +233,7 @@ fi
 
 # ── 11. summary ──────────────────────────────────────────────────────
 log "PROVISION COMPLETE"
-echo "  daemon:    $(systemctl is-active k2-daemon) on 127.0.0.1:${PORT}"
+echo "  daemon:    $(systemctl is-active "$K2_UNIT_NAME") on 127.0.0.1:${PORT}"
 [ -n "${K2_SUBDOMAIN:-}" ] && echo "  address:   https://${K2_SUBDOMAIN}.k2.dev"
 if [ -n "${K2_OWNER_USER:-}" ]; then
 	echo "  owner:     ${K2_OWNER_USER}"

@@ -19,7 +19,7 @@ import { useWindowModeStore } from '@/stores/window-mode'
 import { showContextMenu } from '@/lib/context-menu'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ProjectGroupAvatar from './ProjectGroupAvatar'
-import { completeMemberDrag, useDashboardDndStore } from './dashboard-dnd'
+import { completeDashDrag, useDashboardDndStore } from './dashboard-dnd'
 import {
   createProjectGroup,
   createErrorMessage,
@@ -216,9 +216,11 @@ function MemberRow({
         document.body.style.userSelect = 'none'
       }
       if (!started) return
-      useDashboardDndStore
-        .getState()
-        .setMemberDrag({ workspaceId: member.workspaceId, x: ev.clientX, y: ev.clientY })
+      useDashboardDndStore.getState().setDrag({
+        payload: { type: 'member', workspaceId: member.workspaceId },
+        x: ev.clientX,
+        y: ev.clientY,
+      })
     }
 
     const handleMouseUp = (ev: MouseEvent): void => {
@@ -227,8 +229,8 @@ function MemberRow({
       if (!started) return
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
-      completeMemberDrag(member.workspaceId, ev.clientX, ev.clientY)
-      useDashboardDndStore.getState().setMemberDrag(null)
+      completeDashDrag({ type: 'member', workspaceId: member.workspaceId }, ev.clientX, ev.clientY)
+      useDashboardDndStore.getState().setDrag(null)
       // The trailing click (mousedown+mouseup on this button) is
       // swallowed by the flag; re-arm on the next tick in case the
       // browser skips it (pointer released off-button).

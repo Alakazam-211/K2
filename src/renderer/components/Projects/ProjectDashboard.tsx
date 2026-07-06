@@ -1,5 +1,5 @@
-// Projects V1 P5 (prd-projects-v1 §6.2/§6.3) — the Dashboard tab's pane
-// grid: percent-width COLUMNS of panes over the canonical layout blob.
+// Projects V1 P5 → §6.8 (prd-projects-v1) — the Dashboard tab's TILING
+// GRID: a VS-Code-style split tree over the canonical layout blob.
 //
 // Pane kinds (§6.2):
 //   1. `terminal` — the member workspace's CANONICAL session, rendered
@@ -16,21 +16,40 @@
 //      plain missing-doc state — it never breaks the layout.
 //   Unknown kinds render an inert placeholder and survive saves (§6.3).
 //
-// Layout semantics (§6.3, all pure logic in dashboard-layout.ts):
-//   - CANONICAL, last-write-wins: every change (drop, reorder, resize
-//     end, close) saves through the trailing-300ms coalesced saver.
-//   - APPLY-ON-OPEN: the blob is adopted once on mount; layout-changed
-//     revisions beyond what we rendered/wrote only show the stale pill
-//     (with an explicit Apply) — never a live rearrange. The echo
-//     guard: our own save's revision ratchets `known` so its event/
-//     refetch echo can't flag our own view.
-//   - Fresh 'Main' (daemon seed, no `columns` key) renders the PoC's
-//     canonical pane client-side; the first real edit writes it.
+// Layout mechanics (§6.8, all pure logic in dashboard-layout.ts):
+//   - the tree renders FLAT: computeLayoutGeometry turns the split
+//     tree into absolute percent rects, panes are positioned divs
+//     keyed by pane identity — so ANY restructure (drop-to-split,
+//     move, preset re-tile) MOVES mounted panes instead of remounting
+//     them, keeping live kessel grid-WS attachments,
+//   - drop-to-split: dragging a member (nav drawer), an HTML doc, or
+//     an existing pane by its header hit-tests 5 zones per pane
+//     (left/right/top/bottom half → split 50/50; center → move/swap/
+//     replace) + ~24px container edge bands (full-span insert),
+//   - every divider (both axes) drags LIVE with immediate reflow
+//     (kessel tolerates live resize — pin-to-size precedent); min pane
+//     ~10%; save on release (coalesced),
+//   - presets (§6.8.4) re-tile the existing panes in reading order —
+//     the tab-row menu reaches the mounted dashboard through the
+//     dashboard-dnd preset registry.
+//
+// Layout semantics (§6.3, unchanged from v1):
+//   - CANONICAL, last-write-wins: every change (drop, move, resize
+//     end, close, preset) saves through the trailing-300ms coalesced
+//     saver; saves always write the v2 blob.
+//   - APPLY-ON-OPEN: the blob is adopted once on mount (v1 blobs
+//     convert on adopt); layout-changed revisions beyond what we
+//     rendered/wrote only show the stale pill (with an explicit
+//     Apply) — never a live rearrange. The echo guard: our own save's
+//     revision ratchets `known` so its event/refetch echo can't flag
+//     our own view.
+//   - Fresh 'Main' (daemon seed, no `columns`/`root` key) renders the
+//     PoC's canonical pane client-side; the first real edit writes it.
 //
 // Permissions (§6.3b): owners AND admins edit; a resolved viewer-mode
 // window (presence S5, window-mode.ts — the same signal TerminalPane
-// uses to suppress input/resize) is READ-ONLY: no drag, no resize
-// handles, no close, member clicks focus-only. The daemon's
+// uses to suppress input/resize) is READ-ONLY: no drag, no dividers,
+// no close, no presets, member clicks focus-only. The daemon's
 // owner-or-admin gate on save-layout backstops all of it.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -42,28 +61,36 @@ import { useWindowModeStore } from '@/stores/window-mode'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
 import {
+  EDGE_BAND_PX,
   adoptLayout,
   adoptRevision,
-  computeDropTarget,
-  computeInsertBoundary,
+  applyDrop,
+  computeLayoutGeometry,
   createLayoutSaver,
-  dropMember,
-  findTerminalColumn,
+  findTerminalPaneId,
   initialFreshness,
-  insertColumnAt,
+  insertEdge,
   isHtmlDocPane,
   isTerminalPane,
-  moveColumn,
   observeOwnSave,
   observeRevision,
-  removeColumnAt,
-  resizePair,
-  type DashboardColumn,
-  type DropTarget,
+  readingOrder,
+  removePane,
+  resizeDivider,
+  resolveDropZone,
+  tileIntoPreset,
+  type DividerGeom,
+  type DragSource,
+  type DropZone,
   type FreshnessState,
+  type LayoutNode,
   type LayoutSaver,
 } from './dashboard-layout'
-import { registerMemberDropHandler, useDashboardDndStore } from './dashboard-dnd'
+import {
+  registerDashDropHandler,
+  registerPresetHandler,
+  useDashboardDndStore,
+} from './dashboard-dnd'
 import { resolveEscFocusPane } from './project-tabs'
 import {
   saveDashboardLayout,
@@ -76,41 +103,10 @@ import {
 const DRAG_THRESHOLD_X = 3
 const DRAG_THRESHOLD_Y = 5
 
-// ── Drop-marker geometry (view-side companion to computeDropTarget) ───────
+// Divider hit-area thickness (px), centered on the boundary line.
+const DIVIDER_HIT_PX = 7
 
-type Marker =
-  | { kind: 'insert'; left: number }
-  | { kind: 'replace'; left: number; width: number }
-  | { kind: 'empty' }
-
-function columnRects(grid: HTMLElement): Array<{ left: number; right: number }> {
-  return Array.from(grid.querySelectorAll<HTMLElement>('[data-dash-col]')).map((el) => {
-    const r = el.getBoundingClientRect()
-    return { left: r.left, right: r.right }
-  })
-}
-
-function markerForTarget(
-  grid: HTMLElement,
-  target: DropTarget,
-  rects: Array<{ left: number; right: number }>,
-): Marker {
-  if (rects.length === 0) return { kind: 'empty' }
-  const gridLeft = grid.getBoundingClientRect().left
-  if (target.type === 'replace') {
-    const r = rects[target.index]
-    return { kind: 'replace', left: r.left - gridLeft, width: r.right - r.left }
-  }
-  const x =
-    target.index === 0
-      ? rects[0].left
-      : target.index >= rects.length
-        ? rects[rects.length - 1].right
-        : (rects[target.index - 1].right + rects[target.index].left) / 2
-  return { kind: 'insert', left: x - gridLeft }
-}
-
-// ── Pane chrome (title + close + drag-to-reorder header) ─────────────────
+// ── Pane chrome (title + close + drag-to-move header) ────────────────────
 
 function PaneChrome({
   title,
@@ -140,7 +136,7 @@ function PaneChrome({
           readOnly ? '' : 'cursor-grab'
         }`}
         onMouseDown={readOnly ? undefined : onHeaderMouseDown}
-        title={readOnly ? undefined : 'Drag to reorder'}
+        title={readOnly ? undefined : 'Drag to move'}
       >
         <span className="text-[10px] font-semibold text-[var(--color-text-secondary)] truncate">
           {title}
@@ -397,11 +393,12 @@ export default function ProjectDashboard({
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
 
-  // ── Canonical columns (adopted ONCE per mount — apply-on-open) ─────────
-  const [columns, setColumns] = useState<DashboardColumn[]>(() =>
+  // ── Canonical tree (adopted ONCE per mount — apply-on-open; v1
+  //    blobs convert here, §6.8.1) ─────────────────────────────────────────
+  const [root, setRoot] = useState<LayoutNode | null>(() =>
     adoptLayout(dashboard.layoutJson, show.pocWorkspaceId),
   )
-  const columnsRef = useRef(columns)
+  const rootRef = useRef(root)
 
   const [freshness, setFreshness] = useState<FreshnessState>(() =>
     initialFreshness(dashboard.revision),
@@ -410,12 +407,12 @@ export default function ProjectDashboard({
   freshnessRef.current = freshness
 
   // Transient focus flash (member click / drop focuses a pane).
-  const [focusIndex, setFocusIndex] = useState<number | null>(null)
+  const [focusPaneId, setFocusPaneId] = useState<string | null>(null)
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const flashFocus = useCallback((index: number): void => {
-    setFocusIndex(index)
+  const flashFocus = useCallback((paneId: string): void => {
+    setFocusPaneId(paneId)
     if (focusTimerRef.current !== null) clearTimeout(focusTimerRef.current)
-    focusTimerRef.current = setTimeout(() => setFocusIndex(null), 1400)
+    focusTimerRef.current = setTimeout(() => setFocusPaneId(null), 1400)
   }, [])
   useEffect(
     () => () => {
@@ -459,9 +456,9 @@ export default function ProjectDashboard({
   }, [])
 
   /** Single mutation gate: ref-sync + render + coalesced save. */
-  const applyColumns = useCallback((next: DashboardColumn[], save: boolean): void => {
-    columnsRef.current = next
-    setColumns(next)
+  const applyRoot = useCallback((next: LayoutNode | null, save: boolean): void => {
+    rootRef.current = next
+    setRoot(next)
     if (save && !readOnlyRef.current) saverRef.current?.schedule(next)
   }, [])
 
@@ -474,17 +471,17 @@ export default function ProjectDashboard({
   }, [dashboard.revision])
 
   const applyLatest = useCallback((): void => {
-    columnsRef.current = adoptLayout(dashboard.layoutJson, show.pocWorkspaceId)
-    setColumns(columnsRef.current)
+    rootRef.current = adoptLayout(dashboard.layoutJson, show.pocWorkspaceId)
+    setRoot(rootRef.current)
     setFreshness((s) => adoptRevision(s, dashboard.revision))
   }, [dashboard.layoutJson, dashboard.revision, show.pocWorkspaceId])
 
   // ── §6.7.4 — last-used pane tracking + Esc-to-pane ─────────────────────
   // Every open/focus path notes the pane on the store (keyed by
   // dashboard id, session-only); Esc focuses it — falling back to the
-  // dashboard's first terminal pane, no-op when there is none. The
-  // actual keyboard handoff goes to the pane's kessel shadow textarea
-  // (where TerminalPane routes keystrokes).
+  // dashboard's first terminal pane (reading order), no-op when there
+  // is none. The actual keyboard handoff goes to the pane's kessel
+  // shadow textarea (where TerminalPane routes keystrokes).
   const notePaneFocus = useCallback(
     (workspaceId: string): void => {
       useProjectGroupsStore.getState().notePaneFocus(dashboard.id, workspaceId)
@@ -493,8 +490,8 @@ export default function ProjectDashboard({
   )
 
   const focusPaneInput = useCallback((workspaceId: string): void => {
-    const col = document.querySelector<HTMLElement>(`[data-dash-pane-ws="${workspaceId}"]`)
-    col?.querySelector<HTMLTextAreaElement>('textarea')?.focus()
+    const el = document.querySelector<HTMLElement>(`[data-dash-pane-ws="${workspaceId}"]`)
+    el?.querySelector<HTMLTextAreaElement>('textarea')?.focus()
   }, [])
 
   useEffect(() => {
@@ -516,11 +513,11 @@ export default function ProjectDashboard({
       }
       const last =
         useProjectGroupsStore.getState().lastFocusedPaneByDashboard[dashboard.id] ?? null
-      const target = resolveEscFocusPane(columnsRef.current, last)
+      const target = resolveEscFocusPane(rootRef.current, last)
       if (target === null) return
       e.preventDefault()
-      const index = findTerminalColumn(columnsRef.current, target)
-      if (index >= 0) flashFocus(index)
+      const paneId = findTerminalPaneId(rootRef.current, target)
+      if (paneId !== null) flashFocus(paneId)
       notePaneFocus(target)
       focusPaneInput(target)
     }
@@ -529,12 +526,14 @@ export default function ProjectDashboard({
   }, [dashboard.id, flashFocus, notePaneFocus, focusPaneInput])
 
   // ── Member-click pane requests (nav drawer → open/focus — §6.1) ────────
+  // Already present → focus. Fresh → the §6.8 sensible default: append
+  // as a RIGHT-MOST full-height region (insertEdge 'right').
   const paneRequest = useProjectGroupsStore((s) => s.paneRequest)
   useEffect(() => {
     if (!paneRequest) return
     useProjectGroupsStore.getState().clearPaneRequest()
-    const existing = findTerminalColumn(columnsRef.current, paneRequest.workspaceId)
-    if (existing >= 0) {
+    const existing = findTerminalPaneId(rootRef.current, paneRequest.workspaceId)
+    if (existing !== null) {
       flashFocus(existing)
       notePaneFocus(paneRequest.workspaceId)
       return
@@ -545,74 +544,104 @@ export default function ProjectDashboard({
         .addToast('View-only — an owner or admin can add panes to this dashboard.', 'info')
       return
     }
-    const next = insertColumnAt(columnsRef.current, columnsRef.current.length, {
+    const next = insertEdge(rootRef.current, 'right', {
       kind: 'terminal',
       workspaceId: paneRequest.workspaceId,
     })
-    applyColumns(next, true)
-    flashFocus(next.length - 1)
+    applyRoot(next, true)
+    flashFocus(`t:${paneRequest.workspaceId}`)
     notePaneFocus(paneRequest.workspaceId)
-  }, [paneRequest, applyColumns, flashFocus, notePaneFocus])
+  }, [paneRequest, applyRoot, flashFocus, notePaneFocus])
 
-  // ── DnD: markers + drops ───────────────────────────────────────────────
+  // ── Presets (§6.8.4 — the tab-row menu re-tiles the open tree) ─────────
+  useEffect(() => {
+    return registerPresetHandler((shape) => {
+      if (readOnlyRef.current) return
+      const panes = readingOrder(rootRef.current)
+      if (panes.length === 0) return
+      applyRoot(tileIntoPreset(shape, panes), true)
+    })
+  }, [applyRoot])
+
+  // ── DnD: 5-zone hit-testing + drops (§6.8.2) ───────────────────────────
   const gridRef = useRef<HTMLDivElement>(null)
-  const [marker, setMarker] = useState<Marker | null>(null)
-  // Index of the column being header-dragged (dims it while dragging).
-  const [paneDragIndex, setPaneDragIndex] = useState<number | null>(null)
+  const [dropZone, setDropZone] = useState<DropZone | null>(null)
+  // paneId being header-dragged (dims it while dragging).
+  const [dragPaneId, setDragPaneId] = useState<string | null>(null)
+  // Divider drag in progress (suppresses pane pointer events, below).
+  const [dividerDragging, setDividerDragging] = useState(false)
 
-  /** Full §6.2 target (insertion boundaries + replace zones) at a
-   *  viewport point, or null when outside the grid. */
-  const targetAtPoint = useCallback((x: number, y: number): DropTarget | null => {
+  /** Hit-test a viewport point against the container + live pane
+   *  rects; null outside (or in a divider gap). */
+  const zoneAtPoint = useCallback((x: number, y: number): DropZone | null => {
     const grid = gridRef.current
     if (!grid) return null
     const rect = grid.getBoundingClientRect()
-    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return null
-    return computeDropTarget(x, columnRects(grid))
-  }, [])
-
-  // Member drag from the nav drawer (dashboard-dnd store) → markers.
-  const memberDrag = useDashboardDndStore((s) => s.memberDrag)
-  useEffect(() => {
-    if (!memberDrag || readOnly) {
-      setMarker(null)
-      return
-    }
-    const grid = gridRef.current
-    const target = targetAtPoint(memberDrag.x, memberDrag.y)
-    if (!grid || !target) {
-      setMarker(null)
-      return
-    }
-    setMarker(markerForTarget(grid, target, columnRects(grid)))
-  }, [memberDrag, readOnly, targetAtPoint])
-
-  // Drop handler for member drags (mouseup lands here via the
-  // registry; unregistered when this dashboard unmounts).
-  useEffect(() => {
-    return registerMemberDropHandler((workspaceId, x, y) => {
-      setMarker(null)
-      if (readOnlyRef.current) return
-      const target = targetAtPoint(x, y)
-      if (!target) return
-      const result = dropMember(columnsRef.current, workspaceId, target)
-      if (result.changed) applyColumns(result.columns, true)
-      if (result.focusIndex >= 0) {
-        flashFocus(result.focusIndex)
-        notePaneFocus(workspaceId)
+    const panes = Array.from(grid.querySelectorAll<HTMLElement>('[data-pane-id]')).map((el) => {
+      const r = el.getBoundingClientRect()
+      return {
+        paneId: el.dataset.paneId as string,
+        left: r.left,
+        top: r.top,
+        right: r.right,
+        bottom: r.bottom,
       }
     })
-  }, [targetAtPoint, applyColumns, flashFocus, notePaneFocus])
+    return resolveDropZone(
+      x,
+      y,
+      { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+      panes,
+    )
+  }, [])
 
-  // Header drag → reorder columns (Sidebar threshold + boundary index).
+  /** Shared drop application (external drags + pane-header moves). */
+  const performDrop = useCallback(
+    (source: DragSource, x: number, y: number): void => {
+      if (readOnlyRef.current) return
+      const zone = zoneAtPoint(x, y)
+      if (!zone) return
+      const result = applyDrop(rootRef.current, source, zone)
+      if (result.changed) applyRoot(result.root, true)
+      if (result.focusPaneId !== null) {
+        flashFocus(result.focusPaneId)
+        if (source.type === 'member') notePaneFocus(source.workspaceId)
+      }
+    },
+    [zoneAtPoint, applyRoot, flashFocus, notePaneFocus],
+  )
+
+  // External drag (member / html-doc from the dashboard-dnd store) →
+  // live zone highlight.
+  const externalDrag = useDashboardDndStore((s) => s.drag)
+  useEffect(() => {
+    if (!externalDrag || readOnly) {
+      setDropZone(null)
+      return
+    }
+    setDropZone(zoneAtPoint(externalDrag.x, externalDrag.y))
+  }, [externalDrag, readOnly, zoneAtPoint])
+
+  // Drop handler for external drags (mouseup lands here via the
+  // registry; unregistered when this dashboard unmounts).
+  useEffect(() => {
+    return registerDashDropHandler((payload, x, y) => {
+      setDropZone(null)
+      performDrop(payload, x, y)
+    })
+  }, [performDrop])
+
+  // Header drag → MOVE the pane (threshold + 5-zone hit-test; §6.8.2:
+  // an existing pane always moves, never duplicates).
   const startPaneDrag = useCallback(
-    (e: React.MouseEvent, fromIndex: number): void => {
+    (e: React.MouseEvent, paneId: string): void => {
       if (readOnlyRef.current || e.button !== 0) return
       if ((e.target as HTMLElement).closest('button')) return
       e.preventDefault()
       const startX = e.clientX
       const startY = e.clientY
       let started = false
-      let boundary: number | null = null
+      let last: { x: number; y: number } | null = null
 
       const handleMove = (ev: MouseEvent): void => {
         if (
@@ -621,16 +650,13 @@ export default function ProjectDashboard({
             Math.abs(ev.clientY - startY) > DRAG_THRESHOLD_Y)
         ) {
           started = true
-          setPaneDragIndex(fromIndex)
+          setDragPaneId(paneId)
           document.body.style.cursor = 'grabbing'
           document.body.style.userSelect = 'none'
         }
         if (!started) return
-        const grid = gridRef.current
-        if (!grid) return
-        const rects = columnRects(grid)
-        boundary = computeInsertBoundary(ev.clientX, rects)
-        setMarker(markerForTarget(grid, { type: 'insert', index: boundary }, rects))
+        last = { x: ev.clientX, y: ev.clientY }
+        setDropZone(zoneAtPoint(ev.clientX, ev.clientY))
       }
 
       const handleUp = (): void => {
@@ -638,49 +664,60 @@ export default function ProjectDashboard({
         document.removeEventListener('mouseup', handleUp)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
-        if (started && boundary !== null) {
-          const next = moveColumn(columnsRef.current, fromIndex, boundary)
-          if (next !== columnsRef.current) applyColumns(next, true)
+        if (started && last !== null) {
+          performDrop({ type: 'pane', paneId }, last.x, last.y)
         }
-        setPaneDragIndex(null)
-        setMarker(null)
+        setDragPaneId(null)
+        setDropZone(null)
       }
 
       document.addEventListener('mousemove', handleMove)
       document.addEventListener('mouseup', handleUp)
     },
-    [applyColumns],
+    [zoneAtPoint, performDrop],
   )
 
-  // Boundary resize handle → live width preview, save on release
-  // (§6.3a: resize END saves).
-  const startResize = useCallback(
-    (e: React.MouseEvent, leftIndex: number): void => {
+  // Divider drag → LIVE reflow from the drag-start tree (percent math
+  // against the split's own span), save on release (§6.8.3).
+  const startDividerDrag = useCallback(
+    (e: React.MouseEvent, divider: DividerGeom): void => {
       if (readOnlyRef.current || e.button !== 0) return
       e.preventDefault()
-      const startX = e.clientX
-      const startColumns = columnsRef.current
       const grid = gridRef.current
-      const gridWidth = grid ? grid.getBoundingClientRect().width || 1 : 1
-      document.body.style.cursor = 'col-resize'
+      if (!grid) return
+      const startX = e.clientX
+      const startY = e.clientY
+      const startRoot = rootRef.current
+      const box = grid.getBoundingClientRect()
+      const axisPx =
+        divider.dir === 'row'
+          ? Math.max(1, (box.width * divider.span) / 100)
+          : Math.max(1, (box.height * divider.span) / 100)
+      document.body.style.cursor = divider.dir === 'row' ? 'col-resize' : 'row-resize'
       document.body.style.userSelect = 'none'
+      setDividerDragging(true)
 
       const handleMove = (ev: MouseEvent): void => {
-        const deltaPct = ((ev.clientX - startX) / gridWidth) * 100
-        applyColumns(resizePair(startColumns, leftIndex, deltaPct), false)
+        const dpx = divider.dir === 'row' ? ev.clientX - startX : ev.clientY - startY
+        const deltaPct = (dpx / axisPx) * 100
+        applyRoot(
+          resizeDivider(startRoot, divider.splitPath, divider.index, deltaPct),
+          false,
+        )
       }
       const handleUp = (): void => {
         document.removeEventListener('mousemove', handleMove)
         document.removeEventListener('mouseup', handleUp)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
-        // Persist the final widths (coalesced).
-        if (!readOnlyRef.current) saverRef.current?.schedule(columnsRef.current)
+        setDividerDragging(false)
+        // Persist the final sizes (coalesced).
+        if (!readOnlyRef.current) saverRef.current?.schedule(rootRef.current)
       }
       document.addEventListener('mousemove', handleMove)
       document.addEventListener('mouseup', handleUp)
     },
-    [applyColumns],
+    [applyRoot],
   )
 
   // ── Render ─────────────────────────────────────────────────────────────
@@ -691,33 +728,52 @@ export default function ProjectDashboard({
     return map
   }, [show.members])
 
-  // Stable React keys: terminal panes key by workspace (unique per
-  // dashboard), doc/unknown panes by identity + occurrence, so a
-  // reorder MOVES mounted panes (keeping live grid-WS attachments)
-  // instead of remounting them.
-  const columnKeys = useMemo(() => {
-    const seen = new Map<string, number>()
-    return columns.map((c) => {
-      const base = isTerminalPane(c.pane)
-        ? `t:${c.pane.workspaceId}`
-        : isHtmlDocPane(c.pane)
-          ? `h:${c.pane.workspaceId}:${c.pane.filePath}`
-          : `u:${c.pane.kind}`
-      const n = seen.get(base) ?? 0
-      seen.set(base, n + 1)
-      return n === 0 ? base : `${base}#${n}`
-    })
-  }, [columns])
+  // Tree → flat absolute percent rects + divider positions. Panes key
+  // by identity (paneKey + occurrence), so ANY restructure MOVES
+  // mounted panes (keeping live kessel grid-WS attachments) instead of
+  // remounting them.
+  const geometry = useMemo(() => computeLayoutGeometry(root), [root])
+
+  // The hovered drop zone's highlight overlay (§6.8.2: half-highlights
+  // for side splits, a full ring for center, edge bands for full-span
+  // inserts).
+  const zoneOverlay = useMemo(():
+    | { kind: 'half' | 'center'; x: number; y: number; w: number; h: number }
+    | { kind: 'edge'; side: 'left' | 'right' | 'top' | 'bottom' }
+    | null => {
+    if (!dropZone) return null
+    if (dropZone.type === 'edge') return { kind: 'edge', side: dropZone.side }
+    const p = geometry.panes.find((g) => g.paneId === dropZone.paneId)
+    if (!p) return null
+    switch (dropZone.region) {
+      case 'left':
+        return { kind: 'half', x: p.x, y: p.y, w: p.w / 2, h: p.h }
+      case 'right':
+        return { kind: 'half', x: p.x + p.w / 2, y: p.y, w: p.w / 2, h: p.h }
+      case 'top':
+        return { kind: 'half', x: p.x, y: p.y, w: p.w, h: p.h / 2 }
+      case 'bottom':
+        return { kind: 'half', x: p.x, y: p.y + p.h / 2, w: p.w, h: p.h / 2 }
+      case 'center':
+        return { kind: 'center', x: p.x, y: p.y, w: p.w, h: p.h }
+    }
+  }, [dropZone, geometry])
 
   const stale = freshness.staleRevision !== null
   const poc = membersById.get(show.pocWorkspaceId ?? '')
+
+  // While ANY drag/resize is live, panes go pointer-events:none so the
+  // htmlDoc <iframe>s can't swallow the document mousemove/mouseup
+  // stream (hit-testing is rect math, not event targets, so this
+  // changes nothing else).
+  const dragActive = externalDrag !== null || dragPaneId !== null || dividerDragging
 
   return (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative" data-projects-dashboard-panes>
       {/* Stale pill (§6.3a): another client saved a newer layout. It
           NEVER auto-applies — apply-on-open, or explicitly here. */}
       {stale && (
-        <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-2 px-2 py-1 bg-[var(--color-bg-elevated)] border border-amber-500/40 shadow-lg">
+        <div className="absolute top-1.5 right-1.5 z-30 flex items-center gap-2 px-2 py-1 bg-[var(--color-bg-elevated)] border border-amber-500/40 shadow-lg">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
           <span className="text-[10px] text-[var(--color-text-secondary)]">
             Layout updated elsewhere
@@ -732,13 +788,14 @@ export default function ProjectDashboard({
         </div>
       )}
 
-      {columns.length === 0 ? (
+      {root === null ? (
         /* gridRef also lives here so a drop on the empty dashboard
-           resolves (no [data-dash-col] rects → insert at 0). */
+           resolves (no [data-pane-id] rects → the whole box is one
+           first-pane target). */
         <div
           ref={gridRef}
           className={`flex-1 flex items-center justify-center border border-dashed text-center px-8 transition-colors ${
-            memberDrag && !readOnly
+            externalDrag && !readOnly
               ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/5'
               : 'border-[var(--color-border)]'
           }`}
@@ -755,9 +812,9 @@ export default function ProjectDashboard({
           </div>
         </div>
       ) : (
-        <div ref={gridRef} className="relative flex-1 flex min-h-0 gap-px">
-          {columns.map((col, i) => {
-            const pane = col.pane
+        <div ref={gridRef} className="relative flex-1 min-h-0 min-w-0">
+          {geometry.panes.map((g) => {
+            const pane = g.pane
             const member = isTerminalPane(pane) || isHtmlDocPane(pane)
               ? membersById.get(pane.workspaceId) ?? null
               : null
@@ -768,75 +825,114 @@ export default function ProjectDashboard({
                 : `Unknown pane (${pane.kind})`
             const hint = isHtmlDocPane(pane) ? member?.name ?? undefined : undefined
             return (
-              <React.Fragment key={columnKeys[i]}>
-                <div
-                  data-dash-col
-                  data-dash-pane-ws={isTerminalPane(pane) ? pane.workspaceId : undefined}
-                  className="flex flex-col min-w-0 min-h-0"
-                  style={{
-                    flexGrow: col.widthPct,
-                    flexShrink: 1,
-                    flexBasis: 0,
-                    opacity: paneDragIndex === i ? 0.4 : 1,
-                  }}
-                  // §6.7.4 — any click inside a terminal pane makes it
-                  // the dashboard's last-used pane (capture: the
-                  // header/body handlers must not swallow it).
-                  onMouseDownCapture={
-                    isTerminalPane(pane) ? () => notePaneFocus(pane.workspaceId) : undefined
-                  }
+              <div
+                key={g.paneId}
+                data-pane-id={g.paneId}
+                data-dash-pane-ws={isTerminalPane(pane) ? pane.workspaceId : undefined}
+                className="absolute flex flex-col min-w-0 min-h-0 p-px"
+                style={{
+                  left: `${g.x}%`,
+                  top: `${g.y}%`,
+                  width: `${g.w}%`,
+                  height: `${g.h}%`,
+                  opacity: dragPaneId === g.paneId ? 0.4 : 1,
+                  pointerEvents: dragActive ? 'none' : undefined,
+                }}
+                // §6.7.4 — any click inside a terminal pane makes it
+                // the dashboard's last-used pane (capture: the
+                // header/body handlers must not swallow it).
+                onMouseDownCapture={
+                  isTerminalPane(pane) ? () => notePaneFocus(pane.workspaceId) : undefined
+                }
+              >
+                <PaneChrome
+                  title={title}
+                  hint={hint}
+                  readOnly={readOnly}
+                  focused={focusPaneId === g.paneId}
+                  onClose={() => applyRoot(removePane(rootRef.current, g.paneId), true)}
+                  onHeaderMouseDown={(e) => startPaneDrag(e, g.paneId)}
                 >
-                  <PaneChrome
-                    title={title}
-                    hint={hint}
-                    readOnly={readOnly}
-                    focused={focusIndex === i}
-                    onClose={() => applyColumns(removeColumnAt(columnsRef.current, i), true)}
-                    onHeaderMouseDown={(e) => startPaneDrag(e, i)}
-                  >
-                    {isTerminalPane(pane) ? (
-                      <DashboardTerminalPane
-                        workspaceId={pane.workspaceId}
-                        member={member}
-                        dashboardId={dashboard.id}
-                      />
-                    ) : isHtmlDocPane(pane) ? (
-                      <HtmlDocPane filePath={pane.filePath} />
-                    ) : (
-                      /* §6.3 forward-compat: inert placeholder; the
-                         pane object round-trips untouched on save. */
-                      <PaneBody>
-                        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[36ch]">
-                          This pane was made by a newer K2 and renders after an update.
-                        </p>
-                      </PaneBody>
-                    )}
-                  </PaneChrome>
-                </div>
-                {i < columns.length - 1 && (
-                  <div
-                    className={`flex-shrink-0 w-1.5 -mx-0.5 z-10 ${
-                      readOnly ? '' : 'cursor-col-resize hover:bg-[var(--color-accent)]/40'
-                    } transition-colors`}
-                    onMouseDown={readOnly ? undefined : (e) => startResize(e, i)}
-                    title={readOnly ? undefined : 'Drag to resize'}
-                  />
-                )}
-              </React.Fragment>
+                  {isTerminalPane(pane) ? (
+                    <DashboardTerminalPane
+                      workspaceId={pane.workspaceId}
+                      member={member}
+                      dashboardId={dashboard.id}
+                    />
+                  ) : isHtmlDocPane(pane) ? (
+                    <HtmlDocPane filePath={pane.filePath} />
+                  ) : (
+                    /* §6.3 forward-compat: inert placeholder; the
+                       pane object round-trips untouched on save. */
+                    <PaneBody>
+                      <p className="text-[11px] text-[var(--color-text-muted)] max-w-[36ch]">
+                        This pane was made by a newer K2 and renders after an update.
+                      </p>
+                    </PaneBody>
+                  )}
+                </PaneChrome>
+              </div>
             )
           })}
 
-          {/* Drop-target hints (§6.2): insertion bar / replace ring. */}
-          {marker && marker.kind === 'insert' && (
+          {/* Dividers (§6.8.3) — every boundary drags on BOTH axes,
+              live reflow, ~10% floor. Hidden for viewers. */}
+          {!readOnly &&
+            geometry.dividers.map((d) => (
+              <div
+                key={`div:${d.splitPath.join('.')}:${d.index}:${d.dir}`}
+                className={`absolute z-10 ${
+                  d.dir === 'row' ? 'cursor-col-resize' : 'cursor-row-resize'
+                } hover:bg-[var(--color-accent)]/40 transition-colors`}
+                style={
+                  d.dir === 'row'
+                    ? {
+                        left: `calc(${d.x}% - ${DIVIDER_HIT_PX / 2}px)`,
+                        top: `${d.y}%`,
+                        height: `${d.length}%`,
+                        width: DIVIDER_HIT_PX,
+                      }
+                    : {
+                        top: `calc(${d.y}% - ${DIVIDER_HIT_PX / 2}px)`,
+                        left: `${d.x}%`,
+                        width: `${d.length}%`,
+                        height: DIVIDER_HIT_PX,
+                      }
+                }
+                onMouseDown={(e) => startDividerDrag(e, d)}
+                title="Drag to resize"
+              />
+            ))}
+
+          {/* Drop-zone highlight (§6.8.2): side half / center ring /
+              container edge band. */}
+          {zoneOverlay && zoneOverlay.kind !== 'edge' && (
             <div
-              className="absolute top-0 bottom-0 w-0.5 bg-[var(--color-accent)] z-20 pointer-events-none"
-              style={{ left: Math.max(0, marker.left - 1) }}
+              className={`absolute z-20 pointer-events-none ${
+                zoneOverlay.kind === 'center'
+                  ? 'border-2 border-[var(--color-accent)] bg-[var(--color-accent)]/10'
+                  : 'border border-[var(--color-accent)] bg-[var(--color-accent)]/20'
+              }`}
+              style={{
+                left: `${zoneOverlay.x}%`,
+                top: `${zoneOverlay.y}%`,
+                width: `${zoneOverlay.w}%`,
+                height: `${zoneOverlay.h}%`,
+              }}
             />
           )}
-          {marker && marker.kind === 'replace' && (
+          {zoneOverlay && zoneOverlay.kind === 'edge' && (
             <div
-              className="absolute top-0 bottom-0 border-2 border-[var(--color-accent)] bg-[var(--color-accent)]/10 z-20 pointer-events-none"
-              style={{ left: marker.left, width: marker.width }}
+              className="absolute z-20 pointer-events-none border border-[var(--color-accent)] bg-[var(--color-accent)]/20"
+              style={
+                zoneOverlay.side === 'left'
+                  ? { left: 0, top: 0, bottom: 0, width: EDGE_BAND_PX }
+                  : zoneOverlay.side === 'right'
+                    ? { right: 0, top: 0, bottom: 0, width: EDGE_BAND_PX }
+                    : zoneOverlay.side === 'top'
+                      ? { top: 0, left: 0, right: 0, height: EDGE_BAND_PX }
+                      : { bottom: 0, left: 0, right: 0, height: EDGE_BAND_PX }
+              }
             />
           )}
         </div>

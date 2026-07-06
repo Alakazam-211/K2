@@ -13,7 +13,7 @@
 //   - Esc focus target: the dashboard's last-used terminal pane,
 //     falling back to its first terminal pane; none → null (no-op).
 
-import { isTerminalPane, type DashboardColumn } from './dashboard-layout'
+import { isTerminalPane, readingOrder, type LayoutNode } from './dashboard-layout'
 
 /** The non-dashboard tab. Dashboard ids are UUIDs, so the sentinel can
  *  never collide with one. */
@@ -62,20 +62,16 @@ export function moveDashboardId(
 }
 
 /** §6.7.4 — which terminal pane Esc should focus in the open
- *  dashboard: the last-used one when it's still a terminal column,
- *  else the dashboard's first terminal pane, else null (no pane →
- *  no-op). Returns the pane's workspaceId. */
+ *  dashboard: the last-used one when it's still a terminal pane in the
+ *  tree, else the dashboard's FIRST terminal pane (reading order),
+ *  else null (no pane → no-op). Returns the pane's workspaceId. */
 export function resolveEscFocusPane(
-  columns: DashboardColumn[],
+  root: LayoutNode | null,
   lastWorkspaceId: string | null,
 ): string | null {
-  const terminals = columns.filter((c) => isTerminalPane(c.pane))
-  if (
-    lastWorkspaceId !== null &&
-    terminals.some((c) => isTerminalPane(c.pane) && c.pane.workspaceId === lastWorkspaceId)
-  ) {
+  const terminals = readingOrder(root).filter(isTerminalPane)
+  if (lastWorkspaceId !== null && terminals.some((p) => p.workspaceId === lastWorkspaceId)) {
     return lastWorkspaceId
   }
-  const first = terminals[0]
-  return first && isTerminalPane(first.pane) ? first.pane.workspaceId : null
+  return terminals[0]?.workspaceId ?? null
 }

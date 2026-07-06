@@ -32,6 +32,7 @@ import PageTabs from '@/components/TopBar/PageTabs'
 import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
 import ProjectNav, { CreateProjectForm, ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
+import DashboardPresetsMenu from './DashboardPresetsMenu'
 import ProjectChatPanel from './ProjectChatPanel'
 import { ProjectFeedbackTab } from '@/components/Feedback/ProjectFeedbackTab'
 import { fetchProjectGroupShow, type ProjectGroupShow } from './projects-api'
@@ -103,33 +104,42 @@ function SelectedProjectView({
             settings via right-click / Settings → Projects). §6.7.6 —
             dashboards ARE the tabs: one per dashboard + Feedback. */}
         <div className="px-4 pt-2 border-b border-[var(--color-border)] flex-shrink-0">
-          <div className="flex items-center gap-1 overflow-x-auto">
-            {dashboards.map((d) => (
+          {/* The scroll container holds only the tabs — the presets
+              popover must not live under overflow-x-auto (clipping). */}
+          <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 overflow-x-auto flex-1 min-w-0">
+              {dashboards.map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => setTab(d.id)}
+                  className={`px-3 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer whitespace-nowrap ${
+                    activeTab === d.id
+                      ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                      : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+                  }`}
+                  title={`Dashboard "${d.name}" — revision ${d.revision}`}
+                >
+                  {d.name}
+                </button>
+              ))}
               <button
-                key={d.id}
                 type="button"
-                onClick={() => setTab(d.id)}
+                onClick={() => setTab(FEEDBACK_TAB)}
                 className={`px-3 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer whitespace-nowrap ${
-                  activeTab === d.id
+                  activeTab === FEEDBACK_TAB
                     ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
                     : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
                 }`}
-                title={`Dashboard "${d.name}" — revision ${d.revision}`}
               >
-                {d.name}
+                Feedback
               </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setTab(FEEDBACK_TAB)}
-              className={`px-3 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer whitespace-nowrap ${
-                activeTab === FEEDBACK_TAB
-                  ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                  : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-              }`}
-            >
-              Feedback
-            </button>
+            </div>
+            {/* §6.8.4 — the layout-presets menu at the RIGHT end of the
+                tab row; only meaningful over an open dashboard (the
+                mounted ProjectDashboard applies the re-tile). Hidden
+                for viewers (inside the component). */}
+            {activeTab !== FEEDBACK_TAB && activeDashboard !== null && <DashboardPresetsMenu />}
           </div>
         </div>
 

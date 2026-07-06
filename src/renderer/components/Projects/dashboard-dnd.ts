@@ -1,42 +1,57 @@
-// Projects V1 P5 (§6.2) — the tiny bridge that lets a MEMBER-ROW drag
-// (ProjectNav's drawer, Sidebar's mouse-threshold pattern) land on the
-// dashboard grid (ProjectDashboard), which lives in a different
-// component subtree.
+// Projects V1 P5 (§6.2) → §6.8 — the tiny bridge that lets drags and
+// commands born OUTSIDE the dashboard subtree land on the mounted
+// ProjectDashboard:
 //
-// The INITIATOR (MemberRow) owns the drag lifecycle exactly like
+//   - a MEMBER-ROW drag (ProjectNav's drawer, Sidebar's mouse-threshold
+//     pattern) or an HTML-DOC drag streams the pointer into this store
+//     (the dashboard renders its 5-zone drop highlights from it); on
+//     mouseup the initiator hands the final point to whichever
+//     dashboard registered the drop handler,
+//   - the presets menu (the tab-row button in ProjectsPage, §6.8.4)
+//     sends its shape through the preset handler the same way.
+//
+// The INITIATOR owns the drag lifecycle exactly like
 // Sidebar.handleProjectMouseDown: mousedown → 3/5px threshold →
-// document mousemove/mouseup. While dragging it streams the pointer
-// into this store (the dashboard renders its drop-target markers from
-// it); on mouseup it hands the final point to whichever dashboard
-// registered a drop handler (none mounted → the drag simply cancels).
+// document mousemove/mouseup. No dashboard mounted → the drag/command
+// simply cancels. Last-mount-wins (only one dashboard renders at a
+// time — the tab is exclusive).
 
 import { create } from 'zustand'
+import type { PresetShape } from './dashboard-layout'
 
-export interface MemberDrag {
-  workspaceId: string
+/** What an external drag carries (§6.8.2): a member resolves to its
+ *  canonical terminal pane; an HTML doc to its #587 doc pane. Existing
+ *  panes (header drags) are dashboard-internal and never cross this
+ *  bridge. */
+export type DashDragPayload =
+  | { type: 'member'; workspaceId: string }
+  | { type: 'htmlDoc'; workspaceId: string; filePath: string }
+
+export interface DashDrag {
+  payload: DashDragPayload
   x: number
   y: number
 }
 
 interface DashboardDndState {
-  /** Live member drag, or null. The dashboard subscribes for markers. */
-  memberDrag: MemberDrag | null
-  setMemberDrag: (drag: MemberDrag | null) => void
+  /** Live external drag, or null. The dashboard subscribes for the
+   *  drop-zone highlights. */
+  drag: DashDrag | null
+  setDrag: (drag: DashDrag | null) => void
 }
 
 export const useDashboardDndStore = create<DashboardDndState>((set) => ({
-  memberDrag: null,
-  setMemberDrag: (memberDrag) => set({ memberDrag }),
+  drag: null,
+  setDrag: (drag) => set({ drag }),
 }))
 
-type MemberDropHandler = (workspaceId: string, x: number, y: number) => void
+type DashDropHandler = (payload: DashDragPayload, x: number, y: number) => void
 
-let dropHandler: MemberDropHandler | null = null
+let dropHandler: DashDropHandler | null = null
 
 /** The mounted dashboard registers itself as the drop target; returns
- *  the unregister. Last-mount-wins (only one dashboard renders at a
- *  time — the tab is exclusive). */
-export function registerMemberDropHandler(handler: MemberDropHandler): () => void {
+ *  the unregister. */
+export function registerDashDropHandler(handler: DashDropHandler): () => void {
   dropHandler = handler
   return () => {
     if (dropHandler === handler) dropHandler = null
@@ -44,6 +59,26 @@ export function registerMemberDropHandler(handler: MemberDropHandler): () => voi
 }
 
 /** Initiator mouseup → offer the drop to the registered dashboard. */
-export function completeMemberDrag(workspaceId: string, x: number, y: number): void {
-  dropHandler?.(workspaceId, x, y)
+export function completeDashDrag(payload: DashDragPayload, x: number, y: number): void {
+  dropHandler?.(payload, x, y)
+}
+
+// ── Presets (§6.8.4) ──────────────────────────────────────────────────────
+
+type PresetHandler = (shape: PresetShape) => void
+
+let presetHandler: PresetHandler | null = null
+
+/** The mounted dashboard registers its re-tile handler; returns the
+ *  unregister. */
+export function registerPresetHandler(handler: PresetHandler): () => void {
+  presetHandler = handler
+  return () => {
+    if (presetHandler === handler) presetHandler = null
+  }
+}
+
+/** The tab-row presets menu → re-tile the open dashboard. */
+export function requestPreset(shape: PresetShape): void {
+  presetHandler?.(shape)
 }

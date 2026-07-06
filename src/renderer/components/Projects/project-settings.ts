@@ -11,16 +11,17 @@
 //     disabled with an explanation until a successor is chosen — the
 //     daemon's 409 `poc_successor_required` is the backstop),
 //   - "Add to dashboard" for the pinned-HTML browser: append an
-//     `{kind:"htmlDoc",workspaceId,filePath}` column to a dashboard's
-//     canonical layout via the P5 machinery (adopt → insert →
-//     serialize), idempotent per (workspaceId, filePath).
+//     `{kind:"htmlDoc",workspaceId,filePath}` pane to a dashboard's
+//     canonical layout via the §6.8 tree machinery (adopt → append
+//     right-most → serialize), idempotent per (workspaceId, filePath).
 
 import {
   adoptLayout,
-  insertColumnAt,
+  insertEdge,
   isHtmlDocPane,
+  readingOrder,
   serializeDashboardLayout,
-  type DashboardColumn,
+  type LayoutNode,
 } from './dashboard-layout'
 
 /** Case-insensitive name filter for the left master list (the
@@ -62,34 +63,35 @@ export function removeMemberBlockedReason(
   return null
 }
 
-/** Index of the htmlDoc column matching (workspaceId, filePath), or -1
- *  (the #587 idempotence key — one pane per pinned doc). */
-export function findHtmlDocColumn(
-  columns: DashboardColumn[],
+/** Whether the tree already holds the htmlDoc pane for (workspaceId,
+ *  filePath) — the #587 idempotence key: one pane per pinned doc. */
+export function hasHtmlDocPane(
+  root: LayoutNode | null,
   workspaceId: string,
   filePath: string,
-): number {
-  return columns.findIndex(
-    (c) => isHtmlDocPane(c.pane) && c.pane.workspaceId === workspaceId && c.pane.filePath === filePath,
+): boolean {
+  return readingOrder(root).some(
+    (p) => isHtmlDocPane(p) && p.workspaceId === workspaceId && p.filePath === filePath,
   )
 }
 
-/** "Add to dashboard" (§6.5): append an htmlDoc column to the
+/** "Add to dashboard" (§6.5): append an htmlDoc pane to the
  *  dashboard's canonical layout. Adopts the stored blob first (an
  *  untouched 'Main' materializes its PoC seed — same as the
- *  dashboard's first real edit), then appends at the end. Idempotent:
- *  a doc already on the dashboard returns `added: false` and the
- *  ORIGINAL blob untouched — callers skip the save. */
-export function appendHtmlDocColumn(
+ *  dashboard's first real edit), then appends as a right-most region
+ *  (the §6.8 member-click default). Idempotent: a doc already on the
+ *  dashboard returns `added: false` and the ORIGINAL blob untouched —
+ *  callers skip the save. */
+export function appendHtmlDocPane(
   layoutJson: string,
   pocWorkspaceId: string | null,
   doc: { workspaceId: string; filePath: string },
 ): { layoutJson: string; added: boolean } {
-  const columns = adoptLayout(layoutJson, pocWorkspaceId)
-  if (findHtmlDocColumn(columns, doc.workspaceId, doc.filePath) >= 0) {
+  const root = adoptLayout(layoutJson, pocWorkspaceId)
+  if (hasHtmlDocPane(root, doc.workspaceId, doc.filePath)) {
     return { layoutJson, added: false }
   }
-  const next = insertColumnAt(columns, columns.length, {
+  const next = insertEdge(root, 'right', {
     kind: 'htmlDoc',
     workspaceId: doc.workspaceId,
     filePath: doc.filePath,

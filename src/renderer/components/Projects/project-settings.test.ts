@@ -6,25 +6,35 @@
 import { describe, it, expect } from 'vitest'
 import {
   addableWorkspaces,
-  appendHtmlDocColumn,
+  appendHtmlDocPane,
   filterGroupsByQuery,
-  findHtmlDocColumn,
+  hasHtmlDocPane,
   removeMemberBlockedReason,
 } from './project-settings'
 import {
   parseDashboardLayout,
+  readingOrder,
   serializeDashboardLayout,
   isHtmlDocPane,
   isTerminalPane,
-  type DashboardColumn,
+  type LayoutNode,
+  type PaneSpec,
 } from './dashboard-layout'
 
 const EMPTY_LAYOUT_V1 = '{"version":1,"panes":[]}' // the daemon's untouched seed
 
-function columnsOf(layoutJson: string): DashboardColumn[] {
+const pane = (p: PaneSpec): LayoutNode => ({ type: 'pane', pane: p })
+
+function panesOf(layoutJson: string): PaneSpec[] {
   const parsed = parseDashboardLayout(layoutJson)
   if (parsed.kind !== 'layout') throw new Error(`expected a layout blob, got ${parsed.kind}`)
-  return parsed.columns
+  return readingOrder(parsed.root)
+}
+
+function rootOf(layoutJson: string): LayoutNode | null {
+  const parsed = parseDashboardLayout(layoutJson)
+  if (parsed.kind !== 'layout') throw new Error(`expected a layout blob, got ${parsed.kind}`)
+  return parsed.root
 }
 
 describe('filterGroupsByQuery', () => {
@@ -67,65 +77,100 @@ describe('removeMemberBlockedReason', () => {
   })
 })
 
-describe('appendHtmlDocColumn', () => {
+describe('appendHtmlDocPane', () => {
   const doc = { workspaceId: 'w1', filePath: '/tmp/status.html' }
 
-  it('materializes the PoC seed from an untouched blob, then appends', () => {
-    const { layoutJson, added } = appendHtmlDocColumn(EMPTY_LAYOUT_V1, 'poc-1', doc)
+  it('materializes the PoC seed from an untouched blob, then appends right-most', () => {
+    const { layoutJson, added } = appendHtmlDocPane(EMPTY_LAYOUT_V1, 'poc-1', doc)
     expect(added).toBe(true)
-    const cols = columnsOf(layoutJson)
-    expect(cols).toHaveLength(2)
-    expect(isTerminalPane(cols[0].pane) && cols[0].pane.workspaceId === 'poc-1').toBe(true)
-    expect(isHtmlDocPane(cols[1].pane)).toBe(true)
-    expect(cols[0].widthPct + cols[1].widthPct).toBeCloseTo(100)
+    const panes = panesOf(layoutJson)
+    expect(panes).toHaveLength(2)
+    expect(isTerminalPane(panes[0]) && panes[0].workspaceId === 'poc-1').toBe(true)
+    expect(isHtmlDocPane(panes[1])).toBe(true)
+    // 50/50 row (insertEdge right on a single-pane root).
+    const root = rootOf(layoutJson)
+    expect(root?.type).toBe('split')
+    if (root?.type !== 'split') return
+    expect(root.dir).toBe('row')
+    expect(root.children.map((c) => c.size)).toEqual([50, 50])
   })
 
-  it('appends at the end of a saved layout, rebalancing widths', () => {
-    const saved = serializeDashboardLayout([
-      { widthPct: 60, pane: { kind: 'terminal', workspaceId: 'poc-1' } },
-      { widthPct: 40, pane: { kind: 'terminal', workspaceId: 'w9' } },
-    ])
-    const { layoutJson, added } = appendHtmlDocColumn(saved, 'poc-1', doc)
+  it('appends as a right-most region of a saved layout (equal share)', () => {
+    const saved = serializeDashboardLayout({
+      type: 'split',
+      dir: 'row',
+      children: [
+        { size: 60, node: pane({ kind: 'terminal', workspaceId: 'poc-1' }) },
+        { size: 40, node: pane({ kind: 'terminal', workspaceId: 'w9' }) },
+      ],
+    })
+    const { layoutJson, added } = appendHtmlDocPane(saved, 'poc-1', doc)
     expect(added).toBe(true)
-    const cols = columnsOf(layoutJson)
-    expect(cols).toHaveLength(3)
-    expect(cols[2].pane).toEqual({ kind: 'htmlDoc', workspaceId: 'w1', filePath: '/tmp/status.html' })
-    expect(cols.reduce((acc, c) => acc + c.widthPct, 0)).toBeCloseTo(100)
+    const panes = panesOf(layoutJson)
+    expect(panes).toHaveLength(3)
+    expect(panes[2]).toEqual({ kind: 'htmlDoc', workspaceId: 'w1', filePath: '/tmp/status.html' })
+    const root = rootOf(layoutJson)
+    if (root?.type !== 'split') throw new Error('expected a split root')
+    expect(root.children.reduce((acc, c) => acc + c.size, 0)).toBeCloseTo(100)
   })
 
-  it('memberless (no PoC) untouched blob → the doc becomes the only column', () => {
-    const { layoutJson, added } = appendHtmlDocColumn(EMPTY_LAYOUT_V1, null, doc)
+  it('accepts a v1 blob (converts on adopt, saves v2)', () => {
+    const v1 = JSON.stringify({
+      version: 1,
+      columns: [{ widthPct: 100, pane: { kind: 'terminal', workspaceId: 'poc-1' } }],
+    })
+    const { layoutJson, added } = appendHtmlDocPane(v1, 'poc-1', doc)
     expect(added).toBe(true)
-    const cols = columnsOf(layoutJson)
-    expect(cols).toHaveLength(1)
-    expect(cols[0].widthPct).toBeCloseTo(100)
+    expect((JSON.parse(layoutJson) as { version: number }).version).toBe(2)
+    expect(panesOf(layoutJson)).toHaveLength(2)
+  })
+
+  it('memberless (no PoC) untouched blob → the doc becomes the only pane', () => {
+    const { layoutJson, added } = appendHtmlDocPane(EMPTY_LAYOUT_V1, null, doc)
+    expect(added).toBe(true)
+    const panes = panesOf(layoutJson)
+    expect(panes).toHaveLength(1)
+    expect(rootOf(layoutJson)?.type).toBe('pane')
   })
 
   it('is idempotent per (workspaceId, filePath): already present → added:false, blob untouched', () => {
-    const first = appendHtmlDocColumn(EMPTY_LAYOUT_V1, 'poc-1', doc)
-    const again = appendHtmlDocColumn(first.layoutJson, 'poc-1', doc)
+    const first = appendHtmlDocPane(EMPTY_LAYOUT_V1, 'poc-1', doc)
+    const again = appendHtmlDocPane(first.layoutJson, 'poc-1', doc)
     expect(again.added).toBe(false)
     expect(again.layoutJson).toBe(first.layoutJson)
     // The SAME path from a DIFFERENT workspace is a distinct doc.
-    const other = appendHtmlDocColumn(first.layoutJson, 'poc-1', {
+    const other = appendHtmlDocPane(first.layoutJson, 'poc-1', {
       workspaceId: 'w2',
       filePath: '/tmp/status.html',
     })
     expect(other.added).toBe(true)
-    expect(columnsOf(other.layoutJson)).toHaveLength(3)
+    expect(panesOf(other.layoutJson)).toHaveLength(3)
   })
 })
 
-describe('findHtmlDocColumn', () => {
-  it('matches on BOTH workspaceId and filePath; terminals never match', () => {
-    const cols = columnsOf(
-      serializeDashboardLayout([
-        { widthPct: 50, pane: { kind: 'terminal', workspaceId: 'w1' } },
-        { widthPct: 50, pane: { kind: 'htmlDoc', workspaceId: 'w1', filePath: '/a.html' } },
-      ]),
-    )
-    expect(findHtmlDocColumn(cols, 'w1', '/a.html')).toBe(1)
-    expect(findHtmlDocColumn(cols, 'w2', '/a.html')).toBe(-1)
-    expect(findHtmlDocColumn(cols, 'w1', '/b.html')).toBe(-1)
+describe('hasHtmlDocPane', () => {
+  it('matches on BOTH workspaceId and filePath, anywhere in the tree; terminals never match', () => {
+    const root: LayoutNode = {
+      type: 'split',
+      dir: 'row',
+      children: [
+        { size: 50, node: pane({ kind: 'terminal', workspaceId: 'w1' }) },
+        {
+          size: 50,
+          node: {
+            type: 'split',
+            dir: 'col',
+            children: [
+              { size: 50, node: pane({ kind: 'terminal', workspaceId: 'w2' }) },
+              { size: 50, node: pane({ kind: 'htmlDoc', workspaceId: 'w1', filePath: '/a.html' }) },
+            ],
+          },
+        },
+      ],
+    }
+    expect(hasHtmlDocPane(root, 'w1', '/a.html')).toBe(true)
+    expect(hasHtmlDocPane(root, 'w2', '/a.html')).toBe(false)
+    expect(hasHtmlDocPane(root, 'w1', '/b.html')).toBe(false)
+    expect(hasHtmlDocPane(null, 'w1', '/a.html')).toBe(false)
   })
 })

@@ -77,7 +77,7 @@ import { GROUP_AVATAR_COLORS, groupAvatarColor } from './ProjectGroupAvatar'
 import IconCropDialog from '@/components/Settings/IconCropDialog'
 import {
   addableWorkspaces,
-  appendHtmlDocColumn,
+  appendHtmlDocPane,
   filterGroupsByQuery,
   removeMemberBlockedReason,
 } from './project-settings'
@@ -367,7 +367,7 @@ function DashboardsBlock({
   const addDocToDashboard = useCallback(
     async (doc: ProjectGroupHtmlDoc, dashboard: ProjectGroupDashboard): Promise<void> => {
       const key = `${doc.workspaceId}:${doc.filePath}`
-      const { layoutJson, added } = appendHtmlDocColumn(
+      const { layoutJson, added } = appendHtmlDocPane(
         dashboard.layoutJson,
         detail.pocWorkspaceId,
         doc,

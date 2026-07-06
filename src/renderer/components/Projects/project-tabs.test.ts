@@ -3,7 +3,7 @@
 // Esc-to-pane focus target (§6.7.4).
 
 import { describe, it, expect } from 'vitest'
-import type { DashboardColumn } from './dashboard-layout'
+import type { LayoutNode, PaneSpec } from './dashboard-layout'
 import {
   FEEDBACK_TAB,
   moveDashboardId,
@@ -78,26 +78,38 @@ describe('moveDashboardId (§6.7.6 — reorder moves)', () => {
 })
 
 describe('resolveEscFocusPane (§6.7.4 — Esc focus target)', () => {
-  const term = (workspaceId: string): DashboardColumn => ({
-    pane: { kind: 'terminal', workspaceId },
-    widthPct: 50,
-  })
-  const doc: DashboardColumn = {
-    pane: { kind: 'htmlDoc', workspaceId: 'w9', filePath: '/x.html' },
-    widthPct: 50,
-  }
-
-  it('prefers the last-used pane when it is still a terminal column', () => {
-    expect(resolveEscFocusPane([term('w1'), term('w2')], 'w2')).toBe('w2')
+  const pane = (p: PaneSpec): LayoutNode => ({ type: 'pane', pane: p })
+  const term = (workspaceId: string): PaneSpec => ({ kind: 'terminal', workspaceId })
+  const doc: PaneSpec = { kind: 'htmlDoc', workspaceId: 'w9', filePath: '/x.html' }
+  const row = (...nodes: LayoutNode[]): LayoutNode => ({
+    type: 'split',
+    dir: 'row',
+    children: nodes.map((node) => ({ size: 100 / nodes.length, node })),
   })
 
-  it('falls back to the FIRST terminal pane when the last-used one left the dashboard', () => {
-    expect(resolveEscFocusPane([doc, term('w1'), term('w2')], 'gone')).toBe('w1')
-    expect(resolveEscFocusPane([term('w1')], null)).toBe('w1')
+  it('prefers the last-used pane when it is still a terminal pane in the tree', () => {
+    expect(resolveEscFocusPane(row(pane(term('w1')), pane(term('w2'))), 'w2')).toBe('w2')
+  })
+
+  it('falls back to the FIRST terminal pane (reading order) when the last-used one left', () => {
+    expect(resolveEscFocusPane(row(pane(doc), pane(term('w1')), pane(term('w2'))), 'gone')).toBe(
+      'w1',
+    )
+    expect(resolveEscFocusPane(pane(term('w1')), null)).toBe('w1')
+    // Reading order descends NESTED splits too.
+    const nested = row(pane(doc), {
+      type: 'split',
+      dir: 'col',
+      children: [
+        { size: 50, node: pane(term('w3')) },
+        { size: 50, node: pane(term('w4')) },
+      ],
+    })
+    expect(resolveEscFocusPane(nested, null)).toBe('w3')
   })
 
   it('no terminal panes (docs only / empty) → null, the no-op', () => {
-    expect(resolveEscFocusPane([doc], 'w9')).toBeNull() // htmlDoc never matches
-    expect(resolveEscFocusPane([], null)).toBeNull()
+    expect(resolveEscFocusPane(pane(doc), 'w9')).toBeNull() // htmlDoc never matches
+    expect(resolveEscFocusPane(null, null)).toBeNull()
   })
 })

@@ -62,6 +62,15 @@ Cloud-init automation: `scripts/cloud-init-k2-server.yaml.tpl`.
       0.40.28 ready, owner created — with ZERO interactive SSH.
       **PASSED 2026-07-06** (k2-accept-01, ~45s on RAW ubuntu-24.04,
       self-fetch path — golden image only makes it faster).
+- [x] Golden image: bake → snapshot → create-from-snapshot + personalize
+      cloud-init → **ONLINE IN ~10s** (k2-accept-02, snapshot
+      `k2-golden-standard-0.40.28-20260706` id 405546816). **PASSED
+      2026-07-06.** Bake gotchas fixed: bake VM needs an --ssh-key (else
+      Hetzner bakes an EXPIRED root password into the image, locking out
+      every descendant) + `passwd -x -1 root` + `cloud-init clean` before
+      poweroff. Micro-optimization available: personalize re-verifies the
+      daemon binary (~1 download); skip-if-version-matches would shave a
+      few seconds.
 - [ ] Tunnel-attach: `https://<label>.k2.dev/boot-status` = 200 + owner
       login at the portal + desktop Remote Sign-In. PENDING a test
       subdomain token (needs `K2_TUNNEL_TOKEN`/`K2_SUBDOMAIN` env).

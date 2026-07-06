@@ -67,6 +67,18 @@ fn spawn_prompt_ready_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// FROZEN contract preamble (byte-stable — tests pin it) prepended to the
+/// INITIAL prompt injected into a freshly spawned host-session process. It
+/// is the only place the in-session agent is ever TOLD the `k2 respond`
+/// read-back contract, so it goes to every process that has never seen it:
+/// a fresh spawn AND a resume-of-a-DEAD-session (which re-spawns a new
+/// process below — new process, never saw the contract). It deliberately
+/// does NOT go to follow-up deliveries into a live session
+/// ([`deliver_into_live`]: message-live and resume-of-live) — the contract
+/// was already delivered in-session and repeating it would pollute every
+/// turn.
+pub const API_SPAWN_PREAMBLE: &str = "[K2 API] You were invoked through the K2 API. Report progress and results back to the caller by running: k2 respond '<your message>' — and send your final answer with: k2 respond --final '<your answer>'. The caller cannot see your terminal; only k2 respond output reaches them.";
+
 /// Parse the UNTRUSTED body into hints. Empty/whitespace → all defaults;
 /// malformed JSON → `Err(400)` (mirror of the sandbox doors).
 fn parse_body(body: &[u8]) -> Result<ApiHostSessionRequest, CliResponse> {
@@ -238,14 +250,21 @@ pub fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) ->
     // thread (readiness polling + the locked injector sleep ~½s+; the API
     // response must not wait). Best-effort by design: the caller confirms
     // via `GET .../messages` / the grid stream. Value never logged.
+    //
+    // The INITIAL prompt is wrapped with [`API_SPAWN_PREAMBLE`] — this is
+    // the fresh process's one and only briefing on the `k2 respond`
+    // read-back contract. Both paths through here are fresh processes
+    // (plain spawn, and resume-of-a-DEAD-session which re-spawns), so both
+    // carry it; follow-ups via [`deliver_into_live`] stay raw.
     let prompt = req.prompt.as_deref().unwrap_or("").trim().to_string();
     if !prompt.is_empty() {
+        let payload = format!("{API_SPAWN_PREAMBLE}\n\n{prompt}");
         let sid_for_inject = sid;
         let ready_timeout = spawn_prompt_ready_timeout();
         std::thread::spawn(move || {
             let ok = crate::workspace_msg::inject_raw_into_session(
                 &sid_for_inject,
-                &prompt,
+                &payload,
                 ready_timeout,
             );
             log_debug!(
@@ -460,6 +479,20 @@ mod tests {
             rusqlite::params![project_id, agent_name, agent_name, session_id],
         )
         .expect("insert tab session row");
+    }
+
+    /// The API contract preamble is FROZEN — external callers and the
+    /// integration suite pin these exact bytes. Change it only with a
+    /// deliberate, coordinated contract bump.
+    #[test]
+    fn api_spawn_preamble_is_byte_frozen() {
+        assert_eq!(
+            API_SPAWN_PREAMBLE,
+            "[K2 API] You were invoked through the K2 API. Report progress and results \
+             back to the caller by running: k2 respond '<your message>' — and send your \
+             final answer with: k2 respond --final '<your answer>'. The caller cannot \
+             see your terminal; only k2 respond output reaches them.",
+        );
     }
 
     /// Every door-block case returns the UNIFORM 404 ("no such workspace"):

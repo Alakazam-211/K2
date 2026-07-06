@@ -143,6 +143,28 @@ impl HostEnv {
     fn shim(&self) -> String {
         self.shim_dir.join("claude").to_string_lossy().into_owned()
     }
+
+    /// Rewrite the shim as a RECORDING agent: `tee -a <capture>` echoes
+    /// stdin (grid parity with the plain `cat` shim) AND appends the raw
+    /// received bytes to `capture` — so tests can assert on the exact
+    /// injected payload without Term line-wrapping mangling long lines.
+    /// Returns the capture file path.
+    fn make_shim_recording(&self) -> std::path::PathBuf {
+        let capture = self.shim_dir.join("received.bytes");
+        let shim = self.shim_dir.join("claude");
+        std::fs::write(
+            &shim,
+            format!("#!/bin/sh\nexec tee -a '{}'\n", capture.display()),
+        )
+        .expect("write recording shim");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod recording shim");
+        }
+        capture
+    }
 }
 
 /// Wire `ws_name`'s DEFAULT AGENT to the shim through the REAL seam: an
@@ -678,6 +700,92 @@ async fn message_live_and_spawn_prompt_reach_the_pty() {
     )
     .await;
     assert_eq!(status, 404, "cross-principal message-live must 404; body={resp}");
+
+    close_session(d.port, &agent).await;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 6 — the `k2 respond` contract preamble (W1, 0.40.30)
+// ─────────────────────────────────────────────────────────────────────
+
+/// Poll `capture` until its contents include `needle` (hard 8s deadline,
+/// fails loudly with whatever bytes DID arrive).
+async fn wait_capture_contains(capture: &std::path::Path, needle: &str, what: &str) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let got = std::fs::read_to_string(capture).unwrap_or_default();
+        if got.contains(needle) {
+            return got;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{what}: {needle:?} never reached the shim agent; received bytes were:\n{got}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// The spawn-time INITIAL prompt must arrive wrapped with the FROZEN
+/// [`k2_daemon::v1_host_sessions::API_SPAWN_PREAMBLE`] (preamble, blank
+/// line, caller prompt — exact bytes on the agent's stdin), while a
+/// follow-up message-live delivery arrives RAW: the contract is briefed
+/// once per process, never repeated per turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_prompt_carries_contract_preamble_and_followups_stay_raw() {
+    let _g = lock();
+    let env = HostEnv::set(true);
+    let capture = env.make_shim_recording();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    setup_project("hs-preamble");
+    configure_ws_agent("hs-preamble", &env.shim());
+
+    let caller_prompt = "hs-preamble-caller-prompt-marker";
+    let body = serde_json::json!({ "prompt": caller_prompt }).to_string();
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-preamble/host-sessions?token={OWNER_TOKEN}"),
+        Some(&body),
+    )
+    .await;
+    assert_eq!(status, 200, "spawn failed: {resp}");
+    let v = json(&resp);
+    let session_id = v["sessionId"].as_str().expect("sessionId").to_string();
+    let agent = v["agentName"].as_str().expect("agentName").to_string();
+
+    // The shim's raw stdin: preamble + blank line + caller prompt, exactly.
+    let preamble = k2_daemon::v1_host_sessions::API_SPAWN_PREAMBLE;
+    let received = wait_capture_contains(&capture, caller_prompt, "spawn prompt").await;
+    assert!(
+        received.contains(preamble),
+        "initial injection must carry the FROZEN contract preamble; received:\n{received}"
+    );
+    let wrapped = format!("{preamble}\n\n{caller_prompt}");
+    assert!(
+        received.contains(&wrapped),
+        "preamble and caller prompt must arrive as one wrapped payload \
+         (preamble, blank line, prompt); received:\n{received}"
+    );
+
+    // Follow-up message-live into the SAME session stays RAW.
+    let followup = "hs-preamble-followup-marker";
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-preamble/host-sessions/{session_id}?token={OWNER_TOKEN}"),
+        Some(&serde_json::json!({ "prompt": followup }).to_string()),
+    )
+    .await;
+    assert_eq!(status, 200, "message-live failed: {resp}");
+    assert_eq!(json(&resp)["delivered"], true, "body={resp}");
+
+    let received = wait_capture_contains(&capture, followup, "follow-up message").await;
+    assert_eq!(
+        received.matches("[K2 API]").count(),
+        1,
+        "the contract preamble is delivered EXACTLY ONCE (at spawn) — a \
+         follow-up must arrive without it; received:\n{received}"
+    );
 
     close_session(d.port, &agent).await;
 }

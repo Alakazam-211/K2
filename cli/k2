@@ -7135,6 +7135,11 @@ manager agent's name).
 - `k2 feedback ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
+- `k2 project read` / `k2 project msg <name> "..."` — your project's
+  shared group chat. A message prefixed `[project:<name>]` came from
+  there: reply with `k2 project msg <name> "..."`, NEVER `k2 msg
+  <name>` (a Project is a group of workspaces, not a workspace —
+  `k2 msg` fails with workspace_not_found).
 - `k2 checkin` — your workspace's status + pending-work summary.
 
 ## Do NOT
@@ -7180,6 +7185,11 @@ to: __ESCALATION_CONTACT__ (your operator/owner — replace this).
 - `k2 feedback ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
+- `k2 project read` / `k2 project msg <name> "..."` — your project's
+  shared group chat. A message prefixed `[project:<name>]` came from
+  there: reply with `k2 project msg <name> "..."`, NEVER `k2 msg
+  <name>` (a Project is a group of workspaces, not a workspace —
+  `k2 msg` fails with workspace_not_found).
 - `k2 inbox` — check your own inbox at the start of every session.
 
 ## Do NOT
@@ -7225,6 +7235,11 @@ your manager agent's name).
 - `k2 feedback ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
+- `k2 project read` / `k2 project msg <name> "..."` — your project's
+  shared group chat. A message prefixed `[project:<name>]` came from
+  there: reply with `k2 project msg <name> "..."`, NEVER `k2 msg
+  <name>` (a Project is a group of workspaces, not a workspace —
+  `k2 msg` fails with workspace_not_found).
 - `k2 checkin` — your workspace's status + pending-work summary.
 
 ## Do NOT
@@ -7270,6 +7285,11 @@ __MANAGER__ (replace with your manager agent's name).
 - `k2 feedback ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
+- `k2 project read` / `k2 project msg <name> "..."` — your project's
+  shared group chat. A message prefixed `[project:<name>]` came from
+  there: reply with `k2 project msg <name> "..."`, NEVER `k2 msg
+  <name>` (a Project is a group of workspaces, not a workspace —
+  `k2 msg` fails with workspace_not_found).
 - `k2 checkin` — your workspace's status + pending-work summary.
 
 ## Do NOT
@@ -8354,9 +8374,10 @@ cmd_help_v2_daily() {
     cat <<'EOF'
 K2SO CLI — workspace orchestration for AI agents
 
-A workspace = a project folder K2SO knows about. Each workspace has
-one primary agent that reads its inbox, applies skills to work, and
-coordinates with other workspaces.
+A workspace = a folder K2SO manages, with exactly one primary agent
+that reads its inbox, applies skills to work, and coordinates with
+other workspaces. A Project is different: a NAMED GROUP of workspaces
+with one shared chat + one PoC agent (see PROJECTS below).
 
 TALK TO OTHERS
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)

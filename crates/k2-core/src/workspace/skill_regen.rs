@@ -132,7 +132,10 @@ fn compose_agents_md(project_path: &str) -> String {
         "## Tooling\n\n\
          This workspace is managed by **K2**. You have the `k2` CLI — load the **k2-cli** \
          skill (`.k2/skills/k2-cli/SKILL.md`) for the full command reference \
-         (`msg`, `inbox`, `activity`, `connections`, `heartbeat`).\n",
+         (`msg`, `inbox`, `activity`, `connections`, `heartbeat`, `feedback` to ask your \
+         human a durable question, `project` for your project group's shared chat — reply \
+         to a `[project:<name>]`-prefixed message with `k2 project msg <name> \"...\"`, \
+         never `k2 msg`).\n",
     );
     out
 }
@@ -166,6 +169,27 @@ k2 connections list
 ```
 k2 inbox compose --title "Fix login bug" --body "Users can't log in after reset"
 ```
+
+## Ask a human
+```
+k2 feedback ask "<title>" [--body "..."] [--options "a,b,c"] [--wait]
+k2 feedback list                               # your asks + their status
+k2 feedback show <id>                          # one ask: status, answer, thread
+```
+`feedback ask` files a durable question on your human's Feedback page — it
+survives your session and the answer comes back to you. Use it instead of a
+dead terminal prompt when you need a decision or approval.
+
+## Projects
+A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
+```
+k2 project read [<name>]         # catch up on the project's shared chat
+k2 project msg [<name>] "..."    # post to the shared chat
+```
+If a message arrives prefixed `[project:<name>]`, it came from that project's
+shared chat — reply with `k2 project msg <name> "your reply"`. Never use
+`k2 msg <name>` for this: `<name>` is a Project, not a workspace, and
+`k2 msg` will fail with `workspace_not_found`.
 
 ## Heartbeats
 ```

@@ -228,8 +228,9 @@ struct GlossaryEntry {
     definition: &'static str,
 }
 
-/// 17 glossary terms from PRD A10/A22/A23. Long-form definitions are
-/// the verbatim mock text where applicable.
+/// Glossary terms — the original 17 from PRD A10/A22/A23 (long-form
+/// definitions are the verbatim mock text where applicable) plus the
+/// 0.40.x `feedback` / `poc` / `project` surfaces.
 const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "activity",
@@ -257,6 +258,11 @@ const GLOSSARY: &[GlossaryEntry] = &[
         definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, A can read B's `who` / `activity` / inbox presence; B can show up in A's `workspace list`. Used for declaring \"these workspaces work together\" so K2SO surfaces the right context.\n\nManage via: `k2so connections list` / `add <path>` / `remove <path>`. Connections are symmetric (both sides see each other) and persisted per-workspace.\n\nNOT the same as: skill profiles (`k2so skills`), live sessions (`k2so workspace list --running`), or ngrok tunnel state (`k2so daemon companion`).",
     },
     GlossaryEntry {
+        term: "feedback",
+        summary: "Durable agent→human question on the Feedback page",
+        definition: "A durable question an agent files for its human: `k2 feedback ask \"<title>\"` (supports `--options` for tappable choices and `--wait` to block for the answer). The ask lands on the human's Feedback page, survives the agent's session, and the answer is delivered back to the agent — use it instead of a terminal prompt when you need a decision or approval.\n\nTrack with `k2 feedback list` / `k2 feedback show <id>`; full surface in `k2 feedback --help`.",
+    },
+    GlossaryEntry {
         term: "harness",
         summary: "IDE integration layer (Claude/Cursor config K2SO writes)",
         definition: "The IDE / agent-runtime layer K2SO integrates with — Claude Code, Cursor, etc. K2SO writes the harness's configuration files (settings.json, hooks.json) so the harness knows about K2SO's workflows, but K2SO does NOT manage the harness's runtime.\n\nSpecifically: the harness owns spawn lifecycle (sub-agents, worktrees, sessions). K2SO owns coordination surface (inbox, heartbeats, skills documentation, workspace metadata). Together they form a complete stack: harness for execution, K2SO for orchestration.\n\nSee also: `k2so help-deprecated delegate` for the Phase 2.1 handoff (K2SO no longer spawns; harness does); `k2so glossary skill` for skill profiles the harness loads on spawn.",
@@ -282,6 +288,16 @@ const GLOSSARY: &[GlossaryEntry] = &[
         definition: "First-launch flow for registering a new workspace or adopting an existing project. See `k2so onboarding --help`.",
     },
     GlossaryEntry {
+        term: "poc",
+        summary: "Point-of-contact workspace for a project group",
+        definition: "The point-of-contact workspace for a project (a named group of workspaces). Each project has exactly one PoC; its agent receives the project's shared-chat messages live, prefixed `[project:<name>]`. Reassign with `k2 project poc <project> <workspace>`. See `k2so glossary project`.",
+    },
+    GlossaryEntry {
+        term: "project",
+        summary: "Named GROUP of workspaces: one shared chat + one PoC agent",
+        definition: "A named GROUP of workspaces that share one chat and one PoC (point-of-contact) agent. NOT a workspace: a workspace is a single folder with one agent; a project groups several of them.\n\nChat: `k2 project read [<name>]` to catch up, `k2 project msg [<name>] \"...\"` to post. Posts are delivered live to the PoC agent prefixed `[project:<name>]`.\n\nIf you receive a message prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2 project msg <name> \"your reply\"`. Never `k2 msg <name>`: `<name>` is a project, not a workspace, and `k2 msg` fails with `workspace_not_found`.\n\nManage membership via `k2 project create|list|show|add|remove|poc` (see `k2 project --help`).",
+    },
+    GlossaryEntry {
         term: "signal",
         summary: "Typed event sent between workspaces (msg, status, presence, etc.)",
         definition: "A typed event K2SO sends between workspaces (msg, status, presence, reservation, task-lifecycle, custom). Sent via `k2so msg --signal <kind>`. The default `k2so msg <ws> \"text\"` is sugar for `--signal msg`.",
@@ -303,8 +319,8 @@ const GLOSSARY: &[GlossaryEntry] = &[
     },
     GlossaryEntry {
         term: "workspace",
-        summary: "A project folder K2SO knows about (has exactly one primary agent)",
-        definition: "A project folder that K2SO knows about. Has at most one primary agent, plus heartbeats, settings, and inbox. List all with `k2so workspace list`.",
+        summary: "A folder K2SO manages (has exactly one primary agent)",
+        definition: "A folder that K2SO manages. Has at most one primary agent, plus heartbeats, settings, and inbox. List all with `k2so workspace list`.\n\nNot to be confused with a *project*: a project is a named GROUP of workspaces sharing one chat + one PoC agent (see `k2so glossary project`). `k2 msg` takes a workspace name, never a project name.",
     },
     GlossaryEntry {
         term: "worktree",

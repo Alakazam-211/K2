@@ -388,6 +388,20 @@ k2so read <workspace> [--lines N] [--agent <name>]       # read its live termina
 
 Only workspaces linked via `k2so connections` are reachable.
 
+### Ask a human
+```
+k2so feedback ask "<title>" [--options "a,b,c"] [--wait]
+```
+Files a durable question on your human's Feedback page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Track answers with `k2so feedback list` / `k2so feedback show <id>`.
+
+### Projects (shared group chat)
+A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
+```
+k2so project read [<name>]        # catch up on the project's shared chat
+k2so project msg [<name>] "..."   # post to it
+```
+**If a message arrives prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2so project msg <name> "your reply"`. Never `k2so msg <name>` for this: `<name>` is a Project, not a workspace, and `msg` fails with `workspace_not_found`.**
+
 ### Discover peers + connections
 ```
 k2so connections list                          # workspaces with live agents now
@@ -485,6 +499,25 @@ k2so read <workspace> [--lines N] [--agent <name>]       # read its live termina
 **`talk` (BETA) — THE inter-agent interaction verb.** `k2so talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2so talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2so terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
 
 Only workspaces linked via `k2so connections` are reachable.
+
+## Ask a human
+
+```
+k2so feedback ask "<title>" [--options "a,b,c"] [--wait]
+```
+
+Files a durable question on your human's Feedback page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Track answers with `k2so feedback list` / `k2so feedback show <id>`.
+
+## Projects (shared group chat)
+
+A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
+
+```
+k2so project read [<name>]        # catch up on the project's shared chat
+k2so project msg [<name>] "..."   # post to it
+```
+
+**If a message arrives prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2so project msg <name> "your reply"`. Never `k2so msg <name>` for this: `<name>` is a Project, not a workspace, and `msg` fails with `workspace_not_found`.**
 
 ## Discover peers
 
@@ -637,6 +670,25 @@ k2so read <workspace> [--lines N] [--agent <name>]       # read its live termina
 **`talk` (BETA) — THE inter-agent interaction verb.** `k2so talk <workspace> "text"` FUSES read+send: it reads the recipient's live screen first (so you can't forget to look), then delivers via `msg`. This guards the *message-eaten* failure — if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow menu, a "proceed?" confirm), a blind `msg` is consumed as the ANSWER to that prompt instead of delivered. With `talk` you SEE the state, then JUDGE: **READY** → deliver; **a HITL you must NOT answer for** (a canonical/federation peer waiting on its OWNER's permission prompt, or any peer you lack standing over) → `k2so talk <workspace> --read-only` to back off and re-check in a few minutes; **a HITL you DO have standing over** → drive it via raw TUI control (`k2so terminal write <id> "y"/"1"/Enter…`), re-read, then deliver. Prefer `talk` over `msg` for any interactive/HITL-sensitive exchange; `msg` stays the deliberate fire-and-forget blind send.
 
 Only workspaces linked via `k2so connections` are reachable.
+
+## Ask a human
+
+```
+k2so feedback ask "<title>" [--options "a,b,c"] [--wait]
+```
+
+Files a durable question on your human's Feedback page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Track answers with `k2so feedback list` / `k2so feedback show <id>`.
+
+## Projects (shared group chat)
+
+A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
+
+```
+k2so project read [<name>]        # catch up on the project's shared chat
+k2so project msg [<name>] "..."   # post to it
+```
+
+**If a message arrives prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2so project msg <name> "your reply"`. Never `k2so msg <name>` for this: `<name>` is a Project, not a workspace, and `msg` fails with `workspace_not_found`.**
 
 ## Activity feed + reviews
 
@@ -1634,6 +1686,55 @@ mod tests {
                 "k2so connections",
             ],
         );
+    }
+
+    // ── feedback + project surfaces (0.40.x) ───────────────────────
+
+    #[test]
+    fn wake_skill_generators_teach_feedback_and_project() {
+        // Agents must learn `feedback ask` (durable agent→human
+        // questions) and the `project` group-chat surface — including
+        // the `[project:<name>]` reply rule — from every wake-time
+        // skill tier. Motivating incident: an agent that received a
+        // `[project:...]`-prefixed injection tried `k2 msg <project>`
+        // and got `workspace_not_found`.
+        let project_path = format!("/tmp/manager-projects-{}", Uuid::new_v4());
+        let cases: [(&str, String); 3] = [
+            (
+                "generate_manager_skill_content",
+                generate_manager_skill_content(&project_path, "P"),
+            ),
+            (
+                "generate_custom_agent_skill_content",
+                generate_custom_agent_skill_content("P", "a"),
+            ),
+            (
+                "generate_k2so_agent_skill_content",
+                generate_k2so_agent_skill_content("P", "a"),
+            ),
+        ];
+        for (generator, body) in &cases {
+            assert!(
+                body.contains("k2so feedback ask"),
+                "{generator} must teach `k2so feedback ask`"
+            );
+            assert!(
+                body.contains("k2so project msg"),
+                "{generator} must teach `k2so project msg`"
+            );
+            assert!(
+                body.contains("k2so project read"),
+                "{generator} must teach `k2so project read`"
+            );
+            assert!(
+                body.contains("[project:"),
+                "{generator} must teach the `[project:<name>]` reply rule"
+            );
+            assert!(
+                body.contains("workspace_not_found"),
+                "{generator} must warn that `msg <project>` fails with workspace_not_found"
+            );
+        }
     }
 
     // ── generate_template_skill_content ────────────────────────────

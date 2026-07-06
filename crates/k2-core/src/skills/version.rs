@@ -41,16 +41,24 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// the pre-Phase-2 deprecated surface (`k2so delegate`, `work *`,
 /// `agents create`, etc.). All four tiers re-roll on next startup so
 /// unmodified SKILL.md files stop telling agents to run dead commands.
-pub const SKILL_VERSION_MANAGER: u32 = 2;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 2;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 2;
+///
+/// Manager / K2SO-agent / custom-agent bumped to 3 in 0.40.x: skills
+/// now teach `feedback ask` (durable agent→human questions) and the
+/// `project` surface (project-group shared chat + the
+/// `[project:<name>]` reply rule).
+pub const SKILL_VERSION_MANAGER: u32 = 3;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 3;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 3;
 pub const SKILL_VERSION_TEMPLATE: u32 = 2;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).
-pub const SKILL_VERSION_WORKSPACE: u32 = 5;
+/// Bumped to 6 in 0.40.x: the loadable k2-cli skill gains the
+/// "Ask a human" (`k2 feedback`) and "Projects" (`k2 project`)
+/// sections.
+pub const SKILL_VERSION_WORKSPACE: u32 = 6;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

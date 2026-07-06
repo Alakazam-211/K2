@@ -533,6 +533,7 @@ External (scan these proactively when woken — customize for your project):
 - `k2so review approve <agent> <branch>` — merge completed work
 - `k2so terminal spawn --title "..." --command "..."` — run parallel tasks
 - `k2 feedback ask "<title>"` — ask your human a durable question (a decision, an approval); it sits on their Feedback page until answered instead of dying in a terminal prompt
+- `k2 project read` / `k2 project msg <name> "..."` — your project group's shared chat (a Project = a named GROUP of workspaces with one PoC agent); a message prefixed `[project:<name>]` came from that chat — reply with `k2 project msg <name> "..."`, never `k2 msg <name>` (fails with `workspace_not_found`)
 
 ## Standing Orders
 
@@ -589,6 +590,7 @@ r#"## Specialization
 
 - If you need clarification, move the task back to inbox with a note
 - If you need a human decision or approval, file `k2 feedback ask "<title>"` — it stays on their Feedback page until answered, and the answer comes back to you
+- If a message arrives prefixed `[project:<name>]`, it came from that project's shared group chat — reply with `k2 project msg <name> "..."`, never `k2 msg <name>` (a Project is a group of workspaces, not a workspace; `k2 msg` fails with `workspace_not_found`)
 - If you need another agent's work first, document the dependency in the task file
 - Never edit files outside your worktree
 "#,
@@ -615,6 +617,7 @@ You run on an adaptive heartbeat. Adjust your check-in frequency based on what y
 - `k2so terminal spawn --title "..." --command "..."` — run parallel tasks
 - `k2so heartbeat set --interval N --phase "..."` — adjust your check-in frequency
 - `k2 feedback ask "<title>"` — ask your human a durable question (a decision, an approval); it sits on their Feedback page until answered instead of dying in a terminal prompt
+- `k2 project read` / `k2 project msg <name> "..."` — your project group's shared chat (a Project = a named GROUP of workspaces with one PoC agent); a message prefixed `[project:<name>]` came from that chat — reply with `k2 project msg <name> "..."`, never `k2 msg <name>` (fails with `workspace_not_found`)
 - Standard CLI tools available in your terminal: `gh`, `git`, `curl`, etc.
 
 ## Standing Orders
@@ -661,6 +664,7 @@ External (add your project-specific sources below — CLI tools only, no MCP):
 - `git` — Version control operations
 - `curl` / `jq` — API calls and JSON processing
 - `k2 feedback ask "<title>"` — ask your human a durable question (a decision, an approval); it sits on their Feedback page until answered instead of dying in a terminal prompt
+- `k2 project read` / `k2 project msg <name> "..."` — your project group's shared chat (a Project = a named GROUP of workspaces with one PoC agent); a message prefixed `[project:<name>]` came from that chat — reply with `k2 project msg <name> "..."`, never `k2 msg <name>` (fails with `workspace_not_found`)
 
 ## Constraints
 

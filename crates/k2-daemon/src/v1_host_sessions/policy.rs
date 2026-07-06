@@ -28,10 +28,13 @@
 //!   stripped.
 //! - `env` = HOST-CURATED ONLY. The caller's env is DROPPED ENTIRELY (no
 //!   field). The base layer is the resolved preset's own `env` metadata
-//!   (migration 0070 — host data, not caller data); the Anthropic key is
-//!   staged ON TOP from the PRINCIPAL's api_keys row (0058
-//!   `anthropic_api_key`) exactly as cells do — never from the body, and
-//!   K2-curated entries always override preset entries.
+//!   (migration 0070 — host data, not caller data); the PRINCIPAL's stored
+//!   LLM credential is staged ON TOP from its api_keys row under the env
+//!   var(s) the row's `provider` metadata maps to (W5, migration 0071 —
+//!   [`k2_core::api_keys::ApiPrincipal::staged_env_pairs`]; NULL provider =
+//!   anthropic → ANTHROPIC_API_KEY exactly as before; unknown provider →
+//!   NOTHING, fail-closed) — never from the body, and K2-curated entries
+//!   always override preset entries.
 //! - `agent_name` host-minted `api-<principal>-<uuid>` (the same anti-hijack
 //!   namespace as the sandbox doors — can't collide with `tab-…`/pinned keys,
 //!   and `v2_session_map` labels `api-…` passthrough sessions `backend:"host"`
@@ -45,7 +48,6 @@ use k2_core::log_debug;
 use k2_core::session::SessionId;
 
 use crate::routes::http::V1Principal;
-use crate::session_token::Provider;
 use crate::v2_spawn::SpawnRequest;
 
 /// The UNTRUSTED public request body for `POST /v1/w/<ws>/host-sessions`.
@@ -278,25 +280,36 @@ pub fn resolve_host_spawn(
 
     // (5) Host-curated env. The caller's env is DROPPED ENTIRELY (the body
     // has no env field). Base layer: the resolved preset's own env metadata
-    // (migration 0070 — host-owned data). On top: the Anthropic key staged
-    // from the PRINCIPAL's api_keys row — never the body, never logged —
-    // which OVERRIDES a same-named preset entry (K2-curated env wins). An
+    // (migration 0070 — host-owned data). On top: the PRINCIPAL's stored
+    // LLM credential, staged under the env var(s) its `provider` metadata
+    // maps to (W5, migration 0071 — `ApiPrincipal::staged_env_pairs`: NULL
+    // provider = anthropic → exactly ANTHROPIC_API_KEY, the pre-0071
+    // behavior; openai → OPENAI_API_KEY [+OPENAI_BASE_URL]; google →
+    // GEMINI_API_KEY+GOOGLE_API_KEY; xai → XAI_API_KEY; UNKNOWN provider →
+    // NOTHING, fail-closed). Never from the body, never logged; K2-staged
+    // entries OVERRIDE same-named preset entries (K2-curated env wins). An
     // Owner-token principal stages nothing (own-use: the host's ambient
-    // login applies). Env VALUES are never logged.
+    // login applies). Env VALUES are never logged — only var NAMES.
     let mut env: HashMap<String, String> = resolved.env_map();
     if let V1Principal::Api(p) = principal {
-        match p.anthropic_key.as_deref().map(str::trim) {
-            Some(key) if !key.is_empty() => {
-                env.insert(Provider::Anthropic.key_env_var().to_string(), key.to_string());
-                log_debug!(
-                    "[v1-host] staged principal Anthropic key into host-session env (principal={})",
-                    p.id
-                );
-            }
-            _ => log_debug!(
-                "[v1-host] principal={} has no usable Anthropic key; host session uses the host's ambient credential",
+        let staged = p.staged_env_pairs();
+        if staged.is_empty() {
+            // No usable credential OR unknown provider (the seam already
+            // logged the structured unknown-provider warning).
+            log_debug!(
+                "[v1-host] principal={} staged no LLM credential; host session uses the host's ambient credential",
                 p.id
-            ),
+            );
+        } else {
+            let names: Vec<&str> = staged.iter().map(|(k, _)| k.as_str()).collect();
+            log_debug!(
+                "[v1-host] staged principal LLM credential into host-session env vars {:?} (principal={})",
+                names,
+                p.id
+            );
+            for (k, v) in staged {
+                env.insert(k, v);
+            }
         }
     }
 
@@ -344,11 +357,21 @@ mod tests {
     use super::*;
 
     fn api(id: &str, key: Option<&str>) -> V1Principal {
+        api_with_provider(id, key, None, None)
+    }
+
+    /// W5 — an API principal with explicit provider/base_url metadata.
+    fn api_with_provider(
+        id: &str,
+        key: Option<&str>,
+        provider: Option<&str>,
+        base_url: Option<&str>,
+    ) -> V1Principal {
         V1Principal::Api(k2_core::api_keys::ApiPrincipal {
             id: id.to_string(),
             anthropic_key: key.map(str::to_string),
-            provider: None,
-            base_url: None,
+            provider: provider.map(str::to_string),
+            base_url: base_url.map(str::to_string),
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
         })
@@ -544,6 +567,85 @@ mod tests {
             spawn.forced_session_id,
             Some(forced),
             "the daemon session id stays the forced one"
+        );
+    }
+
+    /// W5 — an openai-provider principal stages OPENAI_API_KEY (+ the
+    /// OPENAI_BASE_URL pass-through) and NOT ANTHROPIC_API_KEY, so a
+    /// codex-preset workspace's agent boots authenticated over the API.
+    #[test]
+    fn openai_provider_key_stages_openai_env_vars() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-openai";
+        insert_project("v1host-policy-openai", ws_path);
+
+        let spawn = resolve_host_spawn(
+            &api_with_provider(
+                "key-oai",
+                Some("sk-oai-host-key"),
+                Some("openai"),
+                Some("https://oai-proxy.example/v1"),
+            ),
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        let env = spawn.env.as_ref().expect("env present");
+        assert_eq!(env.get("OPENAI_API_KEY").map(String::as_str), Some("sk-oai-host-key"));
+        assert_eq!(
+            env.get("OPENAI_BASE_URL").map(String::as_str),
+            Some("https://oai-proxy.example/v1"),
+            "base_url pass-through rides with the openai key"
+        );
+        assert!(
+            env.get("ANTHROPIC_API_KEY").is_none(),
+            "an openai key must NOT masquerade as an Anthropic credential"
+        );
+        assert_eq!(env.len(), 2, "exactly the openai pair — nothing else invented");
+    }
+
+    /// W5 — a google-provider principal stages the credential under BOTH
+    /// GEMINI_API_KEY and GOOGLE_API_KEY.
+    #[test]
+    fn google_provider_key_stages_both_google_vars() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-google";
+        insert_project("v1host-policy-google", ws_path);
+
+        let spawn = resolve_host_spawn(
+            &api_with_provider("key-goo", Some("goog-key-1"), Some("google"), None),
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        let env = spawn.env.as_ref().expect("env present");
+        assert_eq!(env.get("GEMINI_API_KEY").map(String::as_str), Some("goog-key-1"));
+        assert_eq!(env.get("GOOGLE_API_KEY").map(String::as_str), Some("goog-key-1"));
+        assert!(env.get("ANTHROPIC_API_KEY").is_none());
+        assert_eq!(env.len(), 2);
+    }
+
+    /// W5 — FAIL-CLOSED: an unknown provider stages NOTHING (no guessed
+    /// env var, no Anthropic fallback, never the value anywhere).
+    #[test]
+    fn unknown_provider_stages_nothing() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-unkprov";
+        insert_project("v1host-policy-unkprov", ws_path);
+
+        let spawn = resolve_host_spawn(
+            &api_with_provider("key-unk", Some("sk-mystery"), Some("mystery-llm"), None),
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        assert_eq!(
+            spawn.env.as_ref().map(|e| e.len()),
+            Some(0),
+            "unknown provider must stage NOTHING (fail-closed)"
         );
     }
 

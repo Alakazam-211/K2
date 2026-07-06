@@ -20,8 +20,11 @@
 //!   ([`resolve_workspace_session`]) resolves the WORKSPACE'S CONFIGURED agent
 //!   via the de-generalization seam ([`k2_core::workspace::agent_resolve`]).
 //! - `env` = HOST-CURATED ONLY. The caller's env is DROPPED ENTIRELY. The
-//!   Anthropic key is staged from the PRINCIPAL (never the body), reusing B3a's
-//!   `Provider → key_env_var` mapping.
+//!   PRINCIPAL's stored LLM credential is staged (never the body) under the
+//!   env var(s) its `provider` metadata maps to (W5, migration 0071 —
+//!   [`k2_core::api_keys::ApiPrincipal::staged_env_pairs`]; NULL provider =
+//!   anthropic → ANTHROPIC_API_KEY, the original behavior; unknown provider
+//!   → NOTHING, fail-closed).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -31,7 +34,6 @@ use k2_core::session::SessionId;
 use k2_core::terminal::sandbox::WorkspaceMountSpec;
 
 use crate::routes::http::V1Principal;
-use crate::session_token::Provider;
 use crate::v2_spawn::SpawnRequest;
 
 /// The UNTRUSTED public request body. Every field is a HINT, never a trust
@@ -269,24 +271,36 @@ fn provision_ephemeral_workspace() -> Result<PathBuf, PolicyError> {
 /// ever logged.
 fn build_cell_env(principal: &V1Principal, req: &ApiSandboxRequest) -> HashMap<String, String> {
     let mut env: HashMap<String, String> = HashMap::new();
-    // Anthropic key — from the PRINCIPAL only (reuses B3a's Provider mapping).
+    // LLM credential — from the PRINCIPAL only, staged under the env var(s)
+    // its `provider` metadata maps to (W5, migration 0071 —
+    // `ApiPrincipal::staged_env_pairs`: NULL provider = anthropic →
+    // ANTHROPIC_API_KEY exactly as before; unknown provider → NOTHING,
+    // fail-closed). Env VALUES are never logged — only var NAMES.
     match principal {
-        V1Principal::Api(p) => match p.anthropic_key.as_deref().map(str::trim) {
-            Some(key) if !key.is_empty() => {
-                env.insert(Provider::Anthropic.key_env_var().to_string(), key.to_string());
+        V1Principal::Api(p) => {
+            let staged = p.staged_env_pairs();
+            if staged.is_empty() {
+                // No usable credential OR unknown provider (the seam already
+                // logged the structured unknown-provider warning).
                 log_debug!(
-                    "[v1-sandbox] staged principal Anthropic key into session env (principal={})",
+                    "[v1-sandbox] principal={} staged no LLM credential; cell will have no model credential",
                     p.id
                 );
+            } else {
+                let names: Vec<&str> = staged.iter().map(|(k, _)| k.as_str()).collect();
+                log_debug!(
+                    "[v1-sandbox] staged principal LLM credential into session env vars {:?} (principal={})",
+                    names,
+                    p.id
+                );
+                for (k, v) in staged {
+                    env.insert(k, v);
+                }
             }
-            _ => log_debug!(
-                "[v1-sandbox] principal={} has no usable Anthropic key; cell will have no model credential",
-                p.id
-            ),
-        },
+        }
         V1Principal::Owner => {
             log_debug!(
-                "[v1-sandbox] owner principal: no app-level Anthropic key fallback (follow-up); none staged"
+                "[v1-sandbox] owner principal: no app-level LLM key fallback (follow-up); none staged"
             );
         }
     }
@@ -931,6 +945,59 @@ mod tests {
             spawn.env.as_ref().unwrap().get("ANTHROPIC_API_KEY").is_none(),
             "a blank key must never produce an ANTHROPIC_API_KEY entry",
         );
+    }
+
+    /// W5 — an openai-provider principal stages OPENAI_API_KEY (+ base URL)
+    /// into the cell env instead of ANTHROPIC_API_KEY; an unknown provider
+    /// stages NOTHING (fail-closed) while the recipe defaults survive.
+    #[test]
+    fn resolve_stages_provider_mapped_key() {
+        let principal = V1Principal::Api(k2_core::api_keys::ApiPrincipal {
+            id: "key-uuid-oai".to_string(),
+            anthropic_key: Some("sk-oai-cell-key".to_string()),
+            provider: Some("openai".to_string()),
+            base_url: Some("https://oai-proxy.example/v1".to_string()),
+            scope: "owner".to_string(),
+            allowed_workspaces: Some("*".to_string()),
+        });
+        let spawn = resolve_spawn(&principal, &ApiSandboxRequest::default())
+            .expect("resolve must succeed");
+        if let Some(d) = spawn.ephemeral_cwd.as_ref() {
+            let _ = std::fs::remove_dir_all(d);
+        }
+        let env = spawn.env.as_ref().expect("env present");
+        assert_eq!(env.get("OPENAI_API_KEY").map(String::as_str), Some("sk-oai-cell-key"));
+        assert_eq!(
+            env.get("OPENAI_BASE_URL").map(String::as_str),
+            Some("https://oai-proxy.example/v1"),
+        );
+        assert!(
+            env.get("ANTHROPIC_API_KEY").is_none(),
+            "an openai key must not be staged as an Anthropic credential",
+        );
+
+        // Unknown provider → NOTHING staged (fail-closed); the 6 recipe vars
+        // + continuity settings remain (same census as the keyless test).
+        let principal = V1Principal::Api(k2_core::api_keys::ApiPrincipal {
+            id: "key-uuid-unk".to_string(),
+            anthropic_key: Some("sk-mystery".to_string()),
+            provider: Some("mystery-llm".to_string()),
+            base_url: None,
+            scope: "owner".to_string(),
+            allowed_workspaces: Some("*".to_string()),
+        });
+        let spawn = resolve_spawn(&principal, &ApiSandboxRequest::default())
+            .expect("resolve must succeed");
+        if let Some(d) = spawn.ephemeral_cwd.as_ref() {
+            let _ = std::fs::remove_dir_all(d);
+        }
+        let env = spawn.env.as_ref().expect("env present");
+        assert!(
+            !env.keys().any(|k| k.contains("API_KEY")),
+            "unknown provider must stage NO credential var; env keys: {:?}",
+            env.keys().collect::<Vec<_>>(),
+        );
+        assert_eq!(env.len(), 7, "unknown-provider env census = keyless census");
     }
 
     /// Two resolves yield DISTINCT ephemeral dirs + distinct host-minted names.

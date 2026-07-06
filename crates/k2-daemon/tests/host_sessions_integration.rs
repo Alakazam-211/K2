@@ -599,6 +599,120 @@ async fn preset_env_reaches_spawned_child_environment() {
     let _ = std::fs::remove_dir_all(&dump_dir);
 }
 
+/// W5 provider-aware principal staging, END-TO-END: an API key minted with
+/// `provider: "openai"` + `baseUrl` (through the REAL create route) spawns a
+/// host session whose child process observes OPENAI_API_KEY + OPENAI_BASE_URL
+/// — and NO ANTHROPIC_API_KEY — in its environment. Proves the whole chain
+/// (create route → api_keys row 0071 → resolve_api_key principal →
+/// staged_env_pairs → policy resolver → v2 spawn → child env).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_mapped_principal_key_reaches_child_environment() {
+    let _g = lock();
+    let _env = HostEnv::set(true);
+    // The spawned PTY inherits this (daemon) process's env — scrub any
+    // ambient credential vars so the ANTH_KEY_SEEN=unset assertion is about
+    // K2's staging, not the developer's shell. Restored at the end.
+    let scrubbed: Vec<(&str, Option<std::ffi::OsString>)> =
+        ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL"]
+            .iter()
+            .map(|n| {
+                let prev = std::env::var_os(n);
+                std::env::remove_var(n);
+                (*n, prev)
+            })
+            .collect();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    setup_project("hs-provider-env");
+
+    // Env-dumping shim (basename `claude` so provider grammar applies): echo
+    // presence + values of the three interesting vars, then exec cat. The
+    // credential here is a TEST fixture, not a real secret.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dump_dir = std::env::temp_dir()
+        .join(format!("k2-host-sess-provshim-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dump_dir).expect("create provider shim dir");
+    let dump_shim = dump_dir.join("claude");
+    std::fs::write(
+        &dump_shim,
+        "#!/bin/sh\n\
+         echo \"OAI_KEY_SEEN=${OPENAI_API_KEY:-unset}\"\n\
+         echo \"OAI_URL_SEEN=${OPENAI_BASE_URL:-unset}\"\n\
+         echo \"ANTH_KEY_SEEN=${ANTHROPIC_API_KEY:-unset}\"\n\
+         exec cat\n",
+    )
+    .expect("write provider shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dump_shim, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod provider shim");
+    }
+    configure_ws_agent("hs-provider-env", &dump_shim.to_string_lossy());
+
+    // Mint the openai-provider key through the REAL route (W5 additive body).
+    let body = serde_json::json!({
+        "label": "hs-provider-env-key",
+        "llmKey": "sk-oai-e2e-fixture",
+        "provider": "openai",
+        "baseUrl": "https://oai-proxy.example/v1",
+        "workspaces": ["hs-provider-env"],
+    })
+    .to_string();
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/cli/api-keys/create?token={OWNER_TOKEN}"),
+        Some(&body),
+    )
+    .await;
+    assert_eq!(status, 200, "provider'd api-key create failed: {resp}");
+    let key = json(&resp)["key"].as_str().expect("raw key").to_string();
+
+    // Spawn AS the API-key principal.
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-provider-env/host-sessions?token={key}"),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(status, 200, "spawn failed: {resp}");
+    let v = json(&resp);
+    let session_id = v["sessionId"].as_str().expect("sessionId").to_string();
+    let agent_name = v["agentName"].as_str().expect("agentName").to_string();
+
+    assert_text_appears(
+        &session_id,
+        "OAI_KEY_SEEN=sk-oai-e2e-fixture",
+        "OPENAI_API_KEY must reach the spawned child's environment",
+    )
+    .await;
+    assert_text_appears(
+        &session_id,
+        "OAI_URL_SEEN=https://oai-proxy.example/v1",
+        "OPENAI_BASE_URL pass-through must reach the child",
+    )
+    .await;
+    assert_text_appears(
+        &session_id,
+        "ANTH_KEY_SEEN=unset",
+        "an openai-provider key must NOT stage ANTHROPIC_API_KEY",
+    )
+    .await;
+
+    close_session(d.port, &agent_name).await;
+    let _ = std::fs::remove_dir_all(&dump_dir);
+    for (name, prev) in scrubbed {
+        match prev {
+            Some(v) => std::env::set_var(name, v),
+            None => std::env::remove_var(name),
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 3 — 404 uniformity + canonical guard + shape guards
 // ─────────────────────────────────────────────────────────────────────

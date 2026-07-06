@@ -128,12 +128,22 @@ pub enum CredMode {
 /// today; adding a provider later is ONE enum arm + its key env var, no
 /// architecture change. Resolved host-side + bound in the token claim; read
 /// from the VALIDATED token, never the request body.
+///
+/// SCOPE NOTE (W5, 0.40.30): this enum covers ONLY the B3a PER-WORKSPACE
+/// key staged into scoped-hook microVM cells (`cell_env_pairs`; the 0056
+/// `projects.anthropic_api_key` store, which carries no provider metadata).
+/// The `/v1` PRINCIPAL credential path is provider-aware separately via
+/// [`k2_core::api_keys::LlmProvider`] +
+/// [`k2_core::api_keys::ApiPrincipal::staged_env_pairs`] — extend THAT
+/// mapping for principal keys, and this enum only when the per-workspace
+/// store learns providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     #[default]
     Anthropic,
-    // TODO(provider): OpenAI→OPENAI_API_KEY, Gemini→GEMINI_API_KEY
+    // TODO(provider): OpenAI→OPENAI_API_KEY, Gemini→GEMINI_API_KEY (see
+    // SCOPE NOTE — mirror k2_core::api_keys::LlmProvider when built).
 }
 
 impl Provider {

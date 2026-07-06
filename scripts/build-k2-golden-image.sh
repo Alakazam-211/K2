@@ -41,8 +41,11 @@ EOF
 )
 
 log "creating bake VM ($SERVER_TYPE, $BASE_IMAGE, $LOCATION)"
+USER_DATA_FILE=$(mktemp)
+printf '%s\n' "$USER_DATA" > "$USER_DATA_FILE"
 hcloud server create --name "$NAME" --type "$SERVER_TYPE" --image "$BASE_IMAGE" \
-	--location "$LOCATION" --user-data "$USER_DATA" >/dev/null
+	--location "$LOCATION" --user-data-from-file "$USER_DATA_FILE" >/dev/null
+rm -f "$USER_DATA_FILE"
 
 cleanup() { hcloud server delete "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT

@@ -90,7 +90,11 @@ LIBKRUNFW_REAL=$(cd "$K2_LIB_DIR" && ls libkrunfw.so.*.*.* 2>/dev/null | head -1
 	|| die "guest base has no k2-guest-init — wrong/stale rootfs?"
 [ -f "$K2_GUEST_BASE/root/.claude.json" ] \
 	|| die "guest base missing seeded /root/.claude.json (claude exits rc=2 without it)"
-for t in k2 k2-hook-forwarder claude node; do
+# W7 de-Claudify: codex/gemini/copilot/pi joined the guest recipe
+# (build-guest.sh EXTRA_AGENT_PKGS) so non-claude presets can run in cells.
+# A pre-W7 guest base FAILS here on purpose — re-bake before packaging.
+# (Validated only at the next Linux image bake; no Linux build runs on a Mac.)
+for t in k2 k2-hook-forwarder claude codex gemini copilot pi node; do
 	[ -e "$K2_GUEST_BASE/usr/local/bin/$t" ] || die "guest base missing /usr/local/bin/$t"
 done
 

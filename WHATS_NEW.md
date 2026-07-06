@@ -3,6 +3,21 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.29 — Companion groundwork
+
+- **Push notifications for the K2 Companion app.** Your daemon can now
+  register a phone for notifications and hand off alerts (a new feedback
+  request, a project message from someone else) to deliver to it — all
+  opt-in and content-free. Dormant until you turn push on; nothing leaves
+  your machine otherwise.
+- **Claim a terminal's size from your phone.** When you open a shared
+  session in the Companion app, your phone can pin the terminal to fit its
+  screen without other viewers fighting you for the dimensions. The pin is
+  ephemeral — it clears the moment you disconnect.
+- **Linux daemon downloads now work.** Headless and cloud installs can
+  fetch and self-update to signed Linux daemon builds — the release
+  pipeline now signs those artifacts correctly for the first time.
+
 ## 0.40.28 — Projects
 
 - **Projects: group your agents into one effort.** A new top-level page

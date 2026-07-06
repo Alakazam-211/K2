@@ -1755,8 +1755,20 @@ cmd_daemon_install() {
         fi
     fi
 
+    # The embedded pubkey is tauri-format: base64 of the full two-line
+    # minisign public-key file. `minisign -P` wants the bare key line,
+    # so decode to a file and verify with `-p`.
+    local pub_file="$tmp/minisign.pub"
+    if { printf '%s' "$_DAEMON_MINISIGN_PUBKEY" | base64 -d > "$pub_file" 2>/dev/null \
+         || printf '%s' "$_DAEMON_MINISIGN_PUBKEY" | base64 -D > "$pub_file" 2>/dev/null; } \
+        && head -c 17 "$pub_file" | grep -q "untrusted comment"; then
+        :
+    else
+        printf 'untrusted comment: minisign public key\n%s\n' "$_DAEMON_MINISIGN_PUBKEY" > "$pub_file"
+    fi
+
     echo "Verifying minisign signature..."
-    if ! minisign -Vm "$dl_bin" -P "$_DAEMON_MINISIGN_PUBKEY" -x "$dl_sig" >/dev/null 2>&1; then
+    if ! minisign -Vm "$dl_bin" -p "$pub_file" -x "$dl_sig" >/dev/null 2>&1; then
         echo "MINISIGN VERIFICATION FAILED for $url" >&2
         echo "Refusing to install. The binary may be corrupt or tampered with." >&2
         return 1

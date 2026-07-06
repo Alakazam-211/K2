@@ -233,8 +233,21 @@ if ! head -c 17 "$DL_SIG" | grep -q "untrusted comment"; then
     fi
 fi
 
+# K2_DAEMON_PUBKEY is the tauri-format pubkey: base64 of the full
+# two-line minisign public-key file. `minisign -P` wants the bare key
+# line, so decode to a file and verify with `-p` (raw-key fallback kept
+# for overridden env values).
+PUB_FILE="$TMP/minisign.pub"
+if { printf '%s' "$K2_DAEMON_PUBKEY" | base64 -d > "$PUB_FILE" 2>/dev/null \
+     || printf '%s' "$K2_DAEMON_PUBKEY" | base64 -D > "$PUB_FILE" 2>/dev/null; } \
+    && head -c 17 "$PUB_FILE" | grep -q "untrusted comment"; then
+    : # decoded two-line pubkey file ready
+else
+    printf 'untrusted comment: minisign public key\n%s\n' "$K2_DAEMON_PUBKEY" > "$PUB_FILE"
+fi
+
 echo "Verifying minisign signature..."
-if ! minisign -Vm "$DL_BIN" -P "$K2_DAEMON_PUBKEY" -x "$DL_SIG" >/dev/null 2>&1; then
+if ! minisign -Vm "$DL_BIN" -p "$PUB_FILE" -x "$DL_SIG" >/dev/null 2>&1; then
     echo "MINISIGN VERIFICATION FAILED for $URL" >&2
     die "Refusing to install. The binary may be corrupt or tampered with."
 fi

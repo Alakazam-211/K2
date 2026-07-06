@@ -57,18 +57,24 @@ import {
   deleteProjectGroup,
   deleteProjectGroupDashboard,
   fetchProjectGroupHtmlDocs,
+  fetchProjectGroupIcon,
   fetchProjectGroupShow,
+  normalizeHexColor,
   pinProjectGroup,
   removeProjectGroupMember,
   renameProjectGroup,
   renameProjectGroupDashboard,
   reorderProjectGroupDashboards,
   saveDashboardLayout,
+  setProjectGroupColor,
+  setProjectGroupIcon,
   setProjectGroupPoc,
   type ProjectGroupDashboard,
   type ProjectGroupHtmlDoc,
   type ProjectGroupShow,
 } from './projects-api'
+import { GROUP_AVATAR_COLORS, groupAvatarColor } from './ProjectGroupAvatar'
+import IconCropDialog from '@/components/Settings/IconCropDialog'
 import {
   addableWorkspaces,
   appendHtmlDocColumn,
@@ -583,6 +589,83 @@ function ProjectSettingsDetail({
     }
   }, [detail.id, revision])
 
+  // ── §6.7.7 Icon + color ──────────────────────────────────────────────
+  // The icon rides its own GET (not in show payloads); refetch on the
+  // store revision so another client's upload lands here live (set-icon
+  // emits groups-changed). null = still loading (controls suspend).
+  const [icon, setIcon] = useState<{ found: boolean; dataUrl: string | null } | null>(null)
+  const [iconBusy, setIconBusy] = useState(false)
+  const [cropImage, setCropImage] = useState<string | null>(null)
+  const iconInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetchProjectGroupIcon(detail.id)
+      .then((res) => {
+        if (!cancelled) setIcon(res)
+      })
+      .catch(() => {
+        // Advisory decoration — fall back to "no icon" controls.
+        if (!cancelled) setIcon({ found: false, dataUrl: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [detail.id, revision])
+
+  const handleIconFileSelected = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => setCropImage(reader.result as string)
+    reader.readAsDataURL(file)
+    // Reset input so the same file can be re-selected (workspace idiom).
+    e.target.value = ''
+  }
+
+  const saveIcon = useCallback(
+    async (dataUrl: string | null): Promise<void> => {
+      setIconBusy(true)
+      try {
+        await setProjectGroupIcon(detail.id, dataUrl)
+        // Optimistic — the groups-changed refetch confirms it.
+        setIcon({ found: dataUrl !== null, dataUrl })
+      } catch (err) {
+        useToastStore.getState().addToast(`Icon save failed: ${errorMessage(err)}`, 'error')
+      } finally {
+        setIconBusy(false)
+      }
+    },
+    [detail.id],
+  )
+
+  // Custom-hex color input (§6.7.7 — the 10-swatch palette + a free
+  // `#rrggbb` field; Enter applies, invalid shows inline).
+  const [customHex, setCustomHex] = useState('')
+  const [hexError, setHexError] = useState(false)
+
+  const saveColor = useCallback(
+    async (color: string | null): Promise<void> => {
+      try {
+        await setProjectGroupColor(detail.id, color)
+        // groups-changed refetches the list + show with the new color.
+      } catch (err) {
+        useToastStore.getState().addToast(`Color change failed: ${errorMessage(err)}`, 'error')
+      }
+    },
+    [detail.id],
+  )
+
+  const commitCustomHex = useCallback((): void => {
+    const normalized = normalizeHexColor(customHex)
+    if (normalized === null) {
+      setHexError(customHex.trim().length > 0)
+      return
+    }
+    setHexError(false)
+    setCustomHex('')
+    void saveColor(normalized)
+  }, [customHex, saveColor])
+
   // ── Members: add picker + remove ─────────────────────────────────────
   const [adding, setAdding] = useState(false)
   const [addQuery, setAddQuery] = useState('')
@@ -664,7 +747,23 @@ function ProjectSettingsDetail({
     return m?.agentName ?? m?.name ?? workspaceId.slice(0, 8)
   }
 
+  // The group's effective avatar color — canonical when set, else the
+  // stable hashed pick (what the nav renders without an override).
+  const effectiveColor = detail.color ?? groupAvatarColor(detail.id)
+  const firstLetter = (detail.name.trim()[0] ?? '?').toUpperCase()
+
   return (
+    <>
+    {cropImage && (
+      <IconCropDialog
+        imageDataUrl={cropImage}
+        onConfirm={(cropped) => {
+          setCropImage(null)
+          void saveIcon(cropped)
+        }}
+        onCancel={() => setCropImage(null)}
+      />
+    )}
     <div className="grid gap-6 grid-cols-[minmax(0,42rem)]">
       {/* ── Header ── */}
       <div className="min-w-0">
@@ -698,6 +797,132 @@ function ProjectSettingsDetail({
                   await renameProjectGroup(detail.id, name)
                 }}
               />
+            )}
+          </div>
+          {/* ── Icon (§6.7.7 — the workspace uploader idiom: preview +
+              file picker → crop/downscale → set-icon; Remove clears) ── */}
+          <div className="flex items-center gap-3 px-3 py-2">
+            <span className="text-[11px] text-[var(--color-text-secondary)] w-20 flex-shrink-0">
+              Icon
+            </span>
+            <div
+              className="flex-shrink-0 flex items-center justify-center overflow-hidden"
+              style={{
+                width: 48,
+                height: 48,
+                backgroundColor: icon?.dataUrl ? 'transparent' : effectiveColor,
+                border: icon?.dataUrl ? `2px solid ${effectiveColor}` : 'none',
+              }}
+            >
+              {icon?.dataUrl ? (
+                <img
+                  src={icon.dataUrl}
+                  alt={detail.name}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
+                />
+              ) : (
+                <span className="text-white font-bold" style={{ fontSize: 22, lineHeight: 1 }}>
+                  {firstLetter}
+                </span>
+              )}
+            </div>
+            {!readOnly && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => iconInputRef.current?.click()}
+                  disabled={iconBusy || icon === null}
+                  className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {iconBusy ? 'Working...' : 'Upload'}
+                </button>
+                <input
+                  ref={iconInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml,image/x-icon"
+                  className="hidden"
+                  onChange={handleIconFileSelected}
+                />
+                {icon?.dataUrl && (
+                  <button
+                    type="button"
+                    onClick={() => void saveIcon(null)}
+                    disabled={iconBusy}
+                    className="px-2.5 py-1 text-xs text-red-400 border border-red-500/30 hover:bg-red-500/10 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          {/* ── Color (§6.7.7 — the avatar palette as swatches + Auto +
+              a custom #rrggbb field; canonical, everyone sees it) ── */}
+          <div className="flex items-center gap-3 px-3 py-2">
+            <span className="text-[11px] text-[var(--color-text-secondary)] w-20 flex-shrink-0">
+              Color
+            </span>
+            {readOnly ? (
+              <span className="flex items-center gap-2 text-xs text-[var(--color-text-primary)]">
+                <span
+                  className="w-4 h-4 flex-shrink-0 inline-block"
+                  style={{ backgroundColor: effectiveColor }}
+                />
+                {detail.color ?? 'Auto'}
+              </span>
+            ) : (
+              <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                {/* Auto — clear back to the stable hashed pick. */}
+                <button
+                  type="button"
+                  onClick={() => void saveColor(null)}
+                  title="Auto — the stable per-project color"
+                  className={`w-4 h-4 flex-shrink-0 no-drag cursor-pointer transition-transform text-[8px] font-bold leading-none text-white/80 ${
+                    detail.color === null ? 'scale-125 ring-1 ring-white/50' : 'hover:scale-110'
+                  }`}
+                  style={{ backgroundColor: groupAvatarColor(detail.id) }}
+                >
+                  A
+                </button>
+                {GROUP_AVATAR_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    onClick={() => void saveColor(color)}
+                    className={`w-4 h-4 flex-shrink-0 no-drag cursor-pointer transition-transform ${
+                      detail.color === color ? 'scale-125 ring-1 ring-white/50' : 'hover:scale-110'
+                    }`}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+                <input
+                  type="text"
+                  value={customHex}
+                  onChange={(e) => {
+                    setCustomHex(e.target.value)
+                    setHexError(false)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitCustomHex()
+                    else if (e.key === 'Escape') {
+                      // Local Esc: clear the field WITHOUT closing Settings.
+                      e.stopPropagation()
+                      setCustomHex('')
+                      setHexError(false)
+                    }
+                  }}
+                  onBlur={() => commitCustomHex()}
+                  placeholder="#rrggbb"
+                  className={`w-20 px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none no-drag ${
+                    hexError
+                      ? 'border-red-400/60'
+                      : 'border-[var(--color-border)] focus:border-[var(--color-accent)]'
+                  }`}
+                />
+                {hexError && (
+                  <span className="text-[10px] text-red-400">Use #rrggbb</span>
+                )}
+              </div>
             )}
           </div>
           <div className="flex items-center gap-3 px-3 py-2">
@@ -911,6 +1136,7 @@ function ProjectSettingsDetail({
         </div>
       )}
     </div>
+    </>
   )
 }
 

@@ -14,11 +14,16 @@ import {
   createErrorMessage,
   createProjectGroupDashboard,
   daemonErrorInfo,
+  fetchProjectGroupIcon,
+  normalizeHexColor,
   partitionPinned,
   reorderProjectGroupDashboards,
+  setProjectGroupColor,
+  setProjectGroupIcon,
 } from './projects-api'
-import { daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 
+const get = vi.mocked(daemonCliGet)
 const post = vi.mocked(daemonCliPost)
 
 describe('daemonErrorInfo', () => {
@@ -81,6 +86,67 @@ describe('dashboard route wrappers (§6.7.6 contract shapes)', () => {
   it('reorder degrades a dashboards-less body to an empty list', async () => {
     post.mockResolvedValueOnce({ ok: true })
     await expect(reorderProjectGroupDashboards('g1', ['d1'])).resolves.toEqual([])
+  })
+})
+
+describe('icon + color route wrappers (§6.7.7 contract shapes)', () => {
+  it('icon GETs {group} and unwraps the {ok, found, dataUrl} envelope', async () => {
+    get.mockResolvedValueOnce({ ok: true, found: true, dataUrl: 'data:image/png;base64,x' })
+    await expect(fetchProjectGroupIcon('g1')).resolves.toEqual({
+      found: true,
+      dataUrl: 'data:image/png;base64,x',
+    })
+    expect(get).toHaveBeenCalledWith('project-group/icon', { group: 'g1' })
+  })
+
+  it('icon degrades a fieldless body to not-found (advisory decoration)', async () => {
+    get.mockResolvedValueOnce({ ok: true })
+    await expect(fetchProjectGroupIcon('g1')).resolves.toEqual({ found: false, dataUrl: null })
+  })
+
+  it('set-icon posts {group, dataUrl} and null clears', async () => {
+    post.mockResolvedValueOnce({ ok: true })
+    await setProjectGroupIcon('g1', 'data:image/png;base64,x')
+    expect(post).toHaveBeenCalledWith('project-group/set-icon', {
+      group: 'g1',
+      dataUrl: 'data:image/png;base64,x',
+    })
+    post.mockResolvedValueOnce({ ok: true })
+    await setProjectGroupIcon('g1', null)
+    expect(post).toHaveBeenCalledWith('project-group/set-icon', { group: 'g1', dataUrl: null })
+  })
+
+  it('set-color posts {group, color} and null clears', async () => {
+    post.mockResolvedValueOnce({ ok: true })
+    await setProjectGroupColor('g1', '#61afef')
+    expect(post).toHaveBeenCalledWith('project-group/set-color', {
+      group: 'g1',
+      color: '#61afef',
+    })
+    post.mockResolvedValueOnce({ ok: true })
+    await setProjectGroupColor('g1', null)
+    expect(post).toHaveBeenCalledWith('project-group/set-color', { group: 'g1', color: null })
+  })
+})
+
+describe('normalizeHexColor', () => {
+  it('accepts #rrggbb, folds case, and tolerates a missing #', () => {
+    expect(normalizeHexColor('#61afef')).toBe('#61afef')
+    expect(normalizeHexColor('61AFEF')).toBe('#61afef')
+    expect(normalizeHexColor('  #E06C75  ')).toBe('#e06c75')
+  })
+
+  it('expands 3-digit shorthand', () => {
+    expect(normalizeHexColor('#abc')).toBe('#aabbcc')
+    expect(normalizeHexColor('F0a')).toBe('#ff00aa')
+  })
+
+  it('rejects everything else', () => {
+    expect(normalizeHexColor('')).toBeNull()
+    expect(normalizeHexColor('#12345')).toBeNull()
+    expect(normalizeHexColor('#1234567')).toBeNull()
+    expect(normalizeHexColor('red')).toBeNull()
+    expect(normalizeHexColor('#gggggg')).toBeNull()
   })
 })
 

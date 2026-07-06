@@ -24,6 +24,7 @@ import {
   fetchUnreadGroupIds,
   type ProjectGroup,
 } from '@/components/Projects/projects-api'
+import { dropCachedGroupIcon } from '@/components/Projects/group-icon-cache'
 
 // ── Per-client last-seen read cursor (§4.4, resolved Q5) ─────────────────
 // Keyed per host + group so remoting doesn't cross-contaminate cursors.
@@ -271,8 +272,14 @@ export function initProjectGroupEvents(): void {
     // listen() rejects outside Tauri (vitest) — warn, don't blow up.
     const warn = (err: unknown): void =>
       console.warn('[project-groups] listen() unavailable:', err)
-    // Structural events → coalesced nav refetch + revision.
-    listen('project-group:groups-changed', () => bumpAndCoalesceRefetch()).catch(warn)
+    // Structural events → coalesced nav refetch + revision. groups-changed
+    // also carries set-icon/set-color (§6.7.7) — drop the group's cached
+    // icon FIRST so the revision bump makes mounted avatars refetch a
+    // fresh upload (no payload groupId → drop all; see group-icon-cache).
+    listen<{ groupId?: string }>('project-group:groups-changed', (event) => {
+      dropCachedGroupIcon(event.payload?.groupId)
+      bumpAndCoalesceRefetch()
+    }).catch(warn)
     listen('project-group:members-changed', () => bumpAndCoalesceRefetch()).catch(warn)
     listen('project-group:poc-changed', () => bumpAndCoalesceRefetch()).catch(warn)
     // P5 (§6.3) — a layout save (this client's or another's) → revision

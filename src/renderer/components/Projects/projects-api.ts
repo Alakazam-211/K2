@@ -18,6 +18,10 @@ export interface ProjectGroup {
   pocWorkspaceId: string | null
   /** Canonical nav Pinned-section flag (resolved Q4). */
   pinned: boolean
+  /** §6.7.7 avatar fallback background (`#rrggbb`); null = the hashed
+   *  palette. The icon dataUrl is deliberately NOT here — it rides its
+   *  own GET (`fetchProjectGroupIcon`) so list/show stay light. */
+  color: string | null
   sortOrder: number
   createdAt: number
   updatedAt: number
@@ -137,6 +141,40 @@ export async function removeProjectGroupMember(group: string, workspace: string)
  *  write; the target must already be a member (`not_a_member`). */
 export async function setProjectGroupPoc(group: string, workspace: string): Promise<void> {
   await daemonCliPost('project-group/set-poc', { group, workspace })
+}
+
+/** GET /cli/project-group/icon — the group's icon dataUrl (§6.7.7),
+ *  deliberately outside list/show payloads. `found:false` (or a null
+ *  dataUrl) = unset; the avatar falls back to color + initials. */
+export async function fetchProjectGroupIcon(
+  group: string,
+): Promise<{ found: boolean; dataUrl: string | null }> {
+  const res = await daemonCliGet<{ ok: boolean; found: boolean; dataUrl: string | null }>(
+    'project-group/icon',
+    { group },
+  )
+  return { found: res.found ?? false, dataUrl: res.dataUrl ?? null }
+}
+
+/** POST /cli/project-group/set-icon — `{group, dataUrl}`; null clears.
+ *  `data:image/*` only, ~2MB cap daemon-side (the crop dialog's 128px
+ *  PNG is far under). Owner-or-admin; emits groups-changed, which drops
+ *  the icon cache (group-icon-cache.ts) so avatars refetch. */
+export async function setProjectGroupIcon(
+  group: string,
+  dataUrl: string | null,
+): Promise<void> {
+  await daemonCliPost('project-group/set-icon', { group, dataUrl })
+}
+
+/** POST /cli/project-group/set-color — `{group, color}` (`#rrggbb`);
+ *  null clears back to the hashed palette. Owner-or-admin; emits
+ *  groups-changed, so the list refetch carries the new `color`. */
+export async function setProjectGroupColor(
+  group: string,
+  color: string | null,
+): Promise<void> {
+  await daemonCliPost('project-group/set-color', { group, color })
 }
 
 /** POST /cli/project-group/dashboard/rename — P8's §6.5 Main-row
@@ -317,6 +355,19 @@ export function createErrorMessage(err: unknown): string {
   if (code === 'name_taken') return hint ?? 'A project with that name already exists.'
   if (hint) return hint
   return err instanceof Error ? err.message : String(err)
+}
+
+/** Normalize a user-typed hex color to the daemon's `#rrggbb` contract
+ *  (§6.7.7 set-color): optional leading `#`, 3-digit shorthand expands,
+ *  case folds to lower. null = not a hex color (the custom-hex input
+ *  shows the inline error instead of posting). */
+export function normalizeHexColor(input: string): string | null {
+  const raw = input.trim().replace(/^#/, '').toLowerCase()
+  if (/^[0-9a-f]{6}$/.test(raw)) return `#${raw}`
+  if (/^[0-9a-f]{3}$/.test(raw)) {
+    return `#${raw[0]}${raw[0]}${raw[1]}${raw[1]}${raw[2]}${raw[2]}`
+  }
+  return null
 }
 
 /** Nav partition: canonical Pinned section on top, unpinned below

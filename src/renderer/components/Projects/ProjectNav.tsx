@@ -123,9 +123,15 @@ function GroupRow({
         onMouseLeave={() => setHovered(false)}
       >
         <div className="flex items-center flex-shrink-0">
-          {/* §6.7.1 — initials + stable per-group color (the shared
-              avatar component the collapsed rail also renders). */}
-          <ProjectGroupAvatar name={group.name} groupId={group.id} size={32} />
+          {/* §6.7.1/§6.7.7 — icon when set, else initials on the group's
+              canonical color / stable hashed pick (the shared avatar
+              component the collapsed rail also renders). */}
+          <ProjectGroupAvatar
+            name={group.name}
+            groupId={group.id}
+            size={32}
+            color={group.color}
+          />
         </div>
         <div className="flex flex-col justify-center min-w-0 flex-1">
           <div className="flex items-center gap-2 w-full">
@@ -434,7 +440,7 @@ function RailIcon({
       onClick={onSelect}
       title={`${group.name} • ${group.memberCount} ${group.memberCount === 1 ? 'member' : 'members'}`}
     >
-      <ProjectGroupAvatar name={group.name} groupId={group.id} size={20} />
+      <ProjectGroupAvatar name={group.name} groupId={group.id} size={20} color={group.color} />
       {unread && (
         <span
           className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"

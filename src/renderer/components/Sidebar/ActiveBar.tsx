@@ -379,11 +379,11 @@ function ActiveBarItem({
       )}
       {/* Session-liveness square, RIGHT of the EKG — always shown: green when
           ≥1 live session (consuming RAM, reapable), grey when none alive.
-          F4 — an unseen completion takes the slot over (amber, round) until
+          F4 — an unseen completion takes the slot over (amber) until
           the user views the pane. */}
       {!isAgentWorking && hasUnseenDone ? (
         <span
-          className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-amber-400"
+          className="flex-shrink-0 w-1.5 h-1.5 rounded-[1px] bg-amber-400"
           title="Agent finished — not yet viewed"
         />
       ) : (

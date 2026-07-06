@@ -181,14 +181,21 @@ fn json(body: &str) -> serde_json::Value {
     serde_json::from_str(body).unwrap_or_else(|e| panic!("body must be JSON ({e}): {body:?}"))
 }
 
-/// The FROZEN capability wire shape: exactly `{enabled, sandboxes}` with
-/// `sandboxes` ∈ {"microvm","none"} matching this build's `can_sandbox()`
-/// (a mac / feature-off test build → "none"; asserted, not assumed).
+/// The FROZEN capability wire shape: exactly `{enabled, hostSessions,
+/// sandboxes}` with `hostSessions == enabled` (the F1 host-session family
+/// ships with the surface gate itself) and `sandboxes` ∈ {"microvm","none"}
+/// matching this build's `can_sandbox()` (a mac / feature-off test build →
+/// "none"; asserted, not assumed).
 fn assert_capability(cap: &serde_json::Value, want_enabled: bool, ctx: &str) {
     assert_eq!(
         cap["enabled"],
         serde_json::json!(want_enabled),
         "{ctx}: api.enabled mismatch; api={cap}"
+    );
+    assert_eq!(
+        cap["hostSessions"],
+        serde_json::json!(want_enabled),
+        "{ctx}: api.hostSessions ships with the surface gate (F1); api={cap}"
     );
     let expect_tier =
         if k2_daemon::v2_spawn::can_sandbox() { "microvm" } else { "none" };
@@ -199,8 +206,8 @@ fn assert_capability(cap: &serde_json::Value, want_enabled: bool, ctx: &str) {
     );
     assert_eq!(
         cap.as_object().map(|o| o.len()),
-        Some(2),
-        "{ctx}: capability object is FROZEN wire shape (exactly enabled+sandboxes); api={cap}"
+        Some(3),
+        "{ctx}: capability object is FROZEN wire shape (exactly enabled+hostSessions+sandboxes); api={cap}"
     );
 }
 

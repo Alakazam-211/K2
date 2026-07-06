@@ -97,7 +97,16 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
     // the `_ => Some(...)` branch — a `FailClosed` resolution Errs at spawn and
     // never registers a session — so the value is `Some("microvm")` exactly
     // where the D9 orange marker should light.
-    let sandbox_backend = sandbox_backend_label(session.sandbox);
+    //
+    // F1 (prd-v1-api-completion §3) — API-launched NON-SANDBOXED host sessions
+    // additionally ride the label `"host"`. They are Passthrough by design, so
+    // the spec-derived label is None; the discriminator is the host-minted
+    // `api-…` agent-name namespace, which ONLY the /v1 policy resolvers ever
+    // mint (the anti-hijack namespace — no renderer/CLI spawn can claim it).
+    // The renderer treats ANY non-null backend as an API-launched tab (the
+    // orange-tab pattern), `"host"` vs the cells' `"microvm"`.
+    let sandbox_backend = sandbox_backend_label(session.sandbox)
+        .or_else(|| key.starts_with("api-").then(|| "host".to_string()));
     let _ = crate::session_events::emit(
         crate::session_events::SessionEvent::SessionAdded {
             workspace_path: cwd.clone(),

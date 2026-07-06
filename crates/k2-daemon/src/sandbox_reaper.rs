@@ -69,6 +69,13 @@ pub fn stamp(id: &SessionId) {
     }
 }
 
+/// Is `id` currently tracked by the reaper? Observability accessor (the
+/// host-sessions/sandbox integration suites assert a spawned session was
+/// armed) — never consulted by the reap loop itself.
+pub fn registered(id: &SessionId) -> bool {
+    REG.lock().map(|m| m.contains_key(id)).unwrap_or(false)
+}
+
 /// Drop tracking (after teardown, so we never double-reap).
 pub fn unregister(id: &SessionId) {
     if let Ok(mut m) = REG.lock() {

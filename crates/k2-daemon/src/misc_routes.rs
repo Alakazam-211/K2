@@ -1140,18 +1140,23 @@ pub(crate) fn api_enabled() -> bool {
     via_new || via_legacy
 }
 
-/// F3 capability object: `{"enabled": <bool>, "sandboxes": "microvm"|"none"}`.
-/// `enabled` = the `/v1` surface exists ([`api_enabled`]); `sandboxes` =
-/// whether THIS daemon can deliver a real microVM cell
+/// F3 capability object:
+/// `{"enabled": <bool>, "hostSessions": <bool>, "sandboxes": "microvm"|"none"}`.
+/// `enabled` = the `/v1` surface exists ([`api_enabled`]); `hostSessions` =
+/// the F1 non-sandboxed host-session family is served (PRD §5 — it ships
+/// with the surface itself, no extra gate, so it equals `enabled`; kept as
+/// its own key so clients never have to infer it); `sandboxes` = whether
+/// THIS daemon can deliver a real microVM cell
 /// ([`crate::v2_spawn::can_sandbox`] — the same source of truth the spawn
 /// route's 409 refusal consults, so they can never diverge). Surfaced on the
 /// UNAUTHENTICATED `/boot-status` (additive + forward-compatible like
 /// `scopedHooks`; PROTOCOL not bumped) and echoed by `/v1/ping`. Nothing here
-/// is sensitive: both facts are already observable by probing `/v1` routes
-/// (surface-404 vs 401, spawn 409 vs 200).
+/// is sensitive: all three facts are already observable by probing `/v1`
+/// routes (surface-404 vs 401, spawn 409 vs 200).
 pub(crate) fn api_capability() -> serde_json::Value {
     serde_json::json!({
         "enabled": api_enabled(),
+        "hostSessions": api_enabled(),
         "sandboxes": if crate::v2_spawn::can_sandbox() { "microvm" } else { "none" },
     })
 }
@@ -1369,17 +1374,23 @@ mod api_key_route_tests {
         std::env::set_var("K2_SANDBOX_API", "off");
         assert!(!api_enabled(), "falsy values must not enable the surface");
 
-        // Capability object shape: enabled bool + sandboxes tier string from
+        // Capability object shape: enabled + hostSessions bools (hostSessions
+        // ships with the surface — F1) + sandboxes tier string from
         // can_sandbox() (on a mac/feature-off test build that is "none").
         std::env::set_var("K2_API", "1");
         let cap = api_capability();
         assert_eq!(cap["enabled"], serde_json::json!(true));
+        assert_eq!(
+            cap["hostSessions"],
+            serde_json::json!(true),
+            "hostSessions ships with the surface gate (F1); got {cap}"
+        );
         let expect_tier = if crate::v2_spawn::can_sandbox() { "microvm" } else { "none" };
         assert_eq!(cap["sandboxes"], serde_json::json!(expect_tier));
         assert_eq!(
             cap.as_object().map(|o| o.len()),
-            Some(2),
-            "capability object is FROZEN wire shape: exactly enabled+sandboxes; got {cap}"
+            Some(3),
+            "capability object is FROZEN wire shape: exactly enabled+hostSessions+sandboxes; got {cap}"
         );
 
         restore_env("K2_API", prev_api);

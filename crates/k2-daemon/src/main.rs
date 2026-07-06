@@ -100,6 +100,8 @@ mod stream_token;
 // P4-H4: per-principal + global concurrent-cell cap (429); /v1/sandboxes only.
 mod sandbox_quota;
 mod v1_sandboxes;
+// F1: NON-SANDBOXED host sessions on /v1 (K2_API-gated; "sandbox":"none").
+mod v1_host_sessions;
 // F2 (sandbox): per-session agent response log + ownership map (GET .../messages).
 mod sandbox_responses;
 mod session_events;

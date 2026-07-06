@@ -618,6 +618,16 @@ async fn handle_one_request(
             // Method- + owner-gated per-handler below. `list` is a GET.
             | "/cli/api-keys/create"
             | "/cli/api-keys/revoke"
+            // F2 host read-back (prd-v1-api-completion §4) — the in-session
+            // agent's RESPONSE egress over loopback TCP (`k2 respond` from a
+            // HOST session, which has no per-cell UDS worth of jail). Auth is
+            // a SCOPED per-session hook token ONLY (K2_HOOK_SCOPED mints it;
+            // the owner token is REFUSED — it carries no session identity),
+            // validated in the dedicated arm below; the append is pinned to
+            // the token's OWN session. With scoped hooks off (default) no
+            // token ever validates, so the arm is inert. POST so the message
+            // text rides the body, never a URL-logged query.
+            | "/cli/respond"
             // P3b (sandbox / K2-as-a-server) — the external spawn route. POST
             // so the (untrusted) request body never rides a URL-logged query;
             // the `/v1/*` arm below is itself gated by K2_SANDBOX_API + auth.
@@ -3180,6 +3190,69 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
         }
+        // F2 host read-back (prd-v1-api-completion §4) — `k2 respond` from a
+        // NON-SANDBOXED host session, arriving over loopback TCP (host
+        // sessions have no per-cell UDS jail requirement; the UDS arm in
+        // `cell_server` keeps serving cells AND scoped host sessions when
+        // bound). AUTH IS THE SESSION IDENTITY: only a SCOPED per-session
+        // hook token (K2_HOOK_SCOPED) validates — `require_hook` structurally
+        // never matches the owner token, and the owner token is deliberately
+        // NOT accepted here because it names no session (identity from the
+        // token, never the body — PRD §2). The append is PINNED to the
+        // validated token's own session id, so a session can only ever write
+        // its OWN log (cross-session append refused by construction). The
+        // log is drained by `GET /v1/(w/<ws>/host-sessions|sandboxes)/<id>/messages`.
+        // Body: form-encoded `message` (fallback `text`) + `final` ("1"/"true").
+        // Bearer preferred; `?token=`/body `token` is the curl fallback.
+        "/cli/respond" => {
+            // POST-only (feedback_post_only_route_guards): a stray GET is a
+            // clean 405 here, never a fall-through into the generic /cli/
+            // dispatch.
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let mut params = super::http::parse_params(&path, &query);
+            for (k, v) in super::http::parse_form_body(&body_bytes) {
+                params.insert(k, v);
+            }
+            let presented = bearer_token
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .or_else(|| params.get("token").cloned())
+                .unwrap_or_default();
+            let r = match crate::session_token::require_hook(&presented, "/cli/respond") {
+                Some(validated) => {
+                    let text = params
+                        .get("message")
+                        .or_else(|| params.get("text"))
+                        .cloned()
+                        .unwrap_or_default();
+                    let final_ = params
+                        .get("final")
+                        .map(|v| {
+                            let v = v.trim();
+                            v == "1" || v.eq_ignore_ascii_case("true")
+                        })
+                        .unwrap_or(false);
+                    let seq = crate::sandbox_responses::append(
+                        &validated.session_id,
+                        text,
+                        final_,
+                    );
+                    crate::cli_response::CliResponse::ok_json(
+                        serde_json::json!({ "ok": true, "seq": seq }).to_string(),
+                    )
+                }
+                None => crate::cli_response::CliResponse {
+                    status: "403 Forbidden",
+                    content_type: "application/json",
+                    body: r#"{"error":"Invalid or missing auth token"}"#.to_string(),
+                },
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // Composer Phase 1a/1c — session-scoped verified send. Mirrors the
         // /cli/workspace/msg spawn_blocking pattern (injection sleeps
         // ~520ms across its settle windows + may block on the per-session
@@ -3540,6 +3613,57 @@ async fn handle_one_request(
                         ([ws, "message"], true) => {
                             let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                             crate::v1_ws_message::handle_v1_ws_message(&principal, ws, &body)
+                        }
+                        // ── F1 (prd-v1-api-completion §3) — NON-SANDBOXED
+                        // HOST SESSIONS. Gated on the /v1 SURFACE gate only
+                        // (K2_API / legacy implies) — deliberately NOT the
+                        // sandbox-family gate: this family exists on EVERY
+                        // host, sandbox-capable or not (the whole point).
+                        // Responses are honestly labeled `"sandbox":"none"`.
+                        // The blocking work (DB + PTY spawn + the locked
+                        // injector's settle sleeps) runs on the blocking
+                        // pool, mirroring the federation arms.
+                        //
+                        // POST /v1/w/<ws>/host-sessions — spawn (or resume
+                        // with {"session": id}).
+                        ([ws, "host-sessions"], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            let ws = ws.to_string();
+                            let principal = principal.clone();
+                            tokio::task::spawn_blocking(move || {
+                                crate::v1_host_sessions::handle_v1_host_new(&principal, &ws, &body)
+                            })
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                        }
+                        // GET /v1/w/<ws>/host-sessions — list (audit).
+                        ([ws, "host-sessions"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::v1_host_sessions::handle_v1_host_list(&principal, ws)
+                        }
+                        // POST /v1/w/<ws>/host-sessions/<id> — message-live.
+                        ([ws, "host-sessions", sid], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            let (ws, sid) = (ws.to_string(), sid.to_string());
+                            let principal = principal.clone();
+                            tokio::task::spawn_blocking(move || {
+                                crate::v1_host_sessions::handle_v1_host_message(
+                                    &principal, &ws, &sid, &body,
+                                )
+                            })
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                        }
+                        // GET /v1/w/<ws>/host-sessions/<id>/messages?since=<n>.
+                        ([ws, "host-sessions", sid, "messages"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            let since = super::http::parse_params(&path, &query)
+                                .get("since")
+                                .and_then(|s| s.parse::<u64>().ok())
+                                .unwrap_or(0);
+                            crate::v1_host_sessions::handle_v1_host_messages(
+                                &principal, ws, sid, since,
+                            )
                         }
                         // Anything else under `/v1/w/` (wrong shape, wrong
                         // method, extra segments) → uniform 404, drain first.

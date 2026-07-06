@@ -268,7 +268,9 @@ pub struct WorkspaceSessionRequest {
 /// UNAUTHORIZED (not-granted) slug, a malformed segment, and a canonical /
 /// unknown session id ALIKE. One indistinguishable response so the surface is
 /// never an existence oracle across workspaces or principals (PRD §A, §F).
-fn uniform_ws_404() -> CliResponse {
+/// `pub(crate)`: shared with the host-sessions family (`v1_host_sessions`)
+/// so its refusals are byte-identical to this family's.
+pub(crate) fn uniform_ws_404() -> CliResponse {
     CliResponse {
         status: "404 Not Found",
         content_type: "application/json",
@@ -287,7 +289,8 @@ fn uniform_ws_404() -> CliResponse {
 /// it), a NUL, and any control char. What survives is a single, printable,
 /// separator-free component — and even then the workspace resolver only ever
 /// returns a REGISTERED `projects.path`, so a hostile value can at worst 404.
-fn decode_and_validate_segment(raw: &str) -> Option<String> {
+/// `pub(crate)`: shared with the host-sessions family (`v1_host_sessions`).
+pub(crate) fn decode_and_validate_segment(raw: &str) -> Option<String> {
     if raw.is_empty() {
         return None;
     }

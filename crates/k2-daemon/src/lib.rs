@@ -98,6 +98,11 @@ pub mod stream_token;
 // Reached ONLY via /v1/sandboxes (K2_SANDBOX_API, default OFF).
 pub mod sandbox_quota;
 pub mod v1_sandboxes;
+// F1 (prd-v1-api-completion §3): NON-SANDBOXED host sessions on /v1 —
+// spawn/list/message/read a real session in a granted workspace, no microVM.
+// Behind the /v1 surface gate (K2_API, default OFF); honestly labeled
+// `"sandbox":"none"`.
+pub mod v1_host_sessions;
 // F2 (sandbox): per-session agent response log + principal→session ownership map
 // backing GET /v1/sandboxes/<id>/messages. Reached ONLY via the K2_SANDBOX_API
 // surface (default OFF) + the scoped /cli/respond cell verb.

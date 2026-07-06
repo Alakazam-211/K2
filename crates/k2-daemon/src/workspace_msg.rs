@@ -1087,6 +1087,55 @@ pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgR
     }
 }
 
+/// Host sessions F1 (prd-v1-api-completion §3) — deliver a RAW payload into
+/// a LIVE session, optionally waiting for TUI readiness first.
+///
+/// The `/v1/w/<ws>/host-sessions` family's injector: unlike
+/// [`send_message_to_session`] the payload is UNFRAMED-by-attribution (no
+/// `[from]` prefix — the API caller IS the session's principal; its prompt is
+/// the prompt), but it still funnels through the shared, locked, ESC-sanitized
+/// [`inject_and_submit`] so an API delivery serializes against a concurrent
+/// composer/`k2 msg` and can never splice keystrokes (D1/D2/D5) or land on an
+/// open grok permission gate.
+///
+/// `wait_ready > 0` polls the bracketed-paste readiness signal (the same one
+/// [`deliver_post_wake`] uses) up to the deadline before injecting —
+/// best-effort past the ceiling, never dropped. Zero means "the session is
+/// already interactive, inject now" (the message-live route). Returns `true`
+/// iff the payload was delivered into a live PTY.
+pub fn inject_raw_into_session(
+    session_id: &SessionId,
+    payload: &str,
+    wait_ready: Duration,
+) -> bool {
+    let Some(live) = session_lookup::lookup_by_session_id(session_id) else {
+        return false;
+    };
+    if !wait_ready.is_zero() {
+        let start = std::time::Instant::now();
+        loop {
+            if !live.is_child_alive() {
+                return false;
+            }
+            if live.bracketed_paste_active() {
+                break;
+            }
+            if start.elapsed() >= wait_ready {
+                // Best-effort past the ceiling (bounded, never blocks forever)
+                // rather than dropping the prompt — deliver_post_wake parity.
+                log_debug!(
+                    "[v1-host/inject] session={} readiness wait hit {}ms ceiling — injecting best-effort",
+                    session_id,
+                    wait_ready.as_millis()
+                );
+                break;
+            }
+            std::thread::sleep(WAKE_POLL_INTERVAL);
+        }
+    }
+    matches!(inject_and_submit(&live, payload), InjectOutcome::Delivered)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Branch implementations
 // ─────────────────────────────────────────────────────────────────────

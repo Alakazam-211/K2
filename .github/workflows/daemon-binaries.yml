@@ -120,6 +120,15 @@ jobs:
             --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
             "${{ matrix.asset }}"
           test -f "${{ matrix.asset }}.sig"
+          # tauri signer writes the .sig as BASE64 of the minisig text; the
+          # daemon self-updater (minisign_verify) and plain minisign need
+          # the RAW text — publish that. (Found by the first real Shape B
+          # two-version e2e, 2026-07-06.)
+          if ! head -c 17 "${{ matrix.asset }}.sig" | grep -q "untrusted comment"; then
+            base64 -d < "${{ matrix.asset }}.sig" > "${{ matrix.asset }}.sig.raw"
+            head -c 17 "${{ matrix.asset }}.sig.raw" | grep -q "untrusted comment"
+            mv "${{ matrix.asset }}.sig.raw" "${{ matrix.asset }}.sig"
+          fi
 
       - name: Compute sha256 (for logs / manual manifest merge)
         run: sha256sum "${{ matrix.asset }}" | tee "${{ matrix.asset }}.sha256"

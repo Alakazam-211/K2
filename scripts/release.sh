@@ -408,6 +408,17 @@ bunx @tauri-apps/cli@2 signer sign \
     "$DIST_DIR/$MAC_ASSET" \
     --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
     --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+# tauri signer writes the .sig as BASE64 of the minisig text; the daemon
+# self-updater and plain minisign need the RAW text — publish that.
+# (Shape B e2e finding, 2026-07-06. NOTE: K2.app.tar.gz.sig stays wrapped —
+# the Tauri APP updater expects that format; only the DAEMON sig is raw.)
+if ! head -c 17 "$DIST_DIR/$MAC_ASSET.sig" | grep -q "untrusted comment"; then
+    base64 -d < "$DIST_DIR/$MAC_ASSET.sig" > "$DIST_DIR/$MAC_ASSET.sig.raw" \
+        || base64 -D < "$DIST_DIR/$MAC_ASSET.sig" > "$DIST_DIR/$MAC_ASSET.sig.raw"
+    head -c 17 "$DIST_DIR/$MAC_ASSET.sig.raw" | grep -q "untrusted comment" \
+        || { echo "ERROR: daemon .sig decode produced non-minisig content" >&2; exit 1; }
+    mv "$DIST_DIR/$MAC_ASSET.sig.raw" "$DIST_DIR/$MAC_ASSET.sig"
+fi
 MAC_SHA256=$(shasum -a 256 "$DIST_DIR/$MAC_ASSET" | awk '{print $1}')
 echo "  macos-aarch64 daemon built, signed, hashed."
 

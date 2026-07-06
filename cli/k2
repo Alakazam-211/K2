@@ -1787,8 +1787,11 @@ cmd_daemon_install() {
 
     echo "Verified. Installing to $bin_path ..."
     mkdir -p "$bin_dir"
-    cp "$dl_bin" "$bin_path"
-    chmod +x "$bin_path"
+    # Atomic rename — plain cp over a RUNNING daemon binary fails with
+    # "Text file busy"; rename swaps the inode and re-runs converge.
+    cp "$dl_bin" "$bin_path.new"
+    chmod +x "$bin_path.new"
+    mv -f "$bin_path.new" "$bin_path"
 
     if [ "$no_service" != "1" ]; then
         if [ "$svc_kind" = "systemd" ]; then

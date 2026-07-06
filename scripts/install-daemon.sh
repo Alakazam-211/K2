@@ -263,8 +263,11 @@ fi
 
 echo "Verified. Installing to $BIN_PATH ..."
 mkdir -p "$K2_BIN_DIR"
-cp "$DL_BIN" "$BIN_PATH"
-chmod +x "$BIN_PATH"
+# Atomic rename — plain cp over a RUNNING daemon binary fails with
+# "Text file busy"; rename swaps the inode and re-runs converge.
+cp "$DL_BIN" "$BIN_PATH.new"
+chmod +x "$BIN_PATH.new"
+mv -f "$BIN_PATH.new" "$BIN_PATH"
 
 if [ "$K2_NO_SERVICE" != "1" ]; then
     if [ "$SVC_KIND" = "systemd" ]; then

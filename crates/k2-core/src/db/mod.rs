@@ -505,6 +505,19 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0069_project_api_skip_permissions",
             include_str!("../../drizzle_sql/0069_project_api_skip_permissions.sql"),
         ),
+        // 0070 (W2, 0.40.30): agent-preset METADATA — `danger_flags`
+        // (JSON array: the preset's OWN dangerous auto-approve flags,
+        // unioned with the host-session policy's hardcoded floor so a
+        // custom agent's flag fails CLOSED on API spawn), `env` (JSON
+        // object merged into the child env at spawn, under AGENT.md /
+        // K2-internal env), `readiness` ('bracketed-paste' |
+        // 'settle:<ms>', the InjectionProfile vocabulary). All NULLable;
+        // NULL = legacy/unknown (consumers fail closed). Built-in seeds
+        // are backfilled label-keyed by `seed_agent_presets`. Additive.
+        (
+            "0070_agent_preset_metadata",
+            include_str!("../../drizzle_sql/0070_agent_preset_metadata.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -647,6 +660,14 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration-0070 metadata backfill — fresh installs AND upgrades. The
+    // INSERT above deliberately leaves the metadata columns NULL (and
+    // existing installed rows were backfilled to NULL by the ALTERs), so
+    // this single label-keyed COALESCE pass is what stamps truthful
+    // metadata on the built-ins, idempotently, without ever clobbering a
+    // non-NULL value.
+    backfill_built_in_preset_metadata(conn)?;
+
     // One-time ordering repair: on upgrade the `WHERE NOT EXISTS` insert placed
     // Hermes at sort_order 5, but existing installs still had OpenCode at 5 — a
     // tie that renders Hermes AFTER OpenCode. If Hermes and OpenCode still share
@@ -698,6 +719,65 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    Ok(())
+}
+
+/// Truthful migration-0070 metadata for the 13 built-in presets, keyed by
+/// LABEL (the same uniqueness key `seed_agent_presets` reconciles on —
+/// built-in ids historically disagreed between modules, labels never did).
+///
+/// Columns: (label, danger_flags JSON array, env JSON object, readiness).
+///
+/// - `danger_flags`: ONLY the five audited auto-approve flags, each on its
+///   owner. Presets we have NOT audited stay NULL (= unknown), which the
+///   host-session policy treats as "strip the hardcoded floor + warn" —
+///   never as "safe". Keep in sync with
+///   `v1_host_sessions::policy::DANGER_FLAGS` (the legacy floor).
+/// - `env`: no built-in needs ambient env today — all NULL. The column is
+///   for community/custom presets (and future seeds).
+/// - `readiness`: the 2026-07 TUI signal studies behind
+///   `provider_resume::injection_profile_for_provider`, same classes:
+///   'bracketed-paste' (claude/grok/cursor-agent — the ?2004h flip is
+///   trustworthy) or 'settle:<ms>' (codex/gemini 2000, pi 1500, hermes
+///   7000 — ?2004h lies). The unstudied six stay NULL (= unknown).
+const BUILT_IN_PRESET_METADATA: &[(&str, Option<&str>, Option<&str>, Option<&str>)] = &[
+    ("Claude", Some(r#"["--dangerously-skip-permissions"]"#), None, Some("bracketed-paste")),
+    (
+        "Codex",
+        Some(r#"["--dangerously-bypass-approvals-and-sandbox"]"#),
+        None,
+        Some("settle:2000"),
+    ),
+    ("Gemini", Some(r#"["--yolo"]"#), None, Some("settle:2000")),
+    ("Grok", Some(r#"["--always-approve"]"#), None, Some("bracketed-paste")),
+    ("Cursor Agent", None, None, Some("bracketed-paste")),
+    ("Pi", None, None, Some("settle:1500")),
+    ("Hermes", None, None, Some("settle:7000")),
+    ("OpenCode", None, None, None),
+    ("Goose", None, None, None),
+    ("Aider", None, None, None),
+    ("Ollama", None, None, None),
+    ("Copilot", Some(r#"["--allow-all"]"#), None, None),
+    ("Interpreter", None, None, None),
+];
+
+/// Stamp [`BUILT_IN_PRESET_METADATA`] onto the built-in rows. COALESCE
+/// per column: only fills NULL (legacy/unknown), never overwrites a
+/// value already present — idempotent across every boot's reseed and
+/// safe on user-touched rows. Shared by `seed_agent_presets` and
+/// `db_ops::presets_reset_built_ins` (which recreates rows metadata-less
+/// and relies on this pass to restore truth).
+pub(crate) fn backfill_built_in_preset_metadata(conn: &Connection) -> Result<()> {
+    for (label, danger_flags, env, readiness) in BUILT_IN_PRESET_METADATA {
+        conn.execute(
+            "UPDATE agent_presets SET \
+                 danger_flags = COALESCE(danger_flags, ?2), \
+                 env          = COALESCE(env, ?3), \
+                 readiness    = COALESCE(readiness, ?4) \
+             WHERE label = ?1 AND is_built_in = 1",
+            params![label, danger_flags, env, readiness],
+        )?;
+    }
     Ok(())
 }
 
@@ -884,6 +964,133 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 13, "reseeding must not duplicate rows");
+    }
+
+    /// Migration-0070 metadata lands truthfully on a FRESH install: the
+    /// five audited danger flags on their owners, the studied readiness
+    /// classes, NULL (= honest unknown) everywhere else, env NULL for
+    /// every built-in.
+    #[test]
+    fn seed_agent_presets_stamps_0070_metadata() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        seed_agent_presets(&conn).unwrap();
+
+        let row = |label: &str| -> (Option<String>, Option<String>, Option<String>) {
+            conn.query_row(
+                "SELECT danger_flags, env, readiness FROM agent_presets \
+                 WHERE label = ?1 AND is_built_in = 1",
+                params![label],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            row("Claude"),
+            (
+                Some(r#"["--dangerously-skip-permissions"]"#.into()),
+                None,
+                Some("bracketed-paste".into())
+            )
+        );
+        assert_eq!(
+            row("Codex"),
+            (
+                Some(r#"["--dangerously-bypass-approvals-and-sandbox"]"#.into()),
+                None,
+                Some("settle:2000".into())
+            )
+        );
+        assert_eq!(
+            row("Gemini"),
+            (Some(r#"["--yolo"]"#.into()), None, Some("settle:2000".into()))
+        );
+        assert_eq!(
+            row("Grok"),
+            (Some(r#"["--always-approve"]"#.into()), None, Some("bracketed-paste".into()))
+        );
+        assert_eq!(row("Cursor Agent"), (None, None, Some("bracketed-paste".into())));
+        assert_eq!(row("Pi"), (None, None, Some("settle:1500".into())));
+        assert_eq!(row("Hermes"), (None, None, Some("settle:7000".into())));
+        assert_eq!(
+            row("Copilot"),
+            (Some(r#"["--allow-all"]"#.into()), None, None)
+        );
+        // The unaudited/unstudied built-ins stay honestly NULL.
+        for label in ["OpenCode", "Goose", "Aider", "Ollama", "Interpreter"] {
+            assert_eq!(row(label), (None, None, None), "{label} must stay NULL");
+        }
+        // Every danger_flags value must be VALID JSON (the resolver
+        // parses these; a typo here would silently degrade to the floor).
+        let mut stmt = conn
+            .prepare("SELECT label, danger_flags FROM agent_presets WHERE danger_flags IS NOT NULL")
+            .unwrap();
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(rows.len(), 5, "exactly the five audited flag owners");
+        for (label, json) in rows {
+            let parsed: Vec<String> = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("{label} danger_flags must be a JSON string array: {e}"));
+            assert!(!parsed.is_empty(), "{label} danger_flags must be non-empty");
+        }
+    }
+
+    /// UPGRADE path: rows that pre-existed the 0070 ALTERs (metadata all
+    /// NULL, possibly with a user-customized command) get the truthful
+    /// backfill on the next reseed — and a non-NULL value is NEVER
+    /// clobbered by later reseeds.
+    #[test]
+    fn seed_agent_presets_backfills_existing_rows_without_clobbering() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        // Simulate a pre-0070 installed row: present, customized command,
+        // NULL metadata (exactly what the ALTERs leave behind).
+        conn.execute(
+            "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+             VALUES ('legacy-claude-id', 'Claude', 'claude --model opus --dangerously-skip-permissions', '', 1, 0, 1)",
+            [],
+        )
+        .unwrap();
+        seed_agent_presets(&conn).unwrap();
+
+        let (command, danger, readiness): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT command, danger_flags, readiness FROM agent_presets \
+                 WHERE label = 'Claude' AND is_built_in = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            command, "claude --model opus --dangerously-skip-permissions",
+            "seed must not clobber the user's customized command"
+        );
+        assert_eq!(danger.as_deref(), Some(r#"["--dangerously-skip-permissions"]"#));
+        assert_eq!(readiness.as_deref(), Some("bracketed-paste"));
+
+        // Non-NULL metadata survives reseeds (COALESCE semantics).
+        conn.execute(
+            "UPDATE agent_presets SET danger_flags = '[\"--custom-flag\"]' WHERE label = 'Claude'",
+            [],
+        )
+        .unwrap();
+        seed_agent_presets(&conn).unwrap();
+        let danger: Option<String> = conn
+            .query_row(
+                "SELECT danger_flags FROM agent_presets WHERE label = 'Claude' AND is_built_in = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            danger.as_deref(),
+            Some(r#"["--custom-flag"]"#),
+            "reseed must never overwrite non-NULL metadata"
+        );
     }
 
     // ── purge_orphan_project_children self-heal ───────────────────

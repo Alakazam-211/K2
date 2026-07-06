@@ -1020,6 +1020,10 @@ pub fn presets_reset_built_ins() -> Result<Vec<AgentPreset>, String> {
         AgentPreset::create(&conn, id, label, command, Some(icon), 1, *sort_order, 1)
             .map_err(|e| e.to_string())?;
     }
+    // Freshly recreated rows carry NULL migration-0070 metadata
+    // (danger_flags/env/readiness); restore the truthful built-in values
+    // via the same label-keyed backfill the boot seed uses.
+    db::backfill_built_in_preset_metadata(&conn).map_err(|e| e.to_string())?;
     AgentPreset::list(&conn).map_err(|e| e.to_string())
 }
 

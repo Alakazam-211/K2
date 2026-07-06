@@ -626,3 +626,72 @@ async fn owner_defaults_to_claimer_and_is_unaffected() {
         });
     });
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 6 — stream token: default claimer (prd-v1-api-completion §3 flip)
+// ─────────────────────────────────────────────────────────────────────
+
+/// A STREAM-TOKEN connection (the `/v1` API caller's per-session bearer)
+/// now defaults to CLAIMER mode — the token is a deliberate, per-session,
+/// single-purpose credential minted so a machine client can DRIVE exactly
+/// this session, so the 0.40.27 viewer-default `set_mode` handshake is
+/// gone: input flows straight from connect. `set_mode viewer` still works
+/// for a read-only watcher, and the token stays scoped to ITS session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stream_token_defaults_to_claimer() {
+    let _g = lock();
+    with_temp_home(|| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        futures_block(async {
+            let ws_id = format!("s5-streamtok-ws-{}", std::process::id());
+            let project_path = setup_project(&ws_id);
+            let agent = "tab-s5-streamtok";
+            let session_id =
+                spawn_cat_session(d.port, agent, &project_path.to_string_lossy()).await;
+
+            // Mint the per-session stream token exactly as the /v1 spawn
+            // routes do, and connect the grid WS with it.
+            let sid = k2_core::session::SessionId::parse(&session_id).expect("uuid");
+            let stream_tok = k2_daemon::stream_token::mint(&sid);
+            let mut grid = connect_grid_client(d.port, &session_id, &stream_tok).await;
+
+            // Connect-time mode ACK: claimer + capable, NO handshake needed.
+            let mode = expect_event(&mut grid, "mode", "stream-token connect").await;
+            assert_eq!(
+                mode["mode"], "claimer",
+                "stream tokens default to claimer (PRD §3 flip): {mode}"
+            );
+            assert_eq!(mode["capable"], true, "connect ACK: {mode}");
+
+            // Input flows immediately — the whole point of the flip.
+            send_json(
+                &mut grid,
+                serde_json::json!({ "action": "input", "text": "S5_STREAM_DRIVES\r" }),
+                "stream-token input",
+            )
+            .await;
+            assert_text_appears(&session_id, "S5_STREAM_DRIVES", "stream-token input").await;
+
+            // Opting DOWN to viewer still works and blocks input.
+            send_json(
+                &mut grid,
+                serde_json::json!({ "action": "set_mode", "mode": "viewer" }),
+                "stream-token set_mode viewer",
+            )
+            .await;
+            let mode = expect_event(&mut grid, "mode", "stream-token viewer ACK").await;
+            assert_eq!(mode["mode"], "viewer", "ACK: {mode}");
+            send_json(
+                &mut grid,
+                serde_json::json!({ "action": "input", "text": "S5_STREAM_BLOCKED\r" }),
+                "stream-token viewer input",
+            )
+            .await;
+            assert_text_never_appears(&session_id, "S5_STREAM_BLOCKED", "viewer-mode stream token")
+                .await;
+
+            close_session(d.port, agent).await;
+        });
+    });
+}

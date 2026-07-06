@@ -560,12 +560,19 @@ pub async fn serve_session_grid_connection(
     } else {
         ConnIdentity::Unknown
     };
-    // Per-connection mode (PRD §5.3): owner connections default to
-    // claimer (local windows keep today's behavior); everyone else —
-    // connect users of ANY role and stream-token drivers — starts as a
-    // viewer until the client opts in with `set_mode`. The connection
-    // ACTS as a claimer only while mode==claimer AND capable.
-    let mut mode_claimer = matches!(identity, ConnIdentity::Owner);
+    // Per-connection mode (PRD §5.3, amended by prd-v1-api-completion §3
+    // note / the 0.40.27 S5 deviation): owner connections default to
+    // claimer (local windows keep today's behavior), and so do STREAM-TOKEN
+    // connections — a stream token is a deliberate per-session,
+    // single-purpose bearer minted for an API caller to DRIVE exactly this
+    // session's PTY, so making it viewer-by-default just forced every
+    // machine client through a `set_mode` handshake for the only thing the
+    // token exists to do. Connect users of ANY role still start as viewers
+    // until they opt in with `set_mode`. The connection ACTS as a claimer
+    // only while mode==claimer AND capable, and a `set_mode` to viewer
+    // still works for a stream-token watcher that wants read-only.
+    let mut mode_claimer =
+        matches!(identity, ConnIdentity::Owner | ConnIdentity::StreamToken);
     // One-time (per connection) `input_denied` hint — repeats drop
     // silently so a key-mashing viewer can't flood the socket.
     let mut input_denied_sent = false;

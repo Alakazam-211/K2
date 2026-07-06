@@ -394,6 +394,14 @@ k2so feedback ask "<title>" [--options "a,b,c"] [--wait]
 ```
 Files a durable question on your human's Feedback page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Track answers with `k2so feedback list` / `k2so feedback show <id>`.
 
+### Respond to your API caller
+If this session was launched through the K2 API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `k2 respond` output reaches it.
+```
+k2 respond "progress: found the root cause"      # report progress (send as many as you like)
+k2 respond --final "done: fix landed on main"    # mark your final answer for this turn
+```
+Outside an API-launched session `k2 respond` fails loudly — it needs the session-scoped token the API stages for you.
+
 ### Projects (shared group chat)
 A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
 ```
@@ -507,6 +515,17 @@ k2so feedback ask "<title>" [--options "a,b,c"] [--wait]
 ```
 
 Files a durable question on your human's Feedback page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Track answers with `k2so feedback list` / `k2so feedback show <id>`.
+
+## Respond to your API caller
+
+If this session was launched through the K2 API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `k2 respond` output reaches it.
+
+```
+k2 respond "progress: found the root cause"      # report progress (send as many as you like)
+k2 respond --final "done: fix landed on main"    # mark your final answer for this turn
+```
+
+Outside an API-launched session `k2 respond` fails loudly — it needs the session-scoped token the API stages for you.
 
 ## Projects (shared group chat)
 
@@ -678,6 +697,17 @@ k2so feedback ask "<title>" [--options "a,b,c"] [--wait]
 ```
 
 Files a durable question on your human's Feedback page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Track answers with `k2so feedback list` / `k2so feedback show <id>`.
+
+## Respond to your API caller
+
+If this session was launched through the K2 API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `k2 respond` output reaches it.
+
+```
+k2 respond "progress: found the root cause"      # report progress (send as many as you like)
+k2 respond --final "done: fix landed on main"    # mark your final answer for this turn
+```
+
+Outside an API-launched session `k2 respond` fails loudly — it needs the session-scoped token the API stages for you.
 
 ## Projects (shared group chat)
 
@@ -1733,6 +1763,51 @@ mod tests {
             assert!(
                 body.contains("workspace_not_found"),
                 "{generator} must warn that `msg <project>` fails with workspace_not_found"
+            );
+        }
+    }
+
+    #[test]
+    fn wake_skill_generators_teach_api_respond_contract() {
+        // W1 (0.40.30): API-launched sessions must be able to LEARN the
+        // `k2 respond` read-back contract from their skill docs, not just
+        // from the one-shot spawn preamble. Every wake-time tier that
+        // documents the communication verbs must teach: `K2_HOOK_TOKEN`
+        // marks an API-launched session; reply with `k2 respond '<msg>'`;
+        // final answers with `k2 respond --final '<msg>'`. (Versions
+        // SKILL_VERSION_MANAGER/K2SO_AGENT/CUSTOM_AGENT bumped 3→4 so
+        // unmodified SKILL.md files re-roll with this section.)
+        let project_path = format!("/tmp/manager-respond-{}", Uuid::new_v4());
+        let cases: [(&str, String); 3] = [
+            (
+                "generate_manager_skill_content",
+                generate_manager_skill_content(&project_path, "P"),
+            ),
+            (
+                "generate_custom_agent_skill_content",
+                generate_custom_agent_skill_content("P", "a"),
+            ),
+            (
+                "generate_k2so_agent_skill_content",
+                generate_k2so_agent_skill_content("P", "a"),
+            ),
+        ];
+        for (generator, body) in &cases {
+            assert!(
+                body.contains("Respond to your API caller"),
+                "{generator} must carry the API read-back section"
+            );
+            assert!(
+                body.contains("K2_HOOK_TOKEN"),
+                "{generator} must name K2_HOOK_TOKEN as the API-session marker"
+            );
+            assert!(
+                body.contains("k2 respond "),
+                "{generator} must teach `k2 respond`"
+            );
+            assert!(
+                body.contains("k2 respond --final"),
+                "{generator} must teach `k2 respond --final`"
             );
         }
     }

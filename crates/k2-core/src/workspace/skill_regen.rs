@@ -180,6 +180,17 @@ k2 feedback show <id>                          # one ask: status, answer, thread
 survives your session and the answer comes back to you. Use it instead of a
 dead terminal prompt when you need a decision or approval.
 
+## Respond to your API caller
+```
+k2 respond "progress: found the root cause"      # report progress (send as many as you like)
+k2 respond --final "done: fix landed on main"    # mark your final answer for this turn
+```
+If this session was launched through the K2 API (`K2_HOOK_TOKEN` is set in
+your environment), your caller is a program — it cannot see this terminal,
+and only `k2 respond` output reaches it. Outside an API-launched session
+`k2 respond` fails loudly — it needs the session-scoped token the API stages
+for you.
+
 ## Projects
 A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
 ```
@@ -1363,6 +1374,20 @@ mod tests {
         assert!(
             !body.contains("k2so msg"),
             "k2-cli skill must not use the legacy `k2so` CLI prefix",
+        );
+        // W1 (0.40.30): the API read-back contract is part of the k2 CLI
+        // reference (SKILL_VERSION_WORKSPACE bumped 6→7 for this section).
+        assert!(
+            body.contains("Respond to your API caller"),
+            "k2-cli skill must carry the API read-back section",
+        );
+        assert!(
+            body.contains("k2 respond --final"),
+            "k2-cli skill must teach `k2 respond --final`",
+        );
+        assert!(
+            body.contains("K2_HOOK_TOKEN"),
+            "k2-cli skill must name K2_HOOK_TOKEN as the API-session marker",
         );
     }
 

@@ -46,9 +46,14 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// now teach `feedback ask` (durable agent→human questions) and the
 /// `project` surface (project-group shared chat + the
 /// `[project:<name>]` reply rule).
-pub const SKILL_VERSION_MANAGER: u32 = 3;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 3;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 3;
+///
+/// Manager / K2SO-agent / custom-agent bumped to 4 in 0.40.30: skills
+/// now teach the API read-back contract — "Respond to your API caller"
+/// (`k2 respond` / `k2 respond --final` when the session was launched
+/// through the K2 API and `K2_HOOK_TOKEN` is staged).
+pub const SKILL_VERSION_MANAGER: u32 = 4;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 4;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 4;
 pub const SKILL_VERSION_TEMPLATE: u32 = 2;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
@@ -58,7 +63,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// Bumped to 6 in 0.40.x: the loadable k2-cli skill gains the
 /// "Ask a human" (`k2 feedback`) and "Projects" (`k2 project`)
 /// sections.
-pub const SKILL_VERSION_WORKSPACE: u32 = 6;
+/// Bumped to 7 in 0.40.30: the loadable k2-cli skill gains the
+/// "Respond to your API caller" (`k2 respond [--final]`) section.
+pub const SKILL_VERSION_WORKSPACE: u32 = 7;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

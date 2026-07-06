@@ -7,27 +7,28 @@
 // (back to the Agents page). LEFT NAV = ProjectNav (Pinned + list +
 // member drawer); the main area shows the selected project under
 // Dashboard | Feedback tabs (the FeedbackItemView two-tab idiom) plus a
-// gear opening the per-project Settings slot.
+// gear deep-linking to Settings → Projects with this project preselected.
 //
 // P5 fills the Dashboard tab: ProjectDashboard renders the canonical
 // layout blob as percent-width pane columns (kessel canonical-terminal
 // attach + htmlDoc panes), with drag-and-drop, coalesced save-layout,
 // and apply-on-open staleness (§6.2/§6.3). P7 fills the Feedback tab:
-// ProjectFeedbackTab, the member-scoped feedback board (§6.6). P8
-// fills the gear panel: ProjectSettings, the §6.5 master-detail
-// per-project Settings surface (deep-linked here with the open
-// project preselected).
+// ProjectFeedbackTab, the member-scoped feedback board (§6.6). Per the
+// §6.5 RELOCATION directive the per-project settings surface lives in
+// the core Settings area (Settings → Projects); the header gear
+// deep-links there with this project preselected.
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { usePageViewStore } from '@/stores/page-view'
 import { useProjectGroupsStore } from '@/stores/project-groups'
+import { useSettingsStore } from '@/stores/settings'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
+import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
 import ProjectNav, { CreateProjectForm } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
 import ProjectChatDrawer from './ProjectChatDrawer'
 import { ProjectFeedbackTab } from '@/components/Feedback/ProjectFeedbackTab'
-import ProjectSettings from './ProjectSettings'
 import { fetchProjectGroupShow, type ProjectGroupShow } from './projects-api'
 
 const TOPBAR_HEIGHT = 38
@@ -92,10 +93,9 @@ function SelectedProjectView({
   error: string | null
 }): React.JSX.Element {
   const [tab, setTab] = useState<ProjectTab>('dashboard')
-  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Selection switches arrive as a fresh mount (the page keys this view
-  // by group id), so tab/settings state resets per project.
+  // by group id), so tab state resets per project.
 
   // P5 — a member-row click (open/focus its canonical pane) always
   // lands on the Dashboard tab; the mounted ProjectDashboard consumes
@@ -104,7 +104,6 @@ function SelectedProjectView({
   useEffect(() => {
     if (paneRequestNonce === null) return
     setTab('dashboard')
-    setSettingsOpen(false)
   }, [paneRequestNonce])
 
   if (error) {
@@ -136,12 +135,12 @@ function SelectedProjectView({
           <span className="flex-1" />
           <button
             type="button"
-            onClick={() => setSettingsOpen((v) => !v)}
-            className={`flex h-6 w-6 items-center justify-center transition-colors cursor-pointer ${
-              settingsOpen
-                ? 'text-[var(--color-text-primary)] bg-white/[0.08]'
-                : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
-            }`}
+            onClick={() =>
+              /* §6.5 relocation — deep-link to Settings → Projects with
+                 THIS project preselected (no in-page panel anymore). */
+              useSettingsStore.getState().openSettings('project-groups', show.id)
+            }
+            className="flex h-6 w-6 items-center justify-center transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]"
             title="Project settings"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -155,12 +154,9 @@ function SelectedProjectView({
             <button
               key={t}
               type="button"
-              onClick={() => {
-                setTab(t)
-                setSettingsOpen(false)
-              }}
+              onClick={() => setTab(t)}
               className={`px-3 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer ${
-                tab === t && !settingsOpen
+                tab === t
                   ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
                   : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
               }`}
@@ -171,11 +167,7 @@ function SelectedProjectView({
         </div>
       </div>
 
-      {settingsOpen ? (
-        /* P8 (§6.5) — the per-project Settings surface, deep-linked
-           with THIS project preselected (its left list can switch). */
-        <ProjectSettings show={show} onClose={() => setSettingsOpen(false)} />
-      ) : tab === 'dashboard' ? (
+      {tab === 'dashboard' ? (
         <DashboardTab show={show} />
       ) : (
         /* P7 (§6.6) — the member-scoped feedback board. Keyed upstream
@@ -278,6 +270,9 @@ export default function ProjectsPage(): React.JSX.Element | null {
           <div className="no-drag">
             <PageTabs />
           </div>
+          {/* §6.5 relocation — the settings cog is on every page, right
+              after the tabs: K2 | Server | Tabs | ⚙ | … */}
+          <SettingsGearButton />
         </div>
       </div>
 

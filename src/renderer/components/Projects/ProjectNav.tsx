@@ -13,8 +13,10 @@
 import React, { useMemo, useRef, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
+import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
+import { showContextMenu } from '@/lib/context-menu'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { completeMemberDrag, useDashboardDndStore } from './dashboard-dnd'
 import {
@@ -79,8 +81,8 @@ function GroupRow({
   const [hovered, setHovered] = useState(false)
   const [pinBusy, setPinBusy] = useState(false)
 
-  const togglePin = async (e: React.MouseEvent): Promise<void> => {
-    e.stopPropagation()
+  const togglePin = async (e?: React.MouseEvent): Promise<void> => {
+    e?.stopPropagation()
     if (pinBusy) return
     setPinBusy(true)
     try {
@@ -100,9 +102,28 @@ function GroupRow({
     }
   }
 
+  // Right-click menu (§6.5) — the Sidebar workspace-row idiom
+  // (showContextMenu): "Project Settings" deep-links to Settings →
+  // Projects with THIS project preselected; Pin/Unpin mirrors the
+  // hover pin button (which stays).
+  const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
+    e.preventDefault()
+    const clickedId = await showContextMenu([
+      { id: 'group-settings', label: 'Project Settings' },
+      { id: 'separator-pin', label: '', type: 'separator' },
+      { id: 'toggle-pin', label: group.pinned ? 'Unpin' : 'Pin to Top' },
+    ])
+    if (clickedId === 'group-settings') {
+      useSettingsStore.getState().openSettings('project-groups', group.id)
+    } else if (clickedId === 'toggle-pin') {
+      await togglePin()
+    }
+  }
+
   return (
     <div className="no-drag" data-group-id={group.id}>
       <button
+        onContextMenu={(e) => void handleContextMenu(e)}
         className={`w-full flex items-stretch gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
           selected
             ? 'bg-white/[0.06] text-[var(--color-text-primary)]'

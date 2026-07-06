@@ -1,14 +1,19 @@
 // Projects V1 P8 (prd-projects-v1 §6.5) — the per-project Settings
-// surface, replacing P4's SettingsPlaceholder.
+// surface. RELOCATION directive (Rosson, 2026-07-05 live review): this
+// lives INSIDE the core Settings area as its own "Projects" section
+// (Settings.tsx, id 'project-groups' — NOT the legacy 'projects' id,
+// which is the Workspaces section), so projects flow exactly like
+// workspaces. Deep-links (the Projects-page header gear + the nav
+// right-click) open Settings at this section with a project preselected
+// via useSettingsStore.initialProjectGroupId.
 //
 // LAYOUT DIRECTIVE (Rosson, 2026-07-05): mirror the Workspaces settings
 // page — Settings/sections/ProjectsSection.tsx's master-detail column
 // viewer, restyled minimally. Left column = the selectable PROJECT list
 // (search + ArrowUp/ArrowDown/Enter keyboard selection +
 // scroll-into-view — its selectedProjectId idiom); right panel = the
-// selected project's management surface. The gear deep-links here with
-// the current project preselected (the `show` prop); the left list can
-// switch projects without touching the page's nav selection.
+// selected project's management surface. The left list can switch
+// projects without touching the Projects page's nav selection.
 //
 // The right panel manages, per §6.5:
 //   - Project: rename + canonical nav pin (routes existed since P2).
@@ -37,6 +42,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
+import { useSettingsStore } from '@/stores/settings'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
@@ -154,7 +160,7 @@ function InlineRename({
             if (e.key === 'Enter') void commit()
             else if (e.key === 'Escape') {
               // Local Esc: cancel the rename WITHOUT closing Settings
-              // (the panel's capture handler skips editable targets).
+              // (stopPropagation keeps it from Settings' window Esc).
               e.stopPropagation()
               setEditing(false)
               setDraft(value)
@@ -687,29 +693,53 @@ function ProjectSettingsDetail({
 
 // ── The settings surface (master-detail) ─────────────────────────────────
 
-export default function ProjectSettings({
-  show,
-  onClose,
-}: {
-  /** The page's currently-open project — the gear's deep-link
-   *  preselection (§6.5); the left list can switch away from it. */
-  show: ProjectGroupShow
-  onClose: () => void
-}): React.JSX.Element {
+export default function ProjectSettings(): React.JSX.Element {
   const groups = useProjectGroupsStore((s) => s.groups)
   const revision = useProjectGroupsStore((s) => s.revision)
   const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
 
-  // The settings surface's OWN selection (initialized to the open
-  // project) — switching here never moves the page's nav selection.
-  const [selectedId, setSelectedId] = useState(show.id)
-  const [detail, setDetail] = useState<ProjectGroupShow | null>(show)
+  // The section's OWN selection — seeded from the deep-link preselect
+  // (initialProjectGroupId — the gear / right-click), else the Projects
+  // page's nav selection, else the first group. Switching here never
+  // moves the page's nav selection.
+  const initialGroupId = useSettingsStore((s) => s.initialProjectGroupId)
+  const [selectedId, setSelectedId] = useState<string | null>(
+    () => initialGroupId ?? useProjectGroupsStore.getState().selectedGroupId,
+  )
+  const [detail, setDetail] = useState<ProjectGroupShow | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
+
+  // A new deep-link while Settings is already open (right-click another
+  // project) re-targets the selection (the ProjectsSection
+  // initialProjectId idiom).
+  useEffect(() => {
+    if (initialGroupId) setSelectedId(initialGroupId)
+  }, [initialGroupId])
+
+  // The group list may be stale/unfetched when Settings opens before the
+  // Projects page ever did — fetch on mount (events keep it live after).
+  useEffect(() => {
+    void useProjectGroupsStore.getState().fetchGroups()
+  }, [])
+
+  // No selection yet, or the selected group vanished (deleted on another
+  // client) → fall back to the first group (null when none exist).
+  useEffect(() => {
+    if (groups === null) return
+    if (selectedId === null || !groups.some((g) => g.id === selectedId)) {
+      setSelectedId(groups[0]?.id ?? null)
+    }
+  }, [groups, selectedId])
 
   // Fetch the selected project's show view on selection change + every
   // project-group event (the store's revision — groups/members/poc/
   // layout changed all land here; the store already coalesces).
   useEffect(() => {
+    if (selectedId === null) {
+      setDetail(null)
+      setDetailError(null)
+      return
+    }
     let cancelled = false
     fetchProjectGroupShow(selectedId)
       .then((data) => {
@@ -725,31 +755,6 @@ export default function ProjectSettings({
       cancelled = true
     }
   }, [selectedId, revision])
-
-  // A selection whose group vanished (deleted on another client) falls
-  // back to the page's project; if THAT is gone too, the page-level
-  // store drops its own selection and this panel unmounts with it.
-  useEffect(() => {
-    if (groups !== null && !groups.some((g) => g.id === selectedId)) {
-      setSelectedId(show.id)
-    }
-  }, [groups, selectedId, show.id])
-
-  // Esc closes Settings (capture phase, so the page's Esc→Agents
-  // listener never sees it). Editable targets keep their own local
-  // Esc semantics (cancel rename / close picker).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      const t = e.target as HTMLElement | null
-      if (t && (t.closest('input, textarea, select') || t.isContentEditable)) return
-      e.preventDefault()
-      e.stopPropagation()
-      onClose()
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
 
   // ── Left master list: search + keyboard selection (ProjectsSection
   //    idiom) ──────────────────────────────────────────────────────────
@@ -794,109 +799,100 @@ export default function ProjectSettings({
   }, [keyboardIndex, visibleGroups])
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      {/* Panel header — title + close (the placeholder's anatomy). */}
-      <div className="flex items-center gap-2 flex-shrink-0 px-3 py-2 border-b border-[var(--color-border)]">
-        <span className="text-[11px] font-semibold text-[var(--color-text-primary)]">
-          Project settings
-        </span>
-        <span className="flex-1" />
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex items-center justify-center w-6 h-6 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] transition-colors cursor-pointer"
-          title="Close settings (Esc)"
-        >
-          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <line x1="2" y1="2" x2="10" y2="10" />
-            <line x1="10" y1="2" x2="2" y2="10" />
-          </svg>
-        </button>
-      </div>
-
-      {/* Master-detail (§6.5 layout directive — the ProjectsSection
-          column viewer: left selectable list, right selected details). */}
-      <div className="flex-1 flex min-h-0">
-        {/* ── Left: the project list ── */}
-        <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col">
-          <div className="px-2 py-1.5">
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              placeholder="Search projects..."
-              className="w-full px-2 py-1.5 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag"
-            />
-          </div>
-          <div className="flex-1 overflow-y-auto px-1 py-1">
-            {visibleGroups.map((g) => {
-              const isSelected = selectedId === g.id
-              const kbIdx = visibleGroups.findIndex((vg) => vg.id === g.id)
-              const isKeyboardHighlighted = kbIdx >= 0 && kbIdx === keyboardIndex
-              return (
-                <div
-                  key={g.id}
-                  data-settings-group-id={g.id}
-                  onClick={() => setSelectedId(g.id)}
-                  className={`flex items-center gap-2 px-2 py-1.5 transition-colors no-drag cursor-pointer select-none ${
+    /* Master-detail (§6.5 layout directive — the ProjectsSection column
+       viewer: left selectable list, right selected details). h-full: the
+       Settings content area renders this section p-0/overflow-hidden so
+       both columns stretch (the Workspaces-section idiom). */
+    <div className="flex h-full min-h-0">
+      {/* ── Left: the project list ── */}
+      <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col">
+        <div className="px-2 py-1.5">
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            placeholder="Search projects..."
+            className="w-full px-2 py-1.5 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag"
+          />
+        </div>
+        <div className="flex-1 overflow-y-auto px-1 py-1">
+          {visibleGroups.map((g) => {
+            const isSelected = selectedId === g.id
+            const kbIdx = visibleGroups.findIndex((vg) => vg.id === g.id)
+            const isKeyboardHighlighted = kbIdx >= 0 && kbIdx === keyboardIndex
+            return (
+              <div
+                key={g.id}
+                data-settings-group-id={g.id}
+                onClick={() => setSelectedId(g.id)}
+                className={`flex items-center gap-2 px-2 py-1.5 transition-colors no-drag cursor-pointer select-none ${
+                  isSelected
+                    ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                    : isKeyboardHighlighted
+                      ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
+                      : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
+                }`}
+              >
+                <span
+                  className={`flex items-center justify-center flex-shrink-0 w-5 h-5 text-[11px] font-semibold ${
                     isSelected
-                      ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                      : isKeyboardHighlighted
-                        ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
-                        : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
+                      ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)]'
+                      : 'bg-white/[0.06] text-[var(--color-text-secondary)]'
                   }`}
                 >
-                  <span
-                    className={`flex items-center justify-center flex-shrink-0 w-5 h-5 text-[11px] font-semibold ${
-                      isSelected
-                        ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)]'
-                        : 'bg-white/[0.06] text-[var(--color-text-secondary)]'
-                    }`}
-                  >
-                    {(g.name.trim()[0] ?? '?').toUpperCase()}
-                  </span>
-                  <span className="text-xs truncate flex-1">{g.name}</span>
-                  <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
-                    {g.memberCount}
-                  </span>
-                </div>
-              )
-            })}
-            {visibleGroups.length === 0 && (
-              <div className="px-2 py-6 text-center">
-                <span className="text-xs text-[var(--color-text-muted)]">
-                  {searchQuery.trim() ? 'No projects match' : 'No projects'}
+                  {(g.name.trim()[0] ?? '?').toUpperCase()}
+                </span>
+                <span className="text-xs truncate flex-1">{g.name}</span>
+                <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
+                  {g.memberCount}
                 </span>
               </div>
-            )}
-          </div>
-        </div>
-
-        {/* ── Right: the selected project's management ── */}
-        <div className="flex-1 overflow-y-auto p-6 min-h-0">
-          {detailError ? (
-            <p className="text-[11px] text-red-400">Failed to load project: {detailError}</p>
-          ) : detail === null || detail.id !== selectedId ? (
-            /* Selection-switch staleness guard (the page idiom): never
-               render the PREVIOUS project's data under a new title. */
-            <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
-          ) : (
-            <ProjectSettingsDetail
-              key={detail.id}
-              detail={detail}
-              readOnly={readOnly}
-              onDeleted={() => {
-                // Deleting the page's open project closes Settings with
-                // it (the nav selection drops via groups-changed); a
-                // sibling delete keeps the panel open on the fallback.
-                if (selectedId === show.id) onClose()
-                else setSelectedId(show.id)
-              }}
-            />
+            )
+          })}
+          {visibleGroups.length === 0 && (
+            <div className="px-2 py-6 text-center">
+              <span className="text-xs text-[var(--color-text-muted)]">
+                {searchQuery.trim() ? 'No projects match' : 'No projects'}
+              </span>
+            </div>
           )}
         </div>
+      </div>
+
+      {/* ── Right: the selected project's management ── */}
+      <div className="flex-1 overflow-y-auto p-6 min-h-0">
+        {groups !== null && groups.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-muted)]">
+            No projects yet — create one on the Projects page.
+          </p>
+        ) : selectedId === null || groups === null ? (
+          <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
+        ) : detailError ? (
+          <p className="text-[11px] text-red-400">Failed to load project: {detailError}</p>
+        ) : detail === null || detail.id !== selectedId ? (
+          /* Selection-switch staleness guard (the page idiom): never
+             render the PREVIOUS project's data under a new title. */
+          <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
+        ) : (
+          <ProjectSettingsDetail
+            key={detail.id}
+            detail={detail}
+            readOnly={readOnly}
+            onDeleted={() => {
+              // Select the first surviving sibling (null when none —
+              // the empty state); refetch NOW so the stale row never
+              // gets re-selected by the fallback effect (the nav's
+              // togglePin skip-the-coalesce idiom).
+              const remaining = (useProjectGroupsStore.getState().groups ?? []).filter(
+                (g) => g.id !== selectedId,
+              )
+              setSelectedId(remaining[0]?.id ?? null)
+              void useProjectGroupsStore.getState().fetchGroups()
+            }}
+          />
+        )}
       </div>
     </div>
   )

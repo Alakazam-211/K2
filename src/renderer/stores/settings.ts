@@ -14,7 +14,10 @@ import {
 // client is a pure view of the active host's daemon.
 import { onActiveHostChange } from '@/stores/connect-host'
 
-export type SettingsSection = 'general' | 'terminal' | 'code-editor' | 'editors-agents' | 'keybindings' | 'projects' | 'timer' | 'workspace-states' | 'agent-skills' | 'heartbeats' | 'companion' | 'wake-scheduler' | 'permissions' | 'dictation-lab' | 'connections' | 'k2-connect'
+// NOTE the naming collision: 'projects' is the LEGACY workspaces section
+// (label "Workspaces" — ProjectsSection.tsx); 'project-groups' is the
+// Projects-V1 groups section (label "Projects" — Projects/ProjectSettings).
+export type SettingsSection = 'general' | 'terminal' | 'code-editor' | 'editors-agents' | 'keybindings' | 'projects' | 'project-groups' | 'timer' | 'workspace-states' | 'agent-skills' | 'heartbeats' | 'companion' | 'wake-scheduler' | 'permissions' | 'dictation-lab' | 'connections' | 'k2-connect'
 
 export interface TerminalSettings {
   fontFamily: string
@@ -90,6 +93,10 @@ interface SettingsState {
 
   // Pre-select a specific project in the projects section
   initialProjectId: string | null
+
+  // Pre-select a specific project GROUP in the project-groups section
+  // (the Projects-page gear / right-click deep-link — prd-projects-v1 §6.5)
+  initialProjectGroupId: string | null
 
   // 0.39.0: last-active project/workspace IDs cached here so projects.ts
   // doesn't re-invoke settings_get on hydration. Source of truth is the
@@ -243,16 +250,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   editor: { ...DEFAULT_EDITOR },
   defaultAgent: 'claude',
   initialProjectId: null,
+  initialProjectGroupId: null,
   lastActiveProjectId: null,
   lastActiveWorkspaceId: null,
   loaded: false,
   pendingUpdateCheck: false,
 
   openSettings: (section?: SettingsSection, projectId?: string) => {
+    // The optional preselect payload routes by section: the legacy
+    // 'projects' (Workspaces) section consumes initialProjectId; the
+    // 'project-groups' (Projects) section consumes initialProjectGroupId.
     set({
       settingsOpen: true,
       activeSection: section ?? get().activeSection,
-      initialProjectId: projectId ?? null
+      initialProjectId: section === 'project-groups' ? null : (projectId ?? null),
+      initialProjectGroupId: section === 'project-groups' ? (projectId ?? null) : null
     })
   },
 

@@ -15,6 +15,10 @@ import { CompanionSection, COMPANION_MANIFEST } from './sections/CompanionSectio
 import { ConnectionsSection, CONNECTIONS_MANIFEST } from './sections/ConnectionsSection'
 import { K2ConnectSection, K2_CONNECT_MANIFEST } from './sections/K2ConnectSection'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
+// The Projects (project GROUPS) section — §6.5 relocation. NOT to be
+// confused with ProjectsSection above, the LEGACY workspaces section
+// (id 'projects', label "Workspaces").
+import ProjectGroupSettings from '../Projects/ProjectSettings'
 import { WorkspaceStatesSection, WORKSPACE_STATES_MANIFEST } from './sections/WorkspaceStatesSection'
 import { AgentSkillsSection, AGENT_SKILLS_MANIFEST } from './sections/AgentSkillsSection'
 // HeartbeatsPanel is rendered inline inside ProjectsSection now; manifest
@@ -32,6 +36,7 @@ const SECTIONS: { id: SettingsSection; label: string; agenticOnly?: boolean }[] 
   { id: 'projects', label: 'Workspaces' },
   { id: 'workspace-states', label: 'Workspace States', agenticOnly: true },
   { id: 'agent-skills', label: 'Canonical Agent Flow', agenticOnly: true },
+  { id: 'project-groups', label: 'Projects' },
   { id: 'k2-connect', label: 'K2 Connect' },
   { id: 'companion', label: 'K2 Companion' },
   { id: 'terminal', label: 'Terminal' },
@@ -212,6 +217,7 @@ export default function Settings(): React.JSX.Element {
         className={`flex-1 min-h-0 relative ${
           activeSection === 'general' ||
           activeSection === 'projects' ||
+          activeSection === 'project-groups' ||
           activeSection === 'k2-connect' ||
           activeSection === 'connections'
             ? 'overflow-hidden p-0'
@@ -279,6 +285,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'projects' && (
           <SectionErrorBoundary>
             <ProjectsSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'project-groups' && (
+          <SectionErrorBoundary>
+            <ProjectGroupSettings />
           </SectionErrorBoundary>
         )}
         {activeSection === 'workspace-states' && (

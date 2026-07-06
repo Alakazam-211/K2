@@ -22,6 +22,7 @@ import { formatRelativeTime } from '@/components/AgentOps/ops-api'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
+import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
 import {
   countByStatus,
   fetchAllFeedback,
@@ -439,6 +440,9 @@ export default function FeedbackPage(): React.JSX.Element | null {
           <div className="no-drag">
             <PageTabs />
           </div>
+          {/* §6.5 relocation — the settings cog is on every page, right
+              after the tabs: K2 | Server | Tabs | ⚙ | … */}
+          <SettingsGearButton />
         </div>
 
         <div className="flex items-center gap-2 no-drag">

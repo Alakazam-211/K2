@@ -96,6 +96,7 @@ export function searchManifest(entries: SettingEntry[], query: string): SettingE
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
   projects: 'Workspaces',
+  'project-groups': 'Projects',
   'workspace-states': 'Workspace States',
   'agent-skills': 'Canonical Agent Flow',
   terminal: 'Terminal',

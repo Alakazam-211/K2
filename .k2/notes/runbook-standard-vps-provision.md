@@ -58,19 +58,26 @@ Cloud-init automation: `scripts/cloud-init-k2-server.yaml.tpl`.
 
 ## Acceptance checklist (Phase 0)
 
-- [ ] Fresh hcloud CPX VM + cloud-init user_data → `k2-daemon` active,
-      tunnel connected, `https://<label>.k2.dev/boot-status` = 200 —
-      with ZERO interactive SSH.
-- [ ] Owner login works at `https://<label>.k2.dev/` (portal) and from
-      the desktop app (Remote Sign-In).
-- [ ] `POST /v1/sandboxes` (with API enabled) → **409** (never
-      unsandboxed) — Standard behaves per the invariant.
-- [ ] Linux two-version self-update e2e (`/cli/daemon/update/start` from
-      version N-1 → N: verify swap + health-check + version bump) — the
-      never-yet-run validation from the 0.39.33 arc.
-- [ ] Re-run provision script → converges, no duplicate users/units.
+- [x] Fresh hcloud CPX VM + cloud-init user_data → `k2-daemon` active,
+      0.40.28 ready, owner created — with ZERO interactive SSH.
+      **PASSED 2026-07-06** (k2-accept-01, ~45s on RAW ubuntu-24.04,
+      self-fetch path — golden image only makes it faster).
+- [ ] Tunnel-attach: `https://<label>.k2.dev/boot-status` = 200 + owner
+      login at the portal + desktop Remote Sign-In. PENDING a test
+      subdomain token (needs `K2_TUNNEL_TOKEN`/`K2_SUBDOMAIN` env).
+- [x] Owner login round-trip on-box (`/cli/auth/login` → whoami
+      `role:"owner"`). **PASSED 2026-07-06** (bare metal + fresh VM).
+- [x] `/v1` absent (404) on a Standard host — never-unsandboxed invariant.
+      **PASSED 2026-07-06.** (409-with-API-on variant needs K2_SANDBOX_API
+      set — deferred to the API-completion arc's gate split.)
+- [x] Linux two-version self-update e2e 0.40.27→0.40.28. **PASSED
+      2026-07-06** on bare metal — after finding + fixing THREE fleet
+      bugs (see gotchas: CI secrets, sig format, KillMode).
+- [x] Re-run provision script → converges. **PASSED 2026-07-06**
+      (3 consecutive runs; surfaced + fixed Text-file-busy and
+      stale-token-on-restart bugs).
 - [ ] Raspberry Pi (aarch64) smoke: same script, same checklist items
-      1–2 (community/self-host path).
+      (community/self-host path). PENDING hardware.
 
 ## Known prerequisites & gotchas
 
@@ -93,7 +100,25 @@ Cloud-init automation: `scripts/cloud-init-k2-server.yaml.tpl`.
   header one-liner (`releases/latest/download/install-daemon.sh`) 404s.
   Fetch from raw.githubusercontent (what the provision script does), or
   add it to release.sh's asset list (follow-up).
+- **Sig-asset format (fixed fleet-wide 2026-07-06)**: tauri's signer
+  emits `.sig` files as BASE64 of the minisig text; the daemon
+  self-updater (`minisign_verify::Signature::decode`) and plain
+  `minisign` need the RAW text — Shape B self-update had NEVER worked on
+  any platform. Fixed at the source (CI workflow + release.sh decode
+  before upload), the v0.40.27/v0.40.28 assets re-uploaded decoded, and
+  both shell installers now accept either form. A verify_minisign
+  accept-both fix in the daemon is queued for the Phase 1 window.
+- **`KillMode=process` is REQUIRED on systemd units** (fixed 2026-07-06):
+  the Shape B swap helper is setsid-detached but stays in the daemon's
+  cgroup — default control-group kill reaped it before it could swap, so
+  self-update silently no-oped on Linux. Both unit templates now set it;
+  existing boxes need the drop-in
+  (`/etc/systemd/system/<unit>.service.d/killmode.conf`). Applied to the
+  bare-metal box's main daemon 2026-07-06 (takes effect its next stop).
 - Ubuntu minimal images may lack `sudo` — the provision script uses
   `sudo -u`; install sudo or swap to `runuser` if you hit that.
 - The daemon binds **127.0.0.1 only**; remote access is exclusively the
   tunnel. Do not "fix" this by exposing the port.
+- Hetzner API token for K2 Cloud lives at `~/.config/hcloud/k2-cloud.token`
+  (0600, OUTSIDE any git tree) on the dev machine — named `k2-cloud` in
+  the Hetzner console. Test/acceptance boxes: `k2-accept-01` (throwaway).

@@ -18,7 +18,7 @@
 //! TOKEN of the `Err(String)`, `"<code>: <hint>"` — the P2 routes layer
 //! splits on the first `": "` to build the wire
 //! `{"error":{"code","hint"}}` shape. Codes used here: `name_taken`,
-//! `poc_successor_required`, `not_a_member`.
+//! `poc_successor_required`, `not_a_member`, `last_dashboard`.
 
 use rusqlite::params;
 
@@ -835,6 +835,162 @@ pub fn save_dashboard_layout(
     get_dashboard(dashboard_id).ok_or_else(|| "dashboard vanished after save".to_string())
 }
 
+/// Create a dashboard in a group (§6.7.6 — multi-dashboard V1.1
+/// alongside [`rename_dashboard`]). `group_id` must be a FULL id. The
+/// name obeys the same non-empty + unique-within-group rules as
+/// [`rename_dashboard`] (`name_taken` on collision); the new row lands
+/// LAST (position = max(position)+1) with the empty versioned layout
+/// blob and revision 0 — exactly how [`create_group`] seeds 'Main'.
+pub fn create_dashboard(group_id: &str, name: &str) -> Result<ProjectGroupDashboard, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("usage: dashboard name must not be empty".to_string());
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = now_secs();
+    let db = crate::db::shared();
+    let conn = db.lock();
+    // Check the parent explicitly so callers get a clean not-found
+    // instead of an FK constraint error.
+    let group_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM project_groups WHERE id = ?1",
+            params![group_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if !group_exists {
+        return Err(format!("no project group with id {group_id}"));
+    }
+    let taken: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM project_group_dashboards \
+             WHERE group_id = ?1 AND name = ?2",
+            params![group_id, name],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if taken {
+        return Err(format!(
+            "name_taken: a dashboard named '{name}' already exists in this project"
+        ));
+    }
+    conn.execute(
+        "INSERT INTO project_group_dashboards (id, group_id, name, layout_json, \
+         revision, position, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, 0, \
+         (SELECT COALESCE(MAX(position) + 1, 0) FROM project_group_dashboards \
+          WHERE group_id = ?2), ?5, ?5)",
+        params![id, group_id, name, EMPTY_LAYOUT_V1, now],
+    )
+    .map_err(|e| {
+        // The UNIQUE (group_id, name) constraint backstops a race
+        // between the check above and the insert.
+        if e.to_string().contains("UNIQUE") {
+            format!("name_taken: a dashboard named '{name}' already exists in this project")
+        } else {
+            format!("dashboard insert failed: {e}")
+        }
+    })?;
+    drop(conn);
+    get_dashboard(&id).ok_or_else(|| "dashboard vanished after insert".to_string())
+}
+
+/// Delete a dashboard (§6.7.6). `dashboard_id` must be a FULL id.
+/// REFUSES to delete a group's LAST dashboard (stable code
+/// `last_dashboard` — every group always keeps at least one, the
+/// create_group 'Main' invariant). Deletes only the dashboard row —
+/// never the group or its members/messages.
+pub fn delete_dashboard(dashboard_id: &str) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let group_id: String = conn
+        .query_row(
+            "SELECT group_id FROM project_group_dashboards WHERE id = ?1",
+            params![dashboard_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| format!("no dashboard with id {dashboard_id}"))?;
+    let siblings: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM project_group_dashboards WHERE group_id = ?1",
+            params![group_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("dashboard count failed: {e}"))?;
+    if siblings <= 1 {
+        return Err(
+            "last_dashboard: a project must keep at least one dashboard — \
+             create another before deleting this one"
+                .to_string(),
+        );
+    }
+    let deleted = conn
+        .execute(
+            "DELETE FROM project_group_dashboards WHERE id = ?1",
+            params![dashboard_id],
+        )
+        .map_err(|e| format!("dashboard delete failed: {e}"))?;
+    if deleted == 0 {
+        return Err(format!("no dashboard with id {dashboard_id}"));
+    }
+    Ok(())
+}
+
+/// Rewrite a group's dashboard positions (§6.7.6 drag-to-reorder).
+/// `group_id` must be a FULL id; `order` must be a PERMUTATION of the
+/// group's dashboard ids (every id exactly once — anything else is a
+/// loud `usage` error, changing nothing). Writes positions `0..n` in
+/// the given order and returns the new position-ordered list. Never
+/// touches layout/revision — a reorder is metadata, not a layout
+/// write.
+pub fn reorder_dashboards(
+    group_id: &str,
+    order: &[String],
+) -> Result<Vec<ProjectGroupDashboard>, String> {
+    let now = now_secs();
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let group_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM project_groups WHERE id = ?1",
+            params![group_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if !group_exists {
+        return Err(format!("no project group with id {group_id}"));
+    }
+    let current: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM project_group_dashboards WHERE group_id = ?1")
+            .map_err(|e| format!("prepare: {e}"))?;
+        let rows = stmt
+            .query_map(params![group_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("query: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("row: {e}"))?
+    };
+    let current_set: std::collections::HashSet<&str> =
+        current.iter().map(String::as_str).collect();
+    let order_set: std::collections::HashSet<&str> = order.iter().map(String::as_str).collect();
+    if order.len() != current.len() || order_set.len() != order.len() || order_set != current_set
+    {
+        return Err(format!(
+            "usage: order must list each of the project's {} dashboard ids exactly once",
+            current.len()
+        ));
+    }
+    for (position, id) in order.iter().enumerate() {
+        conn.execute(
+            "UPDATE project_group_dashboards SET position = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, position as i64, now],
+        )
+        .map_err(|e| format!("position update failed: {e}"))?;
+    }
+    drop(conn);
+    list_dashboards(group_id)
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests
 // ──────────────────────────────────────────────────────────────────────
@@ -1211,6 +1367,123 @@ mod tests {
 
         // Unknown id fails loudly.
         assert!(rename_dashboard("nope", "x").is_err());
+    }
+
+    #[test]
+    fn create_dashboard_rules() {
+        let g = create_group(&gname("dashcreate")).expect("create");
+        let main = list_dashboards(&g.id).expect("dashboards").remove(0);
+
+        // New dashboard lands LAST with the create_group 'Main'
+        // seeding: empty versioned layout, revision 0.
+        let ops = create_dashboard(&g.id, "Ops").expect("create dashboard");
+        assert_eq!(ops.group_id, g.id);
+        assert_eq!(ops.name, "Ops");
+        assert_eq!(ops.position, main.position + 1, "position = max(position)+1");
+        assert_eq!(ops.revision, 0);
+        assert_eq!(ops.layout_json, EMPTY_LAYOUT_V1);
+        assert!(ops.created_at > 0);
+        let third = create_dashboard(&g.id, "Burndown").expect("create third");
+        assert_eq!(third.position, ops.position + 1);
+        let ids: Vec<String> =
+            list_dashboards(&g.id).expect("dashboards").into_iter().map(|d| d.id).collect();
+        assert_eq!(ids, vec![main.id.clone(), ops.id.clone(), third.id.clone()]);
+
+        // Whitespace trims; empty/blank is refused loudly.
+        let trimmed = create_dashboard(&g.id, "  Release  ").expect("trimmed create");
+        assert_eq!(trimmed.name, "Release");
+        assert!(create_dashboard(&g.id, "   ").is_err());
+
+        // A taken name WITHIN the group → stable name_taken code.
+        let err = create_dashboard(&g.id, "Ops").expect_err("dup within group refused");
+        assert!(err.starts_with("name_taken"), "got: {err}");
+        assert_eq!(list_dashboards(&g.id).expect("dashboards").len(), 4, "refusal adds nothing");
+
+        // The same name in ANOTHER group is fine (uniqueness is
+        // per-group).
+        let other = create_group(&gname("dashcreate-other")).expect("create other");
+        assert_eq!(create_dashboard(&other.id, "Ops").expect("cross-group ok").name, "Ops");
+
+        // Unknown group fails loudly.
+        assert!(create_dashboard("nope", "x").is_err());
+    }
+
+    #[test]
+    fn delete_dashboard_refuses_last() {
+        let g = create_group(&gname("dashdelete")).expect("create");
+        let main = list_dashboards(&g.id).expect("dashboards").remove(0);
+
+        // Deleting the group's LAST dashboard is refused with the
+        // stable code; the row survives.
+        let err = delete_dashboard(&main.id).expect_err("last dashboard must be refused");
+        assert!(err.starts_with("last_dashboard"), "got: {err}");
+        assert_eq!(list_dashboards(&g.id).expect("dashboards").len(), 1, "nothing deleted");
+
+        // With a sibling present, deletion succeeds and removes ONLY
+        // the dashboard row — the group survives untouched.
+        let ops = create_dashboard(&g.id, "Ops").expect("create sibling");
+        delete_dashboard(&main.id).expect("delete with sibling present");
+        let remaining = list_dashboards(&g.id).expect("dashboards");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, ops.id);
+        assert!(get_dashboard(&main.id).is_none());
+        assert!(get_group_by_id(&g.id).is_some(), "group untouched");
+
+        // The survivor is now the last → refused again.
+        let err = delete_dashboard(&ops.id).expect_err("new last must be refused");
+        assert!(err.starts_with("last_dashboard"), "got: {err}");
+
+        // Unknown / already-deleted ids fail loudly.
+        assert!(delete_dashboard(&main.id).is_err(), "gone already");
+        assert!(delete_dashboard("nope").is_err());
+    }
+
+    #[test]
+    fn reorder_dashboards_permutation() {
+        let g = create_group(&gname("dashorder")).expect("create");
+        let main = list_dashboards(&g.id).expect("dashboards").remove(0);
+        let ops = create_dashboard(&g.id, "Ops").expect("ops");
+        let burn = create_dashboard(&g.id, "Burndown").expect("burn");
+
+        // A full permutation rewrites positions 0..n and returns the
+        // new order.
+        let order = vec![burn.id.clone(), main.id.clone(), ops.id.clone()];
+        let reordered = reorder_dashboards(&g.id, &order).expect("reorder");
+        let ids: Vec<&str> = reordered.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, vec![burn.id.as_str(), main.id.as_str(), ops.id.as_str()]);
+        let positions: Vec<i64> = reordered.iter().map(|d| d.position).collect();
+        assert_eq!(positions, vec![0, 1, 2], "positions rewritten 0..n");
+        // Reorder is metadata only — layout/revision untouched.
+        assert!(reordered.iter().all(|d| d.revision == 0));
+        assert_eq!(
+            get_dashboard(&main.id).expect("get").layout_json,
+            EMPTY_LAYOUT_V1,
+            "reorder must not touch layouts"
+        );
+        // list_dashboards agrees on the next read.
+        let listed: Vec<String> =
+            list_dashboards(&g.id).expect("list").into_iter().map(|d| d.id).collect();
+        assert_eq!(listed, order);
+
+        // Anything that is NOT a permutation is a loud usage error
+        // that changes nothing: too few, duplicates, a foreign id.
+        let foreign_group = create_group(&gname("dashorder-other")).expect("other");
+        let foreign = list_dashboards(&foreign_group.id).expect("dash").remove(0);
+        for bad in [
+            vec![main.id.clone(), ops.id.clone()],
+            vec![main.id.clone(), ops.id.clone(), ops.id.clone()],
+            vec![main.id.clone(), ops.id.clone(), foreign.id.clone()],
+            Vec::new(),
+        ] {
+            let err = reorder_dashboards(&g.id, &bad).expect_err("non-permutation refused");
+            assert!(err.starts_with("usage"), "got: {err} for {bad:?}");
+        }
+        let unchanged: Vec<String> =
+            list_dashboards(&g.id).expect("list").into_iter().map(|d| d.id).collect();
+        assert_eq!(unchanged, order, "refused reorder changes nothing");
+
+        // Unknown group fails loudly.
+        assert!(reorder_dashboards("nope", &[]).is_err());
     }
 
     #[test]

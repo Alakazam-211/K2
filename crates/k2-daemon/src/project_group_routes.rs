@@ -13,17 +13,17 @@
 //! `routes::dispatcher` with `token_ok` auth (owner AND connect-user
 //! sessions — connect users see projects too). GET-chain hits on POST
 //! paths return 405 (`feedback_post_only_route_guards` house rule).
-//! `dashboard/save-layout` additionally requires the owner-or-admin
+//! The `dashboard/*` mutations additionally require the owner-or-admin
 //! bit (PRD §6.3 resolved Q2 — viewers see but cannot save), enforced
 //! in the dispatcher arm where the query string lives.
 //!
 //! Error contract: `{"ok":false,"error":{"code","hint"}}` with stable
 //! codes — `not_found` / `ambiguous_id` (CLI exit 4; the ambiguous hint
 //! lists the candidate names), `usage` (exit 2), plus the
-//! project-specific `name_taken` (409), `poc_successor_required` (409)
-//! and `not_a_member` (403). Core errors arrive as `"<code>: <hint>"`
-//! strings (project_groups.rs convention) and are split on the first
-//! `": "`.
+//! project-specific `name_taken` (409), `poc_successor_required` (409),
+//! `last_dashboard` (409) and `not_a_member` (403). Core errors arrive
+//! as `"<code>: <hint>"` strings (project_groups.rs convention) and are
+//! split on the first `": "`.
 //!
 //! Events (PRD §4.2) ride the existing `/events` WireEvent broadcast
 //! via `agent_hooks::emit`:
@@ -37,9 +37,9 @@
 //!   — `dashboard/save-layout` (freshness on next open, never a live
 //!   rearrange).
 //! - `project-group:groups-changed` `{groupId?}` — create / rename /
-//!   delete / pin / sort / dashboard rename (nav-list + open-`show`
-//!   liveness; §4.2 has no dashboards-changed event, so the dashboard
-//!   rename rides the structural sibling).
+//!   delete / pin / sort / dashboard create/rename/delete/reorder
+//!   (nav-list + open-`show` liveness; §4.2 has no dashboards-changed
+//!   event, so the dashboard mutations ride the structural sibling).
 //!
 //! PoC injection (§4.3, trigger matrix frozen): every stored chat
 //! message from anyone EXCEPT the PoC best-effort injects into the PoC
@@ -181,7 +181,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/project-group/set-poc"
         | "/cli/project-group/msg"
         | "/cli/project-group/dashboard/save-layout"
-        | "/cli/project-group/dashboard/rename" => CliResponse::method_not_allowed(),
+        | "/cli/project-group/dashboard/rename"
+        | "/cli/project-group/dashboard/create"
+        | "/cli/project-group/dashboard/delete"
+        | "/cli/project-group/dashboard/reorder" => CliResponse::method_not_allowed(),
 
         _ => return None,
     };
@@ -204,6 +207,9 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/project-group/msg" => handle_msg(body),
         "/cli/project-group/dashboard/save-layout" => handle_save_layout(body),
         "/cli/project-group/dashboard/rename" => handle_dashboard_rename(body),
+        "/cli/project-group/dashboard/create" => handle_dashboard_create(body),
+        "/cli/project-group/dashboard/delete" => handle_dashboard_delete(body),
+        "/cli/project-group/dashboard/reorder" => handle_dashboard_reorder(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -258,13 +264,15 @@ fn resolve_error_response(given: &str, err: ResolveError) -> CliResponse {
 /// is a validation-shaped `usage` error.
 fn core_error(e: String) -> CliResponse {
     let (code, hint) = match e.split_once(": ") {
-        Some((c @ ("name_taken" | "poc_successor_required" | "not_a_member" | "usage"), h)) => {
-            (c.to_string(), h.to_string())
-        }
+        Some((
+            c @ ("name_taken" | "poc_successor_required" | "not_a_member" | "last_dashboard"
+            | "usage"),
+            h,
+        )) => (c.to_string(), h.to_string()),
         _ => ("usage".to_string(), e),
     };
     let status = match code.as_str() {
-        "name_taken" | "poc_successor_required" => "409 Conflict",
+        "name_taken" | "poc_successor_required" | "last_dashboard" => "409 Conflict",
         "not_a_member" => "403 Forbidden",
         _ => "400 Bad Request",
     };
@@ -1050,7 +1058,8 @@ struct DashboardRenameBody {
 }
 
 /// Handler for `POST /cli/project-group/dashboard/rename` — P8's §6.5
-/// Settings Main-row rename (create/delete/reorder stay V1.1).
+/// Settings Main-row rename (create/delete/reorder land beside it,
+/// §6.7.6).
 /// Dashboard-id-addressed like save-layout (and owner-or-admin gated
 /// in the same dispatcher arm); the dashboard must belong to the
 /// addressed group. Emits `project-group:groups-changed` (§4.2 has no
@@ -1096,6 +1105,157 @@ pub fn handle_dashboard_rename(body: &[u8]) -> CliResponse {
                 map.insert("ok".to_string(), serde_json::json!(true));
             }
             CliResponse::ok_json(v.to_string())
+        }
+        Err(e) => core_error(e),
+    }
+}
+
+/// `POST /cli/project-group/dashboard/create` body.
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct DashboardCreateBody {
+    group: String,
+    name: String,
+}
+
+/// Handler for `POST /cli/project-group/dashboard/create` — §6.7.6:
+/// a new dashboard lands LAST (position = max+1) with the empty
+/// versioned layout blob and revision 0, exactly how `create` seeds
+/// 'Main'. Owner-or-admin gated in the same dispatcher arm as
+/// save-layout/rename. Emits `project-group:groups-changed` (the
+/// structural sibling — §4.2 has no dashboards-changed event). Never
+/// injects.
+pub fn handle_dashboard_create(body: &[u8]) -> CliResponse {
+    let b: DashboardCreateBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    if b.group.is_empty() {
+        return usage_error("missing 'group' (a project name, id, or unique prefix)");
+    }
+    if b.name.trim().is_empty() {
+        return usage_error("create requires a non-empty dashboard <name>");
+    }
+    let group_id = match project_groups::resolve_group(&b.group) {
+        Ok(id) => id,
+        Err(e) => return resolve_error_response(&b.group, e),
+    };
+    match project_groups::create_dashboard(&group_id, &b.name) {
+        Ok(created) => {
+            emit_groups_changed(&group_id);
+            let mut v = serde_json::to_value(&created).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(map) = v.as_object_mut() {
+                map.insert("ok".to_string(), serde_json::json!(true));
+            }
+            CliResponse::ok_json(v.to_string())
+        }
+        Err(e) => core_error(e),
+    }
+}
+
+/// `POST /cli/project-group/dashboard/delete` body.
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct DashboardDeleteBody {
+    group: String,
+    dashboard_id: String,
+}
+
+/// Handler for `POST /cli/project-group/dashboard/delete` — §6.7.6.
+/// Dashboard-id-addressed like save-layout/rename (and owner-or-admin
+/// gated in the same dispatcher arm); the dashboard must belong to the
+/// addressed group. Deleting a group's LAST dashboard is refused
+/// (`last_dashboard`, 409 — every group keeps at least one). Deletes
+/// only the dashboard row; emits `project-group:groups-changed`.
+pub fn handle_dashboard_delete(body: &[u8]) -> CliResponse {
+    let b: DashboardDeleteBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    if b.group.is_empty() {
+        return usage_error("missing 'group' (a project name, id, or unique prefix)");
+    }
+    if b.dashboard_id.is_empty() {
+        return usage_error("missing 'dashboardId'");
+    }
+    let group_id = match project_groups::resolve_group(&b.group) {
+        Ok(id) => id,
+        Err(e) => return resolve_error_response(&b.group, e),
+    };
+    let Some(dashboard) = project_groups::get_dashboard(&b.dashboard_id) else {
+        return error_response(
+            "404 Not Found",
+            "not_found",
+            format!("no dashboard with id {}", b.dashboard_id),
+        );
+    };
+    if dashboard.group_id != group_id {
+        return error_response(
+            "404 Not Found",
+            "not_found",
+            format!("dashboard {} does not belong to project '{}'", b.dashboard_id, b.group),
+        );
+    }
+    match project_groups::delete_dashboard(&b.dashboard_id) {
+        Ok(()) => {
+            emit_groups_changed(&group_id);
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "id": b.dashboard_id,
+                    "groupId": group_id,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => core_error(e),
+    }
+}
+
+/// `POST /cli/project-group/dashboard/reorder` body. `order` is the
+/// FULL new position order — every dashboard id of the group exactly
+/// once.
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct DashboardReorderBody {
+    group: String,
+    order: Vec<String>,
+}
+
+/// Handler for `POST /cli/project-group/dashboard/reorder` — §6.7.6
+/// drag-to-reorder. Owner-or-admin gated in the same dispatcher arm as
+/// the other dashboard mutations. `order` must be a permutation of the
+/// group's dashboard ids (a foreign or missing id is a loud `usage`
+/// refusal that changes nothing — core's permutation check doubles as
+/// the ownership check); positions are rewritten 0..n and the new
+/// position-ordered list rides the response. Emits
+/// `project-group:groups-changed`. Never touches layout/revision.
+pub fn handle_dashboard_reorder(body: &[u8]) -> CliResponse {
+    let b: DashboardReorderBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    if b.group.is_empty() {
+        return usage_error("missing 'group' (a project name, id, or unique prefix)");
+    }
+    if b.order.is_empty() {
+        return usage_error("missing 'order' (every dashboard id of the project, in the new order)");
+    }
+    let group_id = match project_groups::resolve_group(&b.group) {
+        Ok(id) => id,
+        Err(e) => return resolve_error_response(&b.group, e),
+    };
+    match project_groups::reorder_dashboards(&group_id, &b.order) {
+        Ok(dashboards) => {
+            emit_groups_changed(&group_id);
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "groupId": group_id,
+                    "dashboards": dashboards,
+                })
+                .to_string(),
+            )
         }
         Err(e) => core_error(e),
     }
@@ -1829,6 +1989,265 @@ mod tests {
         );
     }
 
+    /// Dashboard create through the route (§6.7.6): new row lands LAST
+    /// with revision 0 + the empty layout, ONE groups-changed event;
+    /// validation misses are loud; a sibling's name 409s name_taken.
+    #[test]
+    fn project_group_dashboard_create_route() {
+        install_capture_sink();
+        let g = create_group_via_route(&gname("dashcreate"));
+        let gid = g["id"].as_str().expect("id").to_string();
+
+        // Create → 200 with the new row: position after 'Main',
+        // revision 0, the empty versioned layout, groups-changed only.
+        let mark = event_mark();
+        let created = ok_json(post_json(
+            "/cli/project-group/dashboard/create",
+            serde_json::json!({ "group": gid, "name": "Ops" }),
+        ));
+        assert_eq!(created["name"], "Ops");
+        assert_eq!(created["groupId"], gid.as_str());
+        assert_eq!(created["position"], 1, "lands after the auto 'Main' at 0");
+        assert_eq!(created["revision"], 0);
+        assert_eq!(
+            created["layoutJson"],
+            k2_core::project_groups::EMPTY_LAYOUT_V1,
+            "seeded like create_group's 'Main'"
+        );
+        let events = events_for_group(mark, &gid);
+        assert_eq!(
+            events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["project-group:groups-changed"],
+            "dashboard create emits groups-changed only: {events:?}"
+        );
+        // show lists both, position order.
+        let shown = ok_json(show(&gid));
+        let dashboards = shown["dashboards"].as_array().expect("dashboards");
+        assert_eq!(dashboards.len(), 2);
+        assert_eq!(dashboards[0]["name"], "Main");
+        assert_eq!(dashboards[1]["name"], "Ops");
+
+        // Missing/blank fields → usage.
+        for body in [
+            serde_json::json!({ "name": "x" }),
+            serde_json::json!({ "group": gid }),
+            serde_json::json!({ "group": gid, "name": "  " }),
+        ] {
+            let resp = post_json("/cli/project-group/dashboard/create", body);
+            assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage");
+        }
+
+        // A sibling's name in the SAME group → 409 name_taken, nothing
+        // added.
+        let resp = post_json(
+            "/cli/project-group/dashboard/create",
+            serde_json::json!({ "group": gid, "name": "Ops" }),
+        );
+        assert_eq!(resp.status, "409 Conflict", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "name_taken");
+        assert_eq!(
+            ok_json(show(&gid))["dashboards"].as_array().expect("dashboards").len(),
+            2,
+            "refused create adds nothing"
+        );
+
+        // Unknown group → 404 not_found.
+        let unknown = format!("zzz-no-such-{}", uuid::Uuid::new_v4());
+        let resp = post_json(
+            "/cli/project-group/dashboard/create",
+            serde_json::json!({ "group": unknown, "name": "x" }),
+        );
+        assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+    }
+
+    /// Dashboard delete through the route (§6.7.6): the group's LAST
+    /// dashboard is refused 409 `last_dashboard`; with a sibling the
+    /// delete lands with ONE groups-changed event; ownership +
+    /// unknown-id 404s and validation misses are loud.
+    #[test]
+    fn project_group_dashboard_delete_route() {
+        install_capture_sink();
+        let g = create_group_via_route(&gname("dashdelete"));
+        let gid = g["id"].as_str().expect("id").to_string();
+        let main_id = ok_json(show(&gid))["dashboards"][0]["id"]
+            .as_str()
+            .expect("dashboard id")
+            .to_string();
+
+        // Deleting the LAST dashboard → 409 last_dashboard, nothing
+        // emitted, the row survives.
+        let mark = event_mark();
+        let resp = post_json(
+            "/cli/project-group/dashboard/delete",
+            serde_json::json!({ "group": gid, "dashboardId": main_id }),
+        );
+        assert_eq!(resp.status, "409 Conflict", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "last_dashboard");
+        assert!(events_for_group(mark, &gid).is_empty(), "a refused delete must not emit");
+        assert_eq!(
+            ok_json(show(&gid))["dashboards"].as_array().expect("dashboards").len(),
+            1,
+            "refusal deletes nothing"
+        );
+
+        // With a sibling present the delete lands: 200 + groups-changed.
+        let ops = ok_json(post_json(
+            "/cli/project-group/dashboard/create",
+            serde_json::json!({ "group": gid, "name": "Ops" }),
+        ));
+        let mark = event_mark();
+        let deleted = ok_json(post_json(
+            "/cli/project-group/dashboard/delete",
+            serde_json::json!({ "group": gid, "dashboardId": main_id }),
+        ));
+        assert_eq!(deleted["id"], main_id.as_str());
+        assert_eq!(deleted["groupId"], gid.as_str());
+        assert_eq!(
+            events_for_group(mark, &gid)
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            vec!["project-group:groups-changed"]
+        );
+        let dashboards = ok_json(show(&gid))["dashboards"].clone();
+        let dashboards = dashboards.as_array().expect("dashboards");
+        assert_eq!(dashboards.len(), 1);
+        assert_eq!(dashboards[0]["id"], ops["id"], "only the sibling remains");
+
+        // Unknown dashboard id → 404; ANOTHER group's dashboard under
+        // this group → 404 (the save-layout ownership rule).
+        let other = create_group_via_route(&gname("dashdelete-other"));
+        let other_id = other["id"].as_str().expect("id").to_string();
+        let other_dash = ok_json(show(&other_id))["dashboards"][0]["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+        for dash in ["nope", other_dash.as_str()] {
+            let resp = post_json(
+                "/cli/project-group/dashboard/delete",
+                serde_json::json!({ "group": gid, "dashboardId": dash }),
+            );
+            assert_eq!(resp.status, "404 Not Found", "dash={dash} body={}", resp.body);
+        }
+
+        // Missing fields → usage.
+        for body in [
+            serde_json::json!({ "dashboardId": "x" }),
+            serde_json::json!({ "group": gid }),
+        ] {
+            let resp = post_json("/cli/project-group/dashboard/delete", body);
+            assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage");
+        }
+    }
+
+    /// Dashboard reorder through the route (§6.7.6): a full permutation
+    /// rewrites positions 0..n and returns the new list with ONE
+    /// groups-changed event; a non-permutation is a loud usage refusal
+    /// that changes nothing; addressing misses are the shared shapes.
+    #[test]
+    fn project_group_dashboard_reorder_route() {
+        install_capture_sink();
+        let g = create_group_via_route(&gname("dashorder"));
+        let gid = g["id"].as_str().expect("id").to_string();
+        let main_id = ok_json(show(&gid))["dashboards"][0]["id"]
+            .as_str()
+            .expect("dashboard id")
+            .to_string();
+        let ops_id = ok_json(post_json(
+            "/cli/project-group/dashboard/create",
+            serde_json::json!({ "group": gid, "name": "Ops" }),
+        ))["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+        let burn_id = ok_json(post_json(
+            "/cli/project-group/dashboard/create",
+            serde_json::json!({ "group": gid, "name": "Burndown" }),
+        ))["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+
+        // Reorder → 200 with the new position-ordered list + ONE
+        // groups-changed event; the next show agrees.
+        let mark = event_mark();
+        let reordered = ok_json(post_json(
+            "/cli/project-group/dashboard/reorder",
+            serde_json::json!({ "group": gid, "order": [burn_id, main_id, ops_id] }),
+        ));
+        assert_eq!(reordered["groupId"], gid.as_str());
+        let dashboards = reordered["dashboards"].as_array().expect("dashboards");
+        let ids: Vec<&str> = dashboards
+            .iter()
+            .map(|d| d["id"].as_str().expect("id"))
+            .collect();
+        assert_eq!(ids, vec![burn_id.as_str(), main_id.as_str(), ops_id.as_str()]);
+        let positions: Vec<i64> = dashboards
+            .iter()
+            .map(|d| d["position"].as_i64().expect("position"))
+            .collect();
+        assert_eq!(positions, vec![0, 1, 2], "positions rewritten 0..n");
+        assert!(
+            dashboards.iter().all(|d| d["revision"] == 0),
+            "reorder must not bump revisions: {dashboards:?}"
+        );
+        let events = events_for_group(mark, &gid);
+        assert_eq!(
+            events.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["project-group:groups-changed"],
+            "reorder emits groups-changed only: {events:?}"
+        );
+        let shown = ok_json(show(&gid));
+        assert_eq!(shown["dashboards"][0]["id"], burn_id.as_str());
+
+        // A NON-permutation (subset / duplicate / a foreign dashboard
+        // id) → 400 usage, order unchanged.
+        let other = create_group_via_route(&gname("dashorder-other"));
+        let other_dash = ok_json(show(other["id"].as_str().expect("id")))["dashboards"][0]["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+        for order in [
+            serde_json::json!([main_id, ops_id]),
+            serde_json::json!([main_id, ops_id, ops_id]),
+            serde_json::json!([main_id, ops_id, other_dash]),
+        ] {
+            let resp = post_json(
+                "/cli/project-group/dashboard/reorder",
+                serde_json::json!({ "group": gid, "order": order }),
+            );
+            assert_eq!(resp.status, "400 Bad Request", "order={order} body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage", "order={order}");
+        }
+        let shown = ok_json(show(&gid));
+        assert_eq!(shown["dashboards"][0]["id"], burn_id.as_str(), "refusal changes nothing");
+
+        // Missing fields → usage; unknown group → 404.
+        for body in [
+            serde_json::json!({ "order": ["x"] }),
+            serde_json::json!({ "group": gid }),
+            serde_json::json!({ "group": gid, "order": [] }),
+        ] {
+            let resp = post_json("/cli/project-group/dashboard/reorder", body);
+            assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage");
+        }
+        let unknown = format!("zzz-no-such-{}", uuid::Uuid::new_v4());
+        let resp = post_json(
+            "/cli/project-group/dashboard/reorder",
+            serde_json::json!({ "group": unknown, "order": ["x"] }),
+        );
+        assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+    }
+
     /// P8 §4.1 — the html-docs read: `isPinnedFile` file-viewer items
     /// out of MEMBER workspaces' layout blobs only, deduped per
     /// (workspace, path), split-view extraGroups included, non-pinned
@@ -1954,6 +2373,9 @@ mod tests {
             "/cli/project-group/msg",
             "/cli/project-group/dashboard/save-layout",
             "/cli/project-group/dashboard/rename",
+            "/cli/project-group/dashboard/create",
+            "/cli/project-group/dashboard/delete",
+            "/cli/project-group/dashboard/reorder",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");

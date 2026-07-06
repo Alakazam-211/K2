@@ -544,6 +544,9 @@ async fn handle_one_request(
             | "/cli/project-group/msg"
             | "/cli/project-group/dashboard/save-layout"
             | "/cli/project-group/dashboard/rename"
+            | "/cli/project-group/dashboard/create"
+            | "/cli/project-group/dashboard/delete"
+            | "/cli/project-group/dashboard/reorder"
             | "/cli/inbox/compose"
             | "/cli/inbox/move"
             | "/cli/inbox/archive"
@@ -2921,14 +2924,16 @@ async fn handle_one_request(
         }
         // Projects V1 P2 — `/cli/project-group/*` mutations (create /
         // rename / delete / pin / sort / add-member / remove-member /
-        // set-poc / msg / dashboard/save-layout / dashboard/rename).
+        // set-poc / msg / dashboard/save-layout / dashboard/rename /
+        // dashboard/create / dashboard/delete / dashboard/reorder).
         // JSON-bodied POSTs; token_ok (owner OR connect-user session —
         // connect users see projects too, PRD §4.1) + require_post per
         // feedback_post_only_route_guards. The `dashboard/*` mutations
         // are additionally owner-or-admin-gated (PRD §6.3 resolved Q2:
-        // owners and admins rearrange/save; viewers and non-admin
-        // users see but cannot save). Handlers run in spawn_blocking
-        // (SQLite writes + the PoC injection's wake path can block).
+        // owners and admins create/rearrange/save; viewers and
+        // non-admin users see but cannot change). Handlers run in
+        // spawn_blocking (SQLite writes + the PoC injection's wake path
+        // can block).
         p if is_post && post_allowed && p.starts_with("/cli/project-group/") => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -2944,8 +2949,7 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            if (p == "/cli/project-group/dashboard/save-layout"
-                || p == "/cli/project-group/dashboard/rename")
+            if p.starts_with("/cli/project-group/dashboard/")
                 && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
             {
                 let _ = stream.read(&mut buf).await;

@@ -67,6 +67,15 @@ pub struct ResolvedAgentCommand {
     /// The matched `agent_presets.id`; None for the literal fallback.
     pub preset_id: Option<String>,
     pub source: ResolvedAgentSource,
+    /// The preset's DECLARED dangerous auto-approve flags (migration
+    /// 0070 `agent_presets.danger_flags`, a JSON string array).
+    /// `None` = the preset carries NULL/malformed metadata (or the
+    /// resolution had no preset row at all) — i.e. the agent's own
+    /// auto-approve flags are UNKNOWN. Consumers must treat `None` as
+    /// fail-closed-with-residual (strip their hardcoded floor and warn),
+    /// never as "safe". The literal claude fallback declares its flag
+    /// truthfully (we know its grammar).
+    pub danger_flags: Option<Vec<String>>,
 }
 
 impl ResolvedAgentCommand {
@@ -102,6 +111,10 @@ fn fallback_claude() -> ResolvedAgentCommand {
         args: FALLBACK_AGENT_ARGS.iter().map(|s| s.to_string()).collect(),
         preset_id: None,
         source: ResolvedAgentSource::FallbackClaude,
+        // The literal fallback IS claude — its auto-approve grammar is
+        // known truth, so declare it (no spurious unknown-flags warning
+        // on a default install).
+        danger_flags: Some(FALLBACK_AGENT_ARGS.iter().map(|s| s.to_string()).collect()),
     }
 }
 
@@ -156,19 +169,34 @@ fn command_first_token(command: &str) -> &str {
     command.split_whitespace().next().unwrap_or("")
 }
 
+/// One enabled `agent_presets` row as the resolver consumes it:
+/// identity + command string + the RAW migration-0070 metadata TEXT
+/// columns (parsed lazily, only for the row that actually matches).
+struct PresetRow {
+    id: String,
+    command: String,
+    /// Raw `danger_flags` JSON (`NULL` → `None` = legacy/unknown).
+    danger_flags: Option<String>,
+}
+
 /// Enabled presets in display order (sort_order, label) — the same
 /// order the renderer store iterates, so token-match ties resolve
 /// identically on both sides. DB errors degrade to an empty roster
 /// (→ fallback), never a panic in a spawn path.
-fn enabled_presets(conn: &Connection) -> Vec<(String, String)> {
-    let mut stmt = match conn
-        .prepare("SELECT id, command FROM agent_presets WHERE enabled = 1 ORDER BY sort_order, label")
-    {
+fn enabled_presets(conn: &Connection) -> Vec<PresetRow> {
+    let mut stmt = match conn.prepare(
+        "SELECT id, command, danger_flags FROM agent_presets \
+         WHERE enabled = 1 ORDER BY sort_order, label",
+    ) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
     let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok(PresetRow {
+            id: row.get(0)?,
+            command: row.get(1)?,
+            danger_flags: row.get(2)?,
+        })
     });
     match rows {
         Ok(mapped) => mapped.flatten().collect(),
@@ -176,29 +204,40 @@ fn enabled_presets(conn: &Connection) -> Vec<(String, String)> {
     }
 }
 
+/// Parse a metadata TEXT column holding a JSON string array. NULL or
+/// malformed JSON → `None` (= UNKNOWN, the fail-closed reading) — a
+/// hand-corrupted row must degrade to the consumer's floor, never
+/// panic a spawn path or silently read as "declared empty".
+fn parse_flags_json(raw: Option<&str>, preset_id: &str) -> Option<Vec<String>> {
+    let raw = raw?;
+    match serde_json::from_str::<Vec<String>>(raw) {
+        Ok(flags) => Some(flags),
+        Err(e) => {
+            crate::log_debug!(
+                "[agent-resolve] preset {preset_id} has malformed danger_flags JSON ({e}); treating as unknown"
+            );
+            None
+        }
+    }
+}
+
 /// Match a stored default-agent VALUE against the enabled roster —
 /// preset id first (canonical), then command first-token (legacy
 /// tolerance). None = unresolvable at this level; caller falls
 /// through to the next precedence level.
-fn match_preset<'a>(
-    presets: &'a [(String, String)],
-    value: &str,
-) -> Option<&'a (String, String)> {
-    presets
-        .iter()
-        .find(|(id, _)| id == value)
-        .or_else(|| {
-            presets
-                .iter()
-                .find(|(_, command)| command_first_token(command) == value)
-        })
+fn match_preset<'a>(presets: &'a [PresetRow], value: &str) -> Option<&'a PresetRow> {
+    presets.iter().find(|p| p.id == value).or_else(|| {
+        presets
+            .iter()
+            .find(|p| command_first_token(&p.command) == value)
+    })
 }
 
 /// Resolve one precedence level's stored value against the roster.
 /// Returns None when the value is empty, matches nothing enabled, or
 /// the matched preset's command string is blank (unspawnable row).
 fn resolve_value(
-    presets: &[(String, String)],
+    presets: &[PresetRow],
     value: &str,
     source: ResolvedAgentSource,
 ) -> Option<ResolvedAgentCommand> {
@@ -206,16 +245,17 @@ fn resolve_value(
     if value.is_empty() {
         return None;
     }
-    let (id, command_str) = match_preset(presets, value)?;
-    let (command, args) = parse_command_string(command_str);
+    let preset = match_preset(presets, value)?;
+    let (command, args) = parse_command_string(&preset.command);
     if command.is_empty() {
         return None;
     }
     Some(ResolvedAgentCommand {
         command,
         args,
-        preset_id: Some(id.clone()),
+        preset_id: Some(preset.id.clone()),
         source,
+        danger_flags: parse_flags_json(preset.danger_flags.as_deref(), &preset.id),
     })
 }
 
@@ -321,11 +361,30 @@ mod tests {
         enabled: bool,
         sort_order: i64,
     ) -> String {
+        insert_preset_meta(conn, command, enabled, sort_order, None)
+    }
+
+    /// `insert_preset` + raw migration-0070 `danger_flags` JSON.
+    fn insert_preset_meta(
+        conn: &Connection,
+        command: &str,
+        enabled: bool,
+        sort_order: i64,
+        danger_flags: Option<&str>,
+    ) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         conn.execute(
-            "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
-             VALUES (?1, ?2, ?3, '', ?4, ?5, 0)",
-            rusqlite::params![id, format!("test-{id}"), command, enabled as i64, sort_order],
+            "INSERT INTO agent_presets \
+                 (id, label, command, icon, enabled, sort_order, is_built_in, danger_flags) \
+             VALUES (?1, ?2, ?3, '', ?4, ?5, 0, ?6)",
+            rusqlite::params![
+                id,
+                format!("test-{id}"),
+                command,
+                enabled as i64,
+                sort_order,
+                danger_flags,
+            ],
         )
         .expect("insert preset");
         id
@@ -465,6 +524,57 @@ mod tests {
         assert_eq!(r.source, ResolvedAgentSource::FallbackClaude);
         let r = resolve_agent_command_with_global(&conn, path, Some("  "));
         assert_eq!(r.source, ResolvedAgentSource::FallbackClaude);
+    }
+
+    // ── Migration-0070 danger_flags metadata plumbing ────────────────
+
+    #[test]
+    fn resolved_command_carries_declared_danger_flags() {
+        let db = crate::db::init_for_tests();
+        let conn = db.lock();
+        let preset = insert_preset_meta(
+            &conn,
+            "zz-flagged-agent --auto-yes --model fast",
+            true,
+            910,
+            Some(r#"["--auto-yes"]"#),
+        );
+        let path = format!("/tmp/agent-resolve-danger-declared-{preset}");
+        insert_project(&conn, &path, Some(&preset));
+
+        let r = resolve_agent_command_with_global(&conn, &path, None);
+        assert_eq!(r.danger_flags, Some(vec!["--auto-yes".to_string()]));
+    }
+
+    #[test]
+    fn null_or_malformed_danger_flags_resolve_to_unknown() {
+        let db = crate::db::init_for_tests();
+        let conn = db.lock();
+        // NULL metadata → None (legacy/unknown).
+        let null_preset = insert_preset(&conn, "zz-nullmeta-agent", true, 911);
+        let path = format!("/tmp/agent-resolve-danger-null-{null_preset}");
+        insert_project(&conn, &path, Some(&null_preset));
+        let r = resolve_agent_command_with_global(&conn, &path, None);
+        assert_eq!(r.danger_flags, None, "NULL metadata must read as unknown");
+
+        // Malformed JSON → None too (fail-closed, never a panic and
+        // never a declared-empty reading).
+        let bad_preset =
+            insert_preset_meta(&conn, "zz-badmeta-agent", true, 912, Some("not-json["));
+        let path = format!("/tmp/agent-resolve-danger-bad-{bad_preset}");
+        insert_project(&conn, &path, Some(&bad_preset));
+        let r = resolve_agent_command_with_global(&conn, &path, None);
+        assert_eq!(r.danger_flags, None, "malformed metadata must read as unknown");
+    }
+
+    #[test]
+    fn fallback_claude_declares_its_own_flag() {
+        let r = fallback_claude();
+        assert_eq!(
+            r.danger_flags,
+            Some(vec!["--dangerously-skip-permissions".to_string()]),
+            "the literal fallback's grammar is known truth"
+        );
     }
 
     // ── Value tolerance: id + legacy command-token matching ─────────

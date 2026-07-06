@@ -18,9 +18,14 @@
 //!   caller's command/args are DROPPED ENTIRELY (there is no field for them).
 //! - **Dangerous auto-approve flags are STRIPPED by default**: on the host
 //!   (no microVM jail) the agent's own permission prompts ARE a safety layer,
-//!   so `--dangerously-skip-permissions` and friends are removed from the
-//!   resolved preset args unless the workspace owner explicitly opted in
-//!   (`projects.api_skip_permissions`, default OFF — migration 0069).
+//!   so the UNION of the resolved preset's DECLARED `danger_flags`
+//!   (migration 0070 metadata) and the legacy hardcoded floor
+//!   ([`DANGER_FLAGS`]) is removed from the resolved preset args unless the
+//!   workspace owner explicitly opted in (`projects.api_skip_permissions`,
+//!   default OFF — migration 0069). A preset with NULL metadata (or a fully
+//!   custom command with no preset) still gets the floor stripped, plus a
+//!   loud log line naming the residual: flags we've never audited can't be
+//!   stripped.
 //! - `env` = HOST-CURATED ONLY. The caller's env is DROPPED ENTIRELY (no
 //!   field). The Anthropic key is staged from the PRINCIPAL's api_keys row
 //!   (0058 `anthropic_api_key`) exactly as cells do — never from the body.
@@ -66,9 +71,14 @@ pub struct ApiHostSessionRequest {
     pub session: Option<String>,
 }
 
-/// The auto-approve flags the seeded agent presets carry. On the host these
-/// are STRIPPED unless the workspace owner opted in (`api_skip_permissions`).
-/// Keep in sync with the built-in `agent_presets` seeds (`k2-core/src/db/mod.rs`).
+/// The legacy hardcoded FLOOR of known auto-approve flags. Since W2
+/// (0.40.30) the strip is data-driven — the resolved preset's DECLARED
+/// `danger_flags` (migration 0070) are stripped too — but this floor is
+/// KEPT so a pre-0070 DB (or a preset whose metadata backfill never ran)
+/// stays exactly as safe as before. On the host these are STRIPPED unless
+/// the workspace owner opted in (`api_skip_permissions`).
+/// Keep in sync with `db::BUILT_IN_PRESET_METADATA`'s five flag owners
+/// (`k2-core/src/db/mod.rs`) — same flags, declared per-owner there.
 const DANGER_FLAGS: &[&str] = &[
     "--dangerously-skip-permissions",          // claude
     "--dangerously-bypass-approvals-and-sandbox", // codex
@@ -98,11 +108,15 @@ fn sanitize_id(s: &str) -> String {
 }
 
 /// Remove every known dangerous auto-approve flag from a resolved preset's
-/// args. Pure + order-preserving so the rest of the preset command survives
-/// byte-identically.
-fn strip_danger_flags(args: Vec<String>) -> Vec<String> {
+/// args: the UNION of the hardcoded [`DANGER_FLAGS`] floor and the preset's
+/// own `declared` flags (migration-0070 metadata; empty slice when the
+/// metadata is NULL/absent). Pure + order-preserving so the rest of the
+/// preset command survives byte-identically.
+fn strip_danger_flags(args: Vec<String>, declared: &[String]) -> Vec<String> {
     args.into_iter()
-        .filter(|a| !DANGER_FLAGS.contains(&a.as_str()))
+        .filter(|a| {
+            !DANGER_FLAGS.contains(&a.as_str()) && !declared.iter().any(|d| d == a)
+        })
         .collect()
 }
 
@@ -138,14 +152,41 @@ pub fn resolve_host_spawn(
 
     // (2) DANGER-FLAG POLICY (PRD §3, LOCKED default): unlike cells, do NOT
     // force auto-approve — on the host the agent's own permission prompts are
-    // a safety layer. Strip the known flags unless the workspace owner
-    // explicitly opted in (per-workspace `api_skip_permissions`, default OFF,
-    // fail-closed on unknown workspace/NULL).
+    // a safety layer. Strip the UNION of the preset's DECLARED danger_flags
+    // (migration-0070 metadata) and the legacy hardcoded floor unless the
+    // workspace owner explicitly opted in (per-workspace
+    // `api_skip_permissions`, default OFF, fail-closed on unknown
+    // workspace/NULL).
+    //
+    // HONEST RESIDUAL when the metadata is unknown (`danger_flags == None`:
+    // a fully custom command with no preset row, or a preset whose
+    // metadata is NULL/malformed): we can only strip the five audited
+    // floor flags. If that agent has its OWN auto-approve flag under a
+    // name we've never seen, it SURVIVES into the spawn — there is no
+    // grammar oracle for arbitrary binaries. We log a loud structured
+    // warning so the operator can declare the flags on the preset row
+    // (or accept the residual); we deliberately do NOT guess-strip
+    // unknown args (a false positive would break the agent's argv).
     let skip_permissions_opt_in =
         k2_core::workspace::settings::get_api_skip_permissions(ws_path);
     if !skip_permissions_opt_in {
+        let declared: &[String] = match resolved.danger_flags.as_deref() {
+            Some(flags) => flags,
+            None => {
+                log_debug!(
+                    "[v1-host] WARNING event=danger_flags_unknown ws={} preset_id={:?} command={}: \
+                     resolved agent declares no danger_flags metadata; only the hardcoded floor is \
+                     stripped — the agent's own auto-approve flags (if any) cannot be known and \
+                     would survive into the host spawn",
+                    ws_path,
+                    resolved.preset_id,
+                    command,
+                );
+                &[]
+            }
+        };
         let before = args.len();
-        args = strip_danger_flags(args);
+        args = strip_danger_flags(args, declared);
         if args.len() != before {
             log_debug!(
                 "[v1-host] stripped auto-approve flag(s) from resolved agent args for ws={} (api_skip_permissions is OFF)",
@@ -381,6 +422,28 @@ mod tests {
         assert_eq!(spawn.env.as_ref().map(|e| e.len()), Some(0));
     }
 
+    /// Wire a workspace's default agent to a CUSTOM preset row with raw
+    /// migration-0070 `danger_flags` metadata (None = NULL = unknown).
+    fn configure_custom_agent(ws_path: &str, command: &str, danger_flags: Option<&str>) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let preset_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO agent_presets \
+                 (id, label, command, icon, enabled, sort_order, is_built_in, danger_flags) \
+             VALUES (?1, ?2, ?3, '', 1, 990, 0, ?4)",
+            rusqlite::params![preset_id, format!("policy-{preset_id}"), command, danger_flags],
+        )
+        .expect("insert custom preset");
+        let rows = conn
+            .execute(
+                "UPDATE projects SET default_agent = ?1 WHERE path = ?2",
+                rusqlite::params![preset_id, ws_path],
+            )
+            .expect("set default_agent");
+        assert_eq!(rows, 1, "project row must exist");
+    }
+
     #[test]
     fn strip_danger_flags_removes_all_known_flags_only() {
         let args: Vec<String> = [
@@ -396,8 +459,120 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         assert_eq!(
-            strip_danger_flags(args),
+            strip_danger_flags(args, &[]),
             vec!["--model".to_string(), "opus".to_string()],
+        );
+    }
+
+    #[test]
+    fn strip_danger_flags_unions_declared_with_floor() {
+        let args: Vec<String> = ["--auto-yes", "--model", "fast", "--yolo"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            strip_danger_flags(args, &["--auto-yes".to_string()]),
+            vec!["--model".to_string(), "fast".to_string()],
+            "declared flag AND floor flag both stripped"
+        );
+    }
+
+    /// W2 fail-closed inversion fix: a custom preset that DECLARES its own
+    /// auto-approve flag (`--auto-yes`, not in the hardcoded floor) gets it
+    /// STRIPPED on API spawn by default.
+    #[test]
+    fn declared_custom_danger_flag_is_stripped() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-declared-flag";
+        insert_project("v1host-policy-declared-flag", ws_path);
+        configure_custom_agent(
+            ws_path,
+            "zz-policy-agent --auto-yes --model fast",
+            Some(r#"["--auto-yes"]"#),
+        );
+
+        let spawn = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        assert_eq!(spawn.command.as_deref(), Some("zz-policy-agent"));
+        let args = spawn.args.as_deref().expect("args");
+        assert!(
+            !args.iter().any(|a| a == "--auto-yes"),
+            "declared danger flag must be stripped; args={args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--model") && args.iter().any(|a| a == "fast"),
+            "non-danger args survive byte-identically; args={args:?}"
+        );
+    }
+
+    /// NULL-metadata preset (danger_flags unknown): the hardcoded floor is
+    /// STILL stripped, and — the documented residual — an unaudited custom
+    /// auto-approve flag survives because it cannot be known.
+    #[test]
+    fn null_metadata_preset_still_strips_the_floor() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-null-meta";
+        insert_project("v1host-policy-null-meta", ws_path);
+        configure_custom_agent(
+            ws_path,
+            "zz-nullmeta-agent --dangerously-skip-permissions --auto-yes",
+            None,
+        );
+
+        let spawn = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        let args = spawn.args.as_deref().expect("args");
+        assert!(
+            !args.iter().any(|a| a == "--dangerously-skip-permissions"),
+            "floor flag stripped even with NULL metadata; args={args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--auto-yes"),
+            "HONEST RESIDUAL: an undeclared custom flag cannot be stripped \
+             (this assertion documents the limitation, not an aspiration); args={args:?}"
+        );
+    }
+
+    /// `api_skip_permissions=1` bypasses stripping ENTIRELY — declared
+    /// custom flags AND floor flags all survive.
+    #[test]
+    fn opt_in_bypasses_declared_flag_stripping_too() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-optin-declared";
+        insert_project("v1host-policy-optin-declared", ws_path);
+        configure_custom_agent(
+            ws_path,
+            "zz-optin-agent --auto-yes --yolo",
+            Some(r#"["--auto-yes"]"#),
+        );
+        k2_core::workspace::settings::update_project_setting(
+            ws_path,
+            "api_skip_permissions",
+            "1",
+        )
+        .expect("set opt-in");
+
+        let spawn = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        let args = spawn.args.as_deref().expect("args");
+        assert!(
+            args.iter().any(|a| a == "--auto-yes") && args.iter().any(|a| a == "--yolo"),
+            "opt-in keeps every flag; args={args:?}"
         );
     }
 

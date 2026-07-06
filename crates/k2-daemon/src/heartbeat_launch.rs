@@ -1184,6 +1184,7 @@ mod decision_tests {
             args: args.iter().map(|s| s.to_string()).collect(),
             preset_id: None,
             source: ResolvedAgentSource::FallbackClaude,
+            danger_flags: None,
         }
     }
 

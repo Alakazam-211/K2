@@ -123,6 +123,41 @@ fn strip_danger_flags(args: Vec<String>, declared: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// W4 (0.40.30) — resolve the READINESS dialect of the workspace's
+/// configured agent for the post-spawn initial-prompt injector, through
+/// the ONE shared precedence chain
+/// ([`k2_core::workspace::provider_resume::resolve_injection_profile`]):
+///
+/// 1. the resolved preset's declared `readiness` metadata
+///    (migration 0070: `'bracketed-paste'` | `'settle:<ms>'`),
+/// 2. else the static provider table (?2004h LIES for
+///    codex/gemini/pi/hermes — their startup dialogs assert bracketed
+///    paste before they're ready and EAT injected text; those need the
+///    settle-floor wait, not a paste poll),
+/// 3. else the claude-shaped poll default.
+///
+/// Same resolution seam as [`resolve_host_spawn`] step (1)
+/// (`agent_resolve::resolve_agent_command` — workspace default → global
+/// default → literal claude), so the profile always describes the agent
+/// that spawn actually launched.
+pub fn resolve_host_injection_profile(
+    ws_path: &str,
+) -> k2_core::workspace::provider_resume::InjectionProfile {
+    let resolved = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_resolve::resolve_agent_command(&conn, ws_path)
+    };
+    let provider =
+        k2_core::workspace::provider_resume::provider_resume_for_command(&resolved.command)
+            .map(|p| p.provider)
+            .unwrap_or("");
+    k2_core::workspace::provider_resume::resolve_injection_profile(
+        resolved.readiness.as_deref(),
+        provider,
+    )
+}
+
 /// Resolve the untrusted body + authenticated principal + AUTHORIZED
 /// workspace path into a host-trusted [`SpawnRequest`] for a NON-SANDBOXED
 /// host session. `session_id` is the HOST-DECIDED id (fresh mint or the
@@ -635,5 +670,77 @@ mod tests {
         assert_eq!(clamp_dim(Some(5), 80, 16, 500), 16);
         assert_eq!(clamp_dim(Some(9999), 24, 4, 300), 300);
         assert_eq!(clamp_dim(None, 80, 16, 500), 80);
+    }
+
+    // ── W4 — the injection-profile resolution seam ───────────────────
+
+    /// `configure_custom_agent` variant that also stamps raw
+    /// migration-0070 `readiness` metadata onto the preset row.
+    fn configure_custom_agent_readiness(ws_path: &str, command: &str, readiness: Option<&str>) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let preset_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO agent_presets \
+                 (id, label, command, icon, enabled, sort_order, is_built_in, readiness) \
+             VALUES (?1, ?2, ?3, '', 1, 990, 0, ?4)",
+            rusqlite::params![preset_id, format!("policy-{preset_id}"), command, readiness],
+        )
+        .expect("insert custom preset");
+        let rows = conn
+            .execute(
+                "UPDATE projects SET default_agent = ?1 WHERE path = ?2",
+                rusqlite::params![preset_id, ws_path],
+            )
+            .expect("set default_agent");
+        assert_eq!(rows, 1, "project row must exist");
+    }
+
+    /// Level 1: a preset-DECLARED settle wins even for a binary the
+    /// static table would poll (and for one it's never studied).
+    #[test]
+    fn injection_profile_preset_settle_beats_static_table() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-profile-settle";
+        insert_project("v1host-profile-settle", ws_path);
+        configure_custom_agent_readiness(ws_path, "zz-custom-agent --fast", Some("settle:2500"));
+
+        let p = resolve_host_injection_profile(ws_path);
+        assert!(!p.ready_via_bracketed_paste, "declared settle must disable the paste poll");
+        assert_eq!(p.post_spawn_settle, std::time::Duration::from_millis(2500));
+    }
+
+    /// Level 2: malformed readiness metadata degrades to the STATIC
+    /// provider table (here: codex, a studied ?2004h liar), never to a
+    /// guessed dialect and never to a panic.
+    #[test]
+    fn injection_profile_malformed_readiness_degrades_to_static_table() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-profile-malformed";
+        insert_project("v1host-profile-malformed", ws_path);
+        configure_custom_agent_readiness(ws_path, "codex", Some("settle:not-a-number"));
+
+        let p = resolve_host_injection_profile(ws_path);
+        assert_eq!(
+            p,
+            k2_core::workspace::provider_resume::injection_profile_for_provider("codex"),
+            "malformed metadata must resolve exactly the codex table entry"
+        );
+        assert!(!p.ready_via_bracketed_paste);
+    }
+
+    /// Level 3: NULL metadata + a provider the table never studied =
+    /// the claude-shaped poll default (today's behavior, unchanged).
+    #[test]
+    fn injection_profile_unknown_everything_is_the_poll_default() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-profile-default";
+        insert_project("v1host-profile-default", ws_path);
+        configure_custom_agent_readiness(ws_path, "zz-unstudied-agent", None);
+
+        assert_eq!(
+            resolve_host_injection_profile(ws_path),
+            k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE
+        );
     }
 }

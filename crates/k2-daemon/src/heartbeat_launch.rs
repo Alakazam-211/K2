@@ -1188,6 +1188,7 @@ mod decision_tests {
             source: ResolvedAgentSource::FallbackClaude,
             danger_flags: None,
             env: None,
+            readiness: None,
         }
     }
 

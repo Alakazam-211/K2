@@ -261,11 +261,19 @@ pub fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) ->
         let payload = format!("{API_SPAWN_PREAMBLE}\n\n{prompt}");
         let sid_for_inject = sid;
         let ready_timeout = spawn_prompt_ready_timeout();
+        // W4: the spawned agent's readiness dialect via the ONE shared
+        // precedence chain (preset-declared `readiness` metadata → static
+        // provider table → poll default). ?2004h LIES for codex/gemini/
+        // pi/hermes — polling bracketed paste would inject into their
+        // startup dialogs (which EAT text); those profiles wait their
+        // settle floor instead, still capped by the ceiling above.
+        let inject_profile = policy::resolve_host_injection_profile(&ws_path);
         std::thread::spawn(move || {
-            let ok = crate::workspace_msg::inject_raw_into_session(
+            let ok = crate::workspace_msg::inject_raw_into_session_with_profile(
                 &sid_for_inject,
                 &payload,
                 ready_timeout,
+                &inject_profile,
             );
             log_debug!(
                 "[v1-host] post-spawn prompt injection for session={} delivered={}",

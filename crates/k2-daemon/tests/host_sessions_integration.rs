@@ -874,3 +874,107 @@ async fn spawn_prompt_carries_contract_preamble_and_followups_stay_raw() {
 
     close_session(d.port, &agent).await;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 7 — readiness-profile-aware initial-prompt injection (W4, 0.40.30)
+// ─────────────────────────────────────────────────────────────────────
+
+/// `configure_ws_agent` variant that also stamps raw migration-0070
+/// `readiness` metadata onto the preset row (the shim's basename is
+/// `claude`, so WITHOUT the metadata the static table would class it as
+/// a poll-trusting provider — declaring `settle:<ms>` proves the preset
+/// level of the precedence chain wins on the live spawn path).
+fn configure_ws_agent_readiness(ws_name: &str, shim_path: &str, readiness: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let preset_id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO agent_presets \
+             (id, label, command, icon, enabled, sort_order, is_built_in, readiness) \
+         VALUES (?1, ?2, ?3, '', 1, 999, 0, ?4)",
+        rusqlite::params![
+            preset_id,
+            format!("hs-shim-{preset_id}"),
+            format!("{shim_path} --dangerously-skip-permissions"),
+            readiness,
+        ],
+    )
+    .expect("insert shim preset");
+    let rows = conn
+        .execute(
+            "UPDATE projects SET default_agent = ?1 WHERE name = ?2",
+            rusqlite::params![preset_id, ws_name],
+        )
+        .expect("set default_agent");
+    assert_eq!(rows, 1, "workspace {ws_name} must exist to configure its agent");
+}
+
+/// A SETTLE-profile provider still receives the FULL initial prompt.
+///
+/// The recording shim (`tee`, basename `claude`) NEVER advertises
+/// bracketed paste, and this test raises the readiness ceiling to 5s —
+/// so under the pre-W4 poll dialect the injector could only deliver at
+/// the 5s best-effort ceiling. The preset declares `settle:250`, which
+/// must (a) resolve through the seam as a non-polling 250ms profile and
+/// (b) deliver the full preamble-wrapped prompt well before the ceiling.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn settle_profile_spawn_prompt_reaches_the_pty() {
+    let _g = lock();
+    let env = HostEnv::set(true);
+    // Raise the ceiling ABOVE the declared settle so the two dialects
+    // are cleanly distinguishable (HostEnv::Drop restores the prior
+    // value). Poll dialect ⇒ delivery at ~5s; settle:250 ⇒ ~250ms.
+    std::env::set_var("K2_HOST_SESSION_READY_TIMEOUT_SECS", "5");
+    let capture = env.make_shim_recording();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let ws_path = setup_project("hs-settle");
+    configure_ws_agent_readiness("hs-settle", &env.shim(), "settle:250");
+
+    // (b-seam) The resolution seam itself: preset metadata beats the
+    // static table's claude entry — non-polling, exactly 250ms.
+    let profile = k2_daemon::v1_host_sessions::policy::resolve_host_injection_profile(
+        ws_path.to_string_lossy().as_ref(),
+    );
+    assert!(
+        !profile.ready_via_bracketed_paste,
+        "preset-declared settle must override the static claude poll entry"
+    );
+    assert_eq!(profile.post_spawn_settle, Duration::from_millis(250));
+
+    // (b-live) Spawn WITH an initial prompt and clock the delivery.
+    let caller_prompt = "hs-settle-profile-prompt-marker";
+    let body = serde_json::json!({ "prompt": caller_prompt }).to_string();
+    let started = std::time::Instant::now();
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-settle/host-sessions?token={OWNER_TOKEN}"),
+        Some(&body),
+    )
+    .await;
+    assert_eq!(status, 200, "spawn failed: {resp}");
+    let v = json(&resp);
+    let agent = v["agentName"].as_str().expect("agentName").to_string();
+
+    // FULL prompt (frozen preamble + blank line + caller prompt) on the
+    // shim's stdin — nothing eaten, nothing truncated.
+    let received = wait_capture_contains(&capture, caller_prompt, "settle-profile prompt").await;
+    let elapsed = started.elapsed();
+    let wrapped = format!(
+        "{}\n\n{caller_prompt}",
+        k2_daemon::v1_host_sessions::API_SPAWN_PREAMBLE
+    );
+    assert!(
+        received.contains(&wrapped),
+        "settle-profile spawn must deliver the FULL wrapped prompt; received:\n{received}"
+    );
+    // Well inside the 5s ceiling: proves the injector took the 250ms
+    // settle wait, not the poll dialect's best-effort-at-ceiling path
+    // (generous 4s bound — a full second of margin under the ceiling).
+    assert!(
+        elapsed < Duration::from_secs(4),
+        "prompt took {elapsed:?} — delivery at the ceiling means the settle profile was ignored"
+    );
+
+    close_session(d.port, &agent).await;
+}

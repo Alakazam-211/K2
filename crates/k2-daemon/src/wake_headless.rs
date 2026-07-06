@@ -226,16 +226,23 @@ pub fn spawn_wake_headless(
             // historical 1500ms (its TUI needs ~1s to accept input);
             // slower-starting providers get their study-derived floor
             // (hermes ~7s: prompt ~3.6s + ~3s agent init) via the
-            // injection profile keyed off the SPAWNED command.
-            let provider_settle =
-                k2_core::workspace::provider_resume::provider_resume_for_command(&command)
-                    .map(|p| {
-                        k2_core::workspace::provider_resume::injection_profile_for_provider(
-                            p.provider,
-                        )
-                        .post_spawn_settle
-                    })
-                    .unwrap_or_default();
+            // injection profile keyed off the SPAWNED command. W4: the
+            // resolved preset's declared readiness metadata takes
+            // precedence over the static table (the shared chain —
+            // resolve_injection_profile — same order every injector
+            // uses). Unknown commands consult the chain too, so a
+            // custom preset that DECLARES its readiness gets a
+            // truthful settle instead of the blanket default.
+            let provider = k2_core::workspace::provider_resume::provider_resume_for_command(
+                &command,
+            )
+            .map(|p| p.provider)
+            .unwrap_or("");
+            let provider_settle = k2_core::workspace::provider_resume::resolve_injection_profile(
+                resolved.readiness.as_deref(),
+                provider,
+            )
+            .post_spawn_settle;
             let settle = provider_settle.max(std::time::Duration::from_millis(1500));
             std::thread::spawn(move || {
                 // Wait for the agent TUI to draw its initial prompt.

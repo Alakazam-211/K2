@@ -1103,34 +1103,79 @@ pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgR
 /// best-effort past the ceiling, never dropped. Zero means "the session is
 /// already interactive, inject now" (the message-live route). Returns `true`
 /// iff the payload was delivered into a live PTY.
+///
+/// Readiness dialect: the claude-shaped default (poll bracketed paste).
+/// Spawn-path callers that know the spawned agent's profile use
+/// [`inject_raw_into_session_with_profile`] instead.
 pub fn inject_raw_into_session(
     session_id: &SessionId,
     payload: &str,
     wait_ready: Duration,
 ) -> bool {
+    inject_raw_into_session_with_profile(
+        session_id,
+        payload,
+        wait_ready,
+        &k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE,
+    )
+}
+
+/// W4 (0.40.30) — [`inject_raw_into_session`] with an explicit
+/// [`k2_core::workspace::provider_resume::InjectionProfile`], resolved by
+/// the caller through the ONE shared precedence chain
+/// (`provider_resume::resolve_injection_profile`: preset-declared
+/// `readiness` metadata → static provider table → default):
+///
+/// - `ready_via_bracketed_paste == true` — today's behavior exactly: poll
+///   `bracketed_paste_active()` up to `wait_ready`, then inject
+///   best-effort (claude/grok/cursor + every unknown agent).
+/// - `ready_via_bracketed_paste == false` — ?2004h LIES for this agent
+///   (codex/gemini/pi/hermes assert it while their startup dialogs still
+///   EAT injected text): skip the poll and wait the profile's settle
+///   floor instead, CAPPED by the `wait_ready` ceiling (the caller's
+///   env-tunable deadline governs either dialect).
+///
+/// `wait_ready == 0` injects immediately regardless of profile (the
+/// session is already interactive — message-live / resume-of-live).
+pub fn inject_raw_into_session_with_profile(
+    session_id: &SessionId,
+    payload: &str,
+    wait_ready: Duration,
+    profile: &k2_core::workspace::provider_resume::InjectionProfile,
+) -> bool {
     let Some(live) = session_lookup::lookup_by_session_id(session_id) else {
         return false;
     };
     if !wait_ready.is_zero() {
-        let start = std::time::Instant::now();
-        loop {
+        if profile.ready_via_bracketed_paste {
+            let start = std::time::Instant::now();
+            loop {
+                if !live.is_child_alive() {
+                    return false;
+                }
+                if live.bracketed_paste_active() {
+                    break;
+                }
+                if start.elapsed() >= wait_ready {
+                    // Best-effort past the ceiling (bounded, never blocks
+                    // forever) rather than dropping the prompt —
+                    // deliver_post_wake parity.
+                    log_debug!(
+                        "[v1-host/inject] session={} readiness wait hit {}ms ceiling — injecting best-effort",
+                        session_id,
+                        wait_ready.as_millis()
+                    );
+                    break;
+                }
+                std::thread::sleep(WAKE_POLL_INTERVAL);
+            }
+        } else {
+            // Non-polling profile: the settle floor IS the readiness wait
+            // (deliver_post_wake parity), bounded by the caller's ceiling.
+            std::thread::sleep(profile.post_spawn_settle.min(wait_ready));
             if !live.is_child_alive() {
                 return false;
             }
-            if live.bracketed_paste_active() {
-                break;
-            }
-            if start.elapsed() >= wait_ready {
-                // Best-effort past the ceiling (bounded, never blocks forever)
-                // rather than dropping the prompt — deliver_post_wake parity.
-                log_debug!(
-                    "[v1-host/inject] session={} readiness wait hit {}ms ceiling — injecting best-effort",
-                    session_id,
-                    wait_ready.as_millis()
-                );
-                break;
-            }
-            std::thread::sleep(WAKE_POLL_INTERVAL);
         }
     }
     matches!(inject_and_submit(&live, payload), InjectOutcome::Delivered)
@@ -1384,7 +1429,12 @@ fn wake_and_fire(
                 resolved.command.clone(),
                 resolved.args.clone(),
                 wake_timeout,
-                k2_core::workspace::provider_resume::injection_profile_for_provider(
+                // W4: the ONE shared precedence chain — the spawning
+                // preset's declared readiness metadata wins over the
+                // static provider table (which keeps its own default
+                // for agents neither has studied).
+                k2_core::workspace::provider_resume::resolve_injection_profile(
+                    resolved.readiness.as_deref(),
                     &resolved.provider,
                 ),
             ),

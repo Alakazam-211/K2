@@ -288,6 +288,13 @@ fn launch_request_for(
         cols: profile.cols.unwrap_or(80),
         rows: profile.rows.unwrap_or(24),
         canonical_key: None,
+        // W2: profile env (AGENT.md launch-block env or the resolved
+        // preset's migration-0070 env). Values never logged.
+        env: profile
+            .env
+            .clone()
+            .map(|m| m.into_iter().collect())
+            .unwrap_or_default(),
     }
 }
 

@@ -132,6 +132,8 @@ pub fn spawn_wake_via_session_stream(
         cols: 120,
         rows: 38,
         canonical_key: None,
+        // W2: the resolved preset's migration-0070 env.
+        env: resolved.env_map(),
     })?;
 
     let _ = k2_core::workspace::session::k2so_agents_lock(
@@ -258,6 +260,13 @@ pub fn handle_agents_launch(
     let mut command = str_field(&launch_info, "command", "claude").to_string();
     let mut cwd = str_field(&launch_info, "cwd", project_path).to_string();
     let mut args = str_array(&launch_info, "args");
+    // W2: the resolved preset's migration-0070 env rides into the child
+    // env. An explicit `command` param resolved nothing → no preset env
+    // (legacy behavior). Values never logged.
+    let mut spawn_env: std::collections::HashMap<String, String> = resolved
+        .as_ref()
+        .map(|r| r.env_map())
+        .unwrap_or_default();
 
     // Slice 3b: build_launch composes Claude flag grammar
     // (--dangerously-skip-permissions / --append-system-prompt /
@@ -283,6 +292,14 @@ pub fn handle_agents_launch(
                 command = rr.command.clone();
                 args = rr.args.clone();
                 cwd = rr.cwd.clone();
+                // W2: the resume resolver picked the governing preset
+                // (the stored harness can differ from the workspace
+                // default) — carry ITS env, not the outrun default's.
+                spawn_env = rr
+                    .env
+                    .clone()
+                    .map(|m| m.into_iter().collect())
+                    .unwrap_or_default();
                 if rr.pending_session_discovery {
                     k2_core::workspace::provider_resume::defer_adopt_discovered_session(
                         rr.provider.clone(),
@@ -313,6 +330,7 @@ pub fn handle_agents_launch(
         cols: 120,
         rows: 38,
         canonical_key: None,
+        env: spawn_env,
     }) {
         Ok(o) => o,
         Err(e) => return CliResponse::bad_request(format!("spawn failed: {e}")),
@@ -399,6 +417,9 @@ pub fn handle_agents_delegate(
     // into — so a non-claude resolved default deliberately spawns the
     // preset's own command+args bare (no invented flags, no task-prompt
     // injection; delegate kickoff grammar per agent is Slice 5).
+    // W2: the resolved preset's migration-0070 env (only the resolved-
+    // default arm has a preset; an explicit AGENT.md command has none).
+    let mut spawn_env: std::collections::HashMap<String, String> = Default::default();
     let command = match launch_info.get("command").and_then(|v| v.as_str()) {
         Some(c) => c.to_string(),
         None => {
@@ -413,6 +434,7 @@ pub fn handle_agents_delegate(
             if !resolved.is_claude() {
                 args = resolved.args.clone();
             }
+            spawn_env = resolved.env_map();
             resolved.command
         }
     };
@@ -431,6 +453,7 @@ pub fn handle_agents_delegate(
         cols: 120,
         rows: 38,
         canonical_key: None,
+        env: spawn_env,
     }) {
         Ok(o) => o,
         Err(e) => return CliResponse::bad_request(format!("spawn failed: {e}")),

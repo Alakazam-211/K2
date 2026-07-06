@@ -33,6 +33,8 @@
 //! default spawns the preset's own command + args bare — correct but
 //! degraded (no resume) until the Slice 3 ProviderResume adapter.
 
+use std::collections::BTreeMap;
+
 use rusqlite::Connection;
 
 use crate::workspace::launch_profile::{load_launch_profile, LaunchProfile};
@@ -76,6 +78,13 @@ pub struct ResolvedAgentCommand {
     /// never as "safe". The literal claude fallback declares its flag
     /// truthfully (we know its grammar).
     pub danger_flags: Option<Vec<String>>,
+    /// The preset's environment map (migration 0070 `agent_presets.env`,
+    /// a JSON string→string object). Merged into the child env at spawn:
+    /// explicit AGENT.md launch-block env and K2-internal env
+    /// (K2_HOOK_TOKEN etc.) OVERRIDE these; these override inherited
+    /// shell env only where set. `None` = NULL/malformed/no-preset.
+    /// VALUES MUST NEVER BE LOGGED (they may hold credentials).
+    pub env: Option<BTreeMap<String, String>>,
 }
 
 impl ResolvedAgentCommand {
@@ -91,8 +100,11 @@ impl ResolvedAgentCommand {
     }
 
     /// Adapt to the `LaunchProfile` shape the spawn helpers consume.
-    /// Command + args only — cwd/cols/rows/env stay caller defaults,
-    /// same as the pre-S2 `default_launch_profile()`.
+    /// Command + args + the preset's env map (migration 0070) —
+    /// cwd/cols/rows stay caller defaults, same as the pre-S2
+    /// `default_launch_profile()`. AGENT.md launch-block profiles never
+    /// pass through here, so a launch block's own env keeps top
+    /// priority by construction (the preset is not consulted at all).
     pub fn to_launch_profile(&self) -> LaunchProfile {
         LaunchProfile {
             command: Some(self.command.clone()),
@@ -100,8 +112,17 @@ impl ResolvedAgentCommand {
             cwd: None,
             cols: None,
             rows: None,
-            env: None,
+            env: self.env.clone(),
         }
+    }
+
+    /// The preset env as the `HashMap` shape the daemon spawn requests
+    /// consume (empty when no metadata). Values must never be logged.
+    pub fn env_map(&self) -> std::collections::HashMap<String, String> {
+        self.env
+            .as_ref()
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default()
     }
 }
 
@@ -115,6 +136,7 @@ fn fallback_claude() -> ResolvedAgentCommand {
         // known truth, so declare it (no spurious unknown-flags warning
         // on a default install).
         danger_flags: Some(FALLBACK_AGENT_ARGS.iter().map(|s| s.to_string()).collect()),
+        env: None,
     }
 }
 
@@ -177,6 +199,8 @@ struct PresetRow {
     command: String,
     /// Raw `danger_flags` JSON (`NULL` → `None` = legacy/unknown).
     danger_flags: Option<String>,
+    /// Raw `env` JSON object (`NULL` → `None` = no preset env).
+    env: Option<String>,
 }
 
 /// Enabled presets in display order (sort_order, label) — the same
@@ -185,7 +209,7 @@ struct PresetRow {
 /// (→ fallback), never a panic in a spawn path.
 fn enabled_presets(conn: &Connection) -> Vec<PresetRow> {
     let mut stmt = match conn.prepare(
-        "SELECT id, command, danger_flags FROM agent_presets \
+        "SELECT id, command, danger_flags, env FROM agent_presets \
          WHERE enabled = 1 ORDER BY sort_order, label",
     ) {
         Ok(s) => s,
@@ -196,6 +220,7 @@ fn enabled_presets(conn: &Connection) -> Vec<PresetRow> {
             id: row.get(0)?,
             command: row.get(1)?,
             danger_flags: row.get(2)?,
+            env: row.get(3)?,
         })
     });
     match rows {
@@ -215,6 +240,22 @@ fn parse_flags_json(raw: Option<&str>, preset_id: &str) -> Option<Vec<String>> {
         Err(e) => {
             crate::log_debug!(
                 "[agent-resolve] preset {preset_id} has malformed danger_flags JSON ({e}); treating as unknown"
+            );
+            None
+        }
+    }
+}
+
+/// Parse a metadata TEXT column holding a JSON string→string object.
+/// NULL or malformed JSON → `None` (no env; a corrupt row must never
+/// panic a spawn path). Values are never logged.
+fn parse_env_json(raw: Option<&str>, preset_id: &str) -> Option<BTreeMap<String, String>> {
+    let raw = raw?;
+    match serde_json::from_str::<BTreeMap<String, String>>(raw) {
+        Ok(env) => Some(env),
+        Err(e) => {
+            crate::log_debug!(
+                "[agent-resolve] preset {preset_id} has malformed env JSON ({e}); ignoring preset env"
             );
             None
         }
@@ -256,6 +297,7 @@ fn resolve_value(
         preset_id: Some(preset.id.clone()),
         source,
         danger_flags: parse_flags_json(preset.danger_flags.as_deref(), &preset.id),
+        env: parse_env_json(preset.env.as_deref(), &preset.id),
     })
 }
 
@@ -575,6 +617,104 @@ mod tests {
             Some(vec!["--dangerously-skip-permissions".to_string()]),
             "the literal fallback's grammar is known truth"
         );
+    }
+
+    // ── Migration-0070 env metadata plumbing ─────────────────────────
+
+    fn insert_preset_env(
+        conn: &Connection,
+        command: &str,
+        sort_order: i64,
+        env_json: Option<&str>,
+    ) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO agent_presets \
+                 (id, label, command, icon, enabled, sort_order, is_built_in, env) \
+             VALUES (?1, ?2, ?3, '', 1, ?4, 0, ?5)",
+            rusqlite::params![id, format!("test-{id}"), command, sort_order, env_json],
+        )
+        .expect("insert preset");
+        id
+    }
+
+    #[test]
+    fn resolved_command_carries_preset_env_into_launch_profile() {
+        let db = crate::db::init_for_tests();
+        let conn = db.lock();
+        let preset = insert_preset_env(
+            &conn,
+            "zz-env-agent --fast",
+            920,
+            Some(r#"{"ZZ_A":"1","ZZ_B":"two"}"#),
+        );
+        let path = format!("/tmp/agent-resolve-env-{preset}");
+        insert_project(&conn, &path, Some(&preset));
+
+        let r = resolve_agent_command_with_global(&conn, &path, None);
+        let env = r.env.clone().expect("env parsed");
+        assert_eq!(env.get("ZZ_A").map(String::as_str), Some("1"));
+        assert_eq!(env.get("ZZ_B").map(String::as_str), Some("two"));
+        // to_launch_profile carries it verbatim…
+        assert_eq!(r.to_launch_profile().env, Some(env));
+        // …and env_map is the same pairs in HashMap shape.
+        assert_eq!(r.env_map().get("ZZ_A").map(String::as_str), Some("1"));
+        assert_eq!(r.env_map().len(), 2);
+    }
+
+    #[test]
+    fn null_or_malformed_env_resolves_to_none() {
+        let db = crate::db::init_for_tests();
+        let conn = db.lock();
+        let null_preset = insert_preset_env(&conn, "zz-noenv-agent", 921, None);
+        let path = format!("/tmp/agent-resolve-env-null-{null_preset}");
+        insert_project(&conn, &path, Some(&null_preset));
+        let r = resolve_agent_command_with_global(&conn, &path, None);
+        assert_eq!(r.env, None);
+        assert!(r.env_map().is_empty());
+
+        let bad_preset = insert_preset_env(&conn, "zz-badenv-agent", 922, Some("{broken"));
+        let path = format!("/tmp/agent-resolve-env-bad-{bad_preset}");
+        insert_project(&conn, &path, Some(&bad_preset));
+        let r = resolve_agent_command_with_global(&conn, &path, None);
+        assert_eq!(r.env, None, "malformed env JSON must degrade to None");
+    }
+
+    /// PRECEDENCE: an AGENT.md `launch:` block replaces the profile
+    /// WHOLESALE — its env (even absent) governs, and the workspace
+    /// preset's env never leaks under it.
+    #[test]
+    fn agent_md_launch_block_env_beats_preset_env() {
+        let db = crate::db::init_for_tests();
+        let conn = db.lock();
+        let preset = insert_preset_env(
+            &conn,
+            "zz-underdog-agent",
+            923,
+            Some(r#"{"ZZ_FROM_PRESET":"must-not-leak"}"#),
+        );
+        let dir = scratch_dir("agent-md-env-wins");
+        let path = dir.to_string_lossy().into_owned();
+        insert_project(&conn, &path, Some(&preset));
+
+        let agent_dir = dir.join(".k2so/agents/pinned");
+        fs::create_dir_all(&agent_dir).unwrap();
+        fs::write(
+            agent_dir.join("AGENT.md"),
+            "---\nname: pinned\nlaunch:\n  command: bash\n  env:\n    ZZ_FROM_BLOCK: block-wins\n---\nbody\n",
+        )
+        .unwrap();
+
+        let profile = resolve_launch_profile(&conn, &path, "pinned").expect("parses");
+        assert_eq!(profile.command.as_deref(), Some("bash"));
+        let env = profile.env.expect("launch-block env present");
+        assert_eq!(env.get("ZZ_FROM_BLOCK").map(String::as_str), Some("block-wins"));
+        assert!(
+            !env.contains_key("ZZ_FROM_PRESET"),
+            "preset env must not leak under an AGENT.md launch block"
+        );
+
+        fs::remove_dir_all(&dir).ok();
     }
 
     // ── Value tolerance: id + legacy command-token matching ─────────

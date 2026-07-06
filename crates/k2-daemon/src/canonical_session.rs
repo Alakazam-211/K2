@@ -254,6 +254,10 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
                     );
                     profile.command = Some(resolved.command.clone());
                     profile.args = Some(resolved.args);
+                    // W2: the harness's preset governs the spawn now —
+                    // carry ITS env (resume_chat resolved it from the
+                    // same preset row), never the outrun profile's.
+                    profile.env = resolved.env;
                 }
                 // Self-minting provider on a fresh spawn: adopt the id
                 // it creates on disk (stamps session_id + harness).
@@ -332,6 +336,14 @@ pub fn launch_request_for(
         cols: profile.cols.unwrap_or(80),
         rows: profile.rows.unwrap_or(24),
         canonical_key: None,
+        // W2: profile env (AGENT.md launch-block env, or the resolved
+        // preset's migration-0070 env via to_launch_profile) rides into
+        // the child env. Values never logged.
+        env: profile
+            .env
+            .clone()
+            .map(|m| m.into_iter().collect())
+            .unwrap_or_default(),
     }
 }
 

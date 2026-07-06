@@ -715,6 +715,9 @@ fn spawn_terminal_impl(
         cols,
         rows,
         canonical_key: None,
+        // Ad-hoc terminal (caller-supplied command, no preset
+        // resolution) — no preset env to merge.
+        env: Default::default(),
     }) {
         Ok(o) => o,
         Err(e) => return CliResponse::bad_request(format!("spawn failed: {e}")),

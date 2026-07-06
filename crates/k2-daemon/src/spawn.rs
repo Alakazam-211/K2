@@ -65,6 +65,13 @@ pub struct SpawnWorkspaceSessionRequest {
     /// `<project_id>` slot. Default `None` = use the project_id-derived
     /// canonical key (the chat-tab lane).
     pub canonical_key: Option<String>,
+    /// W2 (0.40.30): environment overrides for the child — the resolved
+    /// preset's env map (migration 0070) and/or AGENT.md launch-block
+    /// env, already merged by the caller (launch-block wins). Applied
+    /// as `DaemonPtyConfig.env`, i.e. OVER inherited shell env where
+    /// set, and UNDER any K2-internal injections. Values must never be
+    /// logged. Empty = no overrides (byte-identical legacy spawn).
+    pub env: HashMap<String, String>,
 }
 
 /// Output shape returned by the spawn helper. The caller needs the
@@ -214,7 +221,7 @@ pub fn spawn_agent_session_v2_blocking(
         cwd: Some(PathBuf::from(&req.cwd)),
         program: req.command.clone(),
         args: req.args.clone().unwrap_or_default(),
-        env: HashMap::new(),
+        env: req.env.clone(),
         drain_on_exit: true,
         label: label_seed,
         label_source: k2_core::terminal::LabelSource::Locked,

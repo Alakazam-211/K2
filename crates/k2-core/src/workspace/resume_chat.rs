@@ -122,6 +122,12 @@ pub struct ResumeChatArgs {
     /// Always `false` for claude/grok (premint) and unknown providers
     /// (nothing to discover).
     pub pending_session_discovery: bool,
+    /// W2 (0.40.30): the spawning preset's env map (migration 0070
+    /// `agent_presets.env`). Merged into the child env by the DAEMON
+    /// spawn sites; deliberately EXCLUDED from [`ResumeChatArgs::to_json`]
+    /// — env values may hold credentials and must never cross the wire
+    /// or reach a log line. `None` = no preset env.
+    pub env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl ResumeChatArgs {
@@ -211,7 +217,7 @@ pub fn resolve_resume_chat_args_ex(
         match provider_resume_for_provider(harness) {
             Some(adapter) => {
                 if adapter.session_file_exists(sid, project_path) {
-                    let (command, base_args) = spawn_command_for(adapter, &default_cmd);
+                    let (command, base_args, env) = spawn_command_for(adapter, &default_cmd);
                     let args = adapter.resume_args(&base_args, sid);
                     return Ok(ResumeChatArgs {
                         command,
@@ -221,6 +227,7 @@ pub fn resolve_resume_chat_args_ex(
                         resumed_existing: true,
                         provider: adapter.provider.to_string(),
                         pending_session_discovery: false,
+                        env,
                     });
                 }
 
@@ -297,6 +304,7 @@ pub fn resolve_resume_chat_args_ex(
                 resumed_existing: false,
                 provider,
                 pending_session_discovery: false,
+                env: default_cmd.env.clone(),
             })
         }
     }
@@ -310,7 +318,7 @@ fn converge_or_mint(
     project_id: Option<&str>,
     project_path: &str,
 ) -> Result<ResumeChatArgs, String> {
-    let (command, base_args) = spawn_command_for(adapter, default_cmd);
+    let (command, base_args, env) = spawn_command_for(adapter, default_cmd);
 
     // GH#24 convergence fix. The saved id's conversation is missing (a
     // never-run pre-allocation, a workspace remove+readd, a manual
@@ -339,6 +347,7 @@ fn converge_or_mint(
             resumed_existing: true,
             provider: adapter.provider.to_string(),
             pending_session_discovery: false,
+            env,
         });
     }
 
@@ -363,6 +372,7 @@ fn converge_or_mint(
                 resumed_existing: false,
                 provider: adapter.provider.to_string(),
                 pending_session_discovery: false,
+                env,
             })
         }
         None => {
@@ -379,6 +389,7 @@ fn converge_or_mint(
                 resumed_existing: false,
                 provider: adapter.provider.to_string(),
                 pending_session_discovery: true,
+                env,
             })
         }
     }
@@ -404,7 +415,7 @@ fn converge_or_mint(
 fn spawn_command_for(
     adapter: &'static ProviderResume,
     default_cmd: &ResolvedAgentCommand,
-) -> (String, Vec<String>) {
+) -> (String, Vec<String>, Option<std::collections::BTreeMap<String, String>>) {
     // 1. Workspace/global default already speaks this provider.
     if provider_resume_for_command(&default_cmd.command).map(|a| a.provider)
         == Some(adapter.provider)
@@ -412,27 +423,32 @@ fn spawn_command_for(
         return (
             default_cmd.command.clone(),
             claude_pinned_or(&default_cmd.command, &default_cmd.args),
+            default_cmd.env.clone(),
         );
     }
 
     // 2. Enabled preset roster, display order (same ordering
-    //    agent_resolve uses, so both sides pick the same row).
-    let roster: Vec<String> = {
+    //    agent_resolve uses, so both sides pick the same row). Carries
+    //    the matched row's migration-0070 env JSON so a harness-picked
+    //    preset spawns with ITS OWN env, not the workspace default's.
+    let roster: Vec<(String, Option<String>)> = {
         let db = crate::db::shared();
         let conn = db.lock();
         conn.prepare(
-            "SELECT command FROM agent_presets WHERE enabled = 1 ORDER BY sort_order, label",
+            "SELECT command, env FROM agent_presets WHERE enabled = 1 ORDER BY sort_order, label",
         )
         .and_then(|mut stmt| {
             let rows = stmt
-                .query_map([], |row| row.get::<_, String>(0))?
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })?
                 .flatten()
-                .collect::<Vec<String>>();
+                .collect::<Vec<(String, Option<String>)>>();
             Ok(rows)
         })
         .unwrap_or_default()
     };
-    for command_str in roster {
+    for (command_str, env_json) in roster {
         if provider_resume_for_command(&command_str).map(|a| a.provider)
             == Some(adapter.provider)
         {
@@ -440,15 +456,20 @@ fn spawn_command_for(
                 crate::workspace::agent_resolve::parse_command_string(&command_str);
             if !command.is_empty() {
                 let args = claude_pinned_or(&command, &args);
-                return (command, args);
+                // Malformed env JSON degrades to None (never a panic in
+                // a spawn path); values are never logged.
+                let env = env_json
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str(raw).ok());
+                return (command, args, env);
             }
         }
     }
 
-    // 3. Adapter default binary.
+    // 3. Adapter default binary — no preset row, no preset env.
     let command = adapter.command.to_string();
     let args = claude_pinned_or(&command, &[]);
-    (command, args)
+    (command, args, None)
 }
 
 /// See [`spawn_command_for`]'s CLAUDE INVARIANT.
@@ -942,6 +963,7 @@ mod tests {
             resumed_existing: true,
             provider: "claude".into(),
             pending_session_discovery: false,
+            env: Some([("SECRET_KEY".to_string(), "must-not-leak".to_string())].into()),
         };
         let j = out.to_json();
         assert_eq!(j["command"], "claude");
@@ -949,5 +971,12 @@ mod tests {
         assert_eq!(j["resumedExisting"], true);
         assert_eq!(j["provider"], "claude");
         assert_eq!(j["pendingSessionDiscovery"], false);
+        // W2: env is DELIBERATELY absent from the wire shape — values
+        // may hold credentials and only daemon spawn sites consume them.
+        assert!(j.get("env").is_none(), "env must never be serialized");
+        assert!(
+            !j.to_string().contains("must-not-leak"),
+            "env values must never appear in the wire JSON"
+        );
     }
 }

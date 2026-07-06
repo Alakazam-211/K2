@@ -27,8 +27,11 @@
 //!   loud log line naming the residual: flags we've never audited can't be
 //!   stripped.
 //! - `env` = HOST-CURATED ONLY. The caller's env is DROPPED ENTIRELY (no
-//!   field). The Anthropic key is staged from the PRINCIPAL's api_keys row
-//!   (0058 `anthropic_api_key`) exactly as cells do — never from the body.
+//!   field). The base layer is the resolved preset's own `env` metadata
+//!   (migration 0070 — host data, not caller data); the Anthropic key is
+//!   staged ON TOP from the PRINCIPAL's api_keys row (0058
+//!   `anthropic_api_key`) exactly as cells do — never from the body, and
+//!   K2-curated entries always override preset entries.
 //! - `agent_name` host-minted `api-<principal>-<uuid>` (the same anti-hijack
 //!   namespace as the sandbox doors — can't collide with `tab-…`/pinned keys,
 //!   and `v2_session_map` labels `api-…` passthrough sessions `backend:"host"`
@@ -222,10 +225,13 @@ pub fn resolve_host_spawn(
     );
 
     // (5) Host-curated env. The caller's env is DROPPED ENTIRELY (the body
-    // has no env field); the ONLY entry is the Anthropic key staged from the
-    // PRINCIPAL's api_keys row — never the body, never logged. An Owner-token
-    // principal stages nothing (own-use: the host's ambient login applies).
-    let mut env: HashMap<String, String> = HashMap::new();
+    // has no env field). Base layer: the resolved preset's own env metadata
+    // (migration 0070 — host-owned data). On top: the Anthropic key staged
+    // from the PRINCIPAL's api_keys row — never the body, never logged —
+    // which OVERRIDES a same-named preset entry (K2-curated env wins). An
+    // Owner-token principal stages nothing (own-use: the host's ambient
+    // login applies). Env VALUES are never logged.
+    let mut env: HashMap<String, String> = resolved.env_map();
     if let V1Principal::Api(p) = principal {
         match p.anthropic_key.as_deref().map(str::trim) {
             Some(key) if !key.is_empty() => {
@@ -404,6 +410,54 @@ mod tests {
             spawn.args.as_deref(),
             Some(&["--resume".to_string(), sid.to_string()][..]),
         );
+    }
+
+    /// W2 preset-env merge: the resolved preset's migration-0070 env is
+    /// the base layer of the host-curated env, and the K2-staged
+    /// principal key OVERRIDES a same-named preset entry.
+    #[test]
+    fn preset_env_merges_under_principal_key() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-preset-env";
+        insert_project("v1host-policy-preset-env", ws_path);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let preset_id = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO agent_presets \
+                     (id, label, command, icon, enabled, sort_order, is_built_in, env) \
+                 VALUES (?1, ?2, 'zz-env-agent', '', 1, 991, 0, \
+                         '{\"ZZ_PRESET_VAR\":\"from-preset\",\"ANTHROPIC_API_KEY\":\"preset-key-must-lose\"}')",
+                rusqlite::params![preset_id, format!("policy-env-{preset_id}")],
+            )
+            .expect("insert env preset");
+            conn.execute(
+                "UPDATE projects SET default_agent = ?1 WHERE path = ?2",
+                rusqlite::params![preset_id, ws_path],
+            )
+            .expect("set default_agent");
+        }
+
+        let spawn = resolve_host_spawn(
+            &api("key-env", Some("sk-ant-principal-wins")),
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        let env = spawn.env.as_ref().expect("env present");
+        assert_eq!(
+            env.get("ZZ_PRESET_VAR").map(String::as_str),
+            Some("from-preset"),
+            "preset env reaches the curated map"
+        );
+        assert_eq!(
+            env.get("ANTHROPIC_API_KEY").map(String::as_str),
+            Some("sk-ant-principal-wins"),
+            "K2-staged principal key must OVERRIDE the preset's entry"
+        );
+        assert_eq!(env.len(), 2, "no other entries invented");
     }
 
     /// A blank principal key stages nothing (never an empty assignment).

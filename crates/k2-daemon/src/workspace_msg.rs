@@ -1400,6 +1400,13 @@ fn wake_and_fire(
         cols: 120,
         rows: 38,
         canonical_key: None,
+        // W2: the spawning preset's migration-0070 env (empty under the
+        // test override). Values never logged.
+        env: resolved
+            .env
+            .clone()
+            .map(|m| m.into_iter().collect())
+            .unwrap_or_default(),
     }) {
         Ok(o) => o,
         Err(e) => {

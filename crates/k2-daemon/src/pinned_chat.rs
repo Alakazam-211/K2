@@ -205,6 +205,13 @@ pub fn ensure_pinned_chat(
         cols: DEFAULT_COLS,
         rows: DEFAULT_ROWS,
         canonical_key: Some(canonical_key.clone()),
+        // W2: the spawning preset's migration-0070 env (resume_chat
+        // resolved it alongside command/args). Values never logged.
+        env: resolved
+            .env
+            .clone()
+            .map(|m| m.into_iter().collect())
+            .unwrap_or_default(),
     };
     let spawn_outcome =
         spawn_agent_session_v2_blocking(req).map_err(|e| format!("spawn failed: {e}"))?;

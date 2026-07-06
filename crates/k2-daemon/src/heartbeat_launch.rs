@@ -738,6 +738,8 @@ fn run_resume_and_fire(
             cols: 120,
             rows: 38,
             canonical_key: canonical_key_override,
+            // W2: the resolved preset's migration-0070 env.
+            env: resolved.env_map(),
         },
     );
 
@@ -1185,6 +1187,7 @@ mod decision_tests {
             preset_id: None,
             source: ResolvedAgentSource::FallbackClaude,
             danger_flags: None,
+            env: None,
         }
     }
 

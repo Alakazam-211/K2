@@ -465,6 +465,91 @@ async fn spawn_pins_cwd_mints_command_and_drops_caller_inputs() {
     close_session(d.port, agent_name).await;
 }
 
+/// W2 preset-env merge, END-TO-END: a preset row carrying migration-0070
+/// `env` metadata spawns a REAL host session whose child process observes
+/// the variable in its environment. The shim prints the var then execs
+/// `cat`; the value's arrival on the live Term proves the whole chain
+/// (preset row → agent_resolve → policy resolver env base → v2 spawn →
+/// DaemonPtyConfig.env → child env).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preset_env_reaches_spawned_child_environment() {
+    let _g = lock();
+    let env = HostEnv::set(true);
+    let d = test_harness::start(OWNER_TOKEN).await;
+    setup_project("hs-preset-env");
+
+    // Env-dumping shim (basename `claude` so provider grammar applies),
+    // in its own dir so the HostEnv shim stays untouched.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dump_dir = std::env::temp_dir()
+        .join(format!("k2-host-sess-envshim-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dump_dir).expect("create env shim dir");
+    let dump_shim = dump_dir.join("claude");
+    std::fs::write(
+        &dump_shim,
+        "#!/bin/sh\necho \"PRESET_ENV_SEEN=${ZZ_PRESET_ONLY_VAR:-unset}\"\nexec cat\n",
+    )
+    .expect("write env shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dump_shim, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod env shim");
+    }
+    let dump_shim_path = dump_shim.to_string_lossy().into_owned();
+
+    // Preset row WITH migration-0070 env metadata, wired as the
+    // workspace's default agent (the REAL seam, same as configure_ws_agent).
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let preset_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO agent_presets \
+                 (id, label, command, icon, enabled, sort_order, is_built_in, env) \
+             VALUES (?1, ?2, ?3, '', 1, 999, 0, '{\"ZZ_PRESET_ONLY_VAR\":\"from-preset-row\"}')",
+            rusqlite::params![
+                preset_id,
+                format!("hs-envshim-{preset_id}"),
+                dump_shim_path.clone(),
+            ],
+        )
+        .expect("insert env preset");
+        let rows = conn
+            .execute(
+                "UPDATE projects SET default_agent = ?1 WHERE name = 'hs-preset-env'",
+                rusqlite::params![preset_id],
+            )
+            .expect("set default_agent");
+        assert_eq!(rows, 1, "workspace hs-preset-env must exist");
+    }
+
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-preset-env/host-sessions?token={OWNER_TOKEN}"),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(status, 200, "spawn failed: {resp}");
+    let v = json(&resp);
+    let session_id = v["sessionId"].as_str().expect("sessionId").to_string();
+    let agent_name = v["agentName"].as_str().expect("agentName").to_string();
+
+    assert_text_appears(
+        &session_id,
+        "PRESET_ENV_SEEN=from-preset-row",
+        "preset env var must reach the spawned child's environment",
+    )
+    .await;
+
+    close_session(d.port, &agent_name).await;
+    let _ = std::fs::remove_dir_all(&dump_dir);
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 3 — 404 uniformity + canonical guard + shape guards
 // ─────────────────────────────────────────────────────────────────────

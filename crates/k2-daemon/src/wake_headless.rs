@@ -187,6 +187,9 @@ pub fn spawn_wake_headless(
         cols: 120,
         rows: 38,
         canonical_key: canonical_key_override,
+        // W2: the resolved preset's migration-0070 env (empty for the
+        // test override / metadata-less presets). Values never logged.
+        env: resolved.env_map(),
     })?;
 
     let terminal_id = outcome.session_id.to_string();

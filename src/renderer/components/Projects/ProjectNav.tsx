@@ -17,6 +17,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { showContextMenu } from '@/lib/context-menu'
+import { KeyCombo } from '@/components/KeySymbol'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ProjectGroupAvatar from './ProjectGroupAvatar'
 import { completeDashDrag, useDashboardDndStore } from './dashboard-dnd'
@@ -277,7 +278,6 @@ function MemberRow({
           className="flex-shrink-0 text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums"
           title={`⌘${paneNum} focuses this pane`}
         >
-          <span className="key-symbol">⌘</span>
           {paneNum}
         </span>
       )}
@@ -306,6 +306,9 @@ function MemberDrawer({
         </span>
         <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono">
           {members.length}
+        </span>
+        <span className="text-[9px] font-mono text-[var(--color-text-muted)] opacity-50">
+          <KeyCombo combo="⌘ 1-9" />
         </span>
         <span className="flex-1" />
         <svg

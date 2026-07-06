@@ -561,49 +561,58 @@ pub struct AgentPreset {
     pub sort_order: i64,
     pub is_built_in: i64,
     pub created_at: i64,
+    /// Migration 0070 — RAW JSON string array of this preset's own
+    /// dangerous auto-approve flags. NULL = legacy/unknown (consumers
+    /// fail closed; see `workspace::agent_resolve`).
+    pub danger_flags: Option<String>,
+    /// Migration 0070 — RAW JSON string→string object merged into the
+    /// child env at spawn. NULL = no preset env. Values may hold
+    /// credentials: NEVER log them.
+    pub env: Option<String>,
+    /// Migration 0070 — readiness class for the wake/injection path:
+    /// 'bracketed-paste' | 'settle:<ms>'. NULL = unknown (default
+    /// injection profile).
+    pub readiness: Option<String>,
 }
 
 impl AgentPreset {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentPreset> {
+        Ok(AgentPreset {
+            id: row.get(0)?,
+            label: row.get(1)?,
+            command: row.get(2)?,
+            icon: row.get(3)?,
+            enabled: row.get(4)?,
+            sort_order: row.get(5)?,
+            is_built_in: row.get(6)?,
+            created_at: row.get(7)?,
+            danger_flags: row.get(8)?,
+            env: row.get(9)?,
+            readiness: row.get(10)?,
+        })
+    }
+
     pub fn list(conn: &Connection) -> Result<Vec<AgentPreset>> {
         let mut stmt = conn.prepare(
-            "SELECT id, label, command, icon, enabled, sort_order, is_built_in, created_at \
+            "SELECT id, label, command, icon, enabled, sort_order, is_built_in, created_at, \
+                    danger_flags, env, readiness \
              FROM agent_presets ORDER BY sort_order",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(AgentPreset {
-                id: row.get(0)?,
-                label: row.get(1)?,
-                command: row.get(2)?,
-                icon: row.get(3)?,
-                enabled: row.get(4)?,
-                sort_order: row.get(5)?,
-                is_built_in: row.get(6)?,
-                created_at: row.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map([], AgentPreset::from_row)?;
         rows.collect()
     }
 
     pub fn get(conn: &Connection, id: &str) -> Result<AgentPreset> {
         conn.query_row(
-            "SELECT id, label, command, icon, enabled, sort_order, is_built_in, created_at \
+            "SELECT id, label, command, icon, enabled, sort_order, is_built_in, created_at, \
+                    danger_flags, env, readiness \
              FROM agent_presets WHERE id = ?1",
             params![id],
-            |row| {
-                Ok(AgentPreset {
-                    id: row.get(0)?,
-                    label: row.get(1)?,
-                    command: row.get(2)?,
-                    icon: row.get(3)?,
-                    enabled: row.get(4)?,
-                    sort_order: row.get(5)?,
-                    is_built_in: row.get(6)?,
-                    created_at: row.get(7)?,
-                })
-            },
+            AgentPreset::from_row,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         conn: &Connection,
         id: &str,
@@ -622,6 +631,7 @@ impl AgentPreset {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         conn: &Connection,
         id: &str,
@@ -645,6 +655,35 @@ impl AgentPreset {
         }
         if let Some(v) = sort_order {
             conn.execute("UPDATE agent_presets SET sort_order = ?1 WHERE id = ?2", params![v, id])?;
+        }
+        Ok(())
+    }
+
+    /// Write the migration-0070 metadata columns. Outer `None` = leave
+    /// unchanged; inner `None` = clear to NULL (back to legacy/unknown,
+    /// which every consumer fail-closes on). Validation of the JSON /
+    /// readiness grammar is `db_ops`' job — this is the raw column write.
+    pub fn update_metadata(
+        conn: &Connection,
+        id: &str,
+        danger_flags: Option<Option<&str>>,
+        env: Option<Option<&str>>,
+        readiness: Option<Option<&str>>,
+    ) -> Result<()> {
+        if let Some(v) = danger_flags {
+            conn.execute(
+                "UPDATE agent_presets SET danger_flags = ?1 WHERE id = ?2",
+                params![v, id],
+            )?;
+        }
+        if let Some(v) = env {
+            conn.execute("UPDATE agent_presets SET env = ?1 WHERE id = ?2", params![v, id])?;
+        }
+        if let Some(v) = readiness {
+            conn.execute(
+                "UPDATE agent_presets SET readiness = ?1 WHERE id = ?2",
+                params![v, id],
+            )?;
         }
         Ok(())
     }

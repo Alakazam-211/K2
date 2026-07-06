@@ -69,6 +69,15 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // auto-approve flags. Values: '1' | '0' (default 0/OFF, fail-closed).
         // See `get_api_skip_permissions`.
         "api_skip_permissions",
+        // W6 (0.40.30) — per-workspace default agent (0063 column): an
+        // `agent_presets` preset id, or a legacy command first-token.
+        // Stored VERBATIM, same tolerance as `/cli/projects/update`'s
+        // `defaultAgent` key — the resolver (`workspace::agent_resolve`)
+        // skips unresolvable/disabled values and falls through, so a
+        // stale value can never brick a spawn. `k2 agent hire --agent`
+        // writes this via `/cli/workspace/set` (validating the preset
+        // CLI-side first).
+        "default_agent",
     ]
 }
 

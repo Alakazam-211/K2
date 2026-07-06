@@ -974,6 +974,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/timer/entries-list" => crate::db_routes::handle_timer_entries_list(params),
         "/cli/timer/entries-export" => crate::db_routes::handle_timer_entries_export(params),
         "/cli/presets/list" => crate::db_routes::handle_presets_list(),
+        // W6 (0.40.30) — one preset with its migration-0070 metadata.
+        "/cli/presets/get" => crate::db_routes::handle_presets_get(params),
         "/cli/window-state/get" => crate::db_routes::handle_window_state_get(),
         "/cli/projects/list" => crate::db_routes::handle_projects_list(),
         // task #672 — canonical Active-set snapshot (GET).

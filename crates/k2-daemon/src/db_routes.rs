@@ -691,11 +691,35 @@ pub fn handle_timer_delete(body: &[u8]) -> CliResponse {
 
 // ── Presets ───────────────────────────────────────────────────────────
 
+/// `GET /cli/presets/get?id=<preset-id>` — one preset, metadata
+/// included. Unknown id → the uniform 404 (indistinguishable from an
+/// unknown route, per house 404 discipline).
+pub fn handle_presets_get(params: &HashMap<String, String>) -> CliResponse {
+    let id = str_param(params, "id");
+    if id.is_empty() {
+        return CliResponse::bad_request("Missing 'id' parameter");
+    }
+    match dops::presets_get(&id) {
+        Ok(Some(p)) => ok_serialized(p),
+        Ok(None) => CliResponse::not_found(),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// W6 (0.40.30): `id` (optional slug — `k2 preset add --id`), plus the
+/// migration-0070 metadata columns. `dangerFlags` = JSON array string,
+/// `env` = JSON object string, `readiness` = 'bracketed-paste' |
+/// 'settle:<ms>' — all validated write-side in `db_ops`.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PresetsCreateBody {
     label: String,
     command: String,
     icon: Option<String>,
+    id: Option<String>,
+    danger_flags: Option<String>,
+    env: Option<String>,
+    readiness: Option<String>,
 }
 
 pub fn handle_presets_create(body: &[u8]) -> CliResponse {
@@ -703,7 +727,15 @@ pub fn handle_presets_create(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    serialized(dops::presets_create(&b.label, &b.command, b.icon.as_deref()))
+    serialized(dops::presets_create_full(
+        b.id.as_deref(),
+        &b.label,
+        &b.command,
+        b.icon.as_deref(),
+        b.danger_flags.as_deref(),
+        b.env.as_deref(),
+        b.readiness.as_deref(),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -715,6 +747,19 @@ struct PresetsUpdateBody {
     icon: Option<String>,
     enabled: Option<i64>,
     sort_order: Option<i64>,
+    /// Metadata fields (W6): omitted = unchanged, `""` = clear to NULL,
+    /// anything else = set (validated). Same convention as `icon_url` /
+    /// `default_agent` on projects/update.
+    danger_flags: Option<String>,
+    env: Option<String>,
+    readiness: Option<String>,
+}
+
+/// Map the wire convention onto the db_ops one: absent → unchanged,
+/// empty string → clear to NULL, value → set.
+fn set_or_clear(v: &Option<String>) -> Option<Option<&str>> {
+    v.as_ref()
+        .map(|s| if s.is_empty() { None } else { Some(s.as_str()) })
 }
 
 pub fn handle_presets_update(body: &[u8]) -> CliResponse {
@@ -722,13 +767,16 @@ pub fn handle_presets_update(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    serialized(dops::presets_update(
+    serialized(dops::presets_update_full(
         &b.id,
         b.label.as_deref(),
         b.command.as_deref(),
         b.icon.as_ref().map(|i| Some(i.as_str())),
         b.enabled,
         b.sort_order,
+        set_or_clear(&b.danger_flags),
+        set_or_clear(&b.env),
+        set_or_clear(&b.readiness),
     ))
 }
 

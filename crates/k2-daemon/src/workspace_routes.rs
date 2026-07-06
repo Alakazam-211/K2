@@ -681,6 +681,38 @@ mod tests {
         );
     }
 
+    /// W6 (0.40.30): `default_agent` is settable through the same
+    /// batch door `k2 agent hire --agent` uses — stored VERBATIM
+    /// (preset id or legacy command token; the resolver tolerates and
+    /// falls through on stale values), and a re-run converges.
+    #[test]
+    fn workspace_set_writes_default_agent_verbatim_and_converges() {
+        let (name, path) = unique("defagent");
+        insert_project(&name, &path);
+        assert_eq!(stored_value(&path, "default_agent"), None, "starts NULL");
+
+        let resp = handle_workspace_set(&set_body(
+            &path,
+            serde_json::json!({ "default_agent": "my-preset-slug" }),
+        ));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(body["changed"], true, "{body}");
+        assert_eq!(
+            stored_value(&path, "default_agent").as_deref(),
+            Some("my-preset-slug"),
+            "value must be stored verbatim"
+        );
+
+        // Idempotent re-run reports skipped/changed:false.
+        let resp = handle_workspace_set(&set_body(
+            &path,
+            serde_json::json!({ "default_agent": "my-preset-slug" }),
+        ));
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(body["changed"], false, "re-run must converge: {body}");
+    }
+
     /// GET on the POST-only route answers an explicit 405 through the
     /// read dispatch chain (feedback_post_only_route_guards).
     #[test]

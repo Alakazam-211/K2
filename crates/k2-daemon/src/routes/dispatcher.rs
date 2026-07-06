@@ -2750,9 +2750,34 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // W6 (0.40.30) — agent-preset MUTATIONS are management-plane
+        // writes: a preset row decides what command launches, with what
+        // env, and which auto-approve flags the host-session strip
+        // trusts — so unlike the generic Unit-4 arm below (any authed
+        // session), these gate on require_owner_or_admin (#660 tier,
+        // same as daemon update). Explicitly POST-gated per
+        // feedback_post_only_route_guards (a stray GET here → 405, not
+        // the catchall 404). Handlers stay in `dispatch_unit4_post`.
+        // Reads (`/cli/presets/list`, `/cli/presets/get`) stay on the
+        // generic GET dispatch — any authed session may look.
+        "/cli/presets/create" | "/cli/presets/update" | "/cli/presets/delete"
+        | "/cli/presets/reorder" | "/cli/presets/reset" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = crate::db_routes::dispatch_unit4_post(&path, &body_bytes);
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // Phase 2 Unit 4 — POST routes for DB-writing domains. JSON-
         // bodied writes; per-route allowlist + same implicit gate
         // pattern as Unit 6. Dispatch is `dispatch_unit4_post`.
+        // (`/cli/presets/*` mutations moved to the owner/admin arm
+        // above — W6.)
         p if is_post && post_allowed && (
             p.starts_with("/cli/states/")
                 || p.starts_with("/cli/workspaces/")
@@ -2760,7 +2785,6 @@ async fn handle_one_request(
                 || p.starts_with("/cli/sections/")
                 || p.starts_with("/cli/workspace-layouts/")
                 || p.starts_with("/cli/timer/")
-                || p.starts_with("/cli/presets/")
                 || p.starts_with("/cli/window-state/")
                 || p.starts_with("/cli/projects/")
         ) => {

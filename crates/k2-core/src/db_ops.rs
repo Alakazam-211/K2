@@ -958,19 +958,144 @@ pub fn presets_list() -> Result<Vec<AgentPreset>, String> {
     AgentPreset::list(&conn).map_err(|e| e.to_string())
 }
 
+/// One preset by exact id. `Ok(None)` = no such row (the route layer
+/// turns that into its uniform 404), `Err` = real DB failure.
+pub fn presets_get(id: &str) -> Result<Option<AgentPreset>, String> {
+    let db = db::shared();
+    let conn = db.lock();
+    match AgentPreset::get(&conn, id) {
+        Ok(p) => Ok(Some(p)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Custom preset ids are caller-visible slugs (`k2 preset add --id
+/// my-agent`): 1–64 chars of `[A-Za-z0-9._-]`, starting alphanumeric.
+/// Built-in ids (UUIDs) predate this and are never re-validated.
+fn validate_custom_preset_id(id: &str) -> Result<(), String> {
+    if id.is_empty() || id.len() > 64 {
+        return Err("preset id must be 1–64 characters".to_string());
+    }
+    let mut chars = id.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_alphanumeric() {
+        return Err("preset id must start with a letter or digit".to_string());
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
+        return Err(
+            "preset id may only contain letters, digits, '.', '_' and '-'".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Validate the migration-0070 metadata WRITE grammar. Read-side
+/// consumers tolerate malformed rows (fail-closed), but a write must be
+/// rejected loudly — we never store metadata we know is garbage.
+///
+/// - `danger_flags`: JSON array of non-empty strings.
+/// - `env`: JSON string→string object; keys non-empty, no `=`/NUL.
+/// - `readiness`: `bracketed-paste` | `settle:<ms>` (1..=600000 ms) —
+///   the `provider_resume::InjectionProfile` vocabulary.
+fn validate_preset_metadata(
+    danger_flags: Option<&str>,
+    env: Option<&str>,
+    readiness: Option<&str>,
+) -> Result<(), String> {
+    if let Some(raw) = danger_flags {
+        let flags: Vec<String> = serde_json::from_str(raw)
+            .map_err(|e| format!("danger_flags must be a JSON array of strings: {e}"))?;
+        if flags.iter().any(|f| f.trim().is_empty()) {
+            return Err("danger_flags entries must be non-empty".to_string());
+        }
+    }
+    if let Some(raw) = env {
+        let map: std::collections::BTreeMap<String, String> = serde_json::from_str(raw)
+            .map_err(|e| format!("env must be a JSON object of string values: {e}"))?;
+        for key in map.keys() {
+            if key.is_empty() || key.contains('=') || key.contains('\0') {
+                return Err(format!("invalid env variable name {key:?}"));
+            }
+        }
+    }
+    if let Some(r) = readiness {
+        let valid = r == "bracketed-paste"
+            || r
+                .strip_prefix("settle:")
+                .and_then(|ms| ms.parse::<u64>().ok())
+                .is_some_and(|ms| (1..=600_000).contains(&ms));
+        if !valid {
+            return Err(format!(
+                "readiness must be 'bracketed-paste' or 'settle:<ms>' (1..=600000), got {r:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn presets_create(
     label: &str,
     command: &str,
     icon: Option<&str>,
 ) -> Result<AgentPreset, String> {
+    presets_create_full(None, label, command, icon, None, None, None)
+}
+
+/// Full create — W6 (0.40.30). `id` None = mint a UUID (the Settings-UI
+/// path); Some(slug) = caller-chosen id (`k2 preset add --id <slug>`),
+/// validated + uniqueness-checked. Metadata columns are validated by
+/// [`validate_preset_metadata`]. Always creates a CUSTOM (non-built-in)
+/// enabled preset appended at the end of the sort order.
+pub fn presets_create_full(
+    id: Option<&str>,
+    label: &str,
+    command: &str,
+    icon: Option<&str>,
+    danger_flags: Option<&str>,
+    env: Option<&str>,
+    readiness: Option<&str>,
+) -> Result<AgentPreset, String> {
+    if label.trim().is_empty() {
+        return Err("preset label must not be empty".to_string());
+    }
+    if command.trim().is_empty() {
+        return Err("preset command must not be empty".to_string());
+    }
+    if let Some(slug) = id {
+        validate_custom_preset_id(slug)?;
+    }
+    validate_preset_metadata(danger_flags, env, readiness)?;
+
     let db = db::shared();
     let conn = db.lock();
-    let id = Uuid::new_v4().to_string();
+    let id = match id {
+        Some(slug) => {
+            match AgentPreset::get(&conn, slug) {
+                Ok(_) => return Err(format!("preset id '{slug}' already exists")),
+                Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                Err(e) => return Err(e.to_string()),
+            }
+            slug.to_string()
+        }
+        None => Uuid::new_v4().to_string(),
+    };
     let existing = AgentPreset::list(&conn).unwrap_or_default();
     let max_order = existing.iter().map(|p| p.sort_order).max().unwrap_or(-1) + 1;
 
     AgentPreset::create(&conn, &id, label, command, icon, 1, max_order, 0)
         .map_err(|e| e.to_string())?;
+    AgentPreset::update_metadata(
+        &conn,
+        &id,
+        Some(danger_flags),
+        Some(env),
+        Some(readiness),
+    )
+    .map_err(|e| e.to_string())?;
     AgentPreset::get(&conn, &id).map_err(|e| e.to_string())
 }
 
@@ -982,9 +1107,52 @@ pub fn presets_update(
     enabled: Option<i64>,
     sort_order: Option<i64>,
 ) -> Result<AgentPreset, String> {
+    presets_update_full(id, label, command, icon, enabled, sort_order, None, None, None)
+}
+
+/// Full update — W6 (0.40.30). Metadata params: outer `None` = leave
+/// unchanged, inner `None` = clear to NULL (legacy/unknown; consumers
+/// fail closed). Metadata IS editable on built-ins — declaring a
+/// built-in's flags/env/readiness is exactly what the metadata columns
+/// are for; only DELETE is built-in-guarded (`presets_delete`).
+#[allow(clippy::too_many_arguments)]
+pub fn presets_update_full(
+    id: &str,
+    label: Option<&str>,
+    command: Option<&str>,
+    icon: Option<Option<&str>>,
+    enabled: Option<i64>,
+    sort_order: Option<i64>,
+    danger_flags: Option<Option<&str>>,
+    env: Option<Option<&str>>,
+    readiness: Option<Option<&str>>,
+) -> Result<AgentPreset, String> {
+    validate_preset_metadata(
+        danger_flags.flatten(),
+        env.flatten(),
+        readiness.flatten(),
+    )?;
+    if matches!(label, Some(l) if l.trim().is_empty()) {
+        return Err("preset label must not be empty".to_string());
+    }
+    if matches!(command, Some(c) if c.trim().is_empty()) {
+        return Err("preset command must not be empty".to_string());
+    }
+
     let db = db::shared();
     let conn = db.lock();
+    // Existence check first so an unknown id is a clean error (the raw
+    // column UPDATEs would silently no-op on 0 rows).
+    match AgentPreset::get(&conn, id) {
+        Ok(_) => {}
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(format!("no preset with id '{id}'"))
+        }
+        Err(e) => return Err(e.to_string()),
+    }
     AgentPreset::update(&conn, id, label, command, icon, enabled, sort_order)
+        .map_err(|e| e.to_string())?;
+    AgentPreset::update_metadata(&conn, id, danger_flags, env, readiness)
         .map_err(|e| e.to_string())?;
     AgentPreset::get(&conn, id).map_err(|e| e.to_string())
 }
@@ -1867,5 +2035,172 @@ mod leaked_tab_prune_tests {
             vec!["tab-real".to_string()],
             "save must persist the pruned form, not the poisoned one"
         );
+    }
+}
+
+#[cfg(test)]
+mod preset_metadata_ops_tests {
+    //! W6 (0.40.30) — `presets_*` metadata CRUD: slug-id create, write-side
+    //! validation, set/clear semantics, and the built-in delete guard.
+    //! Uses the process-global in-memory test DB (`db::shared()` →
+    //! `init_for_tests`), so every id here is uniquified.
+
+    use super::*;
+
+    fn uid(tag: &str) -> String {
+        format!(
+            "w6-{tag}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        )
+    }
+
+    #[test]
+    fn create_full_with_slug_id_and_metadata_round_trips() {
+        let id = uid("slug");
+        let p = presets_create_full(
+            Some(&id),
+            "W6 Custom",
+            "my-agent --model fast",
+            None,
+            Some(r#"["--auto-yes"]"#),
+            Some(r#"{"OPENAI_BASE_URL":"http://localhost:11434/v1"}"#),
+            Some("settle:2000"),
+        )
+        .expect("create");
+        assert_eq!(p.id, id, "caller-chosen slug id must be stored verbatim");
+        assert_eq!(p.is_built_in, 0);
+        assert_eq!(p.enabled, 1);
+        assert_eq!(p.danger_flags.as_deref(), Some(r#"["--auto-yes"]"#));
+        assert_eq!(
+            p.env.as_deref(),
+            Some(r#"{"OPENAI_BASE_URL":"http://localhost:11434/v1"}"#)
+        );
+        assert_eq!(p.readiness.as_deref(), Some("settle:2000"));
+
+        // get sees the same row; a duplicate slug is rejected loudly.
+        let got = presets_get(&id).expect("get ok").expect("row present");
+        assert_eq!(got.command, "my-agent --model fast");
+        let dup = presets_create_full(Some(&id), "Dup", "dup-agent", None, None, None, None);
+        assert!(
+            dup.unwrap_err().contains("already exists"),
+            "duplicate slug must be a loud error"
+        );
+    }
+
+    #[test]
+    fn presets_get_unknown_id_is_ok_none() {
+        assert!(
+            presets_get(&uid("missing")).expect("no db error").is_none(),
+            "unknown id must be Ok(None), never a fabricated row"
+        );
+    }
+
+    #[test]
+    fn write_side_metadata_validation_rejects_garbage() {
+        let mk = |df: Option<&str>, env: Option<&str>, ready: Option<&str>| {
+            presets_create_full(None, "W6 Bad", "bad-agent", None, df, env, ready)
+        };
+        assert!(mk(Some("not-json["), None, None).is_err(), "malformed danger_flags");
+        assert!(mk(Some(r#"[""]"#), None, None).is_err(), "empty flag entry");
+        assert!(mk(None, Some("{broken"), None).is_err(), "malformed env");
+        assert!(mk(None, Some(r#"{"A=B":"x"}"#), None).is_err(), "env key with '='");
+        assert!(mk(None, None, Some("sentinel:hi")).is_err(), "unknown readiness class");
+        assert!(mk(None, None, Some("settle:0")).is_err(), "settle floor");
+        assert!(mk(None, None, Some("settle:9999999")).is_err(), "settle ceiling");
+        // Bad slug ids too.
+        assert!(
+            presets_create_full(Some("-leading-dash"), "X", "x", None, None, None, None)
+                .is_err(),
+            "slug must start alphanumeric"
+        );
+        assert!(
+            presets_create_full(Some("has space"), "X", "x", None, None, None, None).is_err(),
+            "slug must not contain spaces"
+        );
+    }
+
+    #[test]
+    fn update_full_sets_and_clears_metadata() {
+        let id = uid("upd");
+        presets_create_full(Some(&id), "W6 Upd", "upd-agent", None, None, None, None)
+            .expect("create");
+
+        // Set all three.
+        let p = presets_update_full(
+            &id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Some(r#"["--yolo-mode"]"#)),
+            Some(Some(r#"{"K":"v"}"#)),
+            Some(Some("bracketed-paste")),
+        )
+        .expect("set metadata");
+        assert_eq!(p.danger_flags.as_deref(), Some(r#"["--yolo-mode"]"#));
+        assert_eq!(p.env.as_deref(), Some(r#"{"K":"v"}"#));
+        assert_eq!(p.readiness.as_deref(), Some("bracketed-paste"));
+
+        // Outer None leaves untouched.
+        let p = presets_update_full(
+            &id, Some("Renamed"), None, None, None, None, None, None, None,
+        )
+        .expect("label-only update");
+        assert_eq!(p.label, "Renamed");
+        assert_eq!(p.danger_flags.as_deref(), Some(r#"["--yolo-mode"]"#), "metadata untouched");
+
+        // Inner None clears back to NULL.
+        let p = presets_update_full(
+            &id, None, None, None, None, None,
+            Some(None), Some(None), Some(None),
+        )
+        .expect("clear metadata");
+        assert_eq!(p.danger_flags, None);
+        assert_eq!(p.env, None);
+        assert_eq!(p.readiness, None);
+
+        // Invalid metadata on update is rejected before any write.
+        assert!(presets_update_full(
+            &id, None, None, None, None, None, None, None, Some(Some("settle:none")),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn update_unknown_id_errors_and_built_in_delete_still_guarded() {
+        let missing = uid("ghost");
+        let err = presets_update_full(
+            &missing, None, None, None, None, None, None, None, None,
+        )
+        .unwrap_err();
+        assert!(err.contains("no preset"), "unknown id must be loud: {err}");
+
+        // Built-ins: metadata EDITABLE, delete REFUSED. Find one seeded row.
+        let built_in = presets_list()
+            .expect("list")
+            .into_iter()
+            .find(|p| p.is_built_in == 1)
+            .expect("seeded built-ins present in the test DB");
+        let before = built_in.danger_flags.clone();
+        let p = presets_update_full(
+            &built_in.id, None, None, None, None, None,
+            Some(Some(r#"["--w6-test-flag"]"#)), None, None,
+        )
+        .expect("metadata edit on a built-in is allowed");
+        assert_eq!(p.danger_flags.as_deref(), Some(r#"["--w6-test-flag"]"#));
+        let err = presets_delete(&built_in.id).unwrap_err();
+        assert!(
+            err.contains("built-in"),
+            "built-in delete must stay refused: {err}"
+        );
+        // Restore the seeded value so other tests sharing the global DB
+        // see truthful metadata.
+        presets_update_full(
+            &built_in.id, None, None, None, None, None,
+            Some(before.as_deref()), None, None,
+        )
+        .expect("restore");
     }
 }

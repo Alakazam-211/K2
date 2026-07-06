@@ -491,7 +491,21 @@ fn spawn_supervised(
 /// No renewal target (no subdomain label or no client-persisted device id
 /// in the config — e.g. a manual token-only config) → the loop logs once
 /// and exits; the tunnel still runs, it just isn't lease-renewed here.
+///
+/// K2 Cloud P1-C — availability is decided ONCE here, per tunnel start,
+/// instead of failing (and logging) on every 60 s tick:
+///   * `K2_TUNNEL_LEASE=off` is honored before any keychain probe;
+///   * no account session material (headless/hosted/provisioned daemons,
+///     non-macOS, or a Mac that never signed in) → a LOUD-ONCE skip. The
+///     tunnel itself is unaffected — the lease only powers the "which
+///     device holds this subdomain" holder UI, and K2 Cloud rows are
+///     single-holder by construction.
+/// The disabled log fires at most once per PROCESS (not per tunnel
+/// restart); a later sign-in is picked up on the next tunnel start because
+/// the mode is re-evaluated each spawn.
 fn spawn_lease_renewal(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
+    // Target check FIRST: it's pure config (touches no keychain), and a
+    // token-only manual config skips before we'd probe anything.
     let target = match super::lease::LeaseTarget::from_config(cfg) {
         Some(t) => t,
         None => {
@@ -502,6 +516,31 @@ fn spawn_lease_renewal(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
             return;
         }
     };
+
+    // Availability: env kill-switch (checked inside BEFORE any keychain
+    // probe), then session presence.
+    static DISABLED_LOGGED: std::sync::Once = std::sync::Once::new();
+    match super::lease::renewal_mode() {
+        super::lease::RenewalMode::Enabled => {}
+        super::lease::RenewalMode::DisabledByEnv => {
+            DISABLED_LOGGED.call_once(|| {
+                crate::log_debug!(
+                    "[tunnel/lease] subdomain lease renewal disabled via {}=off",
+                    super::lease::LEASE_ENV_VAR
+                );
+            });
+            return;
+        }
+        super::lease::RenewalMode::NoSession => {
+            DISABLED_LOGGED.call_once(|| {
+                crate::log_debug!(
+                    "[tunnel/lease] subdomain lease renewal disabled — no account session \
+                     (normal for provisioned/hosted daemons)"
+                );
+            });
+            return;
+        }
+    }
 
     let spawned = std::thread::Builder::new()
         .name("k2so-tunnel-lease".to_string())

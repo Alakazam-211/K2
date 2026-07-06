@@ -23,11 +23,25 @@
 //! semantics and the control-plane contract are UNCHANGED — only *who
 //! schedules* the periodic call moved. To call the RPC the daemon needs a
 //! Supabase **access token**, which it derives from the account **refresh
-//! token** the renderer persisted to the OS keychain at sign-in
-//! (`dev.k2.connect.account` / `session-refresh-token`).
+//! token** the renderer persisted to the OS keychain at sign-in. The
+//! CURRENT layout (renderer double-prompt fix) is ONE item — a JSON blob
+//! `{"refreshToken": …, "email": …}` under `dev.k2.connect.account` /
+//! `session`; the pre-blob bare-string item (`session-refresh-token`) is
+//! read as a fallback only (the renderer DELETES it on fresh sign-ins).
 //!
 //! Cadence: [`RENEW_INTERVAL`] (60 s) — matches the old renderer cadence
 //! and is well inside the 3-minute server TTL ([`LEASE_TTL`]).
+//!
+//! ## When renewal does NOT run (K2 Cloud P1-C)
+//!
+//! The lease only powers the "which device holds this subdomain" holder
+//! UI — the tunnel itself works without it, and K2 Cloud hosted rows are
+//! single-holder by construction. So on daemons with NO account session
+//! (headless/hosted/provisioned boxes, non-macOS, a Mac that never signed
+//! in) the renew loop is skipped with ONE loud line instead of warning on
+//! every tick. Hosted images can also hard-disable it with
+//! `K2_TUNNEL_LEASE=off` ([`LEASE_ENV_VAR`]), which is honored BEFORE any
+//! keychain probing.
 
 use std::time::Duration;
 
@@ -45,8 +59,8 @@ const SUPABASE_URL: &str = "https://ttgcalfrzzgkxnfepkiu.supabase.co";
 const SUPABASE_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z2NhbGZyenpna3huZmVwa2l1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDIyMzksImV4cCI6MjA5NjA3ODIzOX0.L28xgtYkPEj5eCNDGO5Zf5xxhdKQLxKD8c1CJRHNqI8";
 
 /// Keychain coordinates for the k2.dev ACCOUNT session. MUST match the
-/// renderer's `ACCOUNT_KEYCHAIN_SERVICE` / `SESSION_ACCOUNT_KEY` in
-/// `K2ConnectSection.tsx` so the daemon reads the very token the client
+/// renderer's `ACCOUNT_KEYCHAIN_SERVICE` / `SESSION_BLOB_KEY` in
+/// `K2ConnectSection.tsx` so the daemon reads the very session the client
 /// stored at sign-in.
 const ACCOUNT_KEYCHAIN_SERVICE: &str = "dev.k2.connect.account";
 /// Pre-0.40 service name — read-only fallback, migrated on first read.
@@ -58,7 +72,23 @@ const LEGACY_ACCOUNT_KEYCHAIN_SERVICE: &str = "com.k2so.connect.account";
 /// per-prompt reason string like osascript's `with prompt`), so a clear
 /// label is the only lever we have to explain what's being unlocked.
 const ACCOUNT_KEYCHAIN_LABEL: &str = "K2 Connect sign-in";
+/// CURRENT session layout (renderer double-prompt fix, `SESSION_BLOB_KEY`
+/// in `K2ConnectSection.tsx`): ONE keychain item under this account key
+/// holding a JSON blob `{"refreshToken": "...", "email": "..."}`.
+const ACCOUNT_SESSION_BLOB_KEY: &str = "session";
+/// LEGACY two-item layout: the bare refresh-token string. Read fallback
+/// only — the renderer DELETES this key on every fresh sign-in
+/// (`saveAccountSession`), so reading it alone silently breaks after the
+/// first blob-era sign-in (the K2 Cloud P1-C bug this module fixes).
 const ACCOUNT_REFRESH_KEY: &str = "session-refresh-token";
+/// LEGACY two-item layout: the companion email item. Read only during
+/// migration so the forwarded blob keeps the email the renderer displays.
+const ACCOUNT_EMAIL_KEY: &str = "session-email";
+
+/// Env kill-switch: `K2_TUNNEL_LEASE=off` disables daemon-side lease
+/// renewal entirely. Honored BEFORE any keychain probing so hosted images
+/// that set it never touch (or prompt for) a keychain.
+pub const LEASE_ENV_VAR: &str = "K2_TUNNEL_LEASE";
 
 /// Server-side claim TTL: a claim with no heartbeat for this long expires
 /// and the subdomain is free for another device. Mirrors the renderer's
@@ -90,6 +120,138 @@ pub const fn cadence_is_safe(interval: Duration, ttl: Duration) -> bool {
     let i = interval.as_secs();
     let t = ttl.as_secs();
     i > 0 && i.saturating_mul(2) <= t
+}
+
+// ── Account session material (pure, keychain-free seam) ─────────────────
+
+/// The account session the renderer persists at sign-in, as far as the
+/// daemon needs it: the refresh token (drives renewal) plus the account
+/// email (carried through rotation write-backs so the renderer's blob
+/// keeps the email it displays).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountSession {
+    pub refresh_token: String,
+    /// From the blob's `email` field; `None` when absent/empty (e.g. a
+    /// session recovered from the legacy string-only entry).
+    pub email: Option<String>,
+}
+
+/// Wire shape of the renderer's persisted session blob — see
+/// `saveAccountSession` in `K2ConnectSection.tsx`:
+/// `JSON.stringify({ refreshToken, email })`.
+#[derive(Debug, Deserialize)]
+struct SessionBlob {
+    #[serde(rename = "refreshToken")]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+}
+
+/// Pure decision seam (unit-testable without a keychain): resolve the
+/// session from raw keychain material. `blob` = the JSON under the CURRENT
+/// single-item key (`session`); `legacy` = the bare refresh-token string
+/// under the OLD key (`session-refresh-token`). The blob wins; a corrupt
+/// or token-less blob falls back to the legacy entry — mirroring the
+/// renderer's `readAccountSession` order.
+pub fn resolve_account_session(
+    blob: Option<&str>,
+    legacy: Option<&str>,
+) -> Option<AccountSession> {
+    if let Some(raw) = blob {
+        if let Ok(parsed) = serde_json::from_str::<SessionBlob>(raw) {
+            if let Some(token) = parsed
+                .refresh_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+            {
+                return Some(AccountSession {
+                    refresh_token: token.to_string(),
+                    email: parsed
+                        .email
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|e| !e.is_empty())
+                        .map(str::to_string),
+                });
+            }
+        }
+        // Corrupt / token-less blob → fall through to the legacy entry.
+    }
+    let token = legacy?.trim();
+    if token.is_empty() {
+        return None;
+    }
+    Some(AccountSession {
+        refresh_token: token.to_string(),
+        email: None,
+    })
+}
+
+/// Serialize a session into the EXACT blob shape the renderer persists and
+/// parses back: `{"refreshToken": "...", "email": "..."}`. `email` is
+/// always emitted as a string (the renderer reads it with
+/// `parsed.email ?? ''` and its `AccountSession` type requires a string).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn session_blob_json(sess: &AccountSession) -> String {
+    serde_json::json!({
+        "refreshToken": sess.refresh_token,
+        "email": sess.email.as_deref().unwrap_or(""),
+    })
+    .to_string()
+}
+
+// ── Renewal availability (env kill-switch + session presence) ───────────
+
+/// Whether — and why not — the daemon-side renew loop should run for this
+/// tunnel start. Decided ONCE at spawn time so a daemon with no session
+/// material skips cleanly instead of erroring on every 60 s tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenewalMode {
+    /// Session material present → run the renew loop.
+    Enabled,
+    /// [`LEASE_ENV_VAR`] is set to an off value → hard off; no keychain
+    /// was (or will be) probed.
+    DisabledByEnv,
+    /// No account session anywhere: never signed in, signed out, or a
+    /// headless/hosted/provisioned daemon with no keychain at all. Normal
+    /// for K2 Cloud boxes — the tunnel works without the lease.
+    NoSession,
+}
+
+/// `K2_TUNNEL_LEASE=off` (also accepts `0`/`false`, case-insensitive,
+/// trimmed) → `true`. Anything else — unset, empty, `on`, `1` — leaves the
+/// lease enabled.
+pub fn env_disables_lease(val: Option<&str>) -> bool {
+    matches!(
+        val.map(str::trim),
+        Some(v) if v.eq_ignore_ascii_case("off")
+            || v == "0"
+            || v.eq_ignore_ascii_case("false")
+    )
+}
+
+/// Pure half of the availability decision (unit-testable): env value +
+/// whether session material exists. Env wins unconditionally — callers
+/// ([`renewal_mode`]) check it BEFORE probing any keychain.
+pub fn decide_renewal_mode(env_val: Option<&str>, has_session: bool) -> RenewalMode {
+    if env_disables_lease(env_val) {
+        return RenewalMode::DisabledByEnv;
+    }
+    if !has_session {
+        return RenewalMode::NoSession;
+    }
+    RenewalMode::Enabled
+}
+
+/// Process-facing availability decision: the env kill-switch first (NO
+/// keychain probe when it says off — a probe could raise a keychain prompt
+/// on macOS), then the session probe.
+pub fn renewal_mode() -> RenewalMode {
+    if env_disables_lease(std::env::var(LEASE_ENV_VAR).ok().as_deref()) {
+        return RenewalMode::DisabledByEnv;
+    }
+    decide_renewal_mode(None, read_account_session().is_some())
 }
 
 /// Everything the daemon needs to renew a single subdomain's lease,
@@ -185,7 +347,7 @@ impl LeaseTarget {
 /// the process that actually performs a keychain access against this item:
 ///
 /// 1. `/usr/bin/security` — the daemon's READ path
-///    ([`read_keychain_token`]) shells `security find-generic-password`, so
+///    ([`read_keychain_item`]) shells `security find-generic-password`, so
 ///    the keychain sees `/usr/bin/security` as the requesting application on
 ///    every daemon read. This is the load-bearing entry.
 /// 2. the running daemon executable (`std::env::current_exe()`, i.e.
@@ -246,31 +408,67 @@ fn acl_trusted_apps() -> Vec<String> {
 /// Allow" then satisfies; once stamped, subsequent boots are prompt-free
 /// because the daemon is already on the ACL. The boot probe read below is
 /// the read that may prompt the one time; everything after is silent.
+/// 0.40.30 (K2 Cloud P1-C) — this boot pass ALSO migrates the LEGACY
+/// two-item layout (`session-refresh-token` [+ `session-email`]) forward
+/// into the current single-blob layout, mirroring the renderer's
+/// `readAccountSession` fallback-then-migrate, and purges the superseded
+/// two-item entries afterwards exactly like the renderer's
+/// `saveAccountSession` does.
 #[cfg(target_os = "macos")]
 pub fn migrate_account_keychain() -> bool {
-    // New item already present → no migration needed, but UPGRADE its ACL
-    // once so the renewal loop's reads stop prompting.
-    if let Some(existing) = read_keychain_token(ACCOUNT_KEYCHAIN_SERVICE) {
-        crate::log_debug!(
-            "[tunnel/lease] boot ACL upgrade on {ACCOUNT_KEYCHAIN_SERVICE} (re-stamp trusted-app list)"
-        );
-        // Re-write the SAME value to (re)install our ACL. Idempotent: once
-        // the daemon is on the ACL, this re-write needs no prompt.
-        write_account_refresh_token(&existing);
+    // Env kill-switch FIRST: hosted images set K2_TUNNEL_LEASE=off to keep
+    // the daemon away from any keychain (a probe could raise a prompt).
+    if env_disables_lease(std::env::var(LEASE_ENV_VAR).ok().as_deref()) {
         return false;
     }
-    match read_keychain_token(LEGACY_ACCOUNT_KEYCHAIN_SERVICE) {
-        Some(legacy) => {
+    // Current-layout blob already present → no migration needed, but
+    // UPGRADE its ACL once so the renewal loop's reads stop prompting.
+    // Re-writing the SAME value (re)installs our ACL; idempotent — once the
+    // daemon is on the ACL, this re-write needs no prompt.
+    if let Some(raw) = read_keychain_item(ACCOUNT_KEYCHAIN_SERVICE, ACCOUNT_SESSION_BLOB_KEY) {
+        if let Some(sess) = resolve_account_session(Some(&raw), None) {
             crate::log_debug!(
-                "[tunnel/lease] boot keychain migration {LEGACY_ACCOUNT_KEYCHAIN_SERVICE} → {ACCOUNT_KEYCHAIN_SERVICE}"
+                "[tunnel/lease] boot ACL upgrade on {ACCOUNT_KEYCHAIN_SERVICE}/{ACCOUNT_SESSION_BLOB_KEY} (re-stamp trusted-app list)"
             );
-            // write_account_refresh_token stamps the ACL on the NEW item, so
-            // the migrated session is prompt-free from its first daemon read.
-            write_account_refresh_token(&legacy);
-            true
+            write_account_session(&sess);
         }
-        None => false,
+        return false;
     }
+    // Blob under the pre-rename service → copy forward. The legacy-SERVICE
+    // copy is deliberately left in place (renderer parity: "an un-updated
+    // daemon may still read it").
+    if let Some(raw) =
+        read_keychain_item(LEGACY_ACCOUNT_KEYCHAIN_SERVICE, ACCOUNT_SESSION_BLOB_KEY)
+    {
+        if let Some(sess) = resolve_account_session(Some(&raw), None) {
+            crate::log_debug!(
+                "[tunnel/lease] boot keychain migration {LEGACY_ACCOUNT_KEYCHAIN_SERVICE} → {ACCOUNT_KEYCHAIN_SERVICE} (session blob)"
+            );
+            write_account_session(&sess);
+            return true;
+        }
+    }
+    // LEGACY two-item layout (either service) → migrate forward to the
+    // single blob, carrying the email item along when present, then drop
+    // the superseded two-item entries so a later read can't resurrect a
+    // soon-to-be-spent refresh token (mirrors renderer saveAccountSession).
+    for service in [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE] {
+        if let Some(token) = read_keychain_item(service, ACCOUNT_REFRESH_KEY) {
+            let email = read_keychain_item(service, ACCOUNT_EMAIL_KEY)
+                .map(|e| e.trim().to_string())
+                .filter(|e| !e.is_empty());
+            crate::log_debug!(
+                "[tunnel/lease] boot keychain migration {service}/{ACCOUNT_REFRESH_KEY} → {ACCOUNT_KEYCHAIN_SERVICE}/{ACCOUNT_SESSION_BLOB_KEY}"
+            );
+            write_account_session(&AccountSession {
+                refresh_token: token,
+                email,
+            });
+            purge_legacy_session_items();
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -278,36 +476,35 @@ pub fn migrate_account_keychain() -> bool {
     false
 }
 
-/// Read the account refresh token the renderer stored at sign-in. Returns
-/// `None` when absent (never signed in / signed out) so the caller can
-/// skip renewal cleanly rather than erroring.
+/// Read the account session the renderer stored at sign-in. Order mirrors
+/// the renderer's `readAccountSession`: the single-item JSON blob first
+/// (current service, then the pre-rename service), then the LEGACY bare
+/// refresh-token entry (same service order). Returns `None` when absent
+/// (never signed in / signed out) so the caller can skip renewal cleanly
+/// rather than erroring.
+///
+/// The legacy entry is only probed when no blob resolves, so the common
+/// post-migration case costs a single keychain read.
 #[cfg(target_os = "macos")]
-pub fn read_account_refresh_token() -> Option<String> {
-    if let Some(token) = read_keychain_token(ACCOUNT_KEYCHAIN_SERVICE) {
-        return Some(token);
-    }
-    // 0.40.0 rebrand: pre-rename sign-ins stored the item under
-    // `com.k2so.connect.account`. Copy-on-read so an existing K2 Connect
-    // session survives the update without re-authenticating.
-    let legacy = read_keychain_token(LEGACY_ACCOUNT_KEYCHAIN_SERVICE)?;
-    crate::log_debug!(
-        "[tunnel/lease] migrating account refresh token {LEGACY_ACCOUNT_KEYCHAIN_SERVICE} → {ACCOUNT_KEYCHAIN_SERVICE}"
+pub fn read_account_session() -> Option<AccountSession> {
+    // 1. Current single-item blob (the renderer's SESSION_BLOB_KEY).
+    let blob = read_keychain_item(ACCOUNT_KEYCHAIN_SERVICE, ACCOUNT_SESSION_BLOB_KEY).or_else(
+        || read_keychain_item(LEGACY_ACCOUNT_KEYCHAIN_SERVICE, ACCOUNT_SESSION_BLOB_KEY),
     );
-    write_account_refresh_token(&legacy);
-    Some(legacy)
+    if let Some(sess) = resolve_account_session(blob.as_deref(), None) {
+        return Some(sess);
+    }
+    // 2. Legacy bare-string entry (pre-blob sign-ins that never re-authed;
+    // the boot migration normally converts these before we get here).
+    let legacy = read_keychain_item(ACCOUNT_KEYCHAIN_SERVICE, ACCOUNT_REFRESH_KEY)
+        .or_else(|| read_keychain_item(LEGACY_ACCOUNT_KEYCHAIN_SERVICE, ACCOUNT_REFRESH_KEY));
+    resolve_account_session(None, legacy.as_deref())
 }
 
 #[cfg(target_os = "macos")]
-fn read_keychain_token(service: &str) -> Option<String> {
+fn read_keychain_item(service: &str, account: &str) -> Option<String> {
     let output = std::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            service,
-            "-a",
-            ACCOUNT_REFRESH_KEY,
-            "-w",
-        ])
+        .args(["find-generic-password", "-s", service, "-a", account, "-w"])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -322,20 +519,45 @@ fn read_keychain_token(service: &str) -> Option<String> {
     }
 }
 
-/// Persist a rotated refresh token back to the keychain. Supabase rotates
-/// the refresh token on every refresh; if we don't write the new one back
-/// the NEXT daemon refresh (and the renderer's next mount) would present a
-/// spent token. Best-effort — a keychain write failure is logged and
-/// swallowed (the in-memory token is still good for this run).
+/// Persist the session back to the keychain in the CURRENT single-blob
+/// layout the renderer reads first. Supabase rotates the refresh token on
+/// every refresh; if we don't write the new one back the NEXT daemon
+/// refresh (and the renderer's next mount) would present a spent token.
+/// Writing the BLOB (not the legacy string key) is load-bearing: the
+/// renderer's `readAccountSession` prefers the blob, so a rotation written
+/// anywhere else would strand the renderer on the spent token. Best-effort
+/// — a keychain write failure is logged and swallowed (the in-memory token
+/// is still good for this run).
 ///
 /// Every write goes through [`write_token_with_acl`], which stamps the
 /// trusted-application ACL ([`acl_trusted_apps`]) so the daemon's `security`
 /// reads — and the renderer's reads — never provoke a login-keychain
-/// prompt. A write also UPGRADES the ACL on a legacy item the renderer
-/// created without one (delete + re-add installs the fresh ACL).
+/// prompt. A write also UPGRADES the ACL on an item the renderer created
+/// without one (delete + re-add installs the fresh ACL).
 #[cfg(target_os = "macos")]
-pub fn write_account_refresh_token(token: &str) {
-    write_token_with_acl(ACCOUNT_KEYCHAIN_SERVICE, ACCOUNT_REFRESH_KEY, token);
+pub fn write_account_session(sess: &AccountSession) {
+    write_token_with_acl(
+        ACCOUNT_KEYCHAIN_SERVICE,
+        ACCOUNT_SESSION_BLOB_KEY,
+        &session_blob_json(sess),
+    );
+}
+
+/// Best-effort removal of the superseded LEGACY two-item layout under BOTH
+/// service names, mirroring the renderer's `saveAccountSession` cleanup —
+/// leaving a copy behind would let a later fallback read resurrect a spent
+/// refresh token. Called on migration only (not on every rotation write:
+/// the read path prefers the blob, so already-purged is the steady state).
+#[cfg(target_os = "macos")]
+fn purge_legacy_session_items() {
+    for service in [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE] {
+        for account in [ACCOUNT_REFRESH_KEY, ACCOUNT_EMAIL_KEY] {
+            // Ignore the status: "not found" is the expected common case.
+            let _ = std::process::Command::new("security")
+                .args(["delete-generic-password", "-s", service, "-a", account])
+                .output();
+        }
+    }
 }
 
 /// Write `token` under `(service, account)` with our trusted-application
@@ -400,17 +622,19 @@ fn write_token_with_acl(service: &str, account: &str, token: &str) {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn read_account_refresh_token() -> Option<String> {
+pub fn read_account_session() -> Option<AccountSession> {
     // Non-macOS keychain bridge for the account session is not yet wired
     // (the renderer uses the keyring crate's Secret Service / Credential
     // Manager backends, which have no stable CLI we read here). Renewal is
-    // a no-op on those platforms for now; the renderer still drives the
-    // one-shot claims. Tracked as a follow-up.
+    // a no-op on those platforms — [`renewal_mode`] resolves to
+    // `NoSession` and the connector skips the loop with ONE log line
+    // (normal for provisioned/hosted daemons; the tunnel works without
+    // the lease). Tracked as a follow-up.
     None
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn write_account_refresh_token(_token: &str) {}
+pub fn write_account_session(_sess: &AccountSession) {}
 
 // ── Control-plane calls (identical wire to the renderer) ────────────────
 
@@ -501,23 +725,29 @@ fn http_client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|e| format!("http client build failed: {e}"))
 }
 
-/// Perform one full renewal cycle for `target`: read the keychain refresh
-/// token, refresh it to an access token (persisting any rotation), and
+/// Perform one full renewal cycle for `target`: read the keychain session,
+/// refresh its token to an access token (persisting any rotation), and
 /// re-claim the subdomain. Returns `Ok(true)` when the lease was renewed
 /// (this device holds it), `Ok(false)` when another device now holds it
 /// (caller may choose to log/stop), `Err` on a transport/auth failure (a
 /// transient error — the next tick retries).
 ///
 /// This is the network-touching entry point; it is NEVER exercised by unit
-/// tests (those cover [`cadence_is_safe`] / [`LeaseTarget::from_config`]).
+/// tests (those cover the pure seams: [`cadence_is_safe`],
+/// [`LeaseTarget::from_config`], [`resolve_account_session`],
+/// [`decide_renewal_mode`]).
 pub fn renew_once(target: &LeaseTarget) -> Result<bool, String> {
-    let refresh = read_account_refresh_token()
-        .ok_or_else(|| "no account refresh token in keychain (signed out?)".to_string())?;
-    let (access, rotated) = refresh_access_token(&refresh)?;
-    // Persist the rotated refresh token so the next cycle (and the
-    // renderer's next mount) doesn't present a spent token.
-    if rotated != refresh {
-        write_account_refresh_token(&rotated);
+    let sess = read_account_session()
+        .ok_or_else(|| "no account session in keychain (signed out?)".to_string())?;
+    let (access, rotated) = refresh_access_token(&sess.refresh_token)?;
+    // Persist the rotated refresh token back into the SAME single-blob
+    // layout the renderer reads first — preserving the email field — so
+    // neither side presents a spent token on its next refresh.
+    if rotated != sess.refresh_token {
+        write_account_session(&AccountSession {
+            refresh_token: rotated,
+            email: sess.email.clone(),
+        });
     }
     claim_subdomain(
         &access,
@@ -604,5 +834,149 @@ mod tests {
             target.device_label, None,
             "a whitespace-only device label must normalize to None"
         );
+    }
+
+    // ── resolve_account_session (pure seam; no keychain touched) ────────
+
+    #[test]
+    fn resolves_current_renderer_blob() {
+        // The EXACT shape the renderer persists (`saveAccountSession` in
+        // K2ConnectSection.tsx): JSON.stringify({ refreshToken, email }).
+        let blob = r#"{"refreshToken":"rt-blob-1","email":"rosson@k2.dev"}"#;
+        let sess = resolve_account_session(Some(blob), None)
+            .expect("current-layout blob must resolve");
+        assert_eq!(sess.refresh_token, "rt-blob-1");
+        assert_eq!(sess.email.as_deref(), Some("rosson@k2.dev"));
+    }
+
+    #[test]
+    fn blob_wins_over_legacy_entry() {
+        let blob = r#"{"refreshToken":"rt-from-blob","email":"a@b.c"}"#;
+        let sess = resolve_account_session(Some(blob), Some("rt-from-legacy"))
+            .expect("must resolve");
+        assert_eq!(
+            sess.refresh_token, "rt-from-blob",
+            "the blob is the CURRENT layout and must win over the legacy string"
+        );
+    }
+
+    #[test]
+    fn corrupt_blob_falls_back_to_legacy() {
+        let sess = resolve_account_session(Some("definitely not json"), Some("rt-legacy"))
+            .expect("legacy fallback must resolve");
+        assert_eq!(sess.refresh_token, "rt-legacy");
+        assert_eq!(sess.email, None, "legacy entry carries no email");
+    }
+
+    #[test]
+    fn tokenless_or_empty_token_blob_falls_back_to_legacy() {
+        // Blob parses but has no usable refreshToken → legacy wins.
+        for blob in [
+            r#"{"email":"a@b.c"}"#,
+            r#"{"refreshToken":"","email":"a@b.c"}"#,
+            r#"{"refreshToken":"   ","email":"a@b.c"}"#,
+            r#"{"refreshToken":null,"email":"a@b.c"}"#,
+        ] {
+            let sess = resolve_account_session(Some(blob), Some("rt-legacy"))
+                .unwrap_or_else(|| panic!("legacy fallback must resolve for blob {blob}"));
+            assert_eq!(sess.refresh_token, "rt-legacy", "blob was {blob}");
+        }
+    }
+
+    #[test]
+    fn empty_email_in_blob_normalizes_to_none() {
+        let blob = r#"{"refreshToken":"rt-1","email":""}"#;
+        let sess = resolve_account_session(Some(blob), None).expect("must resolve");
+        assert_eq!(sess.email, None);
+    }
+
+    #[test]
+    fn legacy_only_resolves_trimmed() {
+        let sess =
+            resolve_account_session(None, Some("  rt-legacy  ")).expect("must resolve");
+        assert_eq!(sess.refresh_token, "rt-legacy");
+        assert_eq!(sess.email, None);
+    }
+
+    #[test]
+    fn no_material_resolves_to_none() {
+        assert_eq!(resolve_account_session(None, None), None);
+        assert_eq!(
+            resolve_account_session(Some("not json"), Some("   ")),
+            None,
+            "corrupt blob + whitespace-only legacy must resolve to no session"
+        );
+    }
+
+    #[test]
+    fn blob_roundtrip_matches_renderer_shape() {
+        // What the daemon writes back on rotation MUST parse both through
+        // our own reader AND through the renderer's expectations:
+        // `refreshToken` a non-empty string, `email` always a string.
+        let sess = AccountSession {
+            refresh_token: "rt-rotated".to_string(),
+            email: Some("rosson@k2.dev".to_string()),
+        };
+        let json = session_blob_json(&sess);
+        assert_eq!(
+            resolve_account_session(Some(&json), None).expect("roundtrip"),
+            sess
+        );
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(v["refreshToken"], "rt-rotated");
+        assert!(
+            v["email"].is_string(),
+            "renderer's AccountSession.email is a string — never null/missing"
+        );
+
+        // An email-less session (recovered from the legacy entry) still
+        // writes email as an EMPTY STRING, matching `parsed.email ?? ''`.
+        let json = session_blob_json(&AccountSession {
+            refresh_token: "rt".to_string(),
+            email: None,
+        });
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(v["email"], "");
+    }
+
+    // ── env kill-switch + renewal-mode decision (pure; no env mutated) ──
+
+    #[test]
+    fn env_off_values_disable_the_lease() {
+        for v in ["off", "OFF", "Off", " off ", "0", "false", "FALSE"] {
+            assert!(env_disables_lease(Some(v)), "{v:?} must disable");
+        }
+    }
+
+    #[test]
+    fn env_other_values_leave_lease_enabled() {
+        for v in [None, Some(""), Some("on"), Some("1"), Some("true"), Some("offf")] {
+            assert!(!env_disables_lease(v), "{v:?} must NOT disable");
+        }
+    }
+
+    #[test]
+    fn renewal_mode_env_wins_over_session() {
+        // Kill-switch beats an existing session — hosted images can force
+        // the lease off even on a signed-in box.
+        assert_eq!(
+            decide_renewal_mode(Some("off"), true),
+            RenewalMode::DisabledByEnv
+        );
+        assert_eq!(
+            decide_renewal_mode(Some("off"), false),
+            RenewalMode::DisabledByEnv
+        );
+    }
+
+    #[test]
+    fn renewal_mode_no_session_is_a_clean_skip() {
+        assert_eq!(decide_renewal_mode(None, false), RenewalMode::NoSession);
+    }
+
+    #[test]
+    fn renewal_mode_enabled_with_session_and_no_kill_switch() {
+        assert_eq!(decide_renewal_mode(None, true), RenewalMode::Enabled);
+        assert_eq!(decide_renewal_mode(Some("on"), true), RenewalMode::Enabled);
     }
 }

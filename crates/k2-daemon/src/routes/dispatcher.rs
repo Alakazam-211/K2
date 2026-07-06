@@ -542,6 +542,8 @@ async fn handle_one_request(
             | "/cli/project-group/remove-member"
             | "/cli/project-group/set-poc"
             | "/cli/project-group/msg"
+            | "/cli/project-group/set-icon"
+            | "/cli/project-group/set-color"
             | "/cli/project-group/dashboard/save-layout"
             | "/cli/project-group/dashboard/rename"
             | "/cli/project-group/dashboard/create"
@@ -2924,13 +2926,15 @@ async fn handle_one_request(
         }
         // Projects V1 P2 — `/cli/project-group/*` mutations (create /
         // rename / delete / pin / sort / add-member / remove-member /
-        // set-poc / msg / dashboard/save-layout / dashboard/rename /
-        // dashboard/create / dashboard/delete / dashboard/reorder).
+        // set-poc / msg / set-icon / set-color / dashboard/save-layout /
+        // dashboard/rename / dashboard/create / dashboard/delete /
+        // dashboard/reorder).
         // JSON-bodied POSTs; token_ok (owner OR connect-user session —
         // connect users see projects too, PRD §4.1) + require_post per
         // feedback_post_only_route_guards. The `dashboard/*` mutations
-        // are additionally owner-or-admin-gated (PRD §6.3 resolved Q2:
-        // owners and admins create/rearrange/save; viewers and
+        // — and the §6.7.7 `set-icon`/`set-color` appearance mutations
+        // — are additionally owner-or-admin-gated (PRD §6.3 resolved
+        // Q2: owners and admins create/rearrange/save; viewers and
         // non-admin users see but cannot change). Handlers run in
         // spawn_blocking (SQLite writes + the PoC injection's wake path
         // can block).
@@ -2949,7 +2953,9 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            if p.starts_with("/cli/project-group/dashboard/")
+            if (p.starts_with("/cli/project-group/dashboard/")
+                || p == "/cli/project-group/set-icon"
+                || p == "/cli/project-group/set-color")
                 && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
             {
                 let _ = stream.read(&mut buf).await;
@@ -2957,7 +2963,7 @@ async fn handle_one_request(
                     &mut *stream,
                     "403 Forbidden",
                     "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"dashboards can only be changed by the owner or an admin"}}"#,
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"dashboards and project appearance can only be changed by the owner or an admin"}}"#,
                 )
                 .await;
                 return DispatchOutcome::Done;

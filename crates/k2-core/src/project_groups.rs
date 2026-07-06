@@ -47,6 +47,11 @@ pub struct ProjectGroup {
     pub sort_order: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// `#rrggbb` accent (§6.7.7); `None` = the renderer derives a
+    /// stable fallback color from the group id. The group's ICON is
+    /// deliberately NOT here — dataUrls run ~10-50KB, so it never rides
+    /// the list/show payloads (see [`get_group_icon`]).
+    pub color: Option<String>,
     /// Membership size (nav member strip / list badges).
     pub member_count: i64,
 }
@@ -129,7 +134,7 @@ fn now_secs() -> i64 {
 }
 
 const GROUP_SELECT: &str = "SELECT g.id, g.name, g.poc_workspace_id, g.pinned, \
-    g.sort_order, g.created_at, g.updated_at, \
+    g.sort_order, g.created_at, g.updated_at, g.color, \
     (SELECT COUNT(*) FROM project_group_members m WHERE m.group_id = g.id) \
     FROM project_groups g";
 
@@ -142,7 +147,8 @@ fn row_to_group(row: &rusqlite::Row) -> rusqlite::Result<ProjectGroup> {
         sort_order: row.get(4)?,
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
-        member_count: row.get(7)?,
+        color: row.get(7)?,
+        member_count: row.get(8)?,
     })
 }
 
@@ -381,6 +387,88 @@ pub fn set_sort_order(id: &str, sort_order: i64) -> Result<ProjectGroup, String>
     }
     drop(conn);
     get_group_by_id(id).ok_or_else(|| "project group vanished after reorder".to_string())
+}
+
+/// [`set_group_icon`]'s size cap (~2MB of dataUrl string — well above
+/// any sane icon, well below anything that hurts the DB or the wire).
+pub const MAX_ICON_BYTES: usize = 2 * 1024 * 1024;
+
+/// Set (or, with `None`, clear) a group's icon — a `data:image/...`
+/// dataUrl string (§6.7.7; a group has no folder on disk, so unlike
+/// workspace icons there is no filesystem detection — the row IS the
+/// storage). Capped at [`MAX_ICON_BYTES`]. `id` must be a FULL id.
+///
+/// Returns `()` rather than the group: the icon never rides
+/// [`ProjectGroup`] (dataUrls are ~10-50KB — see [`get_group_icon`]).
+pub fn set_group_icon(id: &str, icon: Option<&str>) -> Result<(), String> {
+    if let Some(icon) = icon {
+        if !icon.starts_with("data:image/") {
+            return Err("usage: icon must be a data:image/... dataUrl".to_string());
+        }
+        if icon.len() > MAX_ICON_BYTES {
+            return Err(format!(
+                "usage: icon too large ({} bytes — max {MAX_ICON_BYTES})",
+                icon.len()
+            ));
+        }
+    }
+    let now = now_secs();
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let updated = conn
+        .execute(
+            "UPDATE project_groups SET icon = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, icon, now],
+        )
+        .map_err(|e| format!("icon update failed: {e}"))?;
+    if updated == 0 {
+        return Err(format!("no project group with id {id}"));
+    }
+    Ok(())
+}
+
+/// A group's icon dataUrl (`None` = unset). `id` must be a FULL id;
+/// an unknown group fails loudly (an unset icon on a REAL group is
+/// `Ok(None)`, never an error).
+pub fn get_group_icon(id: &str) -> Result<Option<String>, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT icon FROM project_groups WHERE id = ?1",
+        params![id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => format!("no project group with id {id}"),
+        e => format!("icon read failed: {e}"),
+    })
+}
+
+/// Set (or, with `None`/empty, clear) a group's `#rrggbb` accent color
+/// (§6.7.7 — `None` lets the renderer derive its stable fallback).
+/// `id` must be a FULL id.
+pub fn set_group_color(id: &str, color: Option<&str>) -> Result<ProjectGroup, String> {
+    let color = color.map(str::trim).filter(|c| !c.is_empty());
+    if let Some(c) = color {
+        let hex = c.strip_prefix('#').unwrap_or("");
+        if hex.len() != 6 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err(format!("usage: color must be #rrggbb, got '{c}'"));
+        }
+    }
+    let now = now_secs();
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let updated = conn
+        .execute(
+            "UPDATE project_groups SET color = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, color, now],
+        )
+        .map_err(|e| format!("color update failed: {e}"))?;
+    if updated == 0 {
+        return Err(format!("no project group with id {id}"));
+    }
+    drop(conn);
+    get_group_by_id(id).ok_or_else(|| "project group vanished after color set".to_string())
 }
 
 /// Delete a group. SQL CASCADE (foreign_keys=ON at connection open)
@@ -1588,5 +1676,81 @@ mod tests {
 
         // Deleting again fails loudly.
         assert!(delete_group(&g.id).is_err());
+    }
+
+    /// §6.7.7 icon: set → get → clear round-trip, dataUrl + size
+    /// validation, and the icon NEVER riding the group wire shape.
+    #[test]
+    fn icon_set_get_clear_and_validation() {
+        let g = create_group(&gname("icon")).expect("create");
+
+        // Fresh group: unset icon on a REAL group is Ok(None).
+        assert_eq!(get_group_icon(&g.id).expect("get fresh"), None);
+
+        // Set → get round-trips the dataUrl.
+        let icon = "data:image/png;base64,iVBORw0KGgoAAA==";
+        set_group_icon(&g.id, Some(icon)).expect("set icon");
+        assert_eq!(get_group_icon(&g.id).expect("get").as_deref(), Some(icon));
+
+        // The icon never rides ProjectGroup — the serialized wire shape
+        // (list/show payloads) must not carry it.
+        let wire = serde_json::to_value(get_group_by_id(&g.id).expect("get group"))
+            .expect("serialize");
+        assert!(wire.get("icon").is_none(), "icon must not ride the group payload: {wire}");
+
+        // Non-dataUrl and oversized icons are refused; stored icon untouched.
+        let err = set_group_icon(&g.id, Some("https://example.com/x.png")).expect_err("scheme");
+        assert!(err.starts_with("usage"), "got: {err}");
+        let huge = format!("data:image/png;base64,{}", "A".repeat(MAX_ICON_BYTES + 1));
+        let err = set_group_icon(&g.id, Some(&huge)).expect_err("size cap");
+        assert!(err.starts_with("usage"), "got: {err}");
+        assert_eq!(
+            get_group_icon(&g.id).expect("get").as_deref(),
+            Some(icon),
+            "failed set must not corrupt the stored icon"
+        );
+
+        // None clears.
+        set_group_icon(&g.id, None).expect("clear");
+        assert_eq!(get_group_icon(&g.id).expect("get cleared"), None);
+
+        // Unknown group fails loudly on both fns.
+        assert!(set_group_icon("nope", Some(icon)).is_err());
+        assert!(get_group_icon("nope").is_err());
+    }
+
+    /// §6.7.7 color: rides the group wire shape; `#rrggbb` validation;
+    /// None/empty clears back to the renderer-derived fallback.
+    #[test]
+    fn color_set_clear_validation_rides_group() {
+        let g = create_group(&gname("color")).expect("create");
+        assert_eq!(g.color, None, "fresh group has no color");
+
+        // Set: rides the returned group AND the fetched wire shape.
+        let updated = set_group_color(&g.id, Some("#3FA9F5")).expect("set color");
+        assert_eq!(updated.color.as_deref(), Some("#3FA9F5"));
+        let fetched = get_group_by_id(&g.id).expect("get");
+        assert_eq!(fetched.color.as_deref(), Some("#3FA9F5"));
+        let wire = serde_json::to_value(&fetched).expect("serialize");
+        assert_eq!(wire["color"], "#3FA9F5", "color rides the group payload");
+
+        // Bad shapes are refused; stored color untouched.
+        for bad in ["3FA9F5", "#3FA9F", "#3FA9F5A", "#GGGGGG", "red"] {
+            let err = set_group_color(&g.id, Some(bad)).expect_err("bad color must fail");
+            assert!(err.starts_with("usage"), "color '{bad}' got: {err}");
+        }
+        assert_eq!(
+            get_group_by_id(&g.id).expect("get").color.as_deref(),
+            Some("#3FA9F5"),
+            "failed set must not corrupt the stored color"
+        );
+
+        // None and empty both clear.
+        assert_eq!(set_group_color(&g.id, None).expect("clear none").color, None);
+        set_group_color(&g.id, Some("#3FA9F5")).expect("re-set");
+        assert_eq!(set_group_color(&g.id, Some("  ")).expect("clear empty").color, None);
+
+        // Unknown group fails loudly.
+        assert!(set_group_color("nope", Some("#112233")).is_err());
     }
 }

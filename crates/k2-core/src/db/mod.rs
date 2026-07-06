@@ -482,6 +482,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // auto-creates 'Main'). NOT the legacy `projects`/`workspaces`
         // tables — those stay untouched. Additive.
         ("0066_project_groups", include_str!("../../drizzle_sql/0066_project_groups.sql")),
+        // 0067 (projects V1 §6.7.7): project-group `icon` (dataUrl TEXT,
+        // NULL = unset — a group has no folder to detect from, so the
+        // icon lives IN the row and is served by a dedicated route, not
+        // the list/show payloads) + `color` (`#rrggbb` TEXT, NULL = the
+        // renderer derives a stable fallback). Additive.
+        ("0067_project_group_icon", include_str!("../../drizzle_sql/0067_project_group_icon.sql")),
     ];
 
     for (name, sql) in migrations {

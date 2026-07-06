@@ -13,9 +13,10 @@
 //! `routes::dispatcher` with `token_ok` auth (owner AND connect-user
 //! sessions — connect users see projects too). GET-chain hits on POST
 //! paths return 405 (`feedback_post_only_route_guards` house rule).
-//! The `dashboard/*` mutations additionally require the owner-or-admin
-//! bit (PRD §6.3 resolved Q2 — viewers see but cannot save), enforced
-//! in the dispatcher arm where the query string lives.
+//! The `dashboard/*` mutations — and the §6.7.7 `set-icon` /
+//! `set-color` appearance mutations — additionally require the
+//! owner-or-admin bit (PRD §6.3 resolved Q2 — viewers see but cannot
+//! save), enforced in the dispatcher arm where the query string lives.
 //!
 //! Error contract: `{"ok":false,"error":{"code","hint"}}` with stable
 //! codes — `not_found` / `ambiguous_id` (CLI exit 4; the ambiguous hint
@@ -37,9 +38,10 @@
 //!   — `dashboard/save-layout` (freshness on next open, never a live
 //!   rearrange).
 //! - `project-group:groups-changed` `{groupId?}` — create / rename /
-//!   delete / pin / sort / dashboard create/rename/delete/reorder
-//!   (nav-list + open-`show` liveness; §4.2 has no dashboards-changed
-//!   event, so the dashboard mutations ride the structural sibling).
+//!   delete / pin / sort / set-icon / set-color / dashboard
+//!   create/rename/delete/reorder (nav-list + open-`show` liveness;
+//!   §4.2 has no dashboards-changed event, so the dashboard mutations
+//!   ride the structural sibling).
 //!
 //! PoC injection (§4.3, trigger matrix frozen): every stored chat
 //! message from anyone EXCEPT the PoC best-effort injects into the PoC
@@ -169,6 +171,35 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
         }
 
+        // GET /cli/project-group/icon?group=<id|name|prefix>
+        // §6.7.7 — the group's icon dataUrl, served OUTSIDE the
+        // list/show payloads (dataUrls run ~10-50KB — the nav rail
+        // fetches per group and client-caches, the get-icon idiom).
+        // `found:false` = unset (the renderer falls back to initials +
+        // the stable color).
+        "/cli/project-group/icon" => {
+            let selector = str_param(params, "group");
+            if selector.is_empty() {
+                return Some(usage_error("missing group (a project name, id, or unique prefix)"));
+            }
+            let group_id = match project_groups::resolve_group(&selector) {
+                Ok(id) => id,
+                Err(e) => return Some(resolve_error_response(&selector, e)),
+            };
+            match project_groups::get_group_icon(&group_id) {
+                Ok(icon) => CliResponse::ok_json(
+                    serde_json::json!({
+                        "ok": true,
+                        "groupId": group_id,
+                        "found": icon.is_some(),
+                        "dataUrl": icon,
+                    })
+                    .to_string(),
+                ),
+                Err(e) => core_error(e),
+            }
+        }
+
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
         "/cli/project-group/create"
@@ -180,6 +211,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/project-group/remove-member"
         | "/cli/project-group/set-poc"
         | "/cli/project-group/msg"
+        | "/cli/project-group/set-icon"
+        | "/cli/project-group/set-color"
         | "/cli/project-group/dashboard/save-layout"
         | "/cli/project-group/dashboard/rename"
         | "/cli/project-group/dashboard/create"
@@ -205,6 +238,8 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/project-group/remove-member" => handle_remove_member(body),
         "/cli/project-group/set-poc" => handle_set_poc(body),
         "/cli/project-group/msg" => handle_msg(body),
+        "/cli/project-group/set-icon" => handle_set_icon(body),
+        "/cli/project-group/set-color" => handle_set_color(body),
         "/cli/project-group/dashboard/save-layout" => handle_save_layout(body),
         "/cli/project-group/dashboard/rename" => handle_dashboard_rename(body),
         "/cli/project-group/dashboard/create" => handle_dashboard_create(body),
@@ -668,6 +703,86 @@ pub fn handle_sort(body: &[u8]) -> CliResponse {
         Err(e) => return resolve_error_response(&b.group, e),
     };
     match project_groups::set_sort_order(&group_id, sort_order) {
+        Ok(group) => {
+            emit_groups_changed(&group.id);
+            group_ok_json(&group)
+        }
+        Err(e) => core_error(e),
+    }
+}
+
+/// `POST /cli/project-group/set-icon` body. `dataUrl` null (or absent)
+/// clears the icon.
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct SetIconBody {
+    group: String,
+    data_url: Option<String>,
+}
+
+/// Handler for `POST /cli/project-group/set-icon` — §6.7.7. Stores (or,
+/// with a null `dataUrl`, clears) the group's icon; owner-or-admin
+/// gated in the dispatcher arm beside the dashboard mutations. The
+/// response reports `found` (icon now present) WITHOUT echoing the
+/// dataUrl back — clients re-read via GET `/cli/project-group/icon`
+/// (the ~10-50KB blob never rides a mutation response). Emits
+/// `project-group:groups-changed` (the nav rail refetches the icon on
+/// it). Never injects.
+pub fn handle_set_icon(body: &[u8]) -> CliResponse {
+    let b: SetIconBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    if b.group.is_empty() {
+        return usage_error("missing 'group' (a project name, id, or unique prefix)");
+    }
+    let group_id = match project_groups::resolve_group(&b.group) {
+        Ok(id) => id,
+        Err(e) => return resolve_error_response(&b.group, e),
+    };
+    match project_groups::set_group_icon(&group_id, b.data_url.as_deref()) {
+        Ok(()) => {
+            emit_groups_changed(&group_id);
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "groupId": group_id,
+                    "found": b.data_url.is_some(),
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => core_error(e),
+    }
+}
+
+/// `POST /cli/project-group/set-color` body. `color` null (or absent,
+/// or empty) clears back to the renderer-derived stable fallback.
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct SetColorBody {
+    group: String,
+    color: Option<String>,
+}
+
+/// Handler for `POST /cli/project-group/set-color` — §6.7.7. Sets (or
+/// clears) the group's `#rrggbb` accent; owner-or-admin gated in the
+/// dispatcher arm beside set-icon. Color rides the group wire shape,
+/// so the updated group is the response. Emits
+/// `project-group:groups-changed`. Never injects.
+pub fn handle_set_color(body: &[u8]) -> CliResponse {
+    let b: SetColorBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    if b.group.is_empty() {
+        return usage_error("missing 'group' (a project name, id, or unique prefix)");
+    }
+    let group_id = match project_groups::resolve_group(&b.group) {
+        Ok(id) => id,
+        Err(e) => return resolve_error_response(&b.group, e),
+    };
+    match project_groups::set_group_color(&group_id, b.color.as_deref()) {
         Ok(group) => {
             emit_groups_changed(&group.id);
             group_ok_json(&group)
@@ -2371,6 +2486,8 @@ mod tests {
             "/cli/project-group/remove-member",
             "/cli/project-group/set-poc",
             "/cli/project-group/msg",
+            "/cli/project-group/set-icon",
+            "/cli/project-group/set-color",
             "/cli/project-group/dashboard/save-layout",
             "/cli/project-group/dashboard/rename",
             "/cli/project-group/dashboard/create",
@@ -2385,6 +2502,125 @@ mod tests {
         assert_eq!(resp.status, "404 Not Found");
         // Unclaimed paths stay unclaimed on the GET chain.
         assert!(dispatch("/cli/project-group/unknown", &params).is_none());
+    }
+
+    /// §6.7.7 — icon + color through the routes: set-icon → GET icon
+    /// round-trip (the dataUrl never echoed by the mutation, served by
+    /// the dedicated read), null clears, color rides the group payload
+    /// (list/show) while the icon never does, groups-changed on every
+    /// appearance mutation, validation + addressing misses are loud.
+    #[test]
+    fn project_group_icon_and_color_routes() {
+        install_capture_sink();
+        let name = gname("appearance");
+        let g = create_group_via_route(&name);
+        let gid = g["id"].as_str().expect("id").to_string();
+        assert!(g["color"].is_null(), "fresh group has no color");
+        assert!(g.get("icon").is_none(), "icon never rides the group payload");
+
+        let icon_get = |selector: &str| -> CliResponse {
+            dispatch("/cli/project-group/icon", &get_params(&[("group", selector)]))
+                .expect("icon route claimed")
+        };
+
+        // Fresh group: ok, found:false, dataUrl null.
+        let v = ok_json(icon_get(&name));
+        assert_eq!(v["found"], false);
+        assert!(v["dataUrl"].is_null());
+
+        // set-icon → GET round-trip; groups-changed emitted; the
+        // mutation response reports found without echoing the blob.
+        let icon = "data:image/png;base64,iVBORw0KGgoAAA==";
+        let mark = event_mark();
+        let set = ok_json(post_json(
+            "/cli/project-group/set-icon",
+            serde_json::json!({ "group": gid, "dataUrl": icon }),
+        ));
+        assert_eq!(set["found"], true);
+        assert!(set.get("dataUrl").is_none(), "mutation must not echo the blob: {set}");
+        assert_eq!(
+            events_for_group(mark, &gid)
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            vec!["project-group:groups-changed"]
+        );
+        let v = ok_json(icon_get(&gid));
+        assert_eq!(v["found"], true);
+        assert_eq!(v["dataUrl"], icon);
+
+        // The icon STILL never rides show/list.
+        let shown = ok_json(show(&name));
+        assert!(shown.get("icon").is_none(), "icon must not ride show: {shown}");
+
+        // set-color: rides the returned group + show; groups-changed.
+        let mark = event_mark();
+        let colored = ok_json(post_json(
+            "/cli/project-group/set-color",
+            serde_json::json!({ "group": gid, "color": "#3fa9f5" }),
+        ));
+        assert_eq!(colored["color"], "#3fa9f5");
+        assert_eq!(
+            events_for_group(mark, &gid)
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            vec!["project-group:groups-changed"]
+        );
+        assert_eq!(ok_json(show(&gid))["color"], "#3fa9f5");
+
+        // Validation is loud (usage, 400); stored values untouched.
+        for (route, body) in [
+            (
+                "/cli/project-group/set-icon",
+                serde_json::json!({ "group": gid, "dataUrl": "https://x.png" }),
+            ),
+            (
+                "/cli/project-group/set-color",
+                serde_json::json!({ "group": gid, "color": "blue" }),
+            ),
+        ] {
+            let resp = post_json(route, body);
+            assert_eq!(resp.status, "400 Bad Request", "route={route} body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage", "route={route}");
+        }
+        assert_eq!(ok_json(icon_get(&gid))["dataUrl"], icon, "failed set must not corrupt");
+        assert_eq!(ok_json(show(&gid))["color"], "#3fa9f5", "failed set must not corrupt");
+
+        // Nulls clear both.
+        let cleared = ok_json(post_json(
+            "/cli/project-group/set-icon",
+            serde_json::json!({ "group": gid, "dataUrl": null }),
+        ));
+        assert_eq!(cleared["found"], false);
+        assert_eq!(ok_json(icon_get(&gid))["found"], false);
+        let cleared = ok_json(post_json(
+            "/cli/project-group/set-color",
+            serde_json::json!({ "group": gid, "color": null }),
+        ));
+        assert!(cleared["color"].is_null());
+
+        // Addressing misses: unknown selector 404 on all three; missing
+        // group is usage.
+        let unknown = format!("zzz-no-such-{}", uuid::Uuid::new_v4());
+        for resp in [
+            icon_get(&unknown),
+            post_json(
+                "/cli/project-group/set-icon",
+                serde_json::json!({ "group": unknown, "dataUrl": icon }),
+            ),
+            post_json(
+                "/cli/project-group/set-color",
+                serde_json::json!({ "group": unknown, "color": "#112233" }),
+            ),
+        ] {
+            assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "not_found");
+        }
+        let resp = icon_get("");
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
     }
 
     // ── §4.5 — the PoC workspace-removal guard ────────────────────────

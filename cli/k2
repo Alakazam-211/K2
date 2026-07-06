@@ -1729,10 +1729,17 @@ cmd_daemon_install() {
         *) curl -fsSL "$url" -o "$dl_bin" ;;
     esac || { echo "Failed to download binary: $url" >&2; return 1; }
 
-    # The .sig string is embedded in the manifest; write it to a file
-    # for minisign. (We trust the manifest only insofar as minisign then
-    # cryptographically verifies the binary against the embedded pubkey.)
-    printf '%s\n' "$sig" > "$dl_sig"
+    # The manifest's `sig` field is a URL to the .sig asset (the daemon
+    # self-updater's contract since 0.39.35); older/local manifests may
+    # inline the signature. Support both. (We trust the manifest only
+    # insofar as minisign then cryptographically verifies the binary
+    # against the embedded pubkey.)
+    case "$sig" in
+        http://*|https://*) curl -fsSL "$sig" -o "$dl_sig" \
+            || { echo "Failed to download signature: $sig" >&2; return 1; } ;;
+        file://*) cp "${sig#file://}" "$dl_sig" ;;
+        *) printf '%s\n' "$sig" > "$dl_sig" ;;
+    esac
 
     echo "Verifying minisign signature..."
     if ! minisign -Vm "$dl_bin" -P "$_DAEMON_MINISIGN_PUBKEY" -x "$dl_sig" >/dev/null 2>&1; then

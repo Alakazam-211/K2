@@ -82,3 +82,26 @@ export function registerPresetHandler(handler: PresetHandler): () => void {
 export function requestPreset(shape: PresetShape): void {
   presetHandler?.(shape)
 }
+
+// ── ⌘1…⌘9 pane switching ─────────────────────────────────────────────────
+// The page-level capture keydown (ProjectsPage) lands the shortcut on
+// whichever dashboard is mounted — no dashboard (Feedback tab open) →
+// the combo is still swallowed there, but no-ops here.
+
+type PaneShortcutHandler = (num: number) => void
+
+let paneShortcutHandler: PaneShortcutHandler | null = null
+
+/** The mounted dashboard registers its ⌘N focus handler; returns the
+ *  unregister. */
+export function registerPaneShortcutHandler(handler: PaneShortcutHandler): () => void {
+  paneShortcutHandler = handler
+  return () => {
+    if (paneShortcutHandler === handler) paneShortcutHandler = null
+  }
+}
+
+/** The Projects page's Cmd+digit keydown → focus pane N. */
+export function requestPaneShortcut(num: number): void {
+  paneShortcutHandler?.(num)
+}

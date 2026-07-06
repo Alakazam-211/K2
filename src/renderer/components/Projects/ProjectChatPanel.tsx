@@ -40,13 +40,17 @@ import {
 import {
   MESSAGES_DEFAULT_LIMIT,
   canLoadEarlier,
+  clampChatPanelWidth,
+  composerPlaceholder,
   deliveredLine,
   mergeMessages,
   nextEarlierLimit,
   pocLabel,
 } from './project-chat'
 
-export const CHAT_PANEL_WIDTH = 320
+// Resize-handle hit-area thickness (px), centered on the panel's left
+// border (the dashboard's DIVIDER_HIT_PX idiom).
+const RESIZE_HIT_PX = 7
 
 /** The most recent post's delivery outcome, rendered under its message. */
 interface LastPost {
@@ -190,15 +194,63 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
       .finally(() => setBusy(false))
   }, [draft, busy, show.id])
 
+  // §6.7.3 polish — resizable width: the persisted store value, with a
+  // panel-local live value while a drag is in flight (drag live,
+  // persist on release — the dashboard-divider idiom).
+  const storedWidth = useProjectGroupsStore((s) => s.chatWidth)
+  const [liveWidth, setLiveWidth] = useState<number | null>(null)
+  const [resizing, setResizing] = useState(false)
+  const width = liveWidth ?? storedWidth
+
+  const startResize = useCallback((e: React.MouseEvent): void => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const startX = e.clientX
+    const base = useProjectGroupsStore.getState().chatWidth
+    let last = base
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    setResizing(true)
+
+    const handleMove = (ev: MouseEvent): void => {
+      // Dragging LEFT widens the right-hand panel.
+      last = clampChatPanelWidth(base + (startX - ev.clientX))
+      setLiveWidth(last)
+    }
+    const handleUp = (): void => {
+      document.removeEventListener('mousemove', handleMove)
+      document.removeEventListener('mouseup', handleUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      setResizing(false)
+      // Persist on release (setChatWidth is sync — no flicker when the
+      // live value clears).
+      useProjectGroupsStore.getState().setChatWidth(last)
+      setLiveWidth(null)
+    }
+    document.addEventListener('mousemove', handleMove)
+    document.addEventListener('mouseup', handleUp)
+  }, [])
+
   const poc = pocLabel(show.members, show.pocWorkspaceId)
   const showEarlier = canLoadEarlier(limit, truncated)
   const atCeiling = truncated && !showEarlier
 
   return (
     <div
-      className="flex-shrink-0 flex flex-col min-h-0 h-full border-l border-[var(--color-border)] bg-[var(--color-bg-surface)]"
-      style={{ width: CHAT_PANEL_WIDTH }}
+      className="relative flex-shrink-0 flex flex-col min-h-0 h-full border-l border-[var(--color-border)] bg-[var(--color-bg-surface)]"
+      style={{ width }}
     >
+      {/* Left-edge resize handle (the dashboard-divider cursor/hover
+          idiom); the fixed overlay keeps the drag's mousemove stream
+          away from the dashboard's iframes/terminals. */}
+      <div
+        className="absolute top-0 bottom-0 z-10 cursor-col-resize hover:bg-[var(--color-accent)]/40 transition-colors"
+        style={{ left: -(RESIZE_HIT_PX / 2) - 1, width: RESIZE_HIT_PX }}
+        onMouseDown={startResize}
+        title="Drag to resize"
+      />
+      {resizing && <div className="fixed inset-0 z-50" style={{ cursor: 'col-resize' }} />}
       {/* Header row — identity only; open/close lives on the top-bar
           toggle (§6.7.3). */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] flex-shrink-0">
@@ -311,7 +363,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                     // dashboard's last-used terminal pane (§6.7.4).
                     if (e.key === 'Escape') e.stopPropagation()
                   }}
-                  placeholder={`Message ${show.name} — it lands in the PoC's session (⌘⏎ to send)`}
+                  placeholder={composerPlaceholder(show.members, show.pocWorkspaceId)}
                   rows={2}
                   className="flex-1 px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none placeholder:text-[var(--color-text-muted)]"
                 />

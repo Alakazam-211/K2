@@ -4,10 +4,15 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  CHAT_PANEL_DEFAULT_WIDTH,
+  CHAT_PANEL_MAX_WIDTH,
+  CHAT_PANEL_MIN_WIDTH,
   EARLIER_PAGE_STEP,
   MESSAGES_DEFAULT_LIMIT,
   MESSAGES_MAX_LIMIT,
   canLoadEarlier,
+  clampChatPanelWidth,
+  composerPlaceholder,
   deliveredLine,
   mergeMessages,
   nextEarlierLimit,
@@ -118,6 +123,52 @@ describe('pocLabel', () => {
     expect(
       pocLabel([{ workspaceId: 'w3', name: null, path: null, agentName: null, createdAt: 3 }], 'w3'),
     ).toBeNull()
+  })
+})
+
+describe('composerPlaceholder (exactly "Message <PoC agent name>")', () => {
+  const members: ProjectGroupMemberInfo[] = [
+    { workspaceId: 'w1', name: 'k2', path: '/k2', agentName: 'cortana', createdAt: 1 },
+    { workspaceId: 'w2', name: 'relay', path: '/relay', agentName: null, createdAt: 2 },
+  ]
+
+  it('uses the PoC AGENT name — nothing else in the placeholder', () => {
+    expect(composerPlaceholder(members, 'w1')).toBe('Message cortana')
+  })
+
+  it('falls back to the workspace name when the agent has no display name', () => {
+    expect(composerPlaceholder(members, 'w2')).toBe('Message relay')
+  })
+
+  it('"Message the PoC" when no PoC exists or its row is unresolvable', () => {
+    expect(composerPlaceholder(members, null)).toBe('Message the PoC')
+    expect(composerPlaceholder(members, 'w9')).toBe('Message the PoC')
+    expect(
+      composerPlaceholder(
+        [{ workspaceId: 'w3', name: null, path: null, agentName: null, createdAt: 3 }],
+        'w3',
+      ),
+    ).toBe('Message the PoC')
+  })
+})
+
+describe('clampChatPanelWidth (§6.7.3 resizable panel clamps)', () => {
+  it('passes in-range widths through (rounded to whole px)', () => {
+    expect(clampChatPanelWidth(320)).toBe(320)
+    expect(clampChatPanelWidth(419.6)).toBe(420)
+  })
+
+  it('clamps below the floor and above the ceiling', () => {
+    expect(clampChatPanelWidth(0)).toBe(CHAT_PANEL_MIN_WIDTH)
+    expect(clampChatPanelWidth(CHAT_PANEL_MIN_WIDTH - 1)).toBe(CHAT_PANEL_MIN_WIDTH)
+    expect(clampChatPanelWidth(10_000)).toBe(CHAT_PANEL_MAX_WIDTH)
+    expect(clampChatPanelWidth(CHAT_PANEL_MAX_WIDTH + 1)).toBe(CHAT_PANEL_MAX_WIDTH)
+  })
+
+  it('non-finite (unset/corrupt localStorage) degrades to the default', () => {
+    expect(clampChatPanelWidth(NaN)).toBe(CHAT_PANEL_DEFAULT_WIDTH)
+    expect(clampChatPanelWidth(Infinity)).toBe(CHAT_PANEL_DEFAULT_WIDTH)
+    expect(clampChatPanelWidth(-Infinity)).toBe(CHAT_PANEL_DEFAULT_WIDTH)
   })
 })
 

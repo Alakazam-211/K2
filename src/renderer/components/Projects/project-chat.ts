@@ -49,6 +49,22 @@ export function mergeMessages(
   return [...prefix, ...incoming]
 }
 
+// ── Chat panel width (§6.7.3 polish — resizable side panel) ──────────────
+// Per-client persisted (the chatCollapsed idiom); the store reads
+// localStorage through the clamp so a hand-edited/corrupt value can
+// never wedge the panel off-screen.
+
+export const CHAT_PANEL_MIN_WIDTH = 240
+export const CHAT_PANEL_MAX_WIDTH = 640
+export const CHAT_PANEL_DEFAULT_WIDTH = 320
+
+/** Clamp a requested panel width into the sane range; anything
+ *  non-finite (unset/corrupt localStorage) degrades to the default. */
+export function clampChatPanelWidth(width: number): number {
+  if (!Number.isFinite(width)) return CHAT_PANEL_DEFAULT_WIDTH
+  return Math.min(CHAT_PANEL_MAX_WIDTH, Math.max(CHAT_PANEL_MIN_WIDTH, Math.round(width)))
+}
+
 /** The PoC's display label for the delivered line: the member's agent
  *  display name, falling back to its workspace name; null when the
  *  group is memberless or the PoC row is missing/unregistered. */
@@ -60,6 +76,17 @@ export function pocLabel(
   const m = members.find((x) => x.workspaceId === pocWorkspaceId)
   if (!m) return null
   return m.agentName ?? m.name ?? null
+}
+
+/** The composer placeholder — exactly "Message <PoC agent name>"
+ *  (pocLabel's agentName → workspace-name fallback), or "Message the
+ *  PoC" when the group has no PoC / the PoC row is unresolvable. */
+export function composerPlaceholder(
+  members: ProjectGroupMemberInfo[],
+  pocWorkspaceId: string | null,
+): string {
+  const label = pocLabel(members, pocWorkspaceId)
+  return label !== null ? `Message ${label}` : 'Message the PoC'
 }
 
 /** The §6.4 line under a just-sent message, from the msg response's

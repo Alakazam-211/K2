@@ -180,6 +180,9 @@ function MemberRow({
   // enrichment carries name/path only).
   const workspace = useProjectsStore((s) => s.projects.find((p) => p.id === member.workspaceId))
   const displayName = member.agentName ?? member.name ?? member.workspaceId.slice(0, 8)
+  // ⌘N — this member's pane number on the current dashboard (undefined
+  // when it has no terminal pane there / no dashboard is mounted).
+  const paneNum = useProjectGroupsStore((s) => s.dashPaneNumbers[member.workspaceId])
   // Presence read-only signal (window-mode.ts): viewers can still CLICK
   // (focus an existing pane — the dashboard decides), but never DRAG.
   const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
@@ -267,6 +270,14 @@ function MemberRow({
           title="Point of Contact — project chat is injected into this agent's session"
         >
           PoC
+        </span>
+      )}
+      {paneNum !== undefined && (
+        <span
+          className="flex-shrink-0 text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums"
+          title={`⌘${paneNum} focuses this pane`}
+        >
+          ⌘{paneNum}
         </span>
       )}
     </button>
@@ -453,12 +464,62 @@ function RailIcon({
   )
 }
 
+/** The member drawer's rail form: one avatar per member of the
+ *  selected project (IconRail's bottom Active-zone anatomy), click =
+ *  the SAME open-canonical-pane action as the expanded drawer's row,
+ *  tooltip = agent name (+ PoC), ⌘N overlay when the member's terminal
+ *  pane is on the current dashboard (the IconRail shortcutIndex
+ *  idiom). */
+function RailMember({
+  member,
+  isPoc,
+}: {
+  member: ProjectGroupMemberInfo
+  isPoc: boolean
+}): React.JSX.Element {
+  const workspace = useProjectsStore((s) => s.projects.find((p) => p.id === member.workspaceId))
+  const paneNum = useProjectGroupsStore((s) => s.dashPaneNumbers[member.workspaceId])
+  const displayName = member.agentName ?? member.name ?? member.workspaceId.slice(0, 8)
+
+  return (
+    <button
+      type="button"
+      className="no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 hover:bg-white/[0.06] transition-colors cursor-pointer"
+      onClick={() => useProjectGroupsStore.getState().requestMemberPane(member.workspaceId)}
+      title={isPoc ? `${displayName} • PoC` : displayName}
+    >
+      <ProjectAvatar
+        projectPath={member.path ?? ''}
+        projectName={member.name ?? displayName}
+        projectColor={workspace?.color ?? 'var(--color-text-muted)'}
+        projectId={member.workspaceId}
+        iconUrl={workspace?.iconUrl ?? null}
+        size={18}
+      />
+      {paneNum !== undefined && (
+        <span className="absolute bottom-0 right-0.5 text-[8px] font-mono text-[var(--color-text-muted)] tabular-nums leading-none">
+          {paneNum}
+        </span>
+      )}
+    </button>
+  )
+}
+
 /** §6.7.1 — the collapsed Projects nav: a narrow vertical strip of
  *  group avatars (IconRail's anatomy: pinned zone on top, divider,
  *  unpinned list — the SAME order as the expanded nav), click to
- *  select, tooltip with the name. The member drawer and create
- *  affordance live only in the expanded nav. */
-export function ProjectNavRail(): React.JSX.Element {
+ *  select, tooltip with the name. The selected project's MEMBERS keep
+ *  a bottom zone after a divider (IconRail's Active-zone anatomy —
+ *  the member drawer in rail form); the create affordance lives only
+ *  in the expanded nav. */
+export function ProjectNavRail({
+  members,
+  pocWorkspaceId,
+}: {
+  /** Members of the SELECTED project (the page owns the `show` fetch). */
+  members: ProjectGroupMemberInfo[] | null
+  pocWorkspaceId: string | null
+}): React.JSX.Element {
   const groups = useProjectGroupsStore((s) => s.groups)
   const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
   const selectGroup = useProjectGroupsStore((s) => s.selectGroup)
@@ -497,6 +558,28 @@ export function ProjectNavRail(): React.JSX.Element {
           />
         ))}
       </div>
+
+      {/* Bottom zone (IconRail's Active-zone anatomy): the selected
+          project's members — the expanded nav's drawer in rail form,
+          same gating (a selected project with a resolved `show`). */}
+      {selectedGroupId && members && members.length > 0 && (
+        <div className="flex flex-col items-center w-full flex-shrink-0 pt-1.5">
+          <div className="w-6 border-b border-[var(--color-border)] mb-1" />
+          {/* Same 320px scroll cap as the expanded drawer's list. */}
+          <div
+            className="flex flex-col items-center gap-0.5 w-full overflow-y-auto overflow-x-hidden"
+            style={{ maxHeight: 320 }}
+          >
+            {members.map((m) => (
+              <RailMember
+                key={m.workspaceId}
+                member={m}
+                isPoc={m.workspaceId === pocWorkspaceId}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

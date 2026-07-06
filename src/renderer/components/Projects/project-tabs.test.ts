@@ -6,10 +6,15 @@ import { describe, it, expect } from 'vitest'
 import type { LayoutNode, PaneSpec } from './dashboard-layout'
 import {
   FEEDBACK_TAB,
+  MAX_PANE_SHORTCUTS,
   moveDashboardId,
   orderedDashboards,
+  paneByNumber,
+  paneNumbersById,
+  paneSwitchDigit,
   resolveActiveTab,
   resolveEscFocusPane,
+  terminalPaneNumbers,
 } from './project-tabs'
 
 function dash(id: string, position: number, createdAt = 0): {
@@ -111,5 +116,98 @@ describe('resolveEscFocusPane (§6.7.4 — Esc focus target)', () => {
   it('no terminal panes (docs only / empty) → null, the no-op', () => {
     expect(resolveEscFocusPane(pane(doc), 'w9')).toBeNull() // htmlDoc never matches
     expect(resolveEscFocusPane(null, null)).toBeNull()
+  })
+})
+
+describe('pane numbering (⌘1…⌘9 — reading order, first 9 only)', () => {
+  const pane = (p: PaneSpec): LayoutNode => ({ type: 'pane', pane: p })
+  const term = (workspaceId: string): PaneSpec => ({ kind: 'terminal', workspaceId })
+  const doc = (workspaceId: string, filePath: string): PaneSpec => ({
+    kind: 'htmlDoc',
+    workspaceId,
+    filePath,
+  })
+  const row = (...nodes: LayoutNode[]): LayoutNode => ({
+    type: 'split',
+    dir: 'row',
+    children: nodes.map((node) => ({ size: 100 / nodes.length, node })),
+  })
+
+  it('numbers panes 1..N in reading order — ALL kinds occupy a number', () => {
+    const root = row(pane(doc('w9', '/a.html')), pane(term('w1')), pane(term('w2')))
+    const nums = paneNumbersById(root)
+    expect(nums.get('h:w9:/a.html')).toBe(1)
+    expect(nums.get('t:w1')).toBe(2)
+    expect(nums.get('t:w2')).toBe(3)
+  })
+
+  it('descends nested splits in reading order', () => {
+    const nested = row(pane(term('w1')), {
+      type: 'split',
+      dir: 'col',
+      children: [
+        { size: 50, node: pane(term('w2')) },
+        { size: 50, node: pane(term('w3')) },
+      ],
+    })
+    expect(paneNumbersById(nested).get('t:w3')).toBe(3)
+  })
+
+  it('only the first 9 panes get a number', () => {
+    const root = row(...Array.from({ length: 11 }, (_, i) => pane(term(`w${i + 1}`))))
+    const nums = paneNumbersById(root)
+    expect(nums.size).toBe(MAX_PANE_SHORTCUTS)
+    expect(nums.get('t:w9')).toBe(9)
+    expect(nums.get('t:w10')).toBeUndefined()
+  })
+
+  it('terminalPaneNumbers keys by workspaceId and skips non-terminal panes WITHOUT renumbering', () => {
+    const root = row(pane(doc('w9', '/a.html')), pane(term('w1')), pane(term('w2')))
+    expect(terminalPaneNumbers(root)).toEqual({ w1: 2, w2: 3 })
+    expect(terminalPaneNumbers(null)).toEqual({})
+  })
+
+  it('paneByNumber addresses the 1-based reading order; out of range → null', () => {
+    const root = row(pane(term('w1')), pane(term('w2')))
+    expect(paneByNumber(root, 1)?.paneId).toBe('t:w1')
+    expect(paneByNumber(root, 2)?.paneId).toBe('t:w2')
+    expect(paneByNumber(root, 3)).toBeNull()
+    expect(paneByNumber(root, 0)).toBeNull()
+    expect(paneByNumber(root, 10)).toBeNull()
+    expect(paneByNumber(null, 1)).toBeNull()
+  })
+})
+
+describe('paneSwitchDigit (the keyboard-scope guard)', () => {
+  const key = (
+    k: string,
+    mods: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }> = {},
+  ): { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean } => ({
+    key: k,
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    ...mods,
+  })
+
+  it('plain Cmd+1…Cmd+9 → the digit', () => {
+    expect(paneSwitchDigit(key('1', { metaKey: true }))).toBe(1)
+    expect(paneSwitchDigit(key('9', { metaKey: true }))).toBe(9)
+  })
+
+  it('leaves the neighbouring shortcuts alone (Ctrl+digit presets, ⌘⌥digit workspace switch, ⌘⇧ screenshots)', () => {
+    expect(paneSwitchDigit(key('1', { ctrlKey: true }))).toBeNull()
+    expect(paneSwitchDigit(key('1', { metaKey: true, altKey: true }))).toBeNull()
+    expect(paneSwitchDigit(key('1', { metaKey: true, shiftKey: true }))).toBeNull()
+    expect(paneSwitchDigit(key('1', { metaKey: true, ctrlKey: true }))).toBeNull()
+    expect(paneSwitchDigit(key('1'))).toBeNull() // bare digit = typing
+  })
+
+  it('non-digits, 0, and multi-char keys never match', () => {
+    expect(paneSwitchDigit(key('0', { metaKey: true }))).toBeNull()
+    expect(paneSwitchDigit(key('t', { metaKey: true }))).toBeNull()
+    expect(paneSwitchDigit(key('F1', { metaKey: true }))).toBeNull()
+    expect(paneSwitchDigit(key('Escape', { metaKey: true }))).toBeNull()
   })
 })

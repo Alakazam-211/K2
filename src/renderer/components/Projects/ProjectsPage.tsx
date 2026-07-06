@@ -36,7 +36,13 @@ import DashboardPresetsMenu from './DashboardPresetsMenu'
 import ProjectChatPanel from './ProjectChatPanel'
 import { ProjectFeedbackTab } from '@/components/Feedback/ProjectFeedbackTab'
 import { fetchProjectGroupShow, type ProjectGroupShow } from './projects-api'
-import { FEEDBACK_TAB, orderedDashboards, resolveActiveTab } from './project-tabs'
+import {
+  FEEDBACK_TAB,
+  orderedDashboards,
+  paneSwitchDigit,
+  resolveActiveTab,
+} from './project-tabs'
+import { requestPaneShortcut } from './dashboard-dnd'
 
 const TOPBAR_HEIGHT = 38
 
@@ -235,6 +241,27 @@ export default function ProjectsPage(): React.JSX.Element | null {
   // handler lives in ProjectDashboard; inputs stopPropagation their own
   // Esc). FeedbackPage keeps its own Esc behavior.
 
+  // ⌘1…⌘9 — focus dashboard pane N (reading order). CAPTURE phase +
+  // stopPropagation, because the Agents page's Cmd+digit workspace
+  // switch (useTerminalShortcuts, mounted by the TerminalArea that
+  // stays alive UNDER this overlay) is a window BUBBLE listener with no
+  // page gate — swallowing the combo here is what keeps the two from
+  // both firing. Attached only while the page is open, and swallowed
+  // even on the Feedback tab / with no dashboard mounted (a hidden
+  // workspace switch underneath would be worse than a no-op).
+  useEffect(() => {
+    if (!isOpen) return
+    const onKey = (e: KeyboardEvent): void => {
+      const num = paneSwitchDigit(e)
+      if (num === null) return
+      e.preventDefault()
+      e.stopPropagation()
+      requestPaneShortcut(num)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [isOpen])
+
   // Reset transient view state when the page closes (selection is
   // store-level and deliberately survives — reopening lands where the
   // user left off).
@@ -350,7 +377,10 @@ export default function ProjectsPage(): React.JSX.Element | null {
       {/* Body: left nav (expanded or icon rail, §6.7.1) + main area. */}
       <div className="flex-1 min-h-0 flex">
         {navCollapsed ? (
-          <ProjectNavRail />
+          <ProjectNavRail
+            members={show?.id === selectedGroupId ? show?.members ?? null : null}
+            pocWorkspaceId={show?.pocWorkspaceId ?? null}
+          />
         ) : (
           <ProjectNav
             members={show?.id === selectedGroupId ? show?.members ?? null : null}

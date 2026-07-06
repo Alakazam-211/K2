@@ -25,6 +25,10 @@ import {
   type ProjectGroup,
 } from '@/components/Projects/projects-api'
 import { dropCachedGroupIcon } from '@/components/Projects/group-icon-cache'
+import {
+  CHAT_PANEL_DEFAULT_WIDTH,
+  clampChatPanelWidth,
+} from '@/components/Projects/project-chat'
 
 // ── Per-client last-seen read cursor (§4.4, resolved Q5) ─────────────────
 // Keyed per host + group so remoting doesn't cross-contaminate cursors.
@@ -64,6 +68,21 @@ function readChatCollapsed(): boolean {
     return localStorage.getItem(CHAT_COLLAPSED_KEY) === '1'
   } catch {
     return false
+  }
+}
+
+// ── §6.7.3 polish — per-client chat-panel width ────────────────────────────
+// Same idiom as chatCollapsed: a plain client preference (not host-keyed,
+// not canonical). Read through the clamp so a corrupt value can never
+// wedge the panel; the panel drags live and persists on release.
+
+const CHAT_WIDTH_KEY = 'k2:project-groups:chat-width'
+
+function readChatWidth(): number {
+  try {
+    return clampChatPanelWidth(parseInt(localStorage.getItem(CHAT_WIDTH_KEY) ?? '', 10))
+  } catch {
+    return CHAT_PANEL_DEFAULT_WIDTH
   }
 }
 
@@ -108,12 +127,20 @@ interface ProjectGroupsState {
    *  While true, arriving messages go UNREAD even for the viewed group
    *  (the closed panel's toggle shows the dot); opening marks seen. */
   chatCollapsed: boolean
+  /** §6.7.3 polish — the chat panel's width in px (clamped, per-client
+   *  persisted; the chatCollapsed idiom). */
+  chatWidth: number
   /** §6.7.1 — the Projects page's left nav, per-client persisted. */
   navCollapsed: boolean
   /** §6.7.4 — the last-clicked/focused terminal pane per DASHBOARD
    *  (workspaceId, keyed by dashboard id), so Esc can focus it. Plain
    *  session state — never persisted. */
   lastFocusedPaneByDashboard: Record<string, string>
+  /** ⌘1…⌘9 — workspaceId → pane number on the CURRENTLY MOUNTED
+   *  dashboard (terminal panes among the first 9, reading order),
+   *  published by ProjectDashboard so the member drawer/rail rows can
+   *  badge them. Session-only; {} while no dashboard is mounted. */
+  dashPaneNumbers: Record<string, number>
   fetchGroups: () => Promise<void>
   /** Select a project in the nav; selecting marks it seen (§4.4) —
    *  unless the chat panel is closed (its messages stay unseen). */
@@ -122,10 +149,15 @@ interface ProjectGroupsState {
   /** Close/open the chat panel (persisted per client); opening marks
    *  the selected group seen — its messages are now on screen. */
   setChatCollapsed: (collapsed: boolean) => void
+  /** Resize the chat panel (clamped; persisted per client). */
+  setChatWidth: (width: number) => void
   /** Collapse/expand the Projects left nav (persisted per client). */
   setNavCollapsed: (collapsed: boolean) => void
   /** §6.7.4 — note the last-used terminal pane of a dashboard. */
   notePaneFocus: (dashboardId: string, workspaceId: string) => void
+  /** ⌘1…⌘9 — the mounted dashboard publishes its terminal pane
+   *  numbers ({} on unmount). No-ops when the map is unchanged. */
+  setDashPaneNumbers: (numbers: Record<string, number>) => void
   /** Member-row click → the dashboard opens/focuses that pane. */
   requestMemberPane: (workspaceId: string) => void
   clearPaneRequest: () => void
@@ -138,8 +170,10 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   revision: 0,
   paneRequest: null,
   chatCollapsed: readChatCollapsed(),
+  chatWidth: readChatWidth(),
   navCollapsed: readNavCollapsed(),
   lastFocusedPaneByDashboard: {},
+  dashPaneNumbers: {},
   fetchGroups: async () => {
     // Capture the host so a slow response from the PREVIOUS host can
     // never land after a switch (projects-store idiom).
@@ -191,6 +225,15 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       if (sel) get().markGroupSeen(sel)
     }
   },
+  setChatWidth: (width) => {
+    const clamped = clampChatPanelWidth(width)
+    try {
+      localStorage.setItem(CHAT_WIDTH_KEY, String(clamped))
+    } catch {
+      /* ignore — width degrades to per-session */
+    }
+    set({ chatWidth: clamped })
+  },
   setNavCollapsed: (collapsed) => {
     try {
       localStorage.setItem(NAV_COLLAPSED_KEY, collapsed ? '1' : '0')
@@ -211,6 +254,19 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
           },
     )
   },
+  setDashPaneNumbers: (numbers) => {
+    set((s) => {
+      const prev = s.dashPaneNumbers
+      const keys = Object.keys(numbers)
+      if (
+        keys.length === Object.keys(prev).length &&
+        keys.every((k) => prev[k] === numbers[k])
+      ) {
+        return {}
+      }
+      return { dashPaneNumbers: numbers }
+    })
+  },
   requestMemberPane: (workspaceId) => {
     set((s) => ({ paneRequest: { workspaceId, nonce: (s.paneRequest?.nonce ?? 0) + 1 } }))
   },
@@ -219,8 +275,8 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
 
 // Host switch: everything here is keyed by the previous host's group ids
 // — reset. The revision bump makes an open Projects page refetch against
-// the new host. `chatCollapsed`/`navCollapsed` deliberately survive —
-// they're plain per-client UI preferences, not host data.
+// the new host. `chatCollapsed`/`chatWidth`/`navCollapsed` deliberately
+// survive — they're plain per-client UI preferences, not host data.
 onActiveHostChange(() => {
   useProjectGroupsStore.setState((s) => ({
     groups: null,
@@ -229,6 +285,7 @@ onActiveHostChange(() => {
     revision: s.revision + 1,
     paneRequest: null,
     lastFocusedPaneByDashboard: {},
+    dashPaneNumbers: {},
   }))
 })
 

@@ -88,10 +88,16 @@ import {
 } from './dashboard-layout'
 import {
   registerDashDropHandler,
+  registerPaneShortcutHandler,
   registerPresetHandler,
   useDashboardDndStore,
 } from './dashboard-dnd'
-import { resolveEscFocusPane } from './project-tabs'
+import {
+  paneByNumber,
+  paneNumbersById,
+  resolveEscFocusPane,
+  terminalPaneNumbers,
+} from './project-tabs'
 import {
   saveDashboardLayout,
   type ProjectGroupDashboard,
@@ -111,6 +117,7 @@ const DIVIDER_HIT_PX = 7
 function PaneChrome({
   title,
   hint,
+  shortcutNum,
   readOnly,
   focused,
   onClose,
@@ -119,6 +126,8 @@ function PaneChrome({
 }: {
   title: string
   hint?: string
+  /** ⌘N badge — reading-order pane number (first 9 panes only). */
+  shortcutNum?: number
   readOnly: boolean
   focused: boolean
   onClose: () => void
@@ -147,6 +156,16 @@ function PaneChrome({
           </span>
         )}
         <span className="flex-1" />
+        {/* ⌘N pane-switch badge (the ActiveBar shortcutNum look),
+            immediately left of the close button. */}
+        {shortcutNum !== undefined && (
+          <span
+            className="text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0"
+            title={`⌘${shortcutNum} focuses this pane`}
+          >
+            ⌘{shortcutNum}
+          </span>
+        )}
         {!readOnly && (
           <button
             type="button"
@@ -563,6 +582,36 @@ export default function ProjectDashboard({
     })
   }, [applyRoot])
 
+  // ── ⌘1…⌘9 pane switching (the page-level capture keydown lands
+  //    here via the dashboard-dnd registry) — the Esc-to-pane focus
+  //    path: terminal panes flash + take keyboard focus; htmlDoc/
+  //    unknown panes just flash (every pane is already on screen in
+  //    the tiled grid). Focus-only, so viewers get it too. ───────────────
+  useEffect(() => {
+    return registerPaneShortcutHandler((num) => {
+      const entry = paneByNumber(rootRef.current, num)
+      if (entry === null) return
+      flashFocus(entry.paneId)
+      if (isTerminalPane(entry.pane)) {
+        notePaneFocus(entry.pane.workspaceId)
+        focusPaneInput(entry.pane.workspaceId)
+      }
+    })
+  }, [flashFocus, notePaneFocus, focusPaneInput])
+
+  // Publish the current tree's terminal pane numbers so the member
+  // drawer/rail rows can badge them; {} on unmount (tab switch /
+  // project switch — the next dashboard republishes its own).
+  useEffect(() => {
+    useProjectGroupsStore.getState().setDashPaneNumbers(terminalPaneNumbers(root))
+  }, [root])
+  useEffect(
+    () => () => {
+      useProjectGroupsStore.getState().setDashPaneNumbers({})
+    },
+    [],
+  )
+
   // ── DnD: 5-zone hit-testing + drops (§6.8.2) ───────────────────────────
   const gridRef = useRef<HTMLDivElement>(null)
   const [dropZone, setDropZone] = useState<DropZone | null>(null)
@@ -734,6 +783,9 @@ export default function ProjectDashboard({
   // remounting them.
   const geometry = useMemo(() => computeLayoutGeometry(root), [root])
 
+  // ⌘N badges — paneId → 1…9 in reading order (first 9 panes).
+  const paneNumbers = useMemo(() => paneNumbersById(root), [root])
+
   // The hovered drop zone's highlight overlay (§6.8.2: half-highlights
   // for side splits, a full ring for center, edge bands for full-span
   // inserts).
@@ -848,6 +900,7 @@ export default function ProjectDashboard({
                 <PaneChrome
                   title={title}
                   hint={hint}
+                  shortcutNum={paneNumbers.get(g.paneId)}
                   readOnly={readOnly}
                   focused={focusPaneId === g.paneId}
                   onClose={() => applyRoot(removePane(rootRef.current, g.paneId), true)}

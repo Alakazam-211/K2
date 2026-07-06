@@ -176,6 +176,21 @@ fn check_daemon_version_and_restart() {
                 );
                 return;
             }
+            // Dev builds (`tauri dev`) are always version-ahead of the
+            // installed /Applications daemon, and the plist doesn't point
+            // at the dev tree — a kickstart can never converge the
+            // versions. It only bounces the user's live daemon (killing
+            // PTY sessions) on every dev launch. Tolerate skew instead;
+            // the release build keeps the drag-replace self-heal.
+            if cfg!(debug_assertions) {
+                log_debug!(
+                    "[version-check] MISMATCH daemon=v{} app=v{} (attempt={}); dev build — tolerating skew, daemon left untouched",
+                    status.version,
+                    app_version,
+                    attempt
+                );
+                return;
+            }
             log_debug!(
                 "[version-check] MISMATCH daemon=v{} app=v{} (attempt={}); restarting daemon via launchctl kickstart",
                 status.version,

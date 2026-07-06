@@ -162,6 +162,16 @@ pub struct ConnectUser {
     /// map. `#[serde(default)]` → `0` so pre-#4 stored rows load unchanged.
     #[serde(default)]
     pub token_epoch: u64,
+    /// K2 Cloud S1 (prd-k2-cloud-hosted-servers §6): when true the account
+    /// must rotate its password before doing anything else. A session from
+    /// this user still AUTHENTICATES but the route layer restricts it to
+    /// whoami / change-password / logout until the flag clears. Set opt-in
+    /// at provision (`users/add` / the seed-users file); cleared by ANY
+    /// successful password write ([`set_password`], which both the owner
+    /// reset and self-service [`change_password`] route through).
+    /// `#[serde(default)]` → `false` so pre-S1 stored rows load unchanged.
+    #[serde(default)]
+    pub must_change_password: bool,
 }
 
 /// Redacted projection of a [`ConnectUser`] safe to return over the
@@ -435,6 +445,9 @@ pub fn add_user(username: &str, password: &str) -> Result<(), String> {
             // Fresh users start at epoch 0 (K2 Connect #4). The first
             // revoke event bumps it to 1.
             token_epoch: 0,
+            // K2 Cloud S1: provision flows that want a forced first-login
+            // rotation flip this via set_must_change_password after add.
+            must_change_password: false,
         });
         Ok(())
     })
@@ -476,6 +489,10 @@ pub fn set_password(username: &str, password: &str) -> Result<(), String> {
         // session is invalidated even across a restart, not just dropped
         // from the (best-effort) persistent record set below.
         user.token_epoch = user.token_epoch.wrapping_add(1);
+        // K2 Cloud S1: ANY successful password write satisfies a pending
+        // forced rotation. Both the owner reset (this route) and the
+        // self-service change_password (which calls set_password) clear it.
+        user.must_change_password = false;
         Ok(())
     })?;
     revoke_user_sessions(&username);
@@ -537,6 +554,45 @@ pub fn set_role(username: &str, role: Role) -> Result<(), String> {
     })?;
     revoke_user_sessions(&username);
     Ok(())
+}
+
+/// K2 Cloud S1: set/clear the forced-password-rotation flag on an
+/// account. A raw store mutation for the provision flows (`users/add`
+/// with `mustChangePassword`, the boot seed-users file) — it does NOT
+/// bump the token epoch or revoke sessions (at provision time none
+/// exist; restriction of live sessions is the ROUTE layer's job while
+/// the flag is set). Errors when the user doesn't exist.
+pub fn set_must_change_password(username: &str, must: bool) -> Result<(), String> {
+    let username = normalize_username(username)?;
+    update_store(|store| {
+        let user = store
+            .users
+            .iter_mut()
+            .find(|u| u.username == username)
+            .ok_or_else(|| format!("user '{username}' not found"))?;
+        user.must_change_password = must;
+        Ok(())
+    })
+}
+
+/// K2 Cloud S1: whether `username` currently has a forced password
+/// rotation pending. `false` for unknown users / unreadable stores —
+/// callers use this to DECORATE (login/whoami payloads) and to RESTRICT
+/// (the dispatcher's session gate); an unknown user never reaches either
+/// with a valid session, so false is the safe default.
+pub fn must_change_password(username: &str) -> bool {
+    let Ok(normalized) = normalize_username(username) else {
+        return false;
+    };
+    let Ok(store) = load_store() else {
+        return false;
+    };
+    store
+        .users
+        .iter()
+        .find(|u| u.username == normalized)
+        .map(|u| u.must_change_password)
+        .unwrap_or(false)
 }
 
 /// Look up the stored role for `username`. `None` when the user doesn't
@@ -2240,6 +2296,107 @@ mod tests {
                 LoginOutcome::LockedOut,
                 "persisted lockout must survive a restart"
             );
+        });
+    }
+
+    // ── K2 Cloud S1 — must_change_password ──────────────────────────
+
+    /// BACK-COMPAT (required by the S1 spec): a LEGACY connect-users.json
+    /// blob — written before `must_change_password` existed (and, for the
+    /// oldest rows, before `role`/`token_epoch`) — must deserialize with
+    /// the flag defaulting to `false`, and the store must be fully usable.
+    #[test]
+    fn legacy_store_json_without_flag_deserializes_false() {
+        with_temp_home(|| {
+            let dir = config_dir();
+            fs::create_dir_all(&dir).unwrap();
+            // Two vintages of legacy row: pre-#629 (no role/token_epoch)
+            // and pre-S1 (role+epoch present, no must_change_password).
+            let legacy = r#"{
+                "users": [
+                    {
+                        "username": "oldest",
+                        "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$abcdefgh$ijklmnop",
+                        "created_at": "2025-01-01T00:00:00Z",
+                        "disabled": false
+                    },
+                    {
+                        "username": "pres1",
+                        "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$qrstuvwx$yzabcdef",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "disabled": false,
+                        "role": "admin",
+                        "token_epoch": 3
+                    }
+                ]
+            }"#;
+            fs::write(store_path(), legacy).unwrap();
+
+            let store = load_store().expect("legacy blob must parse");
+            assert_eq!(store.users.len(), 2, "both legacy rows load");
+            for u in &store.users {
+                assert!(
+                    !u.must_change_password,
+                    "missing field must default false for '{}'",
+                    u.username
+                );
+            }
+            assert_eq!(store.users[1].role, Role::Admin);
+            assert_eq!(store.users[1].token_epoch, 3);
+            // The public accessor agrees.
+            assert!(!must_change_password("oldest"));
+            assert!(!must_change_password("pres1"));
+        });
+    }
+
+    #[test]
+    fn set_must_change_password_flags_and_owner_reset_clears() {
+        with_temp_home(|| {
+            add_user("rotator", "password1").expect("add");
+            assert!(!must_change_password("rotator"), "defaults false on add");
+            set_must_change_password("rotator", true).expect("flag");
+            assert!(must_change_password("rotator"));
+            // The flag does NOT revoke an existing session by itself —
+            // restriction is the route layer's job.
+            let tok = create_session("rotator");
+            assert_eq!(validate_session(&tok), Some("rotator".to_string()));
+            // Owner reset (set_password) clears the flag.
+            set_password("rotator", "password2").expect("owner reset");
+            assert!(
+                !must_change_password("rotator"),
+                "set_password must clear the flag"
+            );
+        });
+    }
+
+    #[test]
+    fn change_password_clears_flag_and_revokes_sessions() {
+        with_temp_home(|| {
+            add_user("selfrot", "password1").expect("add");
+            set_must_change_password("selfrot", true).expect("flag");
+            let tok = create_session("selfrot");
+            assert_eq!(
+                change_password("selfrot", "password1", "password2"),
+                ChangePasswordOutcome::Ok
+            );
+            assert!(
+                !must_change_password("selfrot"),
+                "change_password must clear the flag"
+            );
+            assert_eq!(
+                validate_session(&tok),
+                None,
+                "change_password revokes every session (forced fresh login)"
+            );
+            assert!(verify("selfrot", "password2"));
+        });
+    }
+
+    #[test]
+    fn set_must_change_password_unknown_user_errors() {
+        with_temp_home(|| {
+            let err = set_must_change_password("ghostrot", true).expect_err("must error");
+            assert!(err.contains("not found"), "got: {err}");
         });
     }
 }

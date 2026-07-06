@@ -178,21 +178,25 @@ log "starting ${K2_UNIT_NAME}"
 systemctl restart "$K2_UNIT_NAME"
 
 # ── 8. wait for daemon readiness ─────────────────────────────────────
-log "waiting for daemon.port + daemon.token"
-for _ in $(seq 1 60); do
-	[ -s "$K2_HOME/.k2/daemon.port" ] && [ -s "$K2_HOME/.k2/daemon.token" ] && break
+# The daemon rotates daemon.token on EVERY boot, so on a re-run the old
+# files linger until the restarted daemon rewrites them. Re-read both
+# each iteration and only accept a token the live daemon actually honors.
+log "waiting for daemon readiness (fresh port + token)"
+PORT=""; TOKEN=""; BASE=""
+for _ in $(seq 1 90); do
+	PORT=$(cat "$K2_HOME/.k2/daemon.port" 2>/dev/null || true)
+	TOKEN=$(cat "$K2_HOME/.k2/daemon.token" 2>/dev/null || true)
+	if [ -n "$PORT" ] && [ -n "$TOKEN" ]; then
+		BASE="http://127.0.0.1:${PORT}"
+		if curl -fsS "$BASE/boot-status" 2>/dev/null | grep -q '"phase":"ready"'; then
+			AUTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/cli/auth/whoami?token=$TOKEN")
+			[ "$AUTH_CODE" = "200" ] && break
+		fi
+	fi
 	sleep 1
+	PORT=""
 done
-[ -s "$K2_HOME/.k2/daemon.port" ] || die "daemon did not publish its port in 60s (journalctl -u ${K2_UNIT_NAME})"
-PORT=$(cat "$K2_HOME/.k2/daemon.port")
-TOKEN=$(cat "$K2_HOME/.k2/daemon.token")
-BASE="http://127.0.0.1:${PORT}"
-
-# boot-status gate: wait until the daemon answers
-for _ in $(seq 1 30); do
-	curl -fsS "$BASE/boot-status" >/dev/null 2>&1 && break
-	sleep 1
-done
+[ -n "$PORT" ] || die "daemon not ready with a live token in 90s (journalctl -u ${K2_UNIT_NAME})"
 
 # ── 9. first owner user ──────────────────────────────────────────────
 GENERATED_PW=0

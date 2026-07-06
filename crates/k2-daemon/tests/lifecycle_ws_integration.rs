@@ -194,6 +194,16 @@ async fn boot_status_returns_versioned_handshake_shape() {
         "detail is empty when ready; body={}",
         r.body
     );
+
+    // api — F3 capability object `{enabled, sandboxes:"microvm"|"none"}`
+    // (additive + forward-compatible like scopedHooks; the full gate-matrix
+    // coverage lives in api_gate_integration.rs).
+    assert!(v["api"]["enabled"].is_boolean(), "api.enabled must be a bool; body={}", r.body);
+    assert!(
+        matches!(v["api"]["sandboxes"].as_str(), Some("microvm") | Some("none")),
+        "api.sandboxes must be \"microvm\"|\"none\"; body={}",
+        r.body
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

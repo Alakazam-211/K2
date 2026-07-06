@@ -1088,20 +1088,72 @@ pub fn handle_set_workspace_api_key(body: &[u8]) -> crate::cli_response::CliResp
 // P3a (sandbox / K2-as-a-server) — API-key auth tier management + /v1/ping.
 // ─────────────────────────────────────────────────────────────────────
 
-/// True iff the external `/v1/*` sandbox API surface is enabled — gated on the
-/// `K2_SANDBOX_API` env flag (`1`/`true`/`yes`/`on`, case-insensitive).
-/// **Default OFF.** With it off, EVERY `/v1/*` path 404s as if it didn't exist
-/// (the dispatcher consults this before routing any `/v1/*` request), so the
-/// whole external surface is dark and flag-off is byte-identical to no surface.
-///
-/// (Mirrors `k2_core::federation::enabled`'s env-flag shape. The owner-gated
-/// `/cli/api-keys/*` MANAGEMENT routes are intentionally NOT gated on this — the
-/// owner can pre-mint keys before flipping the external surface live; minting is
-/// harmless while `/v1/*` is dark.)
-pub(crate) fn sandbox_api_enabled() -> bool {
-    std::env::var("K2_SANDBOX_API")
+/// Shared truthy-env parse for the `/v1` gate flags: `1`/`true`/`yes`/`on`,
+/// case-insensitive; anything else — including unset — is OFF. (Mirrors
+/// `k2_core::federation::enabled`'s env-flag shape.)
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false)
+}
+
+/// F3 gate split (prd-v1-api-completion §5): true iff the SANDBOX route
+/// families of the `/v1/*` surface exist — `POST /v1/sandboxes`, the
+/// `/v1/sandboxes/<id>/…` reads, and the workspace-scoped sandbox-session
+/// routes under `/v1/w/<ws>/sessions…` — gated on the `K2_SANDBOX_API` env
+/// flag. **Default OFF.** With it off those families 404 exactly like any
+/// unknown `/v1` path (surface-absent; never a 405/409 oracle). Pre-split this
+/// flag meant "the whole /v1 surface exists"; that role moved to `K2_API`
+/// (see [`api_enabled`]), which this flag still implies for back-compat.
+///
+/// (The owner-gated `/cli/api-keys/*` MANAGEMENT routes are intentionally NOT
+/// gated on this — the owner can pre-mint keys before flipping the external
+/// surface live; minting is harmless while `/v1/*` is dark.)
+pub(crate) fn sandbox_api_enabled() -> bool {
+    env_truthy("K2_SANDBOX_API")
+}
+
+/// F3 gate split (prd-v1-api-completion §5): true iff the external `/v1/*`
+/// surface EXISTS at all — auth tier, `/v1/ping`, `POST /v1/w/<ws>/message`.
+/// Gated on the `K2_API` env flag, **default OFF**; with it off EVERY `/v1/*`
+/// path 404s as if it didn't exist (the dispatcher consults this before
+/// routing any `/v1/*` request), so the whole external surface is dark and
+/// flag-off is byte-identical to no surface.
+///
+/// BACK-COMPAT: the legacy `K2_SANDBOX_API` (which pre-split meant "the whole
+/// /v1 surface") still implies the surface is on — existing Dedicated units
+/// set only that var and must keep working. When the surface is enabled ONLY
+/// via the legacy var, log a one-time deprecation info line.
+pub(crate) fn api_enabled() -> bool {
+    let via_new = env_truthy("K2_API");
+    let via_legacy = sandbox_api_enabled();
+    if via_legacy && !via_new {
+        static DEPRECATION_LOGGED: std::sync::Once = std::sync::Once::new();
+        DEPRECATION_LOGGED.call_once(|| {
+            k2_core::log_debug!(
+                "[v1-api] INFO: /v1 surface enabled via legacy K2_SANDBOX_API only. \
+                 Set K2_API=1 for the surface; K2_SANDBOX_API now narrows to the \
+                 sandbox route families (F3 gate split)."
+            );
+        });
+    }
+    via_new || via_legacy
+}
+
+/// F3 capability object: `{"enabled": <bool>, "sandboxes": "microvm"|"none"}`.
+/// `enabled` = the `/v1` surface exists ([`api_enabled`]); `sandboxes` =
+/// whether THIS daemon can deliver a real microVM cell
+/// ([`crate::v2_spawn::can_sandbox`] — the same source of truth the spawn
+/// route's 409 refusal consults, so they can never diverge). Surfaced on the
+/// UNAUTHENTICATED `/boot-status` (additive + forward-compatible like
+/// `scopedHooks`; PROTOCOL not bumped) and echoed by `/v1/ping`. Nothing here
+/// is sensitive: both facts are already observable by probing `/v1` routes
+/// (surface-404 vs 401, spawn 409 vs 200).
+pub(crate) fn api_capability() -> serde_json::Value {
+    serde_json::json!({
+        "enabled": api_enabled(),
+        "sandboxes": if crate::v2_spawn::can_sandbox() { "microvm" } else { "none" },
+    })
 }
 
 /// OWNER-only: mint a new API key. Body (JSON): `{"label": "<tag>",
@@ -1211,22 +1263,50 @@ pub fn handle_api_key_list() -> CliResponse {
 
 /// `GET /v1/ping` — the minimal P3a test route proving the auth tier resolves a
 /// principal. `principal_id` is the caller's NON-secret identity (`"owner"` or
-/// the API key's id). Carries no secret. P3b replaces the real `/v1/*` work.
+/// the API key's id). Carries no secret. F3 adds the `api` capability object
+/// (same shape `/boot-status` advertises) so an authenticated caller can
+/// feature-detect the sandbox tier without probing for 404s/409s.
 pub fn handle_v1_ping(principal_id: &str) -> CliResponse {
-    CliResponse::ok_json(serde_json::json!({ "ok": true, "principal": principal_id }).to_string())
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "principal": principal_id,
+            "api": api_capability(),
+        })
+        .to_string(),
+    )
 }
 
 #[cfg(test)]
 mod api_key_route_tests {
     use super::*;
 
+    /// Serializes the env-mutating gate tests in this module against each
+    /// other across threads (`K2_API` / `K2_SANDBOX_API` are process-wide).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Set-or-remove an env var, returning the previous value for restore.
+    fn swap_env(name: &str, val: Option<&str>) -> Option<std::ffi::OsString> {
+        let prev = std::env::var_os(name);
+        match val {
+            Some(v) => std::env::set_var(name, v),
+            None => std::env::remove_var(name),
+        }
+        prev
+    }
+
+    fn restore_env(name: &str, prev: Option<std::ffi::OsString>) {
+        match prev {
+            Some(v) => std::env::set_var(name, v),
+            None => std::env::remove_var(name),
+        }
+    }
+
     /// The `K2_SANDBOX_API` flag defaults OFF and only the canonical truthy
-    /// values flip it on (serialized via the crate env lock to avoid racing
+    /// values flip it on (serialized via the module env lock to avoid racing
     /// other env-mutating tests).
     #[test]
     fn sandbox_api_flag_defaults_off() {
-        // Serialize this env-mutating test against itself across threads.
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var_os("K2_SANDBOX_API");
         std::env::remove_var("K2_SANDBOX_API");
@@ -1237,10 +1317,54 @@ mod api_key_route_tests {
         assert!(!sandbox_api_enabled(), "K2_SANDBOX_API=off disables");
         std::env::set_var("K2_SANDBOX_API", "true");
         assert!(sandbox_api_enabled(), "K2_SANDBOX_API=true enables");
-        match prev {
-            Some(v) => std::env::set_var("K2_SANDBOX_API", v),
-            None => std::env::remove_var("K2_SANDBOX_API"),
-        }
+        restore_env("K2_SANDBOX_API", prev);
+    }
+
+    /// F3 gate split: `api_enabled()` = `K2_API` truthy OR the legacy
+    /// `K2_SANDBOX_API` (back-compat implies), default OFF; the capability
+    /// object mirrors it and reports `sandboxes` from `can_sandbox()`.
+    #[test]
+    fn api_enabled_combos_and_capability_shape() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev_api = std::env::var_os("K2_API");
+        let prev_sbx = std::env::var_os("K2_SANDBOX_API");
+
+        // Both unset → surface dark.
+        std::env::remove_var("K2_API");
+        std::env::remove_var("K2_SANDBOX_API");
+        assert!(!api_enabled(), "K2_API must default OFF");
+        assert_eq!(api_capability()["enabled"], serde_json::json!(false));
+
+        // K2_API alone turns the surface on.
+        std::env::set_var("K2_API", "1");
+        assert!(api_enabled(), "K2_API=1 enables the surface");
+        assert!(!sandbox_api_enabled(), "…without implying the sandbox gate");
+
+        // Legacy K2_SANDBOX_API alone still implies the surface (back-compat).
+        std::env::remove_var("K2_API");
+        std::env::set_var("K2_SANDBOX_API", "true");
+        assert!(api_enabled(), "legacy K2_SANDBOX_API=true implies K2_API");
+
+        // Falsy values never enable.
+        std::env::set_var("K2_API", "0");
+        std::env::set_var("K2_SANDBOX_API", "off");
+        assert!(!api_enabled(), "falsy values must not enable the surface");
+
+        // Capability object shape: enabled bool + sandboxes tier string from
+        // can_sandbox() (on a mac/feature-off test build that is "none").
+        std::env::set_var("K2_API", "1");
+        let cap = api_capability();
+        assert_eq!(cap["enabled"], serde_json::json!(true));
+        let expect_tier = if crate::v2_spawn::can_sandbox() { "microvm" } else { "none" };
+        assert_eq!(cap["sandboxes"], serde_json::json!(expect_tier));
+        assert_eq!(
+            cap.as_object().map(|o| o.len()),
+            Some(2),
+            "capability object is FROZEN wire shape: exactly enabled+sandboxes; got {cap}"
+        );
+
+        restore_env("K2_API", prev_api);
+        restore_env("K2_SANDBOX_API", prev_sbx);
     }
 
     /// create → list shows the key (redacted); revoke flips it; the create
@@ -1297,5 +1421,13 @@ mod api_key_route_tests {
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert_eq!(v["ok"], serde_json::json!(true));
         assert_eq!(v["principal"], serde_json::json!("owner"));
+        // F3: ping echoes the capability object (gate-state coverage lives in
+        // api_enabled_combos_and_capability_shape + api_gate_integration.rs).
+        assert!(v["api"]["enabled"].is_boolean(), "body={}", resp.body);
+        assert!(
+            matches!(v["api"]["sandboxes"].as_str(), Some("microvm") | Some("none")),
+            "body={}",
+            resp.body
+        );
     }
 }

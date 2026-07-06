@@ -654,8 +654,9 @@ async fn handle_one_request(
             | "/cli/federation/inbound"
             | "/cli/federation/send"
             // P3b (sandbox / K2-as-a-server) — the EXTERNAL public spawn route.
-            // POST-only; gated below by the /v1/* surface flag (K2_SANDBOX_API)
-            // + v1_principal + per-handler require_post. Listed here so the
+            // POST-only; gated below by the /v1 surface gate (K2_API, or the
+            // legacy K2_SANDBOX_API which implies it) + the sandbox-family gate
+            // (K2_SANDBOX_API) + v1_principal + per-handler require_post. Listed here so the
             // top-level 405 guard never short-circuits it (without this entry
             // POST /v1/sandboxes 405s before ever reaching the /v1/ arm).
             | "/v1/sandboxes"
@@ -667,7 +668,8 @@ async fn handle_one_request(
         // `/v1/w/` prefix here so the top-level 405 guard never short-circuits
         // them before the `/v1/` arm runs (that arm + the per-route `is_post`
         // branch below do the real method gating). The surface stays DARK
-        // unless K2_SANDBOX_API is on (checked inside the `/v1/` arm).
+        // unless the /v1 gate is on (K2_API or legacy K2_SANDBOX_API; the
+        // sessions family also needs K2_SANDBOX_API — checked in the `/v1/` arm).
         || post_path.starts_with("/v1/w/");
     if method != "GET" && !(is_post && post_allowed) {
         let _ = stream.read(&mut buf).await;
@@ -787,6 +789,14 @@ async fn handle_one_request(
                     "supported": true,
                     "version": "1",
                 },
+                // F3 (prd-v1-api-completion §5 / Cloud PRD S3): the external
+                // `/v1` API capability — `{enabled, sandboxes:"microvm"|"none"}`
+                // — so dashboards/clients render the tier truthfully instead of
+                // probing for 404/409. Additive + forward-compatible like
+                // `scopedHooks` (PROTOCOL not bumped). Safe on this
+                // UNAUTHENTICATED route: both facts are already observable by
+                // probing `/v1/*` (surface-404 vs 401, spawn 409); no secrets.
+                "api": crate::misc_routes::api_capability(),
             })
             .to_string();
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
@@ -3298,14 +3308,20 @@ async fn handle_one_request(
         }
         // ── P3a (sandbox / K2-as-a-server) — the EXTERNAL `/v1/*` surface.
         //
-        // DARK BY DEFAULT: with K2_SANDBOX_API OFF (the shipped default) EVERY
-        // `/v1/*` path 404s exactly as if the routes didn't exist — the whole
-        // external surface is absent and flag-off is byte-identical to no
-        // surface. When ON, each route gates on `v1_principal` (owner token OR a
-        // valid non-revoked API key, Bearer-preferred). `/v1/ping` is the
-        // minimal P3a test route (P3b adds the real POST /v1/sandboxes spawn).
+        // DARK BY DEFAULT: with the surface gate OFF (the shipped default)
+        // EVERY `/v1/*` path 404s exactly as if the routes didn't exist — the
+        // whole external surface is absent and flag-off is byte-identical to
+        // no surface. F3 gate split (prd-v1-api-completion §5): the surface
+        // gate is `api_enabled()` = K2_API truthy OR the legacy K2_SANDBOX_API
+        // (back-compat implies). The SANDBOX route families additionally
+        // require `sandbox_api_enabled()` via the guard arms below; with K2_API
+        // on but K2_SANDBOX_API off they return the same uniform 404 as any
+        // unknown /v1 path (surface-absent — 409 stays reserved for "API on,
+        // engine can't sandbox", the `can_sandbox()` check inside the
+        // handlers). When ON, each route gates on `v1_principal` (owner token
+        // OR a valid non-revoked API key, Bearer-preferred).
         p if p.starts_with("/v1/") => {
-            if !crate::misc_routes::sandbox_api_enabled() {
+            if !crate::misc_routes::api_enabled() {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -3316,6 +3332,11 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            // F3: sampled ONCE per request, consulted by the sandbox-family
+            // guard arms below. Auth stays FIRST (below) so an unauthenticated
+            // probe can't distinguish a gated-off sandbox route (401) from any
+            // other /v1 path (also 401) — no gate-state oracle.
+            let sandbox_on = crate::misc_routes::sandbox_api_enabled();
             // Authenticate → V1Principal (owner token or a valid API key). The
             // Bearer header is preferred (keeps the secret out of the URL);
             // `?token=` is the fallback. None → 401.
@@ -3339,6 +3360,18 @@ async fn handle_one_request(
                 "/v1/ping" => {
                     let _ = stream.read(&mut buf).await;
                     crate::misc_routes::handle_v1_ping(&principal.display_id())
+                }
+                // F3 gate split: with K2_API on but K2_SANDBOX_API off, the
+                // `/v1/sandboxes*` family is SURFACE-ABSENT — the same uniform
+                // 404 an unknown /v1 path gets, checked BEFORE any method/shape
+                // handling so a stray GET can't draw a 405 oracle. (409 stays
+                // reserved for "surface on, engine can't sandbox" inside the
+                // handlers.)
+                _ if !sandbox_on
+                    && (p == "/v1/sandboxes" || p.starts_with("/v1/sandboxes/")) =>
+                {
+                    let _ = stream.read(&mut buf).await;
+                    crate::cli_response::CliResponse::not_found()
                 }
                 // P3b — POST /v1/sandboxes: the public sandbox-spawn route. The
                 // principal is host-resolved above; the policy-resolver inside
@@ -3399,6 +3432,17 @@ async fn handle_one_request(
                     let rest = p.strip_prefix("/v1/w/").unwrap_or("");
                     let segs: Vec<&str> = rest.split('/').collect();
                     match (segs.as_slice(), is_post) {
+                        // F3 gate split: the workspace SANDBOX-SESSION family
+                        // (`/v1/w/<ws>/sessions…`) requires K2_SANDBOX_API on
+                        // top of the surface gate — when off it is surface-
+                        // absent (the same uniform 404 as any unknown /v1
+                        // path), checked BEFORE method/shape handling. The
+                        // canonical-agent `/v1/w/<ws>/message` route below is
+                        // NOT sandbox-gated: it ships with K2_API alone.
+                        ([_, "sessions", ..], _) if !sandbox_on => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::cli_response::CliResponse::not_found()
+                        }
                         // POST /v1/w/<ws>/sessions — new / fork.
                         ([ws, "sessions"], true) => {
                             let body = super::http::read_post_body(&mut *stream, &mut buf).await;

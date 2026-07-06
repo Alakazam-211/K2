@@ -162,6 +162,11 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin:${K2_HOME}/.local/bin
 ExecStart=${K2_HOME}/.local/bin/k2-daemon
 Restart=always
 RestartSec=2
+# Shape B self-update spawns a detached swap helper that must OUTLIVE the
+# daemon across the restart; the default control-group KillMode would
+# kill it before it can swap the staged binary. The daemon reaps its own
+# PTY children on graceful shutdown, so process-scoped kill is safe.
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target

@@ -283,6 +283,10 @@ Type=simple
 ExecStart=$BIN_PATH
 Restart=always
 RestartSec=2
+# Shape B self-update spawns a detached swap helper that must OUTLIVE
+# the daemon across the restart; control-group KillMode would kill it
+# before it swaps the staged binary.
+KillMode=process
 
 [Install]
 WantedBy=default.target

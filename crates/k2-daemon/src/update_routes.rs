@@ -294,7 +294,23 @@ pub fn verify_minisign(
         .map_err(|e| format!("updater pubkey is not valid utf8: {e}"))?;
     let public_key = minisign_verify::PublicKey::decode(pub_file.trim())
         .map_err(|e| format!("updater pubkey decode failed: {e}"))?;
-    let signature = minisign_verify::Signature::decode(sig_str.trim())
+    // tauri's signer emits `.sig` files whose CONTENT is base64 of the
+    // 2-line minisig text. Release assets are published RAW (decoded at
+    // source since 2026-07-06), but accept BOTH forms so an old wrapped
+    // asset or a future pipeline regression can't brick self-update again.
+    let mut sig_text = sig_str.trim().to_string();
+    if !sig_text.starts_with("untrusted comment") {
+        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&sig_text) {
+            if let Ok(inner) = String::from_utf8(decoded) {
+                if inner.trim_start().starts_with("untrusted comment") {
+                    sig_text = inner;
+                }
+            }
+        }
+        // Otherwise fall through with the original string so garbage still
+        // produces the stable "signature decode failed: ..." error below.
+    }
+    let signature = minisign_verify::Signature::decode(sig_text.trim())
         .map_err(|e| format!("signature decode failed: {e}"))?;
     public_key
         .verify(data, &signature, false)
@@ -1491,6 +1507,65 @@ mod tests {
         let wrapped = wrap_pubkey(TEST_PUBKEY_BARE);
         let err = verify_minisign(&wrapped, "not a signature", b"test")
             .expect_err("garbage sig must be a clean Err");
+        assert!(err.contains("signature decode failed"), "err={err}");
+    }
+
+    // ── base64-wrapped .sig acceptance (tauri signer emits wrapped) ──
+
+    /// Wrap a raw 2-line minisig text the way tauri's signer writes `.sig`
+    /// files: standard base64 of the whole text.
+    fn wrap_sig(raw_sig: &str) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(raw_sig)
+    }
+
+    #[test]
+    fn minisign_wrapped_signature_verifies_like_raw() {
+        let wrapped_key = wrap_pubkey(TEST_PUBKEY_BARE);
+        let wrapped_sig = wrap_sig(TEST_SIG_PREHASHED);
+        verify_minisign(&wrapped_key, &wrapped_sig, b"test")
+            .expect("base64-wrapped valid signature must verify like the raw form");
+        // And the raw form still verifies (path unchanged).
+        verify_minisign(&wrapped_key, TEST_SIG_PREHASHED, b"test")
+            .expect("raw valid signature must still verify");
+    }
+
+    #[test]
+    fn minisign_wrapped_tampered_data_fails_like_raw() {
+        let wrapped_key = wrap_pubkey(TEST_PUBKEY_BARE);
+        let wrapped_sig = wrap_sig(TEST_SIG_PREHASHED);
+        let err_wrapped = verify_minisign(&wrapped_key, &wrapped_sig, b"Test")
+            .expect_err("tampered data must fail via the wrapped path too");
+        let err_raw = verify_minisign(&wrapped_key, TEST_SIG_PREHASHED, b"Test")
+            .expect_err("tampered data must fail via the raw path");
+        assert_eq!(
+            err_wrapped, err_raw,
+            "wrapped and raw forms must produce the SAME error"
+        );
+    }
+
+    #[test]
+    fn minisign_wrapped_wrong_key_fails_same_as_raw() {
+        // Wrapped form of a valid-looking minisig against the WRONG key
+        // must produce the same error as its raw form — proves the unwrap
+        // layer is transparent.
+        let err_wrapped =
+            verify_minisign(UPDATER_PUBKEY_B64, &wrap_sig(TEST_SIG_PREHASHED), b"test")
+                .expect_err("wrong key must fail (wrapped)");
+        let err_raw = verify_minisign(UPDATER_PUBKEY_B64, TEST_SIG_PREHASHED, b"test")
+            .expect_err("wrong key must fail (raw)");
+        assert_eq!(err_wrapped, err_raw);
+    }
+
+    #[test]
+    fn minisign_base64_of_garbage_still_decode_error() {
+        // base64("not a signature") decodes to utf8 that does NOT start
+        // with "untrusted comment" → must fall through to the original
+        // string and yield the stable decode error.
+        let wrapped_key = wrap_pubkey(TEST_PUBKEY_BARE);
+        let b64_garbage = wrap_sig("not a signature");
+        let err = verify_minisign(&wrapped_key, &b64_garbage, b"test")
+            .expect_err("base64 of garbage must be a clean Err");
         assert!(err.contains("signature decode failed"), "err={err}");
     }
 

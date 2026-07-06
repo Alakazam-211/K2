@@ -159,6 +159,9 @@ Type=simple
 User=${K2_RUN_USER}
 Environment=HOME=${K2_HOME}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:${K2_HOME}/.local/bin
+# Standard-tier API surface: /v1/ping + canonical-message API (and, when
+# built, host-sessions). Sandbox families stay dark — no K2_SANDBOX_API.
+Environment=K2_API=1
 ExecStart=${K2_HOME}/.local/bin/k2-daemon
 Restart=always
 RestartSec=2

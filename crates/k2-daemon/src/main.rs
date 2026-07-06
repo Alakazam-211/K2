@@ -84,6 +84,8 @@ mod providers;
 mod push_routes;
 mod review_checklist_routes;
 mod routes;
+// K2 Cloud S2 — boot-time consume-once ~/.k2/seed-users.json.
+mod seed_users;
 // COMPAT-58 (#58 Phase 0): scoped per-session hook tokens + per-cell UDS.
 // Dormant superset, gated on K2_HOOK_SCOPED (default OFF).
 mod cell_server;
@@ -282,6 +284,14 @@ async fn async_main() {
         log_debug!("[daemon] FATAL: create ~/.k2so: {e}");
         std::process::exit(2);
     }
+
+    // K2 Cloud S2: consume-once ~/.k2/seed-users.json — golden-image /
+    // cloud-init user provisioning without HTTP and without a password
+    // ever being echoed. Runs as soon as the config dir exists, before
+    // (and independent of) the listeners; instant no-op when absent.
+    // The module reads then DELETES the file in every outcome (even a
+    // parse failure) so plaintext passwords never linger on disk.
+    let _ = seed_users::consume_seed_file();
 
     // Open (or create) ~/.k2so/k2so.db and populate k2_core's process-
     // wide shared connection. Every migrated hook handler (e.g.

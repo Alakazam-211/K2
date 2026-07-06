@@ -73,6 +73,10 @@ pub mod providers;
 pub mod push_routes;
 pub mod review_checklist_routes;
 pub mod routes;
+// K2 Cloud S2 — boot-time consume-once ~/.k2/seed-users.json. Exposed
+// in the lib so the provision_users integration suite can drive the
+// SAME module function main.rs's boot sequence calls.
+pub mod seed_users;
 // COMPAT-58 (#58 Phase 0): scoped per-session hook tokens + per-cell UDS.
 // Dormant superset, gated on K2_HOOK_SCOPED (default OFF).
 pub mod cell_server;

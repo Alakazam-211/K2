@@ -3,6 +3,29 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.30 — Talk to your server, not just at it
+
+- **Spawn agent sessions over the API.** K2 Cloud servers (and any daemon
+  you run with the API enabled) gain a host-sessions API: `POST` a prompt
+  to `/v1/w/<workspace>/host-sessions` and a real agent session boots in
+  that workspace, works, and **answers back over the same API** — agents
+  reply with `k2 respond`, and you read the conversation with a plain GET.
+  List a workspace's API sessions, resume one that's still live, or send
+  a follow-up message to it. Requires a Pro subdomain.
+- **Safe by default.** API-spawned sessions run with your agent preset's
+  auto-approve flags **stripped** unless you explicitly opt the workspace
+  in with the new `api_skip_permissions` setting — an unattended server
+  never bypasses permission prompts just because a request came in over
+  the wire. API sessions are also invisible to other workspaces and can't
+  touch your human tabs.
+- **Watch API sessions type from any client.** Session stream links minted
+  by the API now connect as first-class viewers with the right identity —
+  a phone or browser following an API session sees it live without
+  claiming your seat.
+- **K2 Cloud servers get the read-back plumbing out of the box.** New
+  provisions ship with scoped hook tokens on, so `k2 respond` from an
+  API-spawned agent lands back in the API conversation with zero setup.
+
 ## 0.40.29 — Companion groundwork
 
 - **Push notifications for the K2 Companion app.** Your daemon can now

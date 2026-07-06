@@ -162,6 +162,10 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin:${K2_HOME}/.local/bin
 # Standard-tier API surface: /v1/ping + canonical-message API (and, when
 # built, host-sessions). Sandbox families stay dark — no K2_SANDBOX_API.
 Environment=K2_API=1
+# Host-session spawns mint per-session scoped hook tokens; without this the
+# ambient hook token is the OWNER token, which /cli/respond refuses (it names
+# no session) — so \`k2 respond\` read-back from API-spawned agents needs it.
+Environment=K2_HOOK_SCOPED=1
 ExecStart=${K2_HOME}/.local/bin/k2-daemon
 Restart=always
 RestartSec=2

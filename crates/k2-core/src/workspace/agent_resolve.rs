@@ -85,6 +85,14 @@ pub struct ResolvedAgentCommand {
     /// shell env only where set. `None` = NULL/malformed/no-preset.
     /// VALUES MUST NEVER BE LOGGED (they may hold credentials).
     pub env: Option<BTreeMap<String, String>>,
+    /// The preset's RAW `readiness` metadata (migration 0070
+    /// `agent_presets.readiness`: `'bracketed-paste'` | `'settle:<ms>'`).
+    /// Deliberately UNPARSED here — validation and the precedence chain
+    /// (preset metadata → static provider table → default) live in ONE
+    /// place, `provider_resume::resolve_injection_profile`, so no call
+    /// site can fork its own resolution order. `None` = NULL/no-preset
+    /// (unknown — the static provider table speaks).
+    pub readiness: Option<String>,
 }
 
 impl ResolvedAgentCommand {
@@ -137,6 +145,10 @@ fn fallback_claude() -> ResolvedAgentCommand {
         // on a default install).
         danger_flags: Some(FALLBACK_AGENT_ARGS.iter().map(|s| s.to_string()).collect()),
         env: None,
+        // None on purpose: the static provider table already speaks
+        // claude's studied readiness dialect (the poll default) — no
+        // second copy of that truth here.
+        readiness: None,
     }
 }
 
@@ -201,6 +213,8 @@ struct PresetRow {
     danger_flags: Option<String>,
     /// Raw `env` JSON object (`NULL` → `None` = no preset env).
     env: Option<String>,
+    /// Raw `readiness` TEXT (`NULL` → `None` = unknown/legacy).
+    readiness: Option<String>,
 }
 
 /// Enabled presets in display order (sort_order, label) — the same
@@ -209,7 +223,7 @@ struct PresetRow {
 /// (→ fallback), never a panic in a spawn path.
 fn enabled_presets(conn: &Connection) -> Vec<PresetRow> {
     let mut stmt = match conn.prepare(
-        "SELECT id, command, danger_flags, env FROM agent_presets \
+        "SELECT id, command, danger_flags, env, readiness FROM agent_presets \
          WHERE enabled = 1 ORDER BY sort_order, label",
     ) {
         Ok(s) => s,
@@ -221,6 +235,7 @@ fn enabled_presets(conn: &Connection) -> Vec<PresetRow> {
             command: row.get(1)?,
             danger_flags: row.get(2)?,
             env: row.get(3)?,
+            readiness: row.get(4)?,
         })
     });
     match rows {
@@ -298,6 +313,7 @@ fn resolve_value(
         source,
         danger_flags: parse_flags_json(preset.danger_flags.as_deref(), &preset.id),
         env: parse_env_json(preset.env.as_deref(), &preset.id),
+        readiness: preset.readiness.clone(),
     })
 }
 
@@ -678,6 +694,48 @@ mod tests {
         insert_project(&conn, &path, Some(&bad_preset));
         let r = resolve_agent_command_with_global(&conn, &path, None);
         assert_eq!(r.env, None, "malformed env JSON must degrade to None");
+    }
+
+    // ── Migration-0070 readiness metadata plumbing (W4) ──────────────
+
+    fn insert_preset_readiness(
+        conn: &Connection,
+        command: &str,
+        sort_order: i64,
+        readiness: Option<&str>,
+    ) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO agent_presets \
+                 (id, label, command, icon, enabled, sort_order, is_built_in, readiness) \
+             VALUES (?1, ?2, ?3, '', 1, ?4, 0, ?5)",
+            rusqlite::params![id, format!("test-{id}"), command, sort_order, readiness],
+        )
+        .expect("insert preset");
+        id
+    }
+
+    #[test]
+    fn resolved_command_carries_raw_readiness_metadata() {
+        let db = crate::db::init_for_tests();
+        let conn = db.lock();
+        // Well-formed AND malformed values pass through RAW — parsing
+        // (and the malformed→static-table degradation) is owned by
+        // provider_resume::resolve_injection_profile alone.
+        for declared in ["settle:2500", "bracketed-paste", "not-a-class"] {
+            let preset =
+                insert_preset_readiness(&conn, "zz-ready-agent", 930, Some(declared));
+            let path = format!("/tmp/agent-resolve-ready-{preset}");
+            insert_project(&conn, &path, Some(&preset));
+            let r = resolve_agent_command_with_global(&conn, &path, None);
+            assert_eq!(r.readiness.as_deref(), Some(declared));
+        }
+        // NULL → None (unknown/legacy).
+        let preset = insert_preset_readiness(&conn, "zz-noready-agent", 931, None);
+        let path = format!("/tmp/agent-resolve-ready-null-{preset}");
+        insert_project(&conn, &path, Some(&preset));
+        let r = resolve_agent_command_with_global(&conn, &path, None);
+        assert_eq!(r.readiness, None);
     }
 
     /// PRECEDENCE: an AGENT.md `launch:` block replaces the profile

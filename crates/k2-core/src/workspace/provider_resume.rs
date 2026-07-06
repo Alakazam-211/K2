@@ -408,6 +408,77 @@ pub fn injection_profile_for_provider(provider: &str) -> InjectionProfile {
     }
 }
 
+/// Ceiling for a preset-DECLARED settle floor (W4, 0.40.30). Defensive:
+/// `readiness` is operator-editable TEXT, and a fat-fingered
+/// `settle:999999999` must degrade to a long-but-bounded wait, never
+/// park a wake/injection thread for days. 60s comfortably clears the
+/// slowest studied agent (hermes, 7s) with an order of magnitude to
+/// spare for slower community agents.
+const MAX_DECLARED_SETTLE_MS: u64 = 60_000;
+
+/// Parse one migration-0070 `agent_presets.readiness` value into a
+/// profile. The declared vocabulary (see `0070_agent_preset_metadata.sql`):
+///
+/// - `bracketed-paste` — the ?2004h flip is trustworthy; poll it with
+///   the default 400ms floor (claude's shipping behavior).
+/// - `settle:<ms>` — ?2004h lies; wait `<ms>` (capped by
+///   [`MAX_DECLARED_SETTLE_MS`]) instead of polling.
+///
+/// Anything else — unknown word, missing/non-numeric/negative ms —
+/// returns `None` so [`resolve_injection_profile`] degrades to the
+/// static provider table: a hand-corrupted row must never invent a
+/// readiness dialect, and must never panic a spawn path.
+fn parse_readiness_metadata(raw: &str) -> Option<InjectionProfile> {
+    let raw = raw.trim();
+    if raw == "bracketed-paste" {
+        return Some(DEFAULT_INJECTION_PROFILE);
+    }
+    if let Some(ms_raw) = raw.strip_prefix("settle:") {
+        if let Ok(ms) = ms_raw.trim().parse::<u64>() {
+            return Some(InjectionProfile {
+                ready_via_bracketed_paste: false,
+                post_spawn_settle: Duration::from_millis(ms.min(MAX_DECLARED_SETTLE_MS)),
+            });
+        }
+    }
+    None
+}
+
+/// W4 (0.40.30) — THE injection-profile precedence chain, shared by
+/// every injection site (the `/v1` host-session post-spawn injector,
+/// `workspace_msg::deliver_post_wake`'s wake path, and
+/// `wake_headless`'s settle computation). ONE resolution order, never
+/// forked per call site:
+///
+/// 1. **Preset-declared `readiness` metadata** (migration 0070,
+///    `agent_presets.readiness`) when present AND well-formed — the
+///    operator/seed-declared truth for THIS preset's binary, which may
+///    be a community agent the static table has never studied.
+/// 2. **Static provider table** ([`injection_profile_for_provider`])
+///    when the metadata is NULL or malformed — the 2026-07 study
+///    results keyed by provider.
+/// 3. **[`DEFAULT_INJECTION_PROFILE`]** for providers the table doesn't
+///    know either (built into step 2's fallback arm) — the
+///    claude-shaped shipping behavior, no new assumptions.
+pub fn resolve_injection_profile(
+    preset_readiness: Option<&str>,
+    provider: &str,
+) -> InjectionProfile {
+    if let Some(raw) = preset_readiness {
+        if let Some(profile) = parse_readiness_metadata(raw) {
+            return profile;
+        }
+        if !raw.trim().is_empty() {
+            crate::log_debug!(
+                "[inject-profile] malformed preset readiness {:?}; degrading to the static provider table (provider={})",
+                raw,
+                provider
+            );
+        }
+    }
+    injection_profile_for_provider(provider)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Post-hoc session adoption (non-premint providers + the claude eager
 // read-back). Core generalization of the daemon's claude-only
@@ -972,5 +1043,81 @@ mod tests {
                 "unknown provider {provider:?} must get the default profile"
             );
         }
+    }
+
+    // ── W4 (0.40.30) — the shared precedence chain ───────────────────
+
+    #[test]
+    fn resolve_profile_preset_settle_overrides_the_static_table() {
+        // 'settle:2500' on a preset wins over BOTH a poll-trusting
+        // static entry (claude) and the unknown-provider default.
+        for provider in ["claude", "totally-custom-agent"] {
+            let p = resolve_injection_profile(Some("settle:2500"), provider);
+            assert!(
+                !p.ready_via_bracketed_paste,
+                "declared settle must disable the paste poll (provider={provider})"
+            );
+            assert_eq!(p.post_spawn_settle, Duration::from_millis(2500));
+        }
+        // Whitespace tolerance — operator-edited TEXT.
+        let p = resolve_injection_profile(Some("  settle: 2500 "), "claude");
+        assert_eq!(p.post_spawn_settle, Duration::from_millis(2500));
+        assert!(!p.ready_via_bracketed_paste);
+    }
+
+    #[test]
+    fn resolve_profile_preset_bracketed_paste_overrides_a_settle_provider() {
+        // A preset declaring 'bracketed-paste' for a binary whose
+        // provider the static table classes as a ?2004h liar takes the
+        // declared (claude-shaped) poll profile — preset truth wins.
+        let p = resolve_injection_profile(Some("bracketed-paste"), "hermes");
+        assert_eq!(p, DEFAULT_INJECTION_PROFILE);
+        let p = resolve_injection_profile(Some(" bracketed-paste "), "codex");
+        assert_eq!(p, DEFAULT_INJECTION_PROFILE);
+    }
+
+    #[test]
+    fn resolve_profile_malformed_readiness_degrades_to_the_static_table() {
+        // Every malformed shape falls through to level 2 — the static
+        // table still speaks the provider's studied dialect.
+        for bad in ["settle:", "settle:abc", "settle:-5", "poll", "settle", "🚀"] {
+            let p = resolve_injection_profile(Some(bad), "hermes");
+            assert_eq!(
+                p,
+                injection_profile_for_provider("hermes"),
+                "malformed readiness {bad:?} must degrade to the hermes table entry"
+            );
+            assert!(!p.ready_via_bracketed_paste);
+            assert_eq!(p.post_spawn_settle, Duration::from_millis(7000));
+        }
+        // …and level 2's own unknown-arm still lands on the default.
+        for bad in ["settle:abc", ""] {
+            assert_eq!(
+                resolve_injection_profile(Some(bad), "not-a-real-agent"),
+                DEFAULT_INJECTION_PROFILE,
+                "malformed readiness {bad:?} + unknown provider must degrade to the default"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_profile_null_readiness_is_exactly_the_static_table() {
+        // NULL metadata (the unstudied six + every legacy row) must be
+        // byte-identical to the pre-W4 resolution for every provider.
+        for provider in ["claude", "grok", "cursor", "codex", "gemini", "pi", "hermes", "x"] {
+            assert_eq!(
+                resolve_injection_profile(None, provider),
+                injection_profile_for_provider(provider),
+                "NULL readiness must resolve exactly the static entry for {provider}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_profile_declared_settle_is_capped_at_the_sanity_ceiling() {
+        // A fat-fingered settle degrades to a bounded wait, never days.
+        let p = resolve_injection_profile(Some("settle:999999999"), "claude");
+        assert!(!p.ready_via_bracketed_paste);
+        assert_eq!(p.post_spawn_settle, Duration::from_millis(60_000));
     }
 }

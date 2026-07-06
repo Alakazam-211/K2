@@ -128,6 +128,14 @@ pub struct ResumeChatArgs {
     /// — env values may hold credentials and must never cross the wire
     /// or reach a log line. `None` = no preset env.
     pub env: Option<std::collections::BTreeMap<String, String>>,
+    /// W4 (0.40.30): the spawning preset's RAW `readiness` metadata
+    /// (migration 0070 `agent_presets.readiness`). Consumed by the
+    /// daemon wake injector through the ONE shared precedence chain
+    /// (`provider_resume::resolve_injection_profile`: preset metadata →
+    /// static provider table → default). Deliberately EXCLUDED from
+    /// [`ResumeChatArgs::to_json`] — the wire shape is frozen and only
+    /// daemon injection sites consume this. `None` = unknown/legacy.
+    pub readiness: Option<String>,
 }
 
 impl ResumeChatArgs {
@@ -217,7 +225,8 @@ pub fn resolve_resume_chat_args_ex(
         match provider_resume_for_provider(harness) {
             Some(adapter) => {
                 if adapter.session_file_exists(sid, project_path) {
-                    let (command, base_args, env) = spawn_command_for(adapter, &default_cmd);
+                    let (command, base_args, env, readiness) =
+                        spawn_command_for(adapter, &default_cmd);
                     let args = adapter.resume_args(&base_args, sid);
                     return Ok(ResumeChatArgs {
                         command,
@@ -228,6 +237,7 @@ pub fn resolve_resume_chat_args_ex(
                         provider: adapter.provider.to_string(),
                         pending_session_discovery: false,
                         env,
+                        readiness,
                     });
                 }
 
@@ -305,6 +315,7 @@ pub fn resolve_resume_chat_args_ex(
                 provider,
                 pending_session_discovery: false,
                 env: default_cmd.env.clone(),
+                readiness: default_cmd.readiness.clone(),
             })
         }
     }
@@ -318,7 +329,7 @@ fn converge_or_mint(
     project_id: Option<&str>,
     project_path: &str,
 ) -> Result<ResumeChatArgs, String> {
-    let (command, base_args, env) = spawn_command_for(adapter, default_cmd);
+    let (command, base_args, env, readiness) = spawn_command_for(adapter, default_cmd);
 
     // GH#24 convergence fix. The saved id's conversation is missing (a
     // never-run pre-allocation, a workspace remove+readd, a manual
@@ -348,6 +359,7 @@ fn converge_or_mint(
             provider: adapter.provider.to_string(),
             pending_session_discovery: false,
             env,
+            readiness,
         });
     }
 
@@ -373,6 +385,7 @@ fn converge_or_mint(
                 provider: adapter.provider.to_string(),
                 pending_session_discovery: false,
                 env,
+                readiness: readiness.clone(),
             })
         }
         None => {
@@ -390,6 +403,7 @@ fn converge_or_mint(
                 provider: adapter.provider.to_string(),
                 pending_session_discovery: true,
                 env,
+                readiness,
             })
         }
     }
@@ -415,7 +429,12 @@ fn converge_or_mint(
 fn spawn_command_for(
     adapter: &'static ProviderResume,
     default_cmd: &ResolvedAgentCommand,
-) -> (String, Vec<String>, Option<std::collections::BTreeMap<String, String>>) {
+) -> (
+    String,
+    Vec<String>,
+    Option<std::collections::BTreeMap<String, String>>,
+    Option<String>,
+) {
     // 1. Workspace/global default already speaks this provider.
     if provider_resume_for_command(&default_cmd.command).map(|a| a.provider)
         == Some(adapter.provider)
@@ -424,6 +443,7 @@ fn spawn_command_for(
             default_cmd.command.clone(),
             claude_pinned_or(&default_cmd.command, &default_cmd.args),
             default_cmd.env.clone(),
+            default_cmd.readiness.clone(),
         );
     }
 
@@ -431,24 +451,29 @@ fn spawn_command_for(
     //    agent_resolve uses, so both sides pick the same row). Carries
     //    the matched row's migration-0070 env JSON so a harness-picked
     //    preset spawns with ITS OWN env, not the workspace default's.
-    let roster: Vec<(String, Option<String>)> = {
+    let roster: Vec<(String, Option<String>, Option<String>)> = {
         let db = crate::db::shared();
         let conn = db.lock();
         conn.prepare(
-            "SELECT command, env FROM agent_presets WHERE enabled = 1 ORDER BY sort_order, label",
+            "SELECT command, env, readiness FROM agent_presets \
+             WHERE enabled = 1 ORDER BY sort_order, label",
         )
         .and_then(|mut stmt| {
             let rows = stmt
                 .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
                 })?
                 .flatten()
-                .collect::<Vec<(String, Option<String>)>>();
+                .collect::<Vec<(String, Option<String>, Option<String>)>>();
             Ok(rows)
         })
         .unwrap_or_default()
     };
-    for (command_str, env_json) in roster {
+    for (command_str, env_json, readiness) in roster {
         if provider_resume_for_command(&command_str).map(|a| a.provider)
             == Some(adapter.provider)
         {
@@ -461,15 +486,17 @@ fn spawn_command_for(
                 let env = env_json
                     .as_deref()
                     .and_then(|raw| serde_json::from_str(raw).ok());
-                return (command, args, env);
+                return (command, args, env, readiness);
             }
         }
     }
 
-    // 3. Adapter default binary — no preset row, no preset env.
+    // 3. Adapter default binary — no preset row, no preset env, no
+    //    readiness metadata (the static provider table speaks for the
+    //    adapter's own studied binary).
     let command = adapter.command.to_string();
     let args = claude_pinned_or(&command, &[]);
-    (command, args, None)
+    (command, args, None, None)
 }
 
 /// See [`spawn_command_for`]'s CLAUDE INVARIANT.
@@ -964,6 +991,7 @@ mod tests {
             provider: "claude".into(),
             pending_session_discovery: false,
             env: Some([("SECRET_KEY".to_string(), "must-not-leak".to_string())].into()),
+            readiness: Some("settle:2000".to_string()),
         };
         let j = out.to_json();
         assert_eq!(j["command"], "claude");

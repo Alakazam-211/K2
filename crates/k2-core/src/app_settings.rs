@@ -249,6 +249,21 @@ pub struct AppSettings {
     /// persist.
     #[serde(default)]
     pub use_llm_hitl_detection: bool,
+    /// Companion C4 (prd-companion-v2 §4) — the mobile-push relay
+    /// gateway base URL (e.g. `https://push.k2.dev`). Env override:
+    /// `K2_PUSH_GATEWAY_URL`. **`None`/blank = push is DORMANT**: the
+    /// `push::K2Cloud` adapter is never constructed and dispatch is a
+    /// startup no-op — the shipped-but-inactive state until the relay
+    /// gateway is deployed. Typed `Option<String>` required (the
+    /// `load`/`update` round-trip drops untyped keys, see above).
+    #[serde(default)]
+    pub push_gateway_url: Option<String>,
+    /// Companion C4 — the shared gateway token `K2Cloud` presents to
+    /// `POST <gateway>/push/dispatch`. Env override:
+    /// `K2_PUSH_GATEWAY_TOKEN`. Both URL and token must be set for
+    /// push to leave dormancy.
+    #[serde(default)]
+    pub push_gateway_token: Option<String>,
     #[serde(default)]
     pub editor: EditorSettings,
     #[serde(default)]
@@ -443,6 +458,8 @@ impl Default for AppSettings {
             allow_remote_instruct: false,
             federation_enabled: false,
             use_llm_hitl_detection: false,
+            push_gateway_url: None,
+            push_gateway_token: None,
             editor: EditorSettings::default(),
             companion: CompanionSettings::default(),
             wake_scheduler: WakeSchedulerSettings::default(),

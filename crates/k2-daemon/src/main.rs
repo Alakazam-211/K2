@@ -78,6 +78,10 @@ mod presence;
 mod project_config_routes;
 mod project_group_routes;
 mod providers;
+// Companion C4 — `/cli/push/*` device registration + mobile-push
+// dispatch triggers (dormant until a gateway URL + token is
+// configured).
+mod push_routes;
 mod review_checklist_routes;
 mod routes;
 // COMPAT-58 (#58 Phase 0): scoped per-session hook tokens + per-cell UDS.

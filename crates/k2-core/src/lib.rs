@@ -111,6 +111,11 @@ pub mod project_config;
 pub mod project_groups;
 pub mod projects_ops;
 pub mod push;
+// Companion C4 (prd-companion-v2 §4) — the daemon-held mobile
+// push-device registry (`push_devices`): upsert-by-device-id
+// registration, dead-token pruning. The `push::K2Cloud` adapter
+// reads it at dispatch time.
+pub mod push_devices;
 pub mod review_checklist;
 pub mod safe_delete;
 // 0.39.0: test-aware trash wrapper for production call sites that are

@@ -415,6 +415,11 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
             "agentName": item.agent_name,
         }),
     );
+    // Companion C4 — mobile push, next to the emit. ONLY new items
+    // push (the frozen only-created-notifies contract); the event is
+    // content-free (agent name + id, NEVER the ask's title/body —
+    // §4.5) and dormant/fire-and-forget inside push_routes.
+    crate::push_routes::notify_feedback_created(&item.agent_name, &item.id);
 
     let (name, _) = project_name_path(&item.project_id);
     let mut v = serde_json::to_value(&item).unwrap_or_else(|_| serde_json::json!({}));
@@ -1395,5 +1400,71 @@ mod tests {
         )
         .expect("claimed");
         assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+    }
+
+    /// Companion C4 trigger selection: CREATE pushes to mobile
+    /// (content-free — §4.5: agent name + id only, never the ask
+    /// text); comment / answer / resolve never push.
+    #[test]
+    fn feedback_create_pushes_mobile_and_other_mutations_do_not() {
+        use k2_core::push::PushEvent;
+        install_capture_sink();
+        let (name, path) = unique("push-trigger");
+        insert_project(&name, &path);
+
+        let mark = crate::push_routes::test_push_capture::mark();
+        let created = create_via_route(
+            &path,
+            "Which port should the tunnel bind?",
+            serde_json::json!({ "agentName": "scout" }),
+        );
+        let id = created["id"].as_str().expect("id").to_string();
+        let pushes: Vec<_> = crate::push_routes::test_push_capture::since(mark)
+            .into_iter()
+            .filter(|e| {
+                matches!(e, PushEvent::FeedbackCreated { feedback_id, .. } if feedback_id == &id)
+            })
+            .collect();
+        assert_eq!(pushes.len(), 1, "create pushes exactly once: {pushes:?}");
+        let e = &pushes[0];
+        assert_eq!(e.title(), "K2");
+        assert_eq!(e.body(), "scout needs your feedback");
+        assert!(
+            !e.body().contains("tunnel") && !e.body().contains("port"),
+            "the ask's text must never ride the push (§4.5): {}",
+            e.body()
+        );
+        assert_eq!(
+            e.data(),
+            serde_json::json!({ "kind": "feedback", "feedbackId": id })
+        );
+
+        // Comment (agent), comment (human — doubles as the answer),
+        // and resolve: none of them may push for this item.
+        let mark = crate::push_routes::test_push_capture::mark();
+        let resp = handle_comment(
+            serde_json::json!({ "id": id, "body": "leaning 8080", "author": "scout" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
+        let resp = handle_comment(
+            serde_json::json!({ "id": id, "body": "8080" }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
+        let resp = handle_resolve(
+            serde_json::json!({ "id": id }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "resolve failed: {}", resp.body);
+        let stray: Vec<_> = crate::push_routes::test_push_capture::since(mark)
+            .into_iter()
+            .filter(|e| {
+                matches!(e, PushEvent::FeedbackCreated { feedback_id, .. } if feedback_id == &id)
+            })
+            .collect();
+        assert!(
+            stray.is_empty(),
+            "only feedback:created pushes — comment/answer/resolve must not: {stray:?}"
+        );
     }
 }

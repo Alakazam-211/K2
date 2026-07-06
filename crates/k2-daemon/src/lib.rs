@@ -67,6 +67,10 @@ pub mod presence;
 pub mod project_config_routes;
 pub mod project_group_routes;
 pub mod providers;
+// Companion C4 (prd-companion-v2 §4) — `/cli/push/*` device
+// registration + the mobile-push dispatch triggers (dormant until a
+// gateway URL + token is configured).
+pub mod push_routes;
 pub mod review_checklist_routes;
 pub mod routes;
 // COMPAT-58 (#58 Phase 0): scoped per-session hook tokens + per-cell UDS.

@@ -16,12 +16,20 @@
 //!   `Webhook` but with the topic / server baked in and the payload format
 //!   matched to ntfy's expected fields.
 //!
-//! ### Future implementation (v2, paid tier)
+//! ### Companion C4 implementation (the reserved cloud seam, filled)
 //!
-//! - `K2soCloud` — talks to Alakazam-Labs-hosted APNs/FCM sender so push
-//!   reaches locked iOS/Android screens. Not in 0.33.0. Designed into this
-//!   trait now so the v2 impl drops in as a new enum variant + `impl
-//!   PushTarget for K2soCloud` without touching callers.
+//! - [`K2Cloud`] (naming: k2, not k2so) — POSTs the daemon-held device
+//!   registry ([`crate::push_devices`]) + a content-free payload to the
+//!   relay's push gateway (`POST <gateway>/push/dispatch`), which fans
+//!   out to APNs/FCM so push reaches locked iOS/Android screens.
+//!   Config = gateway URL + shared gateway token
+//!   (`K2_PUSH_GATEWAY_URL`/`K2_PUSH_GATEWAY_TOKEN` env, falling back
+//!   to the `pushGatewayUrl`/`pushGatewayToken` app settings). When
+//!   unset, [`K2Cloud::from_config`] returns `None` and the impl is
+//!   never constructed — dispatch is a startup no-op: **DORMANT**.
+//!   Payloads are deliberately dumb (§4.5 invariant): generic title +
+//!   attribution line + IDs ONLY — question/message content NEVER
+//!   rides APNs/FCM; the app pulls over the E2E tunnel on open.
 //!
 //! ### Design constraints (ratified in the persistent-agents PRD)
 //!
@@ -52,6 +60,23 @@ pub enum PushEvent {
         heartbeat: String,
         reason: String,
     },
+    /// Companion C4: an agent filed a feedback item
+    /// (`feedback:created`). CONTENT-FREE by construction (§4.5
+    /// invariant): carries the asking agent's name + the feedback id
+    /// ONLY — never the ask's title/body. The phone deep-links on the
+    /// id and pulls content over the E2E channel.
+    FeedbackCreated {
+        agent_name: String,
+        feedback_id: String,
+    },
+    /// Companion C4: a non-owner author posted into a project-group
+    /// chat (`project-group:message-created`, author != "owner").
+    /// CONTENT-FREE: project name + group id ONLY — never the message
+    /// text.
+    ProjectMessageCreated {
+        project_name: String,
+        group_id: String,
+    },
 }
 
 impl PushEvent {
@@ -64,14 +89,25 @@ impl PushEvent {
             Self::HeartbeatFailed { heartbeat, .. } => {
                 format!("Heartbeat failed: {heartbeat}")
             }
+            // C4 mobile pushes use the generic app title; the body
+            // carries the (still content-free) attribution line.
+            Self::FeedbackCreated { .. } | Self::ProjectMessageCreated { .. } => {
+                "K2".to_string()
+            }
         }
     }
 
     /// Body text for the notification.
-    pub fn body(&self) -> &str {
+    pub fn body(&self) -> String {
         match self {
-            Self::AgentNeedsAttention { summary, .. } => summary,
-            Self::HeartbeatFailed { reason, .. } => reason,
+            Self::AgentNeedsAttention { summary, .. } => summary.clone(),
+            Self::HeartbeatFailed { reason, .. } => reason.clone(),
+            Self::FeedbackCreated { agent_name, .. } => {
+                format!("{agent_name} needs your feedback")
+            }
+            Self::ProjectMessageCreated { project_name, .. } => {
+                format!("New message in {project_name}")
+            }
         }
     }
 
@@ -79,7 +115,29 @@ impl PushEvent {
     pub fn action_url(&self) -> &str {
         match self {
             Self::AgentNeedsAttention { action_url, .. } => action_url,
-            Self::HeartbeatFailed { .. } => "",
+            Self::HeartbeatFailed { .. }
+            | Self::FeedbackCreated { .. }
+            | Self::ProjectMessageCreated { .. } => "",
+        }
+    }
+
+    /// The mobile deep-link `data` object ([`K2Cloud`] payloads): IDs
+    /// + a `kind` discriminator ONLY — tap-to-open navigates on these,
+    /// content is pulled in-app (feedback PRD §8.6).
+    pub fn data(&self) -> serde_json::Value {
+        match self {
+            Self::FeedbackCreated { feedback_id, .. } => serde_json::json!({
+                "kind": "feedback",
+                "feedbackId": feedback_id,
+            }),
+            Self::ProjectMessageCreated { group_id, .. } => serde_json::json!({
+                "kind": "project",
+                "groupId": group_id,
+            }),
+            // Legacy desktop-era events carry no mobile deep link.
+            Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. } => {
+                serde_json::json!({})
+            }
         }
     }
 }
@@ -203,7 +261,7 @@ impl PushTarget for NtfySh {
             request = request.header("Click", action);
         }
         let response = request
-            .body(event.body().to_string())
+            .body(event.body())
             .send()
             .map_err(|e| PushError::Transport(e.to_string()))?;
         let status = response.status();
@@ -219,6 +277,179 @@ impl PushTarget for NtfySh {
 
     fn label(&self) -> String {
         format!("NtfySh({}/{})", self.server, self.topic)
+    }
+}
+
+// ── K2Cloud (companion C4) ──────────────────────────────────────────────
+
+/// The one HTTP call [`K2Cloud`] makes, behind a seam so tests inject
+/// a recorder instead of a live socket (no network in tests — the
+/// gateway itself is exercised in the k2-connect repo). `Ok` carries
+/// the gateway's parsed JSON response (per-token outcomes, incl.
+/// `dead:true` for `410 Unregistered` tokens the daemon must prune).
+pub trait DispatchSender: Send + Sync {
+    fn post(
+        &self,
+        url: &str,
+        gateway_token: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, PushError>;
+}
+
+/// Production sender: blocking reqwest POST with the shared gateway
+/// token as a bearer credential. Mirrors the [`Webhook`] transport
+/// idiom (fire-and-forget; no internal retry — the gateway is on the
+/// same relay the daemon already depends on).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HttpDispatchSender;
+
+impl DispatchSender for HttpDispatchSender {
+    fn post(
+        &self,
+        url: &str,
+        gateway_token: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, PushError> {
+        let response = reqwest::blocking::Client::new()
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {gateway_token}"))
+            .header("User-Agent", "k2-daemon")
+            .body(body.to_string())
+            .send()
+            .map_err(|e| PushError::Transport(e.to_string()))?;
+        let status = response.status();
+        let text = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(PushError::Remote {
+                status: status.as_u16(),
+                body: text,
+            });
+        }
+        Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
+    }
+}
+
+/// Companion C4 mobile push adapter — the module's reserved cloud
+/// seam, filled (naming: k2, not k2so). `send` reads the daemon-held
+/// device registry ([`crate::push_devices`]) and POSTs
+/// `{devices:[{platform,token}], payload:{title, body, data}}` to
+/// `<gateway>/push/dispatch`; the stateless relay gateway fans out to
+/// APNs/FCM. Tokens the response marks `dead:true` are pruned from
+/// the registry (aggressive dead-token hygiene, §4.5).
+///
+/// Constructed ONLY via [`K2Cloud::from_config`] in production: no
+/// gateway URL + token configured → no instance → dispatch is a
+/// no-op (DORMANT — the shipped-but-inactive state).
+pub struct K2Cloud {
+    gateway_url: String,
+    gateway_token: String,
+    sender: std::sync::Arc<dyn DispatchSender>,
+}
+
+/// The exact env/settings keys [`K2Cloud::from_config`] reads.
+pub const ENV_GATEWAY_URL: &str = "K2_PUSH_GATEWAY_URL";
+pub const ENV_GATEWAY_TOKEN: &str = "K2_PUSH_GATEWAY_TOKEN";
+
+impl K2Cloud {
+    /// Build from resolved config parts. `None` unless BOTH the
+    /// gateway URL and the gateway token are present and non-blank —
+    /// the dormancy gate, kept pure so it's directly testable.
+    pub fn from_parts(url: Option<String>, token: Option<String>) -> Option<Self> {
+        let url = url.map(|s| s.trim().trim_end_matches('/').to_string())?;
+        let token = token.map(|s| s.trim().to_string())?;
+        if url.is_empty() || token.is_empty() {
+            return None;
+        }
+        Some(Self {
+            gateway_url: url,
+            gateway_token: token,
+            sender: std::sync::Arc::new(HttpDispatchSender),
+        })
+    }
+
+    /// Resolve config and construct, or `None` = DORMANT. Env wins
+    /// over settings (the `K2_*`-override house pattern):
+    /// [`ENV_GATEWAY_URL`]/[`ENV_GATEWAY_TOKEN`], falling back to the
+    /// `pushGatewayUrl`/`pushGatewayToken` app settings.
+    pub fn from_config() -> Option<Self> {
+        let settings = crate::app_settings::load();
+        let url = std::env::var(ENV_GATEWAY_URL)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or(settings.push_gateway_url);
+        let token = std::env::var(ENV_GATEWAY_TOKEN)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or(settings.push_gateway_token);
+        Self::from_parts(url, token)
+    }
+
+    /// Test seam: same adapter, injected transport.
+    pub fn with_sender(
+        gateway_url: &str,
+        gateway_token: &str,
+        sender: std::sync::Arc<dyn DispatchSender>,
+    ) -> Self {
+        Self {
+            gateway_url: gateway_url.trim_end_matches('/').to_string(),
+            gateway_token: gateway_token.to_string(),
+            sender,
+        }
+    }
+
+    /// The dispatch body: every registered device (V1 fans out to ALL
+    /// — per-user subscriptions later) + the content-free payload.
+    fn dispatch_body(
+        devices: &[crate::push_devices::PushDevice],
+        event: &PushEvent,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "devices": devices
+                .iter()
+                .map(|d| serde_json::json!({ "platform": d.platform, "token": d.token }))
+                .collect::<Vec<_>>(),
+            "payload": {
+                "title": event.title(),
+                "body": event.body(),
+                "data": event.data(),
+            },
+        })
+    }
+}
+
+impl PushTarget for K2Cloud {
+    fn send(&self, event: &PushEvent) -> Result<(), PushError> {
+        let devices = crate::push_devices::list_devices()
+            .map_err(PushError::BadConfig)?;
+        if devices.is_empty() {
+            // Nobody registered — nothing to deliver, no network call.
+            return Ok(());
+        }
+        let url = format!("{}/push/dispatch", self.gateway_url);
+        let body = Self::dispatch_body(&devices, event);
+        let response = self.sender.post(&url, &self.gateway_token, &body)?;
+        // Dead-token feedback: the gateway reports per-token outcomes;
+        // `dead:true` (APNs 410 Unregistered / FCM NotRegistered)
+        // tokens are pruned so they never ride another dispatch. A
+        // malformed/missing results array is simply no prunes — the
+        // push itself already succeeded.
+        if let Some(results) = response.get("results").and_then(|r| r.as_array()) {
+            for entry in results {
+                let dead = entry.get("dead").and_then(|d| d.as_bool()).unwrap_or(false);
+                let token = entry.get("token").and_then(|t| t.as_str());
+                if let (true, Some(token)) = (dead, token) {
+                    if let Err(e) = crate::push_devices::prune_device_by_token(token) {
+                        crate::log_debug!("[push] dead-token prune failed: {e}");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn label(&self) -> String {
+        format!("K2Cloud({})", self.gateway_url)
     }
 }
 
@@ -283,5 +514,187 @@ mod tests {
         let target: std::sync::Arc<dyn PushTarget> = std::sync::Arc::new(NoOp);
         let _ = target.send(&sample_event());
         assert_eq!(target.label(), "NoOp");
+    }
+
+    // ── Companion C4: event shaping + K2Cloud ─────────────────────────
+
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn c4_events_render_generic_title_and_deep_link_data() {
+        let e = PushEvent::FeedbackCreated {
+            agent_name: "cortana".to_string(),
+            feedback_id: "fb-123".to_string(),
+        };
+        assert_eq!(e.title(), "K2");
+        assert_eq!(e.body(), "cortana needs your feedback");
+        assert_eq!(e.action_url(), "");
+        assert_eq!(
+            e.data(),
+            serde_json::json!({ "kind": "feedback", "feedbackId": "fb-123" })
+        );
+
+        let e = PushEvent::ProjectMessageCreated {
+            project_name: "Apollo".to_string(),
+            group_id: "pg-9".to_string(),
+        };
+        assert_eq!(e.title(), "K2");
+        assert_eq!(e.body(), "New message in Apollo");
+        assert_eq!(e.action_url(), "");
+        assert_eq!(
+            e.data(),
+            serde_json::json!({ "kind": "project", "groupId": "pg-9" })
+        );
+
+        // Legacy desktop-era events carry no mobile deep link.
+        assert_eq!(sample_event().data(), serde_json::json!({}));
+    }
+
+    /// Recording sender: captures every call, answers a canned
+    /// response. No network anywhere in these tests.
+    struct MockSender {
+        calls: Mutex<Vec<(String, String, serde_json::Value)>>,
+        response: serde_json::Value,
+    }
+
+    impl MockSender {
+        fn new(response: serde_json::Value) -> Arc<Self> {
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+                response,
+            })
+        }
+
+        fn calls(&self) -> Vec<(String, String, serde_json::Value)> {
+            self.calls.lock().expect("mock lock").clone()
+        }
+    }
+
+    impl DispatchSender for MockSender {
+        fn post(
+            &self,
+            url: &str,
+            gateway_token: &str,
+            body: &serde_json::Value,
+        ) -> Result<serde_json::Value, PushError> {
+            self.calls.lock().expect("mock lock").push((
+                url.to_string(),
+                gateway_token.to_string(),
+                body.clone(),
+            ));
+            Ok(self.response.clone())
+        }
+    }
+
+    fn unique_token(label: &str) -> String {
+        format!("tok-push-{label}-{}", uuid::Uuid::new_v4())
+    }
+
+    #[test]
+    fn k2cloud_dispatch_payload_is_content_free() {
+        let token = unique_token("shape");
+        let device_id = format!("dev-push-shape-{}", uuid::Uuid::new_v4());
+        crate::push_devices::upsert_device(&device_id, "apns", &token, "owner")
+            .expect("register device");
+
+        let sender = MockSender::new(serde_json::json!({ "results": [] }));
+        let cloud = K2Cloud::with_sender("https://push.k2.dev/", "gw-secret", sender.clone());
+        assert_eq!(cloud.label(), "K2Cloud(https://push.k2.dev)");
+
+        cloud
+            .send(&PushEvent::FeedbackCreated {
+                agent_name: "cortana".to_string(),
+                feedback_id: "fb-77".to_string(),
+            })
+            .expect("send");
+
+        let calls = sender.calls();
+        assert_eq!(calls.len(), 1, "exactly one dispatch POST");
+        let (url, gw_token, body) = &calls[0];
+        assert_eq!(url, "https://push.k2.dev/push/dispatch");
+        assert_eq!(gw_token, "gw-secret");
+
+        // Wire shape: {devices:[{platform,token}], payload:{title,body,data}}
+        // and NOTHING else — the §4.5 content-free invariant is
+        // structural: no field exists that could carry ask/message text.
+        let top: Vec<_> = body.as_object().expect("object").keys().collect();
+        assert_eq!(top, vec!["devices", "payload"], "no extra top-level fields");
+        let payload = body["payload"].as_object().expect("payload object");
+        assert_eq!(
+            payload.keys().collect::<Vec<_>>(),
+            vec!["body", "data", "title"],
+            "payload carries exactly title/body/data"
+        );
+        assert_eq!(body["payload"]["title"], "K2");
+        assert_eq!(body["payload"]["body"], "cortana needs your feedback");
+        assert_eq!(
+            body["payload"]["data"],
+            serde_json::json!({ "kind": "feedback", "feedbackId": "fb-77" })
+        );
+        let devices = body["devices"].as_array().expect("devices array");
+        let mine = devices
+            .iter()
+            .find(|d| d["token"] == token.as_str())
+            .expect("registered device rides the dispatch");
+        assert_eq!(mine["platform"], "apns");
+        assert_eq!(
+            mine.as_object().expect("device object").keys().collect::<Vec<_>>(),
+            vec!["platform", "token"],
+            "devices carry platform+token only — usernames stay home"
+        );
+
+        crate::push_devices::remove_device(&device_id).expect("cleanup");
+    }
+
+    #[test]
+    fn k2cloud_prunes_tokens_the_gateway_marks_dead() {
+        let dead_token = unique_token("dead");
+        let live_token = unique_token("live");
+        let dead_id = format!("dev-push-dead-{}", uuid::Uuid::new_v4());
+        let live_id = format!("dev-push-live-{}", uuid::Uuid::new_v4());
+        crate::push_devices::upsert_device(&dead_id, "apns", &dead_token, "owner")
+            .expect("register dead");
+        crate::push_devices::upsert_device(&live_id, "fcm", &live_token, "owner")
+            .expect("register live");
+
+        let sender = MockSender::new(serde_json::json!({
+            "results": [
+                { "token": dead_token, "dead": true },
+                { "token": live_token, "dead": false },
+            ]
+        }));
+        let cloud = K2Cloud::with_sender("https://push.k2.dev", "gw", sender);
+        cloud
+            .send(&PushEvent::ProjectMessageCreated {
+                project_name: "Apollo".to_string(),
+                group_id: "pg-1".to_string(),
+            })
+            .expect("send");
+
+        let ids: Vec<_> = crate::push_devices::list_devices()
+            .expect("list")
+            .into_iter()
+            .map(|d| d.device_id)
+            .collect();
+        assert!(!ids.contains(&dead_id), "dead-marked token pruned");
+        assert!(ids.contains(&live_id), "live token survives");
+        crate::push_devices::remove_device(&live_id).expect("cleanup");
+    }
+
+    #[test]
+    fn k2cloud_from_parts_is_dormant_unless_fully_configured() {
+        // The dormancy gate: BOTH url and token, non-blank, or nothing.
+        assert!(K2Cloud::from_parts(None, None).is_none());
+        assert!(K2Cloud::from_parts(Some("https://push.k2.dev".into()), None).is_none());
+        assert!(K2Cloud::from_parts(None, Some("gw".into())).is_none());
+        assert!(K2Cloud::from_parts(Some("  ".into()), Some("gw".into())).is_none());
+        assert!(K2Cloud::from_parts(Some("https://push.k2.dev".into()), Some(" ".into()))
+            .is_none());
+        let cloud = K2Cloud::from_parts(
+            Some("https://push.k2.dev/".into()),
+            Some("gw".into()),
+        )
+        .expect("fully configured constructs");
+        assert_eq!(cloud.label(), "K2Cloud(https://push.k2.dev)");
     }
 }

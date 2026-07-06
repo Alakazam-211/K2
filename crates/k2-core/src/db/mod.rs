@@ -488,6 +488,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // the list/show payloads) + `color` (`#rrggbb` TEXT, NULL = the
         // renderer derives a stable fallback). Additive.
         ("0067_project_group_icon", include_str!("../../drizzle_sql/0067_project_group_icon.sql")),
+        // 0068 (companion C4, prd-companion-v2 §4; feedback PRD §8.4
+        // Option B): `push_devices` — the daemon-held mobile push
+        // registry (device_id PK, platform apns|fcm, vendor token,
+        // daemon-resolved username, last_seen_at). Companion upserts
+        // via `/cli/push/register-device` on every app launch; the
+        // relay gateway stays stateless. Token-indexed for the
+        // dead-token (410 Unregistered) prune path. Additive.
+        ("0068_push_devices", include_str!("../../drizzle_sql/0068_push_devices.sql")),
     ];
 
     for (name, sql) in migrations {

@@ -110,6 +110,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::project_group_routes::dispatch(path, params) {
         return resp;
     }
+    // Companion C4 — `/cli/push/*` 405 guards for its POST-only
+    // mutations reached via the GET chain (no push GET reads in V1).
+    if let Some(resp) = crate::push_routes::dispatch(path, params) {
+        return resp;
+    }
 
     if let Some(resp) = crate::misc_routes::dispatch(path, params) {
         return resp;

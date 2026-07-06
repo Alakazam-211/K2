@@ -1031,6 +1031,15 @@ pub fn handle_msg(body: &[u8]) -> CliResponse {
             "author": msg.author,
         }),
     );
+    // Companion C4 — mobile push, next to the emit, ONLY for
+    // non-owner authors (the rate-sanity rule: never push the owner
+    // their own message; agent posts are exactly what the phone
+    // wants to hear about). Content-free: project name + group id,
+    // NEVER the message text (§4.5). Dormant/fire-and-forget inside
+    // push_routes.
+    if msg.author != "owner" {
+        crate::push_routes::notify_project_message_created(&group.name, &group_id);
+    }
 
     // §4.3 — best-effort PoC injection. PoC identity is read AT STORE
     // TIME (re-read after the insert, not from the pre-store snapshot).
@@ -2738,5 +2747,71 @@ mod tests {
         let resp = crate::workspace_routes::dispatch("/cli/workspace/remove", &params)
             .expect("remove route claimed");
         assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+    }
+
+    /// Companion C4 trigger selection through the msg route: AGENT
+    /// posts (member and PoC alike — any author != "owner") push to
+    /// mobile, content-free (§4.5: project name + group id only,
+    /// never the message text); OWNER posts never push (the
+    /// rate-sanity rule — don't push the owner their own message).
+    #[test]
+    fn project_group_msg_pushes_for_agents_never_for_owner() {
+        use k2_core::push::PushEvent;
+        install_capture_sink();
+        let name = gname("push");
+        let g = create_group_via_route(&name);
+        let gid = g["id"].as_str().expect("id").to_string();
+        let (poc_id, poc_name, _) = insert_workspace("push-poc");
+        let (_member_id, member_name, _) = insert_workspace("push-member");
+        ok_json(post_json(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": gid, "workspace": poc_id }),
+        ));
+        ok_json(post_json(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": gid, "workspace": member_name }),
+        ));
+
+        let pushes_since = |mark: usize| -> Vec<PushEvent> {
+            crate::push_routes::test_push_capture::since(mark)
+                .into_iter()
+                .filter(|e| {
+                    matches!(e, PushEvent::ProjectMessageCreated { group_id, .. } if group_id == &gid)
+                })
+                .collect()
+        };
+
+        // Owner post: stored + emitted, but NO push.
+        let mark = crate::push_routes::test_push_capture::mark();
+        ok_json(msg_as(&gid, None, "kickoff — read the plan doc"));
+        assert!(
+            pushes_since(mark).is_empty(),
+            "an owner post must never push the owner's own phone"
+        );
+
+        // Member-agent post: exactly one push, content-free.
+        let mark = crate::push_routes::test_push_capture::mark();
+        ok_json(msg_as(&gid, Some(&member_name), "progress: secret details inside"));
+        let pushes = pushes_since(mark);
+        assert_eq!(pushes.len(), 1, "agent post pushes exactly once: {pushes:?}");
+        let e = &pushes[0];
+        assert_eq!(e.title(), "K2");
+        assert_eq!(e.body(), format!("New message in {name}"));
+        assert!(
+            !e.body().contains("secret"),
+            "message text must never ride the push (§4.5): {}",
+            e.body()
+        );
+        assert_eq!(
+            e.data(),
+            serde_json::json!({ "kind": "project", "groupId": gid })
+        );
+
+        // The PoC's own post is still an agent post → pushes too
+        // (the author gate is owner-vs-not, independent of the
+        // PoC-injection matrix).
+        let mark = crate::push_routes::test_push_capture::mark();
+        ok_json(msg_as(&gid, Some(&poc_name), "acknowledged, on it"));
+        assert_eq!(pushes_since(mark).len(), 1, "a PoC post pushes like any agent post");
     }
 }

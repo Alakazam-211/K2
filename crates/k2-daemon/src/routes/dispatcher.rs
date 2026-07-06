@@ -549,6 +549,16 @@ async fn handle_one_request(
             | "/cli/project-group/dashboard/create"
             | "/cli/project-group/dashboard/delete"
             | "/cli/project-group/dashboard/reorder"
+            // Companion C4 (prd-companion-v2 §4) — push-device
+            // registration. JSON-bodied POSTs; token_ok (ANY authed
+            // user — owner or connect-user; the phone registers over
+            // its own logged-in session) + require_post in the
+            // dedicated arm below, which also resolves the acting
+            // username from the token for attribution (D3). No GET
+            // reads in V1 — GETs 405 via crate::cli::dispatch
+            // (push_routes).
+            | "/cli/push/register-device"
+            | "/cli/push/unregister-device"
             | "/cli/inbox/compose"
             | "/cli/inbox/move"
             | "/cli/inbox/archive"
@@ -2972,6 +2982,63 @@ async fn handle_one_request(
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
                 crate::project_group_routes::dispatch_post(&p_owned, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
+        // Companion C4 — `/cli/push/*` mutations (register-device /
+        // unregister-device). JSON-bodied POSTs; token_ok (ANY authed
+        // user: owner or a live connect-user session) + require_post
+        // per feedback_post_only_route_guards. The acting username is
+        // resolved HERE from the session token — owner token →
+        // "owner", connect-user token → its session's username — and
+        // passed to the handler; the request body is never trusted
+        // for attribution (D3). Handlers run in spawn_blocking
+        // (SQLite writes).
+        p if is_post && post_allowed && p.starts_with("/cli/push/") => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let username = if super::http::token_is_owner(&query, state.token.as_str()) {
+                Some("owner".to_string())
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+            };
+            // token_ok passed but the session vanished in between
+            // (revocation race) — fail closed like the gate above.
+            let Some(username) = username else {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            };
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::push_routes::dispatch_post(&p_owned, &body_bytes, &username)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

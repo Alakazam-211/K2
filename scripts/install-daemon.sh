@@ -211,7 +211,13 @@ DL_SIG="$TMP/k2-daemon.minisig"
 echo "Downloading daemon binary ($PLATFORM, manifest ver ${MVER:-?})..."
 fetch "$URL" "$DL_BIN"
 
-printf '%s\n' "$SIG" > "$DL_SIG"
+# The manifest's `sig` field is a URL to the .sig asset (the deployed
+# daemon self-updater's contract since 0.39.35). Older/local manifests
+# may inline the signature — support both.
+case "$SIG" in
+    http://*|https://*|file://*) fetch "$SIG" "$DL_SIG" ;;
+    *) printf '%s\n' "$SIG" > "$DL_SIG" ;;
+esac
 
 echo "Verifying minisign signature..."
 if ! minisign -Vm "$DL_BIN" -P "$K2_DAEMON_PUBKEY" -x "$DL_SIG" >/dev/null 2>&1; then

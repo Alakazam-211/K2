@@ -1156,12 +1156,17 @@ pub(crate) fn api_capability() -> serde_json::Value {
     })
 }
 
-/// OWNER-only: mint a new API key. Body (JSON): `{"label": "<tag>",
-/// "anthropicKey": "<sk-ant-…>"?}`. Returns `{"id": "<uuid>", "key":
-/// "k2sk_…"}` — **the RAW key is returned exactly ONCE here and is never
-/// recoverable afterward** (only its SHA-256 digest is stored). The owner must
-/// surface it to the caller now. NEVER logs the raw key or the anthropic key.
-pub fn handle_api_key_create(body: &[u8]) -> CliResponse {
+/// OWNER-TIER (owner token OR Owner-role session — F4): mint a new API key.
+/// Body (JSON): `{"label": "<tag>", "anthropicKey": "<sk-ant-…>"?}`. Returns
+/// `{"id": "<uuid>", "key": "k2sk_…"}` — **the RAW key is returned exactly
+/// ONCE here and is never recoverable afterward** (only its SHA-256 digest is
+/// stored). The owner must surface it to the caller now. NEVER logs the raw
+/// key or the anthropic key.
+///
+/// `actor` is the dispatcher-resolved NON-secret acting identity
+/// (`"owner-token"` or `"user:<name>"`, `api_key_manager_identity`) — the F4
+/// audit trail: every mint is logged with who did it.
+pub fn handle_api_key_create(body: &[u8], actor: &str) -> CliResponse {
     let v: serde_json::Value = match serde_json::from_slice(body) {
         // An empty body is allowed (no label, no anthropic key).
         Ok(v) => v,
@@ -1205,19 +1210,25 @@ pub fn handle_api_key_create(body: &[u8]) -> CliResponse {
     };
 
     match k2_core::api_keys::create_api_key(label, anthropic_key, workspaces_grant.as_deref()) {
-        // The ONLY place the raw key is ever returned. Not logged.
+        // The ONLY place the raw key is ever returned. Not logged — the audit
+        // line carries the id + label + ACTOR only, never a secret.
         Ok((id, raw)) => {
+            k2_core::log_debug!("[api-keys] created key {id} (label {label:?}) by {actor}");
             CliResponse::ok_json(serde_json::json!({ "id": id, "key": raw }).to_string())
         }
         Err(e) => CliResponse::bad_request(e),
     }
 }
 
-/// OWNER-only: revoke an API key by id. Body (JSON): `{"id": "<uuid>"}`.
-/// Returns `{"success": <bool>}` — `true` if a live key was just revoked,
-/// `false` for an unknown/already-revoked id (idempotent). Revocation is
-/// immediate: the key fails the `/v1/*` gate on its next use.
-pub fn handle_api_key_revoke(body: &[u8]) -> CliResponse {
+/// OWNER-TIER (owner token OR Owner-role session — F4): revoke an API key by
+/// id. Body (JSON): `{"id": "<uuid>"}`. Returns `{"success": <bool>}` —
+/// `true` if a live key was just revoked, `false` for an unknown/
+/// already-revoked id (idempotent). Revocation is immediate: the key fails
+/// the `/v1/*` gate on its next use.
+///
+/// `actor` is the dispatcher-resolved NON-secret acting identity (F4 audit
+/// trail); an actual revocation is logged with who did it.
+pub fn handle_api_key_revoke(body: &[u8], actor: &str) -> CliResponse {
     let v: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
@@ -1227,13 +1238,21 @@ pub fn handle_api_key_revoke(body: &[u8]) -> CliResponse {
         return CliResponse::bad_request("missing 'id'");
     }
     match k2_core::api_keys::revoke_api_key(&id) {
-        Ok(success) => CliResponse::ok_json(serde_json::json!({ "success": success }).to_string()),
+        Ok(success) => {
+            // Only a REAL revocation is audit-logged (idempotent no-ops on an
+            // unknown/already-revoked id aren't state changes).
+            if success {
+                k2_core::log_debug!("[api-keys] revoked key {id} by {actor}");
+            }
+            CliResponse::ok_json(serde_json::json!({ "success": success }).to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
 
-/// OWNER-only: list API keys as redacted metadata. NEVER returns the raw key
-/// (unrecoverable) or the anthropic key (only `anthropicKeySet`).
+/// OWNER-TIER (owner token OR Owner-role session — F4): list API keys as
+/// redacted metadata. NEVER returns the raw key (unrecoverable) or the
+/// anthropic key (only `anthropicKeySet`).
 pub fn handle_api_key_list() -> CliResponse {
     match k2_core::api_keys::list_api_keys() {
         Ok(keys) => {
@@ -1374,7 +1393,7 @@ mod api_key_route_tests {
         let secret = "sk-ant-route-secret-qqq";
         let body = serde_json::json!({ "label": "route-test", "anthropicKey": secret })
             .to_string();
-        let resp = handle_api_key_create(body.as_bytes());
+        let resp = handle_api_key_create(body.as_bytes(), "owner-token");
         assert_eq!(resp.status, "200 OK");
         let created: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
         let id = created["id"].as_str().expect("id").to_string();
@@ -1395,13 +1414,19 @@ mod api_key_route_tests {
         assert_eq!(mine["revokedAt"], serde_json::Value::Null);
 
         // Revoke → success true; second revoke → false (idempotent).
-        let rev = handle_api_key_revoke(serde_json::json!({ "id": id }).to_string().as_bytes());
+        let rev = handle_api_key_revoke(
+            serde_json::json!({ "id": id }).to_string().as_bytes(),
+            "owner-token",
+        );
         assert_eq!(rev.status, "200 OK");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&rev.body).unwrap()["success"],
             serde_json::json!(true),
         );
-        let rev2 = handle_api_key_revoke(serde_json::json!({ "id": id }).to_string().as_bytes());
+        let rev2 = handle_api_key_revoke(
+            serde_json::json!({ "id": id }).to_string().as_bytes(),
+            "owner-token",
+        );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&rev2.body).unwrap()["success"],
             serde_json::json!(false),
@@ -1410,7 +1435,7 @@ mod api_key_route_tests {
 
     #[test]
     fn revoke_missing_id_is_bad_request() {
-        let resp = handle_api_key_revoke(b"{}");
+        let resp = handle_api_key_revoke(b"{}", "owner-token");
         assert_eq!(resp.status, "400 Bad Request");
     }
 

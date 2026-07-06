@@ -106,6 +106,44 @@ pub(crate) fn token_is_owner_or_admin(query: &str, owner_token: &str) -> bool {
     actor_role(query, owner_token).is_some_and(k2_core::connect_users::can_manage_users)
 }
 
+/// F4 (prd-v1-api-completion §6) — OWNER-TIER gate for `/cli/api-keys/*`,
+/// resolving the ACTING IDENTITY for the audit trail.
+///
+/// Hosted (K2 Cloud) customers never hold the on-box daemon token — they hold
+/// an Owner-ROLE connect session — so key management authorizes EITHER:
+///
+/// - the owner token → `Some("owner-token")`, or
+/// - a live connect-user session whose role passes `can_change_roles`
+///   (Owner ONLY — the same bar as `/cli/users/set-role`; Admin does NOT
+///   get key management) → `Some("user:<username>")`.
+///
+/// Everything else → `None` (reject): Admin/Member/Viewer sessions, unknown/
+/// empty tokens, and — critically — API keys themselves: a `k2sk_…` key is
+/// not the owner token and never resolves to a connect session, so a key can
+/// NEVER mint/list/revoke keys (the `/v1` boundary invariant — see the
+/// `v1_principal` SECURITY note below).
+///
+/// The returned string is NON-secret (never the token) and feeds the
+/// create/revoke log lines. A must-change-password Owner session never
+/// reaches this gate: [`session_password_gate`] rejects it at the
+/// dispatcher chokepoint first.
+pub(crate) fn api_key_manager_identity(query: &str, owner_token: &str) -> Option<String> {
+    let tok = extract_token(query)?;
+    if tok.is_empty() {
+        return None;
+    }
+    if ct_eq_token(tok, owner_token) {
+        return Some("owner-token".to_string());
+    }
+    let username = k2_core::connect_users::validate_session(tok)?;
+    let role = k2_core::connect_users::role_for_user(&username)?;
+    if k2_core::connect_users::can_change_roles(role) {
+        Some(format!("user:{username}"))
+    } else {
+        None
+    }
+}
+
 /// The shared authorization gate for the bulk of `/cli/*` routes.
 ///
 /// K2SO #617: a request is authorized when its `?token=` is EITHER the

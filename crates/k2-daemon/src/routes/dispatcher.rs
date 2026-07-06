@@ -3268,25 +3268,37 @@ async fn handle_one_request(
         }
         // ── P3a (sandbox / K2-as-a-server) — API-key auth-tier MANAGEMENT.
         //
-        // OWNER-ONLY (require_owner / token_is_owner) + ALWAYS-ON: minting,
-        // listing, and revoking keys is the owner's job, so a connect-user
-        // session token is rejected and an API key CANNOT manage keys (it never
-        // reaches here — these gate on the owner token, never v1_principal).
+        // OWNER-TIER (F4, prd-v1-api-completion §6) + ALWAYS-ON: minting,
+        // listing, and revoking keys authorizes on the owner TOKEN or an
+        // Owner-ROLE connect session (`api_key_manager_identity` — the same
+        // `can_change_roles` bar as /cli/users/set-role), because hosted
+        // customers only ever hold the session, never the daemon token.
+        // Admin-role does NOT get key management, and an API key CANNOT
+        // manage keys (a `k2sk_…` token is neither the owner token nor a
+        // session — this gate never consults v1_principal). A
+        // must-change-password session never reaches here: the
+        // `session_password_gate` chokepoint above already 403s it.
         // Always-on so the owner can pre-create keys before flipping the
         // external /v1/* surface live (harmless while /v1/* is dark). The two
         // POSTs are method-gated per-handler (require_post); `list` is a GET.
-        // The minted RAW key is returned ONCE by create + never logged.
+        // The minted RAW key is returned ONCE by create + never logged; the
+        // resolved actor identity feeds the create/revoke audit log lines.
         p if p.starts_with("/cli/api-keys/") => {
             let r = match p {
                 "/cli/api-keys/create" => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                    let Some(actor) =
+                        super::http::api_key_manager_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = crate::cli_response::CliResponse::forbidden();
+                        super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
                         return DispatchOutcome::Done;
-                    }
+                    };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
-                    tokio::task::spawn_blocking(move || crate::misc_routes::handle_api_key_create(&body))
+                    tokio::task::spawn_blocking(move || crate::misc_routes::handle_api_key_create(&body, &actor))
                         .await
                         .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
@@ -3294,18 +3306,23 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                    let Some(actor) =
+                        super::http::api_key_manager_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = crate::cli_response::CliResponse::forbidden();
+                        super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
                         return DispatchOutcome::Done;
-                    }
+                    };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
-                    tokio::task::spawn_blocking(move || crate::misc_routes::handle_api_key_revoke(&body))
+                    tokio::task::spawn_blocking(move || crate::misc_routes::handle_api_key_revoke(&body, &actor))
                         .await
                         .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
                 "/cli/api-keys/list" => {
-                    // GET, OWNER-gated. Drain the peeked head then check owner.
+                    // GET, owner-tier. Drain the peeked head then gate.
                     let _ = stream.read(&mut buf).await;
-                    if !super::http::token_is_owner(&query, state.token.as_str()) {
+                    if super::http::api_key_manager_identity(&query, state.token.as_str()).is_none() {
                         crate::cli_response::CliResponse::forbidden()
                     } else {
                         tokio::task::spawn_blocking(crate::misc_routes::handle_api_key_list)

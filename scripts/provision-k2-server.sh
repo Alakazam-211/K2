@@ -231,13 +231,41 @@ if [ -n "${K2_OWNER_USER:-}" ]; then
 		|| die "users/set-role owner failed"
 fi
 
+# ── 9b. website-management service user (K2 Cloud only) ─────────────
+# Owner-role user the k2.dev control plane uses to proxy the server
+# modal's actions (user management, subdomain re-pairing) over the
+# tunnel. Customer-visible in their user list; deleting it opts out of
+# website management. Only created when K2_OPS_USER is set (hosted
+# provisioning); self-host runs never get it.
+OPS_PASSWORD=""
+if [ -n "${K2_OPS_USER:-}" ]; then
+	OPS_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-28)
+	export K2_OPS_USER OPS_PASSWORD
+	log "creating service user '${K2_OPS_USER}' (website management)"
+	OPS_BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OPS_USER"],"password":os.environ["OPS_PASSWORD"]}))')
+	OPS_RES=$(mktemp)
+	HTTP=$(curl -sS -o "$OPS_RES" -w '%{http_code}' -X POST "$BASE/cli/users/add?token=$TOKEN" -d "$OPS_BODY")
+	if [ "$HTTP" != "200" ]; then
+		grep -qi "exist" "$OPS_RES" || die "ops users/add failed ($HTTP): $(cat "$OPS_RES")"
+		log "ops user already exists — leaving its password unchanged"
+		OPS_PASSWORD=""
+	fi
+	rm -f "$OPS_RES"
+	OPS_ROLE=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OPS_USER"],"role":"owner"}))')
+	curl -fsS -X POST "$BASE/cli/users/set-role?token=$TOKEN" -d "$OPS_ROLE" >/dev/null \
+		|| die "ops set-role owner failed"
+fi
+
 # ── 10. control-plane callback ───────────────────────────────────────
 if [ -n "${K2_CALLBACK_URL:-}" ]; then
 	log "posting provisioning callback"
+	export CB_OPS_PASSWORD="${OPS_PASSWORD:-}"
 	CB=$(python3 -c 'import json,os;print(json.dumps({
 		"status":"online",
 		"subdomain":os.environ.get("K2_SUBDOMAIN",""),
 		"ownerUser":os.environ.get("K2_OWNER_USER",""),
+		"opsUser":os.environ.get("K2_OPS_USER",""),
+		"opsPassword":os.environ.get("CB_OPS_PASSWORD",""),
 	}))')
 	curl -fsS -X POST "$K2_CALLBACK_URL" \
 		${K2_CALLBACK_TOKEN:+-H "Authorization: Bearer $K2_CALLBACK_TOKEN"} \

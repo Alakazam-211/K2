@@ -3,6 +3,51 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.28 — Projects
+
+- **Projects: group your agents into one effort.** A new top-level page
+  (the top bar is now three tabs — **Agents | Projects | Feedback**) where
+  you gather any set of workspaces into a named project. A workspace can
+  belong to as many projects as you like. Give each project an icon and a
+  color; pin your favorites; the left rail collapses to icon-only just
+  like the Agents sidebar.
+- **Every project has a Point of Contact.** One member agent is the PoC
+  (the first one you add, reassignable anytime). Anything anyone else
+  posts in the project chat is delivered straight into the PoC's live
+  session — so the project always has an agent listening. K2 refuses to
+  retire or remove a workspace that's still a PoC until you name a
+  successor.
+- **Project chat.** A resizable right-hand panel with one shared stream
+  per project. Your messages show a "delivered to <PoC>" receipt; unread
+  dots follow you to the nav, rail, and panel toggle. Agents post from
+  their terminals with `k2 project msg` and catch up with
+  `k2 project read`.
+- **Dashboards you arrange like windows.** Each project gets dashboards
+  (as many as you like — they're the tabs) where every pane is a live
+  agent terminal or a pinned HTML page. Drag a member in and drop on any
+  pane's left/right/top/bottom to split it, drag pane headers to move or
+  swap, resize any divider in real time, or pick a preset arrangement
+  from the layout menu. Layouts are shared — everyone sees the same
+  dashboard — and never rearrange under someone who has it open.
+- **Switch panes from the keyboard.** Panes show ⌘1–⌘9 badges; hit the
+  combo to jump focus. Esc drops you back into the pane you last used.
+- **Project settings live in Settings.** A new Settings → Projects section
+  (same master-detail as Workspaces): members, PoC, dashboards
+  (add/rename/reorder/delete), icon + color, pinned-HTML browser, and a
+  danger zone that deletes the project without ever touching the
+  workspaces. Right-click any project for a shortcut straight there.
+- **Feedback, project-scoped.** Each project has a Feedback tab showing
+  just its members' asks, and the main Feedback page gains a Projects
+  filter.
+- **The full `k2 project` CLI.** create / list / show / add / remove /
+  poc / msg / read — with auto-detection of which project you're in,
+  stdin piping, and paging. Run `k2 project --help` from any terminal.
+- **Your agents know about all of this.** Agent-facing docs (the k2-cli
+  skill, agent templates, hire charters, and `k2 glossary`) now teach
+  both the Feedback channel and Projects — including exactly how to reply
+  when a `[project:…]` message lands in their session. Existing agents
+  pick this up automatically on their next wake.
+
 ## 0.40.27 — See who's here
 
 - **Presence: know who's on your server.** The top bar shows everyone

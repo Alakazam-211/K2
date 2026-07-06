@@ -34,6 +34,25 @@
 //! [`policy::resolve_host_spawn`]; quota ([`crate::sandbox_quota`]) and the
 //! idle reaper ([`crate::sandbox_reaper`]) are reused as-is (both are
 //! principal/session keyed, not microVM-specific).
+//!
+//! SESSION-IDENTITY COVERAGE (Slice W3 — honest limits):
+//! - **Premint providers (claude, grok)** — the host splices
+//!   `--session-id <sid>` at spawn; the id is durable immediately, so
+//!   list/resume work from the first second.
+//! - **Self-minting adapter providers (codex, gemini, pi, cursor, hermes)**
+//!   — the provider mints its own conversation id after boot; the spawn argv
+//!   carries none, so the row starts `session_id = NULL`. A deferred
+//!   adoption probe ([`defer_adopt_api_host_session`], the wake path's
+//!   `defer_stamp_adopted_session` seam re-aimed at the `api-…` tab row)
+//!   discovers the provider-minted id from the provider's own on-disk store
+//!   and stamps it — list shows the session and resume matches once the
+//!   agent has booted and persisted its first record (~seconds).
+//! - **Presets with NO adapter (opencode, goose, aider, ollama, copilot,
+//!   interpreter)** — K2 has no session-store adapter to discover an id
+//!   with, so their rows stay `session_id = NULL` forever: they spawn and
+//!   accept live messages fine, but are DELIBERATELY ABSENT from
+//!   `GET …/host-sessions` and can never be resumed. That absence is the
+//!   honest answer, not a bug — listing an unresumable id would be a lie.
 
 pub mod policy;
 
@@ -79,6 +98,157 @@ fn spawn_prompt_ready_timeout() -> Duration {
 /// turn.
 pub const API_SPAWN_PREAMBLE: &str = "[K2 API] You were invoked through the K2 API. Report progress and results back to the caller by running: k2 respond '<your message>' — and send your final answer with: k2 respond --final '<your answer>'. The caller cannot see your terminal; only k2 respond output reaches them.";
 
+/// How long the deferred adoption probe waits before reading the provider's
+/// on-disk session store — same ~5s window as the wake path's
+/// `defer_stamp_adopted_session` (providers persist their session record a
+/// beat after spawn). Env-overridable (`K2_HOST_SESSION_ADOPTION_DELAY_MS`)
+/// so the integration suite's shim scenario doesn't sleep 5 real seconds.
+const HOST_ADOPTION_PROBE_DELAY_MS: u64 = 5000;
+
+fn host_adoption_probe_delay() -> Duration {
+    let ms = std::env::var("K2_HOST_SESSION_ADOPTION_DELAY_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(HOST_ADOPTION_PROBE_DELAY_MS);
+    Duration::from_millis(ms)
+}
+
+/// Deferred post-spawn adoption for SELF-MINTING providers (Slice W3): the
+/// host-sessions sibling of `wake_headless::defer_stamp_adopted_session`.
+/// Sleep the probe window on a detached thread, discover the id the freshly
+/// spawned provider actually minted on disk
+/// ([`ProviderResume::newest_on_disk`] — the same probe the wake path
+/// trusts), then stamp it onto THIS spawn's `api-…` row in
+/// `workspace_tab_sessions` — NOT onto `workspace_sessions` like the wake
+/// path does: that row is the CANONICAL pinned chat's identity SSOT and is
+/// off-limits to this API family by design.
+///
+/// Once stamped, `GET …/host-sessions` lists the session and
+/// `{"session": <id>}` resumes it. Fire-and-forget: a miss (agent still
+/// booting at probe time, provider wrote nothing) just leaves the row NULL —
+/// the documented degraded state, never an error.
+fn defer_adopt_api_host_session(
+    provider: &'static str,
+    ws_path: String,
+    agent_name: String,
+    principal_key: String,
+) {
+    std::thread::spawn(move || {
+        std::thread::sleep(host_adoption_probe_delay());
+        match adopt_api_host_session(provider, &ws_path, &agent_name, &principal_key) {
+            Some(sid) => log_debug!(
+                "[v1-host] adopted {} session {} for api agent {} in {}",
+                provider,
+                sid,
+                agent_name,
+                ws_path
+            ),
+            None => log_debug!(
+                "[v1-host] deferred {} adoption for api agent {} found nothing to stamp \
+                 (no on-disk session yet, canonical-only, or row already stamped) in {}",
+                provider,
+                agent_name,
+                ws_path
+            ),
+        }
+    });
+}
+
+/// Synchronous core of [`defer_adopt_api_host_session`]. Returns the adopted
+/// id, or `None` when there is nothing safe to stamp:
+/// - the provider wrote no on-disk session for this workspace yet;
+/// - the newest on-disk id is the workspace's CANONICAL session
+///   (`newest_on_disk` is an approximation — if OUR spawn hasn't persisted
+///   yet, the newest conversation may be the pinned chat's; adopting it would
+///   hand this API family a canonical handle, so refuse. The resume door's
+///   own canonical guard is the backstop either way);
+/// - the row is already stamped (never clobber — first truth wins).
+///
+/// On success, also records the spawning principal as the OWNER of the
+/// provider-minted id ([`crate::sandbox_responses::record_owner`]) so
+/// message-live / messages addressed by the ADOPTED id pass the same
+/// default-deny gate as the spawn-returned id.
+fn adopt_api_host_session(
+    provider: &str,
+    ws_path: &str,
+    agent_name: &str,
+    principal_key: &str,
+) -> Option<String> {
+    let adapter =
+        k2_core::workspace::provider_resume::provider_resume_for_provider(provider)?;
+    let sid = adapter.newest_on_disk(ws_path)?;
+    if sid.is_empty() || session_is_canonical(&sid) {
+        return None;
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let project_id =
+            k2_core::workspace::agent_identity::resolve_project_id(&conn, ws_path)?;
+        let row = k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
+            &conn, &project_id, agent_name,
+        )
+        .ok()
+        .flatten()?;
+        if row.session_id.is_some() {
+            return None; // already stamped — never clobber.
+        }
+        k2_core::db::schema::WorkspaceTabSession::stamp_session_id(
+            &conn,
+            &project_id,
+            &row.pane_group_id,
+            &sid,
+        )
+        .ok()?;
+    }
+    crate::sandbox_responses::record_owner(&sid, principal_key);
+    Some(sid)
+}
+
+/// Resolve a LIVE PTY for a host session addressed by `session_id` within
+/// `ws_path`. Two shapes exist (Slice W3):
+/// - premint providers — the daemon SessionId IS the conversation id, so the
+///   direct `v2_session_map` lookup hits;
+/// - self-minting providers — the conversation id was ADOPTED post-hoc and
+///   differs from the live PTY's forced daemon SessionId, so map through the
+///   `api-…` tab row's `agent_name` (the v2 map key) instead.
+///
+/// Scoped to THIS workspace's `api-…` rows on the adopted path (same index
+/// as [`host_session_resumable`]); the direct path's workspace pin is
+/// enforced by the callers' existing cwd checks / resume-door index check.
+fn lookup_live_host_session(
+    ws_path: &str,
+    session_id: &str,
+) -> Option<std::sync::Arc<k2_core::terminal::DaemonPtySession>> {
+    if let Some(sid) = SessionId::parse(session_id) {
+        if let Some(live) = crate::v2_session_map::lookup_by_session_id(&sid) {
+            return Some(live);
+        }
+    }
+    let agents: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT wts.agent_name FROM workspace_tab_sessions wts \
+                 JOIN projects p ON p.id = wts.project_id \
+                 WHERE p.path = ?1 AND wts.session_id = ?2 \
+                   AND wts.agent_name LIKE 'api-%' \
+                 ORDER BY wts.last_seen_at DESC",
+            )
+            .ok()?;
+        let mapped = stmt
+            .query_map(rusqlite::params![ws_path, session_id], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()?;
+        mapped.flatten().collect()
+    };
+    agents
+        .iter()
+        .find_map(|a| crate::v2_session_map::lookup_by_agent_name(a))
+}
+
 /// Parse the UNTRUSTED body into hints. Empty/whitespace → all defaults;
 /// malformed JSON → `Err(400)` (mirror of the sandbox doors).
 fn parse_body(body: &[u8]) -> Result<ApiHostSessionRequest, CliResponse> {
@@ -116,7 +286,13 @@ fn host_session_resumable(ws_path: &str, session_id: &str) -> bool {
 /// re-arm the idle reaper and inject the (optional) prompt through the
 /// locked, sanitized injector. Returns the FROZEN live-delivery response
 /// `{sessionId, delivered, live:true}`.
-fn deliver_into_live(sid: &SessionId, prompt: &str) -> CliResponse {
+///
+/// `sid` is the live PTY's daemon SessionId (reaper key + injector target);
+/// `echo_sid` is the id the CALLER addressed — identical for premint
+/// providers, the ADOPTED provider-minted id for self-minting ones (echoing
+/// the daemon-internal id there would hand back a handle no other route
+/// resolves).
+fn deliver_into_live(sid: &SessionId, echo_sid: &str, prompt: &str) -> CliResponse {
     crate::sandbox_reaper::stamp(sid);
     let delivered = if prompt.is_empty() {
         // Nothing to inject — the touch (reaper re-arm) is the whole effect.
@@ -126,7 +302,7 @@ fn deliver_into_live(sid: &SessionId, prompt: &str) -> CliResponse {
     };
     CliResponse::ok_json(
         serde_json::json!({
-            "sessionId": sid.to_string(),
+            "sessionId": echo_sid,
             "delivered": delivered,
             "live": true,
         })
@@ -152,8 +328,12 @@ pub fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) ->
 
     // Resume intent: `{"session": <id>}`. A present-but-malformed, canonical,
     // or not-this-family's id is a hard uniform 404 (the caller asked for
-    // specific state; never silently downgrade to a fresh session).
-    let resume_sid: Option<SessionId> = match req.session.as_deref().map(str::trim) {
+    // specific state; never silently downgrade to a fresh session). The
+    // target is kept as a STRING: for self-minting providers the indexed
+    // (adopted) conversation id is provider-minted and — for hermes — not
+    // UUID-shaped at all; the index check against this workspace's own
+    // `api-…` rows is the authorization, not the id's shape.
+    let resume_target: Option<String> = match req.session.as_deref().map(str::trim) {
         None | Some("") => None,
         Some(raw) => {
             let Some(validated) = decode_and_validate_segment(raw) else {
@@ -162,22 +342,22 @@ pub fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) ->
             if session_is_canonical(&validated) {
                 return uniform_ws_404();
             }
-            let Some(parsed) = SessionId::parse(&validated) else {
-                return uniform_ws_404();
-            };
             if !host_session_resumable(&ws_path, &validated) {
                 return uniform_ws_404();
             }
-            Some(parsed)
+            Some(validated)
         }
     };
 
     // Resume of a session that is STILL LIVE = deliver into it (never boot a
-    // duplicate PTY under the same forced id) — the F3 liveness-router shape.
-    if let Some(sid) = resume_sid.as_ref() {
-        if crate::v2_session_map::lookup_by_session_id(sid).is_some() {
+    // duplicate PTY on the same conversation) — the F3 liveness-router shape.
+    // `lookup_live_host_session` covers both id shapes: the daemon SessionId
+    // (premint providers) and an ADOPTED provider-minted id (self-minting
+    // providers, routed via the api- row's agent_name).
+    if let Some(target) = resume_target.as_deref() {
+        if let Some(live) = lookup_live_host_session(&ws_path, target) {
             let prompt = req.prompt.as_deref().unwrap_or("").trim().to_string();
-            return deliver_into_live(sid, &prompt);
+            return deliver_into_live(&live.session_id, target, &prompt);
         }
     }
 
@@ -194,8 +374,17 @@ pub fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) ->
         };
     }
 
-    let is_resume = resume_sid.is_some();
-    let session_id = resume_sid.unwrap_or_else(SessionId::new);
+    // The forced daemon SessionId: a UUID-shaped resume target rides it
+    // (premint continuity — returned id == conversation id); a non-UUID
+    // provider-minted target (hermes) can't, so the PTY gets a fresh
+    // daemon id while the RESUME GRAMMAR below still carries the target
+    // (policy splices `req.session`, and registration re-stamps the new
+    // `api-…` row with it via the table-driven argv scan).
+    let is_resume = resume_target.is_some();
+    let session_id = resume_target
+        .as_deref()
+        .and_then(SessionId::parse)
+        .unwrap_or_else(SessionId::new);
 
     // The PASSTHROUGH POLICY RESOLVER (the one new security-critical piece):
     // cwd pinned, command host-minted from the workspace's configured agent,
@@ -204,6 +393,9 @@ pub fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) ->
     let mut spawn_req =
         policy::resolve_host_spawn(principal, &ws_path, &session_id, is_resume, &req);
     spawn_req.principal_key = Some(principal_key.clone());
+    // Captured for the post-spawn adoption decision below (spawn_session
+    // consumes the request).
+    let spawn_command = spawn_req.command.clone().unwrap_or_default();
 
     // Idle-reap timeout — the caller's knob, identical semantics to the
     // sandbox family (clamped 30..86400, default 180).
@@ -244,6 +436,29 @@ pub fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) ->
 
     // Arm the idle reaper (idempotent; a resume re-arms the clock).
     crate::sandbox_reaper::register(sid, timeout_secs);
+
+    // Slice W3 — SELF-MINTING providers (adapter present, no premint:
+    // codex/gemini/pi/cursor/hermes) spawn with NO session identity in argv
+    // on a FRESH session, so their `api-…` tab row starts `session_id=NULL`
+    // (invisible to list/resume). Schedule the deferred adoption probe to
+    // discover + stamp the provider-minted id. Resumes need none (the
+    // resume grammar in argv already stamped the row at registration);
+    // premint providers need none (the spliced flag stamped it); no-adapter
+    // presets GET none — documented-absent (module docs).
+    if !is_resume {
+        if let Some(adapter) =
+            k2_core::workspace::provider_resume::provider_resume_for_command(&spawn_command)
+        {
+            if adapter.premint_flag().is_none() {
+                defer_adopt_api_host_session(
+                    adapter.provider,
+                    ws_path.clone(),
+                    agent_name.to_string(),
+                    principal_key.clone(),
+                );
+            }
+        }
+    }
 
     // Initial prompt: host sessions have no guest-init to read a staged env
     // var, so deliver it into the PTY once the TUI is ready — on a DETACHED
@@ -305,6 +520,12 @@ pub fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) ->
 /// `GET /v1/w/<ws>/host-sessions` — list this workspace's api-spawned host
 /// sessions (audit). Reads the durable `workspace_tab_sessions` index
 /// restricted to the `api-…` namespace; liveness comes from `v2_session_map`.
+///
+/// COVERAGE (Slice W3, see module docs): premint providers appear
+/// immediately; self-minting adapter providers appear once the deferred
+/// adoption stamps their provider-minted id (~seconds after boot);
+/// no-adapter presets never appear here — their rows stay `session_id=NULL`
+/// by honest necessity (nothing K2 can list would be resumable).
 pub fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
@@ -341,9 +562,15 @@ pub fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliResponse
     let sessions: Vec<serde_json::Value> = rows
         .iter()
         .map(|(sid, agent, last_seen)| {
-            let live = SessionId::parse(sid)
-                .and_then(|s| crate::v2_session_map::lookup_by_session_id(&s))
-                .is_some();
+            // Liveness: the `api-…` agent_name IS the v2 map's registration
+            // key, so it resolves for BOTH id shapes — including adopted
+            // provider-minted ids, whose live PTY runs under a different
+            // (forced daemon) SessionId. The SessionId lookup stays as a
+            // fallback for a row whose PTY outlived its map key shape.
+            let live = crate::v2_session_map::lookup_by_agent_name(agent).is_some()
+                || SessionId::parse(sid)
+                    .and_then(|s| crate::v2_session_map::lookup_by_session_id(&s))
+                    .is_some();
             serde_json::json!({
                 "sessionId": sid,
                 "agentName": agent,
@@ -387,12 +614,13 @@ pub fn handle_v1_host_message(
         Some(owner) if owner == requester => {}
         _ => return uniform_ws_404(),
     }
-    let Some(sid) = SessionId::parse(&sid_seg) else {
-        return uniform_ws_404();
-    };
     // LIVENESS + WORKSPACE PIN: the session must be live AND rooted in THIS
     // workspace (a principal granted two workspaces can't cross-address).
-    let Some(live) = crate::v2_session_map::lookup_by_session_id(&sid) else {
+    // Slice W3: resolves BOTH id shapes — the daemon SessionId (premint
+    // providers) and an ADOPTED provider-minted id (self-minting providers,
+    // whose owner record was written at adoption time so the gate above
+    // already vouched for it).
+    let Some(live) = lookup_live_host_session(&ws_path, &sid_seg) else {
         return uniform_ws_404();
     };
     let cwd_matches = live
@@ -408,7 +636,7 @@ pub fn handle_v1_host_message(
         .ok()
         .and_then(|v| v.get("prompt").and_then(|x| x.as_str()).map(str::to_string))
         .unwrap_or_default();
-    deliver_into_live(&sid, prompt.trim())
+    deliver_into_live(&live.session_id, &sid_seg, prompt.trim())
 }
 
 /// `GET /v1/w/<ws>/host-sessions/<id>/messages?since=<seq>` — drain the
@@ -687,5 +915,49 @@ mod tests {
             handle_v1_host_list(&ungranted, "v1host-list").status,
             "404 Not Found",
         );
+    }
+
+    /// Slice W3 honesty: an api- row with NO stamped session id (a
+    /// self-minting provider pre-adoption, or a no-adapter preset forever)
+    /// is ABSENT from the list — never a null/garbage entry — and is not
+    /// resumable.
+    #[test]
+    fn list_and_resume_omit_unstamped_rows() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-unstamped";
+        let pid = insert_project("v1host-unstamped", ws);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT OR REPLACE INTO workspace_tab_sessions \
+                     (project_id, pane_group_id, agent_name, session_id, command) \
+                 VALUES (?1, 'api-owner-null', 'api-owner-null', NULL, 'aider')",
+                rusqlite::params![pid],
+            )
+            .expect("insert NULL-session row");
+        }
+        let r = handle_v1_host_list(&V1Principal::Owner, "v1host-unstamped");
+        assert_eq!(r.status, "200 OK", "body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(
+            v["sessions"].as_array().map(Vec::len),
+            Some(0),
+            "unstamped rows must be absent, not surfaced as null; body={}",
+            r.body
+        );
+    }
+
+    /// Slice W3: `host_session_resumable` admits a NON-UUID provider-minted
+    /// id (hermes-shaped) once adopted — authorization is the workspace's
+    /// own api- index, not the id's shape.
+    #[test]
+    fn host_session_resumable_accepts_non_uuid_adopted_ids() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-nonuuid";
+        let pid = insert_project("v1host-nonuuid", ws);
+        insert_host_tab_session(&pid, "20260706_090000_abcdef", "api-owner-hermes");
+        assert!(host_session_resumable(ws, "20260706_090000_abcdef"));
+        assert!(!host_session_resumable(ws, "20990101_000000_zzzzzz"));
     }
 }

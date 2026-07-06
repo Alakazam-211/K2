@@ -96,11 +96,12 @@ impl HostEnv {
     /// an ABSOLUTE path, so the daemon's login-PATH enrichment can never
     /// shadow it with a real `claude` install.
     fn set(api_on: bool) -> Self {
-        let names: [&'static str; 4] = [
+        let names: [&'static str; 5] = [
             "K2_API",
             "K2_SANDBOX_API",
             "HOME",
             "K2_HOST_SESSION_READY_TIMEOUT_SECS",
+            "K2_HOST_SESSION_ADOPTION_DELAY_MS",
         ];
         let prev: Vec<_> = names.iter().map(|n| (*n, std::env::var_os(n))).collect();
 
@@ -112,6 +113,9 @@ impl HostEnv {
         // `cat` never advertises bracketed-paste readiness — clamp the
         // post-spawn prompt injector's ceiling so tests stay fast.
         std::env::set_var("K2_HOST_SESSION_READY_TIMEOUT_SECS", "1");
+        // Slice W3 — clamp the self-minting adoption probe's 5s window so
+        // the shim scenario doesn't sleep real seconds.
+        std::env::set_var("K2_HOST_SESSION_ADOPTION_DELAY_MS", "400");
 
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -165,6 +169,51 @@ impl HostEnv {
         }
         capture
     }
+
+    /// Mint an additional `exec cat` shim under `name` (the basename drives
+    /// the ProviderResume adapter — `codex` gets subcommand grammar + the
+    /// self-minting adoption path). Returns its absolute path.
+    fn shim_named(&self, name: &str) -> String {
+        let shim = self.shim_dir.join(name);
+        std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("write named shim");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod named shim");
+        }
+        shim.to_string_lossy().into_owned()
+    }
+}
+
+/// Fabricate the on-disk session record a REAL codex writes at boot
+/// (`~/.codex/sessions/YYYY/MM/DD/rollout-<ISO>-<uuid>.jsonl`, line 1 =
+/// `session_meta` with the provider-minted id + cwd) so the deferred
+/// adoption probe (`ProviderResume::newest_on_disk` → `detect_codex_session`)
+/// has something true to discover. The `exec cat` shim can't write this
+/// itself — the TEST plays the provider's disk role, pre-seeding before
+/// spawn so the single-shot probe can't race the write.
+fn write_codex_session_fixture(home: &std::path::Path, provider_sid: &str, cwd: &str) {
+    let day_dir = home
+        .join(".codex")
+        .join("sessions")
+        .join("2026")
+        .join("07")
+        .join("06");
+    std::fs::create_dir_all(&day_dir).expect("create codex sessions dir");
+    let meta = serde_json::json!({
+        "type": "session_meta",
+        "payload": {
+            "id": provider_sid,
+            "timestamp": "2026-07-06T00:00:00Z",
+            "cwd": cwd,
+        }
+    });
+    std::fs::write(
+        day_dir.join(format!("rollout-2026-07-06T00-00-00-{provider_sid}.jsonl")),
+        format!("{meta}\n"),
+    )
+    .expect("write codex rollout fixture");
 }
 
 /// Wire `ws_name`'s DEFAULT AGENT to the shim through the REAL seam: an
@@ -977,4 +1026,175 @@ async fn settle_profile_spawn_prompt_reaches_the_pty() {
     );
 
     close_session(d.port, &agent).await;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 8 — Slice W3: self-minting provider adoption → list → resume
+// ─────────────────────────────────────────────────────────────────────
+
+/// A `codex`-named shim (self-minting adapter provider: subcommand resume
+/// grammar, NO premint) driven END-TO-END through the real dispatcher:
+///
+///   1. fresh spawn carries NO session identity in argv (nothing to premint);
+///   2. the deferred adoption probe discovers the provider-minted id from
+///      codex's on-disk store and stamps the `api-…` row → the LIST shows it
+///      (live, via the agent-name key — the PTY runs under a different
+///      forced daemon SessionId);
+///   3. resume-while-LIVE with the ADOPTED id routes into the SAME PTY
+///      (no duplicate spawn), echoing the addressed id;
+///   4. message-live addressed by the ADOPTED id works (owner recorded at
+///      adoption);
+///   5. resume-after-death boots a new PTY with codex's SUBCOMMAND grammar
+///      (`resume <id>`, preset args dropped) and the response sessionId
+///      equals the provider id.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn self_minting_provider_adoption_lists_and_resumes() {
+    let _g = lock();
+    let env = HostEnv::set(true);
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let ws_path = setup_project("hs-adopt");
+    let codex_shim = env.shim_named("codex");
+    configure_ws_agent("hs-adopt", &codex_shim);
+
+    // Pre-seed the provider's on-disk session record (what a real codex
+    // writes at boot) BEFORE spawning, so the single-shot 400ms adoption
+    // probe deterministically finds it.
+    let provider_sid = uuid::Uuid::new_v4().to_string();
+    write_codex_session_fixture(&env.tmp_home, &provider_sid, &ws_path.to_string_lossy());
+
+    // (1) Fresh spawn — the FROZEN five-key shape, and a BARE argv: codex
+    // has no premint, so the host splices nothing (the danger flag from the
+    // preset would also be stripped; here the preset is the bare shim).
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-adopt/host-sessions?token={OWNER_TOKEN}"),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(status, 200, "codex-shim spawn failed: {resp}");
+    let v = json(&resp);
+    assert_eq!(v.as_object().map(|o| o.len()), Some(5), "frozen shape; body={resp}");
+    assert_eq!(v["sandbox"], "none");
+    let spawn_sid = v["sessionId"].as_str().expect("sessionId").to_string();
+    let agent = v["agentName"].as_str().expect("agentName").to_string();
+    assert_ne!(spawn_sid, provider_sid, "daemon sid is NOT the provider's id");
+    {
+        let sid = k2_core::session::SessionId::parse(&spawn_sid).expect("uuid");
+        let session = v2_session_map::lookup_by_session_id(&sid).expect("registered");
+        assert!(
+            session.args.is_empty(),
+            "self-minting spawn must carry NO session identity in argv: {:?}",
+            session.args
+        );
+    }
+
+    // (2) ADOPTION → the list shows the provider-minted id, LIVE (agent-name
+    // keyed liveness — the PTY's daemon SessionId differs). Poll with a hard
+    // deadline: the probe fires ~400ms post-spawn.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let listed = loop {
+        let (status, resp) = http_req(
+            d.port,
+            "GET",
+            &format!("/v1/w/hs-adopt/host-sessions?token={OWNER_TOKEN}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, 200, "list failed: {resp}");
+        let l = json(&resp);
+        let hit = l["sessions"]
+            .as_array()
+            .expect("sessions")
+            .iter()
+            .find(|e| e["sessionId"] == serde_json::json!(provider_sid))
+            .cloned();
+        if let Some(entry) = hit {
+            break entry;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "adopted session never appeared in the list; last body={resp}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(listed["live"], true, "adopted session must list as LIVE: {listed}");
+    assert_eq!(listed["agentName"], serde_json::json!(agent));
+
+    // (3) Resume-while-LIVE with the ADOPTED id → delivered into the SAME
+    // PTY (observed on the ORIGINAL session's Term), echoing the adopted id.
+    let body = serde_json::json!({ "session": provider_sid, "prompt": "hs-adopt-live-resume" })
+        .to_string();
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-adopt/host-sessions?token={OWNER_TOKEN}"),
+        Some(&body),
+    )
+    .await;
+    assert_eq!(status, 200, "live resume failed: {resp}");
+    let r = json(&resp);
+    assert_eq!(r["live"], true, "body={resp}");
+    assert_eq!(r["delivered"], true, "body={resp}");
+    assert_eq!(r["sessionId"], serde_json::json!(provider_sid), "echo the ADDRESSED id");
+    assert_text_appears(&spawn_sid, "hs-adopt-live-resume", "live resume into same PTY").await;
+
+    // (4) Message-live ADDRESSED BY the adopted id (owner recorded at
+    // adoption time — the default-deny gate must vouch for it).
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-adopt/host-sessions/{provider_sid}?token={OWNER_TOKEN}"),
+        Some(r#"{"prompt":"hs-adopt-msg-by-adopted-id"}"#),
+    )
+    .await;
+    assert_eq!(status, 200, "message-live by adopted id failed: {resp}");
+    assert_text_appears(&spawn_sid, "hs-adopt-msg-by-adopted-id", "adopted-id message").await;
+
+    // (5) Kill it, then resume-after-death: codex SUBCOMMAND grammar.
+    close_session(d.port, &agent).await;
+    let body = serde_json::json!({ "session": provider_sid }).to_string();
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-adopt/host-sessions?token={OWNER_TOKEN}"),
+        Some(&body),
+    )
+    .await;
+    assert_eq!(status, 200, "dead resume failed: {resp}");
+    let v2 = json(&resp);
+    assert_eq!(v2.as_object().map(|o| o.len()), Some(5), "frozen shape; body={resp}");
+    assert_eq!(
+        v2["sessionId"],
+        serde_json::json!(provider_sid),
+        "a UUID-shaped provider id rides the forced daemon sid on resume"
+    );
+    let agent2 = v2["agentName"].as_str().expect("agentName").to_string();
+    assert_ne!(agent2, agent, "resume mints a fresh api- agent");
+    let resumed = v2_session_map::lookup_by_agent_name(&agent2).expect("resumed PTY registered");
+    assert_eq!(
+        resumed.args,
+        vec!["resume".to_string(), provider_sid.clone()],
+        "codex resume grammar: leading subcommand pair, preset args dropped"
+    );
+
+    // The resumed spawn's argv stamped the new row (commit-1 grammar scan) —
+    // the list still resolves the provider id, and it is LIVE again.
+    let (status, resp) = http_req(
+        d.port,
+        "GET",
+        &format!("/v1/w/hs-adopt/host-sessions?token={OWNER_TOKEN}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "post-resume list failed: {resp}");
+    let l = json(&resp);
+    let live_again = l["sessions"]
+        .as_array()
+        .expect("sessions")
+        .iter()
+        .any(|e| e["sessionId"] == serde_json::json!(provider_sid) && e["live"] == true);
+    assert!(live_again, "resumed provider session must list live; body={resp}");
+
+    close_session(d.port, &agent2).await;
 }

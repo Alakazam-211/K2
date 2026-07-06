@@ -236,15 +236,32 @@ pub fn resolve_host_spawn(
     // (3) Session-identity grammar, spliced HOST-SIDE via the ProviderResume
     // adapter table: fresh → the premint flag (`--session-id <sid>` for
     // claude/grok); resume → the provider's resume grammar (`--resume <sid>`,
-    // pi `--session`, codex `resume <sid>`). Self-minting / unknown providers
-    // spawn bare (degraded-but-correct, same posture as every other daemon
-    // spawn site) — and because the argv then carries no identity, v2_spawn's
-    // `autoinject_premint_session_id` is a no-op for unknown providers.
+    // pi `--session`, codex `resume <sid>`). Self-minting providers
+    // (pi/codex/gemini/cursor/hermes) spawn bare on a FRESH session — the
+    // route's deferred adoption discovers + stamps their provider-minted id
+    // post-hoc; unknown providers spawn bare period (degraded-but-correct,
+    // same posture as every other daemon spawn site) — and because the argv
+    // then carries no identity, v2_spawn's `autoinject_premint_session_id`
+    // is a no-op for unknown providers.
+    //
+    // On RESUME the id spliced into the grammar is the caller's validated
+    // resume TARGET (`req.session` — the route already checked it against
+    // this workspace's own api-spawned index), NOT necessarily `sid`: for a
+    // self-minting provider the on-disk conversation id is provider-minted
+    // and — for hermes — not even UUID-shaped, so it cannot always ride the
+    // forced daemon SessionId. When the target IS a UUID the route forces
+    // `sid == target` and the two coincide (the claude/grok premint case).
     if let Some(adapter) =
         k2_core::workspace::provider_resume::provider_resume_for_command(&command)
     {
         if resume {
-            args = adapter.resume_args(&args, &sid);
+            let target = req
+                .session
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&sid);
+            args = adapter.resume_args(&args, target);
         } else if let Some(preminted) = adapter.premint_args(&args, &sid) {
             args = preminted;
         }
@@ -493,6 +510,39 @@ mod tests {
             "K2-staged principal key must OVERRIDE the preset's entry"
         );
         assert_eq!(env.len(), 2, "no other entries invented");
+    }
+
+    /// Slice W3: on resume, the id spliced into the provider grammar is the
+    /// caller's validated TARGET (`req.session`) — which for a self-minting
+    /// provider (hermes) may not be UUID-shaped and thus can't equal the
+    /// forced daemon SessionId.
+    #[test]
+    fn resume_splices_the_caller_target_not_the_forced_sid() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-target";
+        insert_project("v1host-policy-target", ws_path);
+        let forced = SessionId::new();
+
+        let spawn = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &forced,
+            true,
+            &ApiHostSessionRequest {
+                session: Some("20260706_090000_abcdef".to_string()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            spawn.args.as_deref(),
+            Some(&["--resume".to_string(), "20260706_090000_abcdef".to_string()][..]),
+            "resume grammar must carry the provider-minted target, never the forced sid"
+        );
+        assert_eq!(
+            spawn.forced_session_id,
+            Some(forced),
+            "the daemon session id stays the forced one"
+        );
     }
 
     /// A blank principal key stages nothing (never an empty assignment).

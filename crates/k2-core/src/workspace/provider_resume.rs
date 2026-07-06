@@ -166,6 +166,15 @@ pub fn provider_resume_for_provider(provider: &str) -> Option<&'static ProviderR
     PROVIDERS.iter().find(|p| p.provider == provider)
 }
 
+/// The union of flag tokens that carry a session id in SOME supported
+/// provider's grammar: `--session-id` (claude/grok premint),
+/// `--resume` / `-r` (claude/grok/gemini/cursor/hermes resume + shared
+/// aliases), `--session` (pi). Single source for the grammar-union
+/// matcher ([`argv_references_session`]) and the per-provider extractor
+/// ([`session_id_from_spawn_argv`]) — new grammars are added HERE and in
+/// [`PROVIDERS`], nowhere else.
+const SESSION_FLAG_TOKENS: &[&str] = &["--session-id", "--resume", "-r", "--session"];
+
 /// Does a spawned argv claim ownership of `session_id`? Recognizes
 /// EVERY grammar K2 (or a user) launches supported agents with:
 ///
@@ -189,12 +198,51 @@ pub fn argv_references_session(args: &[String], session_id: &str) -> bool {
     if args.len() >= 2 && args[0] == "resume" && args[1] == session_id {
         return true;
     }
-    args.windows(2).any(|w| {
-        matches!(
-            w[0].as_str(),
-            "--session-id" | "--resume" | "-r" | "--session"
-        ) && w[1] == session_id
-    })
+    args.windows(2)
+        .any(|w| SESSION_FLAG_TOKENS.contains(&w[0].as_str()) && w[1] == session_id)
+}
+
+/// First `<flag> <value>` pair whose flag satisfies `is_flag`.
+fn flag_value(args: &[String], is_flag: impl Fn(&str) -> bool) -> Option<String> {
+    args.windows(2)
+        .find_map(|w| is_flag(w[0].as_str()).then(|| w[1].clone()))
+}
+
+/// EXTRACT the session id a spawn argv claims for `command`, in that
+/// provider's grammar — the write-side dual of
+/// [`argv_references_session`] (any id returned here satisfies the
+/// matcher; the two share [`SESSION_FLAG_TOKENS`] / the adapter table).
+/// This is what `v2_session_map::register` stamps
+/// `workspace_tab_sessions.session_id` from, so it must recognize EVERY
+/// grammar the daemon assembles ([`ProviderResume::resume_args`] /
+/// [`ProviderResume::premint_args`]) — the pre-Slice-W3 inline
+/// `--session-id`/`--resume` scan missed pi's `--session` and codex's
+/// leading `resume <id>` subcommand, leaving those rows NULL (invisible
+/// to the /v1 host-sessions list/resume index).
+///
+/// Command-aware:
+/// - known subcommand-grammar provider (codex) → the LEADING
+///   `resume <id>` pair only (a deeper positional `resume` is prompt
+///   text, not identity);
+/// - known flag-grammar provider → its resume flag, the shared
+///   `--resume`/`-r` aliases, and its premint flag (if any);
+/// - unknown command → the legacy generic `--session-id`/`--resume`
+///   pair scan, byte-identical to the historical v2_session_map
+///   behavior for arbitrary commands (deliberately NOT widened: a
+///   random command's `--session`/leading-`resume` argv is not evidence
+///   of a resumable conversation).
+pub fn session_id_from_spawn_argv(command: &str, args: &[String]) -> Option<String> {
+    match provider_resume_for_command(command) {
+        Some(adapter) => match adapter.grammar {
+            ResumeGrammar::Subcommand(sub) => {
+                (args.len() >= 2 && args[0] == sub).then(|| args[1].clone())
+            }
+            ResumeGrammar::Flag(flag) => flag_value(args, |a| {
+                a == flag || a == "--resume" || a == "-r" || Some(a) == adapter.premint_flag()
+            }),
+        },
+        None => flag_value(args, |a| a == "--session-id" || a == "--resume"),
+    }
 }
 
 impl ProviderResume {
@@ -688,6 +736,125 @@ mod tests {
         assert!(!argv_references_session(&args(&["--resume", "other"]), sid));
         assert!(!argv_references_session(&args(&["--resume", sid]), ""));
         assert!(!argv_references_session(&[], sid));
+    }
+
+    // ── session_id_from_spawn_argv (registration stamping, Slice W3) ─
+
+    #[test]
+    fn spawn_argv_extraction_covers_every_premint_grammar() {
+        let sid = "aaaaaaaa-0000-4000-8000-000000000001";
+        // claude / grok premint (`--session-id <id>`).
+        for cmd in ["claude", "grok", "/usr/local/bin/claude"] {
+            assert_eq!(
+                session_id_from_spawn_argv(cmd, &args(&["--session-id", sid])).as_deref(),
+                Some(sid),
+                "{cmd} premint argv must stamp"
+            );
+        }
+    }
+
+    #[test]
+    fn spawn_argv_extraction_covers_every_flag_resume_grammar() {
+        let sid = "aaaaaaaa-0000-4000-8000-000000000002";
+        // Shared `--resume` (claude/grok/gemini/cursor/hermes) + `-r`.
+        for cmd in ["claude", "grok", "gemini", "cursor-agent", "hermes"] {
+            assert_eq!(
+                session_id_from_spawn_argv(cmd, &args(&["--model", "x", "--resume", sid]))
+                    .as_deref(),
+                Some(sid),
+                "{cmd} --resume argv must stamp"
+            );
+            assert_eq!(
+                session_id_from_spawn_argv(cmd, &args(&["-r", sid])).as_deref(),
+                Some(sid),
+                "{cmd} -r argv must stamp"
+            );
+        }
+        // Pi's `--session <id>` (its --resume is the interactive picker;
+        // the shared aliases still count if a user typed them).
+        assert_eq!(
+            session_id_from_spawn_argv("pi", &args(&["--session", sid])).as_deref(),
+            Some(sid),
+            "pi --session was the missed grammar this slice exists for"
+        );
+        // A trailing flag with no value never stamps.
+        assert_eq!(session_id_from_spawn_argv("pi", &args(&["--session"])), None);
+        assert_eq!(session_id_from_spawn_argv("claude", &args(&["--resume"])), None);
+    }
+
+    #[test]
+    fn spawn_argv_extraction_covers_the_subcommand_grammar() {
+        let sid = "aaaaaaaa-0000-4000-8000-000000000003";
+        // codex `resume <id>` — LEADING pair only.
+        assert_eq!(
+            session_id_from_spawn_argv("codex", &args(&["resume", sid])).as_deref(),
+            Some(sid),
+            "codex resume subcommand was the other missed grammar"
+        );
+        assert_eq!(
+            session_id_from_spawn_argv("codex", &args(&["-c", "resume", sid])),
+            None,
+            "a deeper positional `resume` is not identity"
+        );
+        // codex has no premint and no flag grammar — a stray --resume in
+        // codex argv is not the codex identity convention.
+        assert_eq!(
+            session_id_from_spawn_argv("codex", &args(&["--resume", sid])),
+            None
+        );
+        // Bare self-minting spawn extracts nothing (post-hoc adoption's job).
+        assert_eq!(session_id_from_spawn_argv("codex", &[]), None);
+    }
+
+    #[test]
+    fn spawn_argv_extraction_unknown_command_keeps_legacy_scan() {
+        let sid = "aaaaaaaa-0000-4000-8000-000000000004";
+        // Unknown commands keep the historical --session-id/--resume pair
+        // scan byte-identical…
+        assert_eq!(
+            session_id_from_spawn_argv("some-agent", &args(&["--session-id", sid])).as_deref(),
+            Some(sid)
+        );
+        assert_eq!(
+            session_id_from_spawn_argv("some-agent", &args(&["--resume", sid])).as_deref(),
+            Some(sid)
+        );
+        // …and are deliberately NOT widened to the provider-only grammars.
+        assert_eq!(
+            session_id_from_spawn_argv("some-agent", &args(&["--session", sid])),
+            None
+        );
+        assert_eq!(
+            session_id_from_spawn_argv("some-agent", &args(&["resume", sid])),
+            None
+        );
+        assert_eq!(session_id_from_spawn_argv("", &args(&["--resume", sid])).as_deref(), Some(sid));
+    }
+
+    #[test]
+    fn spawn_argv_extraction_agrees_with_the_reference_matcher() {
+        // DUALITY INVARIANT: any id the extractor stamps must satisfy the
+        // live-PTY matcher (`argv_references_session`) — the read side of
+        // the same grammar table. Exercise one argv per grammar.
+        let sid = "aaaaaaaa-0000-4000-8000-000000000005";
+        for (cmd, argv) in [
+            ("claude", args(&["--session-id", sid])),
+            ("grok", args(&["--always-approve", "--resume", sid])),
+            ("gemini", args(&["-r", sid])),
+            ("cursor-agent", args(&["--resume", sid])),
+            ("hermes", args(&["--resume", sid])),
+            ("pi", args(&["--session", sid])),
+            ("codex", args(&["resume", sid])),
+            ("unknown-cli", args(&["--session-id", sid])),
+        ] {
+            let extracted = session_id_from_spawn_argv(cmd, &argv)
+                .unwrap_or_else(|| panic!("{cmd}: extraction must hit"));
+            assert_eq!(extracted, sid, "{cmd}");
+            assert!(
+                argv_references_session(&argv, &extracted),
+                "{cmd}: extracted id must satisfy argv_references_session"
+            );
+        }
     }
 
     #[test]

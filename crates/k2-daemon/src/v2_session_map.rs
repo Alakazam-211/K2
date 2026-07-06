@@ -191,32 +191,30 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
                 return;
             }
             let args_json = serde_json::to_string(&session.args).ok();
-            // 0.38.8 — extract claude's session UUID from the args if
-            // present. v2_spawn::handle_v2_spawn auto-injects
-            // `--session-id <uuid>` for every Cmd+T claude spawn, so
-            // we can stamp `workspace_tab_sessions.session_id` here.
-            // Restart-recovery in v2_spawn reads this column to splice
-            // `--resume <uuid>` on the next daemon restart →
-            // conversation continuity for Cmd+T tabs.
-            let claude_session_id = session
-                .args
-                .windows(2)
-                .find_map(|w| {
-                    if w[0] == "--session-id" || w[0] == "--resume" {
-                        Some(w[1].clone())
-                    } else {
-                        None
-                    }
-                });
+            // 0.38.8 → Slice W3 — extract the provider's session id from
+            // the spawn argv, TABLE-DRIVEN (`provider_resume`): claude/
+            // grok `--session-id`/`--resume`/`-r`, pi `--session`, codex
+            // leading `resume <id>`; unknown commands keep the legacy
+            // `--session-id`/`--resume` pair scan byte-identical. This
+            // stamp is what makes restart-recovery splice a resume on
+            // the next daemon restart AND what the /v1 host-sessions
+            // list/resume index (`api-…` rows) keys on — the old inline
+            // claude-only scan left pi/codex rows NULL, so API-spawned
+            // sessions of those providers never listed or resumed.
+            let claimed_session_id =
+                k2_core::workspace::provider_resume::session_id_from_spawn_argv(
+                    session.program.as_deref().unwrap_or(""),
+                    &session.args,
+                );
             let row = k2_core::db::schema::WorkspaceTabSession {
                 project_id,
                 pane_group_id,
                 agent_name: key,
-                // Set when spawn args carry --session-id / --resume;
-                // None otherwise. The upsert uses COALESCE so a
-                // subsequent re-register without the flag won't
-                // clobber a previously-stamped value.
-                session_id: claude_session_id,
+                // Set when spawn args carry session identity in the
+                // provider's grammar; None otherwise. The upsert uses
+                // COALESCE so a subsequent re-register without the flag
+                // won't clobber a previously-stamped value.
+                session_id: claimed_session_id,
                 command: session.program.clone(),
                 args_json,
                 cwd: Some(cwd),

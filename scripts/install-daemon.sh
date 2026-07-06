@@ -219,6 +219,20 @@ case "$SIG" in
     *) printf '%s\n' "$SIG" > "$DL_SIG" ;;
 esac
 
+# Tauri's signer emits .sig content as BASE64 of the minisig text (the
+# Rust self-updater decodes it); minisign -x needs the raw text. Decode
+# when the file isn't already a bare minisig.
+if ! head -c 17 "$DL_SIG" | grep -q "untrusted comment"; then
+    if base64 -d "$DL_SIG" > "$DL_SIG.dec" 2>/dev/null \
+        || base64 -D "$DL_SIG" > "$DL_SIG.dec" 2>/dev/null \
+        || base64 -D -i "$DL_SIG" -o "$DL_SIG.dec" 2>/dev/null; then
+        mv "$DL_SIG.dec" "$DL_SIG"
+    else
+        rm -f "$DL_SIG.dec"
+        die "Signature file is not a minisig and base64-decoding it failed."
+    fi
+fi
+
 echo "Verifying minisign signature..."
 if ! minisign -Vm "$DL_BIN" -P "$K2_DAEMON_PUBKEY" -x "$DL_SIG" >/dev/null 2>&1; then
     echo "MINISIGN VERIFICATION FAILED for $URL" >&2

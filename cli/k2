@@ -1741,6 +1741,20 @@ cmd_daemon_install() {
         *) printf '%s\n' "$sig" > "$dl_sig" ;;
     esac
 
+    # Tauri's signer emits .sig content as BASE64 of the minisig text;
+    # minisign -x needs the raw text. Decode when it isn't already bare.
+    if ! head -c 17 "$dl_sig" | grep -q "untrusted comment"; then
+        if base64 -d "$dl_sig" > "$dl_sig.dec" 2>/dev/null \
+            || base64 -D "$dl_sig" > "$dl_sig.dec" 2>/dev/null \
+            || base64 -D -i "$dl_sig" -o "$dl_sig.dec" 2>/dev/null; then
+            mv "$dl_sig.dec" "$dl_sig"
+        else
+            rm -f "$dl_sig.dec"
+            echo "Signature is not a minisig and base64-decode failed." >&2
+            return 1
+        fi
+    fi
+
     echo "Verifying minisign signature..."
     if ! minisign -Vm "$dl_bin" -P "$_DAEMON_MINISIGN_PUBKEY" -x "$dl_sig" >/dev/null 2>&1; then
         echo "MINISIGN VERIFICATION FAILED for $url" >&2

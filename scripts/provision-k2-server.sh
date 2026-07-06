@@ -209,11 +209,13 @@ if [ -n "${K2_OWNER_USER:-}" ]; then
 	log "creating owner user '${K2_OWNER_USER}'"
 	BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OWNER_USER"],"password":os.environ["K2_OWNER_PASSWORD"]}))')
 	ADD_RES_FILE=$(mktemp)
+	OWNER_CREATED=1
 	HTTP=$(curl -sS -o "$ADD_RES_FILE" -w '%{http_code}' -X POST "$BASE/cli/users/add?token=$TOKEN" -d "$BODY")
 	if [ "$HTTP" != "200" ]; then
 		grep -qi "exist" "$ADD_RES_FILE" \
 			|| die "users/add failed ($HTTP): $(cat "$ADD_RES_FILE")"
-		log "owner user already exists — continuing (idempotent re-run)"
+		log "owner user already exists — continuing (idempotent re-run, password unchanged)"
+		OWNER_CREATED=0
 	fi
 	rm -f "$ADD_RES_FILE"
 	ROLE_BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OWNER_USER"],"role":"owner"}))')
@@ -241,7 +243,7 @@ echo "  daemon:    $(systemctl is-active "$K2_UNIT_NAME") on 127.0.0.1:${PORT}"
 [ -n "${K2_SUBDOMAIN:-}" ] && echo "  address:   https://${K2_SUBDOMAIN}.k2.dev"
 if [ -n "${K2_OWNER_USER:-}" ]; then
 	echo "  owner:     ${K2_OWNER_USER}"
-	if [ "$GENERATED_PW" = 1 ] && [ -z "${K2_CALLBACK_URL:-}" ]; then
+	if [ "${OWNER_CREATED:-0}" = 1 ] && [ "$GENERATED_PW" = 1 ] && [ -z "${K2_CALLBACK_URL:-}" ]; then
 		echo "  password:  ${K2_OWNER_PASSWORD}   (generated — shown ONCE, store it now)"
 	fi
 fi

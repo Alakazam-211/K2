@@ -31,6 +31,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { formatRelativeTime } from '@/components/AgentOps/ops-api'
+import { KeyCombo } from '@/components/KeySymbol'
 import {
   fetchProjectGroupMessages,
   postProjectGroupMessage,
@@ -350,30 +351,33 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
           ) : (
             <>
               {sendError && <div className="mb-1.5 text-[11px] text-red-400">{sendError}</div>}
-              <div className="flex items-end gap-2">
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                      e.preventDefault()
-                      send()
-                    }
-                    // Keep Esc local — the page-level Esc focuses the
-                    // dashboard's last-used terminal pane (§6.7.4).
-                    if (e.key === 'Escape') e.stopPropagation()
-                  }}
-                  placeholder={composerPlaceholder(show.members, show.pocWorkspaceId)}
-                  rows={2}
-                  className="flex-1 px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none placeholder:text-[var(--color-text-muted)]"
-                />
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault()
+                    send()
+                  }
+                  // Keep Esc local — the page-level Esc focuses the
+                  // dashboard's last-used terminal pane (§6.7.4).
+                  if (e.key === 'Escape') e.stopPropagation()
+                }}
+                placeholder={composerPlaceholder(show.members, show.pocWorkspaceId)}
+                rows={2}
+                className="w-full px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none placeholder:text-[var(--color-text-muted)]"
+              />
+              <div className="flex justify-end mt-1.5">
                 <button
                   type="button"
                   disabled={busy || draft.trim().length === 0}
                   onClick={send}
-                  className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                  className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer flex items-center gap-1.5"
                 >
                   Send
+                  <span className="text-[9px] font-mono text-[var(--color-text-muted)]">
+                    <KeyCombo combo="⌘⏎" />
+                  </span>
                 </button>
               </div>
             </>

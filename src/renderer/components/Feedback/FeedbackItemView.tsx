@@ -21,6 +21,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { formatRelativeTime } from '@/components/AgentOps/ops-api'
+import { KeyCombo } from '@/components/KeySymbol'
 import {
   commentFeedback,
   fetchFeedbackShow,
@@ -296,7 +297,7 @@ function ThreadTab({
               sendReply()
             }
           }}
-          placeholder="Add a comment — it lands in the agent's session (⌘⏎ to send)"
+          placeholder="Add a comment — it lands in the agent's session"
           rows={2}
           className="w-full px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none placeholder:text-[var(--color-text-muted)]"
         />
@@ -305,9 +306,12 @@ function ThreadTab({
             type="button"
             disabled={busy || reply.trim().length === 0}
             onClick={sendReply}
-            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer flex items-center gap-1.5"
           >
             Comment
+            <span className="text-[9px] font-mono text-[var(--color-text-muted)]">
+              <KeyCombo combo="⌘⏎" />
+            </span>
           </button>
           <div className="flex-1" />
           {openItem && (

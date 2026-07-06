@@ -798,6 +798,8 @@ mod tests {
         let principal = V1Principal::Api(k2_core::api_keys::ApiPrincipal {
             id: "key-uuid-1".to_string(),
             anthropic_key: Some("sk-ant-principal-key".to_string()),
+            provider: None,
+            base_url: None,
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
         });
@@ -915,6 +917,8 @@ mod tests {
         let principal = V1Principal::Api(k2_core::api_keys::ApiPrincipal {
             id: "key-uuid-2".to_string(),
             anthropic_key: Some("   ".to_string()),
+            provider: None,
+            base_url: None,
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
         });

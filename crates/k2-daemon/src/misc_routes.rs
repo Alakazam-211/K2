@@ -1168,6 +1168,19 @@ pub(crate) fn api_capability() -> serde_json::Value {
 /// stored). The owner must surface it to the caller now. NEVER logs the raw
 /// key or the anthropic key.
 ///
+/// W5 (0.40.30, migration 0071) — ADDITIVE provider metadata (existing
+/// request shapes keep working byte-identically):
+/// - `"llmKey"` / `"llm_key"` — provider-neutral alias for the credential
+///   (`anthropicKey` still accepted and takes precedence when both appear).
+/// - `"provider"` — the credential's LLM provider. Validated against
+///   [`k2_core::api_keys::LlmProvider`] and stored CANONICAL (`anthropic`,
+///   `openai`, `google`, `xai`; aliases `gemini`/`grok` normalize). An
+///   UNKNOWN value is a 400 (never stored — a typo'd provider would
+///   otherwise fail closed at staging and boot the agent unauthenticated).
+///   Absent/blank → NULL = anthropic (today's behavior).
+/// - `"baseUrl"` / `"base_url"` — optional endpoint override, staged as
+///   `OPENAI_BASE_URL` for openai keys; stored verbatim otherwise-unused.
+///
 /// `actor` is the dispatcher-resolved NON-secret acting identity
 /// (`"owner-token"` or `"user:<name>"`, `api_key_manager_identity`) — the F4
 /// audit trail: every mint is logged with who did it.
@@ -1179,11 +1192,40 @@ pub fn handle_api_key_create(body: &[u8], actor: &str) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     let label = v.get("label").and_then(|x| x.as_str()).unwrap_or("");
-    // Accept either `anthropicKey` (camel) or `anthropic_key` (snake).
+    // Accept either `anthropicKey` (camel) or `anthropic_key` (snake) — plus
+    // the W5 provider-neutral aliases `llmKey`/`llm_key` (the same stored
+    // credential; the historical names win when both are present).
     let anthropic_key = v
         .get("anthropicKey")
         .and_then(|x| x.as_str())
-        .or_else(|| v.get("anthropic_key").and_then(|x| x.as_str()));
+        .or_else(|| v.get("anthropic_key").and_then(|x| x.as_str()))
+        .or_else(|| v.get("llmKey").and_then(|x| x.as_str()))
+        .or_else(|| v.get("llm_key").and_then(|x| x.as_str()));
+
+    // W5 — optional provider (validated + canonicalized; absent/blank → NULL
+    // = anthropic). Reject-at-mint: a typo'd provider would silently fail
+    // closed at STAGING time (nothing staged), so surface it here instead.
+    let provider_raw = v.get("provider").and_then(|x| x.as_str()).unwrap_or("");
+    let provider_canonical: Option<&'static str> = if provider_raw.trim().is_empty() {
+        None
+    } else {
+        match k2_core::api_keys::LlmProvider::parse(provider_raw) {
+            Some(p) => Some(p.canonical_name()),
+            None => {
+                return CliResponse::bad_request(format!(
+                    "unknown provider {:?}; accepted: {}",
+                    provider_raw.trim(),
+                    k2_core::api_keys::LlmProvider::ACCEPTED,
+                ))
+            }
+        }
+    };
+    // W5 — optional endpoint override (OPENAI_BASE_URL pass-through for
+    // openai keys). Stored verbatim; blank → NULL.
+    let base_url = v
+        .get("baseUrl")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.get("base_url").and_then(|x| x.as_str()));
 
     // Sandbox v2 (PRD §G2 #4) — normalize the optional per-key WORKSPACE GRANT
     // from the body into the raw TEXT column stored by `create_api_key`.
@@ -1214,7 +1256,13 @@ pub fn handle_api_key_create(body: &[u8], actor: &str) -> CliResponse {
         _ => None,
     };
 
-    match k2_core::api_keys::create_api_key(label, anthropic_key, workspaces_grant.as_deref()) {
+    match k2_core::api_keys::create_api_key(
+        label,
+        anthropic_key,
+        workspaces_grant.as_deref(),
+        provider_canonical,
+        base_url,
+    ) {
         // The ONLY place the raw key is ever returned. Not logged — the audit
         // line carries the id + label + ACTOR only, never a secret.
         Ok((id, raw)) => {
@@ -1276,6 +1324,11 @@ pub fn handle_api_key_list() -> CliResponse {
                         // so the owner can audit which workspaces the key can
                         // address (null = fail-closed, no grant).
                         "allowedWorkspaces": m.allowed_workspaces,
+                        // W5 (0071) — ADDITIVE non-secret provider metadata
+                        // (null provider = anthropic default). Never the
+                        // credential itself.
+                        "provider": m.provider,
+                        "baseUrl": m.base_url,
                     })
                 })
                 .collect();
@@ -1448,6 +1501,107 @@ mod api_key_route_tests {
     fn revoke_missing_id_is_bad_request() {
         let resp = handle_api_key_revoke(b"{}", "owner-token");
         assert_eq!(resp.status, "400 Bad Request");
+    }
+
+    /// W5 — ADDITIVE provider fields on create/list: a provider'd create
+    /// round-trips (canonicalized), the `llmKey` alias stores the credential,
+    /// and a legacy provider-less create keeps working with null metadata.
+    #[test]
+    fn create_with_provider_round_trips_additively() {
+        let secret = "sk-oai-route-secret-w5";
+        // Aliased spellings: `llmKey` + alias provider `gemini` (→ google).
+        let body = serde_json::json!({
+            "label": "route-w5-google",
+            "llmKey": secret,
+            "provider": "Gemini",
+        })
+        .to_string();
+        let resp = handle_api_key_create(body.as_bytes(), "owner-token");
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let id = serde_json::from_str::<serde_json::Value>(&resp.body).unwrap()["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+
+        // openai + baseUrl round trip.
+        let body = serde_json::json!({
+            "label": "route-w5-openai",
+            "anthropicKey": secret,
+            "provider": "openai",
+            "baseUrl": "https://oai.example/v1",
+        })
+        .to_string();
+        let resp = handle_api_key_create(body.as_bytes(), "owner-token");
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let id_oai = serde_json::from_str::<serde_json::Value>(&resp.body).unwrap()["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+
+        let list = handle_api_key_list();
+        assert_eq!(list.status, "200 OK");
+        assert!(!list.body.contains(secret), "list must never leak the credential");
+        let parsed: serde_json::Value = serde_json::from_str(&list.body).expect("json");
+        let keys = parsed["keys"].as_array().expect("keys");
+        let google = keys.iter().find(|k| k["id"] == serde_json::json!(id)).expect("google key");
+        assert_eq!(
+            google["provider"],
+            serde_json::json!("google"),
+            "alias gemini canonicalizes to google; got {google}"
+        );
+        assert_eq!(google["baseUrl"], serde_json::Value::Null);
+        assert_eq!(google["anthropicKeySet"], serde_json::json!(true), "llmKey alias stored");
+        let oai = keys.iter().find(|k| k["id"] == serde_json::json!(id_oai)).expect("oai key");
+        assert_eq!(oai["provider"], serde_json::json!("openai"));
+        assert_eq!(oai["baseUrl"], serde_json::json!("https://oai.example/v1"));
+
+        // FROZEN-SHAPE guard: the legacy provider-less body still mints, and
+        // its listed metadata is null (= anthropic default at staging).
+        let resp = handle_api_key_create(
+            serde_json::json!({ "label": "route-w5-legacy" }).to_string().as_bytes(),
+            "owner-token",
+        );
+        assert_eq!(resp.status, "200 OK", "legacy shape must keep working");
+        let id_legacy = serde_json::from_str::<serde_json::Value>(&resp.body).unwrap()["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+        let list = handle_api_key_list();
+        let parsed: serde_json::Value = serde_json::from_str(&list.body).expect("json");
+        let legacy = parsed["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|k| k["id"] == serde_json::json!(id_legacy))
+            .expect("legacy key")
+            .clone();
+        assert_eq!(legacy["provider"], serde_json::Value::Null);
+        assert_eq!(legacy["baseUrl"], serde_json::Value::Null);
+    }
+
+    /// W5 — an UNKNOWN provider is rejected at mint (400, nothing stored):
+    /// a typo would otherwise fail closed at staging and boot the agent
+    /// credential-less with no visible error.
+    #[test]
+    fn create_with_unknown_provider_is_bad_request() {
+        let body = serde_json::json!({
+            "label": "route-w5-badprov",
+            "provider": "azure-openai",
+        })
+        .to_string();
+        let resp = handle_api_key_create(body.as_bytes(), "owner-token");
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+        assert!(
+            resp.body.contains("unknown provider") && resp.body.contains("anthropic"),
+            "error names the accepted set; body={}",
+            resp.body
+        );
+        // Nothing minted.
+        let list = handle_api_key_list();
+        assert!(
+            !list.body.contains("route-w5-badprov"),
+            "a rejected create must not mint a row"
+        );
     }
 
     #[test]

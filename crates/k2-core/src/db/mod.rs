@@ -518,6 +518,17 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0070_agent_preset_metadata",
             include_str!("../../drizzle_sql/0070_agent_preset_metadata.sql"),
         ),
+        // 0071 (W5, 0.40.30): API-key LLM-credential PROVIDER metadata —
+        // `api_keys.provider` (canonical 'anthropic'|'openai'|'google'|'xai';
+        // NULL = anthropic, the pre-0071 behavior, so existing rows stage
+        // ANTHROPIC_API_KEY byte-identically; unknown values fail CLOSED at
+        // staging: nothing staged) + `api_keys.base_url` (optional endpoint
+        // override, staged as OPENAI_BASE_URL for provider 'openai' only).
+        // Additive.
+        (
+            "0071_api_key_provider",
+            include_str!("../../drizzle_sql/0071_api_key_provider.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

@@ -3088,32 +3088,46 @@ except Exception as e:
 
 # P3a (sandbox / K2-as-a-server) — OWNER-only API-key auth-tier management for
 # the external /v1/* surface. Subcommands:
-#   k2 api-key create [--label L] [--anthropic-key K]
+#   k2 api-key create [--label L] [--anthropic-key K | --llm-key K] \
+#                     [--provider anthropic|openai|google|xai] [--base-url U]
 #   k2 api-key list
 #   k2 api-key revoke <id>
 # The RAW key is printed exactly ONCE on create ("store it now, not shown
-# again"); it is never re-printed. The associated Anthropic key (BYO LLM cred)
-# is never echoed back. All routes are owner-token gated at the daemon.
+# again"); it is never re-printed. The associated LLM credential (BYO cred;
+# --llm-key is the provider-neutral alias for --anthropic-key) is never echoed
+# back. W5: --provider decides WHICH env var(s) the credential stages into
+# /v1-spawned sessions (default anthropic → ANTHROPIC_API_KEY; openai →
+# OPENAI_API_KEY [+ OPENAI_BASE_URL from --base-url]; google/gemini →
+# GEMINI_API_KEY+GOOGLE_API_KEY; xai/grok → XAI_API_KEY). All routes are
+# owner-token gated at the daemon.
 cmd_api_key() {
     local sub="${1:-}"
     shift || true
     case "$sub" in
         create)
-            local label="" anthropic=""
+            local label="" anthropic="" provider="" base_url=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --label)        label="${2:-}"; shift 2 ;;
                     --anthropic-key) anthropic="${2:-}"; shift 2 ;;
+                    # W5: provider-neutral alias for the same credential slot.
+                    --llm-key)      anthropic="${2:-}"; shift 2 ;;
+                    --provider)     provider="${2:-}"; shift 2 ;;
+                    --base-url)     base_url="${2:-}"; shift 2 ;;
                     *)              echo "Unknown flag: $1" >&2; exit 1 ;;
                 esac
             done
-            # Build the JSON body via python3 so the (secret) anthropic key is
+            # Build the JSON body via python3 so the (secret) LLM key is
             # escaped correctly and never interpolated into a shell/URL context.
             local body
-            body=$(K2_AK_LABEL="$label" K2_AK_ANTH="$anthropic" python3 -c 'import json,os
+            body=$(K2_AK_LABEL="$label" K2_AK_ANTH="$anthropic" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" python3 -c 'import json,os
 b={"label": os.environ.get("K2_AK_LABEL","")}
 k=os.environ.get("K2_AK_ANTH","")
 if k.strip(): b["anthropicKey"]=k
+p=os.environ.get("K2_AK_PROVIDER","")
+if p.strip(): b["provider"]=p
+u=os.environ.get("K2_AK_BASE_URL","")
+if u.strip(): b["baseUrl"]=u
 print(json.dumps(b))')
             cli_post_json "/cli/api-keys/create" "$body" \
                 | python3 -c 'import json,sys
@@ -3141,8 +3155,11 @@ try:
         print("No API keys."); sys.exit(0)
     for k in keys:
         state="revoked" if k.get("revokedAt") else "active"
-        anth="anthropic-key" if k.get("anthropicKeySet") else "no-anthropic-key"
-        print("%s  [%s]  %s  %s  scope=%s" % (k.get("id",""), state, (k.get("label") or "-"), anth, k.get("scope","")))
+        prov=k.get("provider") or "anthropic"
+        cred=("%s-key" % prov) if k.get("anthropicKeySet") else "no-llm-key"
+        line="%s  [%s]  %s  %s  scope=%s" % (k.get("id",""), state, (k.get("label") or "-"), cred, k.get("scope",""))
+        if k.get("baseUrl"): line += "  base-url=%s" % k["baseUrl"]
+        print(line)
 except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
             ;;

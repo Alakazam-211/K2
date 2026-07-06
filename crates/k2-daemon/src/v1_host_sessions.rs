@@ -676,6 +676,8 @@ mod tests {
         V1Principal::Api(k2_core::api_keys::ApiPrincipal {
             id: id.to_string(),
             anthropic_key: None,
+            provider: None,
+            base_url: None,
             scope: "owner".to_string(),
             allowed_workspaces: grant.map(str::to_string),
         })

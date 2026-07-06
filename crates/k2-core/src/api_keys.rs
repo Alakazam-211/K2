@@ -51,6 +51,80 @@ const API_KEY_BODY_LEN: usize = 43;
 /// The base62 alphabet (digits, upper, lower) used for the key body.
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
+/// W5 (0.40.30, migration 0071) — the LLM providers whose credentials the
+/// api-key store can carry, i.e. the PROVIDER→ENV-VAR mapping table for
+/// principal credential staging. A key row's `provider` column (NULL =
+/// [`LlmProvider::Anthropic`], the pre-0071 behavior) decides WHICH env
+/// var(s) the stored credential is staged under when a `/v1` spawn runs
+/// under that principal — so a workspace whose configured agent is
+/// codex/gemini/grok receives the credential its CLI actually reads.
+///
+/// FAIL-CLOSED: an unrecognized `provider` value parses to `None` and the
+/// staging seam ([`ApiPrincipal::staged_env_pairs`]) stages NOTHING (with a
+/// structured warning naming the provider — never the credential).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmProvider {
+    /// `ANTHROPIC_API_KEY` (claude).
+    Anthropic,
+    /// `OPENAI_API_KEY` (codex); `base_url` rides as `OPENAI_BASE_URL`.
+    OpenAi,
+    /// `GEMINI_API_KEY` + `GOOGLE_API_KEY` (gemini reads either, staged
+    /// under BOTH so every CLI generation finds it).
+    Google,
+    /// `XAI_API_KEY` (grok).
+    Xai,
+}
+
+impl LlmProvider {
+    /// Parse a stored/requested provider name. Trimmed, case-insensitive;
+    /// accepts the canonical name plus the obvious product-name aliases
+    /// (`gemini`→Google, `grok`→Xai). Unknown → `None` (fail-closed —
+    /// callers stage nothing / reject the create).
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "anthropic" => Some(Self::Anthropic),
+            "openai" => Some(Self::OpenAi),
+            "google" | "gemini" => Some(Self::Google),
+            "xai" | "grok" => Some(Self::Xai),
+            _ => None,
+        }
+    }
+
+    /// The canonical lowercase name persisted in `api_keys.provider` (the
+    /// create route normalizes aliases through parse→canonical so the DB
+    /// only ever carries these four values, or NULL).
+    pub fn canonical_name(&self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::OpenAi => "openai",
+            Self::Google => "google",
+            Self::Xai => "xai",
+        }
+    }
+
+    /// The env var name(s) the credential is staged under for this provider.
+    pub fn key_env_vars(&self) -> &'static [&'static str] {
+        match self {
+            Self::Anthropic => &["ANTHROPIC_API_KEY"],
+            Self::OpenAi => &["OPENAI_API_KEY"],
+            Self::Google => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            Self::Xai => &["XAI_API_KEY"],
+        }
+    }
+
+    /// The env var a stored `base_url` rides under, if this provider has an
+    /// endpoint-override convention (OpenAI-compatible endpoints only today).
+    pub fn base_url_env_var(&self) -> Option<&'static str> {
+        match self {
+            Self::OpenAi => Some("OPENAI_BASE_URL"),
+            _ => None,
+        }
+    }
+
+    /// The accepted `provider` spellings, for create-route error messages.
+    pub const ACCEPTED: &'static str = "anthropic, openai, google (alias: gemini), xai (alias: grok)";
+}
+
 /// A resolved API-key principal — the host-side identity a presented key maps
 /// to. This is the input the P3b policy-resolver consumes (never any
 /// caller-supplied hint).
@@ -64,9 +138,21 @@ pub struct ApiPrincipal {
     /// The `api_keys.id` (a UUID) — a stable, non-secret handle for the
     /// principal (safe to log / surface as the `/v1/ping` identity).
     pub id: String,
-    /// The associated Anthropic API key, if one was set at create. Staged into
-    /// the spawned session's env (B3a-style). SECRET — never logged.
+    /// The associated BYO LLM credential, if one was set at create (column
+    /// `anthropic_api_key` — the name is historical; since migration 0071
+    /// the `provider` field decides which env var(s) it stages under, and
+    /// NULL provider = anthropic, the original behavior). Staged into the
+    /// spawned session's env via [`Self::staged_env_pairs`]. SECRET — never
+    /// logged.
     pub anthropic_key: Option<String>,
+    /// W5 (migration 0071) — the credential's provider, verbatim from the
+    /// `provider` column. `None` (NULL) = anthropic (pre-0071 behavior);
+    /// an unrecognized value stages NOTHING (fail-closed). NOT a secret.
+    pub provider: Option<String>,
+    /// W5 (migration 0071) — optional provider endpoint override, verbatim
+    /// from the `base_url` column. Staged as `OPENAI_BASE_URL` when the
+    /// provider is openai; ignored otherwise. NOT a secret.
+    pub base_url: Option<String>,
     /// Authorization scope. `"owner"` today; per-tenant scopes are P4.
     pub scope: String,
     /// Sandbox v2 (PRD §G2 #4) — the per-key WORKSPACE GRANT, the raw
@@ -111,6 +197,56 @@ impl ApiPrincipal {
             },
         }
     }
+
+    /// W5 (0.40.30) — THE credential-staging seam: the `(ENV_VAR, value)`
+    /// pairs this principal's stored LLM credential should be staged under
+    /// in a `/v1`-spawned session's env, per the [`LlmProvider`] mapping
+    /// table.
+    ///
+    /// - No / blank credential → empty (never an empty `VAR=` assignment).
+    /// - `provider` NULL/blank → **anthropic** (the pre-0071 behavior:
+    ///   exactly `ANTHROPIC_API_KEY`, byte-identical staging).
+    /// - Recognized provider → that provider's `key_env_vars()`, plus the
+    ///   `base_url` pass-through (`OPENAI_BASE_URL`) when the provider has
+    ///   one and the row carries a non-blank `base_url`.
+    /// - **Unrecognized provider → EMPTY (fail-closed)**, with a structured
+    ///   warning naming the principal + provider — NEVER the credential.
+    ///
+    /// The credential VALUE is never logged here or by callers.
+    pub fn staged_env_pairs(&self) -> Vec<(String, String)> {
+        let key = match self.anthropic_key.as_deref().map(str::trim) {
+            Some(k) if !k.is_empty() => k,
+            _ => return Vec::new(),
+        };
+        let raw_provider = self
+            .provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .unwrap_or("anthropic");
+        let Some(provider) = LlmProvider::parse(raw_provider) else {
+            crate::log_debug!(
+                "[api-keys] WARNING event=unknown_llm_provider principal={} provider={:?}: \
+                 unrecognized provider on the key row — staging NO credential env \
+                 (fail-closed; accepted: {})",
+                self.id,
+                raw_provider,
+                LlmProvider::ACCEPTED,
+            );
+            return Vec::new();
+        };
+        let mut pairs: Vec<(String, String)> = provider
+            .key_env_vars()
+            .iter()
+            .map(|var| (var.to_string(), key.to_string()))
+            .collect();
+        if let Some(base_var) = provider.base_url_env_var() {
+            if let Some(url) = self.base_url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+                pairs.push((base_var.to_string(), url.to_string()));
+            }
+        }
+        pairs
+    }
 }
 
 /// Redacted metadata about a stored API key — safe to return over the wire.
@@ -127,8 +263,13 @@ pub struct ApiKeyMeta {
     /// Whether a (hashed) key is on file. Always true for a real row — present
     /// so the shape is explicit and future-proof.
     pub key_set: bool,
-    /// Whether an associated Anthropic key is stored (NEVER the value).
+    /// Whether an associated LLM credential is stored (NEVER the value).
     pub anthropic_key_set: bool,
+    /// W5 (migration 0071) — the credential's provider (canonical lowercase;
+    /// `None` = anthropic default). NOT a secret — surfaced for owner audit.
+    pub provider: Option<String>,
+    /// W5 (migration 0071) — the optional endpoint override. NOT a secret.
+    pub base_url: Option<String>,
     /// Sandbox v2 (PRD §G2 #4) — the raw per-key workspace grant
     /// (`allowed_workspaces`): `None` = no grant (fail-closed), `Some("*")` =
     /// all, `Some(json_array)` = the explicit slug set. NOT a secret (slugs are
@@ -203,10 +344,18 @@ fn now_secs() -> i64 {
 /// for an explicit set. The caller (`misc_routes::handle_api_key_create`)
 /// normalizes the owner's request into this string; a blank value stores NULL
 /// so a key minted without a grant is fail-closed by default.
+///
+/// `provider` (W5, migration 0071) is the LLM credential's provider —
+/// callers should pass a [`LlmProvider::canonical_name`] (the route
+/// validates + normalizes); blank/absent stores NULL = anthropic (the
+/// pre-0071 default). `base_url` is the optional endpoint override
+/// (`OPENAI_BASE_URL` pass-through for openai); blank stores NULL.
 pub fn create_api_key(
     label: &str,
     anthropic_key: Option<&str>,
     allowed_workspaces: Option<&str>,
+    provider: Option<&str>,
+    base_url: Option<&str>,
 ) -> Result<(String, String), String> {
     let id = uuid::Uuid::new_v4().to_string();
     let raw = generate_raw_key();
@@ -225,14 +374,33 @@ pub fn create_api_key(
         Some(w) if !w.trim().is_empty() => Some(w.trim()),
         _ => None,
     };
+    // W5 (0071): blank provider/base_url store NULL. NULL provider =
+    // anthropic at staging time (the zero-migration-risk default).
+    let provider_stored: Option<&str> = match provider {
+        Some(p) if !p.trim().is_empty() => Some(p.trim()),
+        _ => None,
+    };
+    let base_url_stored: Option<&str> = match base_url {
+        Some(u) if !u.trim().is_empty() => Some(u.trim()),
+        _ => None,
+    };
 
     let db = crate::db::shared();
     let conn = db.lock();
     conn.execute(
-        "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at, allowed_workspaces) \
-         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6)",
-        // Deliberately keep the raw key + anthropic key OUT of any error string.
-        rusqlite::params![id, key_hash, label_stored, anthropic_stored, now_secs(), workspaces_stored],
+        "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at, allowed_workspaces, provider, base_url) \
+         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6, ?7, ?8)",
+        // Deliberately keep the raw key + LLM credential OUT of any error string.
+        rusqlite::params![
+            id,
+            key_hash,
+            label_stored,
+            anthropic_stored,
+            now_secs(),
+            workspaces_stored,
+            provider_stored,
+            base_url_stored
+        ],
     )
     .map_err(|e| format!("DB insert failed: {e}"))?;
     Ok((id, raw))
@@ -264,7 +432,7 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
         .prepare(
             "SELECT id, label, scope, created_at, revoked_at, \
                     (anthropic_api_key IS NOT NULL AND TRIM(anthropic_api_key) <> ''), \
-                    allowed_workspaces \
+                    allowed_workspaces, provider, base_url \
              FROM api_keys ORDER BY created_at DESC, id DESC",
         )
         .map_err(|e| format!("DB prepare failed: {e}"))?;
@@ -281,6 +449,9 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
                 anthropic_key_set: row.get::<_, i64>(5)? != 0,
                 // Non-secret (slugs) — surface the raw grant for owner audit.
                 allowed_workspaces: row.get::<_, Option<String>>(6)?,
+                // W5 (0071) — non-secret provider metadata for owner audit.
+                provider: row.get::<_, Option<String>>(7)?,
+                base_url: row.get::<_, Option<String>>(8)?,
             })
         })
         .map_err(|e| format!("DB query failed: {e}"))?;
@@ -311,7 +482,7 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
     let db = crate::db::shared();
     let conn = db.lock();
     conn.query_row(
-        "SELECT id, anthropic_api_key, scope, allowed_workspaces FROM api_keys \
+        "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url FROM api_keys \
          WHERE key_hash = ?1 AND revoked_at IS NULL",
         rusqlite::params![key_hash],
         |row| {
@@ -319,10 +490,16 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
             let anthropic: Option<String> = row.get(1)?;
             let scope: String = row.get(2)?;
             let allowed_workspaces: Option<String> = row.get(3)?;
+            let provider: Option<String> = row.get(4)?;
+            let base_url: Option<String> = row.get(5)?;
             Ok(ApiPrincipal {
                 id,
                 // Treat a blank stored value as absent (parity with B3a).
                 anthropic_key: anthropic.filter(|k| !k.trim().is_empty()),
+                // W5 (0071) — raw provider metadata verbatim; interpreted by
+                // `staged_env_pairs` (NULL = anthropic; unknown = fail-closed).
+                provider,
+                base_url,
                 scope,
                 // Raw grant verbatim; interpreted by `authorizes_workspace`
                 // (NULL = fail-closed no grant).
@@ -343,7 +520,7 @@ mod tests {
     #[test]
     fn create_then_resolve_round_trips() {
         let (id, raw) =
-            create_api_key("ci-roundtrip", Some("sk-ant-roundtrip-1"), Some("[\"ai\"]")).expect("create");
+            create_api_key("ci-roundtrip", Some("sk-ant-roundtrip-1"), Some("[\"ai\"]"), None, None).expect("create");
         assert!(raw.starts_with(API_KEY_PREFIX), "raw key must carry the k2sk_ prefix");
         assert_eq!(
             raw.len(),
@@ -369,7 +546,7 @@ mod tests {
     /// A key minted with no anthropic key resolves to a principal with `None`.
     #[test]
     fn create_without_anthropic_key_resolves_none_cred() {
-        let (_id, raw) = create_api_key("ci-no-cred", None, None).expect("create");
+        let (_id, raw) = create_api_key("ci-no-cred", None, None, None, None).expect("create");
         let principal = resolve_api_key(&raw).expect("resolves");
         assert_eq!(principal.anthropic_key, None);
         // No grant → fail-closed: authorizes NO workspace.
@@ -377,14 +554,14 @@ mod tests {
         assert!(!principal.authorizes_workspace("ai"), "ungranted key reaches no workspace");
 
         // A blank anthropic key is also stored as absent.
-        let (_id2, raw2) = create_api_key("ci-blank-cred", Some("   "), None).expect("create blank");
+        let (_id2, raw2) = create_api_key("ci-blank-cred", Some("   "), None, None, None).expect("create blank");
         assert_eq!(resolve_api_key(&raw2).expect("resolves").anthropic_key, None);
     }
 
     /// Revocation is immediate: after revoke, the SAME raw key resolves to None.
     #[test]
     fn revoke_then_resolve_is_none() {
-        let (id, raw) = create_api_key("ci-revoke", None, None).expect("create");
+        let (id, raw) = create_api_key("ci-revoke", None, None, None, None).expect("create");
         assert!(resolve_api_key(&raw).is_some(), "valid before revoke");
 
         assert!(revoke_api_key(&id).expect("revoke"), "first revoke flips the row");
@@ -410,7 +587,7 @@ mod tests {
     #[test]
     fn list_never_contains_raw_or_anthropic_key() {
         let secret_anthropic = "sk-ant-list-secret-zzz";
-        let (id, raw) = create_api_key("ci-list", Some(secret_anthropic), Some("*")).expect("create");
+        let (id, raw) = create_api_key("ci-list", Some(secret_anthropic), Some("*"), None, None).expect("create");
 
         let metas = list_api_keys().expect("list");
         let mine = metas.iter().find(|m| m.id == id).expect("our key is listed");
@@ -446,6 +623,8 @@ mod tests {
             ApiPrincipal {
                 id: "k".to_string(),
                 anthropic_key: None,
+                provider: None,
+                base_url: None,
                 scope: "owner".to_string(),
                 allowed_workspaces: grant.map(str::to_string),
             }
@@ -473,11 +652,201 @@ mod tests {
         assert!(!p(Some("[]")).authorizes_workspace("ai"), "empty array grants nothing");
     }
 
+    /// W5 — a pure principal builder for the staging-seam unit tests.
+    fn principal(
+        key: Option<&str>,
+        provider: Option<&str>,
+        base_url: Option<&str>,
+    ) -> ApiPrincipal {
+        ApiPrincipal {
+            id: "w5-test-key".to_string(),
+            anthropic_key: key.map(str::to_string),
+            provider: provider.map(str::to_string),
+            base_url: base_url.map(str::to_string),
+            scope: "owner".to_string(),
+            allowed_workspaces: Some("*".to_string()),
+        }
+    }
+
+    /// W5 — THE provider→env mapping contract, pinned pure (no DB):
+    /// NULL/blank provider = anthropic (byte-identical pre-0071 staging);
+    /// each known provider stages its own var(s); unknown stages NOTHING.
+    #[test]
+    fn staged_env_pairs_maps_provider_to_env_vars() {
+        // NULL provider → anthropic (the zero-migration-risk default).
+        assert_eq!(
+            principal(Some("sk-test-1"), None, None).staged_env_pairs(),
+            vec![("ANTHROPIC_API_KEY".to_string(), "sk-test-1".to_string())],
+        );
+        // Blank provider → also anthropic.
+        assert_eq!(
+            principal(Some("sk-test-1"), Some("   "), None).staged_env_pairs(),
+            vec![("ANTHROPIC_API_KEY".to_string(), "sk-test-1".to_string())],
+        );
+        // Explicit anthropic (case/space-insensitive).
+        assert_eq!(
+            principal(Some("sk-test-1"), Some(" Anthropic "), None).staged_env_pairs(),
+            vec![("ANTHROPIC_API_KEY".to_string(), "sk-test-1".to_string())],
+        );
+        // openai → OPENAI_API_KEY only (no base URL on the row).
+        assert_eq!(
+            principal(Some("sk-oai"), Some("openai"), None).staged_env_pairs(),
+            vec![("OPENAI_API_KEY".to_string(), "sk-oai".to_string())],
+        );
+        // google → BOTH GEMINI_API_KEY and GOOGLE_API_KEY.
+        assert_eq!(
+            principal(Some("gk"), Some("google"), None).staged_env_pairs(),
+            vec![
+                ("GEMINI_API_KEY".to_string(), "gk".to_string()),
+                ("GOOGLE_API_KEY".to_string(), "gk".to_string()),
+            ],
+        );
+        // gemini alias → same as google.
+        assert_eq!(
+            principal(Some("gk"), Some("gemini"), None).staged_env_pairs(),
+            principal(Some("gk"), Some("google"), None).staged_env_pairs(),
+        );
+        // xai (+ grok alias) → XAI_API_KEY.
+        assert_eq!(
+            principal(Some("xk"), Some("xai"), None).staged_env_pairs(),
+            vec![("XAI_API_KEY".to_string(), "xk".to_string())],
+        );
+        assert_eq!(
+            principal(Some("xk"), Some("grok"), None).staged_env_pairs(),
+            principal(Some("xk"), Some("xai"), None).staged_env_pairs(),
+        );
+    }
+
+    /// W5 — FAIL-CLOSED arms: unknown provider stages NOTHING; a missing/
+    /// blank credential stages nothing regardless of provider.
+    #[test]
+    fn staged_env_pairs_fails_closed() {
+        // Unknown provider → NOTHING (never a guessed env var).
+        assert!(
+            principal(Some("sk-x"), Some("mystery-llm"), None).staged_env_pairs().is_empty(),
+            "unknown provider must stage nothing",
+        );
+        // Unknown provider with a base_url → STILL nothing (no orphan URL var).
+        assert!(
+            principal(Some("sk-x"), Some("mystery-llm"), Some("https://x.test"))
+                .staged_env_pairs()
+                .is_empty(),
+        );
+        // No credential → nothing, whatever the provider says.
+        assert!(principal(None, Some("openai"), None).staged_env_pairs().is_empty());
+        assert!(principal(Some("   "), Some("openai"), None).staged_env_pairs().is_empty());
+        assert!(principal(None, None, None).staged_env_pairs().is_empty());
+    }
+
+    /// W5 — OPENAI_BASE_URL pass-through: staged for openai when the row
+    /// carries a non-blank base_url; ignored for providers with no override
+    /// convention.
+    #[test]
+    fn staged_env_pairs_base_url_passthrough() {
+        assert_eq!(
+            principal(Some("sk-oai"), Some("openai"), Some("https://proxy.example/v1"))
+                .staged_env_pairs(),
+            vec![
+                ("OPENAI_API_KEY".to_string(), "sk-oai".to_string()),
+                ("OPENAI_BASE_URL".to_string(), "https://proxy.example/v1".to_string()),
+            ],
+        );
+        // Blank base_url → no OPENAI_BASE_URL entry.
+        assert_eq!(
+            principal(Some("sk-oai"), Some("openai"), Some("   ")).staged_env_pairs(),
+            vec![("OPENAI_API_KEY".to_string(), "sk-oai".to_string())],
+        );
+        // Non-openai provider ignores a stored base_url (no convention).
+        assert_eq!(
+            principal(Some("sk-a"), None, Some("https://ignored.example")).staged_env_pairs(),
+            vec![("ANTHROPIC_API_KEY".to_string(), "sk-a".to_string())],
+        );
+        assert_eq!(
+            principal(Some("xk"), Some("xai"), Some("https://ignored.example"))
+                .staged_env_pairs(),
+            vec![("XAI_API_KEY".to_string(), "xk".to_string())],
+        );
+    }
+
+    /// W5 — LlmProvider::parse canonicalization table.
+    #[test]
+    fn llm_provider_parse_and_canonical_names() {
+        for (raw, want) in [
+            ("anthropic", LlmProvider::Anthropic),
+            ("ANTHROPIC", LlmProvider::Anthropic),
+            ("openai", LlmProvider::OpenAi),
+            (" OpenAI ", LlmProvider::OpenAi),
+            ("google", LlmProvider::Google),
+            ("gemini", LlmProvider::Google),
+            ("xai", LlmProvider::Xai),
+            ("grok", LlmProvider::Xai),
+        ] {
+            assert_eq!(LlmProvider::parse(raw), Some(want), "parse {raw:?}");
+        }
+        for bad in ["", "  ", "azure", "claude", "gpt", "llama"] {
+            assert_eq!(LlmProvider::parse(bad), None, "must reject {bad:?}");
+        }
+        assert_eq!(LlmProvider::Anthropic.canonical_name(), "anthropic");
+        assert_eq!(LlmProvider::OpenAi.canonical_name(), "openai");
+        assert_eq!(LlmProvider::Google.canonical_name(), "google");
+        assert_eq!(LlmProvider::Xai.canonical_name(), "xai");
+    }
+
+    /// W5 — provider + base_url round-trip create → resolve → list; the
+    /// credential still never leaks from list.
+    #[test]
+    fn provider_metadata_round_trips() {
+        let secret = "sk-oai-w5-secret-zz";
+        let (id, raw) = create_api_key(
+            "w5-openai-key",
+            Some(secret),
+            Some("*"),
+            Some("openai"),
+            Some("https://oai-proxy.example/v1"),
+        )
+        .expect("create");
+
+        let p = resolve_api_key(&raw).expect("resolves");
+        assert_eq!(p.provider.as_deref(), Some("openai"));
+        assert_eq!(p.base_url.as_deref(), Some("https://oai-proxy.example/v1"));
+        assert_eq!(
+            p.staged_env_pairs(),
+            vec![
+                ("OPENAI_API_KEY".to_string(), secret.to_string()),
+                ("OPENAI_BASE_URL".to_string(), "https://oai-proxy.example/v1".to_string()),
+            ],
+        );
+
+        let metas = list_api_keys().expect("list");
+        let mine = metas.iter().find(|m| m.id == id).expect("listed");
+        assert_eq!(mine.provider.as_deref(), Some("openai"));
+        assert_eq!(mine.base_url.as_deref(), Some("https://oai-proxy.example/v1"));
+        let json = serde_json::to_string(&metas).expect("serialize");
+        assert!(!json.contains(secret), "list must never contain the credential");
+
+        // Blank provider/base_url store NULL (the anthropic-default row).
+        let (id2, raw2) =
+            create_api_key("w5-null-provider", Some("sk-a2"), None, Some("  "), Some(""))
+                .expect("create 2");
+        let p2 = resolve_api_key(&raw2).expect("resolves 2");
+        assert_eq!(p2.provider, None);
+        assert_eq!(p2.base_url, None);
+        assert_eq!(
+            p2.staged_env_pairs(),
+            vec![("ANTHROPIC_API_KEY".to_string(), "sk-a2".to_string())],
+            "NULL provider stages exactly the pre-0071 Anthropic pair",
+        );
+        let metas = list_api_keys().expect("list 2");
+        let mine2 = metas.iter().find(|m| m.id == id2).expect("listed 2");
+        assert_eq!(mine2.provider, None);
+        assert_eq!(mine2.base_url, None);
+    }
+
     /// Two minted keys are distinct (CSPRNG) and resolve to distinct principals.
     #[test]
     fn minted_keys_are_unique() {
-        let (id1, raw1) = create_api_key("u1", None, None).expect("create 1");
-        let (id2, raw2) = create_api_key("u2", None, None).expect("create 2");
+        let (id1, raw1) = create_api_key("u1", None, None, None, None).expect("create 1");
+        let (id2, raw2) = create_api_key("u2", None, None, None, None).expect("create 2");
         assert_ne!(raw1, raw2, "two CSPRNG keys must differ");
         assert_ne!(id1, id2, "ids differ");
         assert_eq!(resolve_api_key(&raw1).unwrap().id, id1);

@@ -277,7 +277,8 @@ function MemberRow({
           className="flex-shrink-0 text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums"
           title={`⌘${paneNum} focuses this pane`}
         >
-          ⌘{paneNum}
+          <span className="key-symbol">⌘</span>
+          {paneNum}
         </span>
       )}
     </button>

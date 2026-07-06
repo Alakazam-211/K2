@@ -163,7 +163,8 @@ function PaneChrome({
             className="text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0"
             title={`⌘${shortcutNum} focuses this pane`}
           >
-            ⌘{shortcutNum}
+            <span className="key-symbol">⌘</span>
+            {shortcutNum}
           </span>
         )}
         {!readOnly && (

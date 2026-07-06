@@ -13,8 +13,12 @@
 //!   into the cell = sandbox-escape).
 //! - `agent_name` = host-minted `api-<principal>-<uuid>` (no find-or-spawn hijack
 //!   of an existing `tab-…` / pinned-UUID session).
-//! - `command`/`args` = `claude` + the standard headless flags. The caller's
-//!   command/args/flags are DROPPED ENTIRELY (no RCE from the wire).
+//! - `command`/`args` = HOST-RESOLVED, never the wire. The caller's
+//!   command/args/flags are DROPPED ENTIRELY (no RCE from the wire). The
+//!   ephemeral door ([`resolve_spawn`]) fixes `claude` + the standard headless
+//!   flags (no workspace → nothing to resolve against); the workspace door
+//!   ([`resolve_workspace_session`]) resolves the WORKSPACE'S CONFIGURED agent
+//!   via the de-generalization seam ([`k2_core::workspace::agent_resolve`]).
 //! - `env` = HOST-CURATED ONLY. The caller's env is DROPPED ENTIRELY. The
 //!   Anthropic key is staged from the PRINCIPAL (never the body), reusing B3a's
 //!   `Provider → key_env_var` mapping.
@@ -84,12 +88,25 @@ impl PolicyError {
     }
 }
 
-/// The standard headless claude flags for an API sandbox session. The microVM
-/// jail — NOT claude's permission prompts — is the security boundary, so the
-/// in-jail agent runs headless (mirrors the pinned-chat base flags). The caller
-/// CANNOT add to or override these; `spawn_session` additionally auto-injects a
-/// fresh `--session-id` for conversation persistence.
+/// The standard headless claude flags for an EPHEMERAL API sandbox session
+/// ([`resolve_spawn`] only). The microVM jail — NOT claude's permission
+/// prompts — is the security boundary, so the in-jail agent runs headless
+/// (mirrors the pinned-chat base flags). The caller CANNOT add to or override
+/// these; `spawn_session` additionally auto-injects a fresh `--session-id` for
+/// conversation persistence.
+///
+/// The workspace-scoped door does NOT use this constant — it resolves the
+/// workspace's configured agent (see [`resolve_workspace_session`]). The
+/// ephemeral door keeps the claude default because there is NO workspace
+/// context: `POST /v1/sandboxes` provisions a throwaway dir, so there is no
+/// `projects` row (and thus no configured preset) to consult.
 const STANDARD_CLAUDE_ARGS: &[&str] = &["--dangerously-skip-permissions"];
+
+/// Claude's auto-approve flag — ENSURED (never stripped) on the resolved
+/// preset args for a claude cell, so a user-customized claude preset that
+/// dropped it still runs headless inside the jail. Kept in sync with
+/// `k2_core::workspace::agent_resolve::FALLBACK_AGENT_ARGS`.
+const CLAUDE_SKIP_PERMISSIONS_FLAG: &str = "--dangerously-skip-permissions";
 
 /// In-cell scratch tmpdir staged as `CLAUDE_CODE_TMPDIR` (F2 cell-recipe). A
 /// single easy-to-change constant: the box must confirm claude-as-guest-root can
@@ -145,7 +162,10 @@ pub fn resolve_spawn(
     Ok(SpawnRequest {
         agent_name,
         cwd: cwd_str,
-        // DROP any caller command/args/flags — host-fixed claude + headless args.
+        // DROP any caller command/args/flags — host-fixed claude + headless
+        // args. The EPHEMERAL door has no workspace context (throwaway dir, no
+        // `projects` row), so there is no configured preset to resolve — the
+        // literal claude default stays (see STANDARD_CLAUDE_ARGS).
         command: Some("claude".to_string()),
         args: Some(STANDARD_CLAUDE_ARGS.iter().map(|s| s.to_string()).collect()),
         cols,
@@ -592,9 +612,11 @@ fn provision_work_scratch(ws_slug: &str, session_id: &str) -> Result<PathBuf, Po
 ///   It is BOTH the RO workspace mirror source AND the in-cell cwd (mirror).
 /// - `ws_slug` (+ `session_id`) key the RW dirs (both re-asserted safe).
 /// - `session_id` is the HOST-DECIDED id — FORCED into the spawn AND staged as
-///   `K2_SESSION_ID` so the guest-init runs `claude --session-id <it>`; the
-///   returned/addressable `sessionId` therefore equals the `.jsonl` key → resume
-///   + audit resolve the real path.
+///   `K2_SESSION_ID` so the guest-init can splice the provider's session flag
+///   (`claude --session-id <it>`); the returned/addressable `sessionId`
+///   therefore equals the `.jsonl` key → resume + audit resolve the real path.
+/// - `command`/`args` = the workspace's CONFIGURED agent (agent_resolve seam),
+///   auto-approved inside the jail — see step (6b). NEVER a caller command.
 /// - `cwd` = `ws_path` (the REAL mirrored path). It is a SUBDIR of the in-cell
 ///   HOME (`/home/k2`), never `== $HOME`, never a caller path (the `$HOME`-
 ///   narrowing invariant is preserved + debug-asserted).
@@ -654,8 +676,9 @@ pub fn resolve_workspace_session(
     // (6) Host-curated env + the mirror/guest-init wiring. HOME = the real
     //     in-cell home (so `claude` uses `<home>/.claude` — the mounted sandbox
     //     home — natively; CLAUDE_CONFIG_DIR is intentionally NOT set). The
-    //     `K2_*_DIR` vars tell the guest-init the REAL in-cell mount points; the
-    //     guest-init runs `claude --session-id "$K2_SESSION_ID"`.
+    //     `K2_*_DIR` vars tell the guest-init the REAL in-cell mount points;
+    //     the guest-init execs the resolved agent argv (splicing
+    //     `--session-id "$K2_SESSION_ID"` for claude).
     let mut env = build_cell_env(principal, req);
 
     // Audit index (fs-mirror §5): write a daemon-owned meta.json so the cockpit's
@@ -683,6 +706,36 @@ pub fn resolve_workspace_session(
     let cols = clamp_dim(req.cols, 80, 16, 500);
     let rows = clamp_dim(req.rows, 24, 4, 300);
 
+    // (6b) The WORKSPACE'S CONFIGURED agent command — the de-generalization
+    // seam (`projects.default_agent` → global default → literal claude), the
+    // same resolution the host-sessions door uses. The caller has NO say in
+    // the command (any body command/args were dropped at parse time).
+    //
+    // CELL PHILOSOPHY (unlike the host door): the microVM jail IS the
+    // security boundary, so the in-cell agent runs AUTO-APPROVED. For claude
+    // we ENSURE `--dangerously-skip-permissions` (the built-in preset already
+    // carries it → byte-identical argv to the pre-resolution hardcode; a
+    // user-customized preset that dropped it gets it back). Other presets
+    // spawn their own command+args exactly as configured — their auto-approve
+    // flags are already in the preset args (e.g. `gemini --yolo`,
+    // `codex … --dangerously-bypass-approvals-and-sandbox`); we never strip
+    // and never invent flags for providers we don't own.
+    //
+    // Session identity stays ENV-carried (`K2_SESSION_ID`, spliced by the
+    // guest-init for claude argv) — never argv here, so non-claude presets
+    // run bare-but-correct (degraded resume) until their in-cell resume
+    // grammar exists.
+    let resolved = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_resolve::resolve_agent_command(&conn, ws_path)
+    };
+    let command = resolved.command.clone();
+    let mut args = resolved.args.clone();
+    if resolved.is_claude() {
+        k2_core::workspace::agent_resolve::ensure_flag(&mut args, CLAUDE_SKIP_PERMISSIONS_FLAG);
+    }
+
     // (7) The workspace-scoped MIRROR mount spec — carried to the worker.
     let overlay = WorkspaceMountSpec {
         workspace_ro: PathBuf::from(ws_path),
@@ -694,7 +747,7 @@ pub fn resolve_workspace_session(
     };
 
     log_debug!(
-        "[v1-sandbox/ws] resolved MIRROR session id={} ws_slug={} cwd={} slug={} home={} memory={} (workspace+memory RO, sandbox-home+/work RW)",
+        "[v1-sandbox/ws] resolved MIRROR session id={} ws_slug={} cwd={} slug={} home={} memory={} command={} args={:?} (workspace+memory RO, sandbox-home+/work RW)",
         session_id,
         ws_slug,
         cwd,
@@ -705,13 +758,17 @@ pub fn resolve_workspace_session(
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "<absent>".to_string()),
+        command,
+        args,
     );
 
     Ok(SpawnRequest {
         agent_name,
         cwd,
-        command: Some("claude".to_string()),
-        args: Some(STANDARD_CLAUDE_ARGS.iter().map(|s| s.to_string()).collect()),
+        // The workspace's CONFIGURED agent (6b) — auto-approved inside the
+        // jail; NEVER a caller command.
+        command: Some(command),
+        args: Some(args),
         cols,
         rows,
         env: Some(env),
@@ -911,6 +968,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(sandbox_homes_root().join(ws_slug));
     }
 
+    /// Built-in preset ids (seeded by `seed_agent_presets` — k2-core db/mod.rs).
+    const CLAUDE_PRESET_ID: &str = "b0a1c2d3-e4f5-6789-abcd-ef0123456001";
+    const CODEX_PRESET_ID: &str = "b0a1c2d3-e4f5-6789-abcd-ef0123456002";
+    const GEMINI_PRESET_ID: &str = "b0a1c2d3-e4f5-6789-abcd-ef0123456003";
+
+    /// Register a workspace with an explicit `default_agent` so the resolver
+    /// is DETERMINISTIC in tests (never falls through to the dev box's real
+    /// global default in `~/.k2/settings.json`).
+    fn insert_project_with_agent(name: &str, path: &str, default_agent: &str) {
+        k2_core::db::init_for_tests();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, default_agent) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), name, path, default_agent],
+        )
+        .expect("insert project");
+    }
+
     /// SLUG computation: the in-cell cwd with every `/`→`-`, matching claude's
     /// `projects/<slug>` layout so RO memory + `--resume` resolve the real path.
     #[test]
@@ -994,13 +1070,16 @@ mod tests {
     /// `resolve_workspace_session` produces a host-trusted MIRROR spec: cwd = the
     /// REAL workspace path (never $HOME), workspace_ro == cwd, the RW dirs under
     /// their roots, a FORCED session id, `K2_SESSION_ID`/`HOME`/`K2_WS_DIR` staged
-    /// into the env, sandbox forced on, headless claude, `ephemeral_cwd = None`.
+    /// into the env, sandbox forced on, the workspace's configured agent
+    /// (claude here — BYTE-IDENTICAL argv to the pre-resolution hardcode),
+    /// `ephemeral_cwd = None`.
     #[test]
     fn resolve_workspace_session_carries_mirror_spec() {
         let ws_slug = format!("v1ws-resolve-{}", uuid::Uuid::new_v4());
         // A real workspace path UNDER the in-cell home so cwd is a subdir of HOME.
         let ws_path = incell_home().join(&ws_slug);
         let ws_path_str = ws_path.to_string_lossy().into_owned();
+        insert_project_with_agent(&ws_slug, &ws_path_str, CLAUDE_PRESET_ID);
         let sid = SessionId::new();
 
         let spawn = resolve_workspace_session(
@@ -1015,9 +1094,16 @@ mod tests {
         // cwd = the REAL workspace path (mirror), NEVER == $HOME.
         assert_eq!(spawn.cwd, ws_path_str);
         assert_ne!(Some(PathBuf::from(&spawn.cwd)), dirs::home_dir());
-        // sandbox forced on; host-fixed headless claude.
+        // sandbox forced on; a claude workspace resolves BYTE-IDENTICAL argv
+        // to the old hardcode (command + the standard headless flag, no more,
+        // no less — the danger flag is KEPT: the jail is the boundary).
         assert_eq!(spawn.sandbox, Some(true));
         assert_eq!(spawn.command.as_deref(), Some("claude"));
+        assert_eq!(
+            spawn.args.as_deref(),
+            Some(&["--dangerously-skip-permissions".to_string()][..]),
+            "claude cell argv must stay byte-identical to the pre-resolution hardcode",
+        );
         // FORCED session id == the layer / .jsonl key (so it can be resumed).
         assert_eq!(spawn.forced_session_id, Some(sid));
         // PERSISTENT: no ephemeral teardown handle.
@@ -1044,6 +1130,124 @@ mod tests {
         );
         // agent name is host-namespaced (anti-hijack).
         assert!(spawn.agent_name.starts_with("api-"));
+
+        cleanup_mirror_ws(&ws_slug);
+    }
+
+    /// A CODEX workspace resolves its OWN preset argv (de-Claudified): the
+    /// built-in codex preset command verbatim, auto-approve flag KEPT (the
+    /// jail is the boundary — cells never strip), nothing claude-specific
+    /// injected. Env staging (K2_SESSION_ID / K2_REQUEST_PROMPT) unchanged.
+    #[test]
+    fn workspace_session_resolves_codex_preset_argv() {
+        let ws_slug = format!("v1ws-codex-{}", uuid::Uuid::new_v4());
+        let ws_path = incell_home().join(&ws_slug);
+        let ws_path_str = ws_path.to_string_lossy().into_owned();
+        insert_project_with_agent(&ws_slug, &ws_path_str, CODEX_PRESET_ID);
+        let sid = SessionId::new();
+
+        let spawn = resolve_workspace_session(
+            &ws_path_str,
+            &ws_slug,
+            &sid,
+            &V1Principal::Owner,
+            &ApiSandboxRequest { prompt: Some("do the thing".into()), ..Default::default() },
+        )
+        .expect("resolve workspace session");
+
+        assert_eq!(spawn.command.as_deref(), Some("codex"));
+        assert_eq!(
+            spawn.args.as_deref(),
+            Some(
+                &[
+                    "-c".to_string(),
+                    "model_reasoning_effort=high".to_string(),
+                    "--dangerously-bypass-approvals-and-sandbox".to_string(),
+                ][..]
+            ),
+            "codex cell runs the preset's own argv — auto-approve KEPT, no claude flags",
+        );
+        // The prompt is still ENV-staged (never argv), same as claude cells.
+        let env = spawn.env.as_ref().expect("env present");
+        assert_eq!(env.get("K2_REQUEST_PROMPT").map(String::as_str), Some("do the thing"));
+        assert_eq!(env.get("K2_SESSION_ID").map(String::as_str), Some(sid.to_string().as_str()));
+        assert_eq!(spawn.sandbox, Some(true));
+
+        cleanup_mirror_ws(&ws_slug);
+    }
+
+    /// A GEMINI workspace keeps its preset's own auto-approve flag (`--yolo`)
+    /// — cells NEVER strip danger flags (contrast: the host-sessions door
+    /// strips them by default).
+    #[test]
+    fn workspace_session_resolves_gemini_preset_argv() {
+        let ws_slug = format!("v1ws-gemini-{}", uuid::Uuid::new_v4());
+        let ws_path = incell_home().join(&ws_slug);
+        let ws_path_str = ws_path.to_string_lossy().into_owned();
+        insert_project_with_agent(&ws_slug, &ws_path_str, GEMINI_PRESET_ID);
+
+        let spawn = resolve_workspace_session(
+            &ws_path_str,
+            &ws_slug,
+            &SessionId::new(),
+            &V1Principal::Owner,
+            &ApiSandboxRequest::default(),
+        )
+        .expect("resolve workspace session");
+
+        assert_eq!(spawn.command.as_deref(), Some("gemini"));
+        assert_eq!(
+            spawn.args.as_deref(),
+            Some(&["--yolo".to_string()][..]),
+            "gemini cell keeps the preset's own auto-approve flag",
+        );
+
+        cleanup_mirror_ws(&ws_slug);
+    }
+
+    /// A user-customized CLAUDE preset that dropped the headless flag gets it
+    /// ENSURED back — inside the jail claude must run auto-approved, or the
+    /// cell wedges on a permission prompt no one can answer.
+    #[test]
+    fn workspace_session_ensures_claude_skip_permissions() {
+        k2_core::db::init_for_tests();
+        let preset_id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+                 VALUES (?1, ?2, 'claude --model opus', '', 1, 99, 0)",
+                rusqlite::params![preset_id, format!("custom-claude-{preset_id}")],
+            )
+            .expect("insert custom preset");
+        }
+        let ws_slug = format!("v1ws-customclaude-{}", uuid::Uuid::new_v4());
+        let ws_path = incell_home().join(&ws_slug);
+        let ws_path_str = ws_path.to_string_lossy().into_owned();
+        insert_project_with_agent(&ws_slug, &ws_path_str, &preset_id);
+
+        let spawn = resolve_workspace_session(
+            &ws_path_str,
+            &ws_slug,
+            &SessionId::new(),
+            &V1Principal::Owner,
+            &ApiSandboxRequest::default(),
+        )
+        .expect("resolve workspace session");
+
+        assert_eq!(spawn.command.as_deref(), Some("claude"));
+        assert_eq!(
+            spawn.args.as_deref(),
+            Some(
+                &[
+                    "--model".to_string(),
+                    "opus".to_string(),
+                    "--dangerously-skip-permissions".to_string(),
+                ][..]
+            ),
+            "claude cells get --dangerously-skip-permissions ensured (appended once)",
+        );
 
         cleanup_mirror_ws(&ws_slug);
     }

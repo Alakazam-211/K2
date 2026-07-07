@@ -282,7 +282,12 @@ export function ConnectionsSection(): React.JSX.Element {
             (a.label || a.hostname).localeCompare(b.label || b.hostname, undefined, { sensitivity: 'base' })
           )
           .map((h) => {
-          const isActive = activeHost !== 'local' && activeHost.id === h.id
+          // This address book only renders when the LOCAL daemon is active
+          // (isLocalActive gate above), so no saved host can be the active
+          // one — TS correctly narrows `activeHost` to 'local' here and the
+          // old `activeHost !== 'local' && activeHost.id === h.id` check
+          // was provably always false.
+          const isActive = false
           return (
             <HostTile
               key={h.id}

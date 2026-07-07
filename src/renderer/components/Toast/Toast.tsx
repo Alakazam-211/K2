@@ -7,7 +7,8 @@ import type { Toast as ToastData } from '@/stores/toast'
 const ACCENT_COLORS: Record<ToastData['type'], string> = {
   success: '#22c55e',
   error: '#ef4444',
-  info: '#3b82f6'
+  info: '#3b82f6',
+  warning: '#f59e0b'
 }
 
 const CORNER_SIZE = 8

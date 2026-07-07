@@ -26,7 +26,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 }))
 
 // ── Mock the cross-window emit bus ───────────────────────────────────────
-const emitMock = vi.fn(() => Promise.resolve())
+const emitMock = vi.fn((..._args: unknown[]) => Promise.resolve())
 vi.mock('@tauri-apps/api/event', () => ({
   emit: (...args: unknown[]) => emitMock(...args),
 }))

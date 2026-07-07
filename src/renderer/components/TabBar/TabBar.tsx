@@ -2,7 +2,7 @@ import { useCallback, useState, useRef, useEffect, useMemo } from 'react'
 import { useTabsStore, type TerminalItemData } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
-import { useActiveAgentsStore } from '@/stores/active-agents'
+import { useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
 import { usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
@@ -139,7 +139,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     addTabToGroup(groupIndex, cwd)
   }, [addTabToGroup, groupIndex, cwd])
 
-  const [pendingClose, setPendingClose] = useState<{ tabId: string; agents: ReturnType<typeof useActiveAgentsStore.getState>['getAgentsInTab'] } | null>(null)
+  const [pendingClose, setPendingClose] = useState<{ tabId: string; agents: ActiveAgent[] } | null>(null)
 
   // ── Inline tab rename (#653, manual half) ──
   // `editingTabId` holds the id of the regular tab whose label is

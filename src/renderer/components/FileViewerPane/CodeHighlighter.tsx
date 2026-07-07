@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { type BundledLanguage, type BundledTheme, codeToHtml, bundledLanguages } from 'shiki'
+import { type BundledLanguage, type BundledTheme, type SpecialLanguage, codeToHtml, bundledLanguages } from 'shiki'
 
 // ── Language detection ──────────────────────────────────────────────
 
@@ -50,8 +50,9 @@ const FILENAME_TO_LANG: Record<string, BundledLanguage> = {
   'Rakefile': 'ruby',
   'Vagrantfile': 'ruby',
   'Justfile': 'just',
-  '.gitignore': 'gitignore',
-  '.gitattributes': 'gitattributes',
+  // NOTE: .gitignore / .gitattributes have no Shiki grammar — they render
+  // via the plain-text fallback (same output as before: the invalid lang
+  // names made codeToHtml reject into that same fallback).
   '.editorconfig': 'ini',
   '.eslintrc': 'json',
   '.prettierrc': 'json',
@@ -81,11 +82,11 @@ export function detectLanguage(filePath: string): BundledLanguage | undefined {
 }
 
 /** Resolve a markdown fence language string to a Shiki language. */
-export function resolveFenceLang(lang: string): BundledLanguage | undefined {
+export function resolveFenceLang(lang: string): BundledLanguage | SpecialLanguage | undefined {
   const l = lang.toLowerCase().trim()
   if (l in bundledLanguages) return l as BundledLanguage
-  // Common aliases
-  const aliases: Record<string, BundledLanguage> = {
+  // Common aliases ('plaintext' is a Shiki SpecialLanguage, not bundled)
+  const aliases: Record<string, BundledLanguage | SpecialLanguage> = {
     'js': 'javascript', 'ts': 'typescript', 'py': 'python', 'rb': 'ruby',
     'sh': 'bash', 'shell': 'bash', 'zsh': 'bash', 'yml': 'yaml',
     'cs': 'csharp', 'c++': 'cpp', 'objc': 'objective-c',

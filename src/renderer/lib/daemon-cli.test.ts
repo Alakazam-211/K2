@@ -127,7 +127,7 @@ describe('daemonCliGet — hits the active host + carries its token', () => {
 
   it('local: GETs http://127.0.0.1:<port>/cli/<route> with params + token', async () => {
     getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
-    const fetchMock = vi.fn(async () => fakeRes({ body: JSON.stringify({ ok: 1 }) }))
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => fakeRes({ body: JSON.stringify({ ok: 1 }) }))
     vi.stubGlobal('fetch', fetchMock)
 
     const out = await daemonCliGet('fs/read-dir', { path: '/x', n: 2 })
@@ -192,7 +192,7 @@ describe('daemonCliPost — body in body, token in query', () => {
 
   it('POSTs JSON body with Content-Type and ?token= (params NOT in URL)', async () => {
     getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
-    const fetchMock = vi.fn(async () => fakeRes({ body: JSON.stringify({ delivered: true }) }))
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => fakeRes({ body: JSON.stringify({ delivered: true }) }))
     vi.stubGlobal('fetch', fetchMock)
 
     const out = await daemonCliPost('workspace/msg', { workspace: 'k2', body: 'hi' })

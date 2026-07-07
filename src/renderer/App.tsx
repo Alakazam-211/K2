@@ -50,7 +50,7 @@ import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
 import { useTabsStore, initApiSandboxTabAdoption } from './stores/tabs'
 import { useSidebarStore } from './stores/sidebar'
-import { useActiveAgentsStore, startAgentPolling, stopAgentPolling } from './stores/active-agents'
+import { useActiveAgentsStore, startAgentPolling, stopAgentPolling, type ActiveAgent } from './stores/active-agents'
 import AgentCloseDialog from './components/AgentCloseDialog/AgentCloseDialog'
 import FocusWorkspaceHeader from './components/FocusWindow/FocusWorkspaceHeader'
 import { useGitInfo } from './hooks/useGit'
@@ -606,7 +606,7 @@ export default function App(): React.JSX.Element {
   }, [focusProjectId, projects, focusInitialized, setActiveProject])
 
   const [showQuitDialog, setShowQuitDialog] = useState(false)
-  const [quitAgents, setQuitAgents] = useState<ReturnType<typeof useActiveAgentsStore.getState>['getActiveAgentsList']>([])
+  const [quitAgents, setQuitAgents] = useState<ActiveAgent[]>([])
 
   // Start agent polling (only when agentic systems enabled)
   const agenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)

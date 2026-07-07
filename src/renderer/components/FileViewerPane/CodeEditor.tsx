@@ -192,7 +192,8 @@ const EXT_LANG_MAP: Record<string, LanguageFn> = {
   // Modern systems
   zig: () => zig(),
   // Smart contracts
-  sol: () => solidity(),
+  // `solidity` is a LanguageSupport instance (not a factory) — return it directly.
+  sol: () => solidity,
   // Infra / Config
   tf: () => hcl(), hcl: () => hcl(), tfvars: () => hcl(),
   nix: () => nix(),
@@ -318,7 +319,7 @@ export function getLanguageName(filePath: string): string {
     proto: 'Protocol Buffers', diff: 'Diff',
     svelte: 'Svelte', vue: 'Vue', astro: 'Astro',
     groovy: 'Groovy', gradle: 'Gradle',
-    gd: 'GDScript', fs: 'F#', fsx: 'F#', ml: 'OCaml', mli: 'OCaml',
+    gd: 'GDScript', fsx: 'F#', ml: 'OCaml', mli: 'OCaml',
     d: 'D', hx: 'Haxe', pug: 'Pug', jade: 'Pug', styl: 'Stylus',
     tcl: 'Tcl', v: 'Verilog', sv: 'SystemVerilog', vhd: 'VHDL', vhdl: 'VHDL',
     pp: 'Puppet', st: 'Smalltalk', feature: 'Gherkin',
@@ -331,8 +332,8 @@ export function getLanguageName(filePath: string): string {
     z80: 'Z80 Assembly', asm: 'Assembly',
     q: 'Q/KDB+', cypher: 'Cypher', http: 'HTTP',
     zig: 'Zig', sol: 'Solidity', tf: 'Terraform', hcl: 'HCL', tfvars: 'Terraform',
-    nix: 'Nix', svelte: 'Svelte',
-    ex: 'Elixir', exs: 'Elixir',
+    nix: 'Nix',
+    exs: 'Elixir',
     graphql: 'GraphQL', gql: 'GraphQL', prisma: 'Prisma',
   }
 
@@ -1264,7 +1265,8 @@ export function CodeEditor({ code, filePath, onSave, onChange, onCursorChange, r
       cursorCompartment.of(buildCursorExtension(es.cursorStyle || 'bar', es.cursorBlink ?? true)),
       scrollPastEndCompartment.of(es.scrollPastEnd ? scrollPastEnd() : []),
       minimapCompartment.of(es.minimap ? showMinimap.compute(['doc'], () => ({
-        enabled: true, displayText: 'blocks' as const, showOverlay: 'mouse-over' as const,
+        create: () => ({ dom: document.createElement('div') }),
+        displayText: 'blocks' as const, showOverlay: 'mouse-over' as const,
       })) : []),
       stickyScrollCompartment.of(es.stickyScroll ? stickyScrollPlugin : []),
       vimCompartment.of(es.vimMode ? vim() : []),
@@ -1412,7 +1414,8 @@ export function CodeEditor({ code, filePath, onSave, onChange, onCursorChange, r
         ),
         scrollPastEndCompartment.reconfigure(editorSettings.scrollPastEnd ? scrollPastEnd() : []),
         minimapCompartment.reconfigure(editorSettings.minimap ? showMinimap.compute(['doc'], () => ({
-          enabled: true, displayText: 'blocks' as const, showOverlay: 'mouse-over' as const,
+          create: () => ({ dom: document.createElement('div') }),
+          displayText: 'blocks' as const, showOverlay: 'mouse-over' as const,
         })) : []),
         stickyScrollCompartment.reconfigure(editorSettings.stickyScroll ? stickyScrollPlugin : []),
         vimCompartment.reconfigure(editorSettings.vimMode ? vim() : []),

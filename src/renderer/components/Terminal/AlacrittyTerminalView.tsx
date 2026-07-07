@@ -198,8 +198,11 @@ export function AlacrittyTerminalView({
 
   const fontSize = useTerminalSettingsStore((s) => s.fontSize)
   const linkClickMode = useTerminalSettingsStore((s) => s.linkClickMode)
-  const settings = useSettingsStore((s) => s.settings)
-  const naturalTextEditing = settings?.terminal?.naturalTextEditing !== false
+  // NOTE: this previously read the non-existent `s.settings` field
+  // (always undefined → naturalTextEditing silently pinned to true).
+  // The store keeps terminal settings at the top level (`s.terminal`).
+  const terminalSettings = useSettingsStore((s) => s.terminal)
+  const naturalTextEditing = terminalSettings?.naturalTextEditing !== false
 
   const [created, setCreated] = useState(false)
   const [cursorBlinkVisible, setCursorBlinkVisible] = useState(true)

@@ -111,6 +111,10 @@ export interface AppSettingsResponse {
   // daemon enforces the gate server-side (renderer-hide is defense-in-depth).
   // Optional: older snapshots omit it → readers treat absent as false.
   allowRemoteInstruct?: boolean
+  // Federation (0.40.14+) — whether cross-server messaging is enabled on
+  // this host. Optional: older snapshots omit it → readers treat absent
+  // as false (the store reads it with `?? false`).
+  federationEnabled?: boolean
   // GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
   // Gates whether the `talk` CLI's /cli/terminal/classify detection step
   // runs the bundled 1.5B model (ON) or stays regex-only (OFF, default).

@@ -1127,12 +1127,11 @@ export function startAgentPolling(): void {
         const { agentName, command, cwd, title } = event.payload
         const tabsStore = useTabsStore.getState()
 
-        // Find the agent's existing tab (look for "Agent: <name>" title)
-        const agentTab = tabsStore.tabs.find((t) =>
-          t.title === `Agent: ${agentName}` || t.paneGroups.values().next().value?.panes?.some(
-            (p: any) => p.title === `Agent: ${agentName}`
-          )
-        )
+        // Find the agent's existing tab (look for "Agent: <name>" title).
+        // A legacy `paneGroups.…value?.panes?.some(p => p.title === …)`
+        // probe was removed here: PaneGroup has `items` (which carry no
+        // `title`), so the probe always evaluated to undefined/falsy.
+        const agentTab = tabsStore.tabs.find((t) => t.title === `Agent: ${agentName}`)
 
         if (agentTab) {
           // Split within the existing agent tab

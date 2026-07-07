@@ -112,6 +112,7 @@ export default function WorktreeDialog({
           workspaces: [...p.workspaces, {
             id: result.workspaceId,
             projectId,
+            sectionId: null,
             name: result.branch,
             type: 'worktree' as const,
             branch: result.branch,

@@ -1128,7 +1128,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const BOOT_DEADLINE_MS = 10_000
       const __t_boot_start = performance.now()
       let creds: DaemonWsAvailable | null = null
-      let spawn: {
+      // Named type (not `typeof spawn` at the assignment site — a type
+      // query there resolves to the FLOW-NARROWED type `null`, which
+      // collapsed `spawn` to `never` after the null-guard below).
+      interface SpawnResponse {
         sessionId: string
         agentName: string
         cols: number
@@ -1137,7 +1140,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // D9 — resolved sandbox backend, echoed ONLY when the caller
         // asked for sandbox. 'microvm' | 'passthrough' | undefined.
         sandbox?: string
-      } | null = null
+      }
+      let spawn: SpawnResponse | null = null
       let attempt = 0
       while (true) {
         if (cancelled) return
@@ -1192,7 +1196,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             }
             return
           }
-          spawn = (await spawnRes.json()) as typeof spawn
+          spawn = (await spawnRes.json()) as SpawnResponse
           perfLog('spawn_fetch_end', {
             elapsed_ms: (performance.now() - __t_spawn_fetch).toFixed(1),
             reused: String(spawn!.reused),
@@ -1233,28 +1237,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       firstSnapshotReusedRef.current = spawn.reused
       if (cancelled) return
 
-      // 0.39.13: capture the session id into a typed local. `spawn` is
-      // typed `never` here (the self-referential `as typeof spawn` cast
-      // at the fetch site widens it — a pre-existing quirk noted in the
-      // baseline tsc errors), so reading `spawn.sessionId` in MORE
-      // places would add more of those `'never'` errors. Reading it
-      // once through a typed local keeps this change at zero new tsc
-      // errors AND reads cleaner.
-      const sessionId: string = (spawn as { sessionId: string }).sessionId
+      // 0.39.13: capture the session id into a typed local. (The old
+      // self-referential `as typeof spawn` cast used to collapse `spawn`
+      // to `never` here; it is now a named SpawnResponse, so this is a
+      // plain property read.)
+      const sessionId: string = spawn.sessionId
 
       // D9 — stamp the resolved sandbox backend onto the tab. The
       // daemon echoes `sandbox` ONLY when this pane asked for it
       // (gated `if sandbox_echo.is_some()` server-side), and the echo
       // fires on BOTH the fresh and reuse branches — so this runs for
-      // every successful spawn/attach. Read through the same `as` cast
-      // used for sessionId above (the `spawn` local is typed `never`
-      // here, a pre-existing quirk). Normal tabs never request sandbox
+      // every successful spawn/attach. Normal tabs never request sandbox
       // ⇒ `sandbox` is undefined ⇒ the marker stays off. Truthful: a
       // degraded passthrough stamps 'passthrough', which renders no
       // orange (TabBar gates strictly on === 'microvm').
       useTabsStore.getState().setTerminalSandboxBackend(
         terminalId,
-        (spawn as { sandbox?: string }).sandbox,
+        spawn.sandbox,
       )
 
       // 0.39.13 — spawn ⊥ stream. The PTY is now spawned/attached on the

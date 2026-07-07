@@ -162,7 +162,7 @@ describe('hostBootStatus — public readiness handshake (top-level, unauthentica
   })
 
   it('hits <base>/boot-status (NOT /cli, NO token) and returns the parsed phase + version', async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
       fakeRes({ body: JSON.stringify({ phase: 'ready', version: '0.40.12', protocol: 3 }) }),
     )
     vi.stubGlobal('fetch', fetchMock)

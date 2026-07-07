@@ -234,7 +234,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
   // matches the snapshot byte-for-byte clears the indicator.
   const [lastApplied, setLastApplied] = useState<WakeSchedulerSettings>(DEFAULT_SETTINGS)
   const [applying, setApplying] = useState(false)
-  const toast = useToastStore((s) => s.push)
+  const toast = useToastStore((s) => s.addToast)
 
   const dirty = useMemo(
     () => JSON.stringify(settings) !== JSON.stringify(lastApplied),

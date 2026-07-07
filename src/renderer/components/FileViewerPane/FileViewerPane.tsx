@@ -604,23 +604,17 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
 
         <div className="flex-1" />
 
-        {/* Search toggle — in edit mode, opens CodeMirror's built-in search panel */}
+        {/* Search toggle. (A legacy 'edit' view mode used to route Cmd+F
+            into CodeMirror here; ViewMode is now 'rendered' | 'raw', so
+            that branch was provably dead and has been removed.) */}
         <button
           className={`p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors ${searchVisible ? 'text-[var(--color-accent)]' : ''}`}
           onClick={() => {
-            if (viewMode === 'edit') {
-              // Dispatch Cmd+F into the CodeMirror editor to open its search panel
-              const cmEl = editorContainerRef.current?.querySelector('.cm-editor')
-              if (cmEl) {
-                cmEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true }))
-              }
+            setSearchVisible(!searchVisible)
+            if (!searchVisible) {
+              requestAnimationFrame(() => searchInputRef.current?.focus())
             } else {
-              setSearchVisible(!searchVisible)
-              if (!searchVisible) {
-                requestAnimationFrame(() => searchInputRef.current?.focus())
-              } else {
-                setSearchQuery('')
-              }
+              setSearchQuery('')
             }
           }}
           title="Search (Cmd+F)"
@@ -729,8 +723,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         )}
       </div>
 
-      {/* Search bar (rendered/preview mode only — edit mode uses CodeMirror's built-in search) */}
-      {searchVisible && viewMode !== 'edit' && (
+      {/* Search bar (legacy 'edit' mode exclusion removed — ViewMode is
+          'rendered' | 'raw', so the guard was always true) */}
+      {searchVisible && (
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[#111111] px-3 py-1.5 flex-shrink-0">
           <svg className="w-3 h-3 text-[var(--color-text-muted)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8" />
@@ -843,14 +838,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </>
       )}
 
-      {/* Filepath bar — shown for non-editor views (preview, image, markdown) */}
-      {viewMode !== 'edit' && (
-        <div className="flex items-center border-t border-[var(--color-border)] bg-[#111111] px-3 py-0.5 flex-shrink-0">
-          <span className="text-[10px] text-[var(--color-text-muted)] font-mono truncate" title={filePath}>
-            {filePath}
-          </span>
-        </div>
-      )}
+      {/* Filepath bar (always shown — the legacy 'edit' mode guard was
+          provably dead: ViewMode is 'rendered' | 'raw') */}
+      <div className="flex items-center border-t border-[var(--color-border)] bg-[#111111] px-3 py-0.5 flex-shrink-0">
+        <span className="text-[10px] text-[var(--color-text-muted)] font-mono truncate" title={filePath}>
+          {filePath}
+        </span>
+      </div>
     </div>
   )
 }

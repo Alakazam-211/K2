@@ -8,7 +8,7 @@
 //! representative new routes:
 //!
 //!   * `POST /cli/skills/create` — filesystem-backed (writes
-//!     `.k2so/skills/<name>/SKILL.md` under a temp workspace).
+//!     `.k2/skills/<name>/SKILL.md` under a temp workspace).
 //!   * `POST /cli/relations/create` — DB-backed (writes a row into the
 //!     shared in-memory `workspace_relations` table).
 //!
@@ -172,7 +172,7 @@ async fn skills_create_writes_skill_md_via_real_dispatch() {
         );
         assert_eq!(r.status, 200, "owner POST create → 200; body={}", r.body);
         assert!(
-            workspace.join(".k2so/skills/gap-skill/SKILL.md").exists(),
+            workspace.join(".k2/skills/gap-skill/SKILL.md").exists(),
             "SKILL.md must land on disk through the real route"
         );
         // The handler echoes the created SkillSummary.
@@ -192,7 +192,7 @@ async fn skills_create_rejects_missing_token() {
         let r = http(d.port, "POST", "/cli/skills/create", Some(&body));
         assert_eq!(r.status, 403, "no token must 403; body={}", r.body);
         assert!(
-            !workspace.join(".k2so/skills/nope/SKILL.md").exists(),
+            !workspace.join(".k2/skills/nope/SKILL.md").exists(),
             "a 403'd request must not have created the skill"
         );
 

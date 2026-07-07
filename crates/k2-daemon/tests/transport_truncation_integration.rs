@@ -131,11 +131,11 @@ fn temp_workspace(tag: &str) -> std::path::PathBuf {
     dir
 }
 
-/// Read the single inbox item written under `<ws>/.k2so/inbox/` and
+/// Read the single inbox item written under `<ws>/.k2/inbox/` and
 /// return its full file content. Panics (loudly) when the inbox dir is
 /// missing or holds anything but exactly one `.md` file.
 fn read_single_inbox_item(ws: &std::path::Path) -> String {
-    let inbox = ws.join(".k2so").join("inbox");
+    let inbox = ws.join(".k2").join("inbox");
     let mut mds: Vec<std::path::PathBuf> = std::fs::read_dir(&inbox)
         .unwrap_or_else(|e| panic!("inbox dir missing at {}: {e}", inbox.display()))
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -273,7 +273,7 @@ async fn oversized_request_head_returns_414() {
     // Nothing must have been written: silent partial delivery is the
     // failure mode this guard exists to kill.
     assert!(
-        !ws.join(".k2so").join("inbox").exists(),
+        !ws.join(".k2").join("inbox").exists(),
         "an inbox item was written despite the 414"
     );
 }

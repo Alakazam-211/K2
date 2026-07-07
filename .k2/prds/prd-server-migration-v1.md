@@ -114,13 +114,33 @@ path exists + `<project>/.k2/agent` intact, users file loads, agent CLIs
 runnable. Exit non-zero on any failure (tests fail loudly).
 
 ### Cutover ordering (the dangerous part)
-**Source stops before target starts — enforced, not documented.** Export ends
-with the source daemon in **tombstone mode**: tunnel/lease renewal disabled,
-federation listener off, UI banner "This server migrated to <target> on
-<date>" (state file `~/.k2/migrated.json`; `k2 migrate untombstone` to roll
-back). Two live daemons with the same `device_id` would fight over the lease
-(last-claimer-wins each 60s) and answer peers inconsistently — tombstone makes
-that impossible by construction. Rollback = untombstone source + wipe target.
+**Guarantee: migration NEVER deletes or modifies source data (Rosson,
+2026-07-07).** Export is read-only apart from the WAL checkpoint; the old
+machine keeps everything. Decommissioning the previous device (destroying a
+rented Linux box, retiring a Mac mini) is the user's separate, explicit
+decision afterwards — never part of this flow.
+
+Ordering maximizes how long the source stays live:
+1. Export + transfer + import run **while the source is still fully live**
+   (export is a snapshot; new state after the snapshot doesn't migrate —
+   stated in the prompt).
+2. **Offline verify** on the target before any switch: paths remapped, files
+   present, users load, agent CLIs runnable — everything except lease +
+   peer dials.
+3. **Cutover is one atomic step:** source enters **tombstone mode**
+   (tunnel/lease renewal + federation listener off, UI banner "This server
+   migrated to <target>", state file `~/.k2/migrated.json` — a soft flag,
+   zero data touched, daemon still usable locally) and the target daemon
+   starts, claims the lease, passes **online verify** (lease held, peers
+   dial).
+4. Rollback at any point = stop target + `k2 migrate untombstone` on source
+   — back to the exact pre-migration state, one command.
+
+Why tombstone at all (vs. leaving both live): two daemons with the same
+`device_id` fight over the lease (last-claimer-wins each 60s) and answer
+federated peers inconsistently. Only one box can BE the identity at a time;
+tombstone is the parked-but-intact state that makes split-brain impossible
+by construction.
 
 ## 5. Phases
 
@@ -160,7 +180,9 @@ that impossible by construction. Rollback = untombstone source + wipe target.
 
 Zero-downtime/live migration; partial migration (that's Clone); Windows;
 multi-server merge; automated DNS changes (subdomain follows the lease —
-no DNS work needed for *.k2.dev tunnels).
+no DNS work needed for *.k2.dev tunnels); **any deletion/cleanup of the
+source machine** (P2's app wizard may OFFER "wipe this server's K2 data" as
+a separate post-verify action, but it is never automatic).
 
 ## 8. The nsi runbook = P0 dry-run
 

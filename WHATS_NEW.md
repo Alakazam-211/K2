@@ -3,6 +3,43 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.31 — K2 comes to Linux
+
+- **K2 Desktop on Linux (beta).** The full K2 app — terminals, projects,
+  presence, the works — now builds and runs on Linux. This release ships
+  `.deb`, `.rpm`, and AppImage packages for x86_64, and a `k2-daemon`
+  `.deb` with a systemd user service for headless installs. The macOS app
+  is unchanged and remains the flagship; Linux desktop is young — tell us
+  what breaks.
+- **Black screen after updates — fixed at the root.** If an update ever
+  relaunched K2 into a black window, that was our watchdog trying to
+  revive the interface with a tool that couldn't work when the interface
+  was truly stuck. Recovery is now native (and has a second, harder
+  fallback), the app re-reads daemon credentials after an upgrade instead
+  of knocking with yesterday's key, and if the interface fails to load
+  you get a real error message with a Reload button that actually appears.
+- **No more password prompt after updating.** Signing in to K2 Connect now
+  stores your session with the daemon pre-authorized to read it, so macOS
+  stops asking for your login password after app updates — permanently,
+  across future re-signings.
+- **Hire agents straight into projects.** `k2 agent hire <dir> --project
+  <name>` places a new agent into a project at hire time (repeatable for
+  several), `k2 agent set --add-project/--remove-project` manages
+  membership afterward, and `k2 agent get <ws> projects` shows where an
+  agent belongs. The first member of an empty project becomes its
+  point-of-contact, same as in the app.
+- **One switcher to rule them all.** ⌘J now lists every active session —
+  including pinned agent tabs — with tab names. The old Review Queue and
+  Agent Ops pages are retired (View → Running Agents replaces the menu
+  entry); reviews live on in each agent's Review tab.
+- **Polish + plumbing.** Fixed five long-standing paper cuts the type
+  system flagged (broken toasts in the wake scheduler, opening `.sol`
+  files, enabling the editor minimap, a terminal setting stuck on, and
+  warning toasts missing their color). Dragging the window from the top
+  bar works on the Projects and Feedback pages. Under the hood: ~3,700
+  lines of dead code deleted and the entire codebase now builds
+  warning-free on both macOS and Linux, enforced by new CI gates.
+
 ## 0.40.30 — Talk to your server, not just at it
 
 - **Spawn agent sessions over the API.** K2 Cloud servers (and any daemon

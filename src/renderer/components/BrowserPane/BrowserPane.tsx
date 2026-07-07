@@ -266,7 +266,7 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
   return (
     <div className="flex h-full w-full flex-col">
       {/* Chrome bar — styled after the FileViewerPane header. */}
-      <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[#111111] px-3 py-1.5 flex-shrink-0">
+      <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
         <input
           type="text"
           value={address}
@@ -314,7 +314,7 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
           The strip resizes the dock area, which the ResizeObserver
           bounds-push absorbs automatically. */}
       {error && created && (
-        <div className="border-b border-[var(--color-border)] bg-[#111111] px-3 py-1 flex-shrink-0 text-[10px] text-[var(--color-error,#f66)]">
+        <div className="border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 flex-shrink-0 text-[10px] text-[var(--color-status-error-text)]">
           {error}
         </div>
       )}

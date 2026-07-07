@@ -24,6 +24,14 @@ APP="target/release/bundle/macos/K2.app"
 VER="$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed 's/.*: *"\([^"]*\)".*/\1/')"
 echo "Building K2.app v${VER} — NO notarize / DMG / publish (local test build)."
 
+# ── Step 0: Linux build gate ──
+# This script is the pre-release "does the full build work" check, so it
+# proves BOTH platforms: Linux first (fast — warm remote check is seconds),
+# then the long signed mac build below. Shared logic + designated-box
+# details in scripts/linux-build-gate.sh. Escape: K2_SKIP_LINUX_GATE=1.
+echo ""; echo "Step 0: Linux build gate..."
+"$PROJECT_DIR/scripts/linux-build-gate.sh" || { echo "FATAL: Linux build gate failed" >&2; exit 1; }
+
 # ── Step 1: Build the Tauri app ──
 echo ""; echo "Step 1: tauri build..."
 export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"

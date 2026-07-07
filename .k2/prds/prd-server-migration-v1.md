@@ -58,7 +58,8 @@ Phase 3 below reserves the cloud surface so the API is designed for it.
 | Connect users + sessions | `~/.k2/connect-users.json`, `connect-sessions.json`, `seed-users.json` | argon2 logins survive |
 | Settings/themes/hooks/skills state | `settings.json`, `themes/`, `hooks/`, `whats-new.state`, `federation-seen.json`, `federation-outbox/`, `inbox/`, `heartbeats/`, `sessions/` | continuity |
 | Workspace trees | wherever `projects.path` points | includes each workspace's `<project>/.k2/` (AGENT.md, skills, heartbeats) |
-| Claude-side state | `~/.claude/projects/<slug>/memory/` + session `.jsonl` (reuse clone inventory) | agent memory/history |
+| CHAT HISTORY (Rosson: must-carry, like past server clones) — three layers | (1) DB session tables (`agent_sessions`, `workspace_sessions`) ride `k2so.db`; (2) `~/.k2/sessions/`; (3) provider transcripts: FULL `~/.claude/projects/<slug>/` per workspace (memory/ AND session `.jsonl`) + global `~/.claude/history.jsonl` (+ `~/.cursor/chats/` if present) | chats survive; `--resume` keeps working |
+| ⚠ slug re-encode after path remap | `<slug>` dirs are derived from ABSOLUTE workspace paths — after `/Users/x` → `/home/k2` remap, RENAME each `~/.claude/projects/<slug>` to the new slug and rewrite embedded cwd paths inside the `.jsonl` (reuse `clone/repair.rs` per workspace; slug encoder must match Claude's own — see reference_claude_slug_encoder) | un-remapped slugs = daemon can't find chats ⇒ every session looks brand-new |
 
 **REGENERATE on target (never copy):** `daemon.token`, `daemon.port`,
 `heartbeat.port`/`heartbeat.token`, `tunnel-https.port`, logs,

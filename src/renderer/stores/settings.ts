@@ -1,6 +1,12 @@
 import { create } from 'zustand'
+import { emit } from '@tauri-apps/api/event'
 import { getDefaultKeybindings } from '@shared/hotkeys'
-import type { AppSettingsResponse, EditorSettingsBackend } from '@shared/types'
+import type { AppSettingsResponse, EditorSettingsBackend, StyleSettingsBackend } from '@shared/types'
+// Style System P3 — the live selection store. settings.ts owns
+// persistence (daemon-canonical); style.ts owns the DOM stamping +
+// localStorage mirror. One-way import (style.ts must never import us).
+import { useStyleStore } from '@/stores/style'
+import { parseSchemeMode } from '@/lib/style-resolve'
 // Phase 2 Unit 7a — settings live in the daemon; renderer hits
 // `/cli/settings/{get,update,reset}` directly. The Tauri `settings_*`
 // proxy commands still exist (back-compat for any caller not yet
@@ -85,6 +91,12 @@ interface SettingsState {
   // Editor settings
   editor: EditorSettingsBackend
 
+  // Style System P3 — the persisted Style selection (style / palette /
+  // scheme mode / gaps preset). Daemon-canonical; stores/style.ts holds
+  // the live resolved state + stamps <html>. Every read-back below
+  // re-applies it there so the daemon wins over the localStorage mirror.
+  style: StyleSettingsBackend
+
   // Default AI agent. Canonically an agent_presets id (UUID); legacy
   // settings.json values hold a command first-token like 'claude'.
   // Never compare this field directly — resolve it via @/lib/agent-resolve
@@ -129,6 +141,7 @@ interface SettingsState {
   setUseLlmHitlDetection: (enabled: boolean) => void
   setCompletionSoundEnabled: (enabled: boolean) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
+  updateStyleSettings: (partial: Partial<StyleSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
   resetAllSettings: () => void
   fetchSettings: () => Promise<void>
@@ -202,6 +215,34 @@ function mergeEditorDefaults(result: Partial<EditorSettingsBackend> | undefined)
   return { ...DEFAULT_EDITOR, ...result }
 }
 
+/** Style System P3 — mirrors the daemon's `StyleSettings::default()`
+ *  (Square / charcoal / dark / base density). */
+const DEFAULT_STYLE: StyleSettingsBackend = {
+  id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '',
+}
+
+/** Merge backend style result with defaults (older daemons omit `style`
+ *  entirely; partial snapshots may omit fields). */
+function mergeStyleDefaults(result: Partial<StyleSettingsBackend> | undefined): StyleSettingsBackend {
+  if (!result) return { ...DEFAULT_STYLE }
+  return { ...DEFAULT_STYLE, ...result }
+}
+
+/** Push a daemon-canonical style read-back into the live style store —
+ *  restamps <html> + refreshes the localStorage mirror, so the daemon's
+ *  value wins over whatever the pre-paint mirror stamped. Called on
+ *  EVERY settings read-back (fetch, write echo, reset) — applyStyle is
+ *  idempotent, so redundant calls are free. */
+function applyBackendStyle(result: Partial<StyleSettingsBackend> | undefined): void {
+  const style = mergeStyleDefaults(result)
+  useStyleStore.getState().applyStyle({
+    styleId: style.id,
+    paletteId: style.palette,
+    schemeMode: parseSchemeMode(style.scheme),
+    gapsPreset: style.gaps,
+  })
+}
+
 async function persistAndApply(
   set: (state: Partial<SettingsState>) => void,
   updates: Record<string, any>
@@ -223,10 +264,15 @@ async function persistAndApply(
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
+      style: mergeStyleDefaults(result.style),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,
       loaded: true
     })
+    // Echo-apply: the daemon's post-merge style is canonical — restamp
+    // this window from it (covers writes made by OTHER settings keys
+    // too, since the daemon echoes the full snapshot).
+    applyBackendStyle(result.style)
   } catch (e) {
     console.warn('[settings] persistAndApply failed:', e)
   }
@@ -248,6 +294,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   useLlmHitlDetection: false,
   completionSoundEnabled: true,
   editor: { ...DEFAULT_EDITOR },
+  style: { ...DEFAULT_STYLE },
   defaultAgent: 'claude',
   initialProjectId: null,
   initialProjectGroupId: null,
@@ -454,6 +501,29 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  updateStyleSettings: async (partial: Partial<StyleSettingsBackend>) => {
+    const prev = get().style
+    const merged = { ...prev, ...partial }
+    set({ style: merged }) // optimistic
+    // Apply live immediately (idempotent — the Settings page usually
+    // already applied via the style store before committing here).
+    applyBackendStyle(merged)
+    try {
+      await persistAndApply(set, { style: merged })
+      // Cross-window sync: other windows re-fetch settings and restamp
+      // their own <html> via the fetchSettings read-back. Fire-and-forget
+      // (non-Tauri/web contexts have no event backend) — pattern per
+      // stores/projects.ts emitProjectsChanged.
+      void emit('sync:settings').catch((e) =>
+        console.warn('[settings] sync:settings emit failed:', e),
+      )
+    } catch (err) {
+      console.error('[settings] Failed to persist style settings:', err)
+      set({ style: prev })
+      applyBackendStyle(prev)
+    }
+  },
+
   setDefaultAgent: async (agent: string) => {
     const prev = get().defaultAgent
     set({ defaultAgent: agent })
@@ -477,7 +547,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
+      style: mergeStyleDefaults(result.style),
     })
+    applyBackendStyle(result.style)
   },
 
   fetchSettings: async () => {
@@ -511,10 +583,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
+      style: mergeStyleDefaults(result.style),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,
       loaded: true
     })
+    // Daemon-canonical style wins over the localStorage-mirror boot
+    // apply. Also the restamp path for cross-window `sync:settings`
+    // (useWindowSync → fetchSettings → here).
+    applyBackendStyle(result.style)
   }
 }))
 

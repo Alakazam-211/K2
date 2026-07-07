@@ -64,6 +64,11 @@ import { prewarmDaemonWs } from './kessel/daemon-ws'
 // #672 — app-level canonical Active mirror (daemon-owned Active set).
 import { subscribeToActiveState, refreshActiveSnapshot } from './stores/session-events'
 import { onActiveHostChange } from './stores/connect-host'
+// Style System P3 — terminal color bridge (style store → KesselConfig).
+import { KesselConfigProvider } from './kessel/config-context'
+import { useStyleStore } from './stores/style'
+import { toKesselColors } from './lib/style-resolve'
+import { getPalette } from './styles.generated'
 // TODO(0.39.x): rename src/renderer/kessel/ to a non-Kessel name.
 // Only daemon-ws.ts + config-context.tsx + config.ts remain after the
 // Kessel renderer deletion; these are shared terminal infrastructure
@@ -247,7 +252,37 @@ function applyK2SOZoom(): void {
   }
 }
 
+/** Style System P3 — the terminal color bridge. Derives the active
+ *  palette's terminal colors (ANSI-16 + fg/bg/cursor/selection) from the
+ *  style store and mounts the (previously never-mounted)
+ *  KesselConfigProvider above the ENTIRE app tree, so every
+ *  TerminalPane — main layout, focus mode, pinned-chat retainer kept
+ *  alive under the Settings overlay — reads them via useKesselConfig().
+ *  A palette switch changes `overrides` identity → the provider
+ *  re-merges → the painter effects (which depend on config.colors.*)
+ *  re-run on live terminals. The charcoal default's terminal block is
+ *  value-identical to defaultKesselConfig.colors, so default boots
+ *  render exactly as before. Runtime OSC-4 from TUIs still wins (it
+ *  layers over the config palette downstream). */
+function StyledKesselProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const styleId = useStyleStore((s) => s.styleId)
+  const resolvedPaletteId = useStyleStore((s) => s.resolvedPaletteId)
+  const overrides = useMemo(() => {
+    const palette = getPalette(styleId, resolvedPaletteId)
+    return palette ? { colors: toKesselColors(palette.terminal) } : undefined
+  }, [styleId, resolvedPaletteId])
+  return <KesselConfigProvider overrides={overrides}>{children}</KesselConfigProvider>
+}
+
 export default function App(): React.JSX.Element {
+  return (
+    <StyledKesselProvider>
+      <AppRoot />
+    </StyledKesselProvider>
+  )
+}
+
+function AppRoot(): React.JSX.Element {
   const settingsLoaded = useSettingsStore((s) => s.loaded)
   const focusProjectId = useMemo(() => parseFocusProjectId(), [])
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)

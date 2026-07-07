@@ -19,12 +19,18 @@
           try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
         }
         html.setAttribute('data-style', read('k2.style', 'square'));
-        html.setAttribute('data-palette', read('k2.palette', 'charcoal'));
         var scheme = read('k2.scheme', 'dark');
         if (scheme === 'auto') {
           scheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
         }
         html.setAttribute('data-scheme', scheme);
+        // Per-scheme mirror wins: after an OS appearance flip while the
+        // app was closed, k2.palette (written under the OLD scheme) is
+        // stale but k2.palette.<scheme> is right. stores/style.ts keeps
+        // both in sync on every apply.
+        html.setAttribute('data-palette', read('k2.palette.' + scheme, '') || read('k2.palette', 'charcoal'));
+        var gaps = read('k2.gaps', '');
+        if (gaps) html.setAttribute('data-gaps', gaps);
       })();
     </script>
   </head>

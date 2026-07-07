@@ -140,6 +140,85 @@ pub fn k2_account_session_set(refresh_token: String, email: String) -> Result<()
     }
 }
 
+/// Read the persisted K2 Connect session back for the renderer, WITHOUT
+/// touching the keyring crate on macOS.
+///
+/// Counterpart of [`k2_account_session_set`] and the reason it exists:
+/// since 0.40.31 the session item is CREATED by the `security` CLI, which
+/// gives it an `apple-tool:` partition list. macOS checks the partition
+/// list before the `-T` ACL for in-process Security-framework reads, so a
+/// keyring-crate read from the signed app raises a login-keychain password
+/// prompt — and the rotation writer's delete + re-add wipes any
+/// user-granted allowance, re-prompting on every Settings visit (the
+/// 0.40.31 regression). Reading through the daemon's `security`-CLI reader
+/// (`/usr/bin/security` is both in the ACL and in the apple-tool
+/// partition) is silent, and it already probes every layout: current blob
+/// → legacy-service blob → legacy bare keys.
+///
+/// Returns the same JSON blob shape the renderer stores
+/// (`{"refreshToken","email"}`), or `None` when signed out. The value is
+/// NEVER logged.
+#[tauri::command]
+pub fn k2_account_session_get() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(k2_core::tunnel::lease::read_account_session().map(|sess| {
+            serde_json::json!({
+                "refreshToken": sess.refresh_token,
+                "email": sess.email.unwrap_or_default(),
+            })
+            .to_string()
+        }))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // The blob k2_account_session_set wrote via keyring; no partition
+        // lists outside macOS, so the crate read is the right path here.
+        let e = entry("dev.k2.connect.account", "session")?;
+        match e.get_password() {
+            Ok(blob) => Ok(Some(blob)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(err) => {
+                log_debug!("[secrets] account session get failed: {err}");
+                Err(format!("failed to read secret: {err}"))
+            }
+        }
+    }
+}
+
+/// Sign-out: remove the persisted session — current blob AND every legacy
+/// layout under both service names. macOS deletes through the `security`
+/// CLI (same partition-list reason as [`k2_account_session_get`]); other
+/// platforms delete the keyring entries directly. Idempotent: missing
+/// items are success.
+#[tauri::command]
+pub fn k2_account_session_clear() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        k2_core::tunnel::lease::clear_account_session();
+        log_debug!("[secrets] cleared K2 Connect account session");
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        for service in ["dev.k2.connect.account", "com.k2so.connect.account"] {
+            for account in ["session", "session-refresh-token", "session-email"] {
+                let e = entry(service, account)?;
+                match e.delete_credential() {
+                    Ok(()) | Err(keyring::Error::NoEntry) => {}
+                    Err(err) => {
+                        log_debug!(
+                            "[secrets] account session clear failed (service={service}, account={account}): {err}"
+                        );
+                        return Err(format!("failed to delete secret: {err}"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 // Every test below exercises the REAL macOS keychain, so the whole module
 // is mac-gated — a bare #[cfg(test)] leaves `use super::*` + the helper
 // dead on Linux, which the release Linux build gate rejects (-D warnings).

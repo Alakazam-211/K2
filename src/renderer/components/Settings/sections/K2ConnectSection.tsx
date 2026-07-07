@@ -290,28 +290,50 @@ async function saveAccountSession(refreshToken: string, email: string): Promise<
   }
 }
 
-// Read the persisted session. Order: new single-blob (current + legacy
-// service name) → OLD two-item layout (current + legacy service name). On a
-// successful fallback hit we migrate forward (write the blob, drop the old
-// items) so subsequent launches read ONE item and prompt once.
+// Read the persisted session. The PRIMARY read goes through
+// k2_account_session_get — on macOS that's the daemon's `security`-CLI
+// reader, the only prompt-free way to read an item the `security` CLI
+// created: the CLI-created item's `apple-tool:` partition list blocks
+// in-process keyring reads from the signed app REGARDLESS of the -T ACL,
+// and the rotation writer re-creates the item so an "Always Allow" grant
+// never sticks (the 0.40.31 visit-the-page-reprompt regression). It also
+// already probes every layout (current blob → legacy blob → bare keys).
+// The keyring fallbacks below only matter off-macOS / for app-created
+// legacy items, both of which read silently.
 async function readAccountSession(): Promise<AccountSession | null> {
   try {
-    // 1. New single-item blob, current service then legacy rebrand service.
-    for (const service of [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE]) {
-      const raw = await invoke<string | null>('k2_secret_get', { service, account: SESSION_BLOB_KEY })
+    // 1. Primary: the dedicated command (CLI-read on macOS, keyring blob
+    // read elsewhere). Same JSON blob shape either way.
+    const primary = await invoke<string | null>('k2_account_session_get')
+    if (primary) {
+      try {
+        const parsed = JSON.parse(primary) as Partial<AccountSession>
+        if (parsed && typeof parsed.refreshToken === 'string' && parsed.refreshToken) {
+          return { refreshToken: parsed.refreshToken, email: parsed.email ?? '' }
+        }
+      } catch { /* corrupt blob — fall through to the layouts below */ }
+    }
+    // 2. Legacy-service single-item blob via keyring (app-created in the
+    // pre-rebrand era ⇒ silent). The CURRENT service is deliberately NOT
+    // probed via keyring here: on macOS that item is CLI-created and a
+    // keyring read of it is exactly the prompt this function exists to
+    // avoid — and step 1 already covered it on every platform.
+    {
+      const raw = await invoke<string | null>('k2_secret_get', { service: LEGACY_ACCOUNT_KEYCHAIN_SERVICE, account: SESSION_BLOB_KEY })
       if (raw) {
         try {
           const parsed = JSON.parse(raw) as Partial<AccountSession>
           if (parsed && typeof parsed.refreshToken === 'string' && parsed.refreshToken) {
             const sess: AccountSession = { refreshToken: parsed.refreshToken, email: parsed.email ?? '' }
-            // Migrate a legacy-service blob forward to the current service.
-            if (service === LEGACY_ACCOUNT_KEYCHAIN_SERVICE) await saveAccountSession(sess.refreshToken, sess.email)
+            // Migrate the legacy-service blob forward to the current service.
+            await saveAccountSession(sess.refreshToken, sess.email)
             return sess
           }
         } catch { /* corrupt blob — fall through to the two-item layout */ }
       }
     }
-    // 2. OLD two-item layout, current service then legacy rebrand service.
+    // 3. OLD two-item layout, current service then legacy rebrand service
+    // (all app-created via keyring in their era ⇒ silent reads).
     for (const service of [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE]) {
       const refreshToken = await invoke<string | null>('k2_secret_get', { service, account: SESSION_ACCOUNT_KEY })
       if (refreshToken) {
@@ -331,7 +353,12 @@ async function readAccountSession(): Promise<AccountSession | null> {
 async function clearAccountSession(): Promise<void> {
   // Sign-out clears the single blob AND the legacy two-item layout under
   // BOTH service names — leaving any copy behind would silently re-sign-in
-  // via the migration fallback above.
+  // via the migration fallback above. The dedicated command deletes via the
+  // `security` CLI on macOS (a keyring delete of the CLI-created blob could
+  // prompt — same partition-list story as readAccountSession) and via
+  // keyring elsewhere; the keyring sweep after it is belt-and-braces for
+  // any stray app-created leftovers and is silent once the command ran.
+  try { await invoke('k2_account_session_clear') } catch { /* fall through to the sweep */ }
   for (const service of [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE]) {
     for (const account of [SESSION_BLOB_KEY, SESSION_ACCOUNT_KEY, EMAIL_ACCOUNT_KEY]) {
       try {

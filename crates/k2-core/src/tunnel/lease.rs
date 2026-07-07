@@ -543,10 +543,21 @@ fn read_keychain_item(service: &str, account: &str) -> Option<String> {
 /// is still good for this run).
 ///
 /// Every write goes through [`write_token_with_acl`], which stamps the
-/// trusted-application ACL ([`acl_trusted_apps`]) so the daemon's `security`
-/// reads — and the renderer's reads — never provoke a login-keychain
-/// prompt. A write also UPGRADES the ACL on an item the renderer created
-/// without one (delete + re-add installs the fresh ACL).
+/// trusted-application ACL ([`acl_trusted_apps`]) so `security` CLI reads
+/// never provoke a login-keychain prompt. A write also UPGRADES the ACL on
+/// an item the renderer created without one (delete + re-add installs the
+/// fresh ACL).
+///
+/// ⚠ The `-T` ACL satisfies CLI reads ONLY. An item created by the
+/// `security` tool carries an `apple-tool:` partition list, and macOS
+/// checks the partition list BEFORE the ACL for in-process
+/// Security-framework reads — so a keyring-crate read from the signed app
+/// still raises a password prompt, and because this writer deletes +
+/// re-adds on every rotation, a user-granted "Always Allow" is wiped each
+/// time. The renderer must therefore read this item through
+/// [`read_account_session`] (via its tauri bridge), never through the
+/// keyring crate. That asymmetry caused the 0.40.31 settings-page
+/// prompt-on-every-visit regression.
 #[cfg(target_os = "macos")]
 pub fn write_account_session(sess: &AccountSession) {
     write_token_with_acl(
@@ -554,6 +565,28 @@ pub fn write_account_session(sess: &AccountSession) {
         ACCOUNT_SESSION_BLOB_KEY,
         &session_blob_json(sess),
     );
+}
+
+/// Remove the persisted account session entirely (sign-out): the current
+/// single-item blob AND every legacy layout, under BOTH service names —
+/// leaving any copy behind would silently re-sign-in via a fallback read.
+/// Deletes go through the `security` CLI for the same partition-list
+/// reason reads do (see [`write_account_session`]); a keyring-crate delete
+/// from the app could prompt on a CLI-created item. Best-effort and
+/// idempotent: "not found" is the expected common case.
+#[cfg(target_os = "macos")]
+pub fn clear_account_session() {
+    for service in [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE] {
+        for account in [
+            ACCOUNT_SESSION_BLOB_KEY,
+            ACCOUNT_REFRESH_KEY,
+            ACCOUNT_EMAIL_KEY,
+        ] {
+            let _ = std::process::Command::new("security")
+                .args(["delete-generic-password", "-s", service, "-a", account])
+                .output();
+        }
+    }
 }
 
 /// Best-effort removal of the superseded LEGACY two-item layout under BOTH
@@ -648,6 +681,11 @@ pub fn read_account_session() -> Option<AccountSession> {
 
 #[cfg(not(target_os = "macos"))]
 pub fn write_account_session(_sess: &AccountSession) {}
+
+/// Non-macOS: the renderer owns the account session via the keyring crate
+/// (see [`read_account_session`]'s note); nothing for the daemon to clear.
+#[cfg(not(target_os = "macos"))]
+pub fn clear_account_session() {}
 
 // ── Control-plane calls (identical wire to the renderer) ────────────────
 

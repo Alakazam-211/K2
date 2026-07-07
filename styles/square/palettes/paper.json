@@ -1,0 +1,51 @@
+{
+  "$schema": "../../style.schema.json#/$defs/palette",
+  "id": "paper",
+  "name": "Paper",
+  "schemes": ["light"],
+  "color": {
+    "bg": { "$value": "#fafafa", "$type": "color" },
+    "bg-surface": { "$value": "#f1f1f2", "$type": "color" },
+    "bg-elevated": { "$value": "#e8e8ea", "$type": "color" },
+    "bg-inset": { "$value": "#ededee", "$type": "color" },
+    "bg-stripe": { "$value": "#f4f4f5", "$type": "color" },
+    "bg-canvas": { "$value": "#fafafa", "$type": "color" },
+    "bg-hover": { "$value": "#e8e8ea", "$type": "color" },
+    "border": { "$value": "#d9d9de", "$type": "color" },
+    "border-strong": { "$value": "rgba(0, 0, 0, 0.25)", "$type": "color" },
+    "text-primary": { "$value": "#1c1c1f", "$type": "color" },
+    "text-secondary": { "$value": "#55555e", "$type": "color" },
+    "text-muted": { "$value": "#8e8e98", "$type": "color" },
+    "accent": { "$value": "#2563eb", "$type": "color" },
+    "accent-hover": { "$value": "#1d4ed8", "$type": "color" },
+    "accent-soft": { "$value": "#60a5fa", "$type": "color" },
+    "on-accent": { "$value": "#ffffff", "$type": "color" },
+    "status-working": { "$value": "#ea580c", "$type": "color" },
+    "status-error": { "$value": "#dc2626", "$type": "color" },
+    "status-ok": { "$value": "#16a34a", "$type": "color" },
+    "status-warn": { "$value": "#d97706", "$type": "color" },
+    "diff-add-text": { "$value": "#3f6212", "$type": "color" },
+    "diff-remove-text": { "$value": "#b91c1c", "$type": "color" },
+    "diff-modified-border": { "$value": "#4ade80", "$type": "color" },
+    "code-inline": { "$value": "#92400e", "$type": "color" },
+    "danger-hover": { "$value": "#dc2626", "$type": "color" },
+    "overlay-soft-bg": { "$value": "rgba(0, 0, 0, 0.04)", "$type": "color" },
+    "overlay-soft-border": { "$value": "rgba(0, 0, 0, 0.08)", "$type": "color" },
+    "scrollbar-thumb": { "$value": "rgba(0, 0, 0, 0.15)", "$type": "color" },
+    "scrollbar-thumb-hover": { "$value": "rgba(0, 0, 0, 0.28)", "$type": "color" },
+    "scrollbar-thumb-strong": { "$value": "rgba(0, 0, 0, 0.3)", "$type": "color" },
+    "scrollbar-thumb-strong-hover": { "$value": "rgba(0, 0, 0, 0.45)", "$type": "color" }
+  },
+  "terminal": {
+    "fg": { "$value": "#1c1c1f", "$type": "color" },
+    "bg": { "$value": "#fafafa", "$type": "color" },
+    "cursor": { "$value": "#1c1c1f", "$type": "color" },
+    "selection": { "$value": "#c9c9cf", "$type": "color" },
+    "ansi": [
+      "#1c1c1f", "#b91c1c", "#3f6f21", "#946200",
+      "#2d5a9e", "#6b4a75", "#04767a", "#8e8e98",
+      "#55555e", "#dc2626", "#4e8a2a", "#b57b00",
+      "#3465a4", "#8d5f9a", "#069094", "#0a0a0a"
+    ]
+  }
+}

@@ -25,7 +25,7 @@ const REQUIRED_TOKEN_SLOTS = {
   radius: ['box', 'field', 'selector'],
   gap: ['pane', 'tile', 'section'],
   inset: ['window'],
-  divider: ['width'],
+  divider: ['width', 'color'],
   ring: ['surface', 'field', 'focus'],
   shadow: ['1', '2', '3', '4', '5'],
   material: ['blur', 'saturate', 'tint', 'tint-opacity'],
@@ -76,6 +76,27 @@ function tokenValue(file, group, key, token) {
 
 function emitDecl(lines, name, value) {
   lines.push(`  ${name}: ${value};`)
+}
+
+// Gap presets may only override layout-domain slots — a preset is a spacing
+// variant, not a whole sub-style.
+const GAP_PRESET_ALLOWED = ['gap.pane', 'gap.tile', 'gap.section', 'inset.window', 'divider.width', 'divider.color']
+
+function buildGapPresets(file, tokens) {
+  const presets = {}
+  for (const [name, overrides] of Object.entries(tokens.gapPresets ?? {})) {
+    if (!/^[a-z][a-z0-9-]*$/.test(name)) fail(`${file}: gap preset name "${name}" must be kebab-case`)
+    const lines = []
+    for (const [path, value] of Object.entries(overrides)) {
+      if (!GAP_PRESET_ALLOWED.includes(path))
+        fail(`${file}: gap preset "${name}" overrides "${path}" — only ${GAP_PRESET_ALLOWED.join(', ')} are allowed`)
+      if (typeof value !== 'string') fail(`${file}: gap preset "${name}"."${path}" must be a string value`)
+      emitDecl(lines, `--${path.replace('.', '-')}`, value)
+    }
+    if (lines.length === 0) fail(`${file}: gap preset "${name}" is empty`)
+    presets[name] = lines
+  }
+  return presets
 }
 
 function buildTokenDecls(file, tokens) {
@@ -131,7 +152,13 @@ function loadStyle(id) {
   if (manifest.schemaVersion !== 1) fail(`${manifestFile}: unsupported schemaVersion ${manifest.schemaVersion}`)
 
   const tokensFile = relative(ROOT, join(dir, 'tokens.json'))
-  const tokenDecls = buildTokenDecls(tokensFile, readJson(join(dir, 'tokens.json')))
+  const tokensJson = readJson(join(dir, 'tokens.json'))
+  const tokenDecls = buildTokenDecls(tokensFile, tokensJson)
+  const gapPresets = buildGapPresets(tokensFile, tokensJson)
+  if (manifest.capabilities.gaps && Object.keys(gapPresets).length === 0)
+    fail(`${manifestFile}: capabilities.gaps is true but tokens.json defines no gapPresets`)
+  if (!manifest.capabilities.gaps && Object.keys(gapPresets).length > 0)
+    fail(`${manifestFile}: tokens.json defines gapPresets but capabilities.gaps is false`)
 
   const palettesDir = join(dir, 'palettes')
   let paletteFiles
@@ -155,7 +182,17 @@ function loadStyle(id) {
   if (!palettes.some((p) => p.id === manifest.defaultPalette))
     fail(`${manifestFile}: defaultPalette "${manifest.defaultPalette}" not found in palettes/`)
 
-  return { manifest, tokenDecls, palettes }
+  for (const [scheme, paletteId] of Object.entries(manifest.defaultPalettes ?? {})) {
+    if (!['dark', 'light'].includes(scheme)) fail(`${manifestFile}: defaultPalettes key "${scheme}" must be dark|light`)
+    const palette = palettes.find((p) => p.id === paletteId)
+    if (!palette) fail(`${manifestFile}: defaultPalettes.${scheme} "${paletteId}" not found in palettes/`)
+    if (!palette.schemes.includes(scheme))
+      fail(`${manifestFile}: defaultPalettes.${scheme} "${paletteId}" does not support scheme "${scheme}"`)
+    if (!manifest.capabilities.schemes.includes(scheme))
+      fail(`${manifestFile}: defaultPalettes.${scheme} set but capabilities.schemes lacks "${scheme}"`)
+  }
+
+  return { manifest, tokenDecls, gapPresets, palettes }
 }
 
 // ── Build ────────────────────────────────────────────────────────────
@@ -188,6 +225,11 @@ for (const style of styles) {
   out.push(`[data-style="${style.manifest.id}"] {`)
   out.push(...style.tokenDecls)
   out.push('}')
+  for (const [preset, decls] of Object.entries(style.gapPresets)) {
+    out.push(`[data-style="${style.manifest.id}"][data-gaps="${preset}"] {`)
+    out.push(...decls)
+    out.push('}')
+  }
   for (const palette of style.palettes) {
     out.push(`[data-style="${style.manifest.id}"][data-palette="${palette.id}"] {`)
     out.push(...palette.decls)

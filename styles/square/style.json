@@ -7,9 +7,13 @@
   "schemaVersion": 1,
   "description": "K2's original look: flat, flush, zero-radius, 1px hairline dividers, everything touching. The reference implementation of the Style contract — bound to the app's historical values exactly.",
   "defaultPalette": "charcoal",
+  "defaultPalettes": {
+    "dark": "charcoal",
+    "light": "paper"
+  },
   "capabilities": {
-    "gaps": false,
+    "gaps": true,
     "backdrop": false,
-    "schemes": ["dark"]
+    "schemes": ["dark", "light"]
   }
 }

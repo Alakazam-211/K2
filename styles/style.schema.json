@@ -28,6 +28,15 @@
         "schemaVersion": { "const": 1 },
         "description": { "type": "string" },
         "defaultPalette": { "type": "string" },
+        "defaultPalettes": {
+          "type": "object",
+          "description": "Per-scheme default palette, used when the user's chosen palette doesn't support the resolved scheme (e.g. Auto flips to light).",
+          "properties": {
+            "dark": { "type": "string" },
+            "light": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
         "screenshot": { "type": "string", "description": "Relative path to a preview image (required for community submissions)." },
         "capabilities": {
           "type": "object",
@@ -70,7 +79,15 @@
         "material": { "$ref": "#/$defs/tokenGroup" },
         "density": { "$ref": "#/$defs/tokenGroup" },
         "motion": { "$ref": "#/$defs/tokenGroup" },
-        "font": { "$ref": "#/$defs/tokenGroup" }
+        "font": { "$ref": "#/$defs/tokenGroup" },
+        "gapPresets": {
+          "type": "object",
+          "description": "Named spacing variants (surfaced as the density control when capabilities.gaps is true). Each preset overrides layout-domain slots only: gap.pane/tile/section, inset.window, divider.width/color. The base tokens are the implicit 'compact' preset.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        }
       }
     },
     "palette": {

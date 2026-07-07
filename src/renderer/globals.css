@@ -339,7 +339,7 @@ a,
 }
 
 .mosaic-dark .mosaic-split {
-  background: var(--color-border);
+  background: var(--divider-color);
 }
 
 .mosaic-dark .mosaic-split:hover {

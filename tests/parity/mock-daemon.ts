@@ -49,7 +49,7 @@ export const FREEZE_CSS = `
  *  settings store hydrates field-by-field WITHOUT fallbacks for `terminal`
  *  and `keybindings`, so this must be a complete object — `{}` crashes
  *  Settings → Terminal on `terminal.fontFamily`. */
-const DEFAULT_SETTINGS = {
+export const DEFAULT_SETTINGS = {
   terminal: {
     fontFamily: 'MesloLGM Nerd Font',
     fontSize: 13,

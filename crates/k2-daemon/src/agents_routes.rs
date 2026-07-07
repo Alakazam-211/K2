@@ -509,7 +509,7 @@ pub fn handle_agents_delegate(
 // location moved. The shared param/respond helpers live in
 // `crate::cli` (made `pub` for this extraction).
 
-use crate::cli::{bool_param, need_project, opt_param, respond, respond_unit, str_param};
+use crate::cli::{need_project, opt_param, respond, respond_unit, str_param};
 
 /// Agents-domain GET dispatch. Returns `Some(resp)` for a handled path,
 /// `None` if the path isn't an agents-domain route (caller falls through).
@@ -683,53 +683,19 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         },
 
         // ── Per-agent heartbeat control ─────────────────────────────
-        "/cli/agents/heartbeat" => match need_project(params) {
-            Ok(p) => {
-                let agent = str_param(params, "agent");
-                let interval = opt_param(params, "interval").and_then(|v| v.parse::<u64>().ok());
-                let phase = opt_param(params, "phase");
-                let mode = opt_param(params, "mode");
-                let cost_budget = opt_param(params, "cost_budget");
-                // If ANY mutation param is present → update; else → read.
-                if interval.is_some()
-                    || phase.is_some()
-                    || mode.is_some()
-                    || cost_budget.is_some()
-                {
-                    let force_wake = if params.contains_key("force_wake") {
-                        Some(bool_param(params, "force_wake"))
-                    } else {
-                        None
-                    };
-                    respond(k2_core::heartbeats::control::set_heartbeat(
-                        p,
-                        agent,
-                        interval,
-                        phase,
-                        mode,
-                        cost_budget,
-                        force_wake,
-                    ))
-                } else {
-                    respond(k2_core::heartbeats::control::get_heartbeat(p, agent))
-                }
-            }
-            Err(r) => r,
-        },
-        "/cli/agents/heartbeat/noop" => match need_project(params) {
-            Ok(p) => respond(k2_core::heartbeats::control::heartbeat_noop(
-                p,
-                str_param(params, "agent"),
-            )),
-            Err(r) => r,
-        },
-        "/cli/agents/heartbeat/action" => match need_project(params) {
-            Ok(p) => respond(k2_core::heartbeats::control::heartbeat_action(
-                p,
-                str_param(params, "agent"),
-            )),
-            Err(r) => r,
-        },
+        // 0.40.31: the legacy per-agent adaptive-backoff heartbeat API
+        // (`<agent>/heartbeat.json`, unread since the custom-agent
+        // scheduler loop retired in 0.39.0d) is deleted. Route entries
+        // kept as HTTP-410 so any straggler (stale generated CLAUDE.md
+        // instructions, old scripts) gets a clear signal instead of a
+        // silent 404 from the catch-all.
+        "/cli/agents/heartbeat"
+        | "/cli/agents/heartbeat/noop"
+        | "/cli/agents/heartbeat/action" => CliResponse::gone(
+            "per-agent heartbeat control deleted in 0.40.31; use the named workspace \
+             heartbeat schedules instead — `k2 heartbeat schedule list` / the \
+             `/cli/heartbeat/*` routes",
+        ),
 
         // ── Sub-agent completion ────────────────────────────────────
         "/cli/agent/complete" => match need_project(params) {

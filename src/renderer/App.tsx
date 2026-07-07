@@ -545,6 +545,12 @@ export default function App(): React.JSX.Element {
       listen('menu:command-palette', () => {
         toggleCommandPalette()
       }).then((fn) => unlisteners.push(fn))
+      // 0.40.31 — the View-menu "Review Queue" item became "Running
+      // Agents" (⌘J): the native accelerator consumes the keystroke on
+      // macOS, so the menu event is how ⌘J reaches us from the menu path.
+      listen('menu:running-agents', () => {
+        useRunningAgentsStore.getState().toggle()
+      }).then((fn) => unlisteners.push(fn))
       listen('menu:toggle-sidebar', () => {
         useSidebarStore.getState().toggle()
       }).then((fn) => unlisteners.push(fn))

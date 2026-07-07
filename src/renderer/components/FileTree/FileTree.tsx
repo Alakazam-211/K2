@@ -14,6 +14,7 @@ import { useFileUndoStore } from '@/stores/file-undo'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { executeRemoteDrop } from '@/lib/handle-remote-drop'
+import { planLocalExternalDrop } from '@/lib/external-drop'
 import { compressFolder, downloadFile } from '@/lib/fs-transfer'
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -793,23 +794,20 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         return
       }
 
+      // LOCAL: an external OS drop (Finder → tree) is NEVER destructive —
+      // always COPY, regardless of modifier keys. The source file remains
+      // with its original owner (Finder), so a copy is always safe; moving
+      // here silently relocated files the user thought were headed to a
+      // remote host (data-loss bug, 2026-07-07). Only INTERNAL tree drags
+      // (handleDragOutStart's onDrop below) keep move semantics.
       const toast = useToastStore.getState()
       const undo = useFileUndoStore.getState()
-      const isCopy = optionKeyRef.current
-      const action = isCopy ? 'Copied' : 'Moved'
+      const plan = planLocalExternalDrop(paths, targetFolder)
 
       try {
-        if (isCopy) {
-          await daemonCliPost('fs/copy', { sources: paths, destination: targetFolder })
-          undo.push({ type: 'copy', createdPaths: paths.map(p => `${targetFolder}/${p.split('/').pop()}`) })
-        } else {
-          await daemonCliPost('fs/move', { sources: paths, destination: targetFolder })
-          undo.push({
-            type: 'move',
-            items: paths.map(p => ({ oldPath: p, newPath: `${targetFolder}/${p.split('/').pop()}` }))
-          })
-        }
-        toast.addToast(`${action} ${paths.length} item${paths.length > 1 ? 's' : ''}`, 'success')
+        await daemonCliPost(plan.endpoint, plan.payload)
+        undo.push(plan.undo)
+        toast.addToast(plan.toast, 'success')
         await loadDir(targetFolder, true)
       } catch (err) {
         toast.addToast(`Failed: ${err}`, 'error')
@@ -1686,7 +1684,8 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       {/* Drop indicator banner */}
       {isDragOver && (
         <div className="mx-3 mb-2 px-2 py-1.5 text-[11px] text-[var(--color-accent)] border border-[var(--color-accent)] bg-[var(--color-accent)]/5 text-center">
-          {optionKeyRef.current ? 'Copy here (Option held)' : 'Move here (hold Option to copy)'}
+          {/* External OS drops always copy — never move (source stays in Finder) */}
+          Drop to copy here
         </div>
       )}
 

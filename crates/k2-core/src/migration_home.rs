@@ -17,7 +17,8 @@
 //!     symlink), it is left untouched and we log — that machine ran
 //!     mixed versions; the operator decides. We never merge or delete.
 //!   - `~/.k2so` is already a symlink → done (migration ran before).
-//!   - neither exists → fresh machine; create `~/.k2` and symlink.
+//!   - neither exists → fresh machine; create `~/.k2` ONLY (no symlink —
+//!     nothing pre-0.40 ever pointed at `~/.k2so` on this machine).
 //!
 //! MUST run before anything touches the DB or port files — both the
 //! daemon (`main.rs`, before `db::shared()`/port claim) and the app
@@ -95,10 +96,14 @@ pub fn migrate_home_dir_at(home: &Path) -> Result<HomeMigration, String> {
         }
         (false, true) => Ok(HomeMigration::AlreadyDone),
         (false, false) => {
+            // Fresh install — no pre-0.40 `~/.k2so` ever existed here, so
+            // there is nothing for a compat symlink to keep working. Just
+            // create `~/.k2`. (Until 0.40.32 we ALSO created the symlink on
+            // this path, which put a mystery `.k2so` folder on every
+            // brand-new machine/server — Rosson, 2026-07-07. The symlink is
+            // only for genuinely MIGRATED machines, created in the
+            // `(true, false)` arm above.)
             std::fs::create_dir_all(&new).map_err(|e| format!("create ~/.k2: {e}"))?;
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&new, &old)
-                .map_err(|e| format!("symlink ~/.k2so → ~/.k2: {e}"))?;
             Ok(HomeMigration::FreshInit)
         }
     }
@@ -159,11 +164,17 @@ mod tests {
     }
 
     #[test]
-    fn fresh_machine_initializes_both() {
+    fn fresh_machine_gets_k2_only_no_compat_symlink() {
+        // 0.40.33: a machine that never had K2SO must not grow a mystery
+        // `.k2so` entry — the compat symlink is exclusively the migration
+        // arm's job.
         let home = tmp_home("fresh");
         assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::FreshInit);
         assert!(home.join(".k2").is_dir());
-        assert!(home.join(".k2so").symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(
+            home.join(".k2so").symlink_metadata().is_err(),
+            "fresh install must not create ~/.k2so"
+        );
         std::fs::remove_dir_all(&home).unwrap();
     }
 

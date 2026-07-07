@@ -19,11 +19,9 @@ path = "src/main.rs"
 # companion, scheduler, agent_hooks, push_adapter as modules migrate in).
 k2-core = { path = "../crates/k2-core" }
 
-# `unstable` = multiwebview (child webviews for the embedded Browser Tab,
-# PRD .k2/prds/prd-browser-pane-v1.md §3). Known side-effect watchlist:
-# WindowEvent::Focused regression (tauri #12568) — the S1 spike regression-
-# tests presence/timers/heartbeats before anything ships on this.
-tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "tray-icon", "image-png", "unstable"] }
+# NOTE: tauri's `unstable` (multiwebview, for the Browser Tab) is pulled in
+# ONLY via the opt-in `browser-pane` cargo feature below — never here.
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
@@ -130,6 +128,12 @@ qoi = "0.4"
 
 [features]
 default = []
+# Embedded Browser Tab (PRD prd-browser-pane-v1.md). Pulls tauri's
+# `unstable` multiwebview API, which has documented whole-app side effects
+# (WindowEvent::Focused regression, tauri #12568) — so it stays OFF in
+# default/release builds until the browser-pane arc actually ships.
+# Spike builds: `cargo check -p k2 --features browser-pane`.
+browser-pane = ["tauri/unstable"]
 
 [dev-dependencies]
 # Benchmark framework for src-tauri/benches/*.rs. Dev-only; never ships in

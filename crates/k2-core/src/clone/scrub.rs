@@ -4,8 +4,9 @@
 //!
 //! 1. **Path patterns** — `.env`, `.env.local`, `.env.*`, `.env.*.local`
 //!    anywhere in the tree; anything under an `.auth/` directory; and
-//!    token-bearing files under `.k2so/` (gated on content, since benign
-//!    config like a focus-group name lives there too).
+//!    token-bearing files under `.k2/` or the legacy `.k2so/` (gated on
+//!    content, since benign config like a focus-group name lives there
+//!    too).
 //! 2. **Content credential scan** — a small set of regex-free substring +
 //!    pattern checks (JWTs, GH tokens, Supabase `service_role`, private
 //!    keys, `password:`/`secret:`/`api_key:` assignments). A hit on a
@@ -29,15 +30,16 @@ const MAX_SCAN_BYTES: u64 = 1024 * 1024;
 pub enum SecretReason {
     /// Matched a secret PATH pattern (`.env*`, `.auth/`).
     PathPattern,
-    /// A `.k2so/` file whose CONTENT tripped the credential scan.
+    /// A `.k2/` (or legacy `.k2so/`) file whose CONTENT tripped the
+    /// credential scan.
     K2soContent,
     /// CONTENT tripped the credential scan (path not otherwise flagged).
     Content,
 }
 
 /// Classify a single file. `rel_path` is the workspace-relative path (so
-/// `.auth/` / `.k2so/` directory tests are anchored to the tree, not to
-/// an absolute home path); `abs_path` is read for the content scan.
+/// `.auth/` / `.k2/` / `.k2so/` directory tests are anchored to the tree,
+/// not to an absolute home path); `abs_path` is read for the content scan.
 ///
 /// Returns `Some(reason)` if the file is a secret, `None` otherwise.
 pub fn classify_secret(rel_path: &str, abs_path: &Path) -> Option<SecretReason> {
@@ -50,9 +52,10 @@ pub fn classify_secret(rel_path: &str, abs_path: &Path) -> Option<SecretReason> 
     }
 
     // ── 2. CONTENT scan ──────────────────────────────────────────────
-    // `.k2so/` files are gated on content (benign config lives there);
-    // every other file is also content-scanned as a credential safety net.
-    let under_k2so = path_under_k2so_dir(rel_path);
+    // `.k2/` (and legacy `.k2so/`) files are gated on content (benign
+    // config lives there); every other file is also content-scanned as a
+    // credential safety net.
+    let under_k2so = path_under_agent_dot_dir(rel_path);
     if content_has_credential(abs_path) {
         return Some(if under_k2so {
             SecretReason::K2soContent
@@ -79,9 +82,10 @@ fn path_under_auth_dir(rel_path: &str) -> bool {
     has_dir_component(rel_path, ".auth")
 }
 
-/// Any path component equal to `.k2so` → content-gated secret scope.
-fn path_under_k2so_dir(rel_path: &str) -> bool {
-    has_dir_component(rel_path, ".k2so")
+/// Any path component equal to `.k2` (current agent dot-dir, 0.40.4
+/// rename) or `.k2so` (legacy) → content-gated secret scope.
+fn path_under_agent_dot_dir(rel_path: &str) -> bool {
+    has_dir_component(rel_path, ".k2") || has_dir_component(rel_path, ".k2so")
 }
 
 /// Does `rel_path` contain `dir` as one of its directory components (i.e.

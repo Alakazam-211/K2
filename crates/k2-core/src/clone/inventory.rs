@@ -20,7 +20,9 @@ const SKIP_DIRS: &[&str] = &[
     ".cache",
     ".turbo",
     ".vercel",
-    ".auth", // login/session state (also secret-classified)
+    // login/session state — pruned from the general walks, but enumerated
+    // by the dedicated secrets pass so `carry_secrets` decides its fate.
+    ".auth",
     "screenshots",
     "artifacts",
     "coverage",
@@ -111,9 +113,27 @@ fn is_appendable_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Walk the PROJECT tree with the `ignore` crate (honors `.gitignore` /
-/// `.ignore` / `.k2soignore`), apply the bulk skip-list (also inside
-/// nested git repos), and secret-classify every surviving file.
+/// The agent dot-dirs that must ALWAYS travel with a clone, gitignore or
+/// not — a workspace's `.gitignore` very commonly lists `/.k2/`, which
+/// used to silently drop the entire agent state from the bundle.
+/// `.k2so` is the pre-0.40.4 legacy name; both live in the wild.
+const AGENT_DOT_DIRS: &[&str] = &[".k2", ".k2so", ".claude"];
+
+/// Walk the PROJECT tree in three passes:
+///
+/// 1. The main walk with the `ignore` crate (honors `.gitignore` /
+///    `.ignore` / `.k2ignore` / `.k2soignore`), applying the bulk
+///    skip-list (also inside nested git repos).
+/// 2. A force-include walk over the agent dot-dirs (`.k2/`, `.k2so/`,
+///    `.claude/`) with NO ignore rules — agent state travels even when
+///    the workspace `.gitignore` lists it.
+/// 3. A gitignore-proof secrets enumeration (`.env*` files + `.auth/`
+///    subtrees) so `carry_secrets` truthfully decides their fate instead
+///    of `.gitignore` silently dropping them first.
+///
+/// Every surviving file is secret-classified (unless `carry_secrets`);
+/// passes dedupe on the workspace-relative path so a file reachable by
+/// more than one pass is only processed once.
 fn collect_workspace(
     project: &Path,
     opts: &CloneOptions,
@@ -127,15 +147,22 @@ fn collect_workspace(
         ));
     }
 
+    // Dedupe set across the three passes: every workspace-relative path
+    // that has been PROCESSED (whether bundled or scrubbed).
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // ── Pass 1: ignore-honoring main walk ────────────────────────────
     let walker = ignore::WalkBuilder::new(project)
-        .hidden(false) // we WANT .k2so/.claude/.git etc.
+        .hidden(false) // we WANT .k2/.claude/.git etc.
         .git_ignore(true)
         .git_global(false)
         .git_exclude(true)
         .follow_links(false)
         .require_git(false)
-        // `.k2soignore` as a custom ignore file name (same syntax as
-        // .gitignore); `ignore` reads `.ignore` by default but not this.
+        // `.k2ignore` (current) + `.k2soignore` (legacy) as custom ignore
+        // file names (same syntax as .gitignore); `ignore` reads `.ignore`
+        // by default but not these.
+        .add_custom_ignore_filename(".k2ignore")
         .add_custom_ignore_filename(".k2soignore")
         .filter_entry(|entry| {
             if entry.depth() == 0 {
@@ -163,43 +190,177 @@ fn collect_workspace(
         if is_dir {
             continue; // entries are files; dirs are recreated implicitly.
         }
-        let path = entry.path();
-        // A symlink reports its OWN type under follow_links(false), so a
-        // symlink pointing at a directory (e.g.
-        // `.k2so/external/agent-skills/.opencode/skills`) escapes the is_dir
-        // skip above. append_file's `File::open` would then follow it into
-        // the directory and crash with EISDIR ("Is a directory"). Resolve the
-        // target and skip anything that isn't a real file — symlinked dirs,
-        // broken/unreadable links. Symlinks to real files still resolve to a
-        // file here and copy their bytes.
-        if !is_appendable_file(path) {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        if is_bulk_file(&name) {
-            continue;
-        }
-        let rel = match path.strip_prefix(project) {
-            Ok(r) => r.to_string_lossy().to_string(),
-            Err(_) => continue,
-        };
-
-        // Secret classification (unless carrying secrets).
-        if !opts.carry_secrets {
-            if let Some(_reason) = classify_secret(&rel, path) {
-                scrubbed.push(rel);
-                continue;
-            }
-        }
-
-        entries.push(InventoryEntry {
-            abs_path: path.to_path_buf(),
-            rel_path: rel,
-            class: DestinationClass::Workspace,
-        });
+        process_workspace_file(project, entry.path(), opts, &mut seen, entries, scrubbed);
     }
 
+    // ── Pass 2: force-include the agent dot-dirs ──────────────────────
+    // The main walk honors `.gitignore`, which very often lists `/.k2/`
+    // (and sometimes `.claude/`) — that used to silently drop the whole
+    // agent dir from the bundle. Re-walk each dot-dir with NO ignore
+    // rules; `seen` dedupes anything the main walk already took. The
+    // secret content-scan still applies (a credential-bearing file inside
+    // `.k2/` is scrubbed unless carrying).
+    for dot in AGENT_DOT_DIRS {
+        let dir = project.join(dot);
+        if !dir.is_dir() {
+            continue;
+        }
+        let walker = ignore::WalkBuilder::new(&dir)
+            .hidden(false)
+            .standard_filters(false) // agent state travels; no ignore rules.
+            .follow_links(false)
+            .filter_entry(|entry| {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                if is_dir {
+                    let name = entry.file_name().to_string_lossy();
+                    return !SKIP_DIRS.iter().any(|&s| s.eq_ignore_ascii_case(&name));
+                }
+                true
+            })
+            .build();
+        for entry in walker {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if entry.depth() == 0 {
+                continue;
+            }
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            process_workspace_file(project, entry.path(), opts, &mut seen, entries, scrubbed);
+        }
+    }
+
+    // ── Pass 3: gitignore-proof secrets enumeration ───────────────────
+    collect_secret_candidates(project, opts, &mut seen, entries, scrubbed);
+
     Ok(())
+}
+
+/// Shared per-file processing for every `collect_workspace` pass: symlink
+/// guard, bulk-file drop, relativize, DEDUPE (first pass to reach a rel
+/// path wins), secret classification, push.
+fn process_workspace_file(
+    project: &Path,
+    path: &Path,
+    opts: &CloneOptions,
+    seen: &mut std::collections::HashSet<String>,
+    entries: &mut Vec<InventoryEntry>,
+    scrubbed: &mut Vec<String>,
+) {
+    // A symlink reports its OWN type under follow_links(false), so a
+    // symlink pointing at a directory (e.g.
+    // `.k2so/external/agent-skills/.opencode/skills`) escapes the walkers'
+    // is_dir skips. append_file's `File::open` would then follow it into
+    // the directory and crash with EISDIR ("Is a directory"). Resolve the
+    // target and skip anything that isn't a real file — symlinked dirs,
+    // broken/unreadable links. Symlinks to real files still resolve to a
+    // file here and copy their bytes.
+    if !is_appendable_file(path) {
+        return;
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if is_bulk_file(&name) {
+        return;
+    }
+    let rel = match path.strip_prefix(project) {
+        Ok(r) => r.to_string_lossy().to_string(),
+        Err(_) => return,
+    };
+    // Dedupe across passes: a file the main walk already took (or already
+    // scrubbed) must not be re-processed by the force-include/secret walks.
+    if !seen.insert(rel.clone()) {
+        return;
+    }
+
+    // Secret classification (unless carrying secrets).
+    if !opts.carry_secrets {
+        if let Some(_reason) = classify_secret(&rel, path) {
+            scrubbed.push(rel);
+            return;
+        }
+    }
+
+    entries.push(InventoryEntry {
+        abs_path: path.to_path_buf(),
+        rel_path: rel,
+        class: DestinationClass::Workspace,
+    });
+}
+
+/// Enumerate the secret-shaped files the main walk may have missed —
+/// `.env` / `.env.*` files at any depth plus everything under an `.auth/`
+/// directory — with NO ignore rules, so a workspace `.gitignore` listing
+/// `.env*` can't hide them from the `carry_secrets` decision. The
+/// existing semantics then apply via [`process_workspace_file`]:
+/// `carry_secrets = false` → scrubbed + listed in `scrubbed_secrets`;
+/// `carry_secrets = true` → included in the bundle.
+///
+/// The bulk skip-list still prunes descent (an `.env` inside
+/// `node_modules/` is not workspace state) — except `.auth` itself, which
+/// is this pass's target.
+fn collect_secret_candidates(
+    project: &Path,
+    opts: &CloneOptions,
+    seen: &mut std::collections::HashSet<String>,
+    entries: &mut Vec<InventoryEntry>,
+    scrubbed: &mut Vec<String>,
+) {
+    let walker = ignore::WalkBuilder::new(project)
+        .hidden(false)
+        .standard_filters(false) // no gitignore: secrets are decided by opts.
+        .follow_links(false)
+        .filter_entry(|entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                let name = entry.file_name().to_string_lossy();
+                // Descend into `.auth` (the target of this pass) but keep
+                // the rest of the bulk skip-list pruning the walk.
+                return name == ".auth"
+                    || !SKIP_DIRS.iter().any(|&s| s.eq_ignore_ascii_case(&name));
+            }
+            true
+        })
+        .build();
+
+    for entry in walker {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if entry.depth() == 0 {
+            continue;
+        }
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy();
+        let is_env = name == ".env" || name.starts_with(".env.");
+        let under_auth = path
+            .strip_prefix(project)
+            .map(|rel| {
+                let mut comps: Vec<_> = rel.components().collect();
+                comps.pop(); // exclude the filename; `.auth` is a DIR test.
+                comps.iter().any(|c| c.as_os_str() == ".auth")
+            })
+            .unwrap_or(false);
+        if !is_env && !under_auth {
+            continue; // this pass only targets secret-shaped paths.
+        }
+        process_workspace_file(project, path, opts, seen, entries, scrubbed);
+    }
 }
 
 /// Collect the ENTIRE `<slug>/memory/` directory (`MEMORY.md` +

@@ -12,9 +12,12 @@
 //! ## The three locations (see PRD `k2-connect-clone-to.md`)
 //! For a project at `PROJECT` with
 //! `SLUG = chat_history::claude_project_hash(PROJECT)`:
-//! 1. **Workspace dir** — the `PROJECT` tree (`.k2so/`, project-local
-//!    `.claude/`, config/persona/tools/docs), minus excludes + scrubbed
-//!    secrets.
+//! 1. **Workspace dir** — the `PROJECT` tree (`.k2/` — legacy `.k2so/` —
+//!    project-local `.claude/`, config/persona/tools/docs), minus
+//!    excludes + scrubbed secrets. The agent dot-dirs are force-included
+//!    even when the workspace `.gitignore` lists them, and `.env*` /
+//!    `.auth/` are always enumerated so the `carry_secrets` option (not
+//!    `.gitignore`) decides whether they travel.
 //! 2. **Durable memory** — the entire `<home>/.claude/projects/<SLUG>/
 //!    memory/` directory (`MEMORY.md` + every `*.md`).
 //! 3. **Live session(s)** — `<session-id>.jsonl` directly under
@@ -24,7 +27,7 @@
 //!
 //! ## Pipeline
 //! `inventory()` resolves PROJECT + SLUG, walks the three locations
-//! (honoring `.gitignore`/`.k2soignore` + the bulk skip-list via the
+//! (honoring `.gitignore`/`.k2ignore`/`.k2soignore` + the bulk skip-list via the
 //! `ignore` crate), runs the secret classifier, and returns a structured
 //! [`CloneInventory`]. `CloneInventory::manifest()` produces the
 //! serializable [`CloneManifest`] (entry list + re-supply report + source

@@ -254,6 +254,165 @@ fn carry_secrets_includes_env_local() {
     );
 }
 
+/// Layer a realistic `.gitignore` + a `.k2/` agent dir onto a fixture —
+/// the exact shape that used to make "Clone to server" silently drop the
+/// whole agent dir (`/.k2/`) and the env file (`.env*`): the main walk
+/// honors `.gitignore`, so both vanished BEFORE the carry_secrets logic
+/// could decide.
+fn add_gitignored_agent_state(fx: &Fixture) {
+    write(
+        &fx.project.join(".gitignore"),
+        "node_modules/\n.env\n.env.*\n/.k2/\n",
+    );
+    write(
+        &fx.project.join(".k2/agent/AGENT.md"),
+        "# Agent\npersona and standing orders\n",
+    );
+    write(
+        &fx.project.join(".k2/skills/x/SKILL.md"),
+        "# Skill X\nhow to do the thing\n",
+    );
+}
+
+/// Rosson 2026-07-07: a gitignored `.k2/` dir must STILL travel — agent
+/// state is the whole point of a clone. Also proves the cross-pass dedupe:
+/// `.k2so/PROJECT.md` is reachable by both the main walk (not gitignored)
+/// and the force-include pass, and must appear exactly once.
+#[test]
+fn gitignored_k2_dir_force_included() {
+    let fx = build_fixture();
+    add_gitignored_agent_state(&fx);
+    let inv = inventory(&fx.project.to_string_lossy(), opts(&fx.home)).unwrap();
+
+    let ws = rel_paths(&inv, DestinationClass::Workspace);
+    assert!(
+        ws.contains(".k2/agent/AGENT.md"),
+        "gitignored .k2/ agent file must be force-included, got {ws:?}"
+    );
+    assert!(
+        ws.contains(".k2/skills/x/SKILL.md"),
+        "gitignored .k2/ skill file must be force-included, got {ws:?}"
+    );
+    // dedupe: a dot-dir file the main walk ALSO collected appears once.
+    let dup_count = inv
+        .entries
+        .iter()
+        .filter(|e| e.rel_path == ".k2so/PROJECT.md")
+        .count();
+    assert_eq!(
+        dup_count, 1,
+        ".k2so/PROJECT.md must be deduped across the main + force-include walks"
+    );
+
+    // ...and the files survive all the way through the tar bundle.
+    let out = fx._root.path().join("k2-force-include-bundle.tar.gz");
+    build_bundle(
+        &inv,
+        &opts(&fx.home),
+        "2026-07-07T00:00:00Z".to_string(),
+        None,
+        &out,
+    )
+    .unwrap();
+    let extract = fx._root.path().join("k2-force-include-extract");
+    fs::create_dir_all(&extract).unwrap();
+    let names = untar(&out, &extract);
+    assert!(
+        names.iter().any(|n| n == "workspace/.k2/agent/AGENT.md"),
+        "gitignored .k2/ file must reach the bundle, got {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "workspace/.k2/skills/x/SKILL.md"),
+        "gitignored .k2/ skill must reach the bundle, got {names:?}"
+    );
+}
+
+/// Rosson 2026-07-07: a gitignored `.env.local` + carry_secrets=false must
+/// be scrubbed AND listed in the re-supply report — previously `.gitignore`
+/// dropped it before the classifier ever saw it, so it silently vanished
+/// from both the bundle and the scrubbed list.
+#[test]
+fn gitignored_env_local_scrubbed_and_listed() {
+    let fx = build_fixture();
+    add_gitignored_agent_state(&fx);
+    let inv = inventory(&fx.project.to_string_lossy(), opts(&fx.home)).unwrap();
+
+    let ws = rel_paths(&inv, DestinationClass::Workspace);
+    assert!(
+        !ws.contains(".env.local"),
+        "carry_secrets=false: .env.local stays out of the bundle, got {ws:?}"
+    );
+    assert!(
+        inv.scrubbed_secrets.contains(&".env.local".to_string()),
+        "gitignored .env.local must STILL appear in scrubbed_secrets, got {:?}",
+        inv.scrubbed_secrets
+    );
+}
+
+/// Rosson 2026-07-07: the "Include secrets" toggle must truthfully control
+/// `.env` travel — a gitignored `.env.local` + carry_secrets=true IS
+/// bundled (this was the silently-broken case).
+#[test]
+fn gitignored_env_local_carried_when_opted_in() {
+    let fx = build_fixture();
+    add_gitignored_agent_state(&fx);
+    let mut o = opts(&fx.home);
+    o.carry_secrets = true;
+    let inv = inventory(&fx.project.to_string_lossy(), o).unwrap();
+
+    let ws = rel_paths(&inv, DestinationClass::Workspace);
+    assert!(
+        ws.contains(".env.local"),
+        "carry_secrets=true must include the gitignored .env.local, got {ws:?}"
+    );
+    // dedupe sanity: exactly one entry even though the secrets pass also
+    // enumerates env files.
+    let count = inv
+        .entries
+        .iter()
+        .filter(|e| e.rel_path == ".env.local")
+        .count();
+    assert_eq!(count, 1, ".env.local must appear exactly once, got {count}");
+    assert!(
+        inv.scrubbed_secrets.is_empty(),
+        "nothing scrubbed when carrying, got {:?}",
+        inv.scrubbed_secrets
+    );
+}
+
+/// The secret content-gate applies to the CURRENT `.k2/` dot-dir (not just
+/// the legacy `.k2so/`): a credential-bearing file inside a force-included
+/// `.k2/` is still scrubbed when not carrying secrets, while its benign
+/// siblings travel.
+#[test]
+fn k2_credential_file_scrubbed_despite_force_include() {
+    let fx = build_fixture();
+    add_gitignored_agent_state(&fx);
+    // A JWT-shaped token inside the gitignored .k2/ dir.
+    write(
+        &fx.project.join(".k2/creds/token.txt"),
+        "TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payloadpayloadpayload\n",
+    );
+    let inv = inventory(&fx.project.to_string_lossy(), opts(&fx.home)).unwrap();
+
+    let ws = rel_paths(&inv, DestinationClass::Workspace);
+    assert!(
+        !ws.contains(".k2/creds/token.txt"),
+        "credential-bearing .k2/ file must be scrubbed, got {ws:?}"
+    );
+    assert!(
+        inv.scrubbed_secrets
+            .contains(&".k2/creds/token.txt".to_string()),
+        "scrubbed .k2/ credential listed for re-supply, got {:?}",
+        inv.scrubbed_secrets
+    );
+    // benign neighbors still travel.
+    assert!(
+        ws.contains(".k2/agent/AGENT.md"),
+        "benign .k2/ files still included, got {ws:?}"
+    );
+}
+
 #[test]
 fn node_modules_excluded_workspace_and_nested_but_git_kept() {
     let fx = build_fixture();

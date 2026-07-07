@@ -314,11 +314,33 @@ rm -f "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
 # app's signature + stapled notarization ticket.
 DMG_STAGE="$(mktemp -d)"
 ditto "target/release/bundle/macos/K2.app" "$DMG_STAGE/K2.app"
-ln -s /Applications "$DMG_STAGE/Applications"
-hdiutil create -volname "K2" \
-    -srcfolder "$DMG_STAGE" \
-    -ov -format UDZO \
-    "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
+# Styled DMG (background art + icon layout from tauri.conf.json) via tauri's
+# own vendored create-dmg script, which `tauri build` leaves behind. Plain
+# hdiutil ships a bare white window — the styling lives in the volume's
+# .DS_Store, which only this script writes. Values mirror tauri.conf.json
+# bundle.macOS.dmg (window 660x400, app 180,170, drop-link 480,170).
+# Fallback: bare hdiutil + symlink (script missing / headless session where
+# the Finder AppleScript pass can't run).
+BUNDLE_DMG="target/release/bundle/dmg/bundle_dmg.sh"
+DMG_OUT="target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
+if [ -x "$BUNDLE_DMG" ] && bash "$BUNDLE_DMG" \
+    --volname "K2" \
+    --background "src-tauri/icons/dmg-background.png" \
+    --window-size 660 400 \
+    --icon-size 100 \
+    --icon "K2.app" 180 170 \
+    --app-drop-link 480 170 \
+    --hide-extension "K2.app" \
+    "$DMG_OUT" "$DMG_STAGE"; then
+    echo "  Styled DMG created (background + layout)."
+else
+    echo "  WARN: styled DMG failed or bundle_dmg.sh missing — falling back to plain hdiutil."
+    ln -s /Applications "$DMG_STAGE/Applications"
+    hdiutil create -volname "K2" \
+        -srcfolder "$DMG_STAGE" \
+        -ov -format UDZO \
+        "$DMG_OUT"
+fi
 rm -rf "$DMG_STAGE"
 codesign --force --timestamp \
     --sign "$SIGNING_IDENTITY" \

@@ -198,9 +198,9 @@ export default function DisableWorktreesDialog({
         {/* Recycle warning for unmerged changes */}
         {showRecycleConfirm && (
           <div className="px-5 pb-4">
-            <div className="border border-yellow-500/30 bg-yellow-500/10 px-3 py-2">
-              <p className="text-[11px] text-yellow-400 font-medium mb-1">Warning: Unmerged Changes Detected</p>
-              <p className="text-[11px] text-yellow-400/80">
+            <div className="border border-[color-mix(in_srgb,var(--color-status-warn-soft)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warn-soft)_10%,transparent)] px-3 py-2">
+              <p className="text-[11px] text-[var(--color-status-warn-text)] font-medium mb-1">Warning: Unmerged Changes Detected</p>
+              <p className="text-[11px] text-[color-mix(in_srgb,var(--color-status-warn-text)_80%,transparent)]">
                 One or more worktrees have uncommitted or unmerged changes.
                 Recycling will move these folders to Trash permanently.
               </p>

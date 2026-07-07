@@ -30,9 +30,9 @@ function trustBadge(trust: PeerTrust): { text: string; cls: string } {
     case 'trusted':
       return { text: 'trusted', cls: 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10' }
     case 'blocked':
-      return { text: 'blocked', cls: 'text-red-300 border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)]' }
+      return { text: 'blocked', cls: 'text-[var(--color-status-error-bright)] border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)]' }
     default:
-      return { text: 'pending', cls: 'text-amber-200 border-amber-500/40 bg-amber-500/10' }
+      return { text: 'pending', cls: 'text-[var(--color-status-warn-amber-bright)] border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warn)_10%,transparent)]' }
   }
 }
 

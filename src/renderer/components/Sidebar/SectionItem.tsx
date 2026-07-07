@@ -27,7 +27,7 @@ function WorkspaceGitBadge({ path }: { path?: string }): React.JSX.Element | nul
   if (count === 0) return null
 
   return (
-    <span className="ml-auto text-[10px] tabular-nums font-medium px-1.5 py-0.5 bg-yellow-400/10 text-yellow-400 flex-shrink-0">
+    <span className="ml-auto text-[10px] tabular-nums font-medium px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn-text)_10%,transparent)] text-[var(--color-status-warn-text)] flex-shrink-0">
       {count}
     </span>
   )

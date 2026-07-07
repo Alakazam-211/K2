@@ -608,7 +608,7 @@ function decisionColor(decision: string): string {
   if (decision === 'fired') return 'text-[var(--color-status-ok-soft)]'
   // Catch-up fires are still successes — amber so a recovered miss is
   // visible at a glance without reading the reason.
-  if (decision === 'fired_catchup') return 'text-amber-400'
+  if (decision === 'fired_catchup') return 'text-[var(--color-status-warn-amber)]'
   if (
     decision === 'error' ||
     decision === 'wakeup_file_missing' ||

@@ -654,7 +654,7 @@ export function DictationLabSection(): React.JSX.Element {
                 onClick={toggleSpeech}
                 className={`px-3 py-1.5 text-[10px] font-medium border transition-colors no-drag cursor-pointer ${
                   speechListening
-                    ? 'bg-[color-mix(in_srgb,var(--color-status-error)_15%,transparent)] border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] text-red-300 animate-pulse'
+                    ? 'bg-[color-mix(in_srgb,var(--color-status-error)_15%,transparent)] border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] text-[var(--color-status-error-bright)] animate-pulse'
                     : 'bg-[var(--color-accent)]/10 border-[var(--color-accent)]/30 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20'
                 }`}
               >

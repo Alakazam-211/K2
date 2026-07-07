@@ -1297,10 +1297,10 @@ export function K2ConnectSection(): React.JSX.Element {
         </div>
 
         {frpcMissing && (
-          <div className="flex items-start gap-2 px-3 py-2 border border-amber-400/30 bg-amber-400/5">
-            <span className="text-amber-400 text-sm leading-none flex-shrink-0 mt-0.5">&#9888;</span>
-            <div className="text-[10px] text-amber-300/80 leading-relaxed">
-              <strong className="text-amber-300">frpc not installed.</strong>{' '}
+          <div className="flex items-start gap-2 px-3 py-2 border border-[color-mix(in_srgb,var(--color-status-warn-amber)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warn-amber)_5%,transparent)]">
+            <span className="text-[var(--color-status-warn-amber)] text-sm leading-none flex-shrink-0 mt-0.5">&#9888;</span>
+            <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] leading-relaxed">
+              <strong className="text-[var(--color-status-warn-amber-soft)]">frpc not installed.</strong>{' '}
               K2 Connect needs the <span className="font-mono">frpc</span> client on your PATH.
               Install it from <span className="font-mono">github.com/fatedier/frp/releases</span>{' '}
               (or via <span className="font-mono">brew install frpc</span>) and try again.

@@ -39,7 +39,7 @@ interface AgentInboxPaneProps {
 const priorityBadge = (p: string): string => {
   const colors: Record<string, string> = {
     critical: 'bg-[color-mix(in_srgb,var(--color-status-error)_15%,transparent)] text-[var(--color-status-error-soft)]',
-    high: 'bg-[color-mix(in_srgb,var(--color-status-working)_15%,transparent)] text-orange-400',
+    high: 'bg-[color-mix(in_srgb,var(--color-status-working)_15%,transparent)] text-[var(--color-status-working-soft)]',
     normal: 'bg-[var(--color-wash-1)] text-[var(--color-text-muted)]',
     low: 'bg-[var(--color-wash-1)] text-[var(--color-text-muted)] opacity-60',
   }
@@ -263,19 +263,19 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
         {isWorkspaceBoard ? (
           <div className="absolute inset-0 z-10 flex gap-3 p-3 overflow-y-auto">
             <KanbanColumn title="Unassigned" items={inboxItems} color="text-[var(--color-accent)]" projectPath={projectPath} onOpenFile={openFile} />
-            <KanbanColumn title="In Progress" items={activeItems} color="text-yellow-400" projectPath={projectPath} onOpenFile={openFile} />
+            <KanbanColumn title="In Progress" items={activeItems} color="text-[var(--color-status-warn-text)]" projectPath={projectPath} onOpenFile={openFile} />
             <KanbanColumn title="Review" items={doneItems} color="text-[var(--color-status-ok-soft)]" projectPath={projectPath} onOpenFile={openFile} />
           </div>
         ) : isManager ? (
           <div className="absolute inset-0 z-10 flex gap-3 p-3 overflow-y-auto bg-[var(--color-bg)]">
             <KanbanColumn title="Inbox" items={inboxItems} color="text-[var(--color-accent)]" projectPath={projectPath} onOpenFile={openFile} />
-            <KanbanColumn title="Delegated" items={activeItems} color="text-yellow-400" projectPath={projectPath} onOpenFile={openFile} />
+            <KanbanColumn title="Delegated" items={activeItems} color="text-[var(--color-status-warn-text)]" projectPath={projectPath} onOpenFile={openFile} />
             <KanbanColumn title="Review" items={doneItems} color="text-[var(--color-status-ok-soft)]" projectPath={projectPath} onOpenFile={openFile} />
           </div>
         ) : (
           <div className="absolute inset-0 z-10 flex gap-3 p-3 overflow-y-auto bg-[var(--color-bg)]">
             <KanbanColumn title="Inbox" items={inboxItems} color="text-[var(--color-accent)]" projectPath={projectPath} onOpenFile={openFile} />
-            <KanbanColumn title="Active" items={activeItems} color="text-yellow-400" projectPath={projectPath} onOpenFile={openFile} />
+            <KanbanColumn title="Active" items={activeItems} color="text-[var(--color-status-warn-text)]" projectPath={projectPath} onOpenFile={openFile} />
             <KanbanColumn title="Done" items={doneItems} color="text-[var(--color-status-ok-soft)]" projectPath={projectPath} onOpenFile={openFile} />
           </div>
         )}

@@ -203,7 +203,7 @@ export default function MergeDialog(): React.JSX.Element | null {
                           file.status === 'added' ? 'text-[var(--color-status-ok-soft)]' :
                           file.status === 'deleted' ? 'text-[var(--color-status-error-soft)]' :
                           file.status === 'renamed' ? 'text-[var(--color-accent-hover)]' :
-                          'text-yellow-400'
+                          'text-[var(--color-status-warn-text)]'
                         }`}>
                           {file.status[0].toUpperCase()}
                         </span>
@@ -242,7 +242,7 @@ export default function MergeDialog(): React.JSX.Element | null {
 
           {step === 'conflicts' && (
             <div>
-              <p className="text-xs text-yellow-400 mb-3">
+              <p className="text-xs text-[var(--color-status-warn-text)] mb-3">
                 Merge has conflicts in {conflicts.length} file{conflicts.length !== 1 ? 's' : ''}. Resolve them in the editor, then stage and commit.
               </p>
               <div className="border border-[var(--color-border)]">
@@ -289,7 +289,7 @@ export default function MergeDialog(): React.JSX.Element | null {
           {step === 'conflicts' && (
             <>
               <button
-                className="px-3 py-1.5 text-xs text-[var(--color-status-error-soft)] hover:text-red-300"
+                className="px-3 py-1.5 text-xs text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error-bright)]"
                 onClick={handleAbortMerge}
               >
                 Abort Merge

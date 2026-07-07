@@ -808,7 +808,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       {pinHint && (
         <span
           className="shrink-0 px-2 truncate"
-          style={{ color: '#f66', fontSize: '10px', maxWidth: '260px' }}
+          style={{ color: 'var(--color-status-error-text)', fontSize: '10px', maxWidth: '260px' }}
           data-tab-pin-hint=""
         >
           {pinHint}

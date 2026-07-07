@@ -220,7 +220,7 @@ export default function PinDimensionsModal({
                 layout jump when it appears) */}
             <div
               className="mt-2 text-[10px]"
-              style={{ minHeight: 28, color: '#f66' }}
+              style={{ minHeight: 28, color: 'var(--color-status-error-text)' }}
               data-pin-dimensions-hint=""
             >
               {submitError ?? (showHint && !validation.ok ? validation.error : '')}

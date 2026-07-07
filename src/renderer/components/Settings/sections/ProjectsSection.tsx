@@ -1853,7 +1853,7 @@ function RemoteInstructToggle({
               : 'Off (recommended): only you can message this workspace\'s agent. Turn on to let K2 Connect users instruct the agent here — it runs with full shell and filesystem access.'}
           </div>
           {!enabled && globalAllow && (
-            <div className="text-[10px] text-amber-300/80 mt-1 leading-relaxed">
+            <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
               Currently allowed anyway: the global &ldquo;Let remote users message
               agents&rdquo; switch (Settings → K2 Connect) opts in every workspace,
               overriding this toggle.
@@ -1915,7 +1915,7 @@ function AgentKebabMenu({ onSettings, onDelete }: { onSettings: () => void; onDe
           {onDelete && (
             <button
               onClick={() => { setOpen(false); onDelete() }}
-              className="w-full text-left px-3 py-1.5 text-[11px] text-[var(--color-status-error-soft)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] hover:text-red-300 transition-colors no-drag cursor-pointer"
+              className="w-full text-left px-3 py-1.5 text-[11px] text-[var(--color-status-error-soft)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] hover:text-[var(--color-status-error-bright)] transition-colors no-drag cursor-pointer"
             >
               Delete Agent
             </button>

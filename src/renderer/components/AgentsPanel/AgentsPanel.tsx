@@ -318,7 +318,7 @@ export default function AgentsPanel(): React.JSX.Element {
               </div>
               <div className="flex items-center gap-1 text-[9px] text-[var(--color-text-muted)] flex-shrink-0">
                 {wsInboxCount > 0 && <span className="text-[var(--color-accent)]" title="Undelegated">{wsInboxCount}u</span>}
-                {totalDelegated > 0 && <span className="text-yellow-400" title="Delegated">{totalDelegated}d</span>}
+                {totalDelegated > 0 && <span className="text-[var(--color-status-warn-text)]" title="Delegated">{totalDelegated}d</span>}
                 {totalDone > 0 && <span className="text-[var(--color-status-ok-soft)]" title="Done">{totalDone}✓</span>}
               </div>
               <button

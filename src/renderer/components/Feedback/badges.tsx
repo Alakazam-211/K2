@@ -7,7 +7,7 @@ import type { FeedbackKind, FeedbackStatus } from './feedback-api'
 export function KindBadge({ kind }: { kind: FeedbackKind }): React.JSX.Element {
   const cls =
     kind === 'approval'
-      ? 'bg-amber-400/10 text-amber-400'
+      ? 'bg-[color-mix(in_srgb,var(--color-status-warn-amber)_10%,transparent)] text-[var(--color-status-warn-amber)]'
       : kind === 'fyi'
         ? 'bg-white/[0.06] text-[var(--color-text-muted)]'
         : 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
@@ -21,7 +21,7 @@ export function KindBadge({ kind }: { kind: FeedbackKind }): React.JSX.Element {
 export function StatusBadge({ status }: { status: FeedbackStatus }): React.JSX.Element {
   const cls =
     status === 'waiting'
-      ? 'bg-orange-400/10 text-orange-400'
+      ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
       : status === 'answered'
         ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
         : 'bg-white/[0.06] text-[var(--color-text-muted)]'
@@ -37,7 +37,7 @@ export function PriorityBadge({ priority }: { priority: number }): React.JSX.Ele
     priority <= 1
       ? 'text-[var(--color-status-error-soft)]'
       : priority === 2
-        ? 'text-amber-400'
+        ? 'text-[var(--color-status-warn-amber)]'
         : 'text-[var(--color-text-muted)]'
   return (
     <span className={`text-[10px] font-mono tabular-nums ${cls}`} title={`Priority ${priority} (1 urgent … 5 whenever)`}>

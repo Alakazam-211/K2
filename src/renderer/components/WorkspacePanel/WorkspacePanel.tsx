@@ -209,7 +209,7 @@ export default function WorkspacePanel(): React.JSX.Element {
                 <div className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">Inbox</div>
               </div>
               <div className="text-center">
-                <div className={`text-sm font-semibold tabular-nums ${totalActive > 0 ? 'text-yellow-400' : 'text-[var(--color-text-muted)]'}`}>{totalActive}</div>
+                <div className={`text-sm font-semibold tabular-nums ${totalActive > 0 ? 'text-[var(--color-status-warn-text)]' : 'text-[var(--color-text-muted)]'}`}>{totalActive}</div>
                 <div className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">Active</div>
               </div>
               <div className="text-center">

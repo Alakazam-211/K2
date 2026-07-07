@@ -59,7 +59,7 @@ function GitBadge({ path }: { path?: string }): React.JSX.Element | null {
           AI Commit
         </span>
       ) : (
-        <span className="text-[10px] tabular-nums font-medium px-1 bg-yellow-400/10 text-yellow-400 leading-none">
+        <span className="text-[10px] tabular-nums font-medium px-1 bg-[color-mix(in_srgb,var(--color-status-warn-text)_10%,transparent)] text-[var(--color-status-warn-text)] leading-none">
           {count}
         </span>
       )}

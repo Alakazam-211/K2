@@ -383,7 +383,7 @@ function ActiveBarItem({
           the user views the pane. */}
       {!isAgentWorking && hasUnseenDone ? (
         <span
-          className="flex-shrink-0 w-1.5 h-1.5 rounded-[1px] bg-amber-400"
+          className="flex-shrink-0 w-1.5 h-1.5 rounded-[1px] bg-[var(--color-status-warn-amber)]"
           title="Agent finished — not yet viewed"
         />
       ) : (

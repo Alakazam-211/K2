@@ -158,7 +158,7 @@ export function CanonicalAgentButton({
           Allow programmatic harness fan-out (symlinks). When on, K2 keeps the harness files
           (<span className="font-mono">CLAUDE.md</span>, <span className="font-mono">GEMINI.md</span>, …)
           symlinked to the generated <span className="font-mono">.k2/AGENTS.md</span> automatically. Off by
-          default. <span className="text-amber-300">Can overwrite existing harness content</span> — for an
+          default. <span className="text-[var(--color-status-warn-amber-soft)]">Can overwrite existing harness content</span> — for an
           existing project, run the K2 Canonical Agent (button above) instead; it merges safely. Best for new
           projects.
         </span>

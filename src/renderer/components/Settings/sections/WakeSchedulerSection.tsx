@@ -80,7 +80,7 @@ function decisionStyle(decision: string): { label: string; color: string } {
   if (decision === 'fired') return { label: '●', color: 'text-[var(--color-good,#57c98a)]' }
   // Catch-up fires are successes for a previously-missed occurrence —
   // amber dot so a recovered miss is scannable.
-  if (decision === 'fired_catchup') return { label: '●', color: 'text-amber-400' }
+  if (decision === 'fired_catchup') return { label: '●', color: 'text-[var(--color-status-warn-amber)]' }
   if (
     decision === 'error' ||
     decision === 'wakeup_file_missing' ||

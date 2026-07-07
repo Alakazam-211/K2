@@ -88,7 +88,7 @@ export function AgentSkillsSection(): React.JSX.Element {
           workspace itself for ongoing{' '}
           <span className="text-[var(--color-text-primary)]">programmatic symlinks</span> pointing back at the
           generated <span className="font-mono">.k2/AGENTS.md</span>. Hands-off, but it{' '}
-          <span className="text-amber-300">can overwrite existing harness content</span> — for an existing
+          <span className="text-[var(--color-status-warn-amber-soft)]">can overwrite existing harness content</span> — for an existing
           project, prefer the skill route above.
         </p>
       </div>

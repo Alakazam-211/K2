@@ -228,7 +228,7 @@ export function WorkspaceStatesSection(): React.JSX.Element {
             <span className="text-[var(--color-text-muted)]">Agents handle this automatically without human approval</span>
           </div>
           <div className="flex items-center gap-2 text-[11px]">
-            <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />
+            <span className="w-2 h-2 rounded-full bg-[var(--color-status-warn-amber)] flex-shrink-0" />
             <span className="text-[var(--color-text-secondary)] font-medium w-16 flex-shrink-0">Gated</span>
             <span className="text-[var(--color-text-muted)]">Requires human approval before agents act</span>
           </div>

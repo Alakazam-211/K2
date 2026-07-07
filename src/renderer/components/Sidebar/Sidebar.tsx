@@ -64,7 +64,7 @@ function WorkspaceGitBadge({ path }: { path?: string }): React.JSX.Element | nul
   if (count === 0) return null
 
   return (
-    <span className="ml-auto text-[10px] tabular-nums font-medium px-1.5 py-0.5 bg-yellow-400/10 text-yellow-400 flex-shrink-0">
+    <span className="ml-auto text-[10px] tabular-nums font-medium px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn-text)_10%,transparent)] text-[var(--color-status-warn-text)] flex-shrink-0">
       {count}
     </span>
   )
@@ -1108,7 +1108,7 @@ export default function Sidebar(): React.JSX.Element {
           <p className="text-[10px] text-[var(--color-status-error-soft)] font-medium leading-snug">
             Too many workspaces without Focus Groups. Enable Focus Groups to organize your workspaces before adding more.{' '}
             <button
-              className="underline text-[var(--color-status-error-soft)] hover:text-red-300 cursor-pointer"
+              className="underline text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error-bright)] cursor-pointer"
               onClick={() => useSettingsStore.getState().openSettings('projects')}
             >
               Open Settings

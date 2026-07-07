@@ -94,7 +94,7 @@ export default function TimerButton(): React.JSX.Element | null {
       {/* Stop */}
       <button
         onClick={stopTimer}
-        className={`${btnClass} w-5 text-[var(--color-status-error-soft)] hover:text-red-300`}
+        className={`${btnClass} w-5 text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error-bright)]`}
         style={noDrag}
         title="Stop timer"
       >

@@ -59,7 +59,7 @@ const SELECTABLE_STATUSES = ['waiting', 'resolved', 'dismissed'] as const
  *  as the card's status badge with a chevron. */
 function statusChipClass(status: FeedbackStatus): string {
   return status === 'waiting'
-    ? 'bg-orange-400/10 text-orange-400'
+    ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
     : status === 'answered'
       ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
       : 'bg-white/[0.06] text-[var(--color-text-muted)]'

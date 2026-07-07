@@ -359,7 +359,7 @@ export function AIFileEditor({
               dirty-state plumbing render unchanged. */}
           {isDirty && (
             <span
-              className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400"
+              className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--color-status-warn-amber)]"
               title="Unsaved changes"
             />
           )}
@@ -401,9 +401,9 @@ export function AIFileEditor({
       </div>
 
       {/* ── Warning banner ── */}
-      <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/8 border-b border-amber-500/20 flex-shrink-0">
-        <span className="text-amber-400 text-sm flex-shrink-0">&#9888;</span>
-        <span className="text-[11px] text-amber-300/80 leading-relaxed">{warningText}</span>
+      <div className="flex items-center gap-2 px-4 py-2 bg-[color-mix(in_srgb,var(--color-status-warn)_8%,transparent)] border-b border-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] flex-shrink-0">
+        <span className="text-[var(--color-status-warn-amber)] text-sm flex-shrink-0">&#9888;</span>
+        <span className="text-[11px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] leading-relaxed">{warningText}</span>
       </div>
 
       {/* ── File tabs (multi-file mode only; parent can hide via showTabs=false) ── */}

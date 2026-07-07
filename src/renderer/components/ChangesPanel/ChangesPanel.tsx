@@ -13,7 +13,7 @@ import { useGitInfo, useGitChanges } from '@/hooks/useGit'
 // ── Status helpers ───────────────────────────────────────────────────────────
 
 const STATUS_CONFIG = {
-  modified: { label: 'Modified', color: 'text-yellow-400', icon: 'M', bg: 'bg-yellow-400/10' },
+  modified: { label: 'Modified', color: 'text-[var(--color-status-warn-text)]', icon: 'M', bg: 'bg-[color-mix(in_srgb,var(--color-status-warn-text)_10%,transparent)]' },
   added: { label: 'Added', color: 'text-[var(--color-status-ok-soft)]', icon: 'A', bg: 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)]' },
   deleted: { label: 'Deleted', color: 'text-[var(--color-status-error-soft)]', icon: 'D', bg: 'bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)]' },
   untracked: { label: 'Untracked', color: 'text-neutral-400', icon: 'U', bg: 'bg-neutral-400/10' }

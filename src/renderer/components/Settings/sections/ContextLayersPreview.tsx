@@ -94,7 +94,7 @@ function KindBadge({ kind }: { kind: LayerKind }): React.JSX.Element {
   const style: Record<LayerKind, string> = {
     auto: 'text-[var(--color-text-muted)] italic',
     global: 'text-[var(--color-accent)]',
-    ws: 'text-amber-400',
+    ws: 'text-[var(--color-status-warn-amber)]',
     heartbeat: 'text-emerald-400',
   }
   return <span className={`text-[10px] ${style[kind]}`}>{kind}</span>
@@ -259,7 +259,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
                   <span className={`w-1 h-4 rounded-sm flex-shrink-0 ${
                     entry.kind === 'auto' ? 'bg-[var(--color-text-muted)]/30' :
                     entry.kind === 'global' ? 'bg-[var(--color-accent)]' :
-                    entry.kind === 'ws' ? 'bg-amber-400/60' :
+                    entry.kind === 'ws' ? 'bg-[color-mix(in_srgb,var(--color-status-warn-amber)_60%,transparent)]' :
                     'bg-emerald-400/60'
                   }`} />
                   <div className="min-w-0">

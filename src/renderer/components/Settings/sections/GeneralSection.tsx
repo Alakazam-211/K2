@@ -106,7 +106,7 @@ export function GeneralSection(): React.JSX.Element {
             <span className="text-xs text-[var(--color-text-secondary)]">K2 by Alakazam Labs</span>
             {isRemote && (
               <span
-                className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-amber-500/20 text-amber-300 flex-shrink-0"
+                className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0"
                 title="This is your local Mac's app version — not the connected host's. The host version is shown under the remote-host controls."
               >
                 This Mac
@@ -177,7 +177,7 @@ export function GeneralSection(): React.JSX.Element {
               <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">The app will restart after installation</p>
             </div>
             <button
-              className="px-3 py-1 text-xs font-medium bg-[var(--color-status-ok)] text-[var(--color-on-accent)] hover:bg-green-600 transition-colors no-drag cursor-pointer"
+              className="px-3 py-1 text-xs font-medium bg-[var(--color-status-ok)] text-[var(--color-on-accent)] hover:bg-[var(--color-status-ok-hover)] transition-colors no-drag cursor-pointer"
               onClick={() => useUpdateStore.getState().installAndRelaunch()}
             >
               Install & Relaunch
@@ -777,7 +777,7 @@ function DaemonRow(): React.JSX.Element {
             <button
               onClick={handleRestart}
               disabled={busy !== null}
-              className="px-2 py-0.5 text-[10px] bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 hover:bg-yellow-500/30 transition-colors no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-0.5 text-[10px] bg-[color-mix(in_srgb,var(--color-status-warn-soft)_20%,transparent)] text-[var(--color-status-warn-text)] border border-[color-mix(in_srgb,var(--color-status-warn-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn-soft)_30%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50"
             >
               {busy === 'restart' ? 'Restarting...' : 'Restart'}
             </button>
@@ -1019,13 +1019,13 @@ function RestartHostRow(): React.JSX.Element | null {
 
   return (
     <div
-      className="py-2.5 px-3 border border-amber-500/40 bg-amber-500/5"
+      className="py-2.5 px-3 border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warn)_5%,transparent)]"
       data-settings-id="general.restart-host"
     >
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col min-w-0 flex-1">
           <span className="flex items-center gap-2 min-w-0">
-            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-amber-500/20 text-amber-300 flex-shrink-0">
+            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
               Remote host
             </span>
             <span className="text-xs text-[var(--color-text-primary)] font-medium truncate">
@@ -1036,19 +1036,19 @@ function RestartHostRow(): React.JSX.Element | null {
             </span>
           </span>
           <span className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Restart the machine you&apos;re connected to — <strong className="text-amber-300">not this Mac</strong>.
+            Restart the machine you&apos;re connected to — <strong className="text-[var(--color-status-warn-amber-soft)]">not this Mac</strong>.
             Active sessions briefly disconnect, then reconnect automatically.
           </span>
         </div>
         <div className="flex-shrink-0">
           {restarting ? (
-            <span className="text-[11px] text-amber-300">Restarting {hostLabel}…</span>
+            <span className="text-[11px] text-[var(--color-status-warn-amber-soft)]">Restarting {hostLabel}…</span>
           ) : (
             <button
               onClick={() => void handleRestart()}
               disabled={!canRestart}
               title={canRestart ? undefined : 'Only the host owner or an admin can restart this host'}
-              className="px-3 py-1 text-[11px] font-medium text-amber-200 bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Restart {hostLabel}
             </button>
@@ -1258,13 +1258,13 @@ function UpdateHostRow(): React.JSX.Element | null {
 
   return (
     <div
-      className="py-2.5 px-3 border border-amber-500/40 bg-amber-500/5"
+      className="py-2.5 px-3 border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warn)_5%,transparent)]"
       data-settings-id="general.update-host"
     >
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col min-w-0 flex-1">
           <span className="flex items-center gap-2 min-w-0">
-            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-amber-500/20 text-amber-300 flex-shrink-0">
+            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
               Remote host
             </span>
             <span className="text-xs text-[var(--color-text-primary)] font-medium truncate">
@@ -1275,7 +1275,7 @@ function UpdateHostRow(): React.JSX.Element | null {
             </span>
           </span>
           <span className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Update the machine you&apos;re connected to — <strong className="text-amber-300">not this Mac</strong>.
+            Update the machine you&apos;re connected to — <strong className="text-[var(--color-status-warn-amber-soft)]">not this Mac</strong>.
             It briefly disconnects to install, then reconnects automatically.
           </span>
         </div>
@@ -1287,7 +1287,7 @@ function UpdateHostRow(): React.JSX.Element | null {
                 onClick={() => void handleDownload()}
                 disabled={!canUpdate}
                 title={canUpdate ? undefined : 'Only the host owner or an admin can update this host'}
-                className="px-3 py-1 text-[11px] font-medium text-amber-200 bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {/* Bundled-app hosts (Shape A) update in one shot — the Tauri
                     updater downloads + installs + relaunches, there's no
@@ -1301,7 +1301,7 @@ function UpdateHostRow(): React.JSX.Element | null {
                 onClick={() => void handleCheck()}
                 disabled={!canUpdate || checking}
                 title={canUpdate ? undefined : 'Only the host owner or an admin can update this host'}
-                className="px-3 py-1 text-[11px] font-medium text-amber-200 bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {checking ? 'Checking…' : 'Check for updates'}
               </button>
@@ -1310,12 +1310,12 @@ function UpdateHostRow(): React.JSX.Element | null {
           {/* Staged: ready to install & restart the host */}
           {staged && (
             applying ? (
-              <span className="text-[11px] text-amber-300">Installing & restarting {hostLabel}…</span>
+              <span className="text-[11px] text-[var(--color-status-warn-amber-soft)]">Installing & restarting {hostLabel}…</span>
             ) : (
               <button
                 onClick={() => void handleApply()}
                 disabled={!canUpdate}
-                className="px-3 py-1 text-[11px] font-medium text-amber-200 bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Install & restart {hostLabel}
               </button>
@@ -1337,7 +1337,7 @@ function UpdateHostRow(): React.JSX.Element | null {
 
       {/* Update-available banner once a check reports one (pre-download) */}
       {check?.available && !inProgress && !staged && (
-        <div className="mt-1 text-[11px] text-amber-200">
+        <div className="mt-1 text-[11px] text-[var(--color-status-warn-amber-bright)]">
           {updateAvailableCopy(hostLabel, check.current, check.latest)}
         </div>
       )}
@@ -1346,7 +1346,7 @@ function UpdateHostRow(): React.JSX.Element | null {
           platform — DISTINCT from "up to date" (available is false but the
           host is behind). Only when not already in/after a job. */}
       {check?.newerNoArtifact && !inProgress && !staged && (
-        <div className="mt-1 text-[11px] text-amber-200/90">
+        <div className="mt-1 text-[11px] text-[color-mix(in_srgb,var(--color-status-warn-amber-bright)_90%,transparent)]">
           {newerNoArtifactCopy(hostLabel, check.latest, check.platform)}
         </div>
       )}
@@ -1354,16 +1354,16 @@ function UpdateHostRow(): React.JSX.Element | null {
       {/* In-flight phase + download progress line */}
       {(inProgress || staged) && phase && (
         <div className="mt-2">
-          <div className="text-[11px] text-amber-200">
+          <div className="text-[11px] text-[var(--color-status-warn-amber-bright)]">
             {updatePhaseCopy(phase, hostLabel, {
               progress: status?.progress,
               current: check?.current,
             })}
           </div>
           {phase === 'downloading' && typeof status?.progress === 'number' && (
-            <div className="h-1.5 mt-1.5 bg-amber-500/20 overflow-hidden">
+            <div className="h-1.5 mt-1.5 bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] overflow-hidden">
               <div
-                className="h-full bg-amber-400 transition-all duration-300"
+                className="h-full bg-[var(--color-status-warn-amber)] transition-all duration-300"
                 style={{ width: `${Math.max(0, Math.min(100, status.progress))}%` }}
               />
             </div>

@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k2.dev/schemas/style/v1.json",
+  "title": "K2 Style contract v1",
+  "description": "A K2 Style is a folder: style.json (manifest, validated by #/$defs/manifest), tokens.json (non-color slots, #/$defs/tokens), and palettes/*.json (color + terminal slots, #/$defs/palette). Token values follow the W3C DTCG shape: { \"$value\": ..., \"$type\": ... }. scripts/build-styles.mjs validates these files and emits src/renderer/styles.generated.css.",
+  "$defs": {
+    "token": {
+      "type": "object",
+      "required": ["$value"],
+      "properties": {
+        "$value": { "type": ["string", "number"] },
+        "$type": { "type": "string" },
+        "$description": { "type": "string" }
+      }
+    },
+    "tokenGroup": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/token" }
+    },
+    "manifest": {
+      "type": "object",
+      "required": ["id", "name", "author", "version", "schemaVersion", "defaultPalette", "capabilities"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Folder name and data-style attribute value." },
+        "name": { "type": "string", "description": "User-facing name shown in Settings→Styles." },
+        "author": { "type": "string" },
+        "version": { "type": "string" },
+        "schemaVersion": { "const": 1 },
+        "description": { "type": "string" },
+        "defaultPalette": { "type": "string" },
+        "screenshot": { "type": "string", "description": "Relative path to a preview image (required for community submissions)." },
+        "capabilities": {
+          "type": "object",
+          "required": ["gaps", "backdrop", "schemes"],
+          "properties": {
+            "gaps": { "type": "boolean", "description": "True if the Style exposes the compact/regular/spacious gap control." },
+            "backdrop": { "type": "boolean", "description": "True if the Style uses translucent materials (backdrop-filter). Surfaces hosting WebGL always use --color-bg (opaque) regardless." },
+            "schemes": { "type": "array", "items": { "enum": ["dark", "light"] }, "minItems": 1 }
+          }
+        },
+        "dials": {
+          "type": "array",
+          "description": "Optional user-adjustable knobs surfaced in Settings→Styles (e.g. Glass tint opacity).",
+          "items": {
+            "type": "object",
+            "required": ["id", "label", "token", "min", "max"],
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" },
+              "token": { "type": "string", "description": "CSS custom property the dial writes, e.g. --material-tint-opacity." },
+              "min": { "type": "number" },
+              "max": { "type": "number" },
+              "step": { "type": "number" }
+            }
+          }
+        }
+      }
+    },
+    "tokens": {
+      "type": "object",
+      "description": "Non-color slots. Every group listed in required must be present with every slot the generator's REQUIRED_TOKEN_SLOTS lists — missing slots fail the build loudly.",
+      "required": ["radius", "gap", "inset", "divider", "ring", "shadow", "material", "density", "motion", "font"],
+      "properties": {
+        "radius": { "$ref": "#/$defs/tokenGroup" },
+        "gap": { "$ref": "#/$defs/tokenGroup" },
+        "inset": { "$ref": "#/$defs/tokenGroup" },
+        "divider": { "$ref": "#/$defs/tokenGroup" },
+        "ring": { "$ref": "#/$defs/tokenGroup" },
+        "shadow": { "$ref": "#/$defs/tokenGroup" },
+        "material": { "$ref": "#/$defs/tokenGroup" },
+        "density": { "$ref": "#/$defs/tokenGroup" },
+        "motion": { "$ref": "#/$defs/tokenGroup" },
+        "font": { "$ref": "#/$defs/tokenGroup" }
+      }
+    },
+    "palette": {
+      "type": "object",
+      "required": ["id", "name", "schemes", "color", "terminal"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "data-palette attribute value." },
+        "name": { "type": "string" },
+        "schemes": { "type": "array", "items": { "enum": ["dark", "light"] }, "minItems": 1 },
+        "color": { "$ref": "#/$defs/tokenGroup" },
+        "terminal": {
+          "type": "object",
+          "required": ["fg", "bg", "cursor", "selection", "ansi"],
+          "properties": {
+            "fg": { "$ref": "#/$defs/token" },
+            "bg": { "$ref": "#/$defs/token" },
+            "cursor": { "$ref": "#/$defs/token" },
+            "selection": { "$ref": "#/$defs/token" },
+            "ansi": {
+              "type": "array",
+              "minItems": 16,
+              "maxItems": 16,
+              "items": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+            }
+          }
+        },
+        "editorTheme": { "type": "string", "description": "Optional suggestion for the (independent) CodeMirror theme system." }
+      }
+    }
+  }
+}

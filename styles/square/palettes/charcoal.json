@@ -1,0 +1,51 @@
+{
+  "$schema": "../../style.schema.json#/$defs/palette",
+  "id": "charcoal",
+  "name": "Charcoal",
+  "schemes": ["dark"],
+  "color": {
+    "bg": { "$value": "#0a0a0a", "$type": "color", "$description": "Base app background. Always opaque — the only background allowed on WebGL-hosting panes." },
+    "bg-surface": { "$value": "#141414", "$type": "color" },
+    "bg-elevated": { "$value": "#1e1e1e", "$type": "color" },
+    "bg-inset": { "$value": "#1a1a1a", "$type": "color", "$description": "Recessed content wells: code blocks, table headers." },
+    "bg-stripe": { "$value": "#111111", "$type": "color", "$description": "Zebra rows, blockquote fills." },
+    "bg-canvas": { "$value": "#0a0a0a", "$type": "color", "$description": "The layer visible BEHIND tiles when gap.* > 0 (ST3). Square: same as bg, so seams read as hairlines." },
+    "bg-hover": { "$value": "#1e1e1e", "$type": "color", "$description": "Hover fill for rows/chips. (Referenced by components since before the contract existed but never defined — dead hovers come alive with this definition.)" },
+    "border": { "$value": "#2a2a2a", "$type": "color" },
+    "border-strong": { "$value": "rgba(255, 255, 255, 0.25)", "$type": "color", "$description": "Checkbox outlines and other controls needing more contrast than border." },
+    "text-primary": { "$value": "#e4e4e7", "$type": "color" },
+    "text-secondary": { "$value": "#a1a1aa", "$type": "color" },
+    "text-muted": { "$value": "#71717a", "$type": "color" },
+    "accent": { "$value": "#3b82f6", "$type": "color" },
+    "accent-hover": { "$value": "#60a5fa", "$type": "color" },
+    "accent-soft": { "$value": "#93c5fd", "$type": "color", "$description": "Attention washes (settings-search pulse)." },
+    "on-accent": { "$value": "#ffffff", "$type": "color", "$description": "Glyphs/knobs drawn on accent or bright fills (checkbox check, slider thumb)." },
+    "status-working": { "$value": "#f97316", "$type": "color" },
+    "status-error": { "$value": "#ef4444", "$type": "color" },
+    "status-ok": { "$value": "#22c55e", "$type": "color" },
+    "status-warn": { "$value": "#f59e0b", "$type": "color" },
+    "diff-add-text": { "$value": "#a3e635", "$type": "color" },
+    "diff-remove-text": { "$value": "#fca5a5", "$type": "color" },
+    "diff-modified-border": { "$value": "#86efac", "$type": "color" },
+    "code-inline": { "$value": "#d7ba7d", "$type": "color", "$description": "Inline code text in markdown." },
+    "danger-hover": { "$value": "#f87171", "$type": "color", "$description": "Destructive-affordance hover (close buttons)." },
+    "overlay-soft-bg": { "$value": "rgba(255, 255, 255, 0.06)", "$type": "color", "$description": "Faint white washes (minimap viewport overlay)." },
+    "overlay-soft-border": { "$value": "rgba(255, 255, 255, 0.08)", "$type": "color" },
+    "scrollbar-thumb": { "$value": "rgba(255, 255, 255, 0.1)", "$type": "color" },
+    "scrollbar-thumb-hover": { "$value": "rgba(255, 255, 255, 0.2)", "$type": "color" },
+    "scrollbar-thumb-strong": { "$value": "rgba(255, 255, 255, 0.25)", "$type": "color", "$description": "Editor scrollbars run brighter than app scrollbars." },
+    "scrollbar-thumb-strong-hover": { "$value": "rgba(255, 255, 255, 0.4)", "$type": "color" }
+  },
+  "terminal": {
+    "fg": { "$value": "#e0e0e0", "$type": "color" },
+    "bg": { "$value": "#0a0a0a", "$type": "color" },
+    "cursor": { "$value": "#e0e0e0", "$type": "color" },
+    "selection": { "$value": "#444444", "$type": "color" },
+    "ansi": [
+      "#000000", "#cc0000", "#4e9a06", "#c4a000",
+      "#3465a4", "#75507b", "#06989a", "#d3d7cf",
+      "#555753", "#ef2929", "#8ae234", "#fce94f",
+      "#729fcf", "#ad7fa8", "#34e2e2", "#eeeeec"
+    ]
+  }
+}

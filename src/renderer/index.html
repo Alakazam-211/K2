@@ -8,6 +8,25 @@
       /* Prevent white flash while loading */
       html, body { background: #0a0a0a; margin: 0; padding: 0; }
     </style>
+    <script>
+      // Stamp Style attributes before first paint so styles.generated.css
+      // resolves without a flash. localStorage mirrors the daemon-canonical
+      // choice; defaults = the Square style. 'auto' scheme resolution (OS
+      // appearance) is applied by the app once booted.
+      (function () {
+        var html = document.documentElement;
+        function read(key, fallback) {
+          try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
+        }
+        html.setAttribute('data-style', read('k2.style', 'square'));
+        html.setAttribute('data-palette', read('k2.palette', 'charcoal'));
+        var scheme = read('k2.scheme', 'dark');
+        if (scheme === 'auto') {
+          scheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        html.setAttribute('data-scheme', scheme);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

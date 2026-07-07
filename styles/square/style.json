@@ -1,0 +1,15 @@
+{
+  "$schema": "../style.schema.json#/$defs/manifest",
+  "id": "square",
+  "name": "Square",
+  "author": "Alakazam Labs",
+  "version": "1.0.0",
+  "schemaVersion": 1,
+  "description": "K2's original look: flat, flush, zero-radius, 1px hairline dividers, everything touching. The reference implementation of the Style contract — bound to the app's historical values exactly.",
+  "defaultPalette": "charcoal",
+  "capabilities": {
+    "gaps": false,
+    "backdrop": false,
+    "schemes": ["dark"]
+  }
+}

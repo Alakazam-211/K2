@@ -4,6 +4,8 @@
 /* CodeMirror's unlayered runtime style-mod styles (syntax highlighting etc) */
 @layer tw, cm-overrides;
 @import "tailwindcss" layer(tw);
+/* Style contract tokens — generated from styles/ by scripts/build-styles.mjs */
+@import "./styles.generated.css";
 
 /* ── Bundled coding fonts ─────────────────────────────────────────── */
 @font-face { font-family: 'MesloLGM Nerd Font'; src: url('./fonts/MesloLGMNerdFontMono-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
@@ -21,16 +23,10 @@
   font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 }
 
-:root {
-  --color-bg: #0a0a0a;
-  --color-bg-surface: #141414;
-  --color-bg-elevated: #1e1e1e;
-  --color-border: #2a2a2a;
-  --color-text-primary: #e4e4e7;
-  --color-text-secondary: #a1a1aa;
-  --color-text-muted: #71717a;
-  --color-accent: #3b82f6;
-}
+/* All --color-* / --gap-* / --radius-* / --ring-* / --term-* custom
+   properties are defined by styles.generated.css (imported above):
+   :root carries the Square/Charcoal fallback, and [data-style]/[data-palette]
+   blocks bind whichever Style is stamped on <html>. Edit styles/, not here. */
 
 html {
   margin: 0;

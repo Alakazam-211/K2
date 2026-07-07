@@ -11,6 +11,8 @@
     "vite:build": "vite build --config vite.config.ts",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "bun run typecheck:web",
+    "styles:build": "node scripts/build-styles.mjs",
+    "styles:check": "node scripts/build-styles.mjs --check",
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri"

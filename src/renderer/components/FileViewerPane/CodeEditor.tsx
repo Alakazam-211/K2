@@ -787,7 +787,7 @@ interface DiffHunk {
 class GitAddMarker extends GutterMarker {
   toDOM() {
     const el = document.createElement('div')
-    el.style.cssText = 'width:3px;height:100%;background:#22c55e;border-radius:1px;'
+    el.style.cssText = 'width:3px;height:100%;background:var(--color-status-ok);border-radius:1px;'
     return el
   }
 }
@@ -795,7 +795,7 @@ class GitAddMarker extends GutterMarker {
 class GitModifyMarker extends GutterMarker {
   toDOM() {
     const el = document.createElement('div')
-    el.style.cssText = 'width:3px;height:100%;background:#3b82f6;border-radius:1px;'
+    el.style.cssText = 'width:3px;height:100%;background:var(--color-accent);border-radius:1px;'
     return el
   }
 }
@@ -803,7 +803,7 @@ class GitModifyMarker extends GutterMarker {
 class GitDeleteMarker extends GutterMarker {
   toDOM() {
     const el = document.createElement('div')
-    el.style.cssText = 'width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:4px solid #ef4444;margin-top:-2px;'
+    el.style.cssText = 'width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:4px solid var(--color-status-error);margin-top:-2px;'
     return el
   }
 }
@@ -913,7 +913,7 @@ function buildGitGutterExtension(
         for (const [lineNum, kind] of entries) {
           if (lineNum < 1 || lineNum > totalLines) continue
           const pct = (lineNum - 1) / totalLines
-          const color = kind === 'added' ? '#22c55e' : kind === 'modified' ? '#3b82f6' : '#ef4444'
+          const color = kind === 'added' ? 'var(--color-status-ok)' : kind === 'modified' ? 'var(--color-accent)' : 'var(--color-status-error)'
           const last = marks.length > 0 ? marks[marks.length - 1] : null
           const topPx = pct * 100
           if (last && last.color === color && Math.abs(topPx - (last.top + last.height)) < 0.5) {

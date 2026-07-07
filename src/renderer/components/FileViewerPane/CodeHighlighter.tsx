@@ -192,7 +192,7 @@ export function HighlightedCodeBlock({ code, language }: CodeBlockProps): React.
 
   // Fallback: unstyled code block
   return (
-    <pre className="bg-[#1a1a1a] border border-[var(--color-border)] p-3 overflow-x-auto">
+    <pre className="bg-[var(--color-bg-inset)] border border-[var(--color-border)] p-3 overflow-x-auto">
       <code className="text-xs text-[var(--color-text-secondary)] font-mono">{code}</code>
     </pre>
   )

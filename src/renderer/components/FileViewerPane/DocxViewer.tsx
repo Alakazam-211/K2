@@ -60,7 +60,7 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
 
   if (loading) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-[#0a0a0a] text-[var(--color-text-muted)] text-sm">
+      <div className="flex h-full w-full items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-muted)] text-sm">
         Converting document...
       </div>
     )
@@ -68,7 +68,7 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
 
   if (error) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-[#0a0a0a]">
+      <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-[var(--color-bg)]">
         <span className="text-red-400 text-sm">Failed to load document</span>
         <span className="text-xs text-[var(--color-text-muted)] max-w-md text-center px-4">
           {error}
@@ -79,7 +79,7 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
 
   return (
     <div
-      className="docx-body p-6 overflow-y-auto h-full bg-[#0a0a0a]"
+      className="docx-body p-6 overflow-y-auto h-full bg-[var(--color-bg)]"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )

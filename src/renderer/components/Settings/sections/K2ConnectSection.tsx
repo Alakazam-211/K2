@@ -1140,7 +1140,7 @@ export function K2ConnectSection(): React.JSX.Element {
                     left: federationEnabled ? 18 : 2,
                     width: 16,
                     height: 16,
-                    backgroundColor: '#fff',
+                    backgroundColor: 'var(--color-on-accent)',
                     transition: 'left 150ms',
                   }}
                 />
@@ -1279,7 +1279,7 @@ export function K2ConnectSection(): React.JSX.Element {
         <div className="flex items-center gap-2 px-3 py-2 border border-[var(--color-border)]">
           <span
             className="w-2 h-2 flex-shrink-0 rounded-full"
-            style={{ backgroundColor: running ? '#22c55e' : '#6b7280' }}
+            style={{ backgroundColor: running ? 'var(--color-status-ok)' : '#6b7280' }}
           />
           <span className="text-xs text-[var(--color-text-secondary)]">
             {running ? 'Tunnel running' : 'Tunnel stopped'}

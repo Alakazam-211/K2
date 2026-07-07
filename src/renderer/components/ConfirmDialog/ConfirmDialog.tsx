@@ -148,7 +148,7 @@ export default function ConfirmDialog(): React.JSX.Element | null {
               border: '1px solid',
               borderColor: confirmDestructive ? '#c53030' : 'var(--color-border)',
               background: confirmDestructive ? '#c53030' : 'var(--color-bg-surface)',
-              color: confirmDestructive ? '#fff' : 'var(--color-text-primary)',
+              color: confirmDestructive ? 'var(--color-on-accent)' : 'var(--color-text-primary)',
               cursor: 'pointer',
               fontWeight: 500,
               lineHeight: '1.4'

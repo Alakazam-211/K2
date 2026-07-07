@@ -168,7 +168,7 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
 
   if (loading) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-[#0a0a0a] text-[var(--color-text-muted)] text-xs font-mono">
+      <div className="flex h-full w-full items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-muted)] text-xs font-mono">
         Loading PDF...
       </div>
     )
@@ -176,7 +176,7 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
 
   if (error) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-[#0a0a0a]">
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-[var(--color-bg)]">
         <span className="text-red-400 text-xs font-mono">Failed to load PDF</span>
         <span className="text-[var(--color-text-muted)] text-[10px] font-mono max-w-[300px] text-center">
           {error}
@@ -186,9 +186,9 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-full w-full flex-col bg-[#0a0a0a]">
+    <div className="flex h-full w-full flex-col bg-[var(--color-bg)]">
       {/* Controls bar */}
-      <div className="flex items-center gap-3 border-b border-[var(--color-border)] bg-[#111111] px-3 py-1 flex-shrink-0">
+      <div className="flex items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 flex-shrink-0">
         {/* Page navigation */}
         <div className="flex items-center gap-1">
           <button
@@ -252,7 +252,7 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
       </div>
 
       {/* PDF canvas area */}
-      <div className="flex-1 overflow-auto flex justify-center p-4 bg-[#0a0a0a]">
+      <div className="flex-1 overflow-auto flex justify-center p-4 bg-[var(--color-bg)]">
         <canvas
           ref={canvasRef}
           className="block shadow-[0_2px_8px_rgba(0,0,0,0.5)]"

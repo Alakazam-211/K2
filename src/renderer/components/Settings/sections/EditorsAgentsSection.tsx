@@ -679,7 +679,7 @@ function CLIInstallGuide(): React.JSX.Element {
                     <button
                       onClick={() => handleCopy(entry.installCommand, i)}
                       className="flex-shrink-0 px-2 py-1.5 text-[10px] font-mono border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
-                      style={{ color: isCopied ? '#22c55e' : 'var(--color-text-muted)' }}
+                      style={{ color: isCopied ? 'var(--color-status-ok)' : 'var(--color-text-muted)' }}
                     >
                       {isCopied ? 'Copied!' : 'Copy'}
                     </button>

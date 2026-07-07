@@ -140,7 +140,7 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
   // One condensed row — just the textarea.
   return (
     <div
-      className="flex flex-shrink-0 items-start gap-1 border-t border-[var(--color-border)] bg-[#111] px-2 pt-1.5 pb-2.5"
+      className="flex flex-shrink-0 items-start gap-1 border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-2 pt-1.5 pb-2.5"
       data-compose-bar=""
       data-session-id={sessionId}
     >
@@ -152,7 +152,7 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
         rows={1}
         spellCheck={false}
         placeholder="Message the agent — Enter to send, Shift+Enter for newline"
-        className="flex-1 resize-none bg-[#0a0a0a] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
+        className="flex-1 resize-none bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
         style={{
           fontFamily:
             "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",

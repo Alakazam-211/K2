@@ -232,7 +232,7 @@ export function PaneTabBar({
       style={{
         height: '24px',
         minHeight: '24px',
-        background: '#111',
+        background: 'var(--color-bg-stripe)',
         fontFamily: "'MesloLGM Nerd Font', Menlo, Monaco, monospace",
         fontSize: '11px'
       }}
@@ -255,7 +255,7 @@ export function PaneTabBar({
                 height: '24px',
                 paddingLeft: '8px',
                 paddingRight: '4px',
-                background: isActive ? '#1a1a1a' : 'transparent',
+                background: isActive ? 'var(--color-bg-inset)' : 'transparent',
                 borderBottom: isActive ? '1px solid var(--color-accent)' : '1px solid transparent',
                 maxWidth: '160px'
               }}

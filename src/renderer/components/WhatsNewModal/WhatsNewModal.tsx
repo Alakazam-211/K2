@@ -235,7 +235,7 @@ export default function WhatsNewModal({
         .whats-new-body code {
           font-family: 'MesloLGM Nerd Font', Menlo, Monaco, monospace;
           font-size: 12px;
-          background: var(--color-bg-subtle, rgba(255,255,255,0.06));
+          background: var(--color-overlay-soft-bg);
           padding: 1px 5px;
           color: var(--color-text-primary);
         }
@@ -434,7 +434,7 @@ export default function WhatsNewModal({
               fontWeight: 500,
               border: '1px solid var(--color-accent, #4a9eff)',
               background: 'var(--color-accent, #4a9eff)',
-              color: '#ffffff',
+              color: 'var(--color-on-accent)',
               cursor: dismissing ? 'wait' : 'pointer',
               opacity: dismissing ? 0.6 : 1,
               lineHeight: '1.4'

@@ -116,7 +116,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
           style={{
             height: '24px',
             minHeight: '24px',
-            background: '#111',
+            background: 'var(--color-bg-stripe)',
             fontSize: '11px',
             fontFamily: "'MesloLGM Nerd Font', Menlo, Monaco, monospace"
           }}

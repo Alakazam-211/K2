@@ -263,7 +263,7 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
         alignItems: 'center',
         gap: '1px',
         borderBottom: '1px solid var(--color-border, #1e1e1e)',
-        backgroundColor: '#0a0a0a',
+        backgroundColor: 'var(--color-bg)',
         paddingLeft: '4px',
         paddingRight: '4px',
         height: '32px',
@@ -314,7 +314,7 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
               opacity: isDragged ? 0.3 : 1,
               backgroundColor: isRunning
                 ? (isHovered ? '#1a2a1a' : '#111a11')
-                : (isHovered ? '#1a1a1a' : 'transparent'),
+                : (isHovered ? 'var(--color-bg-inset)' : 'transparent'),
               color: isRunning
                 ? '#70c070'
                 : (isHovered ? '#e0e0e0' : '#808080'),
@@ -355,7 +355,7 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
         onClick={openNewForm}
         onMouseEnter={(e) => {
           ;(e.currentTarget as HTMLButtonElement).style.color = '#e0e0e0'
-          ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = '#1a1a1a'
+          ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--color-bg-inset)'
         }}
         onMouseLeave={(e) => {
           ;(e.currentTarget as HTMLButtonElement).style.color = '#505050'
@@ -395,7 +395,7 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
             alignItems: 'center',
             gap: '4px',
             borderBottom: '1px solid var(--color-border, #1e1e1e)',
-            backgroundColor: '#111111',
+            backgroundColor: 'var(--color-bg-stripe)',
             padding: '6px 8px',
             boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
             fontFamily: 'inherit',
@@ -410,8 +410,8 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
             style={{
               height: '26px',
               width: '40px',
-              border: '1px solid #2a2a2a',
-              backgroundColor: '#0a0a0a',
+              border: '1px solid var(--color-border)',
+              backgroundColor: 'var(--color-bg)',
               padding: '0 4px',
               textAlign: 'center',
               fontSize: '11px',
@@ -428,8 +428,8 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
             style={{
               height: '26px',
               width: '80px',
-              border: '1px solid #2a2a2a',
-              backgroundColor: '#0a0a0a',
+              border: '1px solid var(--color-border)',
+              backgroundColor: 'var(--color-bg)',
               padding: '0 6px',
               fontSize: '11px',
               fontFamily: 'inherit',
@@ -445,8 +445,8 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
             style={{
               height: '26px',
               width: '220px',
-              border: '1px solid #2a2a2a',
-              backgroundColor: '#0a0a0a',
+              border: '1px solid var(--color-border)',
+              backgroundColor: 'var(--color-bg)',
               padding: '0 6px',
               fontSize: '11px',
               fontFamily: 'inherit',
@@ -458,11 +458,11 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
             onClick={submitForm}
             style={{
               height: '26px',
-              backgroundColor: '#3b82f6',
+              backgroundColor: 'var(--color-accent)',
               padding: '0 8px',
               fontSize: '11px',
               fontFamily: 'inherit',
-              color: '#ffffff',
+              color: 'var(--color-on-accent)',
               border: 'none',
               cursor: 'pointer',
             }}

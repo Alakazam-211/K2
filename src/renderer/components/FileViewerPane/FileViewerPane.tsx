@@ -545,7 +545,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
 
   if (loading) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-[#0a0a0a] text-[var(--color-text-muted)] text-sm">
+      <div className="flex h-full w-full items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-muted)] text-sm">
         Loading...
       </div>
     )
@@ -553,9 +553,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
 
   if (error) {
     return (
-      <div className="flex h-full w-full flex-col bg-[#0a0a0a]">
+      <div className="flex h-full w-full flex-col bg-[var(--color-bg)]">
         {/* Toolbar even in error state */}
-        <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[#111111] px-3 py-1.5 flex-shrink-0">
+        <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
           <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate">
             {fileName}
           </span>
@@ -587,9 +587,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   }
 
   return (
-    <div ref={rootRef} className="flex h-full w-full flex-col bg-[#0a0a0a] no-drag" tabIndex={-1}>
+    <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)] no-drag" tabIndex={-1}>
       {/* Toolbar */}
-      <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[#111111] px-3 py-1.5 flex-shrink-0">
+      <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
         {/* File info */}
         <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate">
           {fileName}
@@ -726,7 +726,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       {/* Search bar (legacy 'edit' mode exclusion removed — ViewMode is
           'rendered' | 'raw', so the guard was always true) */}
       {searchVisible && (
-        <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[#111111] px-3 py-1.5 flex-shrink-0">
+        <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
           <svg className="w-3 h-3 text-[var(--color-text-muted)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -768,7 +768,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       ) : category === 'image' && viewMode === 'rendered' ? (
         <div className="flex-1 overflow-y-auto overflow-x-hidden" ref={contentRef}>
-          <div className="flex items-center justify-center p-4 min-h-full bg-[#0a0a0a]">
+          <div className="flex items-center justify-center p-4 min-h-full bg-[var(--color-bg)]">
             <img
               src={convertFileSrc(filePath)}
               alt={fileName}
@@ -828,7 +828,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
             </Suspense>
           </div>
           {/* Status bar */}
-          <div className="flex items-center gap-3 border-t border-[var(--color-border)] bg-[#111111] px-3 py-0.5 flex-shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono">
+          <div className="flex items-center gap-3 border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-0.5 flex-shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono">
             <span>Ln {cursorInfo.line}, Col {cursorInfo.col}</span>
             {cursorInfo.selections > 1 && <span>{cursorInfo.selections} selections</span>}
             <div className="flex-1" />
@@ -840,7 +840,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
 
       {/* Filepath bar (always shown — the legacy 'edit' mode guard was
           provably dead: ViewMode is 'rendered' | 'raw') */}
-      <div className="flex items-center border-t border-[var(--color-border)] bg-[#111111] px-3 py-0.5 flex-shrink-0">
+      <div className="flex items-center border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-0.5 flex-shrink-0">
         <span className="text-[10px] text-[var(--color-text-muted)] font-mono truncate" title={filePath}>
           {filePath}
         </span>

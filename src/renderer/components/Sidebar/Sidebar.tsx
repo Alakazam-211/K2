@@ -85,7 +85,7 @@ function WorkspaceStatusDot({ path }: { path?: string }): React.JSX.Element | nu
       style={{
         width: 6,
         height: 6,
-        backgroundColor: '#f59e0b'
+        backgroundColor: 'var(--color-status-warn)'
       }}
     />
   )

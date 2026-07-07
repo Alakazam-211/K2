@@ -142,7 +142,7 @@ export default function IconCropDialog({
       <div
         className="flex flex-col items-center gap-4 p-6"
         style={{
-          backgroundColor: '#111',
+          backgroundColor: 'var(--color-bg-stripe)',
           border: '1px solid var(--color-border)',
         }}
         onClick={(e) => e.stopPropagation()}

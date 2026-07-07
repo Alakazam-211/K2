@@ -64,7 +64,7 @@ export function AllowRemoteInstructRow(): React.JSX.Element {
             left: allow ? 18 : 2,
             width: 16,
             height: 16,
-            backgroundColor: '#fff',
+            backgroundColor: 'var(--color-on-accent)',
             transition: 'left 150ms',
           }}
         />

@@ -442,7 +442,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
     // Show a simple context menu with pin + rename
     const menuDiv = document.createElement('div')
-    menuDiv.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;background:#1e1e1e;border:1px solid #333;padding:2px 0;min-width:140px;font-size:11px;font-family:var(--font-mono,monospace);`
+    menuDiv.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;background:var(--color-bg-elevated);border:1px solid #333;padding:2px 0;min-width:140px;font-size:11px;font-family:var(--font-mono,monospace);`
     const config = PROVIDER_CONFIG[session.provider]
     const resumeCmd = config
       ? `${config.command} ${config.resumeFlag} ${session.sessionId}`

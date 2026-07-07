@@ -316,9 +316,9 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
   const statusColor = (terminalId: string) => {
     const status = paneStatuses.get(terminalId)
     switch (status) {
-      case 'working': return '#3b82f6'
-      case 'permission': return '#ef4444'
-      case 'review': return '#22c55e'
+      case 'working': return 'var(--color-accent)'
+      case 'permission': return 'var(--color-status-error)'
+      case 'review': return 'var(--color-status-ok)'
       default: return '#6b7280'
     }
   }

@@ -49,7 +49,7 @@ export default function AgentCloseDialog({
       <div
         className="max-w-md w-full mx-4"
         style={{
-          backgroundColor: '#111',
+          backgroundColor: 'var(--color-bg-stripe)',
           border: '1px solid var(--color-border)',
         }}
       >
@@ -79,14 +79,14 @@ export default function AgentCloseDialog({
               <div
                 className="space-y-1 max-h-40 overflow-y-auto"
                 style={{
-                  backgroundColor: '#0a0a0a',
+                  backgroundColor: 'var(--color-bg)',
                   border: '1px solid var(--color-border)',
                   padding: '8px 12px',
                 }}
               >
                 {agents.map((agent) => (
                   <div key={agent.terminalId} className="flex items-center gap-2 text-xs">
-                    <span className="flex-shrink-0 rounded-full" style={{ width: 6, height: 6, backgroundColor: '#22c55e' }} />
+                    <span className="flex-shrink-0 rounded-full" style={{ width: 6, height: 6, backgroundColor: 'var(--color-status-ok)' }} />
                     <span className="text-[var(--color-text-secondary)] font-medium">{agent.command}</span>
                     <span className="text-[var(--color-text-muted)]">in</span>
                     <span className="text-[var(--color-text-secondary)] truncate">{agent.tabTitle}</span>

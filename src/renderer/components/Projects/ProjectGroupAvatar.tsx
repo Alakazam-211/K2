@@ -138,7 +138,7 @@ export default function ProjectGroupAvatar({
         width: size,
         height: size,
         backgroundColor: fallbackColor,
-        color: '#ffffff',
+        color: 'var(--color-on-accent)',
         fontSize: size * 0.5,
         fontWeight: 700,
         lineHeight: 1,

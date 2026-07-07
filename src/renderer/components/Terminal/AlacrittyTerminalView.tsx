@@ -991,10 +991,10 @@ export function AlacrittyTerminalView({
   }
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-[#0a0a0a]">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg)]">
     <div
       ref={containerRef}
-      className="relative min-h-0 w-full flex-1 bg-[#0a0a0a] focus:outline-none overflow-hidden"
+      className="relative min-h-0 w-full flex-1 bg-[var(--color-bg)] focus:outline-none overflow-hidden"
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}

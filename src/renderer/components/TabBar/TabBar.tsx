@@ -637,13 +637,13 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               {showDropAfter && <div className="absolute right-0 top-1 bottom-1 w-[2px] bg-[var(--color-accent)] z-10" />}
               {/* D9 — sandbox (microVM) marker. Absolute bar (NOT
                   borderTop) so non-sandboxed tabs have ZERO layout/
-                  height change. #f59e0b matches globals.css:792.
+                  height change. var(--color-status-warn) matches the globals.css sandbox marker.
                   pointer-events-none + z-10 ⇒ never intercepts
                   click/drag and sits below the drag indicators. */}
               {isSandboxed && (
                 <div
                   className="absolute top-0 left-0 right-0 h-[2px] z-10 pointer-events-none"
-                  style={{ background: '#f59e0b' }}
+                  style={{ background: 'var(--color-status-warn)' }}
                 />
               )}
               {/* Tab icon — single icon with activity indicator beneath */}

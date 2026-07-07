@@ -189,7 +189,7 @@ export default function ContextMenu(): React.JSX.Element | null {
               width: '100%',
               padding: '5px 12px',
               border: 'none',
-              background: isFocused ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+              background: isFocused ? 'var(--color-overlay-soft-border)' : 'transparent',
               color: isDisabled
                 ? 'var(--color-text-muted)'
                 : 'var(--color-text-secondary)',

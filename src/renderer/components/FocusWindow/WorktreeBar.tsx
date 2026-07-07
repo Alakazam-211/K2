@@ -124,7 +124,7 @@ export default function WorktreeBar({ project }: WorktreeBarProps): React.JSX.El
           {(hasActiveAgentSingle || hasIdleAgentSingle) && (
             <span
               className={`flex-shrink-0 rounded-full ${hasActiveAgentSingle ? 'agent-active-dot' : ''}`}
-              style={{ width: 5, height: 5, backgroundColor: hasActiveAgentSingle ? '#f97316' : '#22c55e' }}
+              style={{ width: 5, height: 5, backgroundColor: hasActiveAgentSingle ? 'var(--color-status-working)' : 'var(--color-status-ok)' }}
             />
           )}
           <BranchIcon />
@@ -180,7 +180,7 @@ export default function WorktreeBar({ project }: WorktreeBarProps): React.JSX.El
         {(hasActiveAgent || hasIdleAgent) && (
           <span
             className={`flex-shrink-0 rounded-full ${hasActiveAgent ? 'agent-active-dot' : ''}`}
-            style={{ width: 5, height: 5, backgroundColor: hasActiveAgent ? '#f97316' : '#22c55e' }}
+            style={{ width: 5, height: 5, backgroundColor: hasActiveAgent ? 'var(--color-status-working)' : 'var(--color-status-ok)' }}
           />
         )}
         <BranchIcon />

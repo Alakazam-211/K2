@@ -192,7 +192,7 @@ function TabGroupColumn({
             className="absolute inset-0 pointer-events-none"
             style={{
               zIndex: 10,
-              backgroundColor: 'rgba(59, 130, 246, 0.08)',
+              backgroundColor: 'color-mix(in srgb, var(--color-accent) 8%, transparent)',
               border: '2px solid var(--color-accent)',
             }}
           />
@@ -249,7 +249,7 @@ function DragGhost(): React.JSX.Element | null {
         left: dragState.mouseX + 8,
         top: dragState.mouseY - 12,
         zIndex: 9999,
-        backgroundColor: '#1a1a1a',
+        backgroundColor: 'var(--color-bg-inset)',
         border: '1px solid var(--color-border)',
         padding: '4px 10px',
         fontSize: '11px',

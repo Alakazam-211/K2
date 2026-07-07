@@ -112,7 +112,7 @@ export default function ProjectAvatar({
           width: size,
           height: size,
           backgroundColor: loaded ? projectColor : 'var(--color-bg-elevated)',
-          color: '#ffffff',
+          color: 'var(--color-on-accent)',
           fontSize: size * 0.5,
           fontWeight: 700,
           lineHeight: 1,

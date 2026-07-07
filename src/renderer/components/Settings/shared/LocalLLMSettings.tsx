@@ -93,7 +93,7 @@ export function LocalLLMSettings(): React.JSX.Element {
                 left: aiAssistantEnabled ? 18 : 2,
                 width: 16,
                 height: 16,
-                backgroundColor: '#fff',
+                backgroundColor: 'var(--color-on-accent)',
                 transition: 'left 150ms'
               }}
             />
@@ -105,7 +105,7 @@ export function LocalLLMSettings(): React.JSX.Element {
           <div className="flex items-center gap-2 mt-2">
             <span
               className="w-2 h-2 flex-shrink-0"
-              style={{ backgroundColor: modelLoaded ? '#4ade80' : '#ef4444' }}
+              style={{ backgroundColor: modelLoaded ? '#4ade80' : 'var(--color-status-error)' }}
             />
             <span className="text-xs text-[var(--color-text-secondary)]">
               {modelLoaded ? 'Model loaded and ready' : 'No model loaded'}
@@ -155,7 +155,7 @@ export function LocalLLMSettings(): React.JSX.Element {
                 left: useLlmHitlDetection && modelReady ? 18 : 2,
                 width: 16,
                 height: 16,
-                backgroundColor: '#fff',
+                backgroundColor: 'var(--color-on-accent)',
                 transition: 'left 150ms',
               }}
             />

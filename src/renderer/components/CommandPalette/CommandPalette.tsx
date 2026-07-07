@@ -367,7 +367,7 @@ export default function CommandPalette(): React.JSX.Element | null {
                     className="flex items-center gap-3 px-4 py-2 cursor-pointer"
                     style={{
                       background: isSelected ? 'var(--color-accent)' : 'transparent',
-                      color: isSelected ? '#fff' : 'var(--color-text-primary)'
+                      color: isSelected ? 'var(--color-on-accent)' : 'var(--color-text-primary)'
                     }}
                     onClick={() => selectResult(result)}
                     onMouseEnter={() => setSelectedIndex(globalIndex)}
@@ -393,7 +393,7 @@ export default function CommandPalette(): React.JSX.Element | null {
                     </div>
                     <span
                       className="text-[10px] flex-shrink-0"
-                      style={{ color: isSelected ? 'rgba(255,255,255,0.7)' : 'var(--color-text-muted)' }}
+                      style={{ color: isSelected ? 'color-mix(in srgb, var(--color-on-accent) 70%, transparent)' : 'var(--color-text-muted)' }}
                     >
                       {result.projectCount} workspace{result.projectCount !== 1 ? 's' : ''}
                     </span>
@@ -418,7 +418,7 @@ export default function CommandPalette(): React.JSX.Element | null {
                     className="flex items-center gap-3 px-4 py-2 cursor-pointer"
                     style={{
                       background: isSelected ? 'var(--color-accent)' : 'transparent',
-                      color: isSelected ? '#fff' : 'var(--color-text-primary)'
+                      color: isSelected ? 'var(--color-on-accent)' : 'var(--color-text-primary)'
                     }}
                     onClick={() => selectResult(result)}
                     onMouseEnter={() => setSelectedIndex(globalIndex)}
@@ -435,7 +435,7 @@ export default function CommandPalette(): React.JSX.Element | null {
                       <span className="text-xs truncate block">{result.name}</span>
                       <span
                         className="text-[10px] truncate block"
-                        style={{ color: isSelected ? 'rgba(255,255,255,0.5)' : 'var(--color-text-muted)' }}
+                        style={{ color: isSelected ? 'color-mix(in srgb, var(--color-on-accent) 50%, transparent)' : 'var(--color-text-muted)' }}
                       >
                         {result.path}
                       </span>

@@ -533,7 +533,7 @@ function DebugLogEntry({ entry }: { entry: InteractionLogEntry }): React.JSX.Ele
   return (
     <div
       style={{
-        borderBottom: '1px solid #1a1a1a',
+        borderBottom: '1px solid var(--color-bg-inset)',
         padding: '8px 16px',
       }}
     >
@@ -563,7 +563,7 @@ function DebugLogEntry({ entry }: { entry: InteractionLogEntry }): React.JSX.Ele
             className="text-[10px] truncate"
             style={{
               color: entry.result.startsWith('Error')
-                ? '#f87171'
+                ? 'var(--color-danger-hover)'
                 : 'var(--color-text-muted)',
             }}
           >
@@ -583,14 +583,14 @@ function DebugLogEntry({ entry }: { entry: InteractionLogEntry }): React.JSX.Ele
               <pre
                 className="text-[var(--color-text-muted)]"
                 style={{
-                  background: '#111',
+                  background: 'var(--color-bg-stripe)',
                   padding: '6px 8px',
                   margin: 0,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
                   maxHeight: '120px',
                   overflowY: 'auto',
-                  border: '1px solid #1a1a1a',
+                  border: '1px solid var(--color-bg-inset)',
                 }}
               >
                 {pass.prompt}
@@ -601,14 +601,14 @@ function DebugLogEntry({ entry }: { entry: InteractionLogEntry }): React.JSX.Ele
               <pre
                 className="text-[var(--color-text-primary)]"
                 style={{
-                  background: '#111',
+                  background: 'var(--color-bg-stripe)',
                   padding: '6px 8px',
                   margin: 0,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
                   maxHeight: '120px',
                   overflowY: 'auto',
-                  border: '1px solid #1a1a1a',
+                  border: '1px solid var(--color-bg-inset)',
                 }}
               >
                 {pass.rawOutput}
@@ -619,14 +619,14 @@ function DebugLogEntry({ entry }: { entry: InteractionLogEntry }): React.JSX.Ele
           <pre
             className="text-[var(--color-text-primary)]"
             style={{
-              background: '#111',
+              background: 'var(--color-bg-stripe)',
               padding: '6px 8px',
               margin: 0,
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
               maxHeight: '150px',
               overflowY: 'auto',
-              border: '1px solid #1a1a1a',
+              border: '1px solid var(--color-bg-inset)',
             }}
           >
             {parsedStr}
@@ -892,7 +892,7 @@ export default function AssistantBar(): React.JSX.Element | null {
 
   // Shared bar style
   const barStyle: React.CSSProperties = {
-    background: '#111111',
+    background: 'var(--color-bg-stripe)',
     borderTop: '1px solid var(--color-border)',
     fontFamily: 'var(--font-mono, "MesloLGM Nerd Font", monospace)',
     animation: 'assistantSlideUp 150ms ease-out',
@@ -909,7 +909,7 @@ export default function AssistantBar(): React.JSX.Element | null {
           <span className="text-[11px] text-[var(--color-text-muted)] flex-shrink-0 tracking-wide">
             K2
           </span>
-          <div className="flex-1 h-[4px] bg-[#1a1a1a] relative overflow-hidden">
+          <div className="flex-1 h-[4px] bg-[var(--color-bg-inset)] relative overflow-hidden">
             <div
               className="absolute inset-y-0 left-0 bg-[var(--color-accent)] transition-[width] duration-300"
               style={{ width: `${downloadProgress}%` }}
@@ -957,7 +957,7 @@ export default function AssistantBar(): React.JSX.Element | null {
           </button>
           <kbd
             className="text-[10px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-muted)] ml-1"
-            style={{ background: '#1a1a1a' }}
+            style={{ background: 'var(--color-bg-inset)' }}
           >
             ESC
           </kbd>
@@ -974,7 +974,7 @@ export default function AssistantBar(): React.JSX.Element | null {
         <div
           style={{
             borderBottom: '1px solid var(--color-border)',
-            background: '#0a0a0a',
+            background: 'var(--color-bg)',
             maxHeight: '50vh',
             overflowY: 'auto',
           }}
@@ -1009,7 +1009,7 @@ export default function AssistantBar(): React.JSX.Element | null {
       {!showDebugLog && (
         <div
           style={{
-            background: '#0a0a0a',
+            background: 'var(--color-bg)',
             minHeight: '120px',
             maxHeight: '200px',
             overflowY: 'auto',
@@ -1028,7 +1028,7 @@ export default function AssistantBar(): React.JSX.Element | null {
             if (isSystem) {
               return (
                 <div key={`${entry.timestamp}-${i}`} className="px-4 py-1.5">
-                  <span className="text-[10px]" style={{ color: isLoaded ? '#22c55e' : 'var(--color-text-muted)', opacity: isLoaded ? 0.7 : 0.4 }}>
+                  <span className="text-[10px]" style={{ color: isLoaded ? 'var(--color-status-ok)' : 'var(--color-text-muted)', opacity: isLoaded ? 0.7 : 0.4 }}>
                     {isLoaded ? '●' : '○'} {entry.result}
                   </span>
                 </div>
@@ -1042,12 +1042,12 @@ export default function AssistantBar(): React.JSX.Element | null {
                   <span className="text-[11px] text-[var(--color-text-muted)]">{entry.message}</span>
                 </div>
                 <div className="flex items-baseline gap-2 mt-0.5">
-                  <span className="text-[10px] flex-shrink-0" style={{ color: isError ? '#f87171' : '#22c55e' }}>
+                  <span className="text-[10px] flex-shrink-0" style={{ color: isError ? 'var(--color-danger-hover)' : 'var(--color-status-ok)' }}>
                     {isError ? '✗' : '✓'}
                   </span>
                   <span
                     className="text-[11px]"
-                    style={{ color: isError ? '#f87171' : 'var(--color-text-primary)' }}
+                    style={{ color: isError ? 'var(--color-danger-hover)' : 'var(--color-text-primary)' }}
                   >
                     {entry.result || 'Done'}
                   </span>
@@ -1094,7 +1094,7 @@ export default function AssistantBar(): React.JSX.Element | null {
             <div className="flex-1" />
             <kbd
               className="text-[10px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-muted)]"
-              style={{ background: '#1a1a1a', opacity: 0.6 }}
+              style={{ background: 'var(--color-bg-inset)', opacity: 0.6 }}
             >
               ESC to cancel
             </kbd>
@@ -1116,7 +1116,7 @@ export default function AssistantBar(): React.JSX.Element | null {
             className="flex-1 bg-transparent text-[12px] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none border-none"
             style={{
               fontFamily: 'inherit',
-              background: '#1a1a1a',
+              background: 'var(--color-bg-inset)',
               padding: '6px 10px',
               height: '28px'
             }}
@@ -1164,7 +1164,7 @@ export default function AssistantBar(): React.JSX.Element | null {
             )}
             <kbd
               className="text-[10px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-muted)]"
-              style={{ background: '#1a1a1a' }}
+              style={{ background: 'var(--color-bg-inset)' }}
             >
               ESC
             </kbd>

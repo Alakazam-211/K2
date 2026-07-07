@@ -62,8 +62,10 @@ const SUPABASE_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOi
 /// renderer's `ACCOUNT_KEYCHAIN_SERVICE` / `SESSION_BLOB_KEY` in
 /// `K2ConnectSection.tsx` so the daemon reads the very session the client
 /// stored at sign-in.
+#[cfg(target_os = "macos")] // consumed only by the mac keychain paths below
 const ACCOUNT_KEYCHAIN_SERVICE: &str = "dev.k2.connect.account";
 /// Pre-0.40 service name — read-only fallback, migrated on first read.
+#[cfg(target_os = "macos")] // consumed only by the mac keychain paths below
 const LEGACY_ACCOUNT_KEYCHAIN_SERVICE: &str = "com.k2so.connect.account";
 /// Human-facing item LABEL (kSecAttrLabel). The service above is the
 /// stable lookup KEY; the label is the only string macOS shows in the
@@ -71,18 +73,22 @@ const LEGACY_ACCOUNT_KEYCHAIN_SERVICE: &str = "com.k2so.connect.account";
 /// keychain dialog. macOS owns that dialog's body text entirely (no
 /// per-prompt reason string like osascript's `with prompt`), so a clear
 /// label is the only lever we have to explain what's being unlocked.
+#[cfg(target_os = "macos")] // consumed only by the mac keychain paths below
 const ACCOUNT_KEYCHAIN_LABEL: &str = "K2 Connect sign-in";
 /// CURRENT session layout (renderer double-prompt fix, `SESSION_BLOB_KEY`
 /// in `K2ConnectSection.tsx`): ONE keychain item under this account key
 /// holding a JSON blob `{"refreshToken": "...", "email": "..."}`.
+#[cfg(target_os = "macos")] // consumed only by the mac keychain paths below
 const ACCOUNT_SESSION_BLOB_KEY: &str = "session";
 /// LEGACY two-item layout: the bare refresh-token string. Read fallback
 /// only — the renderer DELETES this key on every fresh sign-in
 /// (`saveAccountSession`), so reading it alone silently breaks after the
 /// first blob-era sign-in (the K2 Cloud P1-C bug this module fixes).
+#[cfg(target_os = "macos")] // consumed only by the mac keychain paths below
 const ACCOUNT_REFRESH_KEY: &str = "session-refresh-token";
 /// LEGACY two-item layout: the companion email item. Read only during
 /// migration so the forwarded blob keeps the email the renderer displays.
+#[cfg(target_os = "macos")] // consumed only by the mac keychain paths below
 const ACCOUNT_EMAIL_KEY: &str = "session-email";
 
 /// Env kill-switch: `K2_TUNNEL_LEASE=off` disables daemon-side lease

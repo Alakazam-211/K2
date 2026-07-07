@@ -22,6 +22,7 @@ use std::path::PathBuf;
 
 /// (old label, new label) pairs — new labels listed for the log only;
 /// installation of the new agents belongs to their owners.
+#[cfg(target_os = "macos")] // used only inside the mac arm of migrate_launchd_labels
 const LABEL_MIGRATIONS: &[(&str, &str)] = &[
     ("com.k2so.k2so-daemon", "dev.k2.daemon"),
     ("com.k2so.agent-heartbeat", "dev.k2.heartbeat"),

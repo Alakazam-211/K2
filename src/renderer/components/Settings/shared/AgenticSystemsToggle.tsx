@@ -2,6 +2,7 @@ import React from 'react'
 import { useSettingsStore } from '@/stores/settings'
 // Phase 2 Unit 7a — settings live in the daemon.
 import { settingsUpdate } from '@/lib/daemon-settings'
+import { Toggle } from '@/components/ui'
 
 export function AgenticSystemsToggle(): React.JSX.Element {
   const enabled = useSettingsStore((s) => s.agenticSystemsEnabled)
@@ -30,29 +31,7 @@ export function AgenticSystemsToggle(): React.JSX.Element {
             : 'Enable to unlock AI agent orchestration across workspaces'}
         </p>
       </div>
-      <button
-        onClick={toggle}
-        className="no-drag cursor-pointer flex-shrink-0 relative"
-        style={{
-          width: 36,
-          height: 20,
-          backgroundColor: enabled ? 'var(--color-accent)' : 'var(--color-control-track-off)',
-          border: 'none',
-          transition: 'background-color 150ms',
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute',
-            top: 2,
-            left: enabled ? 18 : 2,
-            width: 16,
-            height: 16,
-            backgroundColor: 'var(--color-on-accent)',
-            transition: 'left 150ms',
-          }}
-        />
-      </button>
+      <Toggle checked={enabled} onChange={() => void toggle()} aria-label="Agentic Systems" />
     </div>
   )
 }

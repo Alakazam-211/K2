@@ -30,6 +30,7 @@ import { getDaemonWs, daemonHttpBase, invalidateDaemonWs } from '@/kessel/daemon
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { SettingEntry } from '../searchManifest'
 import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingControls'
+import { Toggle } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import {
   signIn as accountSignIn,
@@ -1120,31 +1121,11 @@ export function K2ConnectSection(): React.JSX.Element {
                 </span>
                 <span className="text-[10px] text-[var(--color-text-muted)] ml-2">{isRemote ? 'this server' : 'this device'}</span>
               </div>
-              <button
-                onClick={() => void setFederationEnabled(!federationEnabled)}
-                className="no-drag cursor-pointer flex-shrink-0 relative"
+              <Toggle
+                checked={federationEnabled}
+                onChange={(next) => void setFederationEnabled(next)}
                 aria-label="Enable federation"
-                aria-pressed={federationEnabled}
-                style={{
-                  width: 36,
-                  height: 20,
-                  backgroundColor: federationEnabled ? 'var(--color-accent)' : 'var(--color-control-track-off)',
-                  border: 'none',
-                  transition: 'background-color 150ms',
-                }}
-              >
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: 2,
-                    left: federationEnabled ? 18 : 2,
-                    width: 16,
-                    height: 16,
-                    backgroundColor: 'var(--color-on-accent)',
-                    transition: 'left 150ms',
-                  }}
-                />
-              </button>
+              />
             </div>
             {/* Delivery consent — moved here from Settings → General so it
                 sits with the federation master it also gates (it is the

@@ -6,6 +6,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
+import { Toggle } from '@/components/ui'
 import { restartHostVisibility, restartHostConfirmCopy, type RestartRole } from './restart-host'
 import {
   updateHostVisibility,
@@ -390,29 +391,11 @@ function CompletionSoundRow(): React.JSX.Element {
           Agents you&apos;re watching never chime.
         </p>
       </div>
-      <button
-        onClick={() => void setCompletionSoundEnabled(!enabled)}
-        className="no-drag cursor-pointer flex-shrink-0 relative"
-        style={{
-          width: 36,
-          height: 20,
-          backgroundColor: enabled ? 'var(--color-accent)' : 'var(--color-control-track-off)',
-          border: 'none',
-          transition: 'background-color 150ms',
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute',
-            top: 2,
-            left: enabled ? 18 : 2,
-            width: 16,
-            height: 16,
-            backgroundColor: 'var(--color-on-accent)',
-            transition: 'left 150ms',
-          }}
-        />
-      </button>
+      <Toggle
+        checked={enabled}
+        onChange={(next) => void setCompletionSoundEnabled(next)}
+        aria-label="Play a sound when an agent finishes unwatched"
+      />
     </div>
   )
 }
@@ -865,8 +848,8 @@ function KeepDaemonOnQuitRow(): React.JSX.Element {
     }
   }
 
-  // Styling copies AgenticSystemsToggle so every toggle in Settings
-  // has the same physical footprint (36x20 track, 16x16 thumb).
+  // <Toggle> gives every switch in Settings the same physical footprint
+  // (36x20 track, 16x16 thumb).
   return (
     <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
       <div className="flex-1 min-w-0 mr-3">
@@ -879,29 +862,11 @@ function KeepDaemonOnQuitRow(): React.JSX.Element {
             : 'Red close button stops everything, same as Cmd+Q. Agents pause and the mobile companion disconnects until you reopen K2.'}
         </p>
       </div>
-      <button
-        onClick={toggle}
-        className="no-drag cursor-pointer flex-shrink-0 relative"
-        style={{
-          width: 36,
-          height: 20,
-          backgroundColor: keep ? 'var(--color-accent)' : 'var(--color-control-track-off)',
-          border: 'none',
-          transition: 'background-color 150ms',
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute',
-            top: 2,
-            left: keep ? 18 : 2,
-            width: 16,
-            height: 16,
-            backgroundColor: 'var(--color-on-accent)',
-            transition: 'left 150ms',
-          }}
-        />
-      </button>
+      <Toggle
+        checked={keep}
+        onChange={() => void toggle()}
+        aria-label="Keep server running when the window is closed"
+      />
     </div>
   )
 }

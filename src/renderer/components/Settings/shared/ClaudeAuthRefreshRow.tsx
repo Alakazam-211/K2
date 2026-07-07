@@ -2,6 +2,7 @@ import React from 'react'
 import { useCallback, useEffect } from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { Toggle } from '@/components/ui'
 import { useClaudeAuthStore } from '@/stores/claude-auth'
 import type { ClaudeAuthState } from '@/stores/claude-auth'
 
@@ -105,29 +106,11 @@ export function ClaudeAuthRefreshRow(): React.JSX.Element {
       </div>
       <div className="flex items-center flex-shrink-0">
         {statusIndicator}
-        <button
-          onClick={handleToggle}
-          className="no-drag cursor-pointer flex-shrink-0 relative"
-          style={{
-            width: 36,
-            height: 20,
-            backgroundColor: claudeAuthAutoRefresh ? 'var(--color-accent)' : 'var(--color-control-track-off)',
-            border: 'none',
-            transition: 'background-color 150ms',
-          }}
-        >
-          <span
-            style={{
-              position: 'absolute',
-              top: 2,
-              left: claudeAuthAutoRefresh ? 18 : 2,
-              width: 16,
-              height: 16,
-              backgroundColor: 'var(--color-on-accent)',
-              transition: 'left 150ms',
-            }}
-          />
-        </button>
+        <Toggle
+          checked={claudeAuthAutoRefresh}
+          onChange={() => void handleToggle()}
+          aria-label="Auto-refresh Claude credentials"
+        />
       </div>
     </div>
   )

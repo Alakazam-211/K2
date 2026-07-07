@@ -5,6 +5,7 @@ import { useSettingsStore } from '@/stores/settings'
 // Phase 2 Unit 2 — Tauri `assistant_*` commands deleted. Daemon owns
 // /cli/llm/* and the renderer calls it directly via the daemon client.
 import { llmCheck, llmDownloadDefault, llmLoadModel, llmStatus } from '@/lib/llmDaemonClient'
+import { Toggle } from '@/components/ui'
 
 export function LocalLLMSettings(): React.JSX.Element {
   const { isDownloading, downloadProgress, modelLoaded } = useAssistantStore()
@@ -75,29 +76,11 @@ export function LocalLLMSettings(): React.JSX.Element {
             <span className="text-xs text-[var(--color-text-primary)]">Enabled</span>
             <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Disabling saves battery by not loading the model into memory</p>
           </div>
-          <button
-            onClick={() => setAiAssistantEnabled(!aiAssistantEnabled)}
-            className="no-drag cursor-pointer flex-shrink-0 relative"
-            style={{
-              width: 36,
-              height: 20,
-              backgroundColor: aiAssistantEnabled ? 'var(--color-accent)' : 'var(--color-control-track-off)',
-              border: 'none',
-              transition: 'background-color 150ms'
-            }}
-          >
-            <span
-              style={{
-                position: 'absolute',
-                top: 2,
-                left: aiAssistantEnabled ? 18 : 2,
-                width: 16,
-                height: 16,
-                backgroundColor: 'var(--color-on-accent)',
-                transition: 'left 150ms'
-              }}
-            />
-          </button>
+          <Toggle
+            checked={aiAssistantEnabled}
+            onChange={(next) => setAiAssistantEnabled(next)}
+            aria-label="AI Workspace Assistant enabled"
+          />
         </div>
         {/* Model Status */}
         <div className="px-4 py-3 border-b border-[var(--color-border)]">
@@ -135,6 +118,10 @@ export function LocalLLMSettings(): React.JSX.Element {
                   : 'Off (default): k2 talk detects human-in-the-loop prompts with fast regex only — no model inference. Obvious prompts are still caught; unmarked ones may not be.'}
             </p>
           </div>
+          {/* NOT <Toggle>: this switch's disabled treatment (opacity-40 +
+              cursor-default) intentionally differs from the primitive's
+              (opacity-50 + cursor-not-allowed); converting would change
+              rendering in the common no-model-loaded state. */}
           <button
             onClick={() => { if (modelReady) void setUseLlmHitlDetection(!useLlmHitlDetection) }}
             disabled={!modelReady}

@@ -1,6 +1,7 @@
 import React from 'react'
 import { useCallback } from 'react'
 import { useSettingsStore } from '@/stores/settings'
+import { Toggle } from '@/components/ui'
 
 // ── Composer 1c (D4) — "Allow remote instruct" ─────────────────────────
 // Per-host opt-in that lets REMOTE PRINCIPALS message this host's agents:
@@ -34,7 +35,7 @@ export function AllowRemoteInstructRow(): React.JSX.Element {
   }, [allow, setAllow])
 
   return (
-    <div className="flex items-center justify-between py-2">
+    <div className="flex items-center justify-between py-2" data-settings-id="k2-connect.allow-remote-instruct">
       <div className="flex-1 min-w-0 mr-3">
         <span className="text-xs text-[var(--color-text-secondary)]">
           Let remote users message agents
@@ -45,30 +46,7 @@ export function AllowRemoteInstructRow(): React.JSX.Element {
             : 'Off (recommended): only you can message agents here. Turn on to let K2 Connect users and paired federation servers message agents on this host — they run with full shell and filesystem access. Each workspace can also opt in individually under Workspaces.'}
         </p>
       </div>
-      <button
-        onClick={toggle}
-        className="no-drag cursor-pointer flex-shrink-0 relative"
-        data-settings-id="k2-connect.allow-remote-instruct"
-        style={{
-          width: 36,
-          height: 20,
-          backgroundColor: allow ? 'var(--color-accent)' : 'var(--color-control-track-off)',
-          border: 'none',
-          transition: 'background-color 150ms',
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute',
-            top: 2,
-            left: allow ? 18 : 2,
-            width: 16,
-            height: 16,
-            backgroundColor: 'var(--color-on-accent)',
-            transition: 'left 150ms',
-          }}
-        />
-      </button>
+      <Toggle checked={allow} onChange={toggle} aria-label="Let remote users message agents" />
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react'
 import TopBar from '../TopBar/TopBar'
 import IconRail from '../Sidebar/IconRail'
+import { Surface } from '../ui'
 import { useSidebarStore } from '../../stores/sidebar'
 import { usePanelsStore } from '../../stores/panels'
 
@@ -58,12 +59,17 @@ export default function Layout({
           <IconRail />
         ) : (
           <>
-            <div
-              className="relative flex-shrink-0 overflow-y-auto border-r border-[var(--color-border)] bg-[var(--color-bg-surface)]"
+            {/* The Sidebar's painted surface — Sidebar.tsx's own root is
+                transparent; this wrapper is the chrome container Glass
+                will paint with material. */}
+            <Surface
+              role2="surface"
+              bordered={false}
+              className="relative flex-shrink-0 overflow-y-auto border-r border-[var(--color-border)]"
               style={{ width: sidebarWidth }}
             >
               {sidebar}
-            </div>
+            </Surface>
           </>
         )}
 

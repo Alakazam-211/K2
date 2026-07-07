@@ -12,6 +12,7 @@ import ModeToggle from '@/components/Presence/ModeToggle'
 import ServerSwitcher from './ServerSwitcher'
 import PageTabs from './PageTabs'
 import SettingsGearButton from './SettingsGearButton'
+import { Surface } from '@/components/ui'
 
 interface TopBarProps {
   projectName?: string
@@ -70,8 +71,10 @@ export default function TopBar({
     }
   }
   return (
-    <div
-      className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none"
+    <Surface
+      role2="surface"
+      bordered={false}
+      className="flex items-center justify-between border-b border-[var(--color-border)] px-3 select-none"
       data-tauri-drag-region
       onMouseDown={(e) => {
         // Only drag if clicking on the bar itself (not buttons)
@@ -265,7 +268,7 @@ export default function TopBar({
           </svg>
         </button>
       </div>
-    </div>
+    </Surface>
   )
 }
 

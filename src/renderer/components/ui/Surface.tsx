@@ -10,6 +10,10 @@ const ROLE_BG: Record<string, string> = {
   surface: 'bg-[var(--color-bg-surface)]',
   elevated: 'bg-[var(--color-bg-elevated)]',
   inset: 'bg-[var(--color-bg-inset)]',
+  // Pane-chrome strip (PaneTabBar) — historically painted bg-stripe
+  // directly; promoted to a role so the strip reads its slot through
+  // the primitive (Glass paints these surfaces with material).
+  stripe: 'bg-[var(--color-bg-stripe)]',
 }
 
 const ELEVATION_SHADOW: Record<number, string> = {
@@ -23,7 +27,7 @@ const ELEVATION_SHADOW: Record<number, string> = {
 
 export interface SurfaceProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Which background slot to paint. Default 'surface'. */
-  role2?: 'canvas' | 'solid' | 'surface' | 'elevated' | 'inset'
+  role2?: 'canvas' | 'solid' | 'surface' | 'elevated' | 'inset' | 'stripe'
   /** 1px border on all sides (Square's panel treatment). Default true. */
   bordered?: boolean
   /** Elevation 0-5 → composes ring + shadow slots into one box-shadow. Default 0. */

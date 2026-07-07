@@ -5,6 +5,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { applyPinSize, resolvePinSessionId } from './pinSizeMenu'
 import PinDimensionsModal from './PinDimensionsModal'
+import { Surface } from '@/components/ui'
 
 // ── Types (from tabs store — will be available after store refactor) ──
 
@@ -227,12 +228,13 @@ export function PaneTabBar({
   )
 
   return (
-    <div
+    <Surface
+      role2="stripe"
+      bordered={false}
       className="flex items-center border-b border-[var(--color-border)] overflow-x-auto"
       style={{
         height: '24px',
         minHeight: '24px',
-        background: 'var(--color-bg-stripe)',
         fontFamily: "'MesloLGM Nerd Font', Menlo, Monaco, monospace",
         fontSize: '11px'
       }}
@@ -337,6 +339,6 @@ export function PaneTabBar({
           onClose={() => setPinModalSessionId(null)}
         />
       )}
-    </div>
+    </Surface>
   )
 }

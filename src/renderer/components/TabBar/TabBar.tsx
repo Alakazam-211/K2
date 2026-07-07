@@ -14,6 +14,7 @@ import { startTabDrag } from '@/components/Terminal/TerminalArea'
 import { showContextMenu } from '@/lib/context-menu'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
+import { Surface } from '@/components/ui'
 
 interface TabBarProps {
   cwd: string
@@ -454,8 +455,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   }, [activeTabId])
 
   return (
-    <div
-      className="flex h-9 items-center border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] no-drag"
+    <Surface
+      role2="surface"
+      bordered={false}
+      className="flex h-9 items-center border-b border-[var(--color-border)] no-drag"
     >
       <div ref={tabBarRef} className="flex h-full flex-1 items-center overflow-x-auto tabbar-scroll">
         {tabs.map((tab, index) => {
@@ -898,6 +901,6 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           onCancel={() => setPendingClose(null)}
         />
       )}
-    </div>
+    </Surface>
   )
 }

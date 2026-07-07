@@ -10,6 +10,9 @@ const VARIANTS: Record<string, string> = {
   /** Bordered but transparent (dialog Cancel). */
   ghost:
     'bg-transparent border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
+  /** Transparent base that fills on hover (the Settings/Connections idiom). */
+  quiet:
+    'bg-transparent border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]',
   /** Primary action. */
   accent:
     'bg-[var(--color-accent)] border border-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90',

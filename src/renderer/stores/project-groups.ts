@@ -1,23 +1,30 @@
 // Projects V1 P4 — nav/list state + live-update wiring for project
 // GROUPS (prd-projects-v1 §6.1), mirroring stores/feedback.ts:
 //
-// The daemon fires `project-group:*` HookEvents on its `/events` WS
-// (project_group_routes.rs) and src-tauri's daemon_events.rs re-emits
-// every frame on the Tauri event bus under the wire name. The renderer
-// listens for the three STRUCTURAL events (groups-changed /
-// members-changed / poc-changed) and coalesce-refetches the group list on
-// a trailing 300ms window (N rapid events → ONE fetch — the
-// FeedbackItemView idiom); every event also bumps `revision` immediately
-// so the open Projects page refetches its selected group's `show` view.
+// The daemon fires `project-group:*` HookEvents (project_group_routes.rs)
+// and — remote live-update fix — mirrors every one of them onto the
+// HOST-AWARE `/cli/sessions/events` bus as an app-level
+// `project_groups_changed` refetch signal (`reason` = the hook name
+// minus its `project-group:` prefix). This store subscribes via
+// `onProjectGroupsChanged` (stores/session-events.ts), which — unlike
+// the old Tauri `listen('project-group:*')` wiring riding the
+// loopback-only `/events` WS — also fires when the app is connected to
+// a REMOTE host over K2 Connect. The three STRUCTURAL reasons
+// (groups-changed / members-changed / poc-changed) coalesce-refetch the
+// group list on a trailing 300ms window (N rapid events → ONE fetch —
+// the FeedbackItemView idiom); every reason also bumps `revision`
+// immediately so the open Projects page refetches its selected group's
+// `show` view.
 //
-// `project-group:message-created` drives the Projects-tab unread badge
-// (§4.4): a per-client last-seen read cursor per group (localStorage —
+// `message-created` drives the Projects-tab unread badge (§4.4): a
+// per-client last-seen read cursor per group (localStorage —
 // canonical-structure vs per-client-view principle) — the badge counts
 // groups with messages newer than last-seen. Viewing a group marks it
 // seen; boot/refetch reconciles via a messages?after=&limit=1 probe.
 
 import { create } from 'zustand'
 import { activeHostKey, onActiveHostChange, useConnectHostStore } from '@/stores/connect-host'
+import { onProjectGroupsChanged } from '@/stores/session-events'
 import { usePageViewStore } from '@/stores/page-view'
 import {
   fetchProjectGroups,
@@ -306,17 +313,17 @@ function bumpAndCoalesceRefetch(): void {
   }, 300)
 }
 
-/** Event payload contract — frozen in project_group_routes.rs. */
-interface MessageCreatedPayload {
-  groupId: string
-  groupName: string
-  messageId: string
-  author: string
-}
-
 /** Wire the project-group event listeners ONCE per window (idempotent —
  *  the top-bar switcher mounts/unmounts across layout switches but the
- *  subscription must survive them; the initFeedbackEvents idiom). */
+ *  subscription must survive them; the initFeedbackEvents idiom).
+ *
+ *  Remote live-update fix: registers on the HOST-AWARE session-events bus
+ *  (`onProjectGroupsChanged`, app-level `project_groups_changed` frames)
+ *  instead of the old Tauri `listen('project-group:*')` wiring — the
+ *  legacy bus is loopback-only, so a client connected to a remote host
+ *  over K2 Connect never saw member/PoC/chat changes without navigating
+ *  away and back. The registration is deliberately never torn down
+ *  (module-lifetime), exactly like the old listeners. */
 export function initProjectGroupEvents(): void {
   if (eventsInitialized) return
   eventsInitialized = true
@@ -325,54 +332,54 @@ export function initProjectGroupEvents(): void {
   // before the page is ever opened — one list fetch + the unread probe.
   void useProjectGroupsStore.getState().fetchGroups()
 
-  void import('@tauri-apps/api/event').then(({ listen }) => {
-    // listen() rejects outside Tauri (vitest) — warn, don't blow up.
-    const warn = (err: unknown): void =>
-      console.warn('[project-groups] listen() unavailable:', err)
-    // Structural events → coalesced nav refetch + revision. groups-changed
-    // also carries set-icon/set-color (§6.7.7) — drop the group's cached
-    // icon FIRST so the revision bump makes mounted avatars refetch a
-    // fresh upload (no payload groupId → drop all; see group-icon-cache).
-    listen<{ groupId?: string }>('project-group:groups-changed', (event) => {
-      dropCachedGroupIcon(event.payload?.groupId)
-      bumpAndCoalesceRefetch()
-    }).catch(warn)
-    listen('project-group:members-changed', () => bumpAndCoalesceRefetch()).catch(warn)
-    listen('project-group:poc-changed', () => bumpAndCoalesceRefetch()).catch(warn)
-    // P5 (§6.3) — a layout save (this client's or another's) → revision
-    // bump ONLY, so the open page refetches its `show` view and the
-    // dashboard's freshness logic sees the new dashboard revision. NO
-    // list refetch (layout changes no list metadata) and explicitly NO
-    // live rearrange — an open dashboard only marks itself stale;
-    // the latest layout applies on project open/switch.
-    listen('project-group:layout-changed', () => {
-      useProjectGroupsStore.setState((s) => ({ revision: s.revision + 1 }))
-    }).catch(warn)
-    // Chat messages → unread bookkeeping (badge) + revision (the P6
-    // drawer refetches on it). NOT a list refetch — a message changes no
-    // list metadata.
-    listen<MessageCreatedPayload>('project-group:message-created', (event) => {
-      const { groupId } = event.payload
-      const store = useProjectGroupsStore.getState()
-      // "Viewing" = the messages are actually on screen: Projects page
-      // open, this group selected, AND the chat drawer expanded (§6.4 —
-      // a collapsed drawer accrues the unread dot instead).
-      const viewingIt =
-        usePageViewStore.getState().page === 'projects' &&
-        store.selectedGroupId === groupId &&
-        !store.chatCollapsed
-      if (viewingIt) {
-        // On screen right now — it's seen the moment it lands.
-        store.markGroupSeen(groupId)
-      } else {
-        useProjectGroupsStore.setState((s) => {
-          if (s.unreadGroupIds.has(groupId)) return {}
-          const next = new Set(s.unreadGroupIds)
-          next.add(groupId)
-          return { unreadGroupIds: next }
-        })
+  onProjectGroupsChanged((reason) => {
+    switch (reason) {
+      // Structural — coalesced nav refetch + revision. groups-changed
+      // also covers set-icon/set-color (§6.7.7) — drop the cached icons
+      // FIRST so the revision bump makes mounted avatars refetch a fresh
+      // upload. (The lean signal carries no groupId, so drop ALL cached
+      // icons — see group-icon-cache; coarser than the old payload-keyed
+      // drop but the next mount refetches each avatar anyway.)
+      case 'groups-changed':
+        dropCachedGroupIcon()
+        bumpAndCoalesceRefetch()
+        break
+      case 'members-changed':
+      case 'poc-changed':
+        bumpAndCoalesceRefetch()
+        break
+      // P5 (§6.3) — a layout save (this client's or another's) → revision
+      // bump ONLY, so the open page refetches its `show` view and the
+      // dashboard's freshness logic sees the new dashboard revision. NO
+      // list refetch (layout changes no list metadata) and explicitly NO
+      // live rearrange — an open dashboard only marks itself stale;
+      // the latest layout applies on project open/switch.
+      case 'layout-changed':
+        useProjectGroupsStore.setState((s) => ({ revision: s.revision + 1 }))
+        break
+      // Chat messages → unread bookkeeping (badge) + revision (the P6
+      // drawer refetches on it). The lean signal carries no groupId, so
+      // the §4.4 split works in two steps: if the user is viewing a
+      // group's chat right now (Projects page open, a group selected,
+      // drawer expanded — §6.4), stamp THAT group seen immediately (its
+      // messages are on screen; the revision-driven refetch renders the
+      // new one). Which OTHER group went unread is reconciled by the
+      // coalesced fetchGroups — its fetchUnreadGroupIds probe flags any
+      // group with messages newer than its last-seen cursor.
+      case 'message-created': {
+        const store = useProjectGroupsStore.getState()
+        const viewing =
+          usePageViewStore.getState().page === 'projects' &&
+          store.selectedGroupId !== null &&
+          !store.chatCollapsed
+        if (viewing && store.selectedGroupId) store.markGroupSeen(store.selectedGroupId)
+        bumpAndCoalesceRefetch()
+        break
       }
-      useProjectGroupsStore.setState((s) => ({ revision: s.revision + 1 }))
-    }).catch(warn)
+      // Forward compat — an unknown reason from a newer daemon is still
+      // a "something changed" signal; do the safe full refresh.
+      default:
+        bumpAndCoalesceRefetch()
+    }
   })
 }

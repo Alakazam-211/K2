@@ -99,6 +99,47 @@ impl AgentHookEventSink for DaemonBroadcastSink {
             }
         }
 
+        // Remote live-update fix — mirror the project-group + feedback
+        // hooks onto the host-aware `/cli/sessions/events` bus. The
+        // legacy `/events` WS below is loopback-only (src-tauri's
+        // daemon_events.rs hardcodes ws://127.0.0.1), so a renderer
+        // connected to a REMOTE host over K2 Connect never saw
+        // members/PoC/chat/feedback changes without navigating away and
+        // back. Same additive Bus-A→Bus-B chokepoint pattern as the
+        // AgentLifecycle mirror above; doing it HERE (not per route)
+        // also covers the k2-core emit sites (`projects_ops.rs`,
+        // `workspace/lifecycle.rs` fire ProjectGroupMembersChanged on
+        // workspace delete/retire) that never touch the route helpers.
+        // `reason` = the hook name minus its bus prefix — the renderer
+        // consumer keys per-event behavior off it. Payload-lean by
+        // design: these are refetch signals (the ProjectsChanged
+        // convention), not diffs.
+        match event {
+            HookEvent::ProjectGroupsChanged
+            | HookEvent::ProjectGroupMembersChanged
+            | HookEvent::ProjectGroupPocChanged
+            | HookEvent::ProjectGroupLayoutChanged
+            | HookEvent::ProjectGroupMessageCreated => {
+                let name = event.event_name();
+                let reason =
+                    name.strip_prefix("project-group:").unwrap_or(name).to_string();
+                let _ = crate::session_events::emit(
+                    crate::session_events::SessionEvent::ProjectGroupsChanged { reason },
+                );
+            }
+            HookEvent::FeedbackCreated
+            | HookEvent::FeedbackAnswered
+            | HookEvent::FeedbackStatusChanged
+            | HookEvent::FeedbackCommented => {
+                let name = event.event_name();
+                let reason = name.strip_prefix("feedback:").unwrap_or(name).to_string();
+                let _ = crate::session_events::emit(
+                    crate::session_events::SessionEvent::FeedbackChanged { reason },
+                );
+            }
+            _ => {}
+        }
+
         let frame = WireEvent {
             event: event.event_name().to_string(),
             payload,
@@ -255,5 +296,75 @@ mod tests {
         let tx = broadcast::Sender::<WireEvent>::new(4);
         let sink = DaemonBroadcastSink::new(tx);
         sink.emit(HookEvent::SyncProjects, serde_json::json!({}));
+    }
+
+    /// Remote live-update fix — the sink mirrors every `project-group:*`
+    /// / `feedback:*` HookEvent onto the host-aware session-events bus as
+    /// `ProjectGroupsChanged { reason }` / `FeedbackChanged { reason }`,
+    /// with `reason` = the hook name minus its bus prefix. Without this
+    /// mirror a K2 Connect client never sees these changes (the legacy
+    /// `/events` WS is loopback-only). Drains a real bus subscription —
+    /// unrelated events from parallel tests are skipped, not failed on.
+    #[test]
+    fn project_group_and_feedback_hooks_mirror_to_session_events_bus() {
+        use crate::session_events::SessionEvent;
+
+        let tx = broadcast::Sender::<WireEvent>::new(16);
+        let sink = DaemonBroadcastSink::new(tx);
+
+        let cases: &[(HookEvent, &str)] = &[
+            (HookEvent::ProjectGroupsChanged, "groups-changed"),
+            (HookEvent::ProjectGroupMembersChanged, "members-changed"),
+            (HookEvent::ProjectGroupPocChanged, "poc-changed"),
+            (HookEvent::ProjectGroupLayoutChanged, "layout-changed"),
+            (HookEvent::ProjectGroupMessageCreated, "message-created"),
+            (HookEvent::FeedbackCreated, "created"),
+            (HookEvent::FeedbackAnswered, "answered"),
+            (HookEvent::FeedbackStatusChanged, "status-changed"),
+            (HookEvent::FeedbackCommented, "commented"),
+        ];
+        for (hook, want_reason) in cases {
+            let mut rx = crate::session_events::subscribe();
+            sink.emit(hook.clone(), serde_json::json!({}));
+            let mut found = false;
+            while let Ok(got) = rx.try_recv() {
+                let hit = match (&got, hook) {
+                    (
+                        SessionEvent::ProjectGroupsChanged { reason },
+                        HookEvent::ProjectGroupsChanged
+                        | HookEvent::ProjectGroupMembersChanged
+                        | HookEvent::ProjectGroupPocChanged
+                        | HookEvent::ProjectGroupLayoutChanged
+                        | HookEvent::ProjectGroupMessageCreated,
+                    ) => reason == want_reason,
+                    (
+                        SessionEvent::FeedbackChanged { reason },
+                        HookEvent::FeedbackCreated
+                        | HookEvent::FeedbackAnswered
+                        | HookEvent::FeedbackStatusChanged
+                        | HookEvent::FeedbackCommented,
+                    ) => reason == want_reason,
+                    _ => false, // contamination from a parallel test — keep draining
+                };
+                if hit {
+                    found = true;
+                    break;
+                }
+            }
+            assert!(found, "no session-events mirror for {hook:?} (want reason {want_reason:?})");
+        }
+
+        // A non-project-group / non-feedback hook must NOT mint either
+        // mirror kind (spot-check the match arms stay scoped).
+        let mut rx = crate::session_events::subscribe();
+        sink.emit(HookEvent::SyncProjects, serde_json::json!({}));
+        while let Ok(got) = rx.try_recv() {
+            if matches!(
+                got,
+                SessionEvent::ProjectGroupsChanged { .. } | SessionEvent::FeedbackChanged { .. }
+            ) {
+                panic!("SyncProjects must not mirror as a project-group/feedback signal");
+            }
+        }
     }
 }

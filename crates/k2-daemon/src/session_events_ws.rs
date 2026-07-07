@@ -328,6 +328,21 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         // presence chips mirror the whole set.
         SessionEvent::PresenceChanged { .. } => return true,
 
+        // 0.40.34 — APP-LEVEL: a URL-open request has no workspace; it
+        // must reach every connected app (local AND across the K2
+        // Connect tunnel) so SOME viewer opens it in a browser tab.
+        SessionEvent::OpenUrl { .. } => return true,
+
+        // Remote live-update fix — APP-LEVEL: project groups + feedback
+        // are daemon-global sets (a group spans workspaces; the feedback
+        // badge counts across all of them). Forward to EVERY subscriber
+        // regardless of `?path=` so a K2 Connect client's Projects page /
+        // feedback badge refetches live — the legacy `project-group:*` /
+        // `feedback:*` HookEvents ride the loopback-only /events bus and
+        // never cross the tunnel.
+        SessionEvent::ProjectGroupsChanged { .. } => return true,
+        SessionEvent::FeedbackChanged { .. } => return true,
+
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter below routes them to
         // the matching subscriber exactly like SessionAdded/Removed.
@@ -444,7 +459,20 @@ mod tests {
         };
         // S1 presence — the roster is daemon-global, same routing class.
         let presence = SessionEvent::PresenceChanged { roster: vec![] };
-        for ev in [&llm, &tunnel, &agent, &presence] {
+        // 0.40.34 — a URL-open request must reach every subscriber.
+        let open_url = SessionEvent::OpenUrl {
+            url: "https://example.com".into(),
+            source: "shim".into(),
+        };
+        // Remote live-update fix — project-group + feedback refetch
+        // signals are daemon-global, same routing class.
+        let project_groups = SessionEvent::ProjectGroupsChanged {
+            reason: "members-changed".into(),
+        };
+        let feedback = SessionEvent::FeedbackChanged {
+            reason: "created".into(),
+        };
+        for ev in [&llm, &tunnel, &agent, &presence, &open_url, &project_groups, &feedback] {
             assert!(event_matches_workspace(ev, "/x/foo"));
             assert!(event_matches_workspace(ev, "/totally/unrelated"));
             assert!(event_matches_workspace(ev, ""));

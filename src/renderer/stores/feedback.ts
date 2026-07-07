@@ -1,19 +1,25 @@
 // Feedback F2 — page open/close state + the live waiting-count badge +
 // the FeedbackCreated/FeedbackAnswered event hookup.
 //
-// The daemon fires `HookEvent::FeedbackCreated` / `::FeedbackAnswered` on
-// its `/events` WS (feedback_routes.rs); src-tauri's daemon_events.rs
-// subscriber re-emits every frame on the Tauri event bus under the
-// HookEvent name — so the renderer listens for `feedback:created` /
-// `feedback:answered` / `feedback:status-changed` /
-// `feedback:commented` exactly like active-agents listens for
-// `agent:lifecycle`. Each event bumps `revision` (the page refetches on
-// it) and refreshes the badge count (commented skips the badge — a
-// comment never changes status); FeedbackCreated additionally fires a
-// desktop notification when the app is unfocused or the Feedback page
-// isn't visible (PRD §6 F2) — it is the ONLY event that notifies.
+// The daemon fires `HookEvent::FeedbackCreated` / `::FeedbackAnswered` /
+// `::FeedbackStatusChanged` / `::FeedbackCommented` (feedback_routes.rs)
+// and — remote live-update fix — mirrors every one of them onto the
+// HOST-AWARE `/cli/sessions/events` bus as an app-level
+// `feedback_changed` refetch signal (`reason` = the hook name minus its
+// `feedback:` prefix). This store subscribes via `onFeedbackChanged`
+// (stores/session-events.ts), which — unlike the old Tauri
+// `listen('feedback:*')` wiring riding the loopback-only `/events` WS —
+// also fires when the app is connected to a REMOTE host over K2 Connect.
+// Each reason bumps `revision` (the page refetches on it) and refreshes
+// the badge count (`commented` skips the badge — a comment never changes
+// status); `created` additionally fires a desktop notification when the
+// app is unfocused or the Feedback page isn't visible (PRD §6 F2) — it
+// is the ONLY reason that notifies. The lean signal carries no item
+// payload, so the notification uses generic copy (the old event's
+// agentName/title rode the legacy payload).
 
 import { create } from 'zustand'
+import { onFeedbackChanged } from '@/stores/session-events'
 import { useProjectsStore } from '@/stores/projects'
 import { usePageViewStore } from '@/stores/page-view'
 import { useWindowFocusStore } from '@/stores/window-focus'
@@ -70,16 +76,6 @@ usePageViewStore.subscribe((s) => {
   }
 })
 
-/** Event payload contract — frozen in feedback_routes.rs. */
-interface FeedbackCreatedPayload {
-  id: string
-  projectPath: string
-  title: string
-  kind: string
-  priority: number
-  agentName: string
-}
-
 /** Desktop notification via tauri-plugin-notification: agent name +
  *  ask title. Permission is requested lazily on the first send. */
 async function notifyDesktop(agentName: string, title: string): Promise<void> {
@@ -111,40 +107,33 @@ export function initFeedbackEvents(notify: boolean): void {
   if (eventsInitialized) return
   eventsInitialized = true
 
-  void import('@tauri-apps/api/event').then(({ listen }) => {
-    // listen() rejects outside Tauri (vitest) — warn, don't blow up.
-    listen<FeedbackCreatedPayload>('feedback:created', (event) => {
-      const store = useFeedbackStore.getState()
-      useFeedbackStore.setState((s) => ({ revision: s.revision + 1 }))
-      void store.refreshWaitingCount()
+  // Remote live-update fix — one host-aware registration replaces the
+  // four Tauri listen('feedback:*') calls (loopback-only bus; see the
+  // module header). Never torn down (module-lifetime), exactly like the
+  // old listeners.
+  onFeedbackChanged((reason) => {
+    // Every reason bumps revision — the open page/thread refetches on it.
+    useFeedbackStore.setState((s) => ({ revision: s.revision + 1 }))
+    // A stored comment (`/cli/feedback/comment` — agent or human — and
+    // the thread entry the answer route creates) is an INTERNAL refresh
+    // signal only: a comment never changes status (an answering first
+    // comment rides reason 'answered'), so the badge count is untouched
+    // — and it NEVER notifies (frozen contract: only NEW items notify,
+    // via reason 'created').
+    if (reason === 'commented') return
+    // created / answered / status-changed (resolve, dismiss,
+    // reopen-to-waiting) — and, forward-compat, any unknown reason —
+    // re-count the waiting badge.
+    void useFeedbackStore.getState().refreshWaitingCount()
+    if (reason === 'created') {
       // Notify ONLY when the ask can't already be on screen: app
-      // unfocused OR the Feedback page not visible (PRD §6 F2).
+      // unfocused OR the Feedback page not visible (PRD §6 F2). The
+      // lean refetch signal carries no agentName/title — generic copy.
       const focused = useWindowFocusStore.getState().isFocused
       const pageVisible = useFeedbackStore.getState().isOpen
       if (notify && (!focused || !pageVisible)) {
-        const { agentName, title } = event.payload
-        void notifyDesktop(agentName || 'Agent', title || 'New feedback')
+        void notifyDesktop('Agent', 'New feedback')
       }
-    }).catch((err) => console.warn('[feedback] listen() unavailable:', err))
-    listen('feedback:answered', () => {
-      useFeedbackStore.setState((s) => ({ revision: s.revision + 1 }))
-      void useFeedbackStore.getState().refreshWaitingCount()
-    }).catch((err) => console.warn('[feedback] listen() unavailable:', err))
-    // Resolve / dismiss / reopen-to-waiting (`/cli/feedback/resolve`) —
-    // same refresh as answered: bump revision + re-count the badge.
-    listen('feedback:status-changed', () => {
-      useFeedbackStore.setState((s) => ({ revision: s.revision + 1 }))
-      void useFeedbackStore.getState().refreshWaitingCount()
-    }).catch((err) => console.warn('[feedback] listen() unavailable:', err))
-    // A stored comment (`/cli/feedback/comment` — agent or human — and
-    // the thread entry the answer route creates). INTERNAL refresh
-    // signal only: bump revision so the open list refreshes comment
-    // counts and the open thread refetches. A comment never changes
-    // status (an answering first comment rides feedback:answered), so
-    // the badge count is untouched — and it NEVER notifies (frozen
-    // contract: only NEW items notify, via feedback:created).
-    listen('feedback:commented', () => {
-      useFeedbackStore.setState((s) => ({ revision: s.revision + 1 }))
-    }).catch((err) => console.warn('[feedback] listen() unavailable:', err))
+    }
   })
 }

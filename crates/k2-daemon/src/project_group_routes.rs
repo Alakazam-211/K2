@@ -474,6 +474,11 @@ fn build_html_docs_json(group_id: &str) -> Result<serde_json::Value, CliResponse
     Ok(serde_json::json!({ "ok": true, "groupId": group_id, "docs": docs }))
 }
 
+// NOTE (remote live-update fix): every emit below ALSO reaches remote
+// K2 Connect clients — `events.rs::DaemonBroadcastSink` mirrors all
+// `project-group:*` hooks onto the host-aware `/cli/sessions/events`
+// bus as app-level `project_groups_changed` refetch signals. Emitting
+// through `agent_hooks::emit` is sufficient; no per-site twin needed.
 fn emit(event: k2_core::agent_hooks::HookEvent, payload: serde_json::Value) {
     k2_core::agent_hooks::emit(event, payload);
 }

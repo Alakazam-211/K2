@@ -48,7 +48,7 @@ import FeedbackPage from './components/Feedback/FeedbackPage'
 import ProjectsPage from './components/Projects/ProjectsPage'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
-import { useTabsStore, initApiSandboxTabAdoption } from './stores/tabs'
+import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs } from './stores/tabs'
 import { useSidebarStore } from './stores/sidebar'
 import { useActiveAgentsStore, startAgentPolling, stopAgentPolling, type ActiveAgent } from './stores/active-agents'
 import AgentCloseDialog from './components/AgentCloseDialog/AgentCloseDialog'
@@ -291,6 +291,13 @@ export default function App(): React.JSX.Element {
     // acts on events carrying a real `sandbox_backend` (never fired on Mac /
     // feature-off builds, which can't deliver a microVM).
     const offSandboxAdoption = initApiSandboxTabAdoption()
+    // Browser-pane arc (0.40.34) — app-level `open_url` consumer: daemon-
+    // routed URL opens (the `k2 open` shim / terminal hyperlink clicks)
+    // surface as embedded browser tabs. Same module-level-registry deal as
+    // the sandbox adoption above: registered once here, survives host
+    // switches, and works identically against the LOCAL daemon (this
+    // app-level socket is always open, local or remote).
+    const offOpenUrl = initOpenUrlBrowserTabs()
     const offHostChange = onActiveHostChange(() => {
       // Host flipped: tear down the old host's WS, open one against the
       // new host, and pull its snapshot. onActiveHostChange fires AFTER
@@ -303,6 +310,7 @@ export default function App(): React.JSX.Element {
     return () => {
       offHostChange()
       offSandboxAdoption()
+      offOpenUrl()
       unsub()
     }
   }, [])

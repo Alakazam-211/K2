@@ -25,6 +25,7 @@ import {
   subscribeToWorkspaceSessionEvents,
   subscribeToWorkspaceTabEvents,
   onSessionAddedApp,
+  onOpenUrl,
   type SessionAddedEvent,
   type SessionRemovedEvent,
   type TabTitleChangedEvent,
@@ -650,10 +651,21 @@ export interface AgentItemData {
   sessionId?: string
 }
 
+/** Embedded Browser Tab (PRD prd-browser-pane-v1.md). The renderer keeps
+ *  only the URL + a display title; the page itself lives in a NATIVE child
+ *  webview owned by src-tauri (browser_create / browser-<item id>), so
+ *  nothing else here is canonical — no history, no scroll state. `url` is
+ *  updated from `browser_current_url` polling so serialize captures where
+ *  the user actually navigated, and restore re-creates the view there. */
+export interface BrowserItemData {
+  url: string
+  title?: string
+}
+
 export interface Item {
   id: string
-  type: 'terminal' | 'file-viewer' | 'agent'
-  data: TerminalItemData | FileViewerItemData | AgentItemData
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser'
+  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData
   pinned?: boolean
 }
 
@@ -778,6 +790,20 @@ export interface SerializedFileViewerItem {
   cursorPos?: number
 }
 
+/** Embedded Browser Tab item (browser-pane arc). ADDITIVE union member —
+ *  no LAYOUT_SCHEMA_VERSION bump, following the established pattern for
+ *  new optional shapes (SerializedAgentItem.sessionId, terminal
+ *  `sandbox`): old layouts simply never contain a `'browser'` item, so
+ *  they load unchanged, and readers that predate this type never receive
+ *  one from their own saves. Only the URL (+ display title) persists —
+ *  the native child webview is re-created at that URL on restore. */
+export interface SerializedBrowserItem {
+  id: string
+  type: 'browser'
+  url?: string
+  title?: string
+}
+
 /** Union of all serialized item shapes accepted by `restoreLayout`.
  *  Includes the legacy v1 terminal shape so pre-0.38.0 layouts deserialize
  *  cleanly; `restoreLayout` migrates them to v2 before constructing Tab
@@ -787,6 +813,7 @@ export type SerializedItem =
   | SerializedTerminalItemV1
   | SerializedAgentItem
   | SerializedFileViewerItem
+  | SerializedBrowserItem
 
 export interface SerializedPaneGroup {
   id: string
@@ -916,6 +943,21 @@ interface TabsState {
   pinPane: (tabId: string, paneGroupId: string) => void
   unpinPane: (tabId: string, paneGroupId: string) => void
   openFileInNewTab: (filePath: string) => void
+  /** Browser-pane arc — open `url` in a NEW tab holding a single browser
+   *  item (mirrors openFileInNewTab). This is the shared entry point for
+   *  integrations (terminal URL clicks, daemon events, menus). Non-http(s)
+   *  URLs still get a tab; the Rust side rejects them at browser_create
+   *  and BrowserPane shows the error inline. */
+  openUrlInNewTab: (url: string) => void
+  /** Browser-pane arc — open `url` in the given tab's active pane group
+   *  (mirrors openFileInPane): reuse the pane group's existing unpinned
+   *  browser item when present (navigate-in-place), else append a new
+   *  browser item. */
+  openUrlInPane: (tabId: string, url: string) => void
+  /** Browser-pane arc — stamp the polled current URL / page title back
+   *  onto a browser item so the next serialize captures where the user
+   *  actually navigated (mirrors setFileViewerState). */
+  setBrowserItemState: (tabId: string, paneGroupId: string, itemId: string, state: { url?: string; title?: string }) => void
   openUntitledDocument: (cwd: string) => void
   /** Set a tab's bar title.
    *  - USER renames (TabBar `commitRename`) pass `{ locked: true }` — that
@@ -1237,6 +1279,17 @@ function serializeTab(tab: Tab): SerializedTab {
           // .k2so/prds/canonical-lane-restore.md.
           sessionId: d.sessionId,
         }
+      } else if (item.type === 'browser') {
+        const d = item.data as BrowserItemData
+        return {
+          id: item.id,
+          type: 'browser' as const,
+          // `url` tracks browser_current_url polling (BrowserPane stamps
+          // it via setBrowserItemState), so restore lands where the user
+          // actually navigated — not the URL the pane was opened with.
+          url: d.url,
+          title: d.title,
+        }
       } else {
         const d = item.data as FileViewerItemData
         return {
@@ -1432,6 +1485,31 @@ function makeFileViewerPaneGroup(
       },
     ],
     activeItemIndex: 0,
+  }
+}
+
+/** Create a PaneGroup with a single browser item (browser-pane arc). */
+function makeBrowserPaneGroup(paneGroupId: string, url: string): PaneGroup {
+  return {
+    id: paneGroupId,
+    items: [
+      {
+        id: crypto.randomUUID(),
+        type: 'browser',
+        data: { url },
+      },
+    ],
+    activeItemIndex: 0,
+  }
+}
+
+/** Best-effort display label for a browser tab: hostname, else the raw
+ *  string the user typed. */
+function browserTabTitle(url: string): string {
+  try {
+    return new URL(url).hostname || url
+  } catch {
+    return url || 'Browser'
   }
 }
 
@@ -2667,6 +2745,80 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     }))
   },
 
+  openUrlInNewTab: (url: string) => {
+    const paneGroupId = crypto.randomUUID()
+    const tabId = crypto.randomUUID()
+
+    const pg = makeBrowserPaneGroup(paneGroupId, url)
+
+    const tab: Tab = {
+      id: tabId,
+      title: browserTabTitle(url),
+      mosaicTree: paneGroupId,
+      paneGroups: new Map([[paneGroupId, pg]])
+    }
+
+    set((state) => ({
+      tabs: [...state.tabs, tab],
+      activeTabId: tabId
+    }))
+  },
+
+  openUrlInPane: (tabId: string, url: string) => {
+    set((state) => {
+      const result = mapTabAcrossGroups(state, tabId, (tab) => {
+        const activePgId = getFirstLeaf(tab.mosaicTree)
+        if (!activePgId) return tab
+        const pg = tab.paneGroups.get(activePgId)
+        if (!pg) return tab
+
+        const newPaneGroups = new Map(tab.paneGroups)
+
+        // Reuse an existing unpinned browser item — navigate in place
+        // (BrowserPane reacts to the url data change) — same reuse rule
+        // as openFileInPane's unpinned file-viewer.
+        const browserIdx = pg.items.findIndex(
+          (item) => item.type === 'browser' && !item.pinned
+        )
+        if (browserIdx !== -1) {
+          const newItems = [...pg.items]
+          const prev = newItems[browserIdx]
+          newItems[browserIdx] = { ...prev, data: { ...(prev.data as BrowserItemData), url } }
+          newPaneGroups.set(activePgId, { ...pg, items: newItems, activeItemIndex: browserIdx })
+        } else {
+          const newItem: Item = {
+            id: crypto.randomUUID(),
+            type: 'browser',
+            data: { url },
+          }
+          const newItems = [...pg.items, newItem]
+          newPaneGroups.set(activePgId, { ...pg, items: newItems, activeItemIndex: newItems.length - 1 })
+        }
+
+        return { ...tab, paneGroups: newPaneGroups }
+      })
+      return { tabs: result.tabs, extraGroups: result.extraGroups }
+    })
+  },
+
+  setBrowserItemState: (tabId: string, paneGroupId: string, itemId: string, browserState: { url?: string; title?: string }) => {
+    set((state) => {
+      const result = mapTabAcrossGroups(state, tabId, (tab) => {
+        const pg = tab.paneGroups.get(paneGroupId)
+        if (!pg) return tab
+        const newItems = pg.items.map((item) => {
+          if (item.id !== itemId || item.type !== 'browser') return item
+          const prevData = item.data as BrowserItemData
+          return { ...item, data: { ...prevData, ...browserState } }
+        })
+        const newPaneGroups = new Map(tab.paneGroups)
+        newPaneGroups.set(paneGroupId, { ...pg, items: newItems })
+        return { ...tab, paneGroups: newPaneGroups }
+      })
+      return { tabs: result.tabs, extraGroups: result.extraGroups }
+    })
+  },
+
   openUntitledDocument: (cwd: string) => {
     // Count existing untitled docs to generate a unique name
     const state = get()
@@ -3344,6 +3496,21 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                 sessionId: restoredSection === 'chat' ? si.sessionId : undefined,
               },
             }
+          } else if (si.type === 'browser') {
+            // Browser pane — only the URL (+ title) persists; the native
+            // child webview is re-created at that URL by BrowserPane on
+            // first visibility.
+            return {
+              id: crypto.randomUUID(),
+              type: 'browser' as const,
+              // Empty url = BrowserPane renders its address bar only and
+              // defers browser_create until the user enters one (the Rust
+              // side rejects non-http(s) URLs, so no placeholder scheme).
+              data: {
+                url: si.url ?? '',
+                title: si.title,
+              },
+            }
           } else {
             return {
               id: crypto.randomUUID(),
@@ -3450,6 +3617,14 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                     id: crypto.randomUUID(),
                     type: 'agent' as const,
                     data: { agentName: si.agentName ?? '', projectPath: si.projectPath ?? cwd },
+                  }
+                } else if (si.type === 'browser') {
+                  // Same restore rule as group 0: URL-only, webview
+                  // re-created lazily by BrowserPane.
+                  return {
+                    id: crypto.randomUUID(),
+                    type: 'browser' as const,
+                    data: { url: si.url ?? '', title: si.title },
                   }
                 } else {
                   return {
@@ -4889,6 +5064,29 @@ export function initApiSandboxTabAdoption(): UnsubscribeFn {
       adoptApiSandboxSession(event)
     } catch (err) {
       console.warn('[tabs] api-sandbox adoption failed:', err)
+    }
+  })
+}
+
+/** Browser-pane arc (0.40.34) — wire the app-level `open_url` consumer:
+ *  when the daemon routes an http(s) open here (the `k2 open <url>` shim
+ *  or a terminal hyperlink click through /cli/fs/open-external), surface
+ *  it in a NEW embedded browser tab. Call ONCE at app boot (App.tsx,
+ *  alongside `initApiSandboxTabAdoption`). Returns an unsubscribe fn.
+ *  The `onOpenUrl` registry is module-level and survives host switches,
+ *  so a single registration covers the app lifetime — the local daemon's
+ *  and any remote host's app-level WS both feed the same registry. The
+ *  daemon has already validated the scheme is http/https; blank/empty
+ *  URLs are ignored defensively. One tab per event by design (no dedupe
+ *  — repeated opens of the same URL intentionally mint repeated tabs). */
+export function initOpenUrlBrowserTabs(): UnsubscribeFn {
+  return onOpenUrl((url) => {
+    const trimmed = typeof url === 'string' ? url.trim() : ''
+    if (!trimmed) return
+    try {
+      useTabsStore.getState().openUrlInNewTab(trimmed)
+    } catch (err) {
+      console.warn('[tabs] open_url tab surface failed:', err)
     }
   })
 }

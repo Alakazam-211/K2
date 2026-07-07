@@ -215,6 +215,45 @@ export interface PresenceChangedEvent {
   roster: PresenceRosterUser[]
 }
 
+/** APP-LEVEL — the daemon asks the renderer to open a URL in K2's embedded
+ *  browser tab (browser-pane arc, 0.40.34). Emitted when a session's shim
+ *  (`k2 open <url>`) or a terminal hyperlink click routes an http(s) target
+ *  through `/cli/fs/open-external`: when ≥1 session-events subscriber exists
+ *  the daemon SKIPS its own `open`/`xdg-open` and emits this instead, so the
+ *  URL surfaces INSIDE K2 (locally AND across a K2 Connect tunnel) rather than
+ *  the host's system browser. Fires regardless of `?path=` (app-level). The
+ *  Rust side has already validated the scheme is http/https — no scheme
+ *  handling is needed here. */
+export interface OpenUrlEvent {
+  kind: 'open_url'
+  url: string
+  /** Where the open originated: the CLI shim vs a terminal hyperlink click. */
+  source: 'shim' | 'terminal-link'
+}
+
+/** APP-LEVEL — something about the project-group set changed (remote
+ *  live-update fix). Host-aware twin of the legacy loopback-only
+ *  `project-group:*` Tauri events, which never arrive when connected to
+ *  a REMOTE host over K2 Connect. `reason` is the legacy hook name minus
+ *  its `project-group:` prefix: `groups-changed` | `members-changed` |
+ *  `poc-changed` | `layout-changed` | `message-created` (typed as string
+ *  for forward compat). Deliberately payload-lean — a refetch signal,
+ *  consumers re-fetch canonical truth (the ProjectsChanged convention). */
+export interface ProjectGroupsChangedEvent {
+  kind: 'project_groups_changed'
+  reason: string
+}
+
+/** APP-LEVEL — the feedback set changed (remote live-update fix). Twin
+ *  of the legacy loopback-only `feedback:*` Tauri events. `reason` is
+ *  the hook name minus its `feedback:` prefix: `created` | `answered` |
+ *  `status-changed` | `commented` (string for forward compat). Refetch
+ *  signal only — no item payload. */
+export interface FeedbackChangedEvent {
+  kind: 'feedback_changed'
+  reason: string
+}
+
 export type SessionEventMessage =
   | SessionAddedEvent
   | SessionRemovedEvent
@@ -229,6 +268,9 @@ export type SessionEventMessage =
   | HeartbeatStateChangedEvent
   | ProjectsChangedEvent
   | PresenceChangedEvent
+  | OpenUrlEvent
+  | ProjectGroupsChangedEvent
+  | FeedbackChangedEvent
 
 export interface SessionEventHandlers {
   onAdded?: (event: SessionAddedEvent) => void
@@ -366,11 +408,16 @@ export function subscribeToWorkspaceSessionEvents(
           break
         case 'active_changed':
         case 'presence_changed':
-          // App-level concerns (#672 / presence S2) — the per-workspace
-          // subscriber ignores them; `subscribeToActiveState` consumes
-          // them. Swallow here so they don't hit the unknown-kind
-          // warning (the daemon re-broadcasts the presence roster on
-          // every connection register/deregister).
+        case 'open_url':
+        case 'projects_changed':
+        case 'project_groups_changed':
+        case 'feedback_changed':
+          // App-level concerns (#672 / presence S2 / browser-pane 0.40.34
+          // / remote live-update fix) — the per-workspace subscriber
+          // ignores them; `subscribeToActiveState` consumes them. Swallow
+          // here so they don't hit the unknown-kind warning (the daemon
+          // forwards every app-level event to every subscriber regardless
+          // of `?path=`).
           break
         case 'tab_title_changed':
         case 'tab_order_changed':
@@ -516,6 +563,23 @@ type ProjectsChangedHandler = (e: ProjectsChangedEvent) => void
 // Rides the same app-level WS; `stores/presence.ts` is the consumer.
 type PresenceChangedHandler = (e: PresenceChangedEvent) => void
 
+// Browser-pane arc (0.40.34) — APP-LEVEL `open_url` (daemon-routed URL
+// opens: `k2 open <url>` shim + terminal hyperlink clicks through
+// /cli/fs/open-external). Rides the same app-level WS; `stores/tabs.ts`
+// is the consumer (`initOpenUrlBrowserTabs`, wired once from App.tsx).
+// The handler receives the unwrapped `(url, source)` pair rather than the
+// event object — consumers never need the `kind` discriminant.
+type OpenUrlHandler = (url: string, source: OpenUrlEvent['source']) => void
+
+// Remote live-update fix — APP-LEVEL `project_groups_changed` /
+// `feedback_changed` refetch signals (host-aware twins of the legacy
+// loopback-only `project-group:*` / `feedback:*` Tauri events).
+// `stores/project-groups.ts` / `stores/feedback.ts` are the consumers.
+// The handler receives the unwrapped `reason` string (the onOpenUrl
+// idiom) — consumers never need the `kind` discriminant.
+type ProjectGroupsChangedHandler = (reason: string) => void
+type FeedbackChangedHandler = (reason: string) => void
+
 const _llmStatusHandlers = new Set<LlmStatusHandler>()
 const _projectsChangedHandlers = new Set<ProjectsChangedHandler>()
 const _agentStatusHandlers = new Set<AgentStatusHandler>()
@@ -524,6 +588,9 @@ const _appHelloHandlers = new Set<AppHelloHandler>()
 const _appSessionAddedHandlers = new Set<SessionAddedHandler>()
 const _appSessionRemovedHandlers = new Set<SessionRemovedHandler>()
 const _presenceChangedHandlers = new Set<PresenceChangedHandler>()
+const _openUrlHandlers = new Set<OpenUrlHandler>()
+const _projectGroupsChangedHandlers = new Set<ProjectGroupsChangedHandler>()
+const _feedbackChangedHandlers = new Set<FeedbackChangedHandler>()
 
 /** Subscribe to APP-LEVEL `projects_changed` (0.39.45, GH #18/#26).
  *  Returns an unsubscribe fn. */
@@ -581,6 +648,37 @@ export function onPresenceChanged(fn: PresenceChangedHandler): UnsubscribeFn {
   return () => void _presenceChangedHandlers.delete(fn)
 }
 
+/** Browser-pane arc (0.40.34) — subscribe to APP-LEVEL `open_url` (the
+ *  daemon asks the renderer to surface a URL in K2's embedded browser
+ *  tab). The callback receives `(url, source)`. Returns an unsubscribe
+ *  fn. Module-level registry — survives the app-level WS teardown/reopen
+ *  on a host switch, so one registration covers the app lifetime. */
+export function onOpenUrl(fn: OpenUrlHandler): UnsubscribeFn {
+  _openUrlHandlers.add(fn)
+  return () => void _openUrlHandlers.delete(fn)
+}
+
+/** Remote live-update fix — subscribe to APP-LEVEL `project_groups_changed`
+ *  (the project-group set changed: structure / members / PoC / layout /
+ *  chat message). The callback receives the unwrapped `reason` (the legacy
+ *  hook name minus its `project-group:` prefix). Returns an unsubscribe
+ *  fn. Module-level registry — survives the app-level WS teardown/reopen
+ *  on a host switch, so one registration covers the app lifetime. */
+export function onProjectGroupsChanged(fn: ProjectGroupsChangedHandler): UnsubscribeFn {
+  _projectGroupsChangedHandlers.add(fn)
+  return () => void _projectGroupsChangedHandlers.delete(fn)
+}
+
+/** Remote live-update fix — subscribe to APP-LEVEL `feedback_changed`
+ *  (a feedback item was created / answered / status-changed / commented).
+ *  The callback receives the unwrapped `reason` (the legacy hook name
+ *  minus its `feedback:` prefix). Returns an unsubscribe fn. Module-level
+ *  registry — survives host-switch WS teardown/reopen. */
+export function onFeedbackChanged(fn: FeedbackChangedHandler): UnsubscribeFn {
+  _feedbackChangedHandlers.add(fn)
+  return () => void _feedbackChangedHandlers.delete(fn)
+}
+
 function dispatchAppEvent(msg: SessionEventMessage): void {
   switch (msg.kind) {
     case 'llm_status_changed':
@@ -603,6 +701,15 @@ function dispatchAppEvent(msg: SessionEventMessage): void {
       break
     case 'presence_changed':
       for (const h of _presenceChangedHandlers) h(msg)
+      break
+    case 'open_url':
+      for (const h of _openUrlHandlers) h(msg.url, msg.source)
+      break
+    case 'project_groups_changed':
+      for (const h of _projectGroupsChangedHandlers) h(msg.reason)
+      break
+    case 'feedback_changed':
+      for (const h of _feedbackChangedHandlers) h(msg.reason)
       break
     default:
       break
@@ -714,7 +821,16 @@ export function subscribeToActiveState(): UnsubscribeFn {
         msg.kind === 'llm_status_changed' ||
         msg.kind === 'agent_status_changed' ||
         msg.kind === 'tunnel_status_changed' ||
-        msg.kind === 'presence_changed'
+        msg.kind === 'presence_changed' ||
+        msg.kind === 'open_url' ||
+        // Remote live-update fix — the project-group / feedback refetch
+        // signals, plus `projects_changed` (its `onProjectsChanged`
+        // registry + dispatchAppEvent case existed since 0.39.45 but the
+        // kind was never listed here, so registered callbacks never
+        // fired off this socket — same latent gap, fixed alongside).
+        msg.kind === 'projects_changed' ||
+        msg.kind === 'project_groups_changed' ||
+        msg.kind === 'feedback_changed'
       ) {
         dispatchAppEvent(msg)
         return

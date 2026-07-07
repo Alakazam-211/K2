@@ -552,6 +552,20 @@ mod unix_impl {
                     serde_json::json!({ "ok": true, "seq": seq }).to_string(),
                 )
             }
+            // 0.40.34 browser-open: the staged k2-open shim's scoped-session
+            // egress (curl --unix-socket + Bearer over K2_HOOK_SOCK). The
+            // handler validates http/https-only + length cap and broadcasts
+            // the app-level `open_url` event; no filesystem/exec surface, so
+            // the session binding + the capability allowlist are the whole
+            // gate. POST-only (feedback_post_only_route_guards) — a stray
+            // GET 405s loudly here instead of falling to the TCP-fallback
+            // sentinel.
+            "/cli/browser/open-url" => {
+                if !is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                from_cli(crate::browser_routes::handle_open_url(params, body, "shim"))
+            }
             "/cli/awareness/publish" => {
                 let restamped = restamp_awareness_from(body, principal);
                 let r = crate::awareness_ws::handle_publish(&restamped);
@@ -766,6 +780,45 @@ mod unix_impl {
             // And the session binding still gates even the cell uid.
             let other = vh("sid-OTHER", "pane-1");
             assert!(!cell_verb_authorized(Some(&other), "sid-1", 999, 501, Some(999)));
+        }
+
+        // ── 0.40.34 browser-open verb over the cell socket ───────────────
+
+        #[test]
+        fn cell_dispatch_serves_browser_open_url_post_only() {
+            let params: HashMap<String, String> = HashMap::new();
+            let p = principal();
+            // POST with the shim's form body → 200 (validated + broadcast).
+            let (status, _, body) = dispatch_cell_verb(
+                "POST",
+                "/cli/browser/open-url",
+                &params,
+                b"url=https%3A%2F%2Fexample.com%2Fx",
+                &p,
+                "sid-1",
+            );
+            assert_eq!(status, "200 OK", "body: {body}");
+            // Non-http target → 400, never a silent success.
+            let (status, _, body) = dispatch_cell_verb(
+                "POST",
+                "/cli/browser/open-url",
+                &params,
+                b"url=file%3A%2F%2F%2Fetc%2Fpasswd",
+                &p,
+                "sid-1",
+            );
+            assert_eq!(status, "400 Bad Request", "body: {body}");
+            // GET → 405 loudly (feedback_post_only_route_guards), not the
+            // 404 TCP-fallback sentinel and never a mutation.
+            let (status, _, _) = dispatch_cell_verb(
+                "GET",
+                "/cli/browser/open-url",
+                &params,
+                b"",
+                &p,
+                "sid-1",
+            );
+            assert_eq!(status, "405 Method Not Allowed");
         }
 
         // ── awareness body re-stamp (identity from principal, not body) ──

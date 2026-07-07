@@ -1,36 +1,38 @@
 // Feedback store — event wiring for the live-update path.
 //
-// The daemon fires feedback:created / feedback:answered /
-// feedback:status-changed / feedback:commented on its /events WS and
-// the daemon_events bridge re-emits them on the Tauri bus. This suite
-// proves the store's `initFeedbackEvents` wiring per event:
-//   - all four events are subscribed;
-//   - feedback:commented bumps `revision` (the open page/thread
-//     refetch on it) and does NOT touch the waiting-count badge (a
-//     comment never changes status);
-//   - feedback:commented NEVER fires the desktop notification — the
-//     frozen contract says only NEW items notify — while
-//     feedback:created still does (the control that proves the
-//     notification seam is live, so the "not called" half isn't
-//     vacuous);
-//   - feedback:answered / feedback:status-changed bump revision AND
-//     re-count the badge.
+// Remote live-update fix: the daemon mirrors every `feedback:*`
+// HookEvent onto the HOST-AWARE /cli/sessions/events bus as an
+// app-level `feedback_changed` refetch signal, and the store subscribes
+// via `onFeedbackChanged(reason)` (stores/session-events.ts) instead of
+// the old loopback-only Tauri `listen('feedback:*')` wiring. This suite
+// proves the store's `initFeedbackEvents` wiring per reason:
+//   - one registration on the session-events registry;
+//   - reason 'commented' bumps `revision` (the open page/thread refetch
+//     on it) and does NOT touch the waiting-count badge (a comment
+//     never changes status);
+//   - 'commented' NEVER fires the desktop notification — the frozen
+//     contract says only NEW items notify — while 'created' still does
+//     (the control that proves the notification seam is live, so the
+//     "not called" half isn't vacuous). The lean signal carries no
+//     agentName/title, so 'created' notifies with generic copy;
+//   - 'answered' / 'status-changed' bump revision AND re-count the badge.
 //
-// vitest env is node — the Tauri event bus + notification plugin are
-// mocked at the module boundary (daemon-broadcasts.test.ts idiom).
+// vitest env is node — the session-events registry + notification
+// plugin are mocked at the module boundary.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // ── Boundary mocks (installed BEFORE the store imports) ──────────────────
 
-// Tauri event bus: record each named listener so tests can fire events.
-const bus = vi.hoisted(() => ({
-  listeners: new Map<string, (event: { payload: unknown }) => void>(),
+// session-events registry: record the store's handler so tests can fire
+// reasons through it (the daemon-broadcasts.test.ts idiom).
+const ev = vi.hoisted(() => ({
+  handlers: [] as Array<(reason: string) => void>,
 }))
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(async (name: string, fn: (event: { payload: unknown }) => void) => {
-    bus.listeners.set(name, fn)
-    return () => undefined
+vi.mock('@/stores/session-events', () => ({
+  onFeedbackChanged: vi.fn((fn: (reason: string) => void) => {
+    ev.handlers.push(fn)
+    return () => void (ev.handlers = ev.handlers.filter((f) => f !== fn))
   }),
 }))
 
@@ -57,23 +59,22 @@ vi.mock('@/stores/projects', () => ({
 import { useFeedbackStore, initFeedbackEvents } from '@/stores/feedback'
 import { useWindowFocusStore } from '@/stores/window-focus'
 
-/** Both listen() registration and notifyDesktop ride dynamic imports —
- *  flush a macrotask so their .then chains settle. */
+/** notifyDesktop rides a dynamic import — flush a macrotask so its
+ *  .then chain settles. */
 async function flush(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0))
 }
 
-function fire(name: string, payload: unknown): void {
-  const fn = bus.listeners.get(name)
-  if (!fn) throw new Error(`no listener registered for ${name}`)
-  fn({ payload })
+function fire(reason: string): void {
+  if (ev.handlers.length === 0) throw new Error('no feedback handler registered')
+  for (const fn of [...ev.handlers]) fn(reason)
 }
 
 describe('feedback store event wiring', () => {
   beforeEach(async () => {
     // initFeedbackEvents is idempotent per module instance — the first
     // beforeEach wires it (notify=true, the MAIN-window role), the rest
-    // no-op. Unfocused so feedback:created WOULD notify.
+    // no-op. Unfocused so reason 'created' WOULD notify.
     useWindowFocusStore.setState({ isFocused: false })
     initFeedbackEvents(true)
     await flush()
@@ -81,53 +82,44 @@ describe('feedback store event wiring', () => {
     api.fetchWaitingCount.mockClear()
   })
 
-  it('subscribes to all four feedback events', async () => {
-    // listen() registration rides a dynamic-import .then chain — under
-    // full-suite CPU pressure it can settle a beat after beforeEach's
-    // single-macrotask flush, so poll instead of asserting a snapshot.
-    await vi.waitFor(() => {
-      for (const name of [
-        'feedback:created',
-        'feedback:answered',
-        'feedback:status-changed',
-        'feedback:commented',
-      ]) {
-        expect(bus.listeners.has(name), `listener for ${name}`).toBe(true)
-      }
-    })
+  it('registers ONE handler on the session-events registry', () => {
+    // Idempotence — repeated beforeEach inits must not stack.
+    expect(ev.handlers).toHaveLength(1)
   })
 
-  it('feedback:commented bumps revision without touching the badge', async () => {
+  it("reason 'commented' bumps revision without touching the badge", async () => {
     const before = useFeedbackStore.getState().revision
-    fire('feedback:commented', { id: 'fb-1', projectPath: '/tmp/ws', author: 'scout' })
+    fire('commented')
     expect(useFeedbackStore.getState().revision).toBe(before + 1)
     await flush()
     expect(api.fetchWaitingCount).not.toHaveBeenCalled()
   })
 
-  it('feedback:commented never fires the desktop notification', async () => {
-    // Fire a comment, then a created CONTROL through the same pipeline
+  it("reason 'commented' never fires the desktop notification", async () => {
+    // Fire a comment, then a 'created' CONTROL through the same pipeline
     // — waiting for the control's notification proves the notify seam
     // was live the whole time, so the comment's silence isn't vacuous.
-    fire('feedback:commented', { id: 'fb-1', projectPath: '/tmp/ws', author: 'owner' })
-    fire('feedback:created', {
-      id: 'fb-2',
-      projectPath: '/tmp/ws',
-      title: 'Which port?',
-      kind: 'question',
-      priority: 3,
-      agentName: 'scout',
-    })
+    fire('commented')
+    fire('created')
     await vi.waitFor(() => expect(notification.send).toHaveBeenCalled())
     await flush()
     expect(notification.send).toHaveBeenCalledTimes(1)
-    expect(notification.send).toHaveBeenCalledWith({ title: 'scout', body: 'Which port?' })
+    // The lean refetch signal carries no agentName/title — generic copy.
+    expect(notification.send).toHaveBeenCalledWith({ title: 'Agent', body: 'New feedback' })
   })
 
-  it('feedback:answered and feedback:status-changed bump revision and re-count the badge', async () => {
+  it("reason 'created' also re-counts the badge", async () => {
     const before = useFeedbackStore.getState().revision
-    fire('feedback:answered', { id: 'fb-3', projectPath: '/tmp/ws' })
-    fire('feedback:status-changed', { id: 'fb-3', projectPath: '/tmp/ws', status: 'resolved' })
+    fire('created')
+    expect(useFeedbackStore.getState().revision).toBe(before + 1)
+    await flush()
+    expect(api.fetchWaitingCount).toHaveBeenCalledTimes(1)
+  })
+
+  it("reasons 'answered' and 'status-changed' bump revision and re-count the badge", async () => {
+    const before = useFeedbackStore.getState().revision
+    fire('answered')
+    fire('status-changed')
     expect(useFeedbackStore.getState().revision).toBe(before + 2)
     await flush()
     expect(api.fetchWaitingCount).toHaveBeenCalledTimes(2)

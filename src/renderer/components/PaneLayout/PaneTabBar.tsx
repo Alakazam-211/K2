@@ -27,10 +27,15 @@ interface AgentItemData {
   section?: string
 }
 
+interface BrowserItemData {
+  url: string
+  title?: string
+}
+
 interface Item {
   id: string
-  type: 'terminal' | 'file-viewer' | 'agent'
-  data: TerminalItemData | FileViewerItemData | AgentItemData
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser'
+  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData
   pinned?: boolean
 }
 
@@ -52,6 +57,15 @@ function getTabLabel(item: Item): string {
   if (item.type === 'agent') {
     const data = item.data as AgentItemData
     return data.agentName === '__workspace__' ? 'Work Board' : `Agent: ${data.agentName}`
+  }
+  if (item.type === 'browser') {
+    const data = item.data as BrowserItemData
+    if (data.title) return data.title
+    try {
+      return new URL(data.url).hostname || 'Browser'
+    } catch {
+      return 'Browser'
+    }
   }
   return 'Unknown'
 }

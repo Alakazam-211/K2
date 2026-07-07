@@ -450,6 +450,14 @@ pub fn is_agent_verb(path: &str) -> bool {
         // daemon/sessions/terminal). The cell server pins it to THIS session id
         // (the body never names the session), so a cell can only write its own log.
         "/cli/respond",
+        // 0.40.34 browser-open: the staged k2-open shim's egress from a
+        // SCOPED session (K2_HOOK_SOCK + K2_HOOK_TOKEN) — xdg-open/$BROWSER
+        // inside the cell forwards the URL so the CONNECTED app opens it.
+        // Carries no escalation: the handler validates http/https-only and
+        // broadcasts an app-level `open_url` event; it never touches the
+        // filesystem and never shells out. Not under any DENY_PREFIX
+        // (`/cli/browser/` is new with this verb).
+        "/cli/browser/open-url",
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
@@ -950,6 +958,18 @@ mod tests {
         // Near-miss: a `respond`-prefixed sub-path is NOT auto-allowed (exact match
         // only — `/cli/respond` is in ALLOW_EXACT, not ALLOW_PREFIXES).
         assert!(!is_agent_verb("/cli/respond/anything"), "respond is exact-match only");
+    }
+
+    #[test]
+    fn is_agent_verb_allows_browser_open_url_exact_only() {
+        // 0.40.34: the shim's scoped-session egress verb is allowlisted…
+        assert!(
+            is_agent_verb("/cli/browser/open-url"),
+            "shim must be able to forward URLs over the scoped channel"
+        );
+        // …EXACT match only — no `/cli/browser/` prefix widening.
+        assert!(!is_agent_verb("/cli/browser/open-url/extra"));
+        assert!(!is_agent_verb("/cli/browser/anything-else"));
     }
 
     #[test]

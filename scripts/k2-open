@@ -1,0 +1,97 @@
+#!/bin/sh
+# k2-open — K2 browser-open shim (staged by the K2 daemon; do not edit).
+# K2_OPEN_SHIM_VERSION: 1
+#
+# 0.40.34 (Rosson): when a process inside a K2 terminal session runs
+# `xdg-open <url>` / honors $BROWSER, the URL must surface in the
+# CONNECTED K2 app as an event (the app opens it in a browser tab)
+# instead of launching a browser on the daemon's machine — which on a
+# headless server does nothing at all.
+#
+# Contract (xdg-open/open CLI shape): exactly one URL argument in the
+# typical case; `open -u <url>` is tolerated; other options are skipped
+# loosely. If the args are unparseable or the target isn't http(s), we
+# fall through to the REAL system opener when one exists (/usr/bin/open
+# on macOS, the next xdg-open on PATH skipping ourselves), else exit 0
+# silently.
+#
+# Auth order (mirrors notify.sh / the k2 CLI):
+#   1. Scoped session (K2_HOOK_SOCK + K2_HOOK_TOKEN): POST the verb over
+#      the per-cell unix socket with a Bearer header (the scoped token is
+#      allowlisted for /cli/browser/open-url in the daemon's
+#      require_hook capability gate).
+#   2. Owner fallback: ~/.k2/heartbeat.{port,token} → loopback TCP with
+#      the standard ?token= query gate.
+# The token is NEVER echoed or logged by this script.
+
+# ── parse: find the URL argument ─────────────────────────────────────
+url=""
+want_u=0
+for a in "$@"; do
+    if [ "$want_u" = 1 ]; then
+        url="$a"
+        want_u=0
+        continue
+    fi
+    case "$a" in
+        -u) want_u=1 ;;          # `open -u <url>` (loose)
+        -*) ;;                   # skip other options loosely
+        *) [ -z "$url" ] && url="$a" ;;
+    esac
+done
+
+is_http=0
+case "$url" in
+    http://*|https://*|HTTP://*|HTTPS://*) is_http=1 ;;
+esac
+
+if [ "$is_http" = 1 ] && command -v curl >/dev/null 2>&1; then
+    # 1. Scoped-session channel: per-cell UDS + scoped hook token.
+    _sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    _hook_tok="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
+    if [ -n "$_sock" ] && [ -n "$_hook_tok" ] && [ -S "$_sock" ]; then
+        if curl -fsS --max-time 5 --unix-socket "$_sock" \
+            -H "Authorization: Bearer $_hook_tok" \
+            --data-urlencode "url=$url" \
+            "http://k2/cli/browser/open-url" >/dev/null 2>&1; then
+            exit 0
+        fi
+    fi
+    # 2. Owner fallback: daemon loopback with the disk owner credentials.
+    _k2_home="${HOME}/.k2"
+    if [ -r "${_k2_home}/heartbeat.port" ] && [ -r "${_k2_home}/heartbeat.token" ]; then
+        _port=$(cat "${_k2_home}/heartbeat.port" 2>/dev/null)
+        _tok=$(cat "${_k2_home}/heartbeat.token" 2>/dev/null)
+        if [ -n "$_port" ] && [ -n "$_tok" ]; then
+            if curl -fsS --max-time 5 \
+                --data-urlencode "url=$url" \
+                "http://127.0.0.1:${_port}/cli/browser/open-url?token=${_tok}" >/dev/null 2>&1; then
+                exit 0
+            fi
+        fi
+    fi
+fi
+
+# ── fall through to the REAL system opener (never ourselves) ─────────
+if [ -x /usr/bin/open ]; then
+    exec /usr/bin/open "$@"
+fi
+# Next xdg-open on PATH, skipping anything in our own directory
+# (~/.k2/bin stages a copy of this script under the name `xdg-open`
+# on Linux, so a naive lookup would recurse).
+self_dir=$(dirname "$0")
+_saved_ifs="$IFS"
+IFS=:
+for d in $PATH; do
+    IFS="$_saved_ifs"
+    [ -n "$d" ] || continue
+    [ "$d" = "$self_dir" ] && continue
+    cand="$d/xdg-open"
+    if [ -x "$cand" ] && [ "$cand" != "$0" ]; then
+        exec "$cand" "$@"
+    fi
+done
+IFS="$_saved_ifs"
+# Headless box with no real opener: swallow silently (a broken no-op
+# is worse than a quiet one — the K2 channel above is the real path).
+exit 0

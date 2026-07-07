@@ -338,6 +338,52 @@ pub enum SessionEvent {
     PresenceChanged {
         roster: Vec<crate::presence::RosterUser>,
     },
+
+    /// 0.40.34 — a process on the daemon's machine asked to open a URL
+    /// (the `~/.k2/bin/k2-open` shim intercepting `xdg-open`/`$BROWSER`,
+    /// or the `/cli/fs/open-external` route for an http(s) target).
+    /// APP-LEVEL: forwarded to EVERY `/cli/sessions/events` subscriber
+    /// regardless of `?path=` (see `event_matches_workspace`) so the
+    /// CONNECTED app — local or across the K2 Connect tunnel — can open
+    /// the URL in a browser tab instead of the daemon's (possibly
+    /// headless) machine launching anything.
+    ///
+    /// Wire: `{ "kind": "open_url", "url": string, "source": string }`.
+    /// `url` is validated at the emit sites (http/https only, ≤2048
+    /// chars). `source` says who asked: `"shim"` (the staged k2-open
+    /// shim via `POST /cli/browser/open-url`) or `"terminal-link"`
+    /// (the `/cli/fs/open-external` route). Clients may ignore it.
+    OpenUrl { url: String, source: String },
+
+    /// Remote live-update fix — SOMETHING about the project-group set
+    /// changed (membership, PoC, structure, layout, or a chat message).
+    /// APP-LEVEL twin of the legacy `project-group:*` HookEvents, which
+    /// ride the loopback-only `/events` WS → Tauri bus and therefore
+    /// never reach a K2 Connect client. Emitted ADDITIVELY alongside
+    /// every project-group HookEvent (see `project_group_routes.rs::emit`)
+    /// so a remote renderer's Projects page/badge refetches live.
+    ///
+    /// Wire: `{ "kind": "project_groups_changed", "reason": string }`.
+    /// `reason` is the legacy hook name minus its `project-group:`
+    /// prefix — one of `groups-changed` | `members-changed` |
+    /// `poc-changed` | `layout-changed` | `message-created` — so the
+    /// consumer can keep per-event behavior. Deliberately payload-lean
+    /// otherwise: it's a refetch signal, consumers re-fetch canonical
+    /// truth rather than patching from a diff (the ProjectsChanged
+    /// convention).
+    ProjectGroupsChanged { reason: String },
+
+    /// Remote live-update fix — the feedback set changed (item created /
+    /// answered / status flipped / comment stored). APP-LEVEL twin of the
+    /// legacy `feedback:*` HookEvents (loopback-only bus, same story as
+    /// [`SessionEvent::ProjectGroupsChanged`]). Emitted ADDITIVELY
+    /// alongside every feedback HookEvent (see `feedback_routes.rs::emit`).
+    ///
+    /// Wire: `{ "kind": "feedback_changed", "reason": string }` with
+    /// `reason` = the legacy hook name minus its `feedback:` prefix —
+    /// one of `created` | `answered` | `status-changed` | `commented`.
+    /// Refetch signal only, no item payload.
+    FeedbackChanged { reason: String },
 }
 
 static SENDER: OnceLock<broadcast::Sender<SessionEvent>> = OnceLock::new();
@@ -843,6 +889,51 @@ mod tests {
         assert_eq!(row["connectedAt"], 1_700_000_000i64);
         let row_obj = row.as_object().unwrap();
         assert_eq!(row_obj.len(), 6, "unexpected roster row keys: {row_obj:?}");
+    }
+
+    /// 0.40.34 FROZEN WIRE CONTRACT: `{ "kind": "open_url", "url":
+    /// string, "source": string }`. The renderer's browser-tab consumer
+    /// codes against exactly these keys; a tag/field drift fails CI
+    /// loudly (same discipline as the 0.39.39 events above).
+    #[test]
+    fn open_url_frozen_contract() {
+        let json = as_json(&SessionEvent::OpenUrl {
+            url: "https://example.com/docs?q=1".into(),
+            source: "shim".into(),
+        });
+        assert_eq!(json["kind"], "open_url");
+        assert_eq!(json["url"], "https://example.com/docs?q=1");
+        assert_eq!(json["source"], "shim");
+        assert_keys(&json, &["kind", "url", "source"]);
+    }
+
+    /// Remote live-update FROZEN WIRE CONTRACT: `{ "kind":
+    /// "project_groups_changed", "reason": string }`. The renderer's
+    /// `stores/project-groups.ts` consumer switches on `reason` (the
+    /// legacy hook name minus its `project-group:` prefix); a tag/field
+    /// drift fails CI loudly (the open_url discipline).
+    #[test]
+    fn project_groups_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::ProjectGroupsChanged {
+            reason: "members-changed".into(),
+        });
+        assert_eq!(json["kind"], "project_groups_changed");
+        assert_eq!(json["reason"], "members-changed");
+        assert_keys(&json, &["kind", "reason"]);
+    }
+
+    /// Remote live-update FROZEN WIRE CONTRACT: `{ "kind":
+    /// "feedback_changed", "reason": string }`. The renderer's
+    /// `stores/feedback.ts` consumer switches on `reason` (the legacy
+    /// hook name minus its `feedback:` prefix).
+    #[test]
+    fn feedback_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::FeedbackChanged {
+            reason: "created".into(),
+        });
+        assert_eq!(json["kind"], "feedback_changed");
+        assert_eq!(json["reason"], "created");
+        assert_keys(&json, &["kind", "reason"]);
     }
 
     /// P3c (D1) FROZEN WIRE CONTRACT: a `SessionAdded` for a REAL sandbox cell

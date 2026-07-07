@@ -595,6 +595,13 @@ async fn handle_one_request(
             // 0.39.39 #676 — daemon-canonical tab title write (token_ok
             // auth in the isolated arm below).
             | "/cli/workspace/set-tab-title"
+            // 0.40.34 — browser-open forwarding: the staged k2-open shim
+            // (xdg-open/$BROWSER inside a K2 session) POSTs the URL here;
+            // the handler broadcasts an app-level `open_url` session event
+            // so the CONNECTED app opens it in a browser tab. token_ok +
+            // require_post in the dedicated arm below; the scoped-token
+            // channel rides the per-cell UDS (cell_server), not this arm.
+            | "/cli/browser/open-url"
             // B3a (sandbox) — set the PER-WORKSPACE Anthropic API key (BYO
             // key). OWNER-ONLY (require_owner per-handler below) + POST so the
             // key rides the JSON body, never the URL-logged query string. The
@@ -2574,6 +2581,38 @@ async fn handle_one_request(
                 body: serde_json::json!({ "error": format!("worker join: {e}") })
                     .to_string(),
             });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
+        // POST /cli/browser/open-url — 0.40.34 browser-open forwarding.
+        // Body (form `url=` from the shim's curl --data-urlencode, or
+        // JSON `{"url": ...}`): validate http/https-only + length cap,
+        // then broadcast the app-level `open_url` session event so every
+        // connected app (local or across the K2 Connect tunnel) can open
+        // it in a browser tab. NO local open/xdg-open shell-out on this
+        // route, ever. token_ok (owner OR connect-user, same tier as the
+        // other /cli data writes — low risk: the payload is a validated
+        // URL broadcast, no filesystem/exec surface) + require_post per
+        // the feedback_post_only_route_guards house rule. Emit is a
+        // non-blocking broadcast send, so no spawn_blocking needed.
+        p if is_post && post_allowed && p == "/cli/browser/open-url" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let params = super::http::parse_params(&path, &query);
+            let result = crate::browser_routes::handle_open_url(&params, &body_bytes, "shim");
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }

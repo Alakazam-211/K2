@@ -654,6 +654,22 @@ impl DaemonPtySession {
             .entry("TERM_PROGRAM".to_string())
             .or_insert_with(|| "K2".to_string());
 
+        // 0.40.34 browser-open shim: children that run `xdg-open <url>`
+        // or honor `$BROWSER` must surface the URL in the CONNECTED K2
+        // app (as an `open_url` session event) instead of launching a
+        // browser on the daemon's — possibly headless — machine. The
+        // daemon staged `~/.k2/bin/k2-open` at boot (`open_shim::stage`);
+        // here we wire it into the child env. Runs AFTER the PATH
+        // enrichment above and PREPENDS `~/.k2/bin`, so our staged
+        // `xdg-open` (Linux) is FIRST in execvp lookup order and wins
+        // over any system one. `BROWSER` uses `.entry().or_insert_with`
+        // so a caller-supplied BROWSER always wins. Gated on the staged
+        // file actually existing — a failed staging never points
+        // children at a dangling path.
+        if let Some(shim) = crate::open_shim::staged_shim_path() {
+            apply_browser_shim_env(&mut child_env, &shim);
+        }
+
         // Sandbox P1 seam: the single backend-specific step — build
         // `tty::Options`, open the PTY, capture the child PID — now lives
         // behind `SandboxBackend::spawn`. The default `Passthrough` backend is
@@ -1734,6 +1750,32 @@ impl Drop for ViewerRegistration {
     }
 }
 
+/// 0.40.34 — wire the staged browser-open shim into a child env map.
+/// PURE (no disk, no globals) so the injection rule is unit-testable:
+///   - PATH: the shim's directory (`~/.k2/bin`) is PREPENDED via
+///     [`crate::open_shim::prepend_bin_dir`] — prepend means FIRST in
+///     `execvp` lookup order, so the staged `xdg-open` wins over any
+///     system one. Idempotent (no duplicate segment on respawn). A
+///     missing PATH key (can't happen after the enrichment above, but
+///     belt) gets just the bin dir.
+///   - BROWSER: filled with the shim's absolute path ONLY when the
+///     caller didn't set one (`entry().or_insert_with` — caller wins).
+fn apply_browser_shim_env(
+    child_env: &mut HashMap<String, String>,
+    shim: &std::path::Path,
+) {
+    if let Some(bin) = shim.parent() {
+        let merged = crate::open_shim::prepend_bin_dir(
+            child_env.get("PATH").map(String::as_str).unwrap_or(""),
+            bin,
+        );
+        child_env.insert("PATH".to_string(), merged);
+    }
+    child_env
+        .entry("BROWSER".to_string())
+        .or_insert_with(|| shim.to_string_lossy().into_owned());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1765,6 +1807,42 @@ mod tests {
         let cfg = DaemonPtyConfig::default();
         assert_eq!(cfg.label, "");
         assert_eq!(cfg.label_source, LabelSource::Pty);
+    }
+
+    // ── 0.40.34 browser-open shim env injection ─────────────────────
+
+    #[test]
+    fn browser_shim_env_prepends_bin_dir_and_sets_browser() {
+        let shim = std::path::Path::new("/home/u/.k2/bin/k2-open");
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+        apply_browser_shim_env(&mut env, shim);
+        // PREPEND = the shim dir is the FIRST segment, so execvp finds
+        // our staged xdg-open before any system one.
+        assert_eq!(
+            env.get("PATH").map(String::as_str),
+            Some("/home/u/.k2/bin:/usr/bin:/bin")
+        );
+        assert_eq!(
+            env.get("BROWSER").map(String::as_str),
+            Some("/home/u/.k2/bin/k2-open")
+        );
+    }
+
+    #[test]
+    fn browser_shim_env_respects_caller_browser_and_is_path_idempotent() {
+        let shim = std::path::Path::new("/home/u/.k2/bin/k2-open");
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), "/home/u/.k2/bin:/usr/bin".to_string());
+        env.insert("BROWSER".to_string(), "firefox".to_string());
+        apply_browser_shim_env(&mut env, shim);
+        // Caller-supplied BROWSER wins (or_insert semantics)…
+        assert_eq!(env.get("BROWSER").map(String::as_str), Some("firefox"));
+        // …and an already-present bin dir is not duplicated.
+        assert_eq!(
+            env.get("PATH").map(String::as_str),
+            Some("/home/u/.k2/bin:/usr/bin")
+        );
     }
 
     #[test]

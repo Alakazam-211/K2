@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, type AgentItemData, type TerminalItemData } from './tabs'
+import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, type AgentItemData, type TerminalItemData, type BrowserItemData } from './tabs'
 
 // ensurePinnedAgentTabForMode resolves the agent name via Tauri
 // `invoke`. Stub it so the async resolution completes deterministically
@@ -647,5 +647,133 @@ describe('D9 sandbox tab marker', () => {
     const before = useTabsStore.getState().tabs
     useTabsStore.getState().setTerminalSandboxBackend('does-not-exist', 'passthrough')
     expect(useTabsStore.getState().tabs).toBe(before)
+  })
+})
+
+/**
+ * Browser-pane arc (0.40.x) — 'browser' pane items.
+ *
+ * The page itself lives in a NATIVE child webview (src-tauri
+ * browser_* commands); the store only carries { url, title }. These
+ * tests cover the store surface: item shape, serialize→restore
+ * round-trip, the navigate-in-place reuse rule of openUrlInPane, and
+ * the setBrowserItemState stamp the current-URL poll uses.
+ */
+describe('browser pane items', () => {
+  beforeEach(reset)
+
+  function browserItems(tabIndex: number): Array<{ id: string; type: string; data: BrowserItemData }> {
+    const tab = useTabsStore.getState().tabs[tabIndex]
+    const pg = Array.from(tab.paneGroups.values())[0]
+    return pg.items.filter((i) => i.type === 'browser') as Array<{ id: string; type: string; data: BrowserItemData }>
+  }
+
+  it('openUrlInNewTab creates a tab with a single browser item and activates it', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/docs')
+
+    const state = useTabsStore.getState()
+    expect(state.tabs).toHaveLength(1)
+    const tab = state.tabs[0]
+    expect(state.activeTabId).toBe(tab.id)
+    // Tab title is the hostname (best-effort display label).
+    expect(tab.title).toBe('example.com')
+
+    const pgs = Array.from(tab.paneGroups.values())
+    expect(pgs).toHaveLength(1)
+    expect(pgs[0].items).toHaveLength(1)
+    const item = pgs[0].items[0]
+    expect(item.type).toBe('browser')
+    expect((item.data as BrowserItemData).url).toBe('https://example.com/docs')
+    expect(pgs[0].activeItemIndex).toBe(0)
+    // Mosaic tree is the single paneGroup leaf, like openFileInNewTab.
+    expect(tab.mosaicTree).toBe(pgs[0].id)
+  })
+
+  it('browser item survives a serialize → restore round-trip (url + title)', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/start')
+    const tab = useTabsStore.getState().tabs[0]
+    const pg = Array.from(tab.paneGroups.values())[0]
+    const itemId = pg.items[0].id
+    // Simulate the current-URL poll stamping in-page navigation + title.
+    useTabsStore.getState().setBrowserItemState(tab.id, pg.id, itemId, {
+      url: 'https://example.com/after-nav',
+      title: 'After Nav',
+    })
+
+    const layout = useTabsStore.getState().serializeCurrentLayout()
+    // The serialized shape is the additive SerializedBrowserItem.
+    const serializedItems = Object.values(layout.tabs[0].paneGroups)[0].items
+    expect(serializedItems).toHaveLength(1)
+    expect(serializedItems[0]).toMatchObject({
+      type: 'browser',
+      url: 'https://example.com/after-nav',
+      title: 'After Nav',
+    })
+
+    reset()
+    useTabsStore.getState().restoreLayout(layout, '/tmp/proj')
+
+    const restored = browserItems(0)
+    expect(restored).toHaveLength(1)
+    expect(restored[0].data.url).toBe('https://example.com/after-nav')
+    expect(restored[0].data.title).toBe('After Nav')
+    // Restore re-mints item ids (native views are re-created lazily).
+    expect(restored[0].id).not.toBe(itemId)
+  })
+
+  it('old layouts without browser items still restore unchanged', () => {
+    useTabsStore.getState().addTab('/tmp/proj', { title: 'Terminal 1' })
+    const layout = useTabsStore.getState().serializeCurrentLayout()
+
+    reset()
+    useTabsStore.getState().restoreLayout(layout, '/tmp/proj')
+
+    const tabs = useTabsStore.getState().tabs
+    expect(tabs).toHaveLength(1)
+    const items = Array.from(tabs[0].paneGroups.values())[0].items
+    expect(items).toHaveLength(1)
+    expect(items[0].type).toBe('terminal')
+  })
+
+  it('openUrlInPane reuses the existing unpinned browser item (navigate-in-place)', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com/a')
+    const tabId = useTabsStore.getState().tabs[0].id
+
+    useTabsStore.getState().openUrlInPane(tabId, 'https://example.com/b')
+
+    const items = browserItems(0)
+    expect(items).toHaveLength(1)
+    expect(items[0].data.url).toBe('https://example.com/b')
+  })
+
+  it('openUrlInPane appends a new browser item when none exists in the active pane group', () => {
+    useTabsStore.getState().addTab('/tmp/proj', { title: 'Terminal 1' })
+    const tabId = useTabsStore.getState().tabs[0].id
+
+    useTabsStore.getState().openUrlInPane(tabId, 'https://example.com/new')
+
+    const tab = useTabsStore.getState().tabs[0]
+    const pg = Array.from(tab.paneGroups.values())[0]
+    expect(pg.items).toHaveLength(2)
+    expect(pg.items[0].type).toBe('terminal')
+    expect(pg.items[1].type).toBe('browser')
+    expect((pg.items[1].data as BrowserItemData).url).toBe('https://example.com/new')
+    // The new browser item becomes the active item.
+    expect(pg.activeItemIndex).toBe(1)
+  })
+
+  it('setBrowserItemState merges partial updates immutably', () => {
+    useTabsStore.getState().openUrlInNewTab('https://example.com')
+    const before = useTabsStore.getState().tabs[0]
+    const pg = Array.from(before.paneGroups.values())[0]
+    const itemId = pg.items[0].id
+
+    useTabsStore.getState().setBrowserItemState(before.id, pg.id, itemId, { title: 'Example' })
+
+    const after = useTabsStore.getState().tabs[0]
+    expect(after).not.toBe(before)
+    const item = Array.from(after.paneGroups.values())[0].items[0]
+    expect((item.data as BrowserItemData).url).toBe('https://example.com')
+    expect((item.data as BrowserItemData).title).toBe('Example')
   })
 })

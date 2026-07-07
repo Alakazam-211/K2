@@ -54,9 +54,11 @@ interface PinSizeResponse {
 }
 
 /** Structural view of a tab item — matches both PaneTabBar's local
- *  Item shape and the tabs store's `Item` without importing either. */
+ *  Item shape and the tabs store's `Item` without importing either.
+ *  'browser' items (browser-pane arc) have no PTY grid and resolve to
+ *  null like file viewers. */
 export interface PinnableItem {
-  type: 'terminal' | 'file-viewer' | 'agent'
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser'
   data: unknown
 }
 

@@ -100,6 +100,10 @@ pub mod inbox;
 // Phase 2.5c: historical migration helpers (one-shot, sentinel-gated).
 pub mod migrations;
 pub mod llm;
+// 0.40.34 — browser-open shim staging (~/.k2/bin/k2-open): xdg-open /
+// $BROWSER inside a K2 session surfaces the URL in the connected app
+// instead of launching a browser on the daemon's (possibly headless) box.
+pub mod open_shim;
 pub mod perf;
 // Phase 2.5 follow-up — daemon port stability (sub-fix A of finding #547).
 pub mod port_claim;

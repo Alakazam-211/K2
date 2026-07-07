@@ -3,8 +3,9 @@ import { AlacrittyTerminalView } from '@/components/Terminal/AlacrittyTerminalVi
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { FileViewerPane } from '@/components/FileViewerPane/FileViewerPane'
 import { AgentPane } from '@/components/AgentPane/AgentPane'
+import { BrowserPane } from '@/components/BrowserPane/BrowserPane'
 import { useTabsStore } from '@/stores/tabs'
-import type { TerminalItemData, FileViewerItemData, AgentItemData } from '@/stores/tabs'
+import type { TerminalItemData, FileViewerItemData, AgentItemData, BrowserItemData } from '@/stores/tabs'
 import { useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import { PaneTabBar } from './PaneTabBar'
@@ -301,6 +302,20 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                   section={ad.section}
                   restoredSessionId={ad.sessionId}
                   onClose={() => handleClose(item.id)}
+                />
+              )
+            } else if (item.type === 'browser') {
+              // Browser-pane arc — the pane is a docking frame for a
+              // NATIVE child webview (src-tauri browser_* commands);
+              // BrowserPane reads useIsTabVisible() from the provider
+              // below to drive browser_set_visible.
+              const bd = item.data as BrowserItemData
+              content = (
+                <BrowserPane
+                  itemId={item.id}
+                  tabId={tabId}
+                  paneGroupId={paneGroupId}
+                  url={bd.url}
                 />
               )
             }

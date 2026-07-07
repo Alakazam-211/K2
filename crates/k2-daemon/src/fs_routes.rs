@@ -570,6 +570,43 @@ pub fn handle_open_external(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
+
+    // 0.40.34 — viewer-aware URL opening (closes the "Phase 3.1" caveat
+    // in `fs_commands::open_external` for http/https targets).
+    //
+    // RULE IMPLEMENTED: for an http(s) target we ALWAYS broadcast the
+    // app-level `open_url` session event (source "terminal-link") so
+    // every connected app — local or across the K2 Connect tunnel — can
+    // open it in a browser tab. We then SKIP the daemon-local
+    // open/xdg-open shell-out whenever there is AT LEAST ONE live
+    // `/cli/sessions/events` subscriber (`receiver_count() > 0` on the
+    // broadcast bus — cheap, exact): the viewer's browser is the right
+    // one, and on a headless server the local shell-out does nothing
+    // anyway. Only with ZERO subscribers (nobody watching to open it)
+    // do we fall back to the historical local open. Non-http targets
+    // (Finder/file-manager paths) keep the current local behavior
+    // unconditionally.
+    if crate::browser_routes::validate_open_url(&parsed.target).is_ok() {
+        let url = parsed.target.trim().to_string();
+        let _ = crate::session_events::emit(crate::session_events::SessionEvent::OpenUrl {
+            url,
+            source: "terminal-link".to_string(),
+        });
+        let subscribers = crate::session_events::sender().receiver_count();
+        if subscribers > 0 {
+            return CliResponse::ok_json(
+                serde_json::json!({
+                    "success": true,
+                    "message": format!(
+                        "Routed to {subscribers} connected app subscriber(s)"
+                    ),
+                })
+                .to_string(),
+            );
+        }
+        // else: fall through to the local opener below.
+    }
+
     match fsc::open_external(&parsed.target) {
         Ok(msg) => CliResponse::ok_json(
             serde_json::json!({ "success": true, "message": msg }).to_string(),
@@ -581,6 +618,64 @@ pub fn handle_open_external(body: &[u8]) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 0.40.34 viewer-aware open-external: with ≥1 live events-bus
+    /// subscriber, an http(s) target is BROADCAST (`open_url`, source
+    /// "terminal-link") and the daemon-local open/xdg-open shell-out is
+    /// SKIPPED — proven by the early-return "Routed to …" message (the
+    /// local path returns "Opened: …" / an error instead).
+    #[test]
+    fn open_external_routes_http_to_connected_subscriber_instead_of_local_open() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let probe = format!(
+                "https://probe.example/open-external-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            );
+            // A live subscriber = "an app is connected".
+            let mut rx = crate::session_events::subscribe();
+
+            let body = serde_json::json!({ "target": probe }).to_string();
+            let resp = handle_open_external(body.as_bytes());
+            assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+            assert!(
+                resp.body.contains("Routed to"),
+                "must skip the local opener when a subscriber is connected: {}",
+                resp.body
+            );
+
+            // The subscriber received the event (drain past contamination
+            // from other tests on the global bus).
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_millis(500);
+            loop {
+                let remaining =
+                    deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    panic!("did not receive probe open_url in time");
+                }
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(Ok(crate::session_events::SessionEvent::OpenUrl {
+                        url,
+                        source,
+                    })) if url == probe => {
+                        assert_eq!(source, "terminal-link");
+                        break;
+                    }
+                    Ok(Ok(_)) => continue,
+                    Ok(Err(_)) => panic!("receiver closed"),
+                    Err(_) => panic!("timed out waiting for probe"),
+                }
+            }
+        });
+    }
 
     #[test]
     fn compress_rejects_missing_path_before_creating_a_job() {

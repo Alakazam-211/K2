@@ -29,6 +29,7 @@ pub mod agents_routes;
 pub mod agent_retire;
 pub mod awareness_ws;
 pub mod boot_status;
+pub mod browser_routes;
 pub mod canonical_session;
 pub mod chat_routes;
 pub mod sandbox_chat_routes;

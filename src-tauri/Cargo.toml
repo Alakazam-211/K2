@@ -133,12 +133,13 @@ objc = "0.2"
 cocoa = "0.26"
 
 [features]
-default = []
+default = ["browser-pane"]
 # Embedded Browser Tab (PRD prd-browser-pane-v1.md). Pulls tauri's
 # `unstable` multiwebview API, which has documented whole-app side effects
-# (WindowEvent::Focused regression, tauri #12568) — so it stays OFF in
-# default/release builds until the browser-pane arc actually ships.
-# Spike builds: `cargo check -p k2 --features browser-pane`.
+# (WindowEvent::Focused regression, tauri #12568) — watch focus-dependent
+# paths after upgrades. ON by default since the browser-pane arc shipped
+# (renderer BrowserPane + tabs-store 'browser' items drive these commands).
+# Feature-less builds keep the inert stub: `cargo check -p k2 --no-default-features`.
 browser-pane = ["tauri/unstable"]
 
 [dev-dependencies]

@@ -40,6 +40,7 @@ mod agents_routes;
 mod agent_retire;
 mod awareness_ws;
 mod boot_status;
+mod browser_routes;
 mod canonical_session;
 mod chat_routes;
 mod sandbox_chat_routes;
@@ -478,6 +479,27 @@ async fn async_main() {
     // (terminal, etc.) can inject them into spawned child-process envs.
     k2_core::hook_config::set_port(port);
     k2_core::hook_config::set_token(token.clone());
+
+    // 0.40.34 — stage the browser-open shim (~/.k2/bin/k2-open; plus an
+    // `xdg-open` copy on Linux only). Embedded in the binary
+    // (include_str!) and written 0755 when missing/outdated (version-
+    // line compare), so an upgrade rolls it forward. The PTY env block
+    // (k2_core::terminal::daemon_pty) prepends ~/.k2/bin to child PATH
+    // and sets BROWSER to it, so `xdg-open <url>` / $BROWSER inside a
+    // K2 session surfaces the URL in the CONNECTED app (`open_url`
+    // event) instead of launching a browser on this machine. Failure is
+    // non-fatal: the env block gates on the staged file existing.
+    match k2_core::open_shim::stage() {
+        Ok(paths) => log_debug!(
+            "[daemon] browser-open shim staged: {}",
+            paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Err(e) => log_debug!("[daemon] WARN: stage browser-open shim: {e}"),
+    }
 
     log_debug!(
         "[daemon] Listening on 127.0.0.1:{} — daemon.{{port,token}} + heartbeat.{{port,token}} published to {}",

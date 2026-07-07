@@ -3,12 +3,9 @@ import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { daemonCliGet } from '@/lib/daemon-cli'
-import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore } from '@/stores/tabs'
-import { useReviewQueueStore } from '@/stores/review-queue'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useActiveAgentsStore } from '@/stores/active-agents'
-import { useAgentOpsStore } from '@/stores/agent-ops'
 import TimerButton from '@/components/Timer/TimerButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
@@ -135,12 +132,6 @@ export default function TopBar({
             )}
           </svg>
         </button>
-        {/* DEPRECATED (Rosson, 2026-07-06): Review Queue + Agent Ops fleet
-            view are retired from the top bar — the rewired ⌘J Running
-            Agents panel (canonical v2 session list) covers the need.
-            <ReviewQueueTopBarButton /> and <AgentOpsTopBarButton /> stay
-            compiled but unrendered; their components/stores/pages are
-            PLANNED FOR REMOVAL in the 0.40.31 cleanup arc. */}
         {/* Running Agents */}
         <RunningAgentsTopBarButton />
         {/* Back / Forward navigation */}
@@ -278,36 +269,6 @@ export default function TopBar({
   )
 }
 
-/** @deprecated Hidden from the top bar 2026-07-06; scheduled for removal
- *  with the Review Queue system in the 0.40.31 cleanup arc. */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function ReviewQueueTopBarButton(): React.JSX.Element | null {
-  const agenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
-  const pendingCount = useReviewQueueStore((s) => s.pendingCount)
-  if (!agenticEnabled) return null
-  return (
-    <button
-      onClick={() => useReviewQueueStore.getState().toggle()}
-      className="relative flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-      style={{
-        // @ts-expect-error -- Electron-specific CSS property
-        WebkitAppRegion: 'no-drag'
-      }}
-      title="Review Queue"
-    >
-      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-        <path d="M9 11l3 3L22 4" />
-        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-      </svg>
-      {pendingCount > 0 && (
-        <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-white bg-[var(--color-accent)] rounded-full px-0.5">
-          {pendingCount > 99 ? '99+' : pendingCount}
-        </span>
-      )}
-    </button>
-  )
-}
-
 function RunningAgentsTopBarButton(): React.JSX.Element {
   const agentCount = useActiveAgentsStore((s) => s.getActiveAgentsList().length)
   return (
@@ -329,28 +290,6 @@ function RunningAgentsTopBarButton(): React.JSX.Element {
           {agentCount > 99 ? '99+' : agentCount}
         </span>
       )}
-    </button>
-  )
-}
-
-/** @deprecated Hidden from the top bar 2026-07-06; the Agent Ops fleet
- *  view is superseded by the rewired ⌘J panel. Scheduled for removal in
- *  the 0.40.31 cleanup arc. */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function AgentOpsTopBarButton(): React.JSX.Element {
-  return (
-    <button
-      onClick={() => useAgentOpsStore.getState().open()}
-      className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-      style={{
-        // @ts-expect-error -- Electron-specific CSS property
-        WebkitAppRegion: 'no-drag'
-      }}
-      title="Agent Ops — fleet view (⌘⇧O)"
-    >
-      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 12h4l2 5 4-12 2 7h6" />
-      </svg>
     </button>
   )
 }

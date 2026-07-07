@@ -9,8 +9,6 @@ import FileTree from './components/FileTree/FileTree'
 import ChangesPanel from './components/ChangesPanel/ChangesPanel'
 import ChatHistory from './components/ChatHistory/ChatHistory'
 import WorkspacePanel from './components/WorkspacePanel/WorkspacePanel'
-import ReviewQueueModal from './components/ReviewQueueModal/ReviewQueueModal'
-import { useReviewQueueStore, startReviewQueuePolling, stopReviewQueuePolling } from './stores/review-queue'
 import TabbedPanel from './components/TabbedPanel/TabbedPanel'
 import { TerminalArea } from './components/Terminal/TerminalArea'
 import Settings from './components/Settings/Settings'
@@ -46,8 +44,6 @@ import { useSettingsStore } from './stores/settings'
 import { useCommandPaletteStore } from './stores/command-palette'
 import { useRunningAgentsStore } from './stores/running-agents'
 import RunningAgentsPanel from './components/RunningAgentsPanel/RunningAgentsPanel'
-import AgentOps from './components/AgentOps/AgentOps'
-import { useAgentOpsStore } from './stores/agent-ops'
 import FeedbackPage from './components/Feedback/FeedbackPage'
 import ProjectsPage from './components/Projects/ProjectsPage'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
@@ -215,9 +211,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
       <RemoveWorkspaceDialog />
       <CloneToDialog />
       <CommandPalette />
-      <ReviewQueueModal />
       <RunningAgentsPanel />
-      <AgentOps />
       <FeedbackPage />
       <ProjectsPage />
       <ContextMenu />
@@ -268,7 +262,6 @@ export default function App(): React.JSX.Element {
   const toggleCommandPalette = useCommandPaletteStore((s) => s.toggle)
 
   const toggleAssistant = useAssistantStore((s) => s.toggle)
-  const toggleReviewQueue = useReviewQueueStore((s) => s.toggle)
   const toggleRunningAgents = useRunningAgentsStore((s) => s.toggle)
 
   // Prewarm the daemon_ws_url cache at app mount. The underlying
@@ -358,7 +351,7 @@ export default function App(): React.JSX.Element {
     }
   }, [])
 
-  // Cmd+, settings, Cmd+K command palette, Cmd+L assistant, Cmd+P review queue
+  // Cmd+, settings, Cmd+K command palette, Cmd+L assistant, Cmd+J running agents
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.metaKey && e.key === ',') {
@@ -373,17 +366,10 @@ export default function App(): React.JSX.Element {
         e.preventDefault()
         toggleAssistant()
       }
-      if (e.metaKey && e.key === 'p') {
-        e.preventDefault()
-        toggleReviewQueue()
-      }
       if (e.metaKey && e.key === 'j') {
         e.preventDefault()
         toggleRunningAgents()
       }
-      // DEPRECATED 2026-07-06: ⌘⇧O Agent Ops fleet view retired (the ⌘J
-      // Running Agents panel is the surviving surface). Shortcut disabled;
-      // AgentOps component + store are planned for removal in 0.40.31.
       // Cmd+[ to go back, Cmd+] to go forward
       if (e.metaKey && !e.shiftKey && e.key === '[') {
         e.preventDefault()
@@ -422,7 +408,7 @@ export default function App(): React.JSX.Element {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [openSettings, toggleCommandPalette, toggleAssistant, toggleReviewQueue, toggleRunningAgents])
+  }, [openSettings, toggleCommandPalette, toggleAssistant, toggleRunningAgents])
 
   // Refocus last active terminal when clicking dead space (navbar, sidebar padding, etc.)
   // Interactive elements (inputs, textareas, buttons, contenteditable, select) keep their own focus.
@@ -559,9 +545,6 @@ export default function App(): React.JSX.Element {
       listen('menu:command-palette', () => {
         toggleCommandPalette()
       }).then((fn) => unlisteners.push(fn))
-      listen('menu:review-queue', () => {
-        useReviewQueueStore.getState().toggle()
-      }).then((fn) => unlisteners.push(fn))
       listen('menu:toggle-sidebar', () => {
         useSidebarStore.getState().toggle()
       }).then((fn) => unlisteners.push(fn))
@@ -619,14 +602,13 @@ export default function App(): React.JSX.Element {
   const [showQuitDialog, setShowQuitDialog] = useState(false)
   const [quitAgents, setQuitAgents] = useState<ReturnType<typeof useActiveAgentsStore.getState>['getActiveAgentsList']>([])
 
-  // Start agent polling + review queue polling (only when agentic systems enabled)
+  // Start agent polling (only when agentic systems enabled)
   const agenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
   useEffect(() => {
     if (agenticEnabled) {
       startAgentPolling()
-      startReviewQueuePolling()
     }
-    return () => { stopAgentPolling(); stopReviewQueuePolling() }
+    return () => { stopAgentPolling() }
   }, [agenticEnabled])
 
   // Check for updates on launch and every 3 hours
@@ -869,9 +851,7 @@ export default function App(): React.JSX.Element {
       <RemoveWorkspaceDialog />
       <CloneToDialog />
       <CommandPalette />
-      <ReviewQueueModal />
       <RunningAgentsPanel />
-      <AgentOps />
       <FeedbackPage />
       <ProjectsPage />
       <ContextMenu />

@@ -20,7 +20,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
-import { formatRelativeTime } from '@/components/AgentOps/ops-api'
+import { formatRelativeTime } from '@/lib/format-relative-time'
 import { KeyCombo } from '@/components/KeySymbol'
 import {
   commentFeedback,

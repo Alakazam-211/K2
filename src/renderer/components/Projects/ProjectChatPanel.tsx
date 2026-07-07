@@ -30,7 +30,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useWindowModeStore } from '@/stores/window-mode'
-import { formatRelativeTime } from '@/components/AgentOps/ops-api'
+import { formatRelativeTime } from '@/lib/format-relative-time'
 import { KeyCombo } from '@/components/KeySymbol'
 import {
   fetchProjectGroupMessages,

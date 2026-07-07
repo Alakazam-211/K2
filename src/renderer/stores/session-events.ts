@@ -125,21 +125,11 @@ export interface TunnelStatusChangedEvent {
   publicUrl: string | null
 }
 
-/** WORKSPACE-SCOPED — the per-workspace review queue changed. Replaces the
- *  `/cli/agents/review-queue` poll in `stores/review-queue.ts`. */
-export interface ReviewQueueChangedEvent {
-  kind: 'review_queue_changed'
-  workspacePath: string
-}
-
-/** WORKSPACE-SCOPED — a specific review (or its checklist) changed.
- *  Replaces the reviews+chats poll AND the review-checklist poll in
- *  `ReviewPanel.tsx`. `agent` is the agent/branch when known, else null. */
-export interface ReviewChangedEvent {
-  kind: 'review_changed'
-  workspacePath: string
-  agent: string | null
-}
+// NOTE (0.40.31): the WORKSPACE-SCOPED review events (`review_queue_changed`,
+// `review_changed`) are still broadcast by the daemon (the `k2 review` system
+// lives on), but this app no longer consumes them — the Review Queue modal +
+// ReviewPanel surfaces were deleted with the 0.40.31 cleanup. Unknown kinds
+// fall through every subscriber's `default` arm, so no types are needed here.
 
 /** WORKSPACE-SCOPED — a tab's title changed (daemon-canonical, #676). A
  *  rename in one client/window broadcasts here so every other client
@@ -234,8 +224,6 @@ export type SessionEventMessage =
   | LlmStatusChangedEvent
   | AgentStatusChangedEvent
   | TunnelStatusChangedEvent
-  | ReviewQueueChangedEvent
-  | ReviewChangedEvent
   | TabTitleChangedEvent
   | TabOrderChangedEvent
   | HeartbeatStateChangedEvent
@@ -754,153 +742,6 @@ export function subscribeToActiveState(): UnsubscribeFn {
       if (stopped) return
       console.debug(
         `[active-state] WS closed (code=${ev.code}, reason="${ev.reason ?? ''}") — scheduling reconnect`,
-      )
-      triggerReconnect()
-    }
-  }
-
-  void openSocket()
-
-  return () => {
-    stopped = true
-    clearReconnect()
-    if (socket) {
-      try {
-        socket.close(1000, 'unsubscribe')
-      } catch {
-        // ignore
-      }
-      socket = null
-    }
-  }
-}
-
-// ── Workspace-scoped review subscription (#675/#677) ───────────────────────
-//
-// The Wave B WORKSPACE-SCOPED review events (`review_queue_changed`,
-// `review_changed`) are forwarded only to subscribers whose `?path=` matches
-// the carried `workspacePath` (cwd-prefix rule, daemon-side
-// `event_matches_workspace`). So unlike the app-level llm/agent/tunnel
-// events, review events need a WS opened with the workspace path. This
-// helper opens that per-workspace socket and invokes the caller's handlers.
-//
-// Consumers (`stores/review-queue.ts`, `ReviewPanel.tsx`) call this with the
-// active workspace path and re-fetch the review queue / review detail +
-// checklist on each event. On (re)connect (`onHello`) they re-snapshot to
-// backfill any events missed during a drop. Tearing down + re-subscribing on
-// a workspace switch is the caller's responsibility (the path is baked into
-// the URL).
-
-export interface WorkspaceReviewHandlers {
-  /** A review was approved / rejected / had changes requested, or a
-   *  checklist mutation altered queue membership. */
-  onReviewQueueChanged?: (event: ReviewQueueChangedEvent) => void
-  /** A specific review (or its checklist) changed. */
-  onReviewChanged?: (event: ReviewChangedEvent) => void
-  /** Fires after each successful (re)connect — re-snapshot here. */
-  onHello?: (event: HelloEvent) => void
-}
-
-/** Subscribe to WORKSPACE-SCOPED review events for one workspace path.
- *  Returns an unsubscribe fn that tears down the WS + reconnect loop. */
-export function subscribeToWorkspaceReviewEvents(
-  workspacePath: string,
-  handlers: WorkspaceReviewHandlers,
-): UnsubscribeFn {
-  let socket: WebSocket | null = null
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let backoffMs = INITIAL_BACKOFF_MS
-  let stopped = false
-
-  const clearReconnect = (): void => {
-    if (reconnectTimer !== null) {
-      clearTimeout(reconnectTimer)
-      reconnectTimer = null
-    }
-  }
-
-  const scheduleReconnect = (): void => {
-    if (stopped) return
-    clearReconnect()
-    const delay = backoffMs
-    backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS)
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null
-      void openSocket()
-    }, delay)
-  }
-
-  const triggerReconnect = (): void => {
-    if (stopped) return
-    if (reconnectTimer !== null) return
-    scheduleReconnect()
-  }
-
-  const openSocket = async (): Promise<void> => {
-    if (stopped) return
-    let creds: DaemonWsAvailable
-    try {
-      creds = await getDaemonWs()
-    } catch (err) {
-      invalidateDaemonWs()
-      console.warn('[review-events] daemon credentials unavailable, retrying:', err)
-      scheduleReconnect()
-      return
-    }
-    if (stopped) return
-
-    const url = `${daemonWsBase(creds)}/cli/sessions/events?path=${encodeURIComponent(workspacePath)}&token=${encodeURIComponent(creds.token)}`
-    let ws: WebSocket
-    try {
-      ws = new WebSocket(url)
-    } catch (err) {
-      console.warn('[review-events] WS construction failed:', err)
-      scheduleReconnect()
-      return
-    }
-    socket = ws
-
-    ws.onopen = () => {
-      backoffMs = INITIAL_BACKOFF_MS
-    }
-
-    ws.onmessage = (ev) => {
-      const raw = typeof ev.data === 'string' ? ev.data : null
-      if (raw === null) return
-      let msg: SessionEventMessage
-      try {
-        msg = JSON.parse(raw) as SessionEventMessage
-      } catch (err) {
-        console.warn('[review-events] failed to parse frame:', err, raw)
-        return
-      }
-      switch (msg.kind) {
-        case 'hello':
-          handlers.onHello?.(msg)
-          break
-        case 'review_queue_changed':
-          handlers.onReviewQueueChanged?.(msg)
-          break
-        case 'review_changed':
-          handlers.onReviewChanged?.(msg)
-          break
-        default:
-          // session_added/removed/renamed + app-level events arrive on this
-          // socket too (cwd-match or app-level); the dedicated subscribers
-          // own those — ignore here.
-          break
-      }
-    }
-
-    ws.onerror = () => {
-      triggerReconnect()
-    }
-
-    ws.onclose = (ev) => {
-      if (socket === ws) socket = null
-      if (stopped) return
-      console.debug(
-        `[review-events] WS closed (code=${ev.code}, reason="${ev.reason ?? ''}") — scheduling reconnect`,
       )
       triggerReconnect()
     }

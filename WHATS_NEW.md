@@ -3,6 +3,30 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.34 — The web comes to K2
+
+- **A real browser tab.** K2 can now open web pages in a native browser
+  pane — a new tab type alongside terminals and files, with an address
+  bar. It's the foundation for agents that browse.
+- **Terminal links open in K2 — even from remote servers.** When anything
+  in a session opens a URL (`xdg-open`, `$BROWSER`, or clicking a link in
+  the terminal), it now opens as a K2 browser tab on your screen — even
+  when the session runs on a headless server an ocean away, where
+  "opening a browser" used to mean nothing happening on a machine with no
+  display.
+- **Remote servers feel live now.** Project members, project chat, and
+  feedback used to update in real time only on your local machine — on a
+  hosted server you had to leave the page and come back. All of it now
+  streams live over the same channel that follows your connection.
+- **Copying inside TUIs works across the tunnel.** When a terminal app
+  copies your selection (OSC 52), the text now lands on the clipboard of
+  the person who selected it — and only theirs — whether the session is
+  local or on a remote host.
+- **API keys can finally reach workspaces.** `k2 api-key create` gained
+  `--workspaces` ('*' or a list) — keys minted without a grant authorize
+  nothing on the /v1 API by design, and the CLI previously had no way to
+  say otherwise (it now warns loudly when you mint an ungranted key).
+
 ## 0.40.33 — Your files, where you left them
 
 - **Dragging files into K2 always copies now — never moves.** Dropping a

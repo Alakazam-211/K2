@@ -331,6 +331,14 @@ export default function App(): React.JSX.Element {
   // — so we never double-handle a drop those listeners already consumed.
   useEffect(() => {
     const unlisteners: Array<() => void> = []
+    // Same async-registration leak guard as the menu-listener effect
+    // below: a remount before listen() resolves would leak a live
+    // duplicate handler (= double uploads on window-chrome drops).
+    let ddTorndown = false
+    const ddTrack = (fn: () => void) => {
+      if (ddTorndown) fn()
+      else unlisteners.push(fn)
+    }
     import('@tauri-apps/api/event').then(({ listen }) => {
       listen<{ paths: string[]; position: { x: number; y: number } }>(
         'tauri://drag-drop',
@@ -352,9 +360,10 @@ export default function App(): React.JSX.Element {
           // True miss on window chrome → prompt for a host destination.
           void executeRemoteDrop(paths, { kind: 'miss' }, {})
         },
-      ).then((fn) => unlisteners.push(fn))
+      ).then(ddTrack)
     })
     return () => {
+      ddTorndown = true
       unlisteners.forEach((fn) => fn())
     }
   }, [])
@@ -490,26 +499,38 @@ export default function App(): React.JSX.Element {
   // Listen for menu events from Tauri backend
   useEffect(() => {
     const unlisteners: Array<() => void> = []
+    // Async-registration leak guard: `listen()` resolves AFTER this effect
+    // may have been torn down (App remounts on host switch via its
+    // ConnectionGate key). The old code pushed the unlisten fn into an
+    // array the cleanup had ALREADY drained — leaking one live listener
+    // per remount, so a single menu event fired N times (an amplifier in
+    // the Cmd+Shift+T multi-spawn bug). If we're torn down by the time a
+    // listener registers, unlisten it immediately instead of keeping it.
+    let torndown = false
+    const track = (fn: () => void) => {
+      if (torndown) fn()
+      else unlisteners.push(fn)
+    }
     import('@tauri-apps/api/event').then(({ listen }) => {
-      listen('menu:open-settings', () => openSettings()).then((fn) => unlisteners.push(fn))
+      listen('menu:open-settings', () => openSettings()).then(track)
       listen('menu:check-for-updates', () => {
         useSettingsStore.setState({ pendingUpdateCheck: true })
         openSettings('general')
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('menu:new-document', () => {
         const ps = useProjectsStore.getState()
         const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
         const ws = proj?.workspaces?.find((w) => w.id === ps.activeWorkspaceId)
         const cwd = ws?.worktreePath ?? proj?.path ?? '~'
         useTabsStore.getState().openUntitledDocument(cwd)
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('menu:new-tab', () => {
         const ps = useProjectsStore.getState()
         const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
         const ws = proj?.workspaces?.find((w) => w.id === ps.activeWorkspaceId)
         const cwd = ws?.worktreePath ?? proj?.path ?? '~'
         useTabsStore.getState().addTab(cwd)
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('menu:launch-agent', async () => {
         const ps = useProjectsStore.getState()
         const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
@@ -521,7 +542,7 @@ export default function App(): React.JSX.Element {
         if (defaultPreset) {
           state.launchPreset(defaultPreset.id, cwd, 'tab')
         }
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('menu:split-pane', () => {
         const tabsState = useTabsStore.getState()
         const activeTab = tabsState.tabs.find((t) => t.id === tabsState.activeTabId)
@@ -540,31 +561,31 @@ export default function App(): React.JSX.Element {
         const cwd = ws?.worktreePath ?? proj?.path ?? '~'
         const newPaneId = crypto.randomUUID()
         tabsState.splitPane(activeTab.id, firstPaneId, newPaneId, { type: 'terminal', terminalId: newPaneId, cwd }, 'column')
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('menu:open-workspace', () => {
         pickWorkspaceFolder().then((path) => {
           if (path) useProjectsStore.getState().addProject(path)
         })
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('menu:close-tab', () => {
         const { activeTabId, removeTab } = useTabsStore.getState()
         if (activeTabId) removeTab(activeTabId)
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('menu:command-palette', () => {
         toggleCommandPalette()
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       // 0.40.31 — the View-menu "Review Queue" item became "Running
       // Agents" (⌘J): the native accelerator consumes the keystroke on
       // macOS, so the menu event is how ⌘J reaches us from the menu path.
       listen('menu:running-agents', () => {
         useRunningAgentsStore.getState().toggle()
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('menu:toggle-sidebar', () => {
         useSidebarStore.getState().toggle()
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('menu:toggle-assistant', () => {
         toggleAssistant()
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('menu:focus-window', () => {
         const projectId = useProjectsStore.getState().activeProjectId
         if (projectId) {
@@ -572,7 +593,7 @@ export default function App(): React.JSX.Element {
             invoke('projects_open_focus_window', { projectId }).catch((e) => console.warn('[app]', e))
           })
         }
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       // 0.37.9 — there's no `menu:start-dictation` listener.
       // The Edit submenu's title "Edit" makes macOS auto-inject the
       // native `Start Dictation…` item itself (bound to the
@@ -586,18 +607,19 @@ export default function App(): React.JSX.Element {
         import('@tauri-apps/api/webview').then(m => m.getCurrentWebview().setZoom(
           (window as any).__k2soNativeZoom = Math.min(((window as any).__k2soNativeZoom ?? 1) + 0.2, 3)
         ))
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('app:zoom-out', () => {
         import('@tauri-apps/api/webview').then(m => m.getCurrentWebview().setZoom(
           (window as any).__k2soNativeZoom = Math.max(((window as any).__k2soNativeZoom ?? 1) - 0.2, 0.4)
         ))
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
       listen('app:zoom-reset', () => {
         (window as any).__k2soNativeZoom = 1
         import('@tauri-apps/api/webview').then(m => m.getCurrentWebview().setZoom(1))
-      }).then((fn) => unlisteners.push(fn))
+      }).then(track)
     })
     return () => {
+      torndown = true
       unlisteners.forEach((fn) => fn())
     }
   }, [openSettings, toggleAssistant, toggleCommandPalette])

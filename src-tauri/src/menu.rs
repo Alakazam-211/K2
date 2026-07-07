@@ -32,8 +32,14 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
         true,
         &[
             &MenuItem::with_id(handle, "new-document", "New Document", true, Some("CmdOrCtrl+N"))?,
-            &MenuItem::with_id(handle, "new-tab", "New Tab", true, Some("CmdOrCtrl+T"))?,
-            &MenuItem::with_id(handle, "launch-agent", "Launch Default Agent", true, Some("CmdOrCtrl+Shift+T"))?,
+            // NO accelerators on new-tab / launch-agent — the webview
+            // keydown handler (useTerminalShortcuts.ts) owns Cmd+T /
+            // Cmd+Shift+T. Binding them here TOO double-fires the spawn
+            // (one press = menu event + keydown = 2+ terminals; the
+            // multi-spawn bug, 2026-07-07). Same duplicate-binding trap
+            // tray.rs documents for Cmd+Q. Menu items stay clickable.
+            &MenuItem::with_id(handle, "new-tab", "New Tab", true, None::<&str>)?,
+            &MenuItem::with_id(handle, "launch-agent", "Launch Default Agent", true, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "split-pane", "Split Pane", true, Some("CmdOrCtrl+D"))?,
             &PredefinedMenuItem::separator(handle)?,
@@ -225,8 +231,20 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
 }
 
 fn emit_to_focused(app: &AppHandle, event: &str) {
-    // Emit to all windows — the focused one will handle it
-    for (_, win) in app.webview_windows() {
+    // Emit to the FOCUSED window only. The old "emit to all windows"
+    // loop meant every extra webview (Focus windows, project windows)
+    // ALSO ran the action — a second amplifier in the Cmd+Shift+T
+    // multi-spawn bug (one menu event = one spawn PER WINDOW). A menu
+    // action is user-initiated, so a focused window exists in practice;
+    // if none reports focused (edge: menu clicked during a focus
+    // transition), fall back to "main" rather than all.
+    let focused = app
+        .webview_windows()
+        .into_iter()
+        .find(|(_, w)| w.is_focused().unwrap_or(false));
+    if let Some((_, win)) = focused {
+        let _ = win.emit(event, ());
+    } else if let Some(win) = app.webview_windows().get("main") {
         let _ = win.emit(event, ());
     }
 }

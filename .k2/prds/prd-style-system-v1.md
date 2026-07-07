@@ -112,6 +112,8 @@ Switch applies instantly (no restart, no flash); Esc reverts within the preview 
 
 P1 is deliberately the largest *de-risking* step and the smallest *visible* step: everything after it is customization on safe rails. Standing build discipline applies (daemon-first where applicable, subagent worktrees cherry-picked, no prod reloads, release.sh, signed-bundle launch tests).
 
+**Execution reorder (2026-07-07, Rosson's compressed test window):** P3 (switching + Settings→Styles) and P4 (Paper light palette + gap presets) build BEFORE the bulk of P2, because they're what Rosson tests and they ride the existing var layer (~95% color-tokenized) without needing primitives. P2 proceeds in parallel/afterward as subagent waves: first a hex-in-TSX sweep (light-palette readiness), then primitives + directory conversion. Glass/Bezel (P5/P6) still require P2. Checkpoints A/C collapse into one combined Rosson session: daily-drive parity + switching + elasticity + light, all at once.
+
 **Branch strategy (ST6):** everything lands on `feat/style-system`, branched from main at kickoff. Subagent worktree commits cherry-pick onto *the branch*, not main. The branch rebases on main periodically to stay current with the 0.40.31 Linux arc, and merges to main only after a checkpoint passes (earliest: Checkpoint A).
 
 ## 7. Risks

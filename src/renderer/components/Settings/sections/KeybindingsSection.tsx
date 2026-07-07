@@ -229,7 +229,7 @@ function KeybindingRow({
     <div
       className={`flex items-center justify-between px-3 py-1.5 ${
         hasBorder ? 'border-b border-[var(--color-border)]' : ''
-      } ${conflict ? 'bg-red-500/10' : ''}`}
+      } ${conflict ? 'bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)]' : ''}`}
     >
       <span className="text-xs text-[var(--color-text-secondary)] flex-1">{hotkey.label}</span>
 
@@ -246,7 +246,7 @@ function KeybindingRow({
             onClick={onStartCapture}
             className={`px-2 py-0.5 text-xs border no-drag cursor-pointer ${
               conflict
-                ? 'bg-red-500/20 border-red-500/40 text-red-400'
+                ? 'bg-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] text-[var(--color-status-error-soft)]'
                 : 'bg-[var(--color-bg-surface)] border-[var(--color-border)] text-[var(--color-text-primary)]'
             } hover:border-[var(--color-text-muted)]`}
           >

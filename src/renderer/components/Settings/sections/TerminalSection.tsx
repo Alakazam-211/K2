@@ -114,7 +114,7 @@ export function TerminalSection(): React.JSX.Element {
             }`}
           >
             <span
-              className={`w-2.5 h-2.5 bg-white block transition-transform ${
+              className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
                 terminal.naturalTextEditing ? 'translate-x-3.5' : 'translate-x-0.5'
               }`}
             />
@@ -196,7 +196,7 @@ export function TerminalSection(): React.JSX.Element {
             }`}
           >
             <span
-              className={`w-2.5 h-2.5 bg-white block transition-transform ${
+              className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
                 openLinksInSplitPane ? 'translate-x-3.5' : 'translate-x-0.5'
               }`}
             />

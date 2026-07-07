@@ -129,7 +129,7 @@ export function CompanionSection(): React.JSX.Element {
             href={APP_DOWNLOAD_URL}
             target="_blank"
             rel="noreferrer"
-            className="flex-shrink-0 px-3 py-1 text-[11px] text-white bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer"
+            className="flex-shrink-0 px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer"
           >
             Get the app
           </a>
@@ -139,7 +139,7 @@ export function CompanionSection(): React.JSX.Element {
       {/* ── K2 Connect status (live) ──────────────────────────────── */}
       <div data-settings-id="companion.status">
         {connected ? (
-          <div className="px-3 py-3 border border-green-500/30 bg-green-500/5">
+          <div className="px-3 py-3 border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-ok)_5%,transparent)]">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 flex-shrink-0 rounded-full" style={{ backgroundColor: 'var(--color-status-ok)' }} />
               <span className="text-xs text-[var(--color-text-secondary)]">Connected</span>

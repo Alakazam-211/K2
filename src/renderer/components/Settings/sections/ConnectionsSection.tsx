@@ -58,9 +58,9 @@ import {
 const BTN_SECONDARY =
   'px-2 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
 const BTN_ACCENT =
-  'px-2 py-1 text-[11px] text-white bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
+  'px-2 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
 const BTN_DANGER =
-  'px-2 py-1 text-[11px] text-red-400 border border-red-400/40 hover:bg-red-400/10 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
+  'px-2 py-1 text-[11px] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
 // Orange/amber, mirroring the remote Restart/Update buttons on the General
 // settings tab (GeneralSection.tsx RestartHostRow/UpdateHostRow) so the
 // per-host Restart + Sign-in read as the same "remote host" action color.
@@ -344,19 +344,19 @@ export function ConnectionsSection(): React.JSX.Element {
               className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border border-[var(--color-border)] bg-[var(--color-bg-surface)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)]"
             >
               {draft.remember && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M2.5 6.5 L5 9 L9.5 3.5" />
                 </svg>
               )}
             </span>
             Remember password (OS keychain)
           </label>
-          {error && <div className="text-[10px] text-red-400">{error}</div>}
+          {error && <div className="text-[10px] text-[var(--color-status-error-soft)]">{error}</div>}
           <div className="flex gap-2 pt-1">
             <button
               onClick={() => void save()}
               disabled={busy}
-              className="px-3 py-1 text-[11px] text-white bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+              className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
             >
               {busy ? 'Verifying…' : 'Save'}
             </button>
@@ -750,7 +750,7 @@ function HostTile({
         <div
           className={`text-[10px] text-right ${
             activeRecovery.kind === 'signin-required'
-              ? 'text-red-400'
+              ? 'text-[var(--color-status-error-soft)]'
               : 'text-[var(--color-text-muted)]'
           }`}
         >
@@ -763,16 +763,16 @@ function HostTile({
           "Starting update for <server>…" phase text, and update errors.
           Fail loud, never silent. */}
       {restartMsg && (
-        <div className={`text-[10px] text-right ${restartMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-red-400'}`}>
+        <div className={`text-[10px] text-right ${restartMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-status-error-soft)]'}`}>
           {restartMsg.text}
         </div>
       )}
-      {checkError && <div className="text-[10px] text-right text-red-400">{checkError}</div>}
+      {checkError && <div className="text-[10px] text-right text-[var(--color-status-error-soft)]">{checkError}</div>}
       {summary && !checkError && (
         <div className="text-[10px] text-right text-[var(--color-text-muted)]">{summary.text}</div>
       )}
       {phaseText && <div className="text-[10px] text-right text-[var(--color-text-muted)]">{phaseText}</div>}
-      {updateError && <div className="text-[10px] text-right text-red-400">{updateError}</div>}
+      {updateError && <div className="text-[10px] text-right text-[var(--color-status-error-soft)]">{updateError}</div>}
     </div>
   )
 }

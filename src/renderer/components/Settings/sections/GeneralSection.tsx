@@ -145,7 +145,7 @@ export function GeneralSection(): React.JSX.Element {
               <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">You&apos;re on v{currentVersion}</p>
             </div>
             <button
-              className="px-3 py-1 text-xs font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
+              className="px-3 py-1 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
               onClick={() => useUpdateStore.getState().startDownload()}
             >
               Download
@@ -171,13 +171,13 @@ export function GeneralSection(): React.JSX.Element {
 
         {/* Ready to install */}
         {updateStatus === 'ready' && (
-          <div className="flex items-center justify-between p-3 bg-green-500/10 border border-green-500/30">
+          <div className="flex items-center justify-between p-3 bg-[color-mix(in_srgb,var(--color-status-ok)_10%,transparent)] border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)]">
             <div>
               <p className="text-xs text-[var(--color-text-primary)]">v{updateVersion} is ready to install</p>
               <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">The app will restart after installation</p>
             </div>
             <button
-              className="px-3 py-1 text-xs font-medium bg-green-500 text-white hover:bg-green-600 transition-colors no-drag cursor-pointer"
+              className="px-3 py-1 text-xs font-medium bg-[var(--color-status-ok)] text-[var(--color-on-accent)] hover:bg-green-600 transition-colors no-drag cursor-pointer"
               onClick={() => useUpdateStore.getState().installAndRelaunch()}
             >
               Install & Relaunch
@@ -187,8 +187,8 @@ export function GeneralSection(): React.JSX.Element {
 
         {/* Error */}
         {updateStatus === 'error' && (
-          <div className="p-3 border border-red-500/30 bg-red-500/5">
-            <p className="text-[10px] text-red-400">{updateError}</p>
+          <div className="p-3 border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)]">
+            <p className="text-[10px] text-[var(--color-status-error-soft)]">{updateError}</p>
             <div className="flex items-center gap-2 mt-2">
               <button
                 className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
@@ -253,13 +253,13 @@ export function GeneralSection(): React.JSX.Element {
         <div className="pt-4">
           {confirming ? (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-red-400">Reset all settings to defaults?</span>
+              <span className="text-xs text-[var(--color-status-error-soft)]">Reset all settings to defaults?</span>
               <button
                 onClick={() => {
                   resetAllSettings()
                   setConfirming(false)
                 }}
-                className="px-3 py-1 text-xs bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30 no-drag cursor-pointer"
+                className="px-3 py-1 text-xs bg-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] no-drag cursor-pointer"
               >
                 Confirm
               </button>
@@ -566,7 +566,7 @@ function CLIVersionRow(): React.JSX.Element {
               <button
                 onClick={handleInstallOrUpdate}
                 disabled={loading}
-                className="px-2 py-0.5 text-[10px] bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
+                className="px-2 py-0.5 text-[10px] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
               >
                 {loading ? 'Updating...' : `Update to v${status.bundledVersion}`}
               </button>
@@ -586,7 +586,7 @@ function CLIVersionRow(): React.JSX.Element {
             <button
               onClick={handleInstallOrUpdate}
               disabled={loading}
-              className="px-2 py-0.5 text-[10px] bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-0.5 text-[10px] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
             >
               {loading ? 'Installing...' : 'Install'}
             </button>
@@ -759,7 +759,7 @@ function DaemonRow(): React.JSX.Element {
             <button
               onClick={handleInstall}
               disabled={busy !== null}
-              className="px-2 py-0.5 text-[10px] bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-0.5 text-[10px] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
             >
               {busy === 'install' ? 'Installing...' : 'Install'}
             </button>
@@ -820,8 +820,8 @@ function DaemonRow(): React.JSX.Element {
 
       {/* Error surface — visible until the next action clears it */}
       {error && (
-        <div className="mt-2 p-2 bg-red-500/5 border border-red-500/30">
-          <p className="text-[10px] text-red-400 break-all">{error}</p>
+        <div className="mt-2 p-2 bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)]">
+          <p className="text-[10px] text-[var(--color-status-error-soft)] break-all">{error}</p>
         </div>
       )}
     </div>
@@ -1373,12 +1373,12 @@ function UpdateHostRow(): React.JSX.Element | null {
 
       {/* Failure surface — host-named, host stays on its current version */}
       {isFailurePhase(phase) && phase && (
-        <div className="mt-2 p-2 bg-red-500/5 border border-red-500/30">
-          <p className="text-[11px] text-red-400">
+        <div className="mt-2 p-2 bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)]">
+          <p className="text-[11px] text-[var(--color-status-error-soft)]">
             {updatePhaseCopy(phase, hostLabel, { current: check?.current })}
           </p>
           {status?.error && (
-            <p className="mt-1 text-[10px] text-red-400 break-all">
+            <p className="mt-1 text-[10px] text-[var(--color-status-error-soft)] break-all">
               {status.error}
             </p>
           )}

@@ -85,7 +85,7 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
           editor[key] && !disabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
         }`}
       >
-        <span className={`w-2.5 h-2.5 bg-white block transition-transform ${
+        <span className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
           editor[key] && !disabled ? 'translate-x-3.5' : 'translate-x-0.5'
         }`} />
       </button>
@@ -309,7 +309,7 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
                             }
                             await deleteCustomTheme(t.id)
                           }}
-                          className="px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-red-400 cursor-pointer no-drag"
+                          className="px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] cursor-pointer no-drag"
                         >
                           Delete
                         </button>

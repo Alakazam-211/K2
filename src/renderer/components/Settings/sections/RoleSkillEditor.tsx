@@ -103,7 +103,7 @@ export function RoleSkillEditor({
                   onClick={() => setPreviewMode(mode)}
                   className={`px-2 py-1 text-[10px] font-medium transition-colors no-drag cursor-pointer ${
                     previewMode === mode
-                      ? 'bg-[var(--color-accent)] text-white'
+                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                       : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)]'
                   }`}
                 >

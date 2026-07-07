@@ -614,7 +614,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
               }`}
             >
               <span
-                className={`w-2.5 h-2.5 bg-white block transition-transform ${
+                className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
                   settings.wakeSystem ? 'translate-x-3.5' : 'translate-x-0.5'
                 }`}
               />
@@ -631,7 +631,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
           type="button"
           onClick={handleApply}
           disabled={!dirty || applying}
-          className="px-3 py-1 text-xs font-medium text-white bg-[var(--color-accent)] hover:opacity-90 transition-opacity cursor-pointer no-drag disabled:opacity-30 disabled:cursor-not-allowed"
+          className="px-3 py-1 text-xs font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity cursor-pointer no-drag disabled:opacity-30 disabled:cursor-not-allowed"
         >
           {applying ? 'Applying…' : 'Apply'}
         </button>
@@ -718,7 +718,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                       viewBox="0 0 12 12"
                       className="w-2.5 h-2.5"
                       fill="none"
-                      stroke="white"
+                      stroke="var(--color-on-accent)"
                       strokeWidth="2"
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -750,7 +750,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                 }`}
               >
                 <span
-                  className={`w-2.5 h-2.5 bg-white block transition-transform ${
+                  className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
                     row.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
                   }`}
                 />

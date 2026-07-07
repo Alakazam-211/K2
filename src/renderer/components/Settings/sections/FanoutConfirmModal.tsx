@@ -143,7 +143,7 @@ export function FanoutConfirmModal({
 
         {error && (
           <div className="px-5 pb-2">
-            <p className="text-[11px] text-red-400">{error}</p>
+            <p className="text-[11px] text-[var(--color-status-error-soft)]">{error}</p>
           </div>
         )}
 

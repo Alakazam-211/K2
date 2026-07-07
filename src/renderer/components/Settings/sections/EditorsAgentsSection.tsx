@@ -332,7 +332,7 @@ export function EditorsAgentsSection(): React.JSX.Element {
             >
               <span
                 className={`w-1.5 h-1.5 flex-shrink-0 ${
-                  editor.installed ? 'bg-green-500' : 'bg-red-500/60'
+                  editor.installed ? 'bg-[var(--color-status-ok)]' : 'bg-[color-mix(in_srgb,var(--color-status-error)_60%,transparent)]'
                 }`}
               />
               <span className="text-xs text-[var(--color-text-primary)] font-mono flex-1">
@@ -361,7 +361,7 @@ export function EditorsAgentsSection(): React.JSX.Element {
                 >
                   <span
                     className={`w-1.5 h-1.5 flex-shrink-0 ${
-                      app.installed ? 'bg-green-500' : 'bg-red-500/60'
+                      app.installed ? 'bg-[var(--color-status-ok)]' : 'bg-[color-mix(in_srgb,var(--color-status-error)_60%,transparent)]'
                     }`}
                   />
                   <span className="text-xs text-[var(--color-text-primary)] font-mono flex-1">
@@ -442,7 +442,7 @@ export function EditorsAgentsSection(): React.JSX.Element {
               {!preset.isBuiltIn && (
                 <button
                   onClick={(e) => { e.stopPropagation(); handleDeletePreset(preset.id) }}
-                  className="text-[10px] text-red-400/60 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity no-drag cursor-pointer font-mono flex-shrink-0"
+                  className="text-[10px] text-[color-mix(in_srgb,var(--color-status-error-soft)_60%,transparent)] hover:text-[var(--color-status-error-soft)] opacity-0 group-hover:opacity-100 transition-opacity no-drag cursor-pointer font-mono flex-shrink-0"
                 >
                   del
                 </button>
@@ -456,7 +456,7 @@ export function EditorsAgentsSection(): React.JSX.Element {
                 }`}
               >
                 <span
-                  className={`w-2.5 h-2.5 bg-white block transition-transform ${
+                  className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
                     preset.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
                   }`}
                 />
@@ -507,7 +507,7 @@ export function EditorsAgentsSection(): React.JSX.Element {
               </button>
               <button
                 onClick={submitForm}
-                className="px-3 py-1 text-xs bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/80 no-drag cursor-pointer font-mono"
+                className="px-3 py-1 text-xs bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/80 no-drag cursor-pointer font-mono"
               >
                 {presetForm.editingId ? 'Save' : 'Add'}
               </button>

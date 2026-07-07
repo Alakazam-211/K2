@@ -229,7 +229,7 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
       <div className="flex items-center justify-between mb-1">
         <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
           Context Layers
-          <span className="ml-2 text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-white/5 text-[var(--color-text-muted)]">{entries.length}</span>
+          <span className="ml-2 text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{entries.length}</span>
         </h3>
         {onOpenSettings && (
           <button

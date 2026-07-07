@@ -263,7 +263,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
                     onClick={() => toggleDay(d)}
                     className={`px-2 py-1 text-[11px] cursor-pointer no-drag ${
                       on
-                        ? 'bg-[var(--color-accent)] text-white'
+                        ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                         : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)]'
                     }`}
                   >
@@ -309,7 +309,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
                     onClick={() => toggleMonth(m)}
                     className={`px-2 py-1 text-[11px] cursor-pointer no-drag ${
                       on
-                        ? 'bg-[var(--color-accent)] text-white'
+                        ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                         : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)]'
                     }`}
                   >
@@ -374,7 +374,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
                 }`}
               >
                 {windowOn && (
-                  <svg className="w-2 h-2 text-white" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg className="w-2 h-2 text-[var(--color-on-accent)]" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M1.5 4l1.5 1.5L6.5 2" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 )}
@@ -410,7 +410,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
           </div>
         )}
 
-        {error && <div className="text-[11px] text-red-400 mb-3">{error}</div>}
+        {error && <div className="text-[11px] text-[var(--color-status-error-soft)] mb-3">{error}</div>}
 
         <div className="flex justify-end gap-2">
           <button
@@ -423,7 +423,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
           <button
             onClick={handleSave}
             disabled={busy || (!isEdit && !nameValid)}
-            className="px-3 py-1.5 text-xs bg-[var(--color-accent)] text-white cursor-pointer no-drag disabled:opacity-50"
+            className="px-3 py-1.5 text-xs bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag disabled:opacity-50"
           >
             {busy ? 'Saving…' : isEdit ? 'Update' : 'Add'}
           </button>
@@ -605,7 +605,7 @@ function WakeupPreview({
 // ── History panel (per-workspace fire audit) ─────────────────────────
 
 function decisionColor(decision: string): string {
-  if (decision === 'fired') return 'text-green-400'
+  if (decision === 'fired') return 'text-[var(--color-status-ok-soft)]'
   // Catch-up fires are still successes — amber so a recovered miss is
   // visible at a glance without reading the reason.
   if (decision === 'fired_catchup') return 'text-amber-400'
@@ -617,7 +617,7 @@ function decisionColor(decision: string): string {
     decision === 'auto_disabled_failing' ||
     decision === 'tick_gap'
   )
-    return 'text-red-400'
+    return 'text-[var(--color-status-error-soft)]'
   if (decision.startsWith('skipped_')) return 'text-[var(--color-text-muted)]'
   if (decision === 'no_work') return 'text-[var(--color-text-muted)]'
   return 'text-[var(--color-text-secondary)]'
@@ -985,7 +985,7 @@ export function HeartbeatsPanel({
         <button
           onClick={() => setShowAdd(true)}
           title="Add heartbeat"
-          className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-white cursor-pointer no-drag"
+          className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
         >
           +
         </button>
@@ -1028,7 +1028,7 @@ export function HeartbeatsPanel({
                   title={r.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}
                 >
                   <span
-                    className={`w-2.5 h-2.5 bg-white block transition-transform ${
+                    className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
                       r.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
                     }`}
                   />
@@ -1059,7 +1059,7 @@ export function HeartbeatsPanel({
                     </span>
                   )}
                   {isRenaming && renameError ? (
-                    <span className="text-[9px] text-red-400 truncate">{renameError}</span>
+                    <span className="text-[9px] text-[var(--color-status-error-soft)] truncate">{renameError}</span>
                   ) : (
                     <span className="text-[9px] text-[var(--color-text-muted)] truncate">
                       Last fired: {describeLastFired(r.lastFired)}
@@ -1072,7 +1072,7 @@ export function HeartbeatsPanel({
                       failure state. */}
                   {heartbeatErrorBadge(r) && (
                     <span
-                      className="text-[9px] text-red-400 truncate"
+                      className="text-[9px] text-[var(--color-status-error-soft)] truncate"
                       title={r.scheduleError ?? undefined}
                     >
                       {heartbeatErrorBadge(r)}
@@ -1102,7 +1102,7 @@ export function HeartbeatsPanel({
                       }`}
                     >
                       {r.useWorkspaceSession && (
-                        <svg className="w-1.5 h-1.5 text-white" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="2">
+                        <svg className="w-1.5 h-1.5 text-[var(--color-on-accent)]" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="2">
                           <path d="M1.5 4l1.5 1.5L6.5 2" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                       )}
@@ -1128,7 +1128,7 @@ export function HeartbeatsPanel({
                 <button
                   onClick={() => onConfigureWakeup?.(r)}
                   disabled={!onConfigureWakeup}
-                  className="px-2 py-1 text-[10px] bg-[var(--color-accent)] text-white cursor-pointer no-drag justify-self-end disabled:opacity-50"
+                  className="px-2 py-1 text-[10px] bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag justify-self-end disabled:opacity-50"
                 >
                   Configure Wakeup
                 </button>
@@ -1136,7 +1136,7 @@ export function HeartbeatsPanel({
                 {/* Col 4 — Remove (same x as Connected Workspaces) */}
                 <button
                   onClick={() => handleArchive(r.name)}
-                  className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-red-400 transition-colors no-drag cursor-pointer flex-shrink-0"
+                  className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
                   title="Archive heartbeat"
                 >
                   <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">

@@ -18,11 +18,11 @@ export class SectionErrorBoundary extends React.Component<
     if (this.state.error) {
       return (
         <div className="max-w-xl p-4">
-          <h2 className="text-sm font-medium text-red-400 mb-2">Something went wrong</h2>
+          <h2 className="text-sm font-medium text-[var(--color-status-error-soft)] mb-2">Something went wrong</h2>
           <p className="text-xs text-[var(--color-text-muted)] mb-3">
             This section failed to render. Try restarting the app.
           </p>
-          <pre className="text-[10px] text-red-400/70 bg-red-500/5 border border-red-500/20 p-2 overflow-x-auto whitespace-pre-wrap">
+          <pre className="text-[10px] text-[color-mix(in_srgb,var(--color-status-error-soft)_70%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] p-2 overflow-x-auto whitespace-pre-wrap">
             {this.state.error.message}
           </pre>
           <button

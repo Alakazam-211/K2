@@ -515,7 +515,7 @@ export function ProjectsSection(): React.JSX.Element {
             }`}
           >
             <span
-              className={`w-2.5 h-2.5 bg-white block transition-transform ${
+              className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
                 focusGroupsEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
               }`}
             />
@@ -895,7 +895,7 @@ function WorktreeFoldersOnDisk({
     <div className="space-y-2">
       <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
         Worktree Folders on Disk
-        <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-white/5 text-[var(--color-text-muted)]">{nonBare.length}</span>
+        <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{nonBare.length}</span>
       </h3>
       <div className="border border-[var(--color-border)]">
         {nonBare.map((wt, i) => {
@@ -933,7 +933,7 @@ function WorktreeFoldersOnDisk({
                 </span>
               </div>
               {isActive ? (
-                <span className="text-[10px] text-green-400 flex-shrink-0">(active)</span>
+                <span className="text-[10px] text-[var(--color-status-ok-soft)] flex-shrink-0">(active)</span>
               ) : (
                 <button
                   onClick={() => handleReopen(wt)}
@@ -1263,7 +1263,7 @@ function ProjectDetail({
               />
             ) : (
               <span
-                className="text-white font-bold"
+                className="text-[var(--color-on-accent)] font-bold"
                 style={{ fontSize: 22, lineHeight: 1 }}
               >
                 {firstLetter}
@@ -1296,7 +1296,7 @@ function ProjectDetail({
               <button
                 onClick={handleClearIcon}
                 disabled={iconLoading}
-                className="px-2.5 py-1 text-xs text-red-400 border border-red-500/30 hover:bg-red-500/10 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="px-2.5 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 Remove
               </button>
@@ -1495,7 +1495,7 @@ function ProjectDetail({
                   }}
                   className={`flex-1 px-2 py-1.5 text-[10px] font-medium transition-colors no-drag cursor-pointer ${
                     isActive
-                      ? 'bg-[var(--color-accent)] text-white'
+                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                       : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)]'
                   }`}
                 >
@@ -1645,7 +1645,7 @@ function ProjectDetail({
       <div className="pt-4 border-t border-[var(--color-border)]">
         <button
           onClick={() => removeProject(project.id)}
-          className="px-3 py-1 text-xs text-red-400 border border-red-500/30 hover:bg-red-500/10 no-drag cursor-pointer"
+          className="px-3 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer"
         >
           Remove Workspace
         </button>
@@ -1759,7 +1759,7 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
           title={enabled ? 'Heartbeat fires open background tabs' : 'Heartbeat fires run silently'}
         >
           <span
-            className={`w-2.5 h-2.5 bg-white block transition-transform ${
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
               enabled ? 'translate-x-3.5' : 'translate-x-0.5'
             }`}
           />
@@ -1838,7 +1838,7 @@ function RemoteInstructToggle({
           title={enabled ? 'Remote users can message this workspace\'s agent' : 'Only the owner can message this workspace\'s agent'}
         >
           <span
-            className={`w-2.5 h-2.5 bg-white block transition-transform ${
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
               enabled ? 'translate-x-3.5' : 'translate-x-0.5'
             }`}
           />
@@ -1915,7 +1915,7 @@ function AgentKebabMenu({ onSettings, onDelete }: { onSettings: () => void; onDe
           {onDelete && (
             <button
               onClick={() => { setOpen(false); onDelete() }}
-              className="w-full text-left px-3 py-1.5 text-[11px] text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors no-drag cursor-pointer"
+              className="w-full text-left px-3 py-1.5 text-[11px] text-[var(--color-status-error-soft)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] hover:text-red-300 transition-colors no-drag cursor-pointer"
             >
               Delete Agent
             </button>
@@ -2199,7 +2199,7 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
                     onClick={() => setPreviewMode(mode)}
                     className={`px-2 py-1 text-[10px] font-medium transition-colors no-drag cursor-pointer ${
                       previewMode === mode
-                        ? 'bg-[var(--color-accent)] text-white'
+                        ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                         : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)]'
                     }`}
                   >
@@ -2366,7 +2366,7 @@ function AgentDisplayNameField({
         {trailing}
       </div>
       {error && (
-        <p className="text-[10px] text-red-400 mt-1">{error}</p>
+        <p className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</p>
       )}
       {!error && helpText && (
         <p className="text-[9px] text-[var(--color-text-muted)] mt-1">{helpText}</p>
@@ -2665,7 +2665,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
         <button
           onClick={() => { setShowAdd(!showAdd); setSearch(''); setRemoteError(null) }}
           title="Add connection"
-          className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-white cursor-pointer no-drag"
+          className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
         >
           +
         </button>
@@ -2708,7 +2708,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
                   </span>
                 </button>
                 {remoteError && (
-                  <div className="px-3 py-2 text-[10px] text-red-400 border-b border-[var(--color-border)]">
+                  <div className="px-3 py-2 text-[10px] text-[var(--color-status-error-soft)] border-b border-[var(--color-border)]">
                     {remoteError}
                   </div>
                 )}
@@ -2775,7 +2775,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
                 )}
                 <button
                   onClick={() => handleRemove(rel.id)}
-                  className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-red-400 transition-colors no-drag cursor-pointer flex-shrink-0"
+                  className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
                   title="Remove connection"
                 >
                   <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -2808,7 +2808,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
               </span>
               <button
                 onClick={() => handleRemoveRemote(rc.address)}
-                className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-red-400 transition-colors no-drag cursor-pointer flex-shrink-0"
+                className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
                 title="Remove remote connection"
               >
                 <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -3098,7 +3098,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
           </button>
           <button
             onClick={() => handleDelete(skill.name)}
-            className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-red-400 transition-colors no-drag cursor-pointer"
+            className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer"
             title="Remove skill (recoverable via recycle bin)"
           >
             <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -3116,7 +3116,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
       <div className="flex items-center justify-between mb-1">
         <span className="flex items-center gap-1.5">
           {skillRows.length > 0 && (
-            <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-white/5 text-[var(--color-text-muted)]">{skillRows.length}</span>
+            <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{skillRows.length}</span>
           )}
         </span>
         <button
@@ -3157,7 +3157,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
           <button
             onClick={handleCreate}
             disabled={creating || !newName.trim()}
-            className="px-3 py-1 text-xs font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer disabled:opacity-50"
+            className="px-3 py-1 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer disabled:opacity-50"
           >
             {creating ? 'Creating...' : 'Create Skill'}
           </button>
@@ -3270,7 +3270,7 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
     <div className="space-y-2">
       <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
         Cursor IDE Conversations
-        <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-white/5 text-[var(--color-text-muted)]">{sessions.length}</span>
+        <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{sessions.length}</span>
       </h3>
 
       <p className="text-[10px] text-[var(--color-text-muted)]">
@@ -3304,7 +3304,7 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
                   migrating...
                 </span>
               ) : isMigrated ? (
-                <span className="text-[10px] text-green-400 flex-shrink-0">
+                <span className="text-[10px] text-[var(--color-status-ok-soft)] flex-shrink-0">
                   migrated
                 </span>
               ) : !session.migratable ? (
@@ -3323,14 +3323,14 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
 
       {/* Error */}
       {error && (
-        <p className="text-[10px] text-red-400">{error}</p>
+        <p className="text-[10px] text-[var(--color-status-error-soft)]">{error}</p>
       )}
 
       {/* Status + button */}
       <div className="flex items-center justify-between">
         <span className="text-[10px] text-[var(--color-text-muted)]">
           {migratedSessions.length > 0 && (
-            <span className="text-green-400">{migratedSessions.length} migrated</span>
+            <span className="text-[var(--color-status-ok-soft)]">{migratedSessions.length} migrated</span>
           )}
           {migratedSessions.length > 0 && unmigratedSessions.length > 0 && ' · '}
           {unmigratedSessions.length > 0 && (
@@ -3348,7 +3348,7 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
           <button
             onClick={handleMigrateAll}
             disabled={migrating}
-            className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 no-drag"
+            className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 no-drag"
           >
             {migrating
               ? `Migrating ${migratingIds.size}...`

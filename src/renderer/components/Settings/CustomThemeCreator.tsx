@@ -244,7 +244,7 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <p className="text-xs text-red-400">Failed to initialize theme editor: {error}</p>
+        <p className="text-xs text-[var(--color-status-error-soft)]">Failed to initialize theme editor: {error}</p>
         <button onClick={onClose} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag">&larr; Back to Settings</button>
       </div>
     )

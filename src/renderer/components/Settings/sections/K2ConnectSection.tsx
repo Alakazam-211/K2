@@ -1211,12 +1211,12 @@ export function K2ConnectSection(): React.JSX.Element {
                   onChange={(e) => setPassword(e.target.value)}
                 />
                 {authError && (
-                  <div className="text-[10px] text-red-400 px-2 py-1 border border-red-400/20 bg-red-400/5">{authError}</div>
+                  <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{authError}</div>
                 )}
                 <button
                   type="submit"
                   disabled={authBusy || !email.trim() || !password}
-                  className="px-3 py-1 text-[11px] text-white bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                  className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
                 >
                   {authBusy ? 'Signing in…' : 'Sign in'}
                 </button>
@@ -1269,7 +1269,7 @@ export function K2ConnectSection(): React.JSX.Element {
                 )}
               </SettingRow>
               {boundMsg && (
-                <div className="text-[10px] text-green-400 py-1">{boundMsg}</div>
+                <div className="text-[10px] text-[var(--color-status-ok-soft)] py-1">{boundMsg}</div>
               )}
             </>
           )}
@@ -1308,7 +1308,7 @@ export function K2ConnectSection(): React.JSX.Element {
           </div>
         )}
 
-        {error && <div className="text-[10px] text-red-400 px-3 py-1.5 border border-red-400/20 bg-red-400/5">{error}</div>}
+        {error && <div className="text-[10px] text-[var(--color-status-error-soft)] px-3 py-1.5 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{error}</div>}
 
         {/* ── Auto-start toggle (left) + Start/Stop (right), one row,
             above the Advanced/manual config ──────────────────────────── */}
@@ -1325,7 +1325,7 @@ export function K2ConnectSection(): React.JSX.Element {
               className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
             >
               {autoStart && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M2.5 6.5 L5 9 L9.5 3.5" />
                 </svg>
               )}
@@ -1336,7 +1336,7 @@ export function K2ConnectSection(): React.JSX.Element {
             <button
               onClick={() => void stopTunnel()}
               disabled={busy || swapBusy}
-              className="px-3 py-1 text-[11px] text-white bg-red-500/80 hover:bg-red-500 no-drag cursor-pointer disabled:opacity-60"
+              className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[color-mix(in_srgb,var(--color-status-error)_80%,transparent)] hover:bg-[var(--color-status-error)] no-drag cursor-pointer disabled:opacity-60"
             >
               {swapBusy ? 'Swapping…' : 'Stop tunnel'}
             </button>
@@ -1344,7 +1344,7 @@ export function K2ConnectSection(): React.JSX.Element {
             <button
               onClick={() => void startTunnel()}
               disabled={busy || swapBusy}
-              className="px-3 py-1 text-[11px] text-white bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+              className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
             >
               Start tunnel
             </button>
@@ -1382,7 +1382,7 @@ export function K2ConnectSection(): React.JSX.Element {
                 label={
                   <>
                     Token
-                    {tokenSet && <span className="ml-2 text-[10px] text-green-400">Set</span>}
+                    {tokenSet && <span className="ml-2 text-[10px] text-[var(--color-status-ok-soft)]">Set</span>}
                   </>
                 }
               >
@@ -1421,7 +1421,7 @@ export function K2ConnectSection(): React.JSX.Element {
                 >
                   {busy ? 'Saving…' : 'Save'}
                 </button>
-                {savedMsg && <span className="text-[10px] text-green-400">{savedMsg}</span>}
+                {savedMsg && <span className="text-[10px] text-[var(--color-status-ok-soft)]">{savedMsg}</span>}
               </div>
             </SettingsGroup>
           )}
@@ -1494,7 +1494,7 @@ export function K2ConnectSection(): React.JSX.Element {
                       className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
                     >
                       {checked && (
-                        <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M2.5 6.5 L5 9 L9.5 3.5" />
                         </svg>
                       )}
@@ -1510,8 +1510,8 @@ export function K2ConnectSection(): React.JSX.Element {
                 >
                   Save requirements
                 </button>
-                {policySavedMsg && <span className="text-[10px] text-green-400">{policySavedMsg}</span>}
-                {policyError && <span className="text-[10px] text-red-400">{policyError}</span>}
+                {policySavedMsg && <span className="text-[10px] text-[var(--color-status-ok-soft)]">{policySavedMsg}</span>}
+                {policyError && <span className="text-[10px] text-[var(--color-status-error-soft)]">{policyError}</span>}
               </div>
             </div>
 
@@ -1559,21 +1559,21 @@ export function K2ConnectSection(): React.JSX.Element {
                 <button
                   type="submit"
                   disabled={addBusy || !newUsername.trim() || !newPassword}
-                  className="flex-shrink-0 px-3 py-1 text-[11px] text-white bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                  className="flex-shrink-0 px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
                 >
                   {addBusy ? 'Adding…' : 'Add user'}
                 </button>
               </div>
               {addError && (
-                <div className="text-[10px] text-red-400 px-2 py-1 border border-red-400/20 bg-red-400/5">{addError}</div>
+                <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{addError}</div>
               )}
-              {addedMsg && <div className="text-[10px] text-green-400">{addedMsg}</div>}
+              {addedMsg && <div className="text-[10px] text-[var(--color-status-ok-soft)]">{addedMsg}</div>}
             </form>
 
             {usersError && (
-              <div className="text-[10px] text-red-400 px-2 py-1 border border-red-400/20 bg-red-400/5">{usersError}</div>
+              <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{usersError}</div>
             )}
-            {resetMsg && <div className="text-[10px] text-green-400">{resetMsg}</div>}
+            {resetMsg && <div className="text-[10px] text-[var(--color-status-ok-soft)]">{resetMsg}</div>}
 
             {/* User list */}
             {usersLoaded && users.length === 0 ? (
@@ -1631,7 +1631,7 @@ export function K2ConnectSection(): React.JSX.Element {
                             className="w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
                           >
                             {!u.disabled && (
-                              <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M2.5 6.5 L5 9 L9.5 3.5" />
                               </svg>
                             )}
@@ -1651,7 +1651,7 @@ export function K2ConnectSection(): React.JSX.Element {
                           <span className="flex items-center gap-1.5">
                             <button
                               onClick={() => void removeUser(u.username)}
-                              className="text-[10px] text-red-400 hover:underline no-drag cursor-pointer"
+                              className="text-[10px] text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
                             >
                               Confirm remove
                             </button>
@@ -1665,7 +1665,7 @@ export function K2ConnectSection(): React.JSX.Element {
                         ) : (
                           <button
                             onClick={() => setRemoveConfirm(u.username)}
-                            className="text-[10px] text-[var(--color-text-muted)] hover:text-red-400 hover:underline no-drag cursor-pointer"
+                            className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
                           >
                             Remove
                           </button>

@@ -130,7 +130,7 @@ export function TimerSection(): React.JSX.Element {
           }`}
         >
           <span
-            className={`w-3 h-3 bg-white block transition-transform ${
+            className={`w-3 h-3 bg-[var(--color-on-accent)] block transition-transform ${
               visible ? 'translate-x-4.5' : 'translate-x-0.5'
             }`}
           />
@@ -150,7 +150,7 @@ export function TimerSection(): React.JSX.Element {
           }`}
         >
           <span
-            className={`w-3 h-3 bg-white block transition-transform ${
+            className={`w-3 h-3 bg-[var(--color-on-accent)] block transition-transform ${
               skipMemo ? 'translate-x-4.5' : 'translate-x-0.5'
             }`}
           />
@@ -293,7 +293,7 @@ export function TimerSection(): React.JSX.Element {
                             </span>
                             <button
                               onClick={() => deleteEntry(entry.id)}
-                              className="text-red-400/0 group-hover:text-red-400/60 hover:!text-red-400 transition-colors cursor-pointer text-center"
+                              className="text-[color-mix(in_srgb,var(--color-status-error-soft)_0%,transparent)] group-hover:text-[color-mix(in_srgb,var(--color-status-error-soft)_60%,transparent)] hover:!text-[var(--color-status-error-soft)] transition-colors cursor-pointer text-center"
                               title="Delete entry"
                             >
                               ×

@@ -208,7 +208,7 @@ export default function DisableWorktreesDialog({
                 <button
                   onClick={() => handleAction('recycle')}
                   disabled={isPending}
-                  className="px-3 py-1 text-xs text-red-400 border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 transition-colors disabled:opacity-40 no-drag cursor-pointer"
+                  className="px-3 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
                 >
                   {isPending && action === 'recycle' ? 'Recycling...' : 'Confirm Recycle'}
                 </button>
@@ -255,9 +255,9 @@ export default function DisableWorktreesDialog({
             <button
               onClick={() => handleAction('recycle')}
               disabled={isPending}
-              className="w-full px-3 py-2 text-xs text-left flex items-start gap-3 bg-red-500/5 hover:bg-red-500/10 border border-red-500/20 transition-colors disabled:opacity-40 no-drag cursor-pointer"
+              className="w-full px-3 py-2 text-xs text-left flex items-start gap-3 bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
             >
-              <span className="text-red-400 font-medium flex-shrink-0 w-14">Recycle</span>
+              <span className="text-[var(--color-status-error-soft)] font-medium flex-shrink-0 w-14">Recycle</span>
               <span className="text-[var(--color-text-muted)]">
                 Move worktree folders to Trash and remove from the sidebar. This cannot be undone.
               </span>

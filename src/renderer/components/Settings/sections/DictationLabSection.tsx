@@ -644,7 +644,7 @@ export function DictationLabSection(): React.JSX.Element {
         hint="Programmatic JS API. Bypasses NSTextInputClient/Apple Dictation entirely. WebKit ships this; we just call .start() / .stop()."
       >
         {!speechSupported ? (
-          <div className="text-[10px] text-red-400">
+          <div className="text-[10px] text-[var(--color-status-error-soft)]">
             Web Speech API not available in this WebView build.
           </div>
         ) : (
@@ -654,7 +654,7 @@ export function DictationLabSection(): React.JSX.Element {
                 onClick={toggleSpeech}
                 className={`px-3 py-1.5 text-[10px] font-medium border transition-colors no-drag cursor-pointer ${
                   speechListening
-                    ? 'bg-red-500/15 border-red-500/40 text-red-300 animate-pulse'
+                    ? 'bg-[color-mix(in_srgb,var(--color-status-error)_15%,transparent)] border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] text-red-300 animate-pulse'
                     : 'bg-[var(--color-accent)]/10 border-[var(--color-accent)]/30 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20'
                 }`}
               >
@@ -667,7 +667,7 @@ export function DictationLabSection(): React.JSX.Element {
                 Clear
               </button>
               {speechError && (
-                <span className="text-[10px] text-red-400">
+                <span className="text-[10px] text-[var(--color-status-error-soft)]">
                   error: {speechError}
                 </span>
               )}
@@ -735,7 +735,7 @@ export function DictationLabSection(): React.JSX.Element {
             </button>
             <button
               onClick={clearLog}
-              className="px-2 py-1 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-red-400 text-[var(--color-text-secondary)] hover:text-red-400 transition-colors no-drag cursor-pointer"
+              className="px-2 py-1 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-status-error-soft)] text-[var(--color-text-secondary)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer"
             >
               Clear
             </button>

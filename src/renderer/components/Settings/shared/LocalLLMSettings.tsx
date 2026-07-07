@@ -216,7 +216,7 @@ export function LocalLLMSettings(): React.JSX.Element {
         </div>
       {/* Error Display */}
       {loadError && (
-        <div className="p-2 text-xs text-red-400 bg-red-500/5 border border-red-500/20 mt-3">
+        <div className="p-2 text-xs text-[var(--color-status-error-soft)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] mt-3">
           {loadError}
         </div>
       )}

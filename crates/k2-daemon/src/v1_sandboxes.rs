@@ -33,7 +33,7 @@ use k2_core::session::SessionId;
 /// Handle `POST /v1/sandboxes`. The caller is ALREADY authenticated to a
 /// [`V1Principal`] by the dispatcher's `/v1/*` gate; this never re-checks creds,
 /// it resolves them into a host-trusted spawn.
-pub fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse {
+pub(crate) fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse {
     // (1) REFUSE if this daemon cannot deliver a real microVM. A public sandbox
     // API must NEVER degrade to an unsandboxed passthrough cell — the inverse of
     // v2/spawn's degrade-loud behavior. On Mac / feature-off this ALWAYS 409s.
@@ -182,7 +182,7 @@ pub fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse 
 /// On success: `{"messages":[...],"latest_seq":<n>}` where `latest_seq` is the
 /// highest `seq` the caller now holds (its next-poll cursor) — the max of the
 /// returned slice, falling back to the requested `since` when the slice is empty.
-pub fn handle_messages(principal: &V1Principal, session_id: &str, since: u64) -> CliResponse {
+pub(crate) fn handle_messages(principal: &V1Principal, session_id: &str, since: u64) -> CliResponse {
     // AUTHZ: the session must exist AND be owned by THIS principal. Unknown owner
     // and owner-mismatch are BOTH 404 (no existence oracle across principals).
     let requester = principal.display_id();
@@ -373,7 +373,7 @@ pub fn resolve_workspace_slug(slug: &str) -> Option<String> {
 /// An unauthorized key returns before we even resolve, so it can NOT learn
 /// whether a workspace it wasn't granted exists (no cross-tenant oracle). An
 /// authorized-but-unknown slug returns the identical 404.
-pub fn resolve_authorized_workspace(
+pub(crate) fn resolve_authorized_workspace(
     principal: &V1Principal,
     slug: &str,
 ) -> Result<String, CliResponse> {
@@ -419,7 +419,7 @@ pub fn session_is_canonical(session_id: &str) -> bool {
 /// carries `fork_from=<id>`). Validates the slug, authorizes the workspace,
 /// validates + canonical-guards any fork source, then (SLICE 1) delegates to
 /// the ephemeral spawn.
-pub fn handle_v1_ws_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
+pub(crate) fn handle_v1_ws_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -452,7 +452,7 @@ pub fn handle_v1_ws_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> C
 
 /// `POST /v1/w/<ws>/sessions/<id>` — ADDRESS an existing sandbox session
 /// (message / resume intent; the F3 liveness router decides in slices 2-3).
-pub fn handle_v1_ws_address(
+pub(crate) fn handle_v1_ws_address(
     principal: &V1Principal,
     ws_raw: &str,
     sid_raw: &str,
@@ -508,7 +508,7 @@ pub fn handle_v1_ws_address(
 /// (`sandbox_sessions`) for this workspace slug, newest first. Returns each
 /// session's id + created/last-active timestamps (never the host filesystem
 /// paths — those are daemon-internal audit-resume state, not caller data).
-pub fn handle_v1_ws_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
+pub(crate) fn handle_v1_ws_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -541,7 +541,7 @@ pub fn handle_v1_ws_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
 /// session, then reuses the F2 [`handle_messages`] drain (whose own default-deny
 /// per-principal owner check still applies — a workspace-authorized caller can
 /// still only read a session it OWNS, else 404).
-pub fn handle_v1_ws_messages(
+pub(crate) fn handle_v1_ws_messages(
     principal: &V1Principal,
     ws_raw: &str,
     sid_raw: &str,

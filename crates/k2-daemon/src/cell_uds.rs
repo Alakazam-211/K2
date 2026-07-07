@@ -23,7 +23,7 @@
 //! keeps the daemon compiling.
 
 #[cfg(unix)]
-pub use unix_impl::{bind_cell_socket, cell_socket_path, cells_dir, peer_cred, PeerCred};
+pub use unix_impl::{bind_cell_socket, cell_socket_path};
 
 // Sandbox B2 (microVM cell socket perms) — internal to the daemon crate.
 // P4-H6: `resolve_sandbox_cell_uid` is no longer the live path (the spawn door

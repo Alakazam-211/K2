@@ -22,9 +22,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::skills::version::{ensure_skill_up_to_date, SKILL_VERSION_TEMPLATE};
+use crate::skills::version::ensure_skill_up_to_date;
 use crate::workspace::agent_identity::{
-    agent_dir, agent_type_for, agents_dir, parse_frontmatter, resolve_project_id,
+    agent_dir, agents_dir, parse_frontmatter, resolve_project_id,
 };
 use crate::workspace::scheduler::{agent_work_dir, get_workspace_state};
 use crate::workspace::wake_prompts::strip_frontmatter;

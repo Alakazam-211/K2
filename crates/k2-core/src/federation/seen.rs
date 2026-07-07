@@ -23,7 +23,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::fs_atomic::atomic_write;
-use crate::log_debug;
 
 /// Per-peer cap on remembered delivered `msg_uuid`s (FIFO, oldest evicted).
 /// 512 uuids ≈ 20 KB per peer — bounded, and far deeper than any plausible

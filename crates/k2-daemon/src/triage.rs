@@ -38,7 +38,7 @@ use tokio::task::{spawn_blocking, JoinSet};
 
 use k2_core::heartbeats as heartbeat;
 use k2_core::workspace::agent_identity::agent_type_for;
-use k2_core::workspace::{scheduler, settings, triage as triage_summary, wake_prompts as wake};
+use k2_core::workspace::{scheduler, triage as triage_summary, wake_prompts as wake};
 use k2_core::db::shared as shared_db;
 
 /// Cap on parallel heartbeat spawns per scheduler tick. Six is a

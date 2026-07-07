@@ -30,7 +30,6 @@ use std::collections::VecDeque;
 
 use vte::{Params, Parser, Perform};
 
-use crate::log_debug;
 use crate::session::{
     CursorOp, CursorShape, EraseMode, Frame, Line, ModeKind, SeqnoGen, SequenceNo, Style,
 };

@@ -402,7 +402,7 @@ pub fn spawn_wake_headless(
         // heartbeats firing on the same agent within a short window
         // both pick the same (highest-timestamp) session id and
         // stamp it on both rows. See `detect_claude_session_near`.
-        let spawn_ms = chrono::Utc::now().timestamp_millis();
+        let _spawn_ms = chrono::Utc::now().timestamp_millis();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(5));
             // For heartbeat fires, use the proximity-matched lookup

@@ -46,7 +46,6 @@ use alacritty_terminal::Term;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
-use crate::log_debug;
 use crate::session::SessionId;
 use crate::terminal::login_path;
 use crate::terminal::sandbox::{

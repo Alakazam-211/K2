@@ -163,7 +163,7 @@ impl GlyphCache {
         ch: char,
         style: u8,
         px_size: f32,
-        cell_width: u32,
+        _cell_width: u32,
         baseline: u32,
     ) -> RasterizedGlyph {
         // Select font based on style

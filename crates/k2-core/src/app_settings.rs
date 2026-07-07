@@ -31,7 +31,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use crate::log_debug;
 
 // ── Settings types (moved verbatim from src-tauri/src/commands/settings.rs) ──
 

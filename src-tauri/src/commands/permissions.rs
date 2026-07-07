@@ -65,7 +65,7 @@ fn check_microphone() -> bool {
     // We treat only `.authorized` as granted — the user has
     // explicitly approved mic access.
     use objc::runtime::Class;
-    use objc::{class, msg_send, sel, sel_impl};
+    use objc::{msg_send, sel, sel_impl};
 
     unsafe {
         let cls = match Class::get("AVCaptureDevice") {
@@ -169,7 +169,7 @@ pub fn permissions_request_microphone() -> Result<MicrophoneRequestResult, Strin
     #[cfg(target_os = "macos")]
     {
         use objc::runtime::Class;
-        use objc::{class, msg_send, sel, sel_impl};
+        use objc::{msg_send, sel, sel_impl};
 
         unsafe {
             // Check the current status. If it's `.notDetermined` (0),

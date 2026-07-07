@@ -3,12 +3,8 @@
 //! Agents have a work queue (inbox/active/done) of markdown files,
 //! a profile (agent.md), and interact with K2SO via the CLI bridge.
 
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use crate::db::schema::{AgentHeartbeat, WorkspaceSession, HeartbeatFire, WorkspaceRelation};
-use crate::fs_atomic::{self, atomic_symlink, atomic_write_str, log_if_err, unique_archive_path};
 
 // Core-hosted helpers + heartbeat fns. Re-imported at crate-local paths
 // so the 170+ existing call sites below keep resolving via name-in-scope
@@ -20,15 +16,7 @@ use crate::fs_atomic::{self, atomic_symlink, atomic_write_str, log_if_err, uniqu
 // `k2_core::workspace::agent_identity`; scheduler moved to
 // `k2_core::workspace::scheduler`. Sourced at canonical new paths
 // here. (Phase 2.5e retired the former agents module entirely.)
-pub use k2_core::workspace::agent_identity::{
-    agent_dir, agent_type_for, agents_dir, find_primary_agent, parse_frontmatter,
-    resolve_project_id,
-};
-pub use k2_core::workspace::scheduler::{
-    agent_work_dir, count_md_files, get_highest_inbox_priority, get_workspace_state,
-    is_agent_locked, k2so_agents_scheduler_tick as core_scheduler_tick,
-    priority_label, priority_rank,
-};
+pub use k2_core::workspace::scheduler::k2so_agents_scheduler_tick as core_scheduler_tick;
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -36,10 +24,7 @@ pub use k2_core::workspace::scheduler::{
 // Re-exported here so external callers (agent_hooks.rs,
 // commands/review.rs, etc.) keep resolving
 // `crate::commands::k2so_agents::WorkItem`.
-pub use k2_core::workspace::work_item::{
-    atomic_write as _atomic_write_shim, parse_work_item_content, read_work_item as _read_work_item_shim,
-    safe_read_to_string, WorkItem, MAX_FILE_SIZE,
-};
+pub use k2_core::workspace::work_item::WorkItem;
 
 // Local aliases for the helpers used at privately-scoped call sites.
 #[allow(dead_code)]
@@ -56,12 +41,6 @@ fn read_work_item(path: &std::path::Path, folder: &str) -> Option<WorkItem> {
 // `generate_agent_claude_md_content` stays as a public alias; new code
 // inside core uses `compose_agent_wake_context` which more honestly
 // names what the function returns.
-pub use k2_core::skills::content::{
-    compose_agent_wake_context, extract_section, format_cap,
-    generate_agent_claude_md_content, generate_custom_agent_skill_content,
-    generate_k2so_agent_skill_content, generate_manager_skill_content,
-    generate_template_skill_content, load_custom_layers, CUSTOM_AGENT_HEARTBEAT_DOCS,
-};
 
 // Phase 2.5c: delegation path relocated to
 // `k2_core::deprecated::delegate` with `#[deprecated]` annotations
@@ -69,21 +48,11 @@ pub use k2_core::skills::content::{
 // `#[tauri::command]` wrapper below is a three-line forward; the four
 // frontmatter helpers are re-exported at their historical names so
 // the 3 call sites elsewhere in this file resolve unchanged.
-#[allow(deprecated)]
-pub use k2_core::deprecated::delegate::{
-    add_worktree_to_frontmatter, shorten_slug, strip_worktree_from_frontmatter,
-    update_assigned_by,
-};
 
 // Phase 2.5c: harness-agnostic skill writer relocated to
 // `k2_core::skills::writer`. Writes canonical SKILL.md + symlinks
 // from every discovery path (.claude/, .opencode/, .pi/) + marker-
 // injects into AGENTS.md and copilot-instructions.md.
-pub use k2_core::skills::writer::{
-    force_symlink, generate_default_agent_body, upsert_k2so_section,
-    write_agent_skill_file, write_skill_to_all_harnesses, K2SO_SECTION_BEGIN,
-    K2SO_SECTION_END,
-};
 
 // Agent CRUD + work queue + workspace inbox + channel events live in
 // k2so-core so the daemon can serve the same /cli/* routes headlessly.
@@ -93,13 +62,7 @@ pub use k2_core::skills::writer::{
 // update_agent_md_field + K2soAgentInfo) and `heartbeats::control`
 // (ensure_agent_wakeup + per-agent heartbeat control). Phase 2.5e
 // retired the `agents/` module entirely.
-pub use k2_core::heartbeats::control::ensure_agent_wakeup;
-pub use k2_core::workspace::agent::{
-    cleanup_agent_backups, log_agent_warning, update_agent_md_field, K2soAgentInfo,
-};
-pub use k2_core::workspace::events::{
-    drain_agent_events, push_agent_event, ChannelEvent, MAX_EVENTS_PER_QUEUE,
-};
+pub use k2_core::workspace::agent::K2soAgentInfo;
 
 // 0.40.31: the four legacy per-agent heartbeat commands
 // (`k2so_agents_get_heartbeat` / `_set_heartbeat` / `_heartbeat_noop` /
@@ -200,14 +163,6 @@ pub fn k2so_agents_get_profile(
 // `agent_wakeup_path`, `workspace_wakeup_path`, `read_agent_wakeup`,
 // `strip_frontmatter`, the four `compose_*` helpers, and
 // `default_heartbeat_wakeup_abs` all resolve to the core versions.
-pub use k2_core::workspace::wake_prompts::{
-    agent_wakeup_path, compose_agent_wake_from_body, compose_manager_wake_from_body,
-    compose_wake_prompt_for_agent, compose_wake_prompt_for_workspace,
-    compose_wake_prompt_from_path, default_heartbeat_wakeup_abs, read_agent_wakeup,
-    strip_frontmatter, wakeup_template_for, workspace_wakeup_path,
-    WAKEUP_TEMPLATE_CUSTOM, WAKEUP_TEMPLATE_K2SO, WAKEUP_TEMPLATE_MANAGER,
-    WAKEUP_TEMPLATE_WORKSPACE,
-};
 
 /// Find the workspace's primary scheduleable agent. A workspace is one-of
 /// Custom / K2SO Agent / Workspace Manager (mutually exclusive by design),
@@ -351,7 +306,6 @@ pub fn k2so_heartbeat_edit(
 // Re-exported so the name stays reachable at its historical path
 // (`crate::commands::k2so_agents::HeartbeatFireCandidate`) while the
 // struct itself lives in k2so-core.
-pub use k2_core::heartbeats::HeartbeatFireCandidate;
 
 // `k2so_agents_heartbeat_tick` + `stamp_heartbeat_fired` shims removed
 // in 0.39.0 — both had zero callers in src-tauri/ + frontend. The
@@ -404,12 +358,6 @@ pub fn k2so_heartbeat_fires_list(
 // longer exist; the entrypoint is now the generated `.k2/AGENTS.md`
 // (harness files symlink to it) with no MANAGED/SOURCE regions. The
 // re-export below drops those deleted symbols.
-pub use k2_core::skills::version::{
-    ensure_skill_up_to_date, parse_skill, skill_checksum_hex,
-    ParsedSkill, SkillUpgradeOutcome, SKILL_BEGIN_MARKER, SKILL_END_MARKER,
-    SKILL_VERSION_CUSTOM_AGENT, SKILL_VERSION_K2SO_AGENT, SKILL_VERSION_MANAGER,
-    SKILL_VERSION_TEMPLATE, SKILL_VERSION_WORKSPACE,
-};
 
 // Legacy shim — fn definitions below deleted. Original ParsedSkill
 // impl block used `struct ParsedSkill { k2_skill: ... }` with a
@@ -666,7 +614,7 @@ pub fn k2so_agents_disable_workspace_claude_md(project_path: String) -> Result<(
 // the types so the Tauri command signatures below (and any callers that
 // imported from this module) keep their shapes.
 
-pub use k2_core::workspace::reviews::{ReviewDiffFile, ReviewItem};
+pub use k2_core::workspace::reviews::ReviewItem;
 
 /// Get the review queue — agents with completed work in worktree branches.
 #[tauri::command]
@@ -1125,18 +1073,8 @@ pub fn k2so_agents_regenerate_skills(
 // since REAPED inside k2-core when the composed `.k2/skills/k2so/SKILL.md`
 // entrypoint was retired for the generated `.k2/AGENTS.md`. They are not
 // re-exported below because they no longer exist anywhere.)
-pub use k2_core::workspace::harness::{
-    HARNESS_WORKSPACE_FILES, WorkspacePreviewEntry,
-};
-pub use k2_core::workspace::migrations::{
-    detect_interrupted_regen, harvest_per_agent_claude_md_files,
-};
-pub use k2_core::workspace::skill_regen::{
-    ensure_all_skills_up_to_date, SKILL_USER_NOTES_SENTINEL, USER_NOTES_PLACEHOLDER,
-};
-pub use k2_core::workspace::teardown::{
-    teardown_workspace_harness_files, TeardownMode, TeardownResult,
-};
+pub use k2_core::workspace::harness::WorkspacePreviewEntry;
+pub use k2_core::workspace::teardown::TeardownResult;
 
 #[tauri::command]
 pub fn k2so_agents_teardown_workspace(

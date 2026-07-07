@@ -65,7 +65,7 @@ fn canonical_status_for_path(project_path: &str) -> Option<String> {
     None
 }
 
-pub fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
+pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
     let Some(slug) = decode_ws_segment(ws_raw) else {
         return CliResponse::not_found();
     };

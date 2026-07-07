@@ -35,7 +35,6 @@ use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Duration, Utc};
 
-use k2_core::log_debug;
 use k2_core::session::SessionId;
 
 /// Backstop TTL. The live boundary is session teardown ([`revoke_for_session`]);

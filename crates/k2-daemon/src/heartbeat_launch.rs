@@ -568,7 +568,7 @@ fn run_workspace_session_delivery(
 }
 
 fn run_inject(
-    project_path: &str,
+    _project_path: &str,
     project_id: &str,
     agent_name: &str,
     hb: &AgentHeartbeat,

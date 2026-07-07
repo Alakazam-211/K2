@@ -45,9 +45,8 @@ use crate::workspace::agent_identity::{
 };
 use crate::workspace::onboarding::harness_fanout_enabled;
 use crate::fs_atomic::{self, atomic_write_str, log_if_err};
-use crate::log_debug;
 use crate::workspace::migrations::{
-    archive_claude_md_file, inject_first_migration_banner, log_adoption_event,
+    inject_first_migration_banner, log_adoption_event,
 };
 
 // ══════════════════════════════════════════════════════════════════════

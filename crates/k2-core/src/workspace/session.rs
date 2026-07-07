@@ -119,7 +119,7 @@ pub fn k2so_agents_save_session_id(
 /// nothing to do."
 pub fn k2so_agents_clear_session_id(
     project_path: String,
-    agent_name: String,
+    _agent_name: String,
 ) -> Result<(), String> {
     let db = crate::db::shared();
     let conn = db.lock();

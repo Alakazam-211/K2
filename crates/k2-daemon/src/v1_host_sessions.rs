@@ -313,7 +313,7 @@ fn deliver_into_live(sid: &SessionId, echo_sid: &str, prompt: &str) -> CliRespon
 /// `POST /v1/w/<ws>/host-sessions` — spawn a fresh NON-SANDBOXED host session
 /// in the granted workspace (or RESUME one of this family's own prior
 /// sessions when the body carries `{"session": <id>}`).
-pub fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
+pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -526,7 +526,7 @@ pub fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) ->
 /// adoption stamps their provider-minted id (~seconds after boot);
 /// no-adapter presets never appear here — their rows stay `session_id=NULL`
 /// by honest necessity (nothing K2 can list would be resumable).
-pub fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
+pub(crate) fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -587,7 +587,7 @@ pub fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliResponse
 /// `POST /v1/w/<ws>/host-sessions/<id>` — MESSAGE-LIVE: inject the caller's
 /// prompt into a LIVE host session's PTY. A dead/unknown/unowned/canonical id
 /// is a uniform 404 (resume rides the spawn route's `{"session": id}`).
-pub fn handle_v1_host_message(
+pub(crate) fn handle_v1_host_message(
     principal: &V1Principal,
     ws_raw: &str,
     sid_raw: &str,
@@ -644,7 +644,7 @@ pub fn handle_v1_host_message(
 /// canonical session, then reuses the F2 drain
 /// ([`crate::v1_sandboxes::handle_messages`]) whose default-deny owner check
 /// still applies — a workspace-authorized caller reads only sessions it OWNS.
-pub fn handle_v1_host_messages(
+pub(crate) fn handle_v1_host_messages(
     principal: &V1Principal,
     ws_raw: &str,
     sid_raw: &str,

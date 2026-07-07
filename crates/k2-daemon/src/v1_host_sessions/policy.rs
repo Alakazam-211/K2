@@ -170,7 +170,7 @@ pub fn resolve_host_injection_profile(
 /// Infallible by design: there is nothing to provision (no ephemeral dir, no
 /// overlay); the agent-command resolver itself falls back to literal claude
 /// rather than erroring (a stale preset must never brick a spawn).
-pub fn resolve_host_spawn(
+pub(crate) fn resolve_host_spawn(
     principal: &V1Principal,
     ws_path: &str,
     session_id: &SessionId,

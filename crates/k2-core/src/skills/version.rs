@@ -28,7 +28,6 @@ use std::fs;
 use std::path::Path;
 
 use crate::fs_atomic::atomic_write_str;
-use crate::log_debug;
 
 // ── Managed region markers ────────────────────────────────────────────
 

@@ -29,7 +29,7 @@
 //! one implementation.
 
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Outcome of [`claim_port`]. The `port` is what the caller should
 /// publish into `~/.k2so/daemon.port` (always equals the port the

@@ -208,7 +208,7 @@ pub fn build_csr_pem(subdomain: &str, key_pair: &KeyPair) -> Result<String, Stri
                 .to_string(),
         );
     }
-    let mut params = csr_params(sub)?;
+    let params = csr_params(sub)?;
     // serialize_request consumes the SAN/DN we set and signs with the key.
     let csr = params
         .serialize_request(key_pair)

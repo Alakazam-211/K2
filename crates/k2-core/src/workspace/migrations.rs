@@ -19,7 +19,6 @@ use crate::db::schema::{AgentHeartbeat, WorkspaceSession};
 use crate::fs_atomic::{self, atomic_write_str, log_if_err, unique_archive_path};
 use crate::heartbeats::control::ensure_agent_wakeup;
 use crate::heartbeats::k2so_heartbeat_add;
-use crate::log_debug;
 use crate::workspace::agent_identity::{
     agent_dir, agent_type_for, agents_dir, find_primary_agent, resolve_project_id,
 };

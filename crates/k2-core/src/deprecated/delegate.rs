@@ -27,10 +27,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::skills::content::generate_agent_claude_md_content;
-use crate::workspace::agent_identity::{agent_dir, resolve_project_id};
+use crate::workspace::agent_identity::agent_dir;
 use crate::workspace::scheduler::{agent_work_dir, get_workspace_state};
 use crate::workspace::work_item::{atomic_write, read_work_item};
-use crate::log_debug;
 
 /// Shorten a slug to a maximum length, breaking at word boundaries.
 /// Strips common filler prefixes (`bug-`, `feature-`, `task-`).

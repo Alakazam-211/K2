@@ -22,7 +22,6 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 
 use crate::fs_atomic::atomic_write;
-use crate::log_debug;
 
 use super::envelope::FederationEnvelope;
 

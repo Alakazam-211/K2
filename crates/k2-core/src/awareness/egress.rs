@@ -38,7 +38,6 @@ use crate::awareness::{
     TargetState,
 };
 use crate::db::schema::ActivityFeedEntry;
-use crate::log_debug;
 use crate::session::registry;
 
 // ─────────────────────────────────────────────────────────────────────
@@ -192,7 +191,7 @@ pub fn deliver(signal: &AgentSignal, inbox_root: &std::path::Path) -> DeliveryRe
 /// is within budget (the budget counter has been incremented as a
 /// side effect).
 fn maybe_deny_over_budget(signal: &AgentSignal) -> Option<DeliveryReport> {
-    use crate::workspace::launch_profile::{load_coordination_level, CoordinationLevel};
+    use crate::workspace::launch_profile::CoordinationLevel;
     use crate::awareness::budget::{
         check_and_increment, BudgetCheck, BudgetDecision, CLI_SENDER_NAME,
     };

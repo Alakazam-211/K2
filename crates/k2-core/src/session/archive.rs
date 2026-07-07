@@ -51,7 +51,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
-use crate::log_debug;
 use crate::session::{Frame, SessionEntry, SessionId};
 
 /// Per-segment rotation boundary. When the active segment reaches

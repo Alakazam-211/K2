@@ -126,7 +126,7 @@ const CELL_GIT_EMAIL: &str = "sandbox@k2.local";
 /// [`SpawnRequest`]. See the module note for the full invariant list. The
 /// returned request carries `ephemeral_cwd = Some(<the provisioned dir>)` so the
 /// child-exit observer tears the dir down on session exit.
-pub fn resolve_spawn(
+pub(crate) fn resolve_spawn(
     principal: &V1Principal,
     req: &ApiSandboxRequest,
 ) -> Result<SpawnRequest, PolicyError> {
@@ -637,7 +637,7 @@ fn provision_work_scratch(ws_slug: &str, session_id: &str) -> Result<PathBuf, Po
 /// - FAIL-CLOSED: a provisioning failure returns `Err` → the route 5xxs; we
 ///   NEVER fall back to `$HOME` or an ephemeral dir. `ephemeral_cwd` is left
 ///   `None` so the child-exit observer does NOT delete the RW dirs (persistence).
-pub fn resolve_workspace_session(
+pub(crate) fn resolve_workspace_session(
     ws_path: &str,
     ws_slug: &str,
     session_id: &SessionId,

@@ -21,7 +21,6 @@ use serde::Serialize;
 
 use crate::workspace::agent_identity::{resolve_agent_name, resolve_project_id};
 use crate::db::schema::{AgentHeartbeat, HeartbeatFire};
-use crate::log_debug;
 
 // Phase 2.5c: cron schedule parsing + next-fire computation.
 pub mod cron;

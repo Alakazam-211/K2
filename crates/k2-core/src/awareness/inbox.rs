@@ -33,7 +33,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::awareness::AgentSignal;
 use crate::fs_atomic::atomic_write;
-use crate::log_debug;
 
 /// Write `signal` into the inbox for `target_agent`. Caller resolves
 /// the target name (e.g. from `signal.to`) and the inbox root

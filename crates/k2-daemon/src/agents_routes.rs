@@ -868,7 +868,8 @@ struct RelationDeleteBody {
 ///
 /// Returns the FULL per-agent settings object the `k2 agent conf`
 /// mockup renders:
-/// `{ok, name, path, mode, enabled, personaPath, connections[], live}`.
+/// `{ok, name, path, mode, enabled, personaPath, connections[],
+/// projects[], live}`.
 ///
 /// - `mode` is display-normalized (stored `k2so`/`agent` → CLI-canonical
 ///   `k2`, see `settings::display_agent_mode`) so operators only ever
@@ -877,6 +878,10 @@ struct RelationDeleteBody {
 ///   are always mutual (one relation row per pair IS bidirectional
 ///   awareness, migration 0051); only cross-daemon edges carry
 ///   `bidirectional: false` + `remote: true`.
+/// - `projects` are the workspace's project-group memberships,
+///   `{id, name, isPoc}` ordered by name (Projects V1 — powers
+///   `k2 agent hire --project` / `set --add-project` plan probes and
+///   `k2 agent get <name> projects`).
 /// - `live` reports the workspace's canonical session:
 ///   `{active, sessionId?, uptimeSec: null}` (uptime tracking is not
 ///   plumbed through `DaemonPtySession` yet; the key is emitted for
@@ -886,17 +891,19 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
         return crate::workspace_routes::workspace_not_found_response(q);
     };
 
-    // projects row: raw mode + enabled bit.
-    let (mode_raw, enabled) = {
+    // projects row: id (for the membership lookup) + raw mode +
+    // enabled bit.
+    let (workspace_id, mode_raw, enabled) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         match conn.query_row(
-            "SELECT agent_mode, agent_enabled FROM projects WHERE path = ?1",
+            "SELECT id, agent_mode, agent_enabled FROM projects WHERE path = ?1",
             rusqlite::params![path],
             |r| {
                 Ok((
-                    r.get::<_, Option<String>>(0)?.unwrap_or_else(|| "off".to_string()),
-                    r.get::<_, Option<i64>>(1)?.unwrap_or(0) == 1,
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?.unwrap_or_else(|| "off".to_string()),
+                    r.get::<_, Option<i64>>(2)?.unwrap_or(0) == 1,
                 ))
             },
         ) {
@@ -925,6 +932,23 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
         Err(_) => serde_json::json!([]),
     };
 
+    // Project-group memberships, {id, name, isPoc} ordered by name
+    // (degrades to [] on a read error — the connections idiom above).
+    let projects = match k2_core::project_groups::memberships_for_workspace(&workspace_id) {
+        Ok(list) => serde_json::Value::Array(
+            list.iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "id": m.group_id,
+                        "name": m.group_name,
+                        "isPoc": m.is_poc,
+                    })
+                })
+                .collect(),
+        ),
+        Err(_) => serde_json::json!([]),
+    };
+
     // Canonical live session (same lookup ensure_canonical_session
     // uses for its single-flight check).
     let live = crate::canonical_session::lookup_project_id(&path)
@@ -950,6 +974,7 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
             "enabled": enabled,
             "personaPath": persona_path,
             "connections": connections,
+            "projects": projects,
             "live": live,
         })
         .to_string(),

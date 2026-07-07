@@ -2749,6 +2749,120 @@ mod tests {
         assert_eq!(resp.status, "200 OK", "body={}", resp.body);
     }
 
+    /// `/cli/agent/conf` reports project-group memberships
+    /// (`projects: [{id, name, isPoc}]`, name-ordered) — the plan
+    /// probe behind `k2 agent hire --project` / `set --add-project` /
+    /// `get <name> projects`.
+    #[test]
+    fn agent_conf_reports_project_memberships() {
+        let stem = gname("conf");
+        let name_a = format!("{stem}-a");
+        let name_z = format!("{stem}-z");
+        let ga = create_group_via_route(&name_a);
+        let gz = create_group_via_route(&name_z);
+        let ga_id = ga["id"].as_str().expect("id").to_string();
+        let gz_id = gz["id"].as_str().expect("id").to_string();
+        let (ws_id, _, ws_path) = insert_workspace("conf-member");
+        let (other_id, ..) = insert_workspace("conf-other");
+
+        // Memberless workspace → empty array (key always present).
+        let resp = crate::agents_routes::handle_agent_conf(&ws_path);
+        let v = ok_json(resp);
+        assert_eq!(v["projects"], serde_json::json!([]));
+
+        // PoC of a, plain member of z (z's PoC is someone else).
+        ok_json(post_json(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": ga_id, "workspace": ws_id }),
+        ));
+        ok_json(post_json(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": gz_id, "workspace": other_id }),
+        ));
+        ok_json(post_json(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": gz_id, "workspace": ws_id }),
+        ));
+
+        let v = ok_json(crate::agents_routes::handle_agent_conf(&ws_path));
+        let projects = v["projects"].as_array().expect("projects array");
+        assert_eq!(projects.len(), 2, "body={v}");
+        assert_eq!(projects[0]["id"], ga_id.as_str());
+        assert_eq!(projects[0]["name"], name_a.as_str());
+        assert_eq!(projects[0]["isPoc"], true, "first member auto-PoC flagged");
+        assert_eq!(projects[1]["id"], gz_id.as_str());
+        assert_eq!(projects[1]["name"], name_z.as_str());
+        assert_eq!(projects[1]["isPoc"], false);
+    }
+
+    /// Removing a plain-member workspace from the SERVER (either
+    /// removal path) also removes its membership rows — no orphan
+    /// `project_group_members` rows (workspace_id has no SQL FK,
+    /// 0066) — and fires members-changed per affected group.
+    #[test]
+    fn workspace_removal_cleans_project_memberships() {
+        install_capture_sink();
+        let ga = create_group_via_route(&gname("reap-a"));
+        let gb = create_group_via_route(&gname("reap-b"));
+        let ga_id = ga["id"].as_str().expect("id").to_string();
+        let gb_id = gb["id"].as_str().expect("id").to_string();
+        let (poc_id, ..) = insert_workspace("reap-poc");
+        let (m1_id, ..) = insert_workspace("reap-m1");
+        let (m2_id, _, m2_path) = insert_workspace("reap-m2");
+        for gid in [&ga_id, &gb_id] {
+            for wid in [&poc_id, &m1_id, &m2_id] {
+                ok_json(post_json(
+                    "/cli/project-group/add-member",
+                    serde_json::json!({ "group": gid, "workspace": wid }),
+                ));
+            }
+        }
+        let member_rows = |wid: &str| -> i64 {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT COUNT(*) FROM project_group_members WHERE workspace_id = ?1",
+                rusqlite::params![wid],
+                |r| r.get(0),
+            )
+            .expect("count")
+        };
+
+        // Path 1 — the UI's `/cli/projects/delete`.
+        let mark = event_mark();
+        let resp = crate::db_routes::handle_projects_delete(
+            serde_json::json!({ "id": m1_id }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(member_rows(&m1_id), 0, "no orphan membership rows");
+        for gid in [&ga_id, &gb_id] {
+            let events = events_for_group(mark, gid);
+            assert!(
+                events
+                    .iter()
+                    .any(|(name, _)| name == "project-group:members-changed"),
+                "members-changed for {gid}: {events:?}"
+            );
+        }
+
+        // Path 2 — `/cli/workspace/remove` (remove_workspace_db_only).
+        let params: std::collections::HashMap<String, String> =
+            [("path".to_string(), m2_path)].into_iter().collect();
+        let resp = crate::workspace_routes::dispatch("/cli/workspace/remove", &params)
+            .expect("remove route claimed");
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(member_rows(&m2_id), 0, "no orphan membership rows");
+
+        // The PoC's rows are untouched (it was never removed) and both
+        // groups still resolve with the PoC as their only member.
+        assert_eq!(member_rows(&poc_id), 2);
+        for gid in [&ga_id, &gb_id] {
+            let v = ok_json(show(gid));
+            assert_eq!(v["members"].as_array().expect("members").len(), 1, "body={v}");
+            assert_eq!(v["pocWorkspaceId"], poc_id.as_str());
+        }
+    }
+
     /// Companion C4 trigger selection through the msg route: AGENT
     /// posts (member and PoC alike — any author != "owner") push to
     /// mobile, content-free (§4.5: project name + group id only,

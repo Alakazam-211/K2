@@ -415,12 +415,23 @@ pub fn projects_update(
 pub fn projects_delete(id: &str) -> Result<(), String> {
     let db = db::shared();
     let conn = db.lock();
+    // Project-group memberships first (no SQL FK on workspace_id —
+    // 0066): callers are §4.5 PoC-guarded (poc_removal_block), so this
+    // only ever removes plain memberships.
+    let member_groups = crate::project_groups::remove_workspace_memberships_with(&conn, id)?;
     conn.execute(
         "DELETE FROM workspaces WHERE project_id = ?1",
         rusqlite::params![id],
     )
     .map_err(|e| e.to_string())?;
-    Project::delete(&conn, id).map_err(|e| e.to_string())
+    Project::delete(&conn, id).map_err(|e| e.to_string())?;
+    for gid in &member_groups {
+        crate::agent_hooks::emit(
+            crate::agent_hooks::HookEvent::ProjectGroupMembersChanged,
+            serde_json::json!({ "groupId": gid }),
+        );
+    }
+    Ok(())
 }
 
 pub fn projects_reorder(ids: &[String]) -> Result<(), String> {

@@ -201,6 +201,17 @@ shared chat — reply with `k2 project msg <name> "your reply"`. Never use
 `k2 msg <name>` for this: `<name>` is a Project, not a workspace, and
 `k2 msg` will fail with `workspace_not_found`.
 
+Membership rides the agent-management plane too:
+```
+k2 agent hire <dir> --project <p>          # hire straight into a project (repeatable)
+k2 agent set <ws> --add-project <p>        # add an existing agent to a project
+k2 agent set <ws> --remove-project <p>     # remove a membership (PoC refused until
+                                           #   `k2 project poc` names a successor)
+k2 agent get <ws> projects                 # its project names, one per line
+```
+The FIRST member of an empty project automatically becomes its Point of
+Contact.
+
 ## Heartbeats
 ```
 k2 heartbeat                                   # list active schedules

@@ -67,7 +67,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// Bumped to 8 in 0.40.30 (W6): the loadable k2-cli skill gains the
 /// "Agent presets" section (`k2 preset`, `hire --agent`, and the
 /// docs/agent-contract.md pointer for custom/local-LLM agents).
-pub const SKILL_VERSION_WORKSPACE: u32 = 8;
+/// Bumped to 9 in 0.40.x: the Projects section gains project-membership
+/// management on the agent plane (`k2 agent hire --project`,
+/// `set --add-project/--remove-project`, `get <ws> projects`, and the
+/// first-member-becomes-PoC rule).
+pub const SKILL_VERSION_WORKSPACE: u32 = 9;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

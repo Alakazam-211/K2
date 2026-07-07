@@ -695,6 +695,108 @@ pub fn poc_blocks_for_workspace(workspace_id: &str) -> Result<Vec<String>, Strin
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("row: {e}"))
 }
 
+/// One row of [`memberships_for_workspace`]: a group this workspace
+/// belongs to, `is_poc` marking the groups where it is the Point of
+/// Contact. Serializes camelCase (wire shape for `k2 agent conf`).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMembership {
+    pub group_id: String,
+    pub group_name: String,
+    pub is_poc: bool,
+}
+
+/// Every project group this workspace is a member of, ordered by group
+/// name (NOCASE) — backs `k2 agent conf`'s `projects` array and
+/// `k2 agent get <name> projects`. Empty vec = member of nothing.
+pub fn memberships_for_workspace(workspace_id: &str) -> Result<Vec<WorkspaceMembership>, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT g.id, g.name, COALESCE(g.poc_workspace_id = m.workspace_id, 0) \
+             FROM project_group_members m JOIN project_groups g ON g.id = m.group_id \
+             WHERE m.workspace_id = ?1 ORDER BY g.name COLLATE NOCASE ASC",
+        )
+        .map_err(|e| format!("prepare: {e}"))?;
+    let rows = stmt
+        .query_map(params![workspace_id], |row| {
+            Ok(WorkspaceMembership {
+                group_id: row.get(0)?,
+                group_name: row.get(1)?,
+                is_poc: row.get(2)?,
+            })
+        })
+        .map_err(|e| format!("query: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("row: {e}"))
+}
+
+/// Delete EVERY membership row for a workspace, across all groups —
+/// the workspace-removal cleanup (`project_group_members.workspace_id`
+/// deliberately has no SQL FK, see 0066, so removal paths must clean
+/// up explicitly or leave orphan member rows behind). Takes the
+/// caller's open connection: both removal paths (`projects_delete`,
+/// `remove_workspace_db_only`) already hold the DB lock. Returns the
+/// affected group ids so callers can emit
+/// `project-group:members-changed` per group.
+///
+/// Defense-in-depth: refuses (`poc_of_projects: ...`) while the
+/// workspace is still the PoC anywhere. Every removal path is already
+/// route-guarded by `poc_removal_block` (§4.5), so tripping this is a
+/// caller bug — failing loudly beats silently orphaning a PoC.
+pub fn remove_workspace_memberships_with(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+) -> Result<Vec<String>, String> {
+    let poc_of: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM project_groups WHERE poc_workspace_id = ?1 \
+                 ORDER BY name COLLATE NOCASE ASC",
+            )
+            .map_err(|e| format!("prepare: {e}"))?;
+        let rows = stmt
+            .query_map(params![workspace_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("query: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("row: {e}"))?
+    };
+    if !poc_of.is_empty() {
+        return Err(format!(
+            "poc_of_projects: workspace is the Point of Contact for: {}. \
+             Reassign the PoC first.",
+            poc_of.join(", ")
+        ));
+    }
+    let group_ids: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT group_id FROM project_group_members WHERE workspace_id = ?1")
+            .map_err(|e| format!("prepare: {e}"))?;
+        let rows = stmt
+            .query_map(params![workspace_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("query: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("row: {e}"))?
+    };
+    if group_ids.is_empty() {
+        return Ok(group_ids);
+    }
+    conn.execute(
+        "DELETE FROM project_group_members WHERE workspace_id = ?1",
+        params![workspace_id],
+    )
+    .map_err(|e| format!("membership delete failed: {e}"))?;
+    let now = now_secs();
+    for gid in &group_ids {
+        conn.execute(
+            "UPDATE project_groups SET updated_at = ?2 WHERE id = ?1",
+            params![gid, now],
+        )
+        .map_err(|e| format!("group touch failed: {e}"))?;
+    }
+    Ok(group_ids)
+}
+
 /// Post to the group's single chat stream. `group_id` must be a FULL
 /// id. This layer STORES only — the P2 routes layer adds membership
 /// enforcement (`not_a_member`, author→workspace via
@@ -1293,6 +1395,82 @@ mod tests {
 
         // A workspace that is PoC nowhere → empty (removal may proceed).
         assert!(poc_blocks_for_workspace(&wid("free")).expect("blocks").is_empty());
+    }
+
+    #[test]
+    fn memberships_for_workspace_lists_groups_name_ordered_with_poc_flag() {
+        let w = wid("member");
+        // Member of nothing → empty.
+        assert!(memberships_for_workspace(&w).expect("none").is_empty());
+
+        // PoC of one group, plain member of another. Names share a
+        // uuid stem with -a/-z suffixes so the NOCASE name ordering is
+        // deterministic and sibling-proof.
+        let stem = gname("memberships");
+        let name_a = format!("{stem}-a");
+        let name_z = format!("{stem}-z");
+        let g_z = create_group(&name_z).expect("z");
+        let g_a = create_group(&name_a).expect("a");
+        add_member(&g_a.id, &w).expect("poc of a");
+        add_member(&g_z.id, &wid("other")).expect("other is poc of z");
+        add_member(&g_z.id, &w).expect("plain member of z");
+
+        let list = memberships_for_workspace(&w).expect("memberships");
+        assert_eq!(list.len(), 2);
+        // Ordered by group NAME, not insertion order.
+        assert_eq!(list[0].group_name, name_a);
+        assert_eq!(list[0].group_id, g_a.id);
+        assert!(list[0].is_poc, "first member auto-PoC must be flagged");
+        assert_eq!(list[1].group_name, name_z);
+        assert_eq!(list[1].group_id, g_z.id);
+        assert!(!list[1].is_poc, "plain membership is not PoC");
+    }
+
+    #[test]
+    fn remove_workspace_memberships_cleans_all_groups_and_guards_poc() {
+        let w = wid("leaver");
+        let other = wid("stayer");
+        let g_a = create_group(&gname("cleanup-a")).expect("a");
+        let g_b = create_group(&gname("cleanup-b")).expect("b");
+        add_member(&g_a.id, &w).expect("w poc of a");
+        add_member(&g_b.id, &other).expect("other poc of b");
+        add_member(&g_b.id, &w).expect("w plain member of b");
+
+        // Still PoC of a → refused loudly with the stable code; NOTHING
+        // is removed (defense-in-depth behind poc_removal_block).
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let err = remove_workspace_memberships_with(&conn, &w)
+                .expect_err("PoC cleanup must be refused");
+            assert!(err.starts_with("poc_of_projects"), "got: {err}");
+        }
+        assert_eq!(memberships_for_workspace(&w).expect("still member").len(), 2);
+
+        // Reassign the PoC away → cleanup removes BOTH rows and
+        // reports both group ids.
+        add_member(&g_a.id, &other).expect("successor joins a");
+        set_poc(&g_a.id, &other).expect("reassign a");
+        let mut affected = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            remove_workspace_memberships_with(&conn, &w).expect("cleanup")
+        };
+        affected.sort();
+        let mut expected = vec![g_a.id.clone(), g_b.id.clone()];
+        expected.sort();
+        assert_eq!(affected, expected, "every affected group id reported");
+        assert!(memberships_for_workspace(&w).expect("gone").is_empty());
+        // Other members are untouched.
+        assert_eq!(list_members(&g_b.id).expect("b members").len(), 1);
+        assert_eq!(get_poc(&g_b.id).expect("b poc"), Some(other.clone()));
+
+        // A workspace with no memberships → Ok(empty), no error.
+        let db = crate::db::shared();
+        let conn = db.lock();
+        assert!(remove_workspace_memberships_with(&conn, &wid("stranger"))
+            .expect("no-op cleanup")
+            .is_empty());
     }
 
     #[test]

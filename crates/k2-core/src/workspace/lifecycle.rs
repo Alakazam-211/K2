@@ -192,6 +192,12 @@ pub fn remove_workspace_db_only(path: &str) -> Result<String, String> {
         )
         .map_err(|_| format!("Workspace not found: {}", path))?;
 
+    // Project-group memberships first (no SQL FK on workspace_id —
+    // 0066): callers are §4.5 PoC-guarded, so this only ever removes
+    // plain memberships. Affected groups get members-changed below.
+    let member_groups =
+        crate::project_groups::remove_workspace_memberships_with(&conn, &project_id)?;
+
     conn.execute(
         "DELETE FROM workspaces WHERE project_id = ?1",
         rusqlite::params![project_id],
@@ -203,6 +209,12 @@ pub fn remove_workspace_db_only(path: &str) -> Result<String, String> {
     )
     .map_err(|e| format!("Failed to delete project: {}", e))?;
 
+    for gid in &member_groups {
+        emit(
+            HookEvent::ProjectGroupMembersChanged,
+            serde_json::json!({ "groupId": gid }),
+        );
+    }
     emit(HookEvent::SyncProjects, serde_json::Value::Null);
     Ok(serde_json::json!({
         "success": true,

@@ -141,11 +141,19 @@ pub(crate) enum Outbound<'a> {
     /// independent of any viewport-text scan.
     Bell,
     /// OSC 52 clipboard STORE from the child app (`ESC]52;c;…`),
-    /// `text` already base64-decoded by alacritty. Sent to EVERY
-    /// viewer of the session — the daemon doesn't guess focus; each
-    /// client applies it to ITS OS clipboard only while it is the
-    /// active viewer (wezterm's attached-client model, deliberately
-    /// not tmux's stomp-every-client). Copy direction ONLY: the
+    /// `text` already base64-decoded by alacritty. TARGETED at the
+    /// ACTIVE subscriber's connection only (see
+    /// [`should_forward_clipboard`]): the Input handler flips
+    /// `active_subscriber` on every input frame — including the SGR
+    /// mouse drag that produced the selection — so the daemon KNOWS
+    /// whose selection this is; it never has to guess focus, and a
+    /// passive second window / phone viewing the same session never
+    /// even receives the payload (wezterm's attached-client model,
+    /// deliberately not tmux's stomp-every-client). An UNCLAIMED
+    /// session (`active_subscriber == 0`) falls back to every viewer;
+    /// the client's DOM-truth apply gate (visible + pane-focused +
+    /// window-focused, `oscClipboard.ts`) bounds that case. Copy
+    /// direction ONLY: the
     /// read-back/query form is a clipboard-exfiltration primitive,
     /// is denied by alacritty's default `Osc52::OnlyCopy` policy,
     /// and the daemon never writes a response. Payloads over
@@ -247,6 +255,20 @@ const UNACKED_BYTES_MAX: usize = 2 * 1024 * 1024;
 /// vte-0.15.0/src/lib.rs:64), so without this cap a hostile/buggy
 /// child could push multi-MB strings at every attached viewer.
 const CLIPBOARD_MAX_BYTES: usize = 1024 * 1024;
+
+/// Whether THIS subscriber's connection should carry an OSC 52
+/// `clipboard` frame. The active subscriber is the connection whose
+/// input made the selection (the Input handler flips
+/// `active_subscriber` on every frame, so the daemon's answer is
+/// authoritative — no client-side claim mirror involved, which is what
+/// stranded remote viewers' copies when the mirror diverged). An
+/// unclaimed session (`active_subscriber == 0`) falls back to every
+/// subscriber: better a spurious copy on a passive viewer (bounded by
+/// the client's DOM-truth apply gate) than a lost copy for the user
+/// who selected.
+fn should_forward_clipboard(active_subscriber: u64, subscriber_id: u64) -> bool {
+    active_subscriber == 0 || active_subscriber == subscriber_id
+}
 
 /// Gate an OSC 52 store into an outbound frame. `None` = drop the
 /// payload WHOLE — a silently-truncated clipboard is worse than none.
@@ -1049,14 +1071,29 @@ pub async fn serve_session_grid_connection(
                         let _ = send_outbound(&mut write, &Outbound::Bell).await;
                     }
                     Ok(AlacEvent::ClipboardStore(_, text)) => {
-                        // OSC 52 copy — forward to this viewer (every
-                        // attached WS runs this same arm, so the frame
-                        // reaches ALL viewers; the client applies it
-                        // only when active — see Outbound::Clipboard).
-                        // The load/query form never reaches here:
-                        // alacritty's default OnlyCopy policy denies
-                        // it, and no response bytes are ever written
-                        // back to the PTY.
+                        // OSC 52 copy — every attached WS runs this
+                        // same arm, but only the ACTIVE subscriber's
+                        // connection forwards the payload (the Input
+                        // handler flipped `active_subscriber` to the
+                        // connection whose selection produced this
+                        // copy; unclaimed sessions fall back to all —
+                        // see Outbound::Clipboard /
+                        // should_forward_clipboard). The load/query
+                        // form never reaches here: alacritty's default
+                        // OnlyCopy policy denies it, and no response
+                        // bytes are ever written back to the PTY.
+                        let active = session
+                            .active_subscriber
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        if !should_forward_clipboard(active, subscriber_id) {
+                            log_debug!(
+                                "[daemon/sessions_grid_ws] OSC52 skipped for \
+                                 passive sub {subscriber_id} (active {active}, \
+                                 session {})",
+                                session.session_id
+                            );
+                            continue;
+                        }
                         let len = text.len();
                         match clipboard_frame(text) {
                             Some(frame) => {
@@ -2073,6 +2110,56 @@ mod tests {
         // …one byte over drops the WHOLE payload (never truncates).
         let over = "x".repeat(CLIPBOARD_MAX_BYTES + 1);
         assert!(clipboard_frame(over).is_none(), "oversize must drop");
+    }
+
+    // Targeted delivery — the clipboard frame goes ONLY to the active
+    // subscriber's connection (the one whose input made the selection),
+    // so a remote client's copy lands on ITS clipboard and a passive
+    // viewer never even receives the payload. Unclaimed falls back to
+    // all (better a spurious client-gated copy than a lost one).
+
+    #[test]
+    fn clipboard_targets_the_active_subscriber_only() {
+        // Sub 7 holds the claim: 7 forwards, passive 9 must NOT.
+        assert!(should_forward_clipboard(7, 7), "active gets the copy");
+        assert!(
+            !should_forward_clipboard(7, 9),
+            "passive subscriber must not receive the clipboard frame"
+        );
+    }
+
+    #[test]
+    fn clipboard_falls_back_to_all_when_unclaimed() {
+        // active_subscriber == 0 (no claim) → every subscriber forwards.
+        assert!(should_forward_clipboard(0, 7));
+        assert!(should_forward_clipboard(0, 9));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clipboard_targeting_follows_the_sessions_active_claim() {
+        // Wire-level source of truth: the WS arm reads the session's
+        // `active_subscriber` atomic — pin that a real claim/release
+        // (apply_set_active, the same helper the WS loop calls) flips
+        // the forwarding decision for a live session.
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_test_session();
+        // Unclaimed → both connections would forward (fallback).
+        let active = s.active_subscriber.load(Relaxed);
+        assert!(should_forward_clipboard(active, 7));
+        assert!(should_forward_clipboard(active, 9));
+
+        // Sub 7 claims (the selection-making client) → only 7 forwards.
+        assert_eq!(apply_set_active(&s, 7, true, None, None), SetActiveOutcome::Claim);
+        let active = s.active_subscriber.load(Relaxed);
+        assert!(should_forward_clipboard(active, 7), "selector receives");
+        assert!(!should_forward_clipboard(active, 9), "passive viewer skipped");
+
+        // Release → back to the everyone fallback.
+        assert_eq!(apply_set_active(&s, 7, false, None, None), SetActiveOutcome::Release);
+        let active = s.active_subscriber.load(Relaxed);
+        assert!(should_forward_clipboard(active, 9));
     }
 
     #[cfg(unix)]

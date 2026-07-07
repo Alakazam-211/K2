@@ -102,7 +102,7 @@ import {
   copySelectionText,
   modelRowAt,
 } from './copyText'
-import { shouldApplyOsc52 } from './oscClipboard'
+import { shouldApplyOsc52Frame } from './oscClipboard'
 import { pickSeamColor } from './seamColor'
 import { computeScaleLayout } from './scaleLayout'
 import { usePinnedSizeStore, type PinnedSize } from '@/stores/pinned-size'
@@ -1763,15 +1763,31 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           case 'clipboard': {
             // OSC 52 copy from the child app (payload decoded and
             // size-capped daemon-side; read-back is never
-            // implemented). Apply to the OS clipboard only while
-            // this pane holds the ACTIVE-viewer claim — wezterm's
-            // attached-client model rather than tmux's stomp-every-
-            // client, so a passive second window / phone viewing the
-            // same session never has its clipboard replaced. Dedupe
-            // against the last APPLIED value via shouldApplyOsc52.
+            // implemented). The daemon targets this frame at the
+            // ACTIVE subscriber (input-flipped, so it's the
+            // connection whose selection produced the copy) —
+            // wezterm's attached-client model rather than tmux's
+            // stomp-every-client. The local apply gate is DOM truth
+            // (visible + pane-focused + window-focused), deliberately
+            // NOT `lastSentActiveRef`: the claim mirror diverges from
+            // the daemon's input-flipped `active_subscriber` (claim
+            // suppression, stale-focus release, reconnect null) and
+            // gating on it stranded remote viewers' copies. The DOM
+            // gate also keeps a pre-targeting daemon's broadcast from
+            // stomping passive viewers. Empty/dedupe policy rides
+            // along inside shouldApplyOsc52Frame.
             const text = parsed.payload.text ?? ''
-            if (lastSentActiveRef.current !== true) break
-            if (!shouldApplyOsc52(lastOsc52AppliedRef.current, text)) break
+            if (
+              !shouldApplyOsc52Frame({
+                visible: tabVisibleRef.current,
+                paneFocused: paneFocusedRef.current,
+                windowFocused: useWindowFocusStore.getState().isFocused,
+                lastApplied: lastOsc52AppliedRef.current,
+                incoming: text,
+              })
+            ) {
+              break
+            }
             lastOsc52AppliedRef.current = text
             navigator.clipboard.writeText(text).catch((err) =>
               console.warn('[kessel-term/osc52] clipboard write failed:', err),

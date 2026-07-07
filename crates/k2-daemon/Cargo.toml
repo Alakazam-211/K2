@@ -1,6 +1,6 @@
 [package]
 name = "k2-daemon"
-version = "0.40.31"
+version = "0.40.32"
 edition = "2021"
 license = "FSL-1.1-Apache-2.0"
 description = "K2 persistent-agent daemon: launchd-managed device-local process that runs the scheduler, companion tunnel, and agent orchestration so agents keep working while the Tauri app is quit and the laptop lid is closed."

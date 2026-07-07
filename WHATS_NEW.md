@@ -3,6 +3,23 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.33 — Your files, where you left them
+
+- **Dragging files into K2 always copies now — never moves.** Dropping a
+  file from Finder into the file tree used to silently relocate the
+  original, which could look like losing it entirely if you thought it
+  was headed to a remote server. External drops are copies, full stop;
+  reorganizing files within the tree still moves them like before.
+- **Clones carry your whole workspace.** "Clone to server" quietly left
+  behind anything your `.gitignore` listed — which usually meant your
+  agent's entire `.k2/` folder (persona, skills, heartbeats) and your
+  `.env` files, even with "Include secrets" checked. Agent state now
+  always travels, and the Include-secrets toggle genuinely decides
+  whether your `.env`/`.auth` files come along.
+- **New machines stop growing a mystery `.k2so` folder.** The
+  compatibility symlink now only appears on machines that actually
+  migrated from the pre-0.40 layout.
+
 ## 0.40.32 — Multiplayer manners
 
 - **Coming back to K2 no longer steals the session.** In shared sessions,

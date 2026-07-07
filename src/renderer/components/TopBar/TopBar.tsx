@@ -96,15 +96,12 @@ export default function TopBar({
         <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">K2</span>
         {/* K2 Connect server switcher (This Mac / saved servers / add) */}
         <ServerSwitcher />
+        {/* Settings cog sits BETWEEN the server picker and the tabs
+            (Rosson, 2026-07-06): K2 | Server | ⚙ | Tabs | … */}
+        <SettingsGearButton />
         {/* §6.0 — the 3-tab page switcher (Agents | Projects | Feedback).
-            Canonical anatomy: K2 | server picker | tabs | page buttons —
-            the tabs sit right of the server picker on every page.
             Absorbs the v0.40.26 Feedback button; badges ride the tabs. */}
         <PageTabs />
-        {/* Settings gear — §6.5 relocation: on every page the cog sits
-            immediately AFTER the page tabs (here that puts it BEFORE the
-            nav-collapse toggle): K2 | Server | Tabs | ⚙ | … */}
-        <SettingsGearButton />
         {/* Primary sidebar toggle */}
         <button
           onClick={onTogglePrimarySidebar}

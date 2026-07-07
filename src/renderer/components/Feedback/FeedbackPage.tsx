@@ -15,6 +15,7 @@
 // dashed empty state; the selection survives filters hiding its card.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useProjectsStore } from '@/stores/projects'
 import { useFeedbackStore } from '@/stores/feedback'
 import { useToastStore } from '@/stores/toast'
@@ -426,6 +427,13 @@ export default function FeedbackPage(): React.JSX.Element | null {
       <div
         className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none flex-shrink-0"
         data-tauri-drag-region
+        onMouseDown={(e) => {
+          // The attribute alone only fires when the bar ITSELF is the click
+          // target — the full-width flex child swallows most clicks, so the
+          // bar wasn't draggable (TopBar.tsx has the same fallback).
+          if ((e.target as HTMLElement).closest('button, input, select, .no-drag')) return
+          void getCurrentWindow().startDragging()
+        }}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">
@@ -437,12 +445,12 @@ export default function FeedbackPage(): React.JSX.Element | null {
               every page; the Feedback tab reads selected here. (Replaces
               the old Back button — Esc still returns to Agents.) */}
           <ServerSwitcher />
+          {/* Settings cog sits BETWEEN the server picker and the tabs
+              (Rosson, 2026-07-06): K2 | Server | ⚙ | Tabs | … */}
+          <SettingsGearButton />
           <div className="no-drag">
             <PageTabs />
           </div>
-          {/* §6.5 relocation — the settings cog is on every page, right
-              after the tabs: K2 | Server | Tabs | ⚙ | … */}
-          <SettingsGearButton />
         </div>
 
         <div className="flex items-center gap-2 no-drag">

@@ -25,6 +25,7 @@
 // ProjectFeedbackTab, the member-scoped feedback board (§6.6).
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { usePageViewStore } from '@/stores/page-view'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
@@ -284,6 +285,13 @@ export default function ProjectsPage(): React.JSX.Element | null {
       <div
         className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none flex-shrink-0"
         data-tauri-drag-region
+        onMouseDown={(e) => {
+          // The attribute alone only fires when the bar ITSELF is the click
+          // target — the full-width flex child swallows most clicks, so the
+          // bar wasn't draggable (TopBar.tsx has the same fallback).
+          if ((e.target as HTMLElement).closest('button, input, select, .no-drag')) return
+          void getCurrentWindow().startDragging()
+        }}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">
@@ -292,12 +300,12 @@ export default function ProjectsPage(): React.JSX.Element | null {
             K2
           </span>
           <ServerSwitcher />
+          {/* Settings cog sits BETWEEN the server picker and the tabs
+              (Rosson, 2026-07-06): K2 | Server | ⚙ | Tabs | … */}
+          <SettingsGearButton />
           <div className="no-drag">
             <PageTabs />
           </div>
-          {/* §6.5 relocation — the settings cog is on every page, right
-              after the tabs: K2 | Server | Tabs | ⚙ | … */}
-          <SettingsGearButton />
           {/* §6.7.1 — nav-collapse toggle, the TopBar primary-sidebar
               idiom (same icon/placement order: … | ⚙ | collapse). */}
           <button

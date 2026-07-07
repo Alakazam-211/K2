@@ -126,6 +126,24 @@ export interface AppSettingsResponse {
   // field needed). Optional: older snapshots omit it → readers treat
   // absent as true (default ON).
   completionSoundEnabled?: boolean
+  // Style System P3 — the persisted Style selection. Backed by the typed
+  // Rust `StyleSettings` struct in k2-core/app_settings.rs (a typed field
+  // is REQUIRED there: AppSettings round-trips through serde and drops
+  // unknown keys). Optional: daemons older than the style arc omit it →
+  // readers fall back to the Square/charcoal/dark defaults.
+  style?: StyleSettingsBackend
+}
+
+/** Matches Rust `StyleSettings` (camelCase via serde rename).
+ *  `scheme` is the user's MODE ('dark' | 'light' | 'auto') — 'auto'
+ *  resolution against the OS appearance happens renderer-side.
+ *  `gaps` is '' (the style's base density) or one of the style's
+ *  declared gap presets (e.g. 'regular' / 'spacious'). */
+export interface StyleSettingsBackend {
+  id: string
+  palette: string
+  scheme: string
+  gaps: string
 }
 
 export interface EditorSettingsBackend {

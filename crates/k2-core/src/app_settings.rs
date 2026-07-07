@@ -265,6 +265,15 @@ pub struct AppSettings {
     pub push_gateway_token: Option<String>,
     #[serde(default)]
     pub editor: EditorSettings,
+    /// Style System P3 — the user's Style selection (style / palette /
+    /// scheme / gaps), daemon-canonical with a renderer localStorage
+    /// mirror for the pre-connect first paint. A typed struct is
+    /// required: `AppSettings` round-trips through
+    /// `serde_json::from_value` on every `load`/`update`, which silently
+    /// drops keys with no matching field — an untyped key would never
+    /// persist.
+    #[serde(default)]
+    pub style: StyleSettings,
     #[serde(default)]
     pub companion: CompanionSettings,
     /// Heartbeat wake scheduler — controls whether/how often launchd
@@ -332,6 +341,47 @@ pub struct CompanionSettings {
     /// `/companion/terminal/spawn` and `/companion/terminal/spawn-background`.
     #[serde(default)]
     pub allow_remote_spawn: bool,
+}
+
+/// Style System P3 (prd-style-system-v1 §5/§6) — persisted Style
+/// selection. `scheme` is the user's MODE ('dark' | 'light' | 'auto');
+/// 'auto' resolution against the OS appearance happens renderer-side.
+/// `gaps` is '' for the style's base/compact density or one of the
+/// style's declared gap presets (e.g. "regular" / "spacious").
+/// The daemon stores these opaquely — validation against the style
+/// registry lives in the renderer, which owns `styles.generated.ts`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleSettings {
+    #[serde(default = "default_style_id")]
+    pub id: String,
+    #[serde(default = "default_style_palette")]
+    pub palette: String,
+    #[serde(default = "default_style_scheme")]
+    pub scheme: String,
+    #[serde(default)]
+    pub gaps: String,
+}
+
+fn default_style_id() -> String {
+    "square".to_string()
+}
+fn default_style_palette() -> String {
+    "charcoal".to_string()
+}
+fn default_style_scheme() -> String {
+    "dark".to_string()
+}
+
+impl Default for StyleSettings {
+    fn default() -> Self {
+        Self {
+            id: default_style_id(),
+            palette: default_style_palette(),
+            scheme: default_style_scheme(),
+            gaps: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -460,6 +510,7 @@ impl Default for AppSettings {
             push_gateway_url: None,
             push_gateway_token: None,
             editor: EditorSettings::default(),
+            style: StyleSettings::default(),
             companion: CompanionSettings::default(),
             wake_scheduler: WakeSchedulerSettings::default(),
         }

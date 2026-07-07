@@ -31,6 +31,13 @@
         html.setAttribute('data-palette', read('k2.palette.' + scheme, '') || read('k2.palette', 'charcoal'));
         var gaps = read('k2.gaps', '');
         if (gaps) html.setAttribute('data-gaps', gaps);
+        if (scheme === 'light') {
+          // Override the dark anti-flash <style> above before first paint.
+          html.style.background = '#fafafa';
+          document.addEventListener('DOMContentLoaded', function () {
+            document.body.style.background = '#fafafa';
+          });
+        }
       })();
     </script>
   </head>

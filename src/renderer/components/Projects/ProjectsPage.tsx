@@ -278,7 +278,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[var(--color-bg)]">
+    <div className="fixed inset-[var(--inset-window)] z-50 flex flex-col bg-[var(--color-bg)]">
       {/* Top bar — mirrors the workspace TopBar's left cluster: traffic-
           light spacer + wordmark + SERVER DROPDOWN + the page switcher
           (§6.0: both visible on every page), draggable. */}

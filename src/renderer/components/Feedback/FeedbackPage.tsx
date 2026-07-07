@@ -422,7 +422,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
     : []
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[var(--color-bg)]">
+    <div className="fixed inset-[var(--inset-window)] z-50 flex flex-col bg-[var(--color-bg)]">
       {/* Top bar — mirrors AgentOps: traffic-light spacer + wordmark, draggable. */}
       <div
         className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none flex-shrink-0"

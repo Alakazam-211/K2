@@ -140,7 +140,10 @@ pub fn k2_account_session_set(refresh_token: String, email: String) -> Result<()
     }
 }
 
-#[cfg(test)]
+// Every test below exercises the REAL macOS keychain, so the whole module
+// is mac-gated — a bare #[cfg(test)] leaves `use super::*` + the helper
+// dead on Linux, which the release Linux build gate rejects (-D warnings).
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

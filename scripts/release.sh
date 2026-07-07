@@ -129,6 +129,43 @@ bun run typecheck:web
 bunx vitest run --reporter=dot
 echo "  Pre-flight gates passed."
 
+# ── Step 0.6: Linux build gate (k2-sandbox-01) ──
+# Added at 0.40.31, the first Linux release. K2 ships Linux artifacts from
+# CI at tag time (app-linux.yml + daemon-binaries.yml) — but tag time is
+# TOO LATE to discover a Linux build break. This gate proves the whole
+# workspace compiles warning-free on real Linux BEFORE any version bump.
+#
+# Designated box: k2-sandbox-01 (Hetzner bare metal, 12c/62GB) — see the
+# boxes inventory memory. Always-on, persistent cargo cache at
+# ${LINUX_GATE_DIR}-target, so warm runs take single-digit minutes. We
+# build in our own directory and touch nothing else on the box (it also
+# hosts the sandbox-engine dev env + Dedicated ref fixture).
+# NEVER point this at linux-test.k2.dev — that DNS name is the LIVE
+# K2 Connect relay.
+#
+# Escape hatch (box down mid-release): K2_SKIP_LINUX_GATE=1 skips with a
+# loud warning — CI at tag time then becomes the only Linux check.
+LINUX_GATE_HOST="${K2_LINUX_GATE_HOST:-root@37.27.67.180}"
+LINUX_GATE_DIR="/root/k2-release-check"
+echo ""
+if [ "${K2_SKIP_LINUX_GATE:-0}" = "1" ]; then
+    echo "Step 0.6: ⚠⚠ LINUX BUILD GATE SKIPPED (K2_SKIP_LINUX_GATE=1) ⚠⚠"
+    echo "  Linux breakage will not surface until CI at tag time."
+else
+    echo "Step 0.6: Linux build gate on ${LINUX_GATE_HOST} (${LINUX_GATE_DIR})..."
+    rsync -az --delete \
+        --exclude target --exclude node_modules --exclude .git \
+        --exclude out --exclude dist \
+        "$PROJECT_DIR/" "${LINUX_GATE_HOST}:${LINUX_GATE_DIR}/"
+    # fetch-frpc.sh auto-detects the Linux triple; the k2 crate's build
+    # script hard-requires the staged sidecar even for `cargo check`.
+    ssh "$LINUX_GATE_HOST" "set -e; export PATH=\"\$HOME/.cargo/bin:\$PATH\"; \
+        cd ${LINUX_GATE_DIR} && ./scripts/fetch-frpc.sh && \
+        CARGO_TARGET_DIR=${LINUX_GATE_DIR}-target RUSTFLAGS='-D warnings' \
+        cargo check --workspace --all-targets"
+    echo "  Linux build gate passed."
+fi
+
 # ── Step 1: Bump version ──
 echo ""
 echo "Step 1: Bumping version to ${VERSION}..."

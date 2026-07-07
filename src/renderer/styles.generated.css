@@ -105,6 +105,156 @@
   --term-ansi-15: #eeeeec;
 }
 
+/* ── Style: Liquid Glass (glass) v0.1.0 ── */
+[data-style="glass"] {
+  --radius-box: 14px;
+  --radius-field: 9px;
+  --radius-selector: 9999px;
+  --gap-pane: 8px;
+  --gap-tile: 6px;
+  --gap-section: 8px;
+  --inset-window: 10px;
+  --divider-width: 12px;
+  --divider-color: transparent;
+  --ring-surface: inset 0 1px 0 0 rgba(255, 255, 255, 0.10), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --ring-field: inset 0 1px 0 0 rgba(255, 255, 255, 0.07), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --ring-focus: 0 0 0 2px rgba(90, 162, 255, 0.35);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-4: 0 16px 40px rgba(0, 0, 0, 0.50);
+  --shadow-5: 0 24px 64px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.35);
+  --material-blur: 18px;
+  --material-saturate: 180%;
+  --material-tint: rgba(16, 20, 32, 0.58);
+  --material-tint-opacity: 0.58;
+  --density-scale: 1;
+  --motion-duration-fast: 140ms;
+  --motion-duration-medium: 220ms;
+  --motion-duration-slow: 340ms;
+  --motion-ease-standard: cubic-bezier(0.32, 0.72, 0, 1);
+  --font-ui: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-display: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
+}
+[data-style="glass"][data-palette="obsidian"] {
+  --color-bg: #0a0c12;
+  --color-bg-surface: rgba(16, 20, 32, 0.58);
+  --color-bg-elevated: rgba(30, 36, 56, 0.62);
+  --color-bg-inset: #0e1118;
+  --color-bg-stripe: rgba(12, 15, 24, 0.50);
+  --color-bg-canvas: #05060a;
+  --color-bg-hover: rgba(255, 255, 255, 0.07);
+  --color-border: rgba(255, 255, 255, 0.09);
+  --color-border-strong: rgba(255, 255, 255, 0.28);
+  --color-text-primary: #eef1f8;
+  --color-text-secondary: #a8b0c2;
+  --color-text-muted: #6d7590;
+  --color-accent: #5aa2ff;
+  --color-accent-hover: #82b8ff;
+  --color-accent-soft: #b3d4ff;
+  --color-on-accent: #ffffff;
+  --color-status-working: #ff9d42;
+  --color-status-error: #ff5d5d;
+  --color-status-ok: #3ddc84;
+  --color-status-warn: #ffc043;
+  --color-status-ok-soft: #6ee7a0;
+  --color-status-warn-soft: #ffd166;
+  --color-status-error-soft: #ff8080;
+  --color-neutral: #7c849c;
+  --color-control-track-off: rgba(255, 255, 255, 0.14);
+  --color-status-error-bright: #ffb3b3;
+  --color-status-error-text: #ff7a7a;
+  --color-status-working-soft: #ffb877;
+  --color-status-warn-text: #ffd166;
+  --color-status-warn-amber: #ffc043;
+  --color-status-warn-amber-soft: #ffd685;
+  --color-status-warn-amber-bright: #ffe7b3;
+  --color-status-ok-hover: #2fbf70;
+  --color-danger: #e0454f;
+  --color-danger-active: #c23540;
+  --color-wash-1: rgba(255, 255, 255, 0.05);
+  --color-wash-2: rgba(255, 255, 255, 0.10);
+  --color-wash-3: rgba(255, 255, 255, 0.20);
+  --color-scrim: rgba(3, 5, 10, 0.40);
+  --color-danger-muted: #b53a44;
+  --color-diff-add-text: #a5e075;
+  --color-diff-remove-text: #ffb3b3;
+  --color-diff-modified-border: #6ee7a0;
+  --color-code-inline: #e8c586;
+  --color-danger-hover: #ff8080;
+  --color-overlay-soft-bg: rgba(255, 255, 255, 0.06);
+  --color-overlay-soft-border: rgba(255, 255, 255, 0.08);
+  --color-scrollbar-thumb: rgba(255, 255, 255, 0.12);
+  --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
+  --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.28);
+  --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.42);
+  --term-fg: #e6e9f2;
+  --term-bg: #0a0c12;
+  --term-cursor: #e6e9f2;
+  --term-selection: #2a3350;
+  --term-ansi-0: #10131c;
+  --term-ansi-1: #ff5d5d;
+  --term-ansi-2: #3ddc84;
+  --term-ansi-3: #ffc043;
+  --term-ansi-4: #5aa2ff;
+  --term-ansi-5: #b58aff;
+  --term-ansi-6: #4dd0e1;
+  --term-ansi-7: #c3c9d9;
+  --term-ansi-8: #5b6378;
+  --term-ansi-9: #ff8080;
+  --term-ansi-10: #6ee7a0;
+  --term-ansi-11: #ffd166;
+  --term-ansi-12: #82b8ff;
+  --term-ansi-13: #cbaaff;
+  --term-ansi-14: #7ee3ef;
+  --term-ansi-15: #f2f5fc;
+}
+/* ── glass/overrides.css (policy-checked: scoped, no !important/url/@import) ── */
+/* Liquid Glass — bounded overrides (policy: scoped, no !important/url/@import).
+ *
+ * 1. The ambient canvas: a barely-there aurora the frost can actually
+ *    diffuse — backdrop-filter over flat color shows nothing.
+ * 2. The material: blur+saturate on chrome-layer surfaces only
+ *    (data-surface = surface/elevated/stripe). `solid`, `canvas`, and
+ *    `inset` roles never frost — terminals and content wells stay opaque
+ *    (Apple layering law + WebGL perf).
+ * 3. Fallbacks: no backdrop-filter support, or the user prefers reduced
+ *    transparency → the same surfaces repaint with the opaque bg slot.
+ */
+
+[data-style="glass"] body {
+  background:
+    radial-gradient(1200px 800px at 12% -8%, rgba(46, 66, 122, 0.28), transparent 60%),
+    radial-gradient(1000px 700px at 88% 108%, rgba(84, 48, 110, 0.20), transparent 62%),
+    radial-gradient(700px 500px at 70% 20%, rgba(28, 82, 96, 0.12), transparent 65%),
+    var(--color-bg-canvas);
+}
+
+[data-style="glass"] [data-surface="surface"],
+[data-style="glass"] [data-surface="elevated"],
+[data-style="glass"] [data-surface="stripe"] {
+  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+  backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-style="glass"] [data-surface="surface"],
+  [data-style="glass"] [data-surface="elevated"],
+  [data-style="glass"] [data-surface="stripe"] {
+    background-color: var(--color-bg);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  [data-style="glass"] [data-surface="surface"],
+  [data-style="glass"] [data-surface="elevated"],
+  [data-style="glass"] [data-surface="stripe"] {
+    -webkit-backdrop-filter: saturate(var(--material-saturate));
+    backdrop-filter: saturate(var(--material-saturate));
+    background-color: var(--color-bg);
+  }
+}
+
 /* ── Style: Square (square) v1.0.0 ── */
 [data-style="square"] {
   --radius-box: 0px;

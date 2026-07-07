@@ -189,6 +189,25 @@ function loadStyle(id) {
     return { ...palette, decls: buildPaletteDecls(file, palette) }
   })
 
+  // Optional bounded overrides.css — the ONLY escape hatch beyond tokens.
+  // Policy (community contract): scoped under [data-style="<id>"], no
+  // remote assets, no imports, no !important.
+  let overridesCss = null
+  try {
+    overridesCss = readFileSync(join(dir, 'overrides.css'), 'utf8')
+  } catch {
+    /* optional */
+  }
+  if (overridesCss !== null) {
+    const oFile = relative(ROOT, join(dir, 'overrides.css'))
+    const code = overridesCss.replace(/\/\*[\s\S]*?\*\//g, '') // policy applies to code, not comments
+    if (/!important/.test(code)) fail(`${oFile}: !important is not allowed in style overrides`)
+    if (/@import/.test(code)) fail(`${oFile}: @import is not allowed in style overrides`)
+    if (/url\s*\(/i.test(code)) fail(`${oFile}: url() (remote/local assets) is not allowed in style overrides`)
+    if (!code.includes(`[data-style="${id}"]`))
+      fail(`${oFile}: overrides must be scoped under [data-style="${id}"]`)
+  }
+
   if (!palettes.some((p) => p.id === manifest.defaultPalette))
     fail(`${manifestFile}: defaultPalette "${manifest.defaultPalette}" not found in palettes/`)
 
@@ -202,7 +221,7 @@ function loadStyle(id) {
       fail(`${manifestFile}: defaultPalettes.${scheme} set but capabilities.schemes lacks "${scheme}"`)
   }
 
-  return { manifest, tokenDecls, gapPresets, palettes }
+  return { manifest, tokenDecls, gapPresets, palettes, overridesCss }
 }
 
 // ── Build ────────────────────────────────────────────────────────────
@@ -244,6 +263,10 @@ for (const style of styles) {
     out.push(`[data-style="${style.manifest.id}"][data-palette="${palette.id}"] {`)
     out.push(...palette.decls)
     out.push('}')
+  }
+  if (style.overridesCss) {
+    out.push(`/* ── ${style.manifest.id}/overrides.css (policy-checked: scoped, no !important/url/@import) ── */`)
+    out.push(style.overridesCss.trimEnd())
   }
 }
 out.push('')

@@ -46,6 +46,7 @@ export const Surface = forwardRef<HTMLDivElement, SurfaceProps>(function Surface
   return (
     <div
       ref={ref}
+      data-surface={role2}
       className={cx(
         ROLE_BG[role2],
         bordered && 'border border-[var(--color-border)]',

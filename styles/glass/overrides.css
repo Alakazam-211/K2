@@ -1,0 +1,44 @@
+/* Liquid Glass — bounded overrides (policy: scoped, no !important/url/@import).
+ *
+ * 1. The ambient canvas: a barely-there aurora the frost can actually
+ *    diffuse — backdrop-filter over flat color shows nothing.
+ * 2. The material: blur+saturate on chrome-layer surfaces only
+ *    (data-surface = surface/elevated/stripe). `solid`, `canvas`, and
+ *    `inset` roles never frost — terminals and content wells stay opaque
+ *    (Apple layering law + WebGL perf).
+ * 3. Fallbacks: no backdrop-filter support, or the user prefers reduced
+ *    transparency → the same surfaces repaint with the opaque bg slot.
+ */
+
+[data-style="glass"] body {
+  background:
+    radial-gradient(1200px 800px at 12% -8%, rgba(46, 66, 122, 0.28), transparent 60%),
+    radial-gradient(1000px 700px at 88% 108%, rgba(84, 48, 110, 0.20), transparent 62%),
+    radial-gradient(700px 500px at 70% 20%, rgba(28, 82, 96, 0.12), transparent 65%),
+    var(--color-bg-canvas);
+}
+
+[data-style="glass"] [data-surface="surface"],
+[data-style="glass"] [data-surface="elevated"],
+[data-style="glass"] [data-surface="stripe"] {
+  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+  backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-style="glass"] [data-surface="surface"],
+  [data-style="glass"] [data-surface="elevated"],
+  [data-style="glass"] [data-surface="stripe"] {
+    background-color: var(--color-bg);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  [data-style="glass"] [data-surface="surface"],
+  [data-style="glass"] [data-surface="elevated"],
+  [data-style="glass"] [data-surface="stripe"] {
+    -webkit-backdrop-filter: saturate(var(--material-saturate));
+    backdrop-filter: saturate(var(--material-saturate));
+    background-color: var(--color-bg);
+  }
+}

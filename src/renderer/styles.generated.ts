@@ -37,6 +37,71 @@ export const DEFAULT_STYLE_ID = "square"
 
 export const STYLES: readonly StyleMeta[] = [
   {
+    "id": "glass",
+    "name": "Liquid Glass",
+    "author": "Alakazam Labs",
+    "description": "Experimental preview — frosted instrument glass over a deep ambient canvas. Chrome floats as translucent cards; terminals stay pure and opaque.",
+    "defaultPalette": "obsidian",
+    "defaultPalettes": {
+      "dark": "obsidian"
+    },
+    "capabilities": {
+      "gaps": false,
+      "backdrop": true,
+      "schemes": [
+        "dark"
+      ]
+    },
+    "gapPresets": [],
+    "palettes": [
+      {
+        "id": "obsidian",
+        "name": "Obsidian",
+        "schemes": [
+          "dark"
+        ],
+        "swatch": {
+          "bg": "#0a0c12",
+          "surface": "rgba(16, 20, 32, 0.58)",
+          "elevated": "rgba(30, 36, 56, 0.62)",
+          "accent": "#5aa2ff",
+          "textPrimary": "#eef1f8",
+          "border": "rgba(255, 255, 255, 0.09)"
+        },
+        "terminal": {
+          "foreground": 15133170,
+          "background": 658450,
+          "palette": [
+            1053468,
+            16735581,
+            4054148,
+            16760899,
+            5939967,
+            11897599,
+            5099745,
+            12831193,
+            5989240,
+            16744576,
+            7268256,
+            16765286,
+            8567039,
+            13347583,
+            8315887,
+            15922684
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 15133170
+          },
+          "selection": {
+            "text": null,
+            "background": 2765648
+          }
+        }
+      }
+    ]
+  },
+  {
     "id": "square",
     "name": "Square",
     "author": "Alakazam Labs",

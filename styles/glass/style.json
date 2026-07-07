@@ -1,0 +1,18 @@
+{
+  "$schema": "../style.schema.json#/$defs/manifest",
+  "id": "glass",
+  "name": "Liquid Glass",
+  "author": "Alakazam Labs",
+  "version": "0.1.0",
+  "schemaVersion": 1,
+  "description": "Experimental preview — frosted instrument glass over a deep ambient canvas. Chrome floats as translucent cards; terminals stay pure and opaque.",
+  "defaultPalette": "obsidian",
+  "defaultPalettes": {
+    "dark": "obsidian"
+  },
+  "capabilities": {
+    "gaps": false,
+    "backdrop": true,
+    "schemes": ["dark"]
+  }
+}

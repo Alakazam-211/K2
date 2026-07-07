@@ -145,3 +145,47 @@ jobs:
             "${{ matrix.asset }}" \
             "${{ matrix.asset }}.sig" \
             --clobber
+
+  # release.sh generates daemon-latest.json BEFORE this workflow builds the
+  # Linux daemons, so the manifest it uploads only carries macos-aarch64 —
+  # and a Linux daemon checking for updates finds no artifact for its
+  # platform key. (0.40.29-era daemons fold that into "up to date", which is
+  # how cfed.k2.dev sat on 0.40.29 while 0.40.31 was out.) This job runs
+  # after both matrix legs, merges the linux-* entries into the released
+  # manifest, and re-uploads it. Idempotent: re-runs overwrite the same keys.
+  merge-daemon-manifest:
+    name: Merge linux artifacts into daemon-latest.json
+    needs: build-linux-daemon
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge + re-upload manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          BASE="https://github.com/$REPO/releases/download/$TAG"
+          # The manifest + binaries were uploaded to THIS tag's release
+          # (manifest by release.sh Step 8.5, binaries by the matrix job).
+          gh release download "$TAG" --repo "$REPO" \
+            -p daemon-latest.json \
+            -p 'k2-daemon-linux-*' \
+            --skip-existing
+          # .sig files also match the glob; hash only the binaries.
+          python3 - "$BASE" <<'PY'
+          import hashlib, json, sys
+          base = sys.argv[1]
+          m = json.load(open("daemon-latest.json"))
+          for target in ("linux-x86_64", "linux-aarch64"):
+              name = f"k2-daemon-{target}"
+              digest = hashlib.sha256(open(name, "rb").read()).hexdigest()
+              m["artifacts"][target] = {
+                  "url": f"{base}/{name}",
+                  "sig": f"{base}/{name}.sig",
+                  "sha256": digest,
+              }
+          json.dump(m, open("daemon-latest.json", "w"), indent=2)
+          print("merged platforms:", sorted(m["artifacts"]))
+          PY
+          gh release upload "$TAG" daemon-latest.json --repo "$REPO" --clobber

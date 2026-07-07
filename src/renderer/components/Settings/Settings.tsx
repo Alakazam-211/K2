@@ -5,6 +5,7 @@ import { SectionErrorBoundary } from './SectionErrorBoundary'
 import { SettingsSearchModal } from './SettingsSearchModal'
 import type { SettingEntry } from './searchManifest'
 import { GeneralSection, GeneralRemoteHostPanel, GENERAL_MANIFEST } from './sections/GeneralSection'
+import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { TerminalSection, TERMINAL_MANIFEST } from './sections/TerminalSection'
 import { CodeEditorSettingsSection, CODE_EDITOR_MANIFEST } from './sections/CodeEditorSettingsSection'
@@ -33,6 +34,7 @@ import { TOPBAR_HEIGHT } from '../../../shared/constants'
 // ── Section nav items ────────────────────────────────────────────────
 const SECTIONS: { id: SettingsSection; label: string; agenticOnly?: boolean }[] = [
   { id: 'general', label: 'General' },
+  { id: 'styles', label: 'Styles' },
   { id: 'projects', label: 'Workspaces' },
   { id: 'workspace-states', label: 'Workspace States', agenticOnly: true },
   { id: 'agent-skills', label: 'Canonical Agent Flow', agenticOnly: true },
@@ -77,6 +79,7 @@ export default function Settings(): React.JSX.Element {
   const allEntries = useMemo<SettingEntry[]>(() => {
     const combined: SettingEntry[] = [
       ...GENERAL_MANIFEST,
+      ...STYLES_MANIFEST,
       ...PROJECTS_MANIFEST,
       ...WORKSPACE_STATES_MANIFEST,
       ...AGENT_SKILLS_MANIFEST,
@@ -216,6 +219,7 @@ export default function Settings(): React.JSX.Element {
       <div
         className={`flex-1 min-h-0 relative ${
           activeSection === 'general' ||
+          activeSection === 'styles' ||
           activeSection === 'projects' ||
           activeSection === 'project-groups' ||
           activeSection === 'k2-connect' ||
@@ -248,6 +252,11 @@ export default function Settings(): React.JSX.Element {
               )}
             </div>
           </div>
+        )}
+        {activeSection === 'styles' && (
+          <SectionErrorBoundary>
+            <StylesSection />
+          </SectionErrorBoundary>
         )}
         {activeSection === 'terminal' && <TerminalSection />}
         {activeSection === 'code-editor' && <CodeEditorSettingsSection />}

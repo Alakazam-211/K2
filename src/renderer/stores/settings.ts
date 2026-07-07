@@ -23,7 +23,7 @@ import { onActiveHostChange } from '@/stores/connect-host'
 // NOTE the naming collision: 'projects' is the LEGACY workspaces section
 // (label "Workspaces" — ProjectsSection.tsx); 'project-groups' is the
 // Projects-V1 groups section (label "Projects" — Projects/ProjectSettings).
-export type SettingsSection = 'general' | 'terminal' | 'code-editor' | 'editors-agents' | 'keybindings' | 'projects' | 'project-groups' | 'timer' | 'workspace-states' | 'agent-skills' | 'heartbeats' | 'companion' | 'wake-scheduler' | 'permissions' | 'dictation-lab' | 'connections' | 'k2-connect'
+export type SettingsSection = 'general' | 'styles' | 'terminal' | 'code-editor' | 'editors-agents' | 'keybindings' | 'projects' | 'project-groups' | 'timer' | 'workspace-states' | 'agent-skills' | 'heartbeats' | 'companion' | 'wake-scheduler' | 'permissions' | 'dictation-lab' | 'connections' | 'k2-connect'
 
 export interface TerminalSettings {
   fontFamily: string

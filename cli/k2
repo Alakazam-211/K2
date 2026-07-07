@@ -5566,8 +5566,8 @@ cmd_schema() {
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--launch] [--onboard <msg>] [--dry-run] [--json]",
-      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, set mode + default agent program, wire connections, optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, set mode + default agent program, wire connections, join projects, optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [{"name": "dir", "required": true}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
@@ -5577,6 +5577,7 @@ cmd_schema() {
         {"name": "--mode", "arg": "mode", "description": "off | custom | manager | k2 (default: custom). 'off' also sets enabled=false."},
         {"name": "--enabled", "arg": "bool", "description": "true | false (default: true). false pauses without changing mode."},
         {"name": "--connect", "arg": "name", "description": "Wire a connection to another agent (repeatable). Connections are always mutual (bidirectional)."},
+        {"name": "--project", "arg": "project", "description": "Add the new agent to a project (name or id, repeatable; see k2 project list). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
         {"name": "--launch", "arg": null, "description": "Start the agent's session after provisioning."},
         {"name": "--onboard", "arg": "msg", "description": "Send msg to the agent after it starts (implies --launch)."},
         {"name": "--dry-run", "arg": null, "description": "Print the exact action plan; change nothing."},
@@ -5586,27 +5587,29 @@ cmd_schema() {
     {
       "name": "agent conf",
       "usage": "k2 agent conf [<name>] [--json]",
-      "description": "Show all of an agent's settings: name, path, mode, enabled, persona, connections (always mutual), live status. Default: the agent in the current directory (exit 4 if unregistered).",
+      "description": "Show all of an agent's settings: name, path, mode, enabled, persona, connections (always mutual), project memberships (PoC marked), live status. Default: the agent in the current directory (exit 4 if unregistered).",
       "args": [{"name": "name", "required": false}],
-      "flags": [{"name": "--json", "arg": null, "description": "Single JSON object: {ok,name,path,mode,enabled,personaPath,connections,live}."}]
+      "flags": [{"name": "--json", "arg": null, "description": "Single JSON object: {ok,name,path,mode,enabled,personaPath,connections,projects,live}."}]
     },
     {
       "name": "agent get",
       "usage": "k2 agent get <name> <key> [--json]",
-      "description": "Print a single setting's value, bare on stdout (script-friendly). Keys: mode | enabled | name | path | persona (persona prints the charter file content).",
+      "description": "Print a single setting's value, bare on stdout (script-friendly). Keys: mode | enabled | name | path | persona | projects (persona prints the charter file content; projects prints the agent's project names, one per line).",
       "args": [{"name": "name", "required": true}, {"name": "key", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Wrap the value in a JSON object instead."}]
     },
     {
       "name": "agent set",
-      "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--dry-run] [--json]",
-      "description": "Change one or more settings in a single call (hire's SETTINGS flags; no connection wiring or launching). Unknown flags exit 2 listing the valid ones.",
+      "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--add-project <p>]... [--remove-project <p>]... [--dry-run] [--json]",
+      "description": "Change one or more settings in a single call (hire's SETTINGS flags plus project membership; no connection wiring or launching). Unknown flags exit 2 listing the valid ones.",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--mode", "arg": "mode", "description": "off | custom | manager | k2 ('off' also sets enabled=false)."},
         {"name": "--enabled", "arg": "bool", "description": "true | false (false pauses without changing mode; survives daemon restarts)."},
         {"name": "--name", "arg": "new-name", "description": "Rename the agent (display name; the directory does not move)."},
         {"name": "--persona", "arg": "file.md", "description": "Replace the persona with this file's contents (previous persona backed up automatically)."},
+        {"name": "--add-project", "arg": "project", "description": "Add the agent to a project (name or id, repeatable). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
+        {"name": "--remove-project", "arg": "project", "description": "Remove the agent from a project (membership only, repeatable). Removing the current PoC is refused (poc_successor_required, exit 1) until 'k2 project poc' names a successor."},
         {"name": "--dry-run", "arg": null, "description": "Show what would change; change nothing."},
         {"name": "--json", "arg": null, "description": "JSON output (ok/changed/actions)."}
       ]
@@ -5621,7 +5624,7 @@ cmd_schema() {
     {
       "name": "agent retire",
       "usage": "k2 agent retire <name> [--archive-to <dir>] [--force] [--dry-run] [--json]",
-      "description": "Safely decommission an agent: deregister, unwire connections, ARCHIVE the folder (never deletes). REFUSES (exit 3) on uncommitted/unpushed git work or likely secrets; --force overrides.",
+      "description": "Safely decommission an agent: deregister, unwire connections, remove project memberships, ARCHIVE the folder (never deletes). REFUSES (exit 3) on uncommitted/unpushed git work or likely secrets; --force overrides. A project's Point of Contact cannot be retired at all (poc_of_projects, NOT force-overridable) — reassign with 'k2 project poc' first.",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--archive-to", "arg": "dir", "description": "Where to move the folder (default: ~/.k2/archive/<name>-<date>/)."},
@@ -6525,9 +6528,10 @@ EOF
 cmd_help_agent_set() {
     cat <<'EOF'
 Change one or more of an agent's settings in a single call.
-Uses the same SETTINGS flags as hire (--mode, --enabled, --name, --persona);
-set does not wire connections or launch sessions. Unknown flags fail (exit 2)
-and list the valid flags.
+Uses the same SETTINGS flags as hire (--mode, --enabled, --name, --persona)
+plus project membership (--add-project / --remove-project); set does not
+wire connections or launch sessions. Unknown flags fail (exit 2) and list
+the valid flags.
 
 USAGE
   k2 agent set <name> [flags]
@@ -6539,19 +6543,27 @@ FLAGS
   --persona <file.md>     Replace the agent's persona with this file's contents.
                           The previous persona is backed up automatically to
                           <dir>/.k2/agent/agent-backups/.
+  --add-project <p>       Add the agent to a project (name or id; repeatable).
+                          Already a member = reported no-op. The FIRST member of
+                          an empty project becomes its Point of Contact.
+  --remove-project <p>    Remove the agent from a project (membership only;
+                          repeatable). Removing the current PoC is refused
+                          (poc_successor_required) until `k2 project poc`
+                          names a successor.
   --dry-run               Show what would change; change nothing
   --json                  JSON output
 
 EXAMPLES
   k2 agent set scout --mode manager
   k2 agent set scout --enabled false --persona ./scout-v2.md
+  k2 agent set scout --add-project "Blue Harbor" --remove-project sandbox
 EOF
 }
 
 cmd_help_agent_conf() {
     cat <<'EOF'
 Show all of an agent's settings: name, path, mode, enabled, persona,
-connections, and live-session status.
+connections, project memberships (PoC marked), and live-session status.
 
 USAGE
   k2 agent conf [<name>] [--json]
@@ -6573,8 +6585,9 @@ USAGE
   k2 agent get <name> <key> [--json]
 
 KEYS
-  mode | enabled | name | path | persona
-  (persona prints the charter file's content)
+  mode | enabled | name | path | persona | projects
+  (persona prints the charter file's content; projects prints the
+  agent's project names, one per line)
 
 FLAGS
   --json                  Wrap the value in a JSON object instead
@@ -6691,6 +6704,11 @@ connects = ", ".join(
     "%s (%s)" % (c.get("peer", "?"), "remote" if c.get("remote") else "bidirectional")
     for c in conns) or "(none)"
 
+# Project-group memberships, the PoC role marked.
+projects = ", ".join(
+    "%s%s" % (p.get("name", "?"), " (PoC)" if p.get("isPoc") else "")
+    for p in d.get("projects") or []) or "(none)"
+
 live = d.get("live") or {}
 if live.get("active"):
     line = "yes — session %s" % str(live.get("sessionId", ""))[:8]
@@ -6707,6 +6725,7 @@ print("mode     : %s" % d.get("mode", "?"))
 print("enabled  : %s" % ("true" if d.get("enabled") else "false"))
 print("persona  : %s" % persona_line)
 print("connects : %s" % connects)
+print("projects : %s" % projects)
 print("live     : %s" % line)
 PYEOF
 }
@@ -6735,9 +6754,9 @@ cmd_agent_get() {
         exit 2
     fi
     case "$key" in
-        mode|enabled|name|path|persona) ;;
+        mode|enabled|name|path|persona|projects) ;;
         *)
-            _agent_err "bad_usage" "unknown key '$key' — valid keys: mode, enabled, name, path, persona"
+            _agent_err "bad_usage" "unknown key '$key' — valid keys: mode, enabled, name, path, persona, projects"
             exit 2 ;;
     esac
     local conf rc=0
@@ -6762,6 +6781,8 @@ if key == "persona":
     except OSError as e:
         sys.stderr.write(json.dumps({"error": {"code": "persona_unreadable", "hint": str(e)}}) + "\n")
         sys.exit(1)
+elif key == "projects":
+    value = d.get("projects") or []
 else:
     value = d.get(key)
 
@@ -6769,6 +6790,10 @@ if as_json:
     print(json.dumps({"ok": True, "key": key, "value": value}))
 elif key == "persona":
     sys.stdout.write(value)
+elif key == "projects":
+    # Bare names, one per line — script-friendly ($(...) capture).
+    for p in value:
+        print(p.get("name", "?"))
 elif value is True:
     print("true")
 elif value is False:
@@ -6781,7 +6806,8 @@ PYEOF
 cmd_agent_set() {
     if _wants_help "$@"; then cmd_help_agent_set; exit 0; fi
     local name="" mode="" enabled="" new_name="" persona="" dry_run=false as_json=false
-    local valid_flags="--mode --enabled --name --persona --dry-run --json"
+    local add_projects=() remove_projects=()
+    local valid_flags="--mode --enabled --name --persona --add-project --remove-project --dry-run --json"
     while [ $# -gt 0 ]; do
         case "$1" in
             --mode)
@@ -6796,6 +6822,12 @@ cmd_agent_set() {
             --persona)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--persona requires a file path"; exit 2; }
                 persona="$2"; shift 2 ;;
+            --add-project)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--add-project requires a project name or id (see: k2 project list)"; exit 2; }
+                add_projects+=("$2"); shift 2 ;;
+            --remove-project)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--remove-project requires a project name or id (see: k2 project list)"; exit 2; }
+                remove_projects+=("$2"); shift 2 ;;
             --dry-run) dry_run=true; shift ;;
             --json) as_json=true; shift ;;
             -*)
@@ -6813,8 +6845,9 @@ cmd_agent_set() {
         _agent_err "bad_usage" "missing <name> — usage: k2 agent set <name> [flags] (valid flags: $valid_flags)"
         exit 2
     fi
-    if [ -z "$mode" ] && [ -z "$enabled" ] && [ -z "$new_name" ] && [ -z "$persona" ]; then
-        _agent_err "bad_usage" "nothing to set — pass at least one of: --mode --enabled --name --persona"
+    if [ -z "$mode" ] && [ -z "$enabled" ] && [ -z "$new_name" ] && [ -z "$persona" ] \
+        && [ ${#add_projects[@]} -eq 0 ] && [ ${#remove_projects[@]} -eq 0 ]; then
+        _agent_err "bad_usage" "nothing to set — pass at least one of: --mode --enabled --name --persona --add-project --remove-project"
         exit 2
     fi
     case "$mode" in
@@ -6836,8 +6869,14 @@ cmd_agent_set() {
     local conf rc=0
     conf=$(_agent_conf_fetch "$name") || rc=$?
     [ "$rc" -ne 0 ] && exit "$rc"
+    local add_projects_json remove_projects_json
+    add_projects_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
+        ${add_projects[@]+"${add_projects[@]}"})
+    remove_projects_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
+        ${remove_projects[@]+"${remove_projects[@]}"})
     CONF="$conf" MODE="$mode" ENABLED="$enabled" NEW_NAME="$new_name" \
-    PERSONA_FILE="$persona" DRY_RUN="$dry_run" AS_JSON="$as_json" \
+    PERSONA_FILE="$persona" ADD_PROJECTS="$add_projects_json" \
+    REMOVE_PROJECTS="$remove_projects_json" DRY_RUN="$dry_run" AS_JSON="$as_json" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
@@ -6847,6 +6886,8 @@ mode = os.environ.get("MODE", "")
 enabled = os.environ.get("ENABLED", "")
 new_name = os.environ.get("NEW_NAME", "")
 persona_file = os.environ.get("PERSONA_FILE", "")
+add_projects = json.loads(os.environ.get("ADD_PROJECTS", "[]"))
+remove_projects = json.loads(os.environ.get("REMOVE_PROJECTS", "[]"))
 dry_run = os.environ.get("DRY_RUN") == "true"
 as_json = os.environ.get("AS_JSON") == "true"
 base = os.environ["ABASE"]
@@ -6934,6 +6975,70 @@ if persona_file:
     else:
         actions.append({"step": "write-persona", "source": persona_file, "status": "pending"})
 
+# Project memberships. The DAEMON owns selector resolution (full id |
+# exact-name NOCASE | unique prefix — the `k2 project` discipline);
+# unresolvable selectors are exit 4 (fix the name and retry).
+def resolve_project(sel):
+    d = http_get("/cli/project-group/show", {"group": sel})
+    err = d.get("error")
+    if err:
+        if isinstance(err, str):
+            err = {"code": "error", "hint": err}
+        code = err.get("code", "error")
+        if code == "ambiguous_id":
+            code = "ambiguous"
+        if code in ("not_found", "ambiguous"):
+            fail(code, err.get("hint")
+                 or "no project matches '%s' — see: k2 project list" % sel, 4)
+        fail("daemon_error", "cannot resolve project '%s': %s"
+             % (sel, err.get("hint") or code))
+    if not d.get("ok") or not d.get("id"):
+        fail("daemon_error",
+             "unexpected response resolving project '%s': %s" % (sel, json.dumps(d)[:200]))
+    return d
+
+# Current memberships from conf: {group id: isPoc}.
+member_of = {p["id"]: bool(p.get("isPoc"))
+             for p in (conf.get("projects") or []) if p.get("id")}
+
+adds, removes = [], []
+for sel in add_projects:
+    d = resolve_project(sel)
+    if all(p["id"] != d["id"] for p in adds):
+        adds.append({"id": d["id"], "name": d.get("name") or sel,
+                     "memberless": not d.get("members")})
+for sel in remove_projects:
+    d = resolve_project(sel)
+    if all(p["id"] != d["id"] for p in removes):
+        removes.append({"id": d["id"], "name": d.get("name") or sel})
+for p in adds:
+    if any(r["id"] == p["id"] for r in removes):
+        fail("bad_usage",
+             "project '%s' is in both --add-project and --remove-project" % p["name"], 2)
+
+for p in adds:
+    a = {"step": "join-project", "project": p["name"], "projectId": p["id"]}
+    if p["id"] in member_of:
+        a.update(status="skipped", reason="already a member")
+    else:
+        a["status"] = "pending"
+        if p["memberless"]:
+            # First-ever member of an empty project auto-becomes the
+            # Point of Contact (confirmed from the response at apply).
+            a["becamePoc"] = True
+    actions.append(a)
+for p in removes:
+    a = {"step": "leave-project", "project": p["name"], "projectId": p["id"]}
+    if p["id"] not in member_of:
+        a.update(status="skipped", reason="not a member")
+    else:
+        a["status"] = "pending"
+        if member_of[p["id"]]:
+            # The daemon will refuse (poc_successor_required) — keep
+            # the step pending so a dry-run previews the refusal.
+            a["note"] = "current PoC — refused until a successor is named"
+    actions.append(a)
+
 def emit(ok, changed, extra_status=None):
     out = {"ok": ok, "changed": changed, "name": conf.get("name"), "path": path,
            "actions": actions}
@@ -6957,6 +7062,18 @@ def emit(ok, changed, extra_status=None):
             elif step == "rename":
                 line = "name: %s" % a["name"] if status == "skipped" else \
                        "name: %s → %s" % (a.get("from"), a["name"])
+            elif step == "join-project":
+                line = "join-project: %s" % a["project"]
+                if a.get("becamePoc"):
+                    line += " (first member — Point of Contact)"
+                if status == "skipped" and a.get("reason"):
+                    line += "  (%s)" % a["reason"]
+            elif step == "leave-project":
+                line = "leave-project: %s" % a["project"]
+                if a.get("note"):
+                    line += " (%s)" % a["note"]
+                if status == "skipped" and a.get("reason"):
+                    line += "  (%s)" % a["reason"]
             else:
                 line = "persona: replace from %s (previous backed up)" % a["source"] \
                        if status != "skipped" else "persona: unchanged (identical content)"
@@ -7040,6 +7157,41 @@ for a in actions:
         a["status"] = "done"
         changed = True
 
+# 4. Project memberships (add-member is idempotent daemon-side; the
+#    PoC invariants are enforced there too — poc_successor_required
+#    surfaces here with the successor hint).
+for a in actions:
+    if a["step"] not in ("join-project", "leave-project") or a["status"] != "pending":
+        continue
+    route = ("/cli/project-group/add-member" if a["step"] == "join-project"
+             else "/cli/project-group/remove-member")
+    resp = http_post_json(route, {"group": a["projectId"], "workspace": path})
+    err = resp.get("error")
+    if err or not resp.get("ok"):
+        if isinstance(err, str):
+            err = {"code": "daemon_error", "hint": err}
+        err = err or {"code": "daemon_error", "hint": json.dumps(resp)[:300]}
+        a["status"] = "failed"
+        emit(False, changed)
+        code = err.get("code") or "daemon_error"
+        hint = err.get("hint") or code
+        if code == "poc_successor_required":
+            hint += " — name a successor first: k2 project poc %s <workspace>" % a["project"]
+        fail(code, hint)
+    if a["step"] == "join-project" and resp.get("alreadyMember"):
+        a["status"] = "skipped"
+        a["reason"] = "already a member"
+        a.pop("becamePoc", None)
+    else:
+        a["status"] = "done"
+        a.pop("note", None)
+        if a["step"] == "join-project":
+            if resp.get("becamePoc"):
+                a["becamePoc"] = True
+            else:
+                a.pop("becamePoc", None)
+        changed = True
+
 emit(True, changed)
 PYEOF
 }
@@ -7078,6 +7230,10 @@ FLAGS
                           without changing its configured mode.
   --connect <name>        Wire a connection to another agent (repeatable).
                           Connections are always mutual (bidirectional).
+  --project <p>           Add the new agent to a project (name or id; repeatable —
+                          see `k2 project list`). Already a member = reported
+                          no-op. The FIRST member of an empty project becomes
+                          its Point of Contact.
   --launch                Start the agent's session after provisioning
   --onboard <msg>         Send <msg> to the agent after it starts (implies --launch)
   --dry-run               Show the full plan; change nothing
@@ -7088,6 +7244,7 @@ EXAMPLES
   k2 agent hire ~/agents/coder --agent codex --template worker --launch
   k2 agent hire ~/agents/qa-bot --persona ./qa-persona.md --name "QA Bot" \
       --connect "Manager" --onboard "Welcome aboard — read your persona and check in."
+  k2 agent hire ~/agents/researcher --template researcher --project "Blue Harbor"
 EOF
 }
 
@@ -7100,6 +7257,11 @@ SAFETY GUARDS — retire REFUSES (exit 3) instead of asking, when it finds:
   * uncommitted or unpushed git work in the agent's folder
   * likely secrets (.env files, key material) in the agent's folder
 Pass --force to proceed anyway. Use --dry-run to preview.
+
+An agent that is a project's Point of Contact cannot be retired at all
+(poc_of_projects — NOT --force-overridable): reassign the PoC first with
+`k2 project poc <project> <successor>`. Plain project memberships are
+removed automatically as part of retirement.
 
 USAGE
   k2 agent retire <name> [flags]
@@ -7353,7 +7515,7 @@ cmd_agent_hire() {
     if _wants_help "$@"; then cmd_help_agent_hire; exit 0; fi
     local dir="" name="" template="" persona="" mode="" enabled="" onboard="" agent_preset=""
     local launch=false dry_run=false as_json=false
-    local connects=()
+    local connects=() projects=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --name)
@@ -7377,6 +7539,9 @@ cmd_agent_hire() {
             --connect)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--connect requires an agent name"; exit 2; }
                 connects+=("$2"); shift 2 ;;
+            --project)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--project requires a project name or id (see: k2 project list)"; exit 2; }
+                projects+=("$2"); shift 2 ;;
             --launch) launch=true; shift ;;
             --onboard)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--onboard requires a message"; exit 2; }
@@ -7428,12 +7593,15 @@ cmd_agent_hire() {
     # --onboard implies --launch (mockup contract).
     [ -n "$onboard" ] && launch=true
 
-    local connects_json
+    local connects_json projects_json
     connects_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
         ${connects[@]+"${connects[@]}"})
+    projects_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
+        ${projects[@]+"${projects[@]}"})
 
     HIRE_DIR="$dir" NAME="$name" TEMPLATE="$template" TEMPLATE_BODY="$template_body" \
     PERSONA_FILE="$persona" MODE="$mode" ENABLED="$enabled" CONNECTS="$connects_json" \
+    PROJECTS="$projects_json" \
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
@@ -7447,6 +7615,7 @@ persona_file = os.environ.get("PERSONA_FILE", "")
 mode = os.environ.get("MODE", "")
 enabled = os.environ.get("ENABLED", "")
 connects = json.loads(os.environ.get("CONNECTS", "[]"))
+wanted_projects = json.loads(os.environ.get("PROJECTS", "[]"))
 launch = os.environ.get("LAUNCH") == "true"
 onboard = os.environ.get("ONBOARD", "")
 agent_preset = os.environ.get("AGENT_PRESET", "")
@@ -7526,6 +7695,32 @@ if agent_preset:
              "preset '%s' is disabled — enable it first: k2 preset set %s --enable" %
              (want, resolved_preset.get("id")), 2)
 
+# ── Resolve --project selectors (fail fast, mirroring --agent) ────
+# The DAEMON owns selector resolution (full id | exact-name NOCASE |
+# unique prefix — the `k2 project` discipline): resolve each via
+# `show`; unresolvable names are exit 4 (fix the name and retry).
+resolved_projects = []  # [{id, name, memberless}]
+for sel in wanted_projects:
+    d = http_get("/cli/project-group/show", {"group": sel})
+    err = d.get("error")
+    if err:
+        if isinstance(err, str):
+            err = {"code": "error", "hint": err}
+        code = err.get("code", "error")
+        if code == "ambiguous_id":
+            code = "ambiguous"
+        if code in ("not_found", "ambiguous"):
+            fail(code, err.get("hint")
+                 or "no project matches '%s' — see: k2 project list" % sel, 4)
+        fail("daemon_error", "cannot resolve project '%s': %s"
+             % (sel, err.get("hint") or code))
+    if not d.get("ok") or not d.get("id"):
+        fail("daemon_error",
+             "unexpected response resolving project '%s': %s" % (sel, json.dumps(d)[:200]))
+    if all(p["id"] != d["id"] for p in resolved_projects):
+        resolved_projects.append({"id": d["id"], "name": d.get("name") or sel,
+                                  "memberless": not d.get("members")})
+
 # ── Probe current state (this is what makes hire idempotent) ─────
 conf = http_get("/cli/agent/conf", {"q": path})
 probe_err = conf.get("error")
@@ -7573,12 +7768,16 @@ desired_mode = mode or "custom"
 desired_mode = {"k2so": "k2"}.get(desired_mode, desired_mode)
 
 existing_peers = set()
+existing_group_ids = set()
 live = False
 if registered:
     for c in conf.get("connections") or []:
         p = c.get("peer")
         if p:
             existing_peers.add(p.lower())
+    for p in conf.get("projects") or []:
+        if p.get("id"):
+            existing_group_ids.add(p["id"])
     live = bool((conf.get("live") or {}).get("active"))
 
 # ── Build the plan ───────────────────────────────────────────────
@@ -7648,6 +7847,20 @@ for peer in connects:
         actions.append({"step": "connect", "peer": peer, "status": "pending",
                         "bidirectional": True})
 
+for p in resolved_projects:
+    # Membership is idempotent daemon-side too (alreadyMember is an Ok
+    # no-op) — the plan-time skip keeps re-runs reporting changed:false.
+    a = {"step": "join-project", "project": p["name"], "projectId": p["id"]}
+    if p["id"] in existing_group_ids:
+        a.update(status="skipped", reason="already a member")
+    else:
+        a["status"] = "pending"
+        if p["memberless"]:
+            # First-ever member of an empty project auto-becomes the
+            # Point of Contact (confirmed from the response at apply).
+            a["becamePoc"] = True
+    actions.append(a)
+
 if launch:
     if live:
         actions.append({"step": "launch", "status": "skipped", "reason": "already live"})
@@ -7694,6 +7907,10 @@ def emit(ok, changed):
             line = "default-agent: %s (%s)" % (a["label"], a["preset"])
         elif step == "connect":
             line = "connect: %s (bidirectional)" % a["peer"]
+        elif step == "join-project":
+            line = "join-project: %s" % a["project"]
+            if a.get("becamePoc"):
+                line += " (first member — Point of Contact)"
         elif step == "launch":
             line = "launch"
             if a.get("sessionId"):
@@ -7849,6 +8066,29 @@ for a in by_step.get("connect", []):
         step_failed(a, "daemon_error", "connect %s failed: %s" % (peer, resp["error"]))
     a["status"] = "done"
     changed = True
+
+# 6b. join projects. add-member is idempotent daemon-side; the first
+#     member of an empty project auto-becomes the PoC (becamePoc).
+for a in by_step.get("join-project", []):
+    if a["status"] != "pending":
+        continue
+    resp = http_post_json("/cli/project-group/add-member",
+                          {"group": a["projectId"], "workspace": path})
+    err = resp.get("error")
+    if err or not resp.get("ok"):
+        hint = err if isinstance(err, str) else (err or {}).get("hint") or json.dumps(resp)[:300]
+        step_failed(a, "daemon_error", "join project %s failed: %s" % (a["project"], hint))
+    if resp.get("alreadyMember"):
+        a["status"] = "skipped"
+        a["reason"] = "already a member"
+        a.pop("becamePoc", None)
+    else:
+        a["status"] = "done"
+        if resp.get("becamePoc"):
+            a["becamePoc"] = True
+        else:
+            a.pop("becamePoc", None)
+        changed = True
 
 # 7. launch
 a = one("launch")

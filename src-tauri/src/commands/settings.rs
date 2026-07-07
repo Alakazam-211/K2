@@ -30,7 +30,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(target_os = "macos")] // only the mac set_document_edited body needs it
+use tauri::Manager;
 
 // ── CLI Install (HOST: writes /usr/local/bin/k2so symlink) ──────────────
 
@@ -378,6 +380,9 @@ pub fn relaunch_via_open(_app: AppHandle) {
 #[tauri::command]
 #[allow(unexpected_cfgs)]
 pub fn set_document_edited(app: AppHandle, edited: bool) -> Result<(), String> {
+    // Non-mac: no NSWindow document-edited dot; params intentionally idle.
+    #[cfg(not(target_os = "macos"))]
+    let _ = (&app, edited);
     #[cfg(target_os = "macos")]
     {
         let app_clone = app.clone();

@@ -51,7 +51,9 @@ use crate::cli_response::CliResponse;
 
 // ── Constants ───────────────────────────────────────────────────────────
 
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+#[cfg(target_os = "macos")]
 const KEYCHAIN_ACCOUNT: &str = "Claude Code";
 const TOKEN_ENDPOINT: &str = "https://platform.claude.com/v1/oauth/token";
 const CLIENT_ID: &str = "https://claude.ai/oauth/claude-code-client-metadata";

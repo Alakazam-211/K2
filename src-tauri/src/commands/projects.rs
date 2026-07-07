@@ -169,12 +169,16 @@ pub async fn projects_open_focus_window(
         tauri::WebviewUrl::App(format!("index.html#focus={}", project_id).into())
     };
 
-    let _window = WebviewWindowBuilder::new(&app, &label, webview_url)
+    let builder = WebviewWindowBuilder::new(&app, &label, webview_url)
         .title(&project_name)
         .inner_size(1200.0, 800.0)
-        .min_inner_size(600.0, 400.0)
+        .min_inner_size(600.0, 400.0);
+    // hidden_title / TitleBarStyle::Overlay are macOS-only builder methods.
+    #[cfg(target_os = "macos")]
+    let builder = builder
         .hidden_title(true)
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .title_bar_style(tauri::TitleBarStyle::Overlay);
+    let _window = builder
         .build()
         .map_err(|e| e.to_string())?;
 

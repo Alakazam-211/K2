@@ -56,9 +56,6 @@ keyring = { version = "3", features = [
     "sync-secret-service",
 ] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-objc = "0.2"
-cocoa = "0.26"
 portable-pty = "0.8"
 # Phase 2 close-out (2026-05-23): rusqlite removed as a direct
 # dependency. src-tauri no longer issues any SQL; every reader/writer
@@ -125,6 +122,15 @@ signal-hook = "0.3"
 signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
 fontdue = "0.9"
 qoi = "0.4"
+
+# ONLY genuinely mac-only deps belong here. For ~15 months this section
+# header sat at the TOP of the dependency list (just `objc`/`cocoa` intended),
+# silently scoping the ~40 deps that followed it to macOS — invisible on mac,
+# and the reason the k2 crate could never resolve on Linux (opener/drag plugin
+# permission schemas were never emitted). Found by the 0.40.31 Linux port.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+cocoa = "0.26"
 
 [features]
 default = []

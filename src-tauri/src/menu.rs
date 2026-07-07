@@ -209,13 +209,16 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
                 tauri::WebviewUrl::App("index.html".into())
             };
 
-            let _ = WebviewWindowBuilder::new(app, &label, webview_url)
+            let builder = WebviewWindowBuilder::new(app, &label, webview_url)
                 .title("K2SO")
                 .inner_size(1400.0, 900.0)
-                .min_inner_size(800.0, 600.0)
+                .min_inner_size(800.0, 600.0);
+            // hidden_title / TitleBarStyle::Overlay are macOS-only builder methods.
+            #[cfg(target_os = "macos")]
+            let builder = builder
                 .hidden_title(true)
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .build();
+                .title_bar_style(tauri::TitleBarStyle::Overlay);
+            let _ = builder.build();
         }
         _ => {}
     }

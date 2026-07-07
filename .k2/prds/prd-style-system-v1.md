@@ -124,7 +124,16 @@ P1 is deliberately the largest *de-risking* step and the smallest *visible* step
 | Community CSS safety | Bounded overrides + Obsidian policies (no remote assets/!important) + selector allowlist lint + schema CI |
 | Lint tooling maturity on Tailwind v4 | Evaluate oxlint-tailwindcss vs custom ESLint denylist at P1; the rule set is small either way |
 
-## 8. Open decisions — SETTLED at P1 kickoff (2026-07-06, per recommendations; Rosson may override)
+## 8. Constraints from the concurrent 0.40.31 arc (platform team, 2026-07-07) — READ BEFORE P1/P2 CONVERSION WORK
+
+The 0.40.31 "K2 on Linux" arc is churning main while this branch lives. Four hard constraints:
+
+1. **Deprecated-surface exclusion list.** The **Review Queue** and **Agent Ops** surfaces (hidden since cd636df) are being **deleted from main in 0.40.31** — components, routes, TopBar buttons, dead CSS, and the state threaded through App.tsx. Do NOT migrate, tokenize, or screenshot these components in P1/P2; exclude them from the 178-component conversion count and the parity matrix. Their deep-links (Feedback page, ProjectChat) are being re-pointed to the ⌘J switcher — if you touch those files, preserve the ⌘J wiring, not the old navigation.
+2. **TS-cleanup sequencing.** Main currently carries ~66 pre-existing TS errors in ~22 renderer files. 0.40.31 drives that to **zero** and then adds a `typecheck:web` CI gate (plus Rust `-D warnings`). Consequences for this branch: (a) after the gate lands, `feat/style-system` cannot merge unless it typechecks clean — rebase promptly once warning-zero lands on main; (b) until then, introduce **no new** TS errors (capture a baseline diff per directory you convert, same discipline as the deletion crews); (c) don't "fix" pre-existing errors in files you convert unless trivial — the warning-zero crew is sweeping them centrally and parallel fixes create rebase conflicts.
+3. **webkitgtk (Linux) blur fallback is now a launch requirement, not a nice-to-have.** 0.40.31 ships K2 Desktop on Linux (webkitgtk). `backdrop-filter` support/perf on webkitgtk is materially worse than macOS WKWebView. Liquid Glass must therefore ship with a **capability-detected reduced-transparency fallback** (solid `surface.solid` rendering when blur is unavailable or expensive) — detect at runtime, don't OS-sniff. Note the Playwright **WebKit** screenshot harness is *not* webkitgtk; add a Linux (webkitgtk) render smoke to the P5 gate before calling Glass done.
+4. **Rebase cadence (ST6 addendum).** Rebase `feat/style-system` on main at minimum: (a) right after the Review Queue/Agent Ops deletion lands, (b) right after TS-zero + CI gates land, and (c) immediately before running Checkpoint A pixel diffs — the parity baseline must be *current main*, or the diff proves nothing.
+
+## 9. Open decisions — SETTLED at P1 kickoff (2026-07-06, per recommendations; Rosson may override)
 
 1. User-facing name: **Styles**; third style ships as **Bezel** (rename is a one-line manifest change if a better name lands).
 2. Primitives: **hand-rolled**, shadcn-inspired (no scaffolding dependency; K2's components are too bespoke for drop-in shadcn).

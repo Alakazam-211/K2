@@ -3059,9 +3059,17 @@ except Exception as e:
 # P3a (sandbox / K2-as-a-server) — OWNER-only API-key auth-tier management for
 # the external /v1/* surface. Subcommands:
 #   k2 api-key create [--label L] [--anthropic-key K | --llm-key K] \
-#                     [--provider anthropic|openai|google|xai] [--base-url U]
+#                     [--provider anthropic|openai|google|xai] [--base-url U] \
+#                     [--workspaces '*'|ws1,ws2,...]
 #   k2 api-key list
 #   k2 api-key revoke <id>
+# --workspaces is the per-key WORKSPACE GRANT (PRD §G2 #4): '*' = every
+# workspace, or a comma-separated list of workspace names. A key minted
+# WITHOUT a grant is FAIL-CLOSED — it authorizes ZERO workspaces and every
+# /v1/w/<ws>/* call returns the uniform 404 (the daemon route has accepted
+# this field since 0.40.21; the flag was simply never exposed here, which
+# made every CLI-minted key dead on arrival for /v1 — found on rpmavs
+# 2026-07-07).
 # The RAW key is printed exactly ONCE on create ("store it now, not shown
 # again"); it is never re-printed. The associated LLM credential (BYO cred;
 # --llm-key is the provider-neutral alias for --anthropic-key) is never echoed
@@ -3075,7 +3083,7 @@ cmd_api_key() {
     shift || true
     case "$sub" in
         create)
-            local label="" anthropic="" provider="" base_url=""
+            local label="" anthropic="" provider="" base_url="" workspaces=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --label)        label="${2:-}"; shift 2 ;;
@@ -3084,13 +3092,14 @@ cmd_api_key() {
                     --llm-key)      anthropic="${2:-}"; shift 2 ;;
                     --provider)     provider="${2:-}"; shift 2 ;;
                     --base-url)     base_url="${2:-}"; shift 2 ;;
+                    --workspaces)   workspaces="${2:-}"; shift 2 ;;
                     *)              echo "Unknown flag: $1" >&2; exit 1 ;;
                 esac
             done
             # Build the JSON body via python3 so the (secret) LLM key is
             # escaped correctly and never interpolated into a shell/URL context.
             local body
-            body=$(K2_AK_LABEL="$label" K2_AK_ANTH="$anthropic" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" python3 -c 'import json,os
+            body=$(K2_AK_LABEL="$label" K2_AK_ANTH="$anthropic" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" K2_AK_WORKSPACES="$workspaces" python3 -c 'import json,os
 b={"label": os.environ.get("K2_AK_LABEL","")}
 k=os.environ.get("K2_AK_ANTH","")
 if k.strip(): b["anthropicKey"]=k
@@ -3098,9 +3107,17 @@ p=os.environ.get("K2_AK_PROVIDER","")
 if p.strip(): b["provider"]=p
 u=os.environ.get("K2_AK_BASE_URL","")
 if u.strip(): b["baseUrl"]=u
+# Workspace grant: "*" passes through as the string; anything else is a
+# comma-separated list -> JSON array of trimmed names. Absent -> no grant
+# (the daemon stores NULL and the key authorizes nothing on /v1).
+w=os.environ.get("K2_AK_WORKSPACES","").strip()
+if w == "*": b["workspaces"]="*"
+elif w:
+    slugs=[s.strip() for s in w.split(",") if s.strip()]
+    if slugs: b["workspaces"]=slugs
 print(json.dumps(b))')
             cli_post_json "/cli/api-keys/create" "$body" \
-                | python3 -c 'import json,sys
+                | K2_AK_WORKSPACES="$workspaces" python3 -c 'import json,os,sys
 try:
     d=json.load(sys.stdin)
     if "error" in d:
@@ -3110,6 +3127,11 @@ try:
     print("  %s" % d.get("key",""))
     print("")
     print("STORE THIS KEY NOW — it is shown only once and cannot be retrieved again.")
+    if not os.environ.get("K2_AK_WORKSPACES","").strip():
+        print("")
+        print("NOTE: minted WITHOUT --workspaces — this key authorizes ZERO", file=sys.stderr)
+        print("workspaces, so every /v1/w/<ws>/* call will 404. Re-mint with", file=sys.stderr)
+        print("--workspaces \x27*\x27 (all) or --workspaces ws1,ws2 to grant access.", file=sys.stderr)
 except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
             ;;

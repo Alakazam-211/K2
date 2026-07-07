@@ -274,8 +274,12 @@ async function errText(res: Response): Promise<string> {
 // resurrect a superseded refresh token.
 async function saveAccountSession(refreshToken: string, email: string): Promise<void> {
   try {
-    const blob = JSON.stringify({ refreshToken, email } satisfies AccountSession)
-    await invoke('k2_secret_set', { service: ACCOUNT_KEYCHAIN_SERVICE, account: SESSION_BLOB_KEY, secret: blob })
+    // Route through the dedicated command that stamps the trusted-application
+    // ACL up front (macOS) so the daemon's first read of this item never
+    // raises a login-keychain prompt. On non-macOS it writes the identical
+    // blob via keyring. Either way the stored bytes match readAccountSession's
+    // expected shape ({ refreshToken, email } under the current service/blob).
+    await invoke('k2_account_session_set', { refreshToken, email })
     // Best-effort cleanup of the superseded two-item layout (both services).
     for (const service of [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE]) {
       try { await invoke('k2_secret_delete', { service, account: SESSION_ACCOUNT_KEY }) } catch { /* idempotent */ }

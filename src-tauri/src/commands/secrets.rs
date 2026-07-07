@@ -92,6 +92,54 @@ pub fn k2_secret_delete(service: String, account: String) -> Result<(), String> 
     }
 }
 
+/// Persist the K2 Connect sign-in session (`dev.k2.connect.account` /
+/// `session`) with the trusted-application ACL applied UP FRONT.
+///
+/// The generic [`k2_secret_set`] goes through the `keyring` crate, whose
+/// macOS backend gives the item a default ACL trusting only the creating app
+/// (`k2`). The daemon then reads that item via the `security` CLI on its next
+/// boot — not on the ACL — which raises exactly one login-keychain prompt
+/// before it can re-stamp the ACL (see `k2_core::tunnel::lease`). Routing the
+/// sign-in write through the SAME `-T` ACL writer the daemon uses means the
+/// item is BORN trusting `/usr/bin/security` + both bundle binaries, so the
+/// daemon's first read is already covered and that one prompt never appears —
+/// and it stays prompt-free across future app re-signings.
+///
+/// macOS-only ACL path; other platforms fall back to the plain keyring blob
+/// write (same bytes, same `(service, account)`), since the `-T` mechanism is
+/// a login-keychain / `security` CLI feature with no cross-platform analogue.
+/// The stored bytes are identical to what the renderer wrote before, so
+/// `readAccountSession` / the daemon read path are unaffected.
+#[tauri::command]
+pub fn k2_account_session_set(refresh_token: String, email: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // Best-effort inside the daemon-shared writer (logs + swallows a
+        // keychain failure); the caller keeps the in-memory session regardless.
+        k2_core::tunnel::lease::write_account_session(&k2_core::tunnel::lease::AccountSession {
+            refresh_token,
+            email: Some(email),
+        });
+        log_debug!("[secrets] stored K2 Connect account session with trusted-app ACL");
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Same blob shape the renderer's readAccountSession expects.
+        let blob = serde_json::json!({
+            "refreshToken": refresh_token,
+            "email": email,
+        })
+        .to_string();
+        let e = entry("dev.k2.connect.account", "session")?;
+        e.set_password(&blob).map_err(|err| {
+            log_debug!("[secrets] account session set failed: {err}");
+            format!("failed to store secret: {err}")
+        })?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

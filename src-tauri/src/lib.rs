@@ -1505,6 +1505,7 @@ pub fn run() {
             commands::secrets::k2_secret_set,
             commands::secrets::k2_secret_get,
             commands::secrets::k2_secret_delete,
+            commands::secrets::k2_account_session_set,
             // K2 Connect — client address book (non-secret host list)
             // persisted to ~/.k2so/connect-hosts.json.
             commands::connect_hosts::connect_hosts_read,

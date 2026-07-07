@@ -354,15 +354,19 @@ impl LeaseTarget {
 ///    `K2.app/Contents/MacOS/k2-daemon`) — covers any future direct
 ///    Security-framework read from the daemon and the daemon's own
 ///    rotation/migration re-writes, so they never re-prompt.
-/// 3. the app/renderer binary (`…/Contents/MacOS/k2`, the daemon exe's
-///    sibling) — the renderer ORIGINALLY created the item (via `keyring`)
-///    and reads it back through `k2_secret_get`. Once the daemon re-writes
-///    the item with an explicit ACL, that ACL REPLACES the keyring default
-///    that trusted `k2`; without re-adding `k2` here the daemon's own ACL
-///    rewrite would lock the renderer OUT and re-introduce a prompt on the
-///    app side. We derive its path as the daemon exe's sibling (both live in
-///    `K2.app/Contents/MacOS/`) so it stays correct across versions and
-///    install locations without hard-coding `/Applications`.
+/// 3. BOTH sibling binaries in `Contents/MacOS/` — the app/renderer `k2`
+///    (created the item via `keyring`, reads it back through `k2_secret_get`)
+///    and the `k2-daemon` (reads via the `security` CLI and any future direct
+///    Security-framework read, plus its own rotation/migration re-writes).
+///    A plain ADD REPLACES the item's ACL wholesale, so whichever process
+///    performs the write must stamp BOTH siblings or it would lock the other
+///    one out and re-introduce a prompt. Since 0.40.31 the app writes the
+///    account session with this ACL at sign-in ([`write_account_session`]
+///    via the renderer command), so `current_exe` may be EITHER binary — we
+///    therefore add both siblings unconditionally rather than deriving "the
+///    other one" from whichever process happens to be running. Paths are the
+///    exe's siblings, so they stay correct across versions and install
+///    locations without hard-coding `/Applications`.
 ///
 /// The CLI (`@alakazamlabs/k2`, an npm-installed bash script) does NOT read
 /// this item — it has no account-session code path — so it is intentionally
@@ -375,16 +379,19 @@ fn acl_trusted_apps() -> Vec<String> {
         // Resolve symlinks so the ACL records the real bundle path (launchd
         // may exec the daemon through a symlink).
         let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-        // (2) the daemon itself.
+        // (2) the current executable — whichever process is writing (the
+        // daemon on rotation/boot, or the app `k2` on sign-in).
         apps.push(exe.to_string_lossy().to_string());
-        // (3) the app binary `k2`, the daemon exe's sibling in
-        // Contents/MacOS/. Only add it when it actually exists on disk
-        // (e.g. inside the .app bundle) — in a bare dev/CI build the daemon
-        // has no `k2` sibling and a phantom path would just be inert.
+        // (3) BOTH bundle siblings, so the ACL is identical no matter which
+        // process wrote it. Only add a sibling that exists on disk (a bare
+        // dev/CI build has no bundle siblings; a phantom path is inert) and
+        // never duplicate `current_exe`.
         if let Some(dir) = exe.parent() {
-            let app_bin = dir.join("k2");
-            if app_bin != exe && app_bin.exists() {
-                apps.push(app_bin.to_string_lossy().to_string());
+            for sibling in ["k2", "k2-daemon"] {
+                let p = dir.join(sibling);
+                if p != exe && p.exists() {
+                    apps.push(p.to_string_lossy().to_string());
+                }
             }
         }
     }

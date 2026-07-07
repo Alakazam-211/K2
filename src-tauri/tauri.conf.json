@@ -37,13 +37,24 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "AI workspace orchestration by Alakazam Labs",
+    "longDescription": "K2 is an AI workspace orchestration tool: run and supervise coding agents across workspaces, terminals, and machines from one cockpit. Ships with the K2 daemon front-ends connect to, terminal multiplexing, and K2 Connect remote access.",
+    "homepage": "https://k2.dev",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
+      "icons/128x128@2x.png",
       "icons/256x256.png",
+      "icons/512x512.png",
       "icons/icon.png",
       "icons/icon.icns"
     ],
+    "linux": {
+      "deb": {
+        "section": "devel"
+      }
+    },
     "macOS": {
       "minimumSystemVersion": "10.15",
       "entitlements": "./entitlements.plist",

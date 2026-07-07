@@ -106,7 +106,7 @@ export function GeneralSection(): React.JSX.Element {
             <span className="text-xs text-[var(--color-text-secondary)]">K2 by Alakazam Labs</span>
             {isRemote && (
               <span
-                className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0"
+                className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0"
                 title="This is your local Mac's app version — not the connected host's. The host version is shown under the remote-host controls."
               >
                 This Mac
@@ -1025,7 +1025,7 @@ function RestartHostRow(): React.JSX.Element | null {
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col min-w-0 flex-1">
           <span className="flex items-center gap-2 min-w-0">
-            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
+            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
               Remote host
             </span>
             <span className="text-xs text-[var(--color-text-primary)] font-medium truncate">
@@ -1264,7 +1264,7 @@ function UpdateHostRow(): React.JSX.Element | null {
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col min-w-0 flex-1">
           <span className="flex items-center gap-2 min-w-0">
-            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
+            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
               Remote host
             </span>
             <span className="text-xs text-[var(--color-text-primary)] font-medium truncate">

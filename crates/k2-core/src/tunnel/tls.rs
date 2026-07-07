@@ -307,20 +307,30 @@ fn load_or_provision_broker(subdomain: &str) -> Result<(String, String), String>
                 cert_file.display()
             ));
         }
-        // Reuse only if it's a real cert that isn't near expiry. A cert
-        // inside the renewal window (or unparseable) falls through to a fresh
-        // broker request so we never serve a cert that's about to die.
-        if !super::cert_broker::cert_needs_renewal(
+        // Reuse only if it's a real cert that (a) COVERS this subdomain's
+        // SANs and (b) isn't near expiry. (a) is the subdomain-rename case:
+        // after cfed → rpmavs the installed cfed cert was fresh for months,
+        // so an expiry-only check kept serving it under the new name and
+        // every browser flagged the site (live bug, rpmavs.k2.dev
+        // 2026-07-07). Wrong-name or unparseable falls through to a fresh
+        // broker request, same as near-expiry.
+        if !super::cert_broker::cert_covers(&cert_pem, &sans_for(subdomain)) {
+            crate::log_debug!(
+                "[tunnel/tls] installed cert does not cover {subdomain} \
+                 (subdomain changed?) — requesting a fresh broker-issued chain"
+            );
+        } else if !super::cert_broker::cert_needs_renewal(
             &cert_pem,
             super::cert_broker::RENEWAL_WINDOW,
             super::cert_broker::now_unix(),
         ) {
             return Ok((cert_pem, key_pem));
+        } else {
+            crate::log_debug!(
+                "[tunnel/tls] installed cert is within the renewal window — \
+                 requesting a fresh broker-issued chain"
+            );
         }
-        crate::log_debug!(
-            "[tunnel/tls] installed cert is within the renewal window — \
-             requesting a fresh broker-issued chain"
-        );
     }
 
     // No usable cert → the real issuance path. Fail loud on any broker error.
@@ -345,7 +355,16 @@ fn load_or_provision_self_signed(subdomain: &str) -> Result<(String, String), St
                 cert_file.display()
             ));
         }
-        return Ok((cert_pem, key_pem));
+        // Same subdomain-rename guard as the broker path: a cached
+        // self-signed cert for the OLD name must not be reused — fall
+        // through and mint a fresh one for the current SANs.
+        if super::cert_broker::cert_covers(&cert_pem, &sans_for(subdomain)) {
+            return Ok((cert_pem, key_pem));
+        }
+        crate::log_debug!(
+            "[tunnel/tls] cached self-signed cert does not cover {subdomain} \
+             (subdomain changed?) — minting a fresh one"
+        );
     }
 
     let cert_pem = self_sign(subdomain, &key_pair)?;
@@ -415,6 +434,44 @@ mod tests {
     fn sans_cover_apex_and_wildcard() {
         let sans = sans_for("rosson");
         assert_eq!(sans, vec!["rosson.k2.dev", "*.rosson.k2.dev"]);
+    }
+
+    // The rpmavs.k2.dev rename bug: a fresh, valid cert for the OLD
+    // subdomain must NOT satisfy the reuse check for the new one.
+    #[test]
+    fn cert_for_old_subdomain_does_not_cover_renamed_one() {
+        with_temp_home(|| {
+            let kp = load_or_generate_keypair().expect("keypair");
+            let cert = self_sign("cfed", &kp).expect("self-signed cert");
+            let sans = crate::tunnel::cert_broker::cert_dns_sans(&cert);
+            assert!(sans.contains(&"cfed.k2.dev".to_string()), "sans: {sans:?}");
+            assert!(sans.contains(&"*.cfed.k2.dev".to_string()), "sans: {sans:?}");
+            assert!(
+                crate::tunnel::cert_broker::cert_covers(&cert, &sans_for("cfed")),
+                "a cert must cover its own subdomain"
+            );
+            assert!(
+                !crate::tunnel::cert_broker::cert_covers(&cert, &sans_for("rpmavs")),
+                "the cfed cert must NOT cover rpmavs after a rename"
+            );
+        });
+    }
+
+    #[test]
+    fn cert_covers_rejects_garbage_and_case_matches() {
+        assert!(!crate::tunnel::cert_broker::cert_covers(
+            "not a pem",
+            &sans_for("cfed")
+        ));
+        with_temp_home(|| {
+            let kp = load_or_generate_keypair().expect("keypair");
+            let cert = self_sign("cfed", &kp).expect("self-signed cert");
+            // Case-insensitive: required names match regardless of case.
+            assert!(crate::tunnel::cert_broker::cert_covers(
+                &cert,
+                &["CFED.k2.dev".to_string()]
+            ));
+        });
     }
 
     #[test]

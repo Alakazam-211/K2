@@ -395,6 +395,51 @@ pub fn cert_not_after(cert_pem: &str) -> Option<i64> {
     Some(cert.validity().not_after.timestamp())
 }
 
+/// The DNS SANs of the leaf cert (first cert in the PEM), lowercased.
+/// Empty when the PEM has no parseable leaf or the leaf carries no
+/// subjectAltName — callers treat "empty" as "covers nothing" and
+/// (re)provision.
+pub fn cert_dns_sans(cert_pem: &str) -> Vec<String> {
+    use x509_parser::extensions::GeneralName;
+    use x509_parser::pem::Pem;
+
+    let mut reader = cert_pem.as_bytes();
+    let Ok((pem, _)) = Pem::read(std::io::Cursor::new(&mut reader)) else {
+        return Vec::new();
+    };
+    let Ok(cert) = pem.parse_x509() else {
+        return Vec::new();
+    };
+    let Ok(Some(san)) = cert.subject_alternative_name() else {
+        return Vec::new();
+    };
+    san.value
+        .general_names
+        .iter()
+        .filter_map(|n| match n {
+            GeneralName::DNSName(d) => Some(d.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// True when the installed leaf cert's DNS SANs cover every name in
+/// `required` (case-insensitive exact match — the per-user wildcard is
+/// itself an explicit `*.<sub>.k2.dev` SAN entry, not pattern-matched).
+/// False for an unparseable leaf. This is what catches a SUBDOMAIN RENAME:
+/// a fresh, valid cert for the OLD name must not be reused for the new one
+/// (found live on rpmavs.k2.dev, 2026-07-07 — the box kept serving its
+/// cfed.k2.dev cert after the rename because reuse only checked expiry).
+pub fn cert_covers(cert_pem: &str, required: &[String]) -> bool {
+    let sans = cert_dns_sans(cert_pem);
+    if sans.is_empty() {
+        return false;
+    }
+    required
+        .iter()
+        .all(|r| sans.iter().any(|s| s.eq_ignore_ascii_case(r)))
+}
+
 /// True when the installed leaf cert is missing, unparseable, or within
 /// `window` of its `notAfter` (i.e. it's time to renew). `now_unix` is the
 /// current time as a Unix timestamp (injected so the renewal decision is

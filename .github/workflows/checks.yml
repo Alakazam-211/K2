@@ -1,0 +1,67 @@
+# Quality gates — added at 0.40.31, the release where the tree first hit
+# warning-zero (cargo, workspace-wide, --all-targets) and typecheck-zero
+# (tsconfig.web.json). This workflow keeps it that way on every push/PR.
+#
+# NOTE: bare `tsc --noEmit` is VACUOUS in this repo (root tsconfig.json is
+# {files: [], references: [...]}, and project references are not checked
+# without --build) — typecheck:web is the real renderer check.
+#
+# The `k2` (src-tauri) crate is deliberately NOT checked here yet: it needs
+# the webkitgtk/gtk stack plus a staged `binaries/frpc-<triple>` external
+# binary (tauri-build validates it even for `cargo check`). The Linux
+# packaging arc owns adding a full app-build job; release.sh Step 0.5 gates
+# the k2 crate on the maintainer box in the meantime.
+
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  web:
+    name: typecheck:web + vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck renderer (tsconfig.web.json)
+        run: bun run typecheck:web
+
+      - name: Vitest
+        run: bunx vitest run --reporter=dot
+
+  rust:
+    name: cargo check -D warnings (k2-core, k2-daemon)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: checks-x86_64
+
+      # Same dep set daemon-binaries.yml uses for the C/C++ build scripts
+      # (ggml/llama-cpp-2, libgit2, sqlite).
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake clang pkg-config libssl-dev
+
+      - name: cargo check (deny warnings, all targets)
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo check -p k2-core -p k2-daemon --all-targets

@@ -117,6 +117,18 @@ fi
 
 cd "$PROJECT_DIR"
 
+# ── Step 0.5: Pre-flight quality gates ──
+# Added at 0.40.31 when the tree first reached warning-zero / typecheck-zero.
+# Fail the release BEFORE any version bump or build if regressions slipped in.
+# NOTE: bare `tsc --noEmit` is vacuous here (root tsconfig has files:[] +
+# references) — typecheck:web (tsconfig.web.json) is the real renderer check.
+echo ""
+echo "Step 0.5: Pre-flight gates (cargo -D warnings, typecheck:web, vitest)..."
+RUSTFLAGS="-D warnings" cargo check --workspace --all-targets
+bun run typecheck:web
+bunx vitest run --reporter=dot
+echo "  Pre-flight gates passed."
+
 # ── Step 1: Bump version ──
 echo ""
 echo "Step 1: Bumping version to ${VERSION}..."

@@ -381,11 +381,9 @@ export default function App(): React.JSX.Element {
         e.preventDefault()
         toggleRunningAgents()
       }
-      // Cmd+Shift+O — Agent Ops (Observability) fleet view
-      if (e.metaKey && e.shiftKey && (e.key === 'o' || e.key === 'O')) {
-        e.preventDefault()
-        useAgentOpsStore.getState().toggle()
-      }
+      // DEPRECATED 2026-07-06: ⌘⇧O Agent Ops fleet view retired (the ⌘J
+      // Running Agents panel is the surviving surface). Shortcut disabled;
+      // AgentOps component + store are planned for removal in 0.40.31.
       // Cmd+[ to go back, Cmd+] to go forward
       if (e.metaKey && !e.shiftKey && e.key === '[') {
         e.preventDefault()

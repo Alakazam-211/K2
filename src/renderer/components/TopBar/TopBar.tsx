@@ -135,12 +135,14 @@ export default function TopBar({
             )}
           </svg>
         </button>
-        {/* Review Queue */}
-        <ReviewQueueTopBarButton />
+        {/* DEPRECATED (Rosson, 2026-07-06): Review Queue + Agent Ops fleet
+            view are retired from the top bar — the rewired ⌘J Running
+            Agents panel (canonical v2 session list) covers the need.
+            <ReviewQueueTopBarButton /> and <AgentOpsTopBarButton /> stay
+            compiled but unrendered; their components/stores/pages are
+            PLANNED FOR REMOVAL in the 0.40.31 cleanup arc. */}
         {/* Running Agents */}
         <RunningAgentsTopBarButton />
-        {/* Agent Ops — fleet view */}
-        <AgentOpsTopBarButton />
         {/* Back / Forward navigation */}
         <NavButtons />
       </div>
@@ -276,6 +278,9 @@ export default function TopBar({
   )
 }
 
+/** @deprecated Hidden from the top bar 2026-07-06; scheduled for removal
+ *  with the Review Queue system in the 0.40.31 cleanup arc. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ReviewQueueTopBarButton(): React.JSX.Element | null {
   const agenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
   const pendingCount = useReviewQueueStore((s) => s.pendingCount)
@@ -328,6 +333,10 @@ function RunningAgentsTopBarButton(): React.JSX.Element {
   )
 }
 
+/** @deprecated Hidden from the top bar 2026-07-06; the Agent Ops fleet
+ *  view is superseded by the rewired ⌘J panel. Scheduled for removal in
+ *  the 0.40.31 cleanup arc. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function AgentOpsTopBarButton(): React.JSX.Element {
   return (
     <button

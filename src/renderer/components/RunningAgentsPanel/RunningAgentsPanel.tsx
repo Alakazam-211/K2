@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { terminalListRunning, terminalWrite } from '@/lib/terminal-daemon'
+import { daemonCliGet } from '@/lib/daemon-cli'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useTabsStore } from '@/stores/tabs'
 import { useProjectsStore } from '@/stores/projects'
@@ -12,8 +13,27 @@ interface RunningAgentInfo {
   terminalId: string
   cwd: string
   command: string | null
+  /** Daemon-canonical agent name from the v2 session map (e.g. "cortana"). */
+  agentName?: string
   tabTitle?: string
   workspaceName?: string
+}
+
+/** Does a tab item render this running session? Terminal items match by
+ *  terminal/session id; pinned agent tabs (Cortana's chat — AgentItemData)
+ *  carry NO terminal id, only the agent identity, so they match by
+ *  agentName. This is the link the panel was missing after the v2
+ *  migration ("no active sessions" while pinned chats were live). */
+function itemMatchesAgent(item: any, agent: RunningAgentInfo): boolean {
+  if (item.type === 'terminal') {
+    const d = item.data as any
+    return d?.terminalId === agent.terminalId || (!!d?.sessionId && d.sessionId === agent.terminalId)
+  }
+  if (item.type === 'agent') {
+    const d = item.data as any
+    return !!agent.agentName && d?.agentName === agent.agentName
+  }
+  return false
 }
 
 export default function RunningAgentsPanel(): React.JSX.Element | null {
@@ -41,7 +61,22 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
 
     const load = async () => {
       try {
-        const result = (await terminalListRunning()) as RunningAgentInfo[]
+        // Canonical source: the daemon's v2 session map (zombie-reaped,
+        // includes pinned agent chats + workspace tab sessions). The old
+        // terminal/list-running route iterates the LEGACY TerminalManager,
+        // which has been empty since the v2 migration — that's why this
+        // panel said "no active sessions" while agents were clearly live.
+        // The legacy route is still unioned in (dedup by id) for any
+        // stragglers spawned through the old path.
+        const [v2, legacy] = await Promise.all([
+          daemonCliGet<RunningAgentInfo[]>('agents/running').catch(() => [] as RunningAgentInfo[]),
+          terminalListRunning().catch(() => [] as RunningAgentInfo[]),
+        ])
+        const seen = new Set(v2.map((a) => a.terminalId))
+        const result: RunningAgentInfo[] = [
+          ...v2,
+          ...(legacy as RunningAgentInfo[]).filter((a) => !seen.has(a.terminalId)),
+        ]
         // Enrich with tab titles from frontend state
         const tabsState = useTabsStore.getState()
         const allTabs = [
@@ -55,13 +90,14 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
         const projects = useProjectsStore.getState().projects
         const activeAgents = useActiveAgentsStore.getState().agents
         for (const agent of result) {
-          // Match tab title and terminal command from tab items
+          // Match tab title (renamable — tab.title is the renamed name) and
+          // terminal command from tab items; pinned agent chats match by
+          // agentName via itemMatchesAgent.
           for (const tab of allTabs) {
             for (const [, pg] of tab.paneGroups) {
-              const matchItem = pg.items.find((item: any) => item.type === 'terminal' && item.data?.terminalId === agent.terminalId)
+              const matchItem = pg.items.find((item: any) => itemMatchesAgent(item, agent))
               if (matchItem) {
                 agent.tabTitle = tab.title
-                // Get the CLI command from the terminal item data (e.g. "claude", "codex")
                 const itemCommand = (matchItem.data as any)?.command
                 if (itemCommand) agent.command = itemCommand
                 break
@@ -99,6 +135,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     return agents.filter(
       (a) =>
         (a.command || '').toLowerCase().includes(q) ||
+        (a.agentName || '').toLowerCase().includes(q) ||
         a.cwd.toLowerCase().includes(q) ||
         (a.tabTitle || '').toLowerCase().includes(q)
     )
@@ -134,7 +171,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
         const agent = filtered[selectedIndex]
         if (agent) {
           // Navigate to the terminal tab
-          navigateToTerminal(agent.terminalId, agent.cwd)
+          navigateToTerminal(agent)
           close()
         }
       }
@@ -142,15 +179,15 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     [close, filtered, selectedIndex, sendingTo]
   )
 
-  const navigateToTerminal = (terminalId: string, cwd: string) => {
+  const navigateToTerminal = (agent: RunningAgentInfo) => {
+    const { terminalId, cwd } = agent
     const tabsState = useTabsStore.getState()
 
-    // 1. Check active workspace tabs
+    // 1. Check active workspace tabs (terminal items by id, pinned agent
+    //    chats by agentName — itemMatchesAgent covers both)
     for (const tab of tabsState.tabs) {
       for (const [, pg] of tab.paneGroups) {
-        const match = pg.items.find(
-          (item) => item.type === 'terminal' && (item.data as any).terminalId === terminalId
-        )
+        const match = pg.items.find((item) => itemMatchesAgent(item, agent))
         if (match) {
           useTabsStore.setState({ activeTabId: tab.id })
           return
@@ -162,9 +199,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     for (const group of tabsState.extraGroups) {
       for (const tab of group.tabs) {
         for (const [, pg] of tab.paneGroups) {
-          const match = pg.items.find(
-            (item) => item.type === 'terminal' && (item.data as any).terminalId === terminalId
-          )
+          const match = pg.items.find((item) => itemMatchesAgent(item, agent))
           if (match) {
             useTabsStore.setState({ activeTabId: tab.id })
             return
@@ -178,9 +213,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
       const allBgTabs = [...(bg.tabs || []), ...(bg.extraGroups || []).flatMap((g: any) => g.tabs || [])]
       for (const tab of allBgTabs) {
         for (const [, pg] of tab.paneGroups) {
-          const match = pg.items.find(
-            (item: any) => item.type === 'terminal' && item.data?.terminalId === terminalId
-          )
+          const match = pg.items.find((item: any) => itemMatchesAgent(item, agent))
           if (match) {
             // key format is "projectId:workspaceId"
             const [projectId, workspaceId] = key.split(':')
@@ -361,7 +394,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
                       isSelected ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]'
                     }`}
                     onClick={() => {
-                      navigateToTerminal(agent.terminalId, agent.cwd)
+                      navigateToTerminal(agent)
                       close()
                     }}
                     onMouseEnter={() => setSelectedIndex(index)}
@@ -379,9 +412,9 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
                           {agent.command || 'shell'}
                         </span>
                       </div>
-                      {agent.tabTitle && agent.tabTitle !== (agent.workspaceName || workspaceName(agent.cwd)) && (
+                      {(agent.tabTitle || agent.agentName) && (agent.tabTitle ?? agent.agentName) !== (agent.workspaceName || workspaceName(agent.cwd)) && (
                         <div className="text-[10px] text-[var(--color-text-muted)] truncate">
-                          {agent.tabTitle}
+                          {agent.tabTitle ?? agent.agentName}
                         </div>
                       )}
                     </div>
@@ -407,12 +440,12 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
                       onClick={(e) => {
                         e.stopPropagation()
                         const wsName = agent.workspaceName || workspaceName(agent.cwd)
-                        const agName = agentNameFromId(agent.terminalId) ?? agent.terminalId
+                        const agName = agent.agentName ?? agentNameFromId(agent.terminalId) ?? agent.terminalId
                         navigator.clipboard.writeText(`${wsName}:${agName}`)
                         setCopiedId(agent.terminalId)
                         setTimeout(() => setCopiedId((prev) => prev === agent.terminalId ? null : prev), 1500)
                       }}
-                      title={`Copy: ${agent.workspaceName || workspaceName(agent.cwd)}:${agentNameFromId(agent.terminalId) ?? agent.terminalId}`}
+                      title={`Copy: ${agent.workspaceName || workspaceName(agent.cwd)}:${agent.agentName ?? agentNameFromId(agent.terminalId) ?? agent.terminalId}`}
                     >
                       {copiedId === agent.terminalId ? (
                         <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">

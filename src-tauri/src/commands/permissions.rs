@@ -58,6 +58,11 @@ fn check_accessibility() -> bool {
     unsafe { AXIsProcessTrusted() }
 }
 
+// TODO(objc2): migrate off the frozen `cocoa`/`objc` crates. NOT a
+// mechanical rename: AVCaptureDevice has no objc2 binding in this
+// dependency tree (objc2-av-foundation is absent from Cargo.lock), so the
+// cocoa-NSString + raw msg_send! form stays until that crate is adopted.
+#[allow(deprecated)]
 #[cfg(target_os = "macos")]
 fn check_microphone() -> bool {
     // AVCaptureDevice.authorizationStatus(for: .audio) returns one of
@@ -159,7 +164,10 @@ pub struct MicrophoneRequestResult {
     pub opened_settings: bool,
 }
 
+// TODO(objc2): same as check_microphone above — cocoa NSString feeding a
+// raw msg_send! AVCaptureDevice call; no objc2-av-foundation in the tree.
 #[tauri::command]
+#[allow(deprecated)]
 pub fn permissions_request_microphone() -> Result<MicrophoneRequestResult, String> {
     // Already granted — short-circuit, no prompt, no Settings open.
     if check_microphone() {

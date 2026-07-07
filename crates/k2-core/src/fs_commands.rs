@@ -930,6 +930,12 @@ pub fn open_external(url: &str) -> Result<String, String> {
 /// In Connect mode the renderer should fall back to a renderer-side
 /// path (Phase 3.1) since the user's clipboard lives on their own
 /// machine.
+// TODO(objc2): migrate off the frozen `cocoa`/`objc` crates. NOT a
+// mechanical rename: NSFilenamesPboardType is deprecated by AppKit itself
+// (objc2-app-kit marks it #[deprecated] too), so the real migration is
+// NSPasteboard readObjects(forClasses: [NSURL]) — a behavioral rewrite of
+// the Finder-copy paste path that needs manual clipboard testing.
+#[allow(deprecated)]
 #[cfg(target_os = "macos")]
 pub fn clipboard_read_file_paths() -> Result<Vec<String>, String> {
     use cocoa::appkit::{NSFilenamesPboardType, NSPasteboard};

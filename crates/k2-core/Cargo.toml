@@ -209,3 +209,12 @@ arc-swap = "1"
 cocoa = "0.26"
 objc = "0.2"
 llama-cpp-2 = { version = "0.1", features = ["metal"] }
+
+# The `objc` crate's `msg_send!` macro expands to `#[cfg(cargo-clippy)]`
+# gates that the newer Rust `unexpected_cfgs` lint doesn't recognize.
+# Declaring `cargo-clippy` as an expected cfg value silences the warnings
+# cleanly (same treatment as src-tauri/Cargo.toml); upstream objc is frozen
+# at a version that pre-dates the stricter cfg check. Goes away with the
+# TODO(objc2) migration in fs_commands.rs.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }

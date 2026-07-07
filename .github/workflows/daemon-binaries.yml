@@ -74,6 +74,13 @@ jobs:
       # cover the daemon's C/C++ deps (ggml/llama-cpp-2, libgit2, sqlite).
       - name: Install build dependencies
         run: |
+          # Drop the runner's flaky third-party apt repos (microsoft/azure-cli)
+          # whose mirror intermittently 500s `apt-get update` with a corrupt
+          # InRelease — transient infra, unrelated to our build. We install
+          # nothing from them. (See app-linux.yml for the v0.40.34 incident.)
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+                     /etc/apt/sources.list.d/azure-cli.list \
+                     /etc/apt/sources.list.d/azure-cli.sources || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake clang pkg-config libssl-dev

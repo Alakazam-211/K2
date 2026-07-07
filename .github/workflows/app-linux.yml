@@ -57,6 +57,15 @@ jobs:
       # daemon-binaries.yml uses for ggml/libgit2/sqlite build scripts.
       - name: Install build dependencies
         run: |
+          # The ubuntu-latest runner image ships third-party apt repos
+          # (packages.microsoft.com / azure-cli) whose mirror intermittently
+          # serves a corrupt InRelease ("NOSPLIT"), failing `apt-get update`
+          # with exit 100 — a transient infra failure unrelated to our build
+          # (hit on the v0.40.34 tag, 2026-07-07). We don't install anything
+          # from those repos, so drop them before updating.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+                     /etc/apt/sources.list.d/azure-cli.list \
+                     /etc/apt/sources.list.d/azure-cli.sources || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake clang pkg-config libssl-dev \

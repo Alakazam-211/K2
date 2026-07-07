@@ -191,24 +191,40 @@ fn check_daemon_version_and_restart() {
                 );
                 return;
             }
-            log_debug!(
-                "[version-check] MISMATCH daemon=v{} app=v{} (attempt={}); restarting daemon via launchctl kickstart",
-                status.version,
-                app_version,
-                attempt
-            );
-            // #14: BEFORE kickstart, self-heal a plist whose baked-in
-            // ProgramArguments[0] is stale/transient. Otherwise the
-            // kickstart just respawns the SAME bad path and we never
-            // converge. `heal_daemon_plist_program` is a no-op when the
-            // recorded path is already correct, or when the current exe
-            // is itself transient (can't be trusted to seed the plist).
-            heal_daemon_plist_program();
-            match crate::commands::daemon::kickstart_daemon() {
-                Ok(()) => log_debug!("[version-check] launchctl kickstart succeeded"),
-                Err(e) => log_debug!("[version-check] launchctl kickstart failed: {e}"),
+            // Linux/other: launchd doesn't exist here, and the daemon is
+            // service-manager-owned (systemd user unit from the k2-daemon
+            // .deb). Log the skew once and leave the daemon alone.
+            #[cfg(not(target_os = "macos"))]
+            {
+                log_debug!(
+                    "[version-check] MISMATCH daemon=v{} app=v{} (attempt={}); launchd unavailable on this platform — restart the k2-daemon service manually (e.g. systemctl --user restart k2-daemon)",
+                    status.version,
+                    app_version,
+                    attempt
+                );
+                return;
             }
-            return;
+            #[cfg(target_os = "macos")]
+            {
+                log_debug!(
+                    "[version-check] MISMATCH daemon=v{} app=v{} (attempt={}); restarting daemon via launchctl kickstart",
+                    status.version,
+                    app_version,
+                    attempt
+                );
+                // #14: BEFORE kickstart, self-heal a plist whose baked-in
+                // ProgramArguments[0] is stale/transient. Otherwise the
+                // kickstart just respawns the SAME bad path and we never
+                // converge. `heal_daemon_plist_program` is a no-op when the
+                // recorded path is already correct, or when the current exe
+                // is itself transient (can't be trusted to seed the plist).
+                heal_daemon_plist_program();
+                match crate::commands::daemon::kickstart_daemon() {
+                    Ok(()) => log_debug!("[version-check] launchctl kickstart succeeded"),
+                    Err(e) => log_debug!("[version-check] launchctl kickstart failed: {e}"),
+                }
+                return;
+            }
         }
         log_debug!(
             "[version-check] daemon unreachable after 10 attempts; skipping version check"
@@ -238,6 +254,10 @@ fn check_daemon_version_and_restart() {
 /// Best-effort: every failure is logged and swallowed so this never
 /// blocks startup or the kickstart that follows. Returns `true` when it
 /// rewrote + reloaded the plist (caller can log), `false` otherwise.
+///
+/// macOS-only: the plist + launchctl machinery has no meaning elsewhere
+/// (Linux daemons are systemd-user-unit-owned). Every caller is gated.
+#[cfg(target_os = "macos")]
 fn heal_daemon_plist_program() -> bool {
     use k2_core::daemon_lifecycle as dl;
 
@@ -363,9 +383,6 @@ fn reload_daemon_launch_agent(plist_path: &std::path::Path) {
         Err(e) => log_debug!("[plist-heal] bootstrap spawn failed: {e}"),
     }
 }
-
-#[cfg(not(target_os = "macos"))]
-fn reload_daemon_launch_agent(_plist_path: &std::path::Path) {}
 
 // Phase 2 Unit 2 — `llm_worker_main` moved to k2so-daemon's
 // `llm_host::worker_main`. The daemon now spawns itself with
@@ -778,6 +795,16 @@ pub fn run() {
             // upgrade. In debug builds we opt out by default — the
             // `target/debug/k2so-daemon` path is volatile, and a dev
             // with `K2SO_INSTALL_DAEMON=1` can override.
+            // Linux/other platforms: the launchd install/heal/autostart
+            // machinery below has no meaning — the daemon is owned by the
+            // k2-daemon .deb's systemd user unit (or started manually).
+            // One clean line instead of launchctl spawn errors.
+            #[cfg(not(target_os = "macos"))]
+            log_debug!(
+                "[k2so] daemon self-heal: launchd unavailable on this platform — skipping plist install/heal/autostart (use the k2-daemon service instead)"
+            );
+
+            #[cfg(target_os = "macos")]
             perf_timer!("startup_install_daemon_plist", {
                 // v2 bump: v1 was burned during 0.33.0 RC testing when
                 // dev launches with `K2SO_INSTALL_DAEMON=1` marked it
@@ -875,6 +902,7 @@ pub fn run() {
             // plist BEFORE the autostart `ensure_loaded` below so launchd
             // loads the corrected program path. No-op when the recorded path
             // is already correct, or when the current exe is itself transient.
+            #[cfg(target_os = "macos")]
             perf_timer!("startup_heal_daemon_plist", {
                 if heal_daemon_plist_program() {
                     log_debug!("[k2so] daemon plist self-healed at startup (#14)");
@@ -888,6 +916,7 @@ pub fn run() {
             // the app — they expect the daemon to be back without having
             // to click "Restart" in Settings. Fires regardless of the
             // toggle, in both debug and release builds.
+            #[cfg(target_os = "macos")]
             perf_timer!("startup_ensure_daemon_loaded", {
                 let plist = k2_core::wake::DaemonPlist::canonical(
                     std::path::PathBuf::from("/unused"),
@@ -1009,12 +1038,15 @@ pub fn run() {
                         // installed) so launchd stops respawning it,
                         // then fall through to the normal cleanup +
                         // destroy path below.
-                        let plist = k2_core::wake::DaemonPlist::canonical(
-                            std::path::PathBuf::from("/unused"),
-                        );
-                        if let Some(path) = plist.plist_path() {
-                            if path.exists() {
-                                let _ = k2_core::wake::launchctl_unload(&path);
+                        #[cfg(target_os = "macos")]
+                        {
+                            let plist = k2_core::wake::DaemonPlist::canonical(
+                                std::path::PathBuf::from("/unused"),
+                            );
+                            if let Some(path) = plist.plist_path() {
+                                if path.exists() {
+                                    let _ = k2_core::wake::launchctl_unload(&path);
+                                }
                             }
                         }
                         window::save_window_state(&app_handle);
@@ -1602,6 +1634,9 @@ pub fn run() {
             std::process::exit(1);
         })
         .run(|app, event| {
+            // Non-mac: `app` is only consumed by the mac-gated Reopen arm.
+            #[cfg(not(target_os = "macos"))]
+            let _ = &app;
             match event {
                 // Cmd+Q / File → Quit / Menubar "Quit K2SO" /
                 // NSApplication terminate: all land here. Semantic
@@ -1614,14 +1649,17 @@ pub fn run() {
                 // installed), then let exit proceed. The in-app
                 // companion server dies with the Tauri process.
                 tauri::RunEvent::ExitRequested { .. } => {
-                    let plist = k2_core::wake::DaemonPlist::canonical(
-                        std::path::PathBuf::from("/unused"),
-                    );
-                    if let Some(path) = plist.plist_path() {
-                        if path.exists() {
-                            // Best-effort — errors swallowed so a
-                            // hung launchctl can't block the quit.
-                            let _ = k2_core::wake::launchctl_unload(&path);
+                    #[cfg(target_os = "macos")]
+                    {
+                        let plist = k2_core::wake::DaemonPlist::canonical(
+                            std::path::PathBuf::from("/unused"),
+                        );
+                        if let Some(path) = plist.plist_path() {
+                            if path.exists() {
+                                // Best-effort — errors swallowed so a
+                                // hung launchctl can't block the quit.
+                                let _ = k2_core::wake::launchctl_unload(&path);
+                            }
                         }
                     }
                 }

@@ -13,6 +13,8 @@ import {
   remoteHostPolicy,
   shouldSurfaceRemoteDrop,
   classifyWhoamiStatus,
+  shouldRefreshCredsOnAccept,
+  shouldShowReloadButton,
 } from './ConnectionGate'
 
 const status = (over: Partial<{ version: string; protocol: number; phase: string; detail: string }> = {}) => ({
@@ -136,5 +138,48 @@ describe('classifyWhoamiStatus (stale-session probe)', () => {
     expect(classifyWhoamiStatus(500)).toBe('unknown')
     expect(classifyWhoamiStatus(502)).toBe('unknown')
     expect(classifyWhoamiStatus(404)).toBe('unknown')
+  })
+})
+
+// Black-screen-after-self-update fix B — stale cached daemon creds. The
+// local daemon rotates its auth token every boot and reuses the port, and
+// /boot-status is public: a LOCAL accept that FOLLOWS any non-accept poll
+// in the same gate session crossed a daemon restart (upgrade kickstart),
+// so the cached port/token MUST be invalidated before App mounts, or every
+// authed call 401s. This pins the rule the poll loop's accept branch uses
+// to decide whether to call invalidateDaemonWs().
+describe('shouldRefreshCredsOnAccept (upgrade-kickstart stale creds)', () => {
+  it('LOCAL accept after a non-accept poll → refresh (crossed a daemon restart)', () => {
+    expect(shouldRefreshCredsOnAccept({ isRemote: false, sawNonAccept: true })).toBe(true)
+  })
+
+  it('LOCAL first-poll accept (no restart crossed) → no refresh', () => {
+    expect(shouldRefreshCredsOnAccept({ isRemote: false, sawNonAccept: false })).toBe(false)
+  })
+
+  it('REMOTE hosts never refresh here (their token lives in the connect-host store)', () => {
+    expect(shouldRefreshCredsOnAccept({ isRemote: true, sawNonAccept: true })).toBe(false)
+    expect(shouldRefreshCredsOnAccept({ isRemote: true, sawNonAccept: false })).toBe(false)
+  })
+})
+
+// Black-screen-after-self-update fix C — a failed Phase-2 App import must
+// never strand the user. On a local accept the poll loop stops, freezing
+// `attempts`, so the attempt-based thresholds can never fire on their own;
+// importFailed must surface the Reload button unconditionally.
+describe('shouldShowReloadButton (overlay escape hatch)', () => {
+  it('importFailed ALWAYS shows Reload — even with attempts frozen at 0', () => {
+    expect(shouldShowReloadButton({ migrating: false, attempts: 0, importFailed: true })).toBe(true)
+    expect(shouldShowReloadButton({ migrating: true, attempts: 0, importFailed: true })).toBe(true)
+  })
+
+  it('plain wait surfaces Reload after ~10s (attempts >= 20)', () => {
+    expect(shouldShowReloadButton({ migrating: false, attempts: 19, importFailed: false })).toBe(false)
+    expect(shouldShowReloadButton({ migrating: false, attempts: 20, importFailed: false })).toBe(true)
+  })
+
+  it('migrating waits longer (~60s, attempts >= 120) before nagging', () => {
+    expect(shouldShowReloadButton({ migrating: true, attempts: 119, importFailed: false })).toBe(false)
+    expect(shouldShowReloadButton({ migrating: true, attempts: 120, importFailed: false })).toBe(true)
   })
 })

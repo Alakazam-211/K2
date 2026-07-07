@@ -111,6 +111,43 @@ export function shouldSurfaceRemoteDrop(consecutiveFails: number): boolean {
   return consecutiveFails >= REMOTE_DROP_THRESHOLD
 }
 
+/** Stale-creds rule for the upgrade kickstart (black-screen bug, fix B).
+ *  The LOCAL daemon rotates its auth token every boot and reuses the same
+ *  port, and /boot-status is PUBLIC — so an accept that FOLLOWS any
+ *  non-accept poll in this gate session means we crossed a daemon
+ *  restart/upgrade while polling, and daemon-ws's cached creds still hold
+ *  the pre-restart token. Mounting on them puts App into a 401 storm.
+ *  Pure fn (like shouldSurfaceRemoteDrop above) so the rule is
+ *  unit-testable without the React/Tauri-bound effect. Remote hosts are
+ *  excluded: their token lives in the connect-host store, not the local
+ *  port file, and remote re-auth has its own revival path. */
+export function shouldRefreshCredsOnAccept(opts: {
+  isRemote: boolean
+  sawNonAccept: boolean
+}): boolean {
+  return !opts.isRemote && opts.sawNonAccept
+}
+
+/** Backoff schedule for retrying the Phase-2 dynamic import of App
+ *  (fix C). A failed/hung chunk load (e.g. the webview recovered mid-boot
+ *  and a stale asset request died) used to be console.error'd and then
+ *  NOTHING — a dark "Connecting…" forever. Three retries, easing off. */
+const APP_IMPORT_RETRY_DELAYS_MS = [1000, 3000, 9000]
+
+/** Reload-button rule for the ConnectingOverlay, pulled out as a pure fn
+ *  for unit tests (fix C). A failed App import must ALWAYS surface the
+ *  Reload escape hatch: on a local accept the poll loop stops, so the
+ *  attempts counter freezes and the attempt-based thresholds below can
+ *  never fire — without the importFailed override the user is stranded. */
+export function shouldShowReloadButton(opts: {
+  migrating: boolean
+  attempts: number
+  importFailed: boolean
+}): boolean {
+  if (opts.importFailed) return true
+  return opts.migrating ? opts.attempts >= 120 : opts.attempts >= 20
+}
+
 /** The gate's verdict for a single poll. */
 type GateDecision =
   | { kind: 'accept' }
@@ -317,6 +354,11 @@ export function ConnectionGate(): React.ReactElement {
   const [decision, setDecision] = useState<GateDecision>({ kind: 'wait', reason: 'starting' })
   const [attempts, setAttempts] = useState(0)
   const [AppModule, setAppModule] = useState<AppComponent | null>(null)
+  // Fix C: the Phase-2 dynamic import of App exhausted its retries. On a
+  // LOCAL accept the poll loop has stopped (attempts frozen), so without
+  // this flag the overlay's Reload button could never appear — a failed
+  // import was a dark "Connecting…" forever.
+  const [importFailed, setImportFailed] = useState(false)
   // Cache the resolved app version so we don't re-invoke Tauri on every
   // host switch. The chosen POLICY, however, is rebuilt per host kind
   // (local vs remote) — see ensurePolicy.
@@ -398,6 +440,12 @@ export function ConnectionGate(): React.ReactElement {
     // remote drop: a single blip is swallowed; only >= REMOTE_DROP_THRESHOLD
     // in a row counts as a genuine reconnect. Reset to 0 on every accept.
     let consecutiveFails = 0
+    // Fix B (upgrade-kickstart stale creds): has THIS effect run seen any
+    // non-accept poll? If a LOCAL accept follows one, we crossed a daemon
+    // restart while polling and the cached port/token are stale — see
+    // shouldRefreshCredsOnAccept. Covers the first-poll-errors case too
+    // (fetchBootStatus null → wait → flag set → later accept refreshes).
+    let sawNonAccept = false
 
     // A host switch must re-poll from scratch: drop any prior accept so
     // the overlay shows while the new host is contacted. (The recovery
@@ -549,6 +597,15 @@ export function ConnectionGate(): React.ReactElement {
         )
       }
       if (next.kind === 'accept') {
+        // Fix B: a LOCAL accept after any non-accept poll means the daemon
+        // restarted under us (upgrade kickstart) — it rotated its boot
+        // token and rebound the same port, and /boot-status is public, so
+        // this accept says nothing about our CACHED creds. Drop them so
+        // App mounts against a fresh port+token read instead of a 401
+        // storm. Synchronous, before any state flush can mount App.
+        if (shouldRefreshCredsOnAccept({ isRemote, sawNonAccept })) {
+          invalidateDaemonWs()
+        }
         // A soft health-poll skipped the unconditional setters above; apply
         // them on recovery so the gate flips back to 'connected' and the
         // banner clears.
@@ -584,7 +641,10 @@ export function ConnectionGate(): React.ReactElement {
         }
         return // local: stop polling; Phase 2 takes over
       }
-      // Non-accept (a failed poll). For a soft health-poll we DEBOUNCE: a
+      // Non-accept (a failed poll). Remember it: a later accept now implies
+      // we crossed a daemon restart → cached creds must be refreshed (fix B).
+      sawNonAccept = true
+      // For a soft health-poll we DEBOUNCE: a
       // single blip is swallowed (gate stays 'connected', no banner) and
       // only >= REMOTE_DROP_THRESHOLD consecutive fails surface the wait
       // decision + the non-blocking reconnect banner. The App stays mounted
@@ -649,16 +709,41 @@ export function ConnectionGate(): React.ReactElement {
   // Phase 2: once accepted, dynamically import App. Its import
   // side-effects (store creation, eager fetches) run NOW for the first
   // time, against a daemon confirmed to be the right version AND ready.
+  //
+  // Fix C: the import is retried with backoff — a chunk request can die
+  // when the webview was natively recovered mid-boot (the black-screen
+  // watchdog path) or the asset protocol hiccups. On exhausted retries we
+  // set importFailed so the overlay says WHY and surfaces Reload, instead
+  // of console.error-ing into an eternal "Connecting…".
   useEffect(() => {
     if (decision.kind !== 'accept') return
     let cancelled = false
-    void import('../App').then((mod) => {
-      if (cancelled) return
-      setAppModule(() => mod.default)
-    }).catch((err: unknown) => {
-      console.error('[ConnectionGate] dynamic import of App failed:', err)
-    })
-    return () => { cancelled = true }
+    let retryId: ReturnType<typeof setTimeout> | null = null
+    const attemptImport = (attempt: number): void => {
+      void import('../App').then((mod) => {
+        if (cancelled) return
+        setImportFailed(false)
+        setAppModule(() => mod.default)
+      }).catch((err: unknown) => {
+        console.error(
+          `[ConnectionGate] dynamic import of App failed (attempt ${attempt + 1}/${APP_IMPORT_RETRY_DELAYS_MS.length + 1}):`,
+          err,
+        )
+        if (cancelled) return
+        const delay = APP_IMPORT_RETRY_DELAYS_MS[attempt]
+        if (delay !== undefined) {
+          retryId = setTimeout(() => { attemptImport(attempt + 1) }, delay)
+        } else {
+          // Out of retries — stop pretending we're connecting.
+          setImportFailed(true)
+        }
+      })
+    }
+    attemptImport(0)
+    return () => {
+      cancelled = true
+      if (retryId !== null) clearTimeout(retryId)
+    }
   }, [decision.kind])
 
   // K2 Connect step #4 — soft reconnect. A REMOTE host that has already
@@ -697,7 +782,7 @@ export function ConnectionGate(): React.ReactElement {
   if (decision.kind !== 'accept' || AppModule === null) {
     return (
       <>
-        <ConnectingOverlay decision={decision} attempts={attempts} />
+        <ConnectingOverlay decision={decision} attempts={attempts} importFailed={importFailed} />
         {signInOverlay}
       </>
     )
@@ -812,22 +897,33 @@ function RecoveryBanner({
 interface ConnectingOverlayProps {
   decision: GateDecision
   attempts: number
+  /** Fix C: the Phase-2 App import exhausted its retries — say so and
+   *  always surface the Reload button (attempts may be frozen). */
+  importFailed: boolean
 }
 
-function ConnectingOverlay({ decision, attempts }: ConnectingOverlayProps): React.ReactElement {
+function ConnectingOverlay({ decision, attempts, importFailed }: ConnectingOverlayProps): React.ReactElement {
   const migrating = decision.kind === 'migrating'
 
   // Heading + sub-line. While the (correct) daemon is migrating we tell
   // the user updates are being applied; otherwise it's a plain connect.
-  const heading = migrating ? 'Setting up K2…' : 'Connecting…'
-  const subline = migrating
-    ? (decision.detail && decision.detail.length > 0 ? decision.detail : 'Applying updates…')
-    : null
+  // A failed App import trumps both — "Connecting…" would be a lie (the
+  // daemon accepted; it's the UI bundle that couldn't load).
+  const heading = importFailed
+    ? 'K2 failed to load'
+    : migrating ? 'Setting up K2…' : 'Connecting…'
+  const subline = importFailed
+    ? 'The app interface could not be loaded.'
+    : migrating
+      ? (decision.detail && decision.detail.length > 0 ? decision.detail : 'Applying updates…')
+      : null
 
   // Reload escape hatch. A big upgrade's migration sweep can legitimately
   // take a while, so don't nag during 'migrating' (only after ~60s). For
   // a plain 'wait' (unreachable / wrong version) surface it after ~10s.
-  const showReloadButton = migrating ? attempts >= 120 : attempts >= 20
+  // importFailed shows it UNCONDITIONALLY: on a local accept the poll
+  // loop stopped, so the attempt thresholds can never fire on their own.
+  const showReloadButton = shouldShowReloadButton({ migrating, attempts, importFailed })
 
   return (
     <div
@@ -856,9 +952,11 @@ function ConnectingOverlay({ decision, attempts }: ConnectingOverlayProps): Reac
       {showReloadButton && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
           <div style={{ fontSize: '0.85rem', opacity: 0.75, maxWidth: '440px', textAlign: 'center', lineHeight: 1.5 }}>
-            {migrating
-              ? 'K2 is still applying updates. This can take a minute on a large upgrade — you can keep waiting, or reload below.'
-              : "Your K2 daemon may still be loading. If you're unsure, quit and relaunch the app, or try reloading with the button below."}
+            {importFailed
+              ? 'The app failed to load after several attempts. Reloading usually fixes this — if it keeps happening, quit and relaunch K2.'
+              : migrating
+                ? 'K2 is still applying updates. This can take a minute on a large upgrade — you can keep waiting, or reload below.'
+                : "Your K2 daemon may still be loading. If you're unsure, quit and relaunch the app, or try reloading with the button below."}
           </div>
           <button
             onClick={() => { window.location.reload() }}

@@ -27,8 +27,9 @@ use crate::log_debug;
 pub mod cron;
 // Phase 2.5c: launchd plist scaffolding + crontab installer.
 pub mod install;
-// Phase 2.5d: per-agent heartbeat control (ensure_agent_wakeup +
-// get/set + noop/action). Extracted from `agents/commands.rs`.
+// Phase 2.5d: wakeup scaffolding (ensure_agent_wakeup). Extracted from
+// `agents/commands.rs`; the legacy per-agent get/set/noop/action
+// control API was deleted in 0.40.31.
 pub mod control;
 
 /// Create a new heartbeat row + scaffold its `WAKEUP.md` file.

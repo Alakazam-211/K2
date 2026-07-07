@@ -25,13 +25,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::workspace::agent_identity::{
     agent_dir, agents_dir, parse_frontmatter, resolve_agent_name, resolve_project_id,
 };
 use crate::db::schema::{WorkspaceSession, HeartbeatFire, WorkspaceState};
-use crate::fs_atomic::atomic_write_str;
 use crate::scheduler::should_project_fire;
 
 // ── Path helpers private to the scheduler path ──────────────────────────
@@ -88,201 +85,16 @@ pub fn is_agent_locked(project_path: &str, agent_name: &str) -> bool {
         .exists()
 }
 
-// ── Heartbeat config types (for custom-timing agents) ──────────────────
-
-fn default_heartbeat_mode() -> String {
-    "heartbeat".to_string()
-}
-fn default_interval() -> u64 {
-    300
-}
-fn default_phase() -> String {
-    "monitoring".to_string()
-}
-fn default_max_interval() -> u64 {
-    3600
-}
-fn default_min_interval() -> u64 {
-    60
-}
-fn default_cost_budget() -> String {
-    "low".to_string()
-}
-fn default_true() -> bool {
-    true
-}
-fn default_updated_by() -> String {
-    "user".to_string()
-}
-
-/// **DEPRECATED — per-agent adaptive heartbeats are being removed.**
-///
-/// Replaced by the workspace-scoped scheduled heartbeats stored in
-/// the `agent_heartbeats` table (see `db/schema.rs::AgentHeartbeat`).
-/// This struct backs the legacy on-disk config file at
-/// `<project>/.k2so/agents/<name>/heartbeat.json` which the UI
-/// stopped writing in 0.36.x. Existing files are tolerated for
-/// rollback safety; new installs do not create them.
-///
-/// Planned for removal in 0.37.x along with all `read_heartbeat_config`
-/// callers and the `cmd_heartbeat_noop` / `cmd_heartbeat_action`
-/// CLI handlers. Search for `legacy-per-agent-heartbeat` to find
-/// every call site that must be retired together.
-#[deprecated(
-    note = "Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed, workspace-scoped). \
-            Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag."
-)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentHeartbeatConfig {
-    #[serde(default = "default_heartbeat_mode")]
-    pub mode: String,
-    #[serde(default = "default_interval")]
-    pub interval_seconds: u64,
-    #[serde(default = "default_phase")]
-    pub phase: String,
-    #[serde(default)]
-    pub active_hours: Option<ActiveHours>,
-    #[serde(default = "default_max_interval")]
-    pub max_interval_seconds: u64,
-    #[serde(default = "default_min_interval")]
-    pub min_interval_seconds: u64,
-    #[serde(default = "default_cost_budget")]
-    pub cost_budget: String,
-    #[serde(default)]
-    pub consecutive_no_ops: u32,
-    #[serde(default = "default_true")]
-    pub auto_backoff: bool,
-    #[serde(default)]
-    pub last_wake: Option<String>,
-    #[serde(default)]
-    pub next_wake: Option<String>,
-    #[serde(default = "default_updated_by")]
-    pub updated_by: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActiveHours {
-    pub start: String,
-    pub end: String,
-    pub timezone: String,
-}
-
-impl Default for AgentHeartbeatConfig {
-    fn default() -> Self {
-        Self {
-            mode: default_heartbeat_mode(),
-            interval_seconds: default_interval(),
-            phase: default_phase(),
-            active_hours: None,
-            max_interval_seconds: default_max_interval(),
-            min_interval_seconds: default_min_interval(),
-            cost_budget: default_cost_budget(),
-            consecutive_no_ops: 0,
-            auto_backoff: true,
-            last_wake: None,
-            next_wake: None,
-            updated_by: default_updated_by(),
-        }
-    }
-}
-
-/// **DEPRECATED — `legacy-per-agent-heartbeat` chokepoint.**
-///
-/// Reads `<project>/.k2so/agents/<name>/heartbeat.json` (the legacy
-/// per-agent config). Replaced by `AgentHeartbeat::list_enabled` which
-/// reads from the DB instead. Planned for removal in 0.37.x.
-///
-/// Until then we instrument every call so the in-flight investigation
-/// of "why is workspace X firing wakes when it has no DB heartbeat row"
-/// can pinpoint the caller — the trace prints the file:line of the
-/// reader and a backtrace to `daemon.stderr.log` / dev console. Disable
-/// the trace by setting `K2SO_TRACE_HEARTBEAT_JSON=0`.
-#[deprecated(
-    note = "Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). \
-            Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag."
-)]
-#[allow(deprecated)] // self-references for rollback safety
-pub fn read_heartbeat_config(project_path: &str, agent_name: &str) -> AgentHeartbeatConfig {
-    // Opt-in trace to identify any remaining caller on the legacy path.
-    // Set `K2SO_TRACE_HEARTBEAT_JSON=1` to dump a backtrace on every read.
-    if std::env::var("K2SO_TRACE_HEARTBEAT_JSON").map(|v| v == "1").unwrap_or(false) {
-        let bt = std::backtrace::Backtrace::force_capture();
-        eprintln!(
-            "[legacy-per-agent-heartbeat] read_heartbeat_config({project_path:?}, {agent_name:?})\n{bt}"
-        );
-    }
-    let path = agent_dir(project_path, agent_name).join("heartbeat.json");
-    if path.exists() {
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    } else {
-        AgentHeartbeatConfig::default()
-    }
-}
-
-/// **DEPRECATED — `legacy-per-agent-heartbeat` writer.** Planned for removal in 0.37.x.
-#[deprecated(
-    note = "Per-agent heartbeats — superseded by AgentHeartbeat (DB-backed). \
-            Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag."
-)]
-#[allow(deprecated)]
-pub fn write_heartbeat_config(
-    project_path: &str,
-    agent_name: &str,
-    config: &AgentHeartbeatConfig,
-) -> Result<(), String> {
-    let dir = agent_dir(project_path, agent_name);
-    if !dir.exists() {
-        return Err(format!("Agent '{}' does not exist", agent_name));
-    }
-    let path = dir.join("heartbeat.json");
-    let json = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("Failed to serialize heartbeat config: {}", e))?;
-    atomic_write_str(&path, &json).map_err(|e| format!("atomic write failed: {}", e))
-}
-
-/// Is the current wall clock within an [`ActiveHours`] window?
-///
-/// Note: `timezone` is accepted but currently compared against local
-/// system time. Full timezone support (chrono-tz) is planned.
-pub fn is_within_active_hours(
-    hours: &ActiveHours,
-    _now: &chrono::DateTime<chrono::Utc>,
-) -> bool {
-    let parse_hhmm = |s: &str| -> Option<(u32, u32)> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() == 2 {
-            let h: u32 = parts[0].parse().ok()?;
-            let m: u32 = parts[1].parse().ok()?;
-            if h > 23 || m > 59 {
-                return None;
-            }
-            Some((h, m))
-        } else {
-            None
-        }
-    };
-    let Some((start_h, start_m)) = parse_hhmm(&hours.start) else {
-        return true;
-    };
-    let Some((end_h, end_m)) = parse_hhmm(&hours.end) else {
-        return true;
-    };
-    use chrono::Timelike;
-    let local = chrono::Local::now();
-    let cur_min = local.hour() * 60 + local.minute();
-    let start_min = start_h * 60 + start_m;
-    let end_min = end_h * 60 + end_m;
-    if start_min <= end_min {
-        cur_min >= start_min && cur_min < end_min
-    } else {
-        // Overnight window (e.g. 22:00-06:00).
-        cur_min >= start_min || cur_min < end_min
-    }
-}
+// ── Heartbeat config types ──────────────────────────────────────────────
+//
+// 0.40.31: the legacy per-agent heartbeat surface (`AgentHeartbeatConfig`,
+// `ActiveHours`, `read_heartbeat_config`, `write_heartbeat_config`,
+// `is_within_active_hours` — the `legacy-per-agent-heartbeat` tag) is
+// DELETED. It backed `<project>/.k2so/agents/<name>/heartbeat.json`,
+// which nothing has consumed since the custom-agent scheduler loop was
+// retired in 0.39.0d. Workspace-scoped scheduled heartbeats in the
+// `agent_heartbeats` DB table (see `db/schema.rs::AgentHeartbeat` +
+// `crate::heartbeats`) are the only heartbeat system.
 
 // ── Workspace state + inbox priority ───────────────────────────────────
 
@@ -551,13 +363,11 @@ pub fn k2so_agents_scheduler_tick(project_path: String) -> Result<Vec<String>, S
                 // (Pre-0.39.0d: the legacy per-agent scheduler loop here
                 // read `<agent>/heartbeat.json` via `read_heartbeat_config`
                 // and fired wakes based on `next_wake` / `active_hours` /
-                // `interval_seconds`. Retired in 0.39.0d — workspace-
-                // scoped scheduled heartbeats in the `agent_heartbeats`
-                // DB table are the canonical path for custom agents now.
-                // The on-disk reader/writer + `k2so heartbeat get/set/
-                // noop/action` CLI verbs still exist for legacy
-                // operators reading the JSON file directly, but the
-                // scheduler tick no longer consumes them.)
+                // `interval_seconds`. Retired in 0.39.0d; the on-disk
+                // reader/writer + `k2so heartbeat get/set/noop/action`
+                // CLI verbs were deleted in 0.40.31. Workspace-scoped
+                // scheduled heartbeats in the `agent_heartbeats` DB
+                // table are the canonical path for custom agents.)
                 audit(
                     Some(&name),
                     &mode_str,
@@ -663,35 +473,8 @@ mod tests {
     }
 
     #[test]
-    fn active_hours_same_day_window() {
-        let hours = ActiveHours {
-            start: "09:00".into(),
-            end: "17:00".into(),
-            timezone: "America/Los_Angeles".into(),
-        };
-        // We can't freeze chrono::Local::now from here without a heavier
-        // scaffold, but we can at least exercise malformed input.
-        let bad = ActiveHours {
-            start: "bogus".into(),
-            end: "17:00".into(),
-            timezone: "UTC".into(),
-        };
-        let _ = is_within_active_hours(&hours, &chrono::Utc::now());
-        assert!(is_within_active_hours(&bad, &chrono::Utc::now()));
-    }
-
-    #[test]
     fn count_md_files_handles_missing_dir() {
         let missing = PathBuf::from("/tmp/k2so-does-not-exist-xyz-12345");
         assert_eq!(count_md_files(&missing), 0);
-    }
-
-    #[test]
-    fn agent_heartbeat_config_default_shape() {
-        let c = AgentHeartbeatConfig::default();
-        assert_eq!(c.mode, "heartbeat");
-        assert_eq!(c.interval_seconds, 300);
-        assert_eq!(c.cost_budget, "low");
-        assert!(c.auto_backoff);
     }
 }

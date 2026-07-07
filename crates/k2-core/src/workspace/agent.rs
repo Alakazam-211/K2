@@ -9,9 +9,9 @@
 //! app serve identical semantics.
 //!
 //! Sibling modules:
-//! - [`crate::heartbeats::control`] — per-agent heartbeat CRUD +
-//!   adaptive backoff (`ensure_agent_wakeup`, `get_heartbeat`,
-//!   `set_heartbeat`, `heartbeat_noop`, `heartbeat_action`)
+//! - [`crate::heartbeats::control`] — wakeup scaffolding
+//!   (`ensure_agent_wakeup`; the legacy per-agent adaptive-backoff
+//!   API was deleted in 0.40.31)
 //! - [`crate::workspace::agent_editor`] — AIFileEditor surface for
 //!   editing AGENT.md (get_editor_context, preview/regenerate/save)
 //! - [`crate::workspace::relations`] — `workspace_sessions` and

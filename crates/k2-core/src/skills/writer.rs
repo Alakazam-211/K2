@@ -604,18 +604,10 @@ r#"## Role
 
 {role}
 
-## Heartbeat Control
-
-You run on an adaptive heartbeat. Adjust your check-in frequency based on what you're doing:
-
-- `k2so heartbeat set --interval 60 --phase "active"` — check every minute (busy periods)
-- `k2so heartbeat set --interval 300 --phase "monitoring"` — every 5 minutes (watching)
-- `k2so heartbeat set --interval 3600 --phase "idle"` — every hour (dormant)
-
 ## Tools Available
 
 - `k2so terminal spawn --title "..." --command "..."` — run parallel tasks
-- `k2so heartbeat set --interval N --phase "..."` — adjust your check-in frequency
+- `k2so heartbeat schedule list` / `k2so heartbeat show <name>` — inspect the named heartbeat schedules the user configured (the user owns your wake cadence)
 - `k2 feedback ask "<title>"` — ask your human a durable question (a decision, an approval); it sits on their Feedback page until answered instead of dying in a terminal prompt
 - `k2 project read` / `k2 project msg <name> "..."` — your project group's shared chat (a Project = a named GROUP of workspaces with one PoC agent); a message prefixed `[project:<name>]` came from that chat — reply with `k2 project msg <name> "..."`, never `k2 msg <name>` (fails with `workspace_not_found`)
 - Standard CLI tools available in your terminal: `gh`, `git`, `curl`, etc.

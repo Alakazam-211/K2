@@ -19,6 +19,7 @@ import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useTabsStore } from '@/stores/tabs'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
+import { pickIconImage } from '@/lib/pick-remote-image'
 import IconCropDialog from '../IconCropDialog'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
@@ -1065,7 +1066,12 @@ function ProjectDetail({
   }
 
   const handleUploadClick = (): void => {
-    fileInputRef.current?.click()
+    // Host-aware: on a remote host the native input would browse THIS
+    // machine's disk — use the remote file picker instead.
+    void pickIconImage({
+      clickNativeInput: () => fileInputRef.current?.click(),
+      setCropImage,
+    })
   }
 
   const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>): void => {

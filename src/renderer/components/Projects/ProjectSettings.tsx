@@ -73,6 +73,7 @@ import {
   type ProjectGroupHtmlDoc,
   type ProjectGroupShow,
 } from './projects-api'
+import { pickIconImage } from '@/lib/pick-remote-image'
 import { GROUP_AVATAR_COLORS, groupAvatarColor } from './ProjectGroupAvatar'
 import IconCropDialog from '@/components/Settings/IconCropDialog'
 import {
@@ -830,7 +831,14 @@ function ProjectSettingsDetail({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => iconInputRef.current?.click()}
+                  onClick={() =>
+                    // Host-aware: on a remote host the native input would
+                    // browse THIS machine's disk — use the remote picker.
+                    void pickIconImage({
+                      clickNativeInput: () => iconInputRef.current?.click(),
+                      setCropImage,
+                    })
+                  }
                   disabled={iconBusy || icon === null}
                   className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >

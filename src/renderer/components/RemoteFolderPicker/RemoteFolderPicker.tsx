@@ -14,7 +14,10 @@ import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 // automatically targets whichever remote is active (connect-host store).
 //
 // Opened via the promise-based `useRemoteFolderPickerStore.open()` —
-// resolves with the chosen path, or null on cancel.
+// resolves with the chosen path, or null on cancel. `open({ mode: 'file' })`
+// switches to FILE selection: files (optionally filtered via `accept`)
+// are listed alongside folders, and clicking a file resolves with the
+// file's remote path; folders remain navigable for traversal.
 
 interface DirEntry {
   name: string
@@ -45,6 +48,13 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
   const isOpen = useRemoteFolderPickerStore((s) => s.isOpen)
   const select = useRemoteFolderPickerStore((s) => s.select)
   const cancel = useRemoteFolderPickerStore((s) => s.cancel)
+  // File-selection mode (opt-in via open({ mode: 'file', … })): files are
+  // listed too (through `accept`) and clicking one resolves the promise
+  // with the FILE's remote path. Folder mode is byte-for-byte the
+  // historical behavior.
+  const mode = useRemoteFolderPickerStore((s) => s.mode)
+  const accept = useRemoteFolderPickerStore((s) => s.accept)
+  const titleOverride = useRemoteFolderPickerStore((s) => s.title)
 
   // #638: when the active host is too OLD to serve GET /cli/fs/info, the
   // fetch below 404s and we fall back to browsing from '/'. That still
@@ -68,24 +78,32 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
   const [newFolderName, setNewFolderName] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
 
-  // Load the directory listing for `dir` (directories only).
-  const browse = useCallback(async (dir: string): Promise<void> => {
-    setLoading(true)
-    setError(null)
-    try {
-      const all = await daemonCliGet<DirEntry[]>('fs/read-dir', { path: dir })
-      const dirs = all
-        .filter((e) => e.isDirectory)
-        .sort((a, b) => a.name.localeCompare(b.name))
-      setEntries(dirs)
-      setCwd(dir)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err))
-      // Keep cwd unchanged so the user can retry / go elsewhere.
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  // Load the directory listing for `dir`. Folder mode: directories only
+  // (historical behavior). File mode: directories (for traversal) followed
+  // by the files that pass `accept`.
+  const browse = useCallback(
+    async (dir: string): Promise<void> => {
+      setLoading(true)
+      setError(null)
+      try {
+        const all = await daemonCliGet<DirEntry[]>('fs/read-dir', { path: dir })
+        const byName = (a: DirEntry, b: DirEntry): number => a.name.localeCompare(b.name)
+        const dirs = all.filter((e) => e.isDirectory).sort(byName)
+        const files =
+          mode === 'file'
+            ? all.filter((e) => !e.isDirectory && (accept ? accept(e.name) : true)).sort(byName)
+            : []
+        setEntries([...dirs, ...files])
+        setCwd(dir)
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : String(err))
+        // Keep cwd unchanged so the user can retry / go elsewhere.
+      } finally {
+        setLoading(false)
+      }
+    },
+    [mode, accept],
+  )
 
   // On open: fetch host fs/info, seed at home (fallback '/').
   useEffect(() => {
@@ -168,7 +186,7 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
         {/* Header */}
         <div className="px-5 pt-5 pb-3 border-b border-[var(--color-border)]">
           <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
-            Open Folder on Host
+            {titleOverride ?? (mode === 'file' ? 'Choose File on Host' : 'Open Folder on Host')}
           </h2>
           <div className="flex items-center gap-2 mt-2">
             <button
@@ -182,14 +200,16 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
             <p className="flex-1 text-[10px] text-[var(--color-text-muted)] break-all font-mono">
               {cwd ?? '…'}
             </p>
-            <button
-              className="px-2 py-1 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] disabled:opacity-30 disabled:cursor-default"
-              onClick={() => setNewFolderName((v) => (v === null ? '' : null))}
-              disabled={!cwd || loading}
-              title="Create a new folder inside the current directory"
-            >
-              + New Folder
-            </button>
+            {mode === 'folder' && (
+              <button
+                className="px-2 py-1 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] disabled:opacity-30 disabled:cursor-default"
+                onClick={() => setNewFolderName((v) => (v === null ? '' : null))}
+                disabled={!cwd || loading}
+                title="Create a new folder inside the current directory"
+              >
+                + New Folder
+              </button>
+            )}
           </div>
           {newFolderName !== null && (
             <div className="flex items-center gap-2 mt-2">
@@ -235,7 +255,7 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
             </div>
           ) : entries.length === 0 ? (
             <div className="px-5 py-6 text-center text-xs text-[var(--color-text-muted)]">
-              No sub-folders here
+              {mode === 'file' ? 'No matching files here' : 'No sub-folders here'}
             </div>
           ) : (
             <div className="py-1">
@@ -243,12 +263,19 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
                 <button
                   key={e.path}
                   className="w-full flex items-center gap-2 px-5 py-1.5 text-left text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.05]"
-                  onDoubleClick={() => browse(e.path)}
-                  onClick={() => browse(e.path)}
+                  onDoubleClick={() => (e.isDirectory ? browse(e.path) : select(e.path))}
+                  onClick={() => (e.isDirectory ? browse(e.path) : select(e.path))}
                 >
-                  <svg className="w-3.5 h-3.5 shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-                  </svg>
+                  {e.isDirectory ? (
+                    <svg className="w-3.5 h-3.5 shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5 shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M14 3v5h5" />
+                    </svg>
+                  )}
                   <span className="truncate">{e.name}</span>
                 </button>
               ))}
@@ -258,19 +285,26 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
 
         {/* Actions */}
         <div className="px-5 py-3 flex gap-2 justify-end border-t border-[var(--color-border)]">
+          {mode === 'file' && (
+            <p className="flex-1 self-center text-[10px] text-[var(--color-text-muted)]">
+              Click a file to select it
+            </p>
+          )}
           <button
             className="px-3 py-1.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
             onClick={cancel}
           >
             Cancel
           </button>
-          <button
-            className="px-3 py-1.5 text-xs font-medium text-[var(--color-bg)] bg-[var(--color-text-primary)] hover:bg-[var(--color-text-secondary)] disabled:opacity-40"
-            onClick={() => cwd && select(cwd)}
-            disabled={!cwd || loading}
-          >
-            Select this folder
-          </button>
+          {mode === 'folder' && (
+            <button
+              className="px-3 py-1.5 text-xs font-medium text-[var(--color-bg)] bg-[var(--color-text-primary)] hover:bg-[var(--color-text-secondary)] disabled:opacity-40"
+              onClick={() => cwd && select(cwd)}
+              disabled={!cwd || loading}
+            >
+              Select this folder
+            </button>
+          )}
         </div>
       </div>
     </div>

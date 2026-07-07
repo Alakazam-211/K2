@@ -26,9 +26,8 @@ pub use k2_core::workspace::agent_identity::{
 };
 pub use k2_core::workspace::scheduler::{
     agent_work_dir, count_md_files, get_highest_inbox_priority, get_workspace_state,
-    is_agent_locked, is_within_active_hours, k2so_agents_scheduler_tick as core_scheduler_tick,
-    priority_label, priority_rank, read_heartbeat_config,
-    write_heartbeat_config, ActiveHours, AgentHeartbeatConfig,
+    is_agent_locked, k2so_agents_scheduler_tick as core_scheduler_tick,
+    priority_label, priority_rank,
 };
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -102,50 +101,12 @@ pub use k2_core::workspace::events::{
     drain_agent_events, push_agent_event, ChannelEvent, MAX_EVENTS_PER_QUEUE,
 };
 
-#[tauri::command]
-pub fn k2so_agents_get_heartbeat(
-    project_path: String,
-    agent_name: String,
-) -> Result<AgentHeartbeatConfig, String> {
-    k2_core::heartbeats::control::get_heartbeat(project_path, agent_name)
-}
-
-#[tauri::command]
-pub fn k2so_agents_set_heartbeat(
-    project_path: String,
-    agent_name: String,
-    interval: Option<u64>,
-    phase: Option<String>,
-    mode: Option<String>,
-    cost_budget: Option<String>,
-    force_wake: Option<bool>,
-) -> Result<AgentHeartbeatConfig, String> {
-    k2_core::heartbeats::control::set_heartbeat(
-        project_path,
-        agent_name,
-        interval,
-        phase,
-        mode,
-        cost_budget,
-        force_wake,
-    )
-}
-
-#[tauri::command]
-pub fn k2so_agents_heartbeat_noop(
-    project_path: String,
-    agent_name: String,
-) -> Result<AgentHeartbeatConfig, String> {
-    k2_core::heartbeats::control::heartbeat_noop(project_path, agent_name)
-}
-
-#[tauri::command]
-pub fn k2so_agents_heartbeat_action(
-    project_path: String,
-    agent_name: String,
-) -> Result<AgentHeartbeatConfig, String> {
-    k2_core::heartbeats::control::heartbeat_action(project_path, agent_name)
-}
+// 0.40.31: the four legacy per-agent heartbeat commands
+// (`k2so_agents_get_heartbeat` / `_set_heartbeat` / `_heartbeat_noop` /
+// `_heartbeat_action`) are deleted along with the k2-core
+// `heartbeats::control` adaptive-backoff API they fronted. Their only
+// renderer caller was the never-rendered `AdaptiveHeartbeatConfig`
+// component in ProjectsSection.tsx.
 
 #[tauri::command]
 pub fn k2so_agents_list(project_path: String) -> Result<Vec<K2soAgentInfo>, String> {
@@ -457,11 +418,11 @@ pub use k2_core::skills::version::{
 
 // ── Heartbeat Configuration ─────────────────────────────────────────────
 //
-// `AgentHeartbeatConfig`, `ActiveHours`, `read_heartbeat_config`,
-// `write_heartbeat_config`, and the per-field default fns all live in
-// `k2_core::workspace::scheduler`. The types + functions are
-// re-exported at the top of this file so existing call sites resolve
-// unchanged.
+// 0.40.31: the legacy per-agent heartbeat config surface
+// (`AgentHeartbeatConfig`, `ActiveHours`, `read_heartbeat_config`,
+// `write_heartbeat_config`) was deleted from
+// `k2_core::workspace::scheduler`. Named workspace heartbeats
+// (`agent_heartbeats` table) are the only heartbeat system.
 
 // ── Tauri Commands ──────────────────────────────────────────────────────
 

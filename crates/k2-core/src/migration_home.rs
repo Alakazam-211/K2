@@ -17,8 +17,9 @@
 //!     symlink), it is left untouched and we log — that machine ran
 //!     mixed versions; the operator decides. We never merge or delete.
 //!   - `~/.k2so` is already a symlink → done (migration ran before).
-//!   - neither exists → fresh machine; create `~/.k2` ONLY (no symlink —
-//!     nothing pre-0.40 ever pointed at `~/.k2so` on this machine).
+//!   - neither exists → fresh machine; create `~/.k2` AND the `~/.k2so`
+//!     compat symlink (the app/CLI still resolve hardcoded `~/.k2so/...`
+//!     paths — incl. the daemon pairing handshake — through it).
 //!
 //! MUST run before anything touches the DB or port files — both the
 //! daemon (`main.rs`, before `db::shared()`/port claim) and the app
@@ -94,16 +95,46 @@ pub fn migrate_home_dir_at(home: &Path) -> Result<HomeMigration, String> {
             );
             Ok(HomeMigration::Conflict(old, new))
         }
-        (false, true) => Ok(HomeMigration::AlreadyDone),
+        (false, true) => {
+            // `~/.k2` exists but `~/.k2so` is neither a symlink nor a real
+            // dir — i.e. the compat symlink is MISSING. A normal
+            // post-migration machine has the symlink and returns at the top,
+            // so reaching here means a 0.40.33/0.40.34 fresh install created
+            // `~/.k2` WITHOUT the symlink (the pairing-breaking regression).
+            // SELF-HEAL: create it now so the next launch pairs. Only when
+            // `~/.k2so` is genuinely absent (never clobber a user file that
+            // happens to sit there).
+            #[cfg(unix)]
+            {
+                if old.symlink_metadata().is_err() {
+                    std::os::unix::fs::symlink(&new, &old).map_err(|e| {
+                        format!("heal missing ~/.k2so → ~/.k2 symlink: {e}")
+                    })?;
+                    crate::log_debug!(
+                        "[migration/0.40] healed missing ~/.k2so compat symlink \
+                         (0.40.33/0.40.34 fresh-install pairing regression)"
+                    );
+                }
+            }
+            Ok(HomeMigration::AlreadyDone)
+        }
         (false, false) => {
-            // Fresh install — no pre-0.40 `~/.k2so` ever existed here, so
-            // there is nothing for a compat symlink to keep working. Just
-            // create `~/.k2`. (Until 0.40.32 we ALSO created the symlink on
-            // this path, which put a mystery `.k2so` folder on every
-            // brand-new machine/server — Rosson, 2026-07-07. The symlink is
-            // only for genuinely MIGRATED machines, created in the
-            // `(true, false)` arm above.)
+            // Fresh install — create `~/.k2` AND the `~/.k2so` compat
+            // symlink. The symlink is NOT optional cosmetics: the Tauri app
+            // (and CLI, and user hook scripts) still resolve dozens of
+            // hardcoded `~/.k2so/...` paths — daemon.port/daemon.token (the
+            // client↔daemon pairing handshake, src-tauri/src/lib.rs +
+            // daemon_events.rs), bin/frpc, templates/, connect-hosts.json,
+            // heartbeat.*, hooks/notify.sh — and the symlink is what maps
+            // them onto the canonical `~/.k2`. 0.40.33 briefly dropped it
+            // here to avoid a "mystery folder"; that BROKE first-launch
+            // pairing on every fresh Mac (the daemon writes `~/.k2/...`, the
+            // app read `~/.k2so/...` → not found). Restored 0.40.35. Do NOT
+            // remove without first de-hardcoding every `~/.k2so` reader.
             std::fs::create_dir_all(&new).map_err(|e| format!("create ~/.k2: {e}"))?;
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&new, &old)
+                .map_err(|e| format!("symlink ~/.k2so → ~/.k2: {e}"))?;
             Ok(HomeMigration::FreshInit)
         }
     }
@@ -164,17 +195,41 @@ mod tests {
     }
 
     #[test]
-    fn fresh_machine_gets_k2_only_no_compat_symlink() {
-        // 0.40.33: a machine that never had K2SO must not grow a mystery
-        // `.k2so` entry — the compat symlink is exclusively the migration
-        // arm's job.
+    fn heals_missing_symlink_from_0_40_33_34_fresh_install() {
+        // The regression state: `~/.k2` exists, no `~/.k2so` at all. Next
+        // 0.40.35 launch must CREATE the compat symlink so pairing works.
+        let home = tmp_home("heal");
+        std::fs::create_dir_all(home.join(".k2")).unwrap();
+        std::fs::write(home.join(".k2/daemon.port"), b"5000").unwrap();
+        assert!(home.join(".k2so").symlink_metadata().is_err(), "precondition");
+        assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::AlreadyDone);
+        let link = home.join(".k2so");
+        assert!(
+            link.symlink_metadata().unwrap().file_type().is_symlink(),
+            "must heal the missing ~/.k2so symlink"
+        );
+        // The app's hardcoded ~/.k2so/daemon.port read now resolves.
+        assert_eq!(std::fs::read(link.join("daemon.port")).unwrap(), b"5000");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn fresh_machine_creates_k2_and_compat_symlink() {
+        // 0.40.35: fresh installs MUST get the `~/.k2so` symlink — the app's
+        // hardcoded `~/.k2so/daemon.{port,token}` reads (the client↔daemon
+        // pairing handshake) resolve through it. 0.40.33 dropped it here and
+        // broke first-launch pairing on every fresh Mac.
         let home = tmp_home("fresh");
         assert_eq!(migrate_home_dir_at(&home).unwrap(), HomeMigration::FreshInit);
         assert!(home.join(".k2").is_dir());
+        let link = home.join(".k2so");
         assert!(
-            home.join(".k2so").symlink_metadata().is_err(),
-            "fresh install must not create ~/.k2so"
+            link.symlink_metadata().unwrap().file_type().is_symlink(),
+            "fresh install must create the ~/.k2so compat symlink"
         );
+        // And it must resolve to ~/.k2 (writing through it lands in ~/.k2).
+        std::fs::write(link.join("probe"), b"x").unwrap();
+        assert!(home.join(".k2/probe").exists());
         std::fs::remove_dir_all(&home).unwrap();
     }
 

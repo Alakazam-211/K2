@@ -13,6 +13,7 @@
     "typecheck": "bun run typecheck:web",
     "styles:build": "node scripts/build-styles.mjs",
     "styles:check": "node scripts/build-styles.mjs --check",
+    "styles:lint": "node scripts/check-style-lint.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "parity:capture": "playwright test --config tests/parity/playwright.config.ts",

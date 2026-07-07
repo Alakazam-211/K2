@@ -26,13 +26,13 @@ vi.mock('@/lib/daemon-cli', () => ({
 }))
 
 // ── Mock the cross-window emit bus ───────────────────────────────────────
-const emitMock = vi.fn(() => Promise.resolve())
+const emitMock = vi.fn((..._args: unknown[]) => Promise.resolve())
 vi.mock('@tauri-apps/api/event', () => ({
   emit: (...args: unknown[]) => emitMock(...args),
 }))
 
 // ── Mock the Tauri core invoke (broadcast_sync runtime-state path) ───────
-const invokeMock = vi.fn(() => Promise.resolve())
+const invokeMock = vi.fn((..._args: unknown[]) => Promise.resolve())
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }))

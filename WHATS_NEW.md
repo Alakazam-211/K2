@@ -3,6 +3,27 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.32 — Multiplayer manners
+
+- **Coming back to K2 no longer steals the session.** In shared sessions,
+  resurfacing the app used to silently take control back from whoever was
+  driving. Now simply looking is just looking — control changes hands only
+  when you act: click the terminal, type into it, or switch your window to
+  claimer mode. A network blip still restores control you already held.
+- **Backgrounded windows keep up with takeovers.** If K2 was hidden or
+  covered when someone took over a session, your terminal could miss the
+  rescale and stay wrong until you poked it. Frames (and their
+  acknowledgements) now apply within about a second even while the window
+  is occluded, and the instant you bring K2 back it snaps current.
+- **K2 Connect settings page stops asking for your password.** 0.40.31's
+  fresh-install fix accidentally made the Settings → K2 Connect page
+  demand your login-keychain password on every visit. The page now reads
+  your session the same trusted way the daemon does — no prompt, ever.
+- **Linux servers see updates again.** The update manifest only listed the
+  macOS daemon, so Linux servers cheerfully reported "up to date" no
+  matter how far behind they were (now fixed for this and all future
+  releases — hosted servers will offer 0.40.31+ correctly).
+
 ## 0.40.31 — K2 comes to Linux
 
 - **K2 Desktop on Linux (beta).** The full K2 app — terminals, projects,

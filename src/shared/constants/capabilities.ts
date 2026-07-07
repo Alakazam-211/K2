@@ -1,7 +1,7 @@
 // ── Workspace capability state definitions ───────────────────────────
-// Shared across WorkspaceStatesSection, ProjectDetail, and
-// AdaptiveHeartbeatConfig — anywhere we render capability pickers or
-// display the current capability posture for a workspace.
+// Shared across WorkspaceStatesSection and ProjectDetail — anywhere we
+// render capability pickers or display the current capability posture
+// for a workspace.
 
 export const CAP_STATES = ['auto', 'gated', 'off'] as const
 
@@ -28,8 +28,8 @@ export const CAPABILITIES = [
 ]
 
 // Shape of a state row from `states_list`. Used in Settings → Workspace
-// States (the editor), and in Settings → Workspaces (StateSelector +
-// AdaptiveHeartbeatConfig) to show and change the current workspace state.
+// States (the editor), and in Settings → Workspaces (StateSelector)
+// to show and change the current workspace state.
 export interface StateData {
   id: string
   name: string

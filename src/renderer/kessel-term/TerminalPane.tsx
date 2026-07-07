@@ -719,6 +719,32 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const enqueueFrame = useCallback((frame: PendingFrame) => {
     frameCoalescerRef.current?.enqueue(frame)
   }, [])
+  // Occlusion resync: macOS pauses rAF for occluded/backgrounded
+  // windows, so frames queued while hidden apply via the coalescer's
+  // throttled timer backstop. The moment the window is visible or
+  // focused again, flush synchronously — a passive peer shows the
+  // current grid (e.g. a takeover's rescale) on reveal, not up to a
+  // backstop tick later. Guarded for vitest's node environment
+  // (no window/document).
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return
+    }
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') {
+        frameCoalescerRef.current?.flushNow()
+      }
+    }
+    const onWindowFocus = (): void => {
+      frameCoalescerRef.current?.flushNow()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('focus', onWindowFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('focus', onWindowFocus)
+    }
+  }, [])
   const [isFocused, setIsFocused] = useState<boolean>(() =>
     typeof document !== 'undefined' ? document.hasFocus() : false,
   )

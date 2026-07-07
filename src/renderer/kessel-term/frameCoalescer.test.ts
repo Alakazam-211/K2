@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  BACKSTOP_FLUSH_MS,
   STARVATION_FLUSH_CAP,
   createFrameCoalescer,
   type CoalescableFrame,
@@ -153,5 +154,112 @@ describe('createFrameCoalescer', () => {
     h.raf()
     expect(h.applied).toHaveLength(1)
     expect(h.applied[0].map((f) => f.id)).toEqual([2])
+  })
+
+  describe('timer backstop (rAF paused in occluded windows)', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    /** Fully paused rAF: schedule hands out handles but the callback
+     *  never runs — macOS occlusion. Timer control via fake timers. */
+    function pausedRafHarness() {
+      const applied: TestFrame[][] = []
+      const cancelled: number[] = []
+      let scheduleCalls = 0
+      const coalescer = createFrameCoalescer<TestFrame>({
+        schedule: () => {
+          scheduleCalls++
+          return scheduleCalls
+        },
+        cancel: (id) => cancelled.push(id),
+        apply: (batch) => applied.push(batch),
+      })
+      return { coalescer, applied, cancelled, scheduleCalls: () => scheduleCalls }
+    }
+
+    it('applies queued frames after the backstop delay with rAF fully paused', () => {
+      // The bug this pins: a takeover's small frame burst arriving at
+      // an occluded peer sat unapplied (and unacked) forever — the
+      // peer never rescaled AND the daemon's ack-gated pacing wedged.
+      vi.useFakeTimers()
+      const h = pausedRafHarness()
+      h.coalescer.enqueue(delta(1))
+      h.coalescer.enqueue(delta(2))
+      // Not yet — the backstop must not undercut the rAF in the
+      // foreground case.
+      vi.advanceTimersByTime(BACKSTOP_FLUSH_MS - 1)
+      expect(h.applied).toHaveLength(0)
+      vi.advanceTimersByTime(1)
+      expect(h.applied).toHaveLength(1)
+      expect(h.applied[0].map((f) => f.id)).toEqual([1, 2])
+      expect(h.coalescer.pendingCount()).toBe(0)
+    })
+
+    it('a cancelled-but-never-run rAF cannot strand the queue', () => {
+      // WebKit can cancel the pending rAF at occlusion time without
+      // it ever firing — the stale handle must not block future
+      // flushes or future scheduling.
+      vi.useFakeTimers()
+      const h = pausedRafHarness()
+      h.coalescer.enqueue(delta(1))
+      vi.advanceTimersByTime(BACKSTOP_FLUSH_MS)
+      expect(h.applied).toHaveLength(1)
+      // The flush neutralized the stale rAF handle…
+      expect(h.cancelled).toEqual([1])
+      // …so the next burst schedules a FRESH flush (rAF + backstop),
+      // and the backstop drains it again.
+      h.coalescer.enqueue(delta(2))
+      expect(h.scheduleCalls()).toBe(2)
+      vi.advanceTimersByTime(BACKSTOP_FLUSH_MS)
+      expect(h.applied).toHaveLength(2)
+      expect(h.applied[1].map((f) => f.id)).toEqual([2])
+    })
+
+    it('the rAF flush disarms the backstop (no late empty-or-early flush)', () => {
+      vi.useFakeTimers()
+      const h = harness()
+      h.coalescer.enqueue(delta(1))
+      h.raf()
+      expect(h.applied).toHaveLength(1)
+      // A burst enqueued AFTER the rAF flush must not be drained by
+      // the FIRST burst's (now-disarmed) backstop timer firing early.
+      vi.advanceTimersByTime(1)
+      h.coalescer.enqueue(delta(2))
+      vi.advanceTimersByTime(BACKSTOP_FLUSH_MS - 1)
+      expect(h.applied).toHaveLength(1)
+      vi.advanceTimersByTime(1)
+      expect(h.applied).toHaveLength(2)
+    })
+  })
+
+  describe('flushNow()', () => {
+    it('applies pending frames synchronously and clears scheduling', () => {
+      const h = harness()
+      h.coalescer.enqueue(delta(1))
+      h.coalescer.enqueue(delta(2))
+      h.coalescer.flushNow()
+      expect(h.applied).toHaveLength(1)
+      expect(h.applied[0].map((f) => f.id)).toEqual([1, 2])
+      expect(h.coalescer.pendingCount()).toBe(0)
+      // The pending rAF was neutralized: it must not double-apply.
+      expect(h.cancelled).toHaveLength(1)
+      expect(h.scheduled.size).toBe(0)
+      h.raf()
+      expect(h.applied).toHaveLength(1)
+      // Later enqueues behave normally (fresh schedule, fresh flush).
+      h.coalescer.enqueue(delta(3))
+      expect(h.scheduled.size).toBe(1)
+      h.raf()
+      expect(h.applied).toHaveLength(2)
+      expect(h.applied[1].map((f) => f.id)).toEqual([3])
+    })
+
+    it('is a no-op when the queue is empty', () => {
+      const h = harness()
+      h.coalescer.flushNow()
+      expect(h.applied).toHaveLength(0)
+      expect(h.scheduled.size).toBe(0)
+    })
   })
 })

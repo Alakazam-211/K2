@@ -1,0 +1,90 @@
+# Linux app bundles (0.40.31 "K2 on Linux").
+#
+# release.sh (maintainer macOS box) builds + signs + notarizes the macOS
+# app; daemon-binaries.yml builds the standalone Linux daemon. This
+# workflow produces the Linux APP bundles (deb / rpm / AppImage) on a
+# native ubuntu runner and uploads them to the SAME GitHub release.
+#
+# Trigger: a pushed release tag (v<x.y.z>), same convention as
+# daemon-binaries.yml. x86_64 only for now — aarch64 app bundles need a
+# native arm runner (webkit2gtk is not realistically cross-compiled) and
+# are deliberately out of scope until we have one.
+#
+# The tauri beforeBuildCommand runs `vite:build` + scripts/fetch-frpc.sh,
+# which on Linux downloads the pinned frp release from GitHub, verifies
+# its sha256 against the release manifest, and stages the frpc sidecar
+# for the target triple. No secrets required: Linux bundles are unsigned
+# today (apt-repo GPG signing is a separate, maintainer-keyed step).
+
+name: app-linux
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual re-run for a tag that already exists (e.g. CI was added after
+  # the tag, or a transient failure). Provide the tag, e.g. v0.40.31.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build + attach Linux app bundles to (e.g. v0.40.31)"
+        required: true
+
+permissions:
+  contents: write # upload assets to the GitHub release
+
+jobs:
+  build-linux-app:
+    name: Build K2 app bundles (x86_64 deb/rpm/AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (at the release tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: app-linux-x86_64
+
+      - uses: oven-sh/setup-bun@v2
+
+      # webkit2gtk/gtk stack for the Tauri app + the same C/C++ toolchain
+      # daemon-binaries.yml uses for ggml/libgit2/sqlite build scripts.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake clang pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf \
+            libxdo-dev file \
+            xdg-utils
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      # beforeBuildCommand handles vite:build + fetch-frpc (sidecar).
+      - name: Build Linux bundles (deb, rpm, AppImage)
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1" # linuxdeploy without FUSE
+        run: bunx tauri build --bundles deb,rpm,appimage
+
+      - name: Collect + checksum artifacts
+        run: |
+          mkdir -p dist-linux
+          cp target/release/bundle/deb/*.deb dist-linux/
+          cp target/release/bundle/rpm/*.rpm dist-linux/
+          cp target/release/bundle/appimage/*.AppImage dist-linux/
+          (cd dist-linux && sha256sum * | tee SHA256SUMS-linux-x86_64.txt)
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release upload "$TAG" dist-linux/* --clobber

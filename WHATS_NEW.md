@@ -25,6 +25,26 @@ files in the repo root for the full developer-facing changelog.
 - **K2 Cloud servers get the read-back plumbing out of the box.** New
   provisions ship with scoped hook tokens on, so `k2 respond` from an
   API-spawned agent lands back in the API conversation with zero setup.
+- **Any agent over the API — for real.** API-spawned sessions now brief
+  every agent on how to answer back (the contract preamble travels with
+  the prompt), listing and resuming works for every agent that keeps a
+  session store (Claude, Grok, Codex, Gemini, Pi, Cursor, Hermes — not
+  just Claude), prompt delivery respects each agent's real startup
+  behavior so slow-booting TUIs stop eating your first message, and an
+  API caller's OpenAI/Gemini/xAI key is staged under the right env var
+  for the workspace's agent, not force-fed as an Anthropic credential.
+- **Custom agents are first-class citizens.** Agent presets now carry
+  metadata — auto-approve flags to strip on API spawns (fail-closed: a
+  custom agent's own bypass flags get declared and stripped, never
+  silently trusted), environment variables (point any OpenAI-compatible
+  harness at your local Ollama/LM Studio server), and startup-readiness
+  hints. Manage it all headlessly with the new `k2 preset` CLI, and
+  `k2 agent hire --agent <preset>` now actually sets the workspace's
+  agent — hiring a Codex agent launches Codex, not the default.
+- **The K2 agent contract, written down.** `docs/agent-contract.md`
+  documents exactly what a custom or local-LLM agent must do to be
+  first-class in K2 — and the sandbox now launches your workspace's
+  real agent inside the cell instead of assuming everyone runs Claude.
 
 ## 0.40.29 — Companion groundwork
 

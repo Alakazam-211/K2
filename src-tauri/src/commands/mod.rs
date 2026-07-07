@@ -62,3 +62,6 @@ pub mod connect_hosts;
 // client's disk; the daemon may be remote).
 pub mod local_download;
 pub mod local_upload;
+// Embedded Browser Tab (PRD prd-browser-pane-v1.md) — Rust-side child-
+// webview lifecycle; renderer gets commands, never webview capabilities.
+pub mod browser_webviews;

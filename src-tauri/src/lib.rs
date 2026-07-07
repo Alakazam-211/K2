@@ -646,6 +646,9 @@ pub fn run() {
             // it defers silently and the user installs from Settings once.
             // Combined with the canonicalized needs-heal check, a correctly
             // installed CLI reports no heal needed and stays quiet.
+            // Browser Tab (S1): registry for child browser webviews.
+            crate::commands::browser_webviews::init(&app.handle().clone());
+
             if crate::commands::settings::cli_symlink_needs_heal() {
                 std::thread::spawn(|| {
                     match crate::commands::settings::cli_heal_silent() {
@@ -1232,6 +1235,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // 0.39.x (Issue #6): webview liveness watchdog heartbeat.
             renderer_heartbeat,
+            // Embedded Browser Tab (S1 spike) — child-webview lifecycle.
+            commands::browser_webviews::browser_create,
+            commands::browser_webviews::browser_set_bounds,
+            commands::browser_webviews::browser_set_visible,
+            commands::browser_webviews::browser_navigate,
+            commands::browser_webviews::browser_current_url,
+            commands::browser_webviews::browser_close,
+            commands::browser_webviews::browser_devtools,
             // Projects — host-only verbs (folder picker, icon upload,
             // OS-integration "open in" actions, editor discovery, focus
             // window). All DB-backed project CRUD moved off the Tauri

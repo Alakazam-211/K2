@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 // Tauri git command emitted NO cross-window sync (optimistic local update
 // is the contract).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { DialogScrim } from '@/components/ui'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 
@@ -149,7 +150,7 @@ export default function WorktreeDialog({
       }}
     >
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <DialogScrim zIndex={0} className="backdrop-blur-sm" />
 
       {/* Dialog */}
       <div className="relative w-[350px] flex flex-col bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl overflow-hidden">

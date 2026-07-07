@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { DialogScrim, Surface } from '@/components/ui'
 import { useTimerStore, formatElapsed } from '@/stores/timer'
 
 export default function MemoDialog(): React.JSX.Element | null {
@@ -46,13 +47,8 @@ export default function MemoDialog(): React.JSX.Element | null {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div
-        className="w-[380px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6"
-        style={{
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4)',
-        }}
-      >
+    <DialogScrim zIndex={50} className="flex items-center justify-center backdrop-blur-sm">
+      <Surface elevation={5} className="w-[380px] p-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-1">
           <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
@@ -97,7 +93,7 @@ export default function MemoDialog(): React.JSX.Element | null {
             Save
           </button>
         </div>
-      </div>
-    </div>
+      </Surface>
+    </DialogScrim>
   )
 }

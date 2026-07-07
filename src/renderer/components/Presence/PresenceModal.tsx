@@ -12,6 +12,7 @@
 // fixed-centered surface on the same z-band).
 
 import { useEffect } from 'react'
+import { DialogFrame, DialogScrim } from '@/components/ui'
 import { usePresenceStore, type RosterUser } from '@/stores/presence'
 import PresenceAvatar, { ROLE_COLORS, presenceDisplayName } from './PresenceAvatar'
 import PresenceKickButton from './PresenceKickButton'
@@ -55,13 +56,7 @@ export default function PresenceModal({ onClose }: PresenceModalProps): React.JS
   return (
     <>
       {/* Semi-transparent backdrop */}
-      <div
-        style={{
-          position: 'fixed',
-          inset: 0,
-          zIndex: 99998,
-          background: 'rgba(0, 0, 0, 0.5)',
-        }}
+      <DialogScrim
         onMouseDown={(e) => {
           e.stopPropagation()
           onClose()
@@ -69,22 +64,13 @@ export default function PresenceModal({ onClose }: PresenceModalProps): React.JS
       />
 
       {/* Dialog */}
-      <div
-        className="no-drag"
+      <DialogFrame
         style={{
-          position: 'fixed',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          zIndex: 99999,
           width: 480,
           maxWidth: 'calc(100vw - 48px)',
           maxHeight: 'calc(100vh - 96px)',
           display: 'flex',
           flexDirection: 'column',
-          background: 'var(--color-bg-surface)',
-          border: '1px solid var(--color-border)',
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4)',
         }}
       >
         {/* Header */}
@@ -118,7 +104,7 @@ export default function PresenceModal({ onClose }: PresenceModalProps): React.JS
             </div>
           )}
         </div>
-      </div>
+      </DialogFrame>
     </>
   )
 }

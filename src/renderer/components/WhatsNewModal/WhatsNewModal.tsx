@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { DialogScrim } from '@/components/ui'
 import Markdown from '../Markdown/Markdown'
 
 interface WhatsNewPayload {
@@ -266,13 +267,7 @@ export default function WhatsNewModal({
       `}</style>
 
       {/* Backdrop. */}
-      <div
-        style={{
-          position: 'fixed',
-          inset: 0,
-          zIndex: 99998,
-          background: 'rgba(0, 0, 0, 0.55)'
-        }}
+      <DialogScrim
         onMouseDown={(e) => {
           e.stopPropagation()
           void handleDismiss()

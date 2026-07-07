@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { DialogScrim } from '@/components/ui'
 import { registerLeaveGuard, type LeaveChoice } from '@/stores/tabs'
 
 // Unsaved-changes leave guard UI.
@@ -36,9 +37,10 @@ function UnsavedChangesModal({ onChoose }: UnsavedChangesModalProps): React.JSX.
   }, [onChoose])
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center no-drag"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
+    <DialogScrim
+      zIndex={60}
+      className="flex items-center justify-center no-drag"
+      style={{ backdropFilter: 'blur(4px)' }}
       onClick={() => onChoose('cancel')}
     >
       <div
@@ -79,7 +81,7 @@ function UnsavedChangesModal({ onChoose }: UnsavedChangesModalProps): React.JSX.
           </button>
         </div>
       </div>
-    </div>
+    </DialogScrim>
   )
 }
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { Callout, DialogScrim } from '@/components/ui'
 import {
   useRemoveWorkspaceDialogStore,
   type RemoveWorkspaceMode,
@@ -98,9 +99,10 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
   const showingResults = results.length > 0
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center no-drag"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
+    <DialogScrim
+      zIndex={50}
+      className="flex items-center justify-center no-drag"
+      style={{ backdropFilter: 'blur(4px)' }}
       onClick={isPending ? undefined : close}
     >
       <div
@@ -196,9 +198,9 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
         {/* Error */}
         {error ? (
           <div className="px-5 pb-4">
-            <div className="border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] px-3 py-2">
-              <p className="text-[11px] text-[var(--color-status-error-soft)] whitespace-pre-wrap">{error}</p>
-            </div>
+            <Callout tone="error">
+              <p className="whitespace-pre-wrap">{error}</p>
+            </Callout>
           </div>
         ) : null}
 
@@ -237,6 +239,6 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
           )}
         </div>
       </div>
-    </div>
+    </DialogScrim>
   )
 }

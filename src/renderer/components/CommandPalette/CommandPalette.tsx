@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { DialogScrim } from '@/components/ui'
 import { useCommandPaletteStore } from '../../stores/command-palette'
 import { useProjectsStore } from '../../stores/projects'
 import { useFocusGroupsStore } from '../../stores/focus-groups'
@@ -252,9 +253,10 @@ export default function CommandPalette(): React.JSX.Element | null {
   const projectIndexOffset = urlResults.length + focusGroupResults.length
 
   return (
-    <div
-      className="fixed inset-0 z-[9999] flex items-start justify-center pt-[15vh] no-drag"
-      style={{ background: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(8px)' }}
+    <DialogScrim
+      zIndex={9999}
+      className="flex items-start justify-center pt-[15vh] no-drag"
+      style={{ backdropFilter: 'blur(8px)' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) close()
       }}
@@ -462,6 +464,6 @@ export default function CommandPalette(): React.JSX.Element | null {
           </span>
         </div>
       </div>
-    </div>
+    </DialogScrim>
   )
 }

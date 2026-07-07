@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from 'react'
 import { useConfirmDialogStore } from '../../stores/confirm-dialog'
+import { Button, DialogFrame, DialogScrim } from '@/components/ui'
 
 export default function ConfirmDialog(): React.JSX.Element | null {
   const isOpen = useConfirmDialogStore((s) => s.isOpen)
@@ -53,13 +54,7 @@ export default function ConfirmDialog(): React.JSX.Element | null {
   return (
     <>
       {/* Semi-transparent backdrop */}
-      <div
-        style={{
-          position: 'fixed',
-          inset: 0,
-          zIndex: 99998,
-          background: 'rgba(0, 0, 0, 0.5)'
-        }}
+      <DialogScrim
         onMouseDown={(e) => {
           e.stopPropagation()
           handleCancel()
@@ -67,19 +62,10 @@ export default function ConfirmDialog(): React.JSX.Element | null {
       />
 
       {/* Dialog */}
-      <div
-        className="no-drag"
+      <DialogFrame
         style={{
-          position: 'fixed',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          zIndex: 99999,
           minWidth: 340,
           maxWidth: 480,
-          background: 'var(--color-bg-surface)',
-          border: '1px solid var(--color-border)',
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4)',
           padding: '20px 24px',
           fontFamily:
             "'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace"
@@ -118,46 +104,35 @@ export default function ConfirmDialog(): React.JSX.Element | null {
             gap: 8
           }}
         >
-          <button
+          <Button
+            variant="ghost"
+            size="md"
+            className="leading-[1.4]"
             onClick={(e) => {
               e.stopPropagation()
               handleCancel()
             }}
-            style={{
-              padding: '6px 14px',
-              fontSize: '12px',
-              fontFamily: 'inherit',
-              border: '1px solid var(--color-border)',
-              background: 'transparent',
-              color: 'var(--color-text-secondary)',
-              cursor: 'pointer',
-              lineHeight: '1.4'
-            }}
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant={confirmDestructive ? 'danger-muted' : 'ghost'}
+            size="md"
+            className="leading-[1.4] font-medium"
+            style={
+              confirmDestructive
+                ? undefined
+                : { background: 'var(--color-bg-surface)', color: 'var(--color-text-primary)' }
+            }
             onClick={(e) => {
               e.stopPropagation()
               handleConfirm()
             }}
-            style={{
-              padding: '6px 14px',
-              fontSize: '12px',
-              fontFamily: 'inherit',
-              border: '1px solid',
-              borderColor: confirmDestructive ? '#c53030' : 'var(--color-border)',
-              background: confirmDestructive ? '#c53030' : 'var(--color-bg-surface)',
-              color: confirmDestructive ? 'var(--color-on-accent)' : 'var(--color-text-primary)',
-              cursor: 'pointer',
-              fontWeight: 500,
-              lineHeight: '1.4'
-            }}
           >
             {confirmLabel}
-          </button>
+          </Button>
         </div>
-      </div>
+      </DialogFrame>
     </>
   )
 }

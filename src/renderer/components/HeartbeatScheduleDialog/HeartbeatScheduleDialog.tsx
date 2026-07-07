@@ -5,6 +5,7 @@ import { emit } from '@tauri-apps/api/event'
 // `/cli/projects/update` HTTP layer and re-emit `sync:projects`. The
 // `k2so_agents_*` calls are agent-control (out of scope), stay on invoke.
 import { daemonCliPost } from '@/lib/daemon-cli'
+import { DialogScrim } from '@/components/ui'
 import { useHeartbeatScheduleStore } from '@/stores/heartbeat-schedule'
 import { useProjectsStore } from '@/stores/projects'
 
@@ -275,7 +276,7 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
       className="fixed inset-0 z-50 flex items-center justify-center"
       onClick={(e) => { if (e.target === e.currentTarget) close() }}
     >
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <DialogScrim zIndex={0} className="backdrop-blur-sm" />
 
       <div className="relative w-[380px] flex flex-col bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl overflow-hidden">
         {/* Header */}

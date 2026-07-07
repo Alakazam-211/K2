@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react'
+import { Callout, DialogScrim } from '@/components/ui'
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 
 // The Skip / Start-Fresh / Adopt consent picker was removed with the
@@ -43,9 +44,10 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
   if (!isOpen || !path) return null
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center no-drag"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
+    <DialogScrim
+      zIndex={50}
+      className="flex items-center justify-center no-drag"
+      style={{ backdropFilter: 'blur(4px)' }}
       onClick={isPending ? undefined : close}
     >
       <div
@@ -81,9 +83,9 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
         {/* Error */}
         {error ? (
           <div className="px-5 pb-4">
-            <div className="border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] px-3 py-2">
-              <p className="text-[11px] text-[var(--color-status-error-soft)] whitespace-pre-wrap">{error}</p>
-            </div>
+            <Callout tone="error">
+              <p className="whitespace-pre-wrap">{error}</p>
+            </Callout>
           </div>
         ) : null}
 
@@ -105,6 +107,6 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
           </button>
         </div>
       </div>
-    </div>
+    </DialogScrim>
   )
 }

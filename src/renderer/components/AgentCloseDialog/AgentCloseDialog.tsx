@@ -1,4 +1,5 @@
 import { useEffect, useCallback } from 'react'
+import { DialogScrim } from '@/components/ui'
 import type { ActiveAgent } from '@/stores/active-agents'
 
 interface AgentCloseDialogProps {
@@ -41,9 +42,9 @@ export default function AgentCloseDialog({
       : 'Active Agents Running'
 
   return (
-    <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center"
-      style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+    <DialogScrim
+      zIndex={1000}
+      className="flex items-center justify-center"
       onClick={handleBackdropClick}
     >
       <div
@@ -113,6 +114,6 @@ export default function AgentCloseDialog({
           </button>
         </div>
       </div>
-    </div>
+    </DialogScrim>
   )
 }

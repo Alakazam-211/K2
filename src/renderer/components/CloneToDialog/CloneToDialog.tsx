@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react'
 
+import { Callout, DialogScrim } from '@/components/ui'
 import { useCloneToDialogStore } from '../../stores/clone-to-dialog'
 import type { CloneStage } from '../../lib/clone-to'
 
@@ -79,9 +80,10 @@ export default function CloneToDialog(): React.JSX.Element | null {
   const activeIdx = steps.findIndex((s) => s.stage === stage)
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center no-drag"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
+    <DialogScrim
+      zIndex={50}
+      className="flex items-center justify-center no-drag"
+      style={{ backdropFilter: 'blur(4px)' }}
       onClick={isClosable ? close : undefined}
     >
       <div
@@ -277,9 +279,9 @@ export default function CloneToDialog(): React.JSX.Element | null {
 
           {/* Error screen. */}
           {stage === 'error' && error && (
-            <div className="border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] px-3 py-2">
-              <p className="text-[11px] text-[var(--color-status-error-soft)] whitespace-pre-wrap break-words">{error}</p>
-            </div>
+            <Callout tone="error">
+              <p className="whitespace-pre-wrap break-words">{error}</p>
+            </Callout>
           )}
         </div>
 
@@ -323,6 +325,6 @@ export default function CloneToDialog(): React.JSX.Element | null {
           )}
         </div>
       </div>
-    </div>
+    </DialogScrim>
   )
 }

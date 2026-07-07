@@ -10,6 +10,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore, type ProjectWithWorkspaces } from '../../stores/projects'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
+import { DialogScrim } from '@/components/ui'
 
 interface DisableWorktreesDialogProps {
   project: ProjectWithWorkspaces
@@ -150,9 +151,10 @@ export default function DisableWorktreesDialog({
   if (!open) return null
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center no-drag"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
+    <DialogScrim
+      zIndex={50}
+      className="flex items-center justify-center no-drag"
+      style={{ backdropFilter: 'blur(4px)' }}
       onClick={isPending ? undefined : onClose}
     >
       <div
@@ -300,6 +302,6 @@ export default function DisableWorktreesDialog({
           }}
         />
       )}
-    </div>
+    </DialogScrim>
   )
 }

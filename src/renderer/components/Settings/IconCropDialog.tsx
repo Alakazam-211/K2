@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
+import { DialogScrim } from '@/components/ui'
 
 interface IconCropDialogProps {
   imageDataUrl: string
@@ -134,9 +135,9 @@ export default function IconCropDialog({
   }, [onCancel, handleConfirm])
 
   return (
-    <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center"
-      style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
+    <DialogScrim
+      zIndex={1000}
+      className="flex items-center justify-center"
       onClick={onCancel}
     >
       <div
@@ -185,6 +186,6 @@ export default function IconCropDialog({
           </button>
         </div>
       </div>
-    </div>
+    </DialogScrim>
   )
 }

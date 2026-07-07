@@ -50,10 +50,6 @@ pub enum LaunchDecision {
     ResumeAndFire {
         claude_session_id: String,
     },
-    SkippedArchived,
-    SkippedNotFound,
-    SkippedNoAgent,
-    SkippedWakeupMissing,
 }
 
 /// Run the full smart-launch flow. Returns a JSON value matching the
@@ -273,14 +269,6 @@ pub fn smart_launch_with_origin(
         LaunchDecision::ResumeAndFire { claude_session_id } => {
             run_resume_and_fire(project_path, &project_id, &agent_name, &hb,
                 &wakeup_abs, &claude_session_id, &resolved_default, catchup_of)
-        }
-        // The pure planner never returns the Skipped* variants — those
-        // are produced earlier in this function before branch selection.
-        LaunchDecision::SkippedArchived
-        | LaunchDecision::SkippedNotFound
-        | LaunchDecision::SkippedNoAgent
-        | LaunchDecision::SkippedWakeupMissing => {
-            run_fresh_fire(project_path, &project_id, &agent_name, &hb, &wakeup_abs, catchup_of)
         }
     }
 }

@@ -69,17 +69,6 @@ impl DaemonClient {
         Ok(Self { base, token, http })
     }
 
-    /// Hit `GET /ping` — no auth required. Returns `true` iff the daemon
-    /// is reachable and replied with a 2xx. Intended for the Tauri app's
-    /// post-launchd-load handshake.
-    pub fn ping(&self) -> bool {
-        let url = format!("{}/ping", self.base);
-        self.http
-            .get(url)
-            .send()
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
-    }
 
     /// Hit a `/cli/*` route on the daemon, returning the raw response
     /// body (the CLI text/JSON the daemon emits). `params` are

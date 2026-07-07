@@ -15,7 +15,9 @@
 //!
 //! ## Phase 0 scope (this module)
 //!
-//! ONLY the bind helper + the peer-cred reader. They are CALLED only
+//! ONLY the bind helper (the peer-cred reader — `PeerCred`/`peer_cred` —
+//! was never wired to a caller and was deleted in the 0.40.31 warning-zero
+//! pass; recover from git history when the accept loop lands). It is CALLED only
 //! behind `K2_HOOK_SCOPED` (see [`crate::session_token::scoped_hooks_enabled`])
 //! and Phase 0 never actually serves traffic on the socket — the accept
 //! loop + vsock bridge + dispatch generalization are Phase 1/2. With the
@@ -177,109 +179,6 @@ mod unix_impl {
         Ok(())
     }
 
-    /// The credential of the process on the other end of an accepted
-    /// connection. `pid` is best-effort (reliable on Linux `SO_PEERCRED`;
-    /// weaker on macOS `LOCAL_PEERPID`, hence `Option`).
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct PeerCred {
-        pub uid: u32,
-        pub gid: u32,
-        pub pid: Option<i32>,
-    }
-
-    /// Read the peer credential of an accepted `UnixStream` — the
-    /// accept-time attestation belt. The STRUCTURAL socket binding (one
-    /// socket per cell) is the primary guarantee; this asserts the
-    /// connecting uid/pid is the expected privilege-dropped worker.
-    #[cfg(target_os = "linux")]
-    pub fn peer_cred(stream: &std::os::unix::net::UnixStream) -> std::io::Result<PeerCred> {
-        use std::os::unix::io::AsRawFd;
-        let fd = stream.as_raw_fd();
-        let mut ucred = libc::ucred {
-            pid: 0,
-            uid: 0,
-            gid: 0,
-        };
-        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        // SAFETY: fd is a valid connected socket for the call's duration;
-        // we pass a correctly-sized ucred + its length.
-        let rc = unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                &mut ucred as *mut _ as *mut libc::c_void,
-                &mut len,
-            )
-        };
-        if rc != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(PeerCred {
-            uid: ucred.uid,
-            gid: ucred.gid,
-            pid: Some(ucred.pid),
-        })
-    }
-
-    /// macOS: `getpeereid` gives uid/gid; pid via `LOCAL_PEERPID` (less
-    /// reliable than Linux `SO_PEERCRED`, so it's optional — PRD §6
-    /// open-Q "macOS peer-cred"). The structural socket binding holds
-    /// regardless of how strict the pid match is.
-    #[cfg(target_os = "macos")]
-    pub fn peer_cred(stream: &std::os::unix::net::UnixStream) -> std::io::Result<PeerCred> {
-        use std::os::unix::io::AsRawFd;
-        let fd = stream.as_raw_fd();
-
-        let mut uid: libc::uid_t = 0;
-        let mut gid: libc::gid_t = 0;
-        // SAFETY: fd is a valid connected socket; out-params are sized.
-        let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
-        if rc != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        // Best-effort pid via LOCAL_PEERPID. A failure leaves pid = None.
-        let mut pid: libc::c_int = 0;
-        let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
-        const LOCAL_PEERPID: libc::c_int = 0x002; // sys/un.h
-        // SAFETY: same fd; out-param + length are correctly sized.
-        let prc = unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_LOCAL,
-                LOCAL_PEERPID,
-                &mut pid as *mut _ as *mut libc::c_void,
-                &mut len,
-            )
-        };
-        let pid = if prc == 0 { Some(pid) } else { None };
-
-        Ok(PeerCred {
-            uid: uid as u32,
-            gid: gid as u32,
-            pid,
-        })
-    }
-
-    /// Other unixes: uid/gid via `getpeereid`, no portable pid.
-    #[cfg(all(unix, not(target_os = "linux"), not(target_os = "macos")))]
-    pub fn peer_cred(stream: &std::os::unix::net::UnixStream) -> std::io::Result<PeerCred> {
-        use std::os::unix::io::AsRawFd;
-        let fd = stream.as_raw_fd();
-        let mut uid: libc::uid_t = 0;
-        let mut gid: libc::gid_t = 0;
-        // SAFETY: fd is a valid connected socket; out-params are sized.
-        let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
-        if rc != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(PeerCred {
-            uid: uid as u32,
-            gid: gid as u32,
-            pid: None,
-        })
-    }
 
     #[cfg(test)]
     mod tests {
@@ -439,16 +338,6 @@ mod stub {
     use k2_core::session::SessionId;
     use std::path::PathBuf;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct PeerCred {
-        pub uid: u32,
-        pub gid: u32,
-        pub pid: Option<i32>,
-    }
-
-    pub fn cells_dir() -> PathBuf {
-        PathBuf::from(".")
-    }
     pub fn cell_socket_path(_session_id: &SessionId) -> PathBuf {
         PathBuf::from(".")
     }
@@ -461,4 +350,4 @@ mod stub {
 }
 
 #[cfg(not(unix))]
-pub use stub::{bind_cell_socket, cell_socket_path, cells_dir, PeerCred};
+pub use stub::{bind_cell_socket, cell_socket_path};

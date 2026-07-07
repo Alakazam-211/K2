@@ -68,12 +68,6 @@ fn opt_i64(params: &HashMap<String, String>, key: &str) -> Option<i64> {
 // GET handlers (used in cli::dispatch)
 // ══════════════════════════════════════════════════════════════════════
 
-// ── States ────────────────────────────────────────────────────────────
-
-pub fn handle_states_list() -> CliResponse {
-    serialized(dops::states_list())
-}
-
 // ── Workspaces ────────────────────────────────────────────────────────
 
 pub fn handle_workspaces_list(params: &HashMap<String, String>) -> CliResponse {
@@ -282,9 +276,6 @@ pub fn handle_projects_get_all_editors() -> CliResponse {
     ok_serialized(k2_core::editors::get_all_editors())
 }
 
-pub fn handle_projects_refresh_editors() -> CliResponse {
-    ok_serialized(k2_core::editors::clear_editor_cache())
-}
 
 // ══════════════════════════════════════════════════════════════════════
 // POST handlers (dispatched by `dispatch_unit4_post` in main.rs)

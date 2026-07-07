@@ -394,6 +394,7 @@ pub fn handle_agents_delegate(
         return CliResponse::bad_request("missing file param");
     }
 
+    #[allow(deprecated)] // deprecated-but-live delegate seam (Phase 2.1 PRD A23)
     let launch_info = match k2_core::deprecated::delegate::k2so_agents_delegate(
         project_path.to_string(),
         target.clone(),

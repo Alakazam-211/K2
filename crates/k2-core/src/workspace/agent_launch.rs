@@ -133,6 +133,7 @@ pub fn k2so_agents_build_launch(
 
         if let Some((top_path, _)) = items.into_iter().next() {
             let source_file = top_path.to_string_lossy().to_string();
+            #[allow(deprecated)] // deprecated-but-live delegate seam (Phase 2.1 PRD A23)
             return crate::deprecated::delegate::k2so_agents_delegate(
                 project_path,
                 agent_name,

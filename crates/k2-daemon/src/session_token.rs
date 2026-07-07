@@ -387,6 +387,13 @@ impl SessionTokenRegistry {
     /// B → `false` (PRD §5 smoke #4). The OWNER-token arm is independent
     /// (`ct_eq_token`) and handled by the caller — this is the scoped half
     /// only, so it is provably DISJOINT from the owner credential.
+    ///
+    /// NOTE (0.40.31): the LIVE `/hook/complete` gate in
+    /// `routes::dispatcher` inlines this decision via `require_hook` +
+    /// pane equality (it also path-gates on `is_agent_verb`); this method
+    /// exists to pin the scope-enforcement semantics in unit tests, so it
+    /// is compiled for test builds only.
+    #[cfg(test)]
     pub fn scoped_hook_authorizes_pane(&self, bearer: &str, req_pane: &str) -> bool {
         if req_pane.is_empty() {
             return false;

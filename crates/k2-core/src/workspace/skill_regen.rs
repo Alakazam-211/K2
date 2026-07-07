@@ -447,7 +447,8 @@ pub(crate) fn reap_old_workspace_skill_shape(project_path: &str) {
 
 /// Return the mtime of a file as seconds since epoch, or 0 if unknown.
 ///
-/// Used by the drift-detection migration-safety tests.
+/// Used by the drift-detection migration-safety tests (test builds only).
+#[cfg(test)]
 pub(crate) fn mtime_secs(path: &Path) -> u64 {
     fs::metadata(path)
         .and_then(|m| m.modified())
@@ -477,7 +478,8 @@ pub(crate) fn content_hash_of(path: &Path) -> String {
 /// cross-machine rsync mtime quirks.
 ///
 /// Phase 2.5d: `pub(crate)` so the migration-safety tests can read the
-/// stamp file and assert drift-detection behavior.
+/// stamp file and assert drift-detection behavior (test builds only).
+#[cfg(test)]
 pub(crate) fn read_regen_hashes(project_path: &str) -> std::collections::HashMap<String, String> {
     let stamp_path = crate::workspace_dot_dir(project_path).join(".last-skill-regen");
     let Ok(raw) = fs::read_to_string(&stamp_path) else {

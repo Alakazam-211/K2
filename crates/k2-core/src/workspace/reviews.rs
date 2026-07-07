@@ -21,6 +21,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+// Deprecated-but-live seam (Phase 2.1 PRD A23): review-reject still
+// strips worktree frontmatter via the deprecated delegate module.
+#[allow(deprecated)]
 use crate::deprecated::delegate::strip_worktree_from_frontmatter;
 use crate::workspace::agent_identity::parse_frontmatter;
 use crate::workspace::scheduler::{agent_work_dir, get_workspace_state};
@@ -295,6 +298,7 @@ pub fn review_reject(
                 };
                 let target = inbox_dir.join(&filename);
                 if let Ok(content) = fs::read_to_string(&path) {
+                    #[allow(deprecated)] // deprecated-but-live delegate seam (Phase 2.1 PRD A23)
                     let cleaned = strip_worktree_from_frontmatter(&content);
                     if let Err(e) = atomic_write(&target, &cleaned) {
                         crate::log_debug!("[review-reject] Failed to write cleaned work item: {}", e);

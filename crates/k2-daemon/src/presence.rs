@@ -137,11 +137,6 @@ pub struct PresenceGuard {
     conn_id: u64,
 }
 
-impl PresenceGuard {
-    pub fn conn_id(&self) -> u64 {
-        self.conn_id
-    }
-}
 
 impl Drop for PresenceGuard {
     fn drop(&mut self) {

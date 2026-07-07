@@ -88,6 +88,9 @@ pub struct SpawnWorkspaceSessionRequest {
 #[derive(Clone, Debug)]
 pub struct SpawnWorkspaceSessionOutcome {
     pub session_id: SessionId,
+    // Asserted via the LIB target by canonical_session_integration; never
+    // read in the bin compile (main.rs builds this module privately).
+    #[allow(dead_code)]
     pub agent_name: String,
     pub pending_drained: usize,
     pub reused: bool,

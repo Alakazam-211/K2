@@ -379,6 +379,7 @@ pub fn list_agents() -> Vec<String> {
 /// Drop every registered entry. Available to both unit tests
 /// (in this module) and integration tests (in `tests/*.rs`) so
 /// shared global state doesn't leak between cases.
+#[allow(dead_code)] // called via the LIB target by integration tests; dead only in the bin compile
 pub fn clear_for_tests() {
     shared().lock().unwrap().clear();
 }

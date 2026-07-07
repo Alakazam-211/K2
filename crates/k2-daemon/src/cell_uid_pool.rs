@@ -105,12 +105,14 @@ impl UidPool {
         }
     }
 
-    /// Count of currently-allocated uids (for logging / tests).
+    /// Count of currently-allocated uids (asserted by unit tests only).
+    #[cfg(test)]
     pub fn in_use_count(&self) -> usize {
         self.in_use.iter().filter(|u| **u).count()
     }
 
     /// Total capacity of the range (0 when fail-closed empty).
+    #[cfg(test)]
     pub fn capacity(&self) -> usize {
         self.in_use.len()
     }

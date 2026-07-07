@@ -378,6 +378,7 @@ pub fn k2so_heartbeat_fires_list(
 /// registers it, moves the item to active, writes CLAUDE.md.
 /// Body lives in `k2_core::deprecated::delegate`.
 #[tauri::command]
+#[allow(deprecated)] // deliberate: deprecated-but-live delegate seam (Phase 2.1 PRD A23)
 pub fn k2so_agents_delegate(
     project_path: String,
     target_agent: String,
@@ -624,19 +625,6 @@ pub async fn k2so_agents_review_queue(project_path: String) -> Result<Vec<Review
         .map_err(|e| format!("review_queue task failed: {}", e))?
 }
 
-pub fn k2so_agents_review_queue_inner(project_path: &str) -> Result<Vec<ReviewItem>, String> {
-    k2_core::workspace::reviews::review_queue(project_path)
-}
-
-/// Sub-agent completion. Core logic in
-/// `k2_core::workspace::reviews::agent_complete`.
-pub fn k2so_agent_complete(
-    project_path: String,
-    agent_name: String,
-    filename: String,
-) -> Result<String, String> {
-    k2_core::workspace::reviews::agent_complete(project_path, agent_name, filename)
-}
 
 /// Approve the agent's branch — merge + cleanup. Core logic lives in
 /// `k2_core::workspace::reviews::review_approve`.
@@ -696,9 +684,13 @@ pub fn k2so_agents_review_request_changes(
 /// gated on `projects.heartbeat_mode != 'off'` so opted-out workspaces
 /// don't get auto-launched even if a stray caller invokes us. Planned
 /// for removal in 0.37.x.
-#[deprecated(
-    note = "Inbox-driven triage — superseded by agent_heartbeats.             Planned for removal in 0.37.x. See `legacy-per-agent-heartbeat` tag."
-)]
+///
+/// Deprecation note (0.40.31): the `#[deprecated]` ATTRIBUTE was dropped
+/// from this WRAPPER because its only reference is the (macro-generated)
+/// `generate_handler!` registration in lib.rs, which cannot carry a
+/// targeted `#[allow(deprecated)]`. The core fn it forwards to
+/// (`k2_core::workspace::triage::triage_decide`) remains `#[deprecated]`,
+/// so any NEW Rust caller still gets warned at the core seam.
 #[tauri::command]
 #[allow(deprecated)]
 pub fn k2so_agents_triage_decide(project_path: String) -> Result<Vec<String>, String> {

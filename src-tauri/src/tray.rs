@@ -32,14 +32,14 @@
 //!   🔴 Not running
 //!   🟠 Unreachable / launching / crashed
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use parking_lot::Mutex;
 use tauri::image::Image;
 use tauri::menu::{IconMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Wry};
 
 /// Menubar icon bytes — embedded at compile time so there's no
 /// runtime file-path dependency (works regardless of where the
@@ -92,13 +92,6 @@ mod ids {
     pub const QUIT: &str = "k2so.tray.quit";
 }
 
-/// Handle stored in Tauri state so the refresh loop can rebuild the
-/// menu. `Arc<Mutex<>>` because both the refresh thread and the
-/// menu-event handler need write access.
-pub struct TrayState {
-    pub app: AppHandle<Wry>,
-}
-
 /// Cached handles to the menu items whose labels we mutate over time
 /// (status + Ngrok URL). Storing the `MenuItem<Wry>` clones here
 /// lets the refresh thread call `.set_text(...)` to update the text
@@ -116,7 +109,6 @@ struct LiveTrayItems {
     status: IconMenuItem<Wry>,
     status_state: StatusState,
     ngrok: MenuItem<Wry>,
-    parties_header: MenuItem<Wry>,
     last_party_count: usize,
 }
 
@@ -141,7 +133,6 @@ pub fn install(app: &AppHandle<Wry>) -> Result<(), String> {
     let icon = Image::from_bytes(TRAY_ICON_PNG)
         .map_err(|e| format!("decode tray icon: {e}"))?;
 
-    let app_clone = app.clone();
     let _tray = TrayIconBuilder::with_id("k2so-main")
         .icon(icon)
         .icon_as_template(true)
@@ -163,11 +154,6 @@ pub fn install(app: &AppHandle<Wry>) -> Result<(), String> {
         refresh_in_place(&refresh_app);
     });
 
-    // Stash a handle so future callers can trigger an immediate
-    // refresh (e.g., right after daemon_install completes).
-    app.manage(Arc::new(Mutex::new(TrayState {
-        app: app_clone,
-    })));
     Ok(())
 }
 
@@ -330,7 +316,6 @@ fn build_menu(app: &AppHandle<Wry>) -> Result<Menu<Wry>, String> {
         status: status.clone(),
         status_state,
         ngrok: ngrok.clone(),
-        parties_header: parties_header.clone(),
         last_party_count: party_count,
     });
 

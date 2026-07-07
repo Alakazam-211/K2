@@ -72,6 +72,7 @@ pub fn stamp(id: &SessionId) {
 /// Is `id` currently tracked by the reaper? Observability accessor (the
 /// host-sessions/sandbox integration suites assert a spawned session was
 /// armed) — never consulted by the reap loop itself.
+#[allow(dead_code)] // read via the LIB target by integration tests; dead only in the bin compile
 pub fn registered(id: &SessionId) -> bool {
     REG.lock().map(|m| m.contains_key(id)).unwrap_or(false)
 }

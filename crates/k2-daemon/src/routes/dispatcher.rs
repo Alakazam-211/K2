@@ -663,13 +663,9 @@ async fn handle_one_request(
             | "/cli/federation/pair/confirm"
             | "/cli/federation/inbound"
             | "/cli/federation/send"
-            // P3b (sandbox / K2-as-a-server) — the EXTERNAL public spawn route.
-            // POST-only; gated below by the /v1 surface gate (K2_API, or the
-            // legacy K2_SANDBOX_API which implies it) + the sandbox-family gate
-            // (K2_SANDBOX_API) + v1_principal + per-handler require_post. Listed here so the
-            // top-level 405 guard never short-circuits it (without this entry
-            // POST /v1/sandboxes 405s before ever reaching the /v1/ arm).
-            | "/v1/sandboxes"
+            // NOTE: "/v1/sandboxes" already appears earlier in this list (the
+            // P3b external spawn route) — do not re-add it here (unreachable
+            // duplicate pattern).
     )
         // Sandbox v2 (PRD §A) — the workspace-scoped session routes carry
         // dynamic `<workspace>` / `<session-id>` segments, so they cannot be

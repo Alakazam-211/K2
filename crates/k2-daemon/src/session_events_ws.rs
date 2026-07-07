@@ -52,12 +52,6 @@ struct HelloEvent {
     subscriber_id: u64,
 }
 
-/// Pre-handshake error frame. Sent then immediately closed.
-#[derive(Debug, Serialize)]
-struct ErrorEvent {
-    kind: &'static str,
-    message: String,
-}
 
 /// WS handler entry point. Called by `main.rs::handle_connection`
 /// after token auth + query parsing. `params` carries the parsed
@@ -372,19 +366,6 @@ where
     })
 }
 
-async fn send_error_then_close(stream: &mut TcpStream, msg: &str) {
-    let err = ErrorEvent {
-        kind: "error",
-        message: msg.to_string(),
-    };
-    let ws = match tokio_tungstenite::accept_async(stream).await {
-        Ok(ws) => ws,
-        Err(_) => return,
-    };
-    let (mut write, _read) = ws.split();
-    let _ = send_json(&mut write, &err).await;
-    let _ = write.close().await;
-}
 
 #[cfg(test)]
 mod tests {

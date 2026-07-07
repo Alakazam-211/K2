@@ -206,7 +206,11 @@ mod stub {
 
     pub fn init(_app: &AppHandle) {}
 
+    // Wire-shape parity with `real::Rect`: the stub must DESERIALIZE the
+    // same JSON the renderer always sends, so the fields exist but are
+    // (deliberately) never read in the browser-pane-off build.
     #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
     pub struct Rect {
         pub x: f64,
         pub y: f64,

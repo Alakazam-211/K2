@@ -90,7 +90,8 @@ impl QuotaState {
         self.per_principal.get(key).copied().unwrap_or(0)
     }
 
-    /// Total live cells across all principals.
+    /// Total live cells across all principals (asserted by unit tests only).
+    #[cfg(test)]
     pub fn total(&self) -> usize {
         self.total
     }

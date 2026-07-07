@@ -678,7 +678,7 @@ pub(crate) fn v1_principal(
         return Some(V1Principal::Owner);
     }
     // Otherwise it must be a valid, non-revoked API key.
-    k2_core::api_keys::resolve_api_key(cred).map(V1Principal::Api)
+    api_principal(query, bearer).map(V1Principal::Api)
 }
 
 /// Composer 1c (D4) — the capability decision for the session-scoped

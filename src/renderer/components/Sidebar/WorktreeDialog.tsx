@@ -246,7 +246,7 @@ export default function WorktreeDialog({
 
         {/* Error */}
         {error && (
-          <div className="px-4 py-2 text-xs text-red-400 bg-red-400/5 border-t border-red-400/10">
+          <div className="px-4 py-2 text-xs text-[var(--color-status-error-soft)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)] border-t border-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)]">
             {error}
           </div>
         )}
@@ -263,7 +263,7 @@ export default function WorktreeDialog({
           <button
             className={`px-4 py-1.5 text-xs font-medium transition-colors ${
               canCreate
-                ? 'bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/90'
+                ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90'
                 : 'bg-white/[0.06] text-[var(--color-text-muted)] cursor-not-allowed'
             }`}
             onClick={handleCreate}

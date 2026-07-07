@@ -213,7 +213,7 @@ export default function WorkspacePanel(): React.JSX.Element {
                 <div className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">Active</div>
               </div>
               <div className="text-center">
-                <div className={`text-sm font-semibold tabular-nums ${totalDone > 0 ? 'text-green-400' : 'text-[var(--color-text-muted)]'}`}>{totalDone}</div>
+                <div className={`text-sm font-semibold tabular-nums ${totalDone > 0 ? 'text-[var(--color-status-ok-soft)]' : 'text-[var(--color-text-muted)]'}`}>{totalDone}</div>
                 <div className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">Review</div>
               </div>
             </div>
@@ -330,7 +330,7 @@ export default function WorkspacePanel(): React.JSX.Element {
           </svg>
           Worktrees
           {worktrees.length > 0 && (
-            <span className="text-[9px] tabular-nums font-medium px-1 py-0.5 bg-white/5 text-[var(--color-text-muted)]">
+            <span className="text-[9px] tabular-nums font-medium px-1 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">
               {worktrees.length}
             </span>
           )}
@@ -340,7 +340,7 @@ export default function WorkspacePanel(): React.JSX.Element {
             e.stopPropagation()
             setShowWorktreeDialog(true)
           }}
-          className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/10 transition-colors no-drag cursor-pointer"
+          className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)] transition-colors no-drag cursor-pointer"
           title="New worktree"
         >
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -488,7 +488,7 @@ function WorktreeRow({
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-[var(--color-text-primary)] truncate">{displayName}</span>
             {agentTemplate && (
-              <span className="text-[9px] font-medium text-[var(--color-text-muted)] bg-white/5 px-1 py-0.5 flex-shrink-0">
+              <span className="text-[9px] font-medium text-[var(--color-text-muted)] bg-[var(--color-wash-1)] px-1 py-0.5 flex-shrink-0">
                 {agentTemplate}
               </span>
             )}

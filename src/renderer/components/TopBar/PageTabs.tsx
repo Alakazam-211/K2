@@ -47,7 +47,7 @@ function PageTab({
       {label}
       {badge !== undefined && badge > 0 && (
         <span
-          className={`absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-white rounded-full px-0.5 ${badgeClass ?? 'bg-[var(--color-accent)]'}`}
+          className={`absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-[var(--color-on-accent)] rounded-full px-0.5 ${badgeClass ?? 'bg-[var(--color-accent)]'}`}
         >
           {badge > 99 ? '99+' : badge}
         </span>
@@ -108,7 +108,7 @@ export default function PageTabs(): React.JSX.Element {
         selected={page === 'feedback'}
         onSelect={() => select('feedback')}
         badge={waitingCount}
-        badgeClass="bg-orange-500"
+        badgeClass="bg-[var(--color-status-working)]"
         title="Feedback — agents waiting on you"
       />
     </div>

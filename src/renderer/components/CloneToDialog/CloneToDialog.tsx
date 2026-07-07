@@ -187,7 +187,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
                       aria-hidden
                     >
                       {isComplete ? (
-                        <svg className="w-3 h-3 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
+                        <svg className="w-3 h-3 text-[var(--color-status-ok-soft)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="20 6 9 17 4 12" />
                         </svg>
                       ) : isCurrent ? (
@@ -277,8 +277,8 @@ export default function CloneToDialog(): React.JSX.Element | null {
 
           {/* Error screen. */}
           {stage === 'error' && error && (
-            <div className="border border-red-500/30 bg-red-500/10 px-3 py-2">
-              <p className="text-[11px] text-red-400 whitespace-pre-wrap break-words">{error}</p>
+            <div className="border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] px-3 py-2">
+              <p className="text-[11px] text-[var(--color-status-error-soft)] whitespace-pre-wrap break-words">{error}</p>
             </div>
           )}
         </div>

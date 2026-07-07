@@ -38,10 +38,10 @@ interface AgentInboxPaneProps {
 
 const priorityBadge = (p: string): string => {
   const colors: Record<string, string> = {
-    critical: 'bg-red-500/15 text-red-400',
-    high: 'bg-orange-500/15 text-orange-400',
-    normal: 'bg-white/5 text-[var(--color-text-muted)]',
-    low: 'bg-white/5 text-[var(--color-text-muted)] opacity-60',
+    critical: 'bg-[color-mix(in_srgb,var(--color-status-error)_15%,transparent)] text-[var(--color-status-error-soft)]',
+    high: 'bg-[color-mix(in_srgb,var(--color-status-working)_15%,transparent)] text-orange-400',
+    normal: 'bg-[var(--color-wash-1)] text-[var(--color-text-muted)]',
+    low: 'bg-[var(--color-wash-1)] text-[var(--color-text-muted)] opacity-60',
   }
   return colors[p] || colors.normal
 }
@@ -99,7 +99,7 @@ function KanbanColumn({ title, items, color, projectPath, onOpenFile }: {
       <div className="flex items-center gap-1.5 mb-2.5 px-1">
         <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>{title}</span>
         {items.length > 0 && (
-          <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-white/5 text-[var(--color-text-muted)]">
+          <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">
             {items.length}
           </span>
         )}
@@ -264,19 +264,19 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
           <div className="absolute inset-0 z-10 flex gap-3 p-3 overflow-y-auto">
             <KanbanColumn title="Unassigned" items={inboxItems} color="text-[var(--color-accent)]" projectPath={projectPath} onOpenFile={openFile} />
             <KanbanColumn title="In Progress" items={activeItems} color="text-yellow-400" projectPath={projectPath} onOpenFile={openFile} />
-            <KanbanColumn title="Review" items={doneItems} color="text-green-400" projectPath={projectPath} onOpenFile={openFile} />
+            <KanbanColumn title="Review" items={doneItems} color="text-[var(--color-status-ok-soft)]" projectPath={projectPath} onOpenFile={openFile} />
           </div>
         ) : isManager ? (
           <div className="absolute inset-0 z-10 flex gap-3 p-3 overflow-y-auto bg-[var(--color-bg)]">
             <KanbanColumn title="Inbox" items={inboxItems} color="text-[var(--color-accent)]" projectPath={projectPath} onOpenFile={openFile} />
             <KanbanColumn title="Delegated" items={activeItems} color="text-yellow-400" projectPath={projectPath} onOpenFile={openFile} />
-            <KanbanColumn title="Review" items={doneItems} color="text-green-400" projectPath={projectPath} onOpenFile={openFile} />
+            <KanbanColumn title="Review" items={doneItems} color="text-[var(--color-status-ok-soft)]" projectPath={projectPath} onOpenFile={openFile} />
           </div>
         ) : (
           <div className="absolute inset-0 z-10 flex gap-3 p-3 overflow-y-auto bg-[var(--color-bg)]">
             <KanbanColumn title="Inbox" items={inboxItems} color="text-[var(--color-accent)]" projectPath={projectPath} onOpenFile={openFile} />
             <KanbanColumn title="Active" items={activeItems} color="text-yellow-400" projectPath={projectPath} onOpenFile={openFile} />
-            <KanbanColumn title="Done" items={doneItems} color="text-green-400" projectPath={projectPath} onOpenFile={openFile} />
+            <KanbanColumn title="Done" items={doneItems} color="text-[var(--color-status-ok-soft)]" projectPath={projectPath} onOpenFile={openFile} />
           </div>
         )}
       </div>

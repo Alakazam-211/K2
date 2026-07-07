@@ -375,7 +375,7 @@ export function AIFileEditor({
             onClick={() => { void onSaveRequested() }}
             disabled={!isDirty}
             title={isDirty ? 'Save changes to disk' : 'No unsaved changes'}
-            className="px-2 py-0.5 text-[10px] font-medium text-white bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
+            className="px-2 py-0.5 text-[10px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
           >
             Save
           </button>

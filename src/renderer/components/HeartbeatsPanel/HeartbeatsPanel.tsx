@@ -162,7 +162,7 @@ export function HeartbeatsPanel(): React.JSX.Element {
               section inside the panel; counting them here would
               inflate the visible "you have N heartbeats" cue. */}
           {active.length > 0 && (
-            <span className="text-[9px] tabular-nums font-medium px-1 py-0.5 bg-white/5 text-[var(--color-text-muted)]">
+            <span className="text-[9px] tabular-nums font-medium px-1 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">
               {active.length}
             </span>
           )}
@@ -190,7 +190,7 @@ export function HeartbeatsPanel(): React.JSX.Element {
       ) : lastError ? (
         // Surface the error rather than silently showing an empty state —
         // a broken Tauri command would otherwise render as "no heartbeats yet".
-        <div className="px-1 py-1 text-[10px] text-red-400 leading-relaxed">
+        <div className="px-1 py-1 text-[10px] text-[var(--color-status-error-soft)] leading-relaxed">
           Failed to load: {lastError}
         </div>
       ) : active.length === 0 && archived.length === 0 ? (

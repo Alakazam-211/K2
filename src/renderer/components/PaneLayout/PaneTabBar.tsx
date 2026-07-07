@@ -272,7 +272,7 @@ export function PaneTabBar({
               </span>
 
               <button
-                className="ml-1.5 flex items-center justify-center shrink-0 hover:bg-white/10"
+                className="ml-1.5 flex items-center justify-center shrink-0 hover:bg-[var(--color-wash-2)]"
                 style={{ width: '14px', height: '14px' }}
                 onClick={(e) => handleClose(e, item.id)}
                 title="Close tab"
@@ -308,7 +308,7 @@ export function PaneTabBar({
       {/* Close pane button — removes this split */}
       {onClosePane && (
         <button
-          className="flex items-center justify-center shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/10"
+          className="flex items-center justify-center shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)]"
           style={{ width: '24px', height: '24px' }}
           onClick={(e) => {
             e.stopPropagation()

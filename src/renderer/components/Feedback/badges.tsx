@@ -23,7 +23,7 @@ export function StatusBadge({ status }: { status: FeedbackStatus }): React.JSX.E
     status === 'waiting'
       ? 'bg-orange-400/10 text-orange-400'
       : status === 'answered'
-        ? 'bg-green-400/10 text-green-400'
+        ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
         : 'bg-white/[0.06] text-[var(--color-text-muted)]'
   return (
     <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${cls}`}>
@@ -35,7 +35,7 @@ export function StatusBadge({ status }: { status: FeedbackStatus }): React.JSX.E
 export function PriorityBadge({ priority }: { priority: number }): React.JSX.Element {
   const cls =
     priority <= 1
-      ? 'text-red-400'
+      ? 'text-[var(--color-status-error-soft)]'
       : priority === 2
         ? 'text-amber-400'
         : 'text-[var(--color-text-muted)]'

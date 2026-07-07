@@ -231,7 +231,7 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
               disabled={disabled}
               className={`px-3 py-1 text-[10px] font-medium transition-colors no-drag cursor-pointer ${
                 activeTab === key
-                  ? 'bg-[var(--color-accent)] text-white'
+                  ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                   : disabled
                     ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)]/40 cursor-not-allowed'
                     : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
@@ -246,7 +246,7 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
           {displayName}
         </span>
         {agentTemplate && (
-          <span className="text-[9px] font-medium text-[var(--color-text-muted)] bg-white/5 px-1.5 py-0.5 flex-shrink-0">
+          <span className="text-[9px] font-medium text-[var(--color-text-muted)] bg-[var(--color-wash-1)] px-1.5 py-0.5 flex-shrink-0">
             {agentTemplate}
           </span>
         )}

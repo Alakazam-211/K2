@@ -191,7 +191,7 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
         </label>
 
         {error && (
-          <div className="text-[12px] text-red-400" role="alert">
+          <div className="text-[12px] text-[var(--color-status-error-soft)]" role="alert">
             {error}
           </div>
         )}
@@ -200,7 +200,7 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
           <button
             type="submit"
             disabled={busy}
-            className="flex-1 px-4 py-1.5 text-[13px] text-white bg-[var(--color-accent)] hover:opacity-90 cursor-pointer disabled:opacity-60 disabled:cursor-progress"
+            className="flex-1 px-4 py-1.5 text-[13px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 cursor-pointer disabled:opacity-60 disabled:cursor-progress"
           >
             {busy ? 'Connecting…' : 'Connect'}
           </button>

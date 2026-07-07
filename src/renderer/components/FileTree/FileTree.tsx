@@ -422,7 +422,7 @@ function TreeItem(props: TreeItemProps): React.JSX.Element | null {
           )}
           {error && (
             <div
-              className="py-1 text-[11px] text-red-400 italic"
+              className="py-1 text-[11px] text-[var(--color-status-error-soft)] italic"
               style={{ paddingLeft: (depth + 1) * 16 + 8 }}
             >
               {error}
@@ -1713,7 +1713,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
           </div>
         )}
         {errorDirs.has(rootPath) && (
-          <div className="py-1 pl-4 text-[11px] text-red-400 italic">
+          <div className="py-1 pl-4 text-[11px] text-[var(--color-status-error-soft)] italic">
             {errorDirs.get(rootPath)}
           </div>
         )}

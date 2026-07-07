@@ -165,8 +165,8 @@ export default function PinDimensionsModal({
                   key={row.id}
                   className={`px-2.5 py-1.5 text-left text-xs transition-colors flex-shrink-0 ${
                     selected
-                      ? 'bg-white/[0.10] text-[var(--color-accent)]'
-                      : 'text-[var(--color-text-secondary)] hover:bg-white/[0.05] hover:text-[var(--color-text-primary)]'
+                      ? 'bg-[var(--color-wash-2)] text-[var(--color-accent)]'
+                      : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]'
                   }`}
                   onClick={() => {
                     setForm(pinFormPresetClicked(row))
@@ -228,7 +228,7 @@ export default function PinDimensionsModal({
 
             <div className="mt-auto flex items-center justify-end gap-2 pt-2">
               <button
-                className="px-3 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-white/[0.05] hover:text-[var(--color-text-primary)] transition-colors"
+                className="px-3 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)] transition-colors"
                 onClick={onClose}
               >
                 Cancel

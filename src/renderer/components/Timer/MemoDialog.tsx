@@ -92,7 +92,7 @@ export default function MemoDialog(): React.JSX.Element | null {
           </button>
           <button
             onClick={handleSave}
-            className="px-4 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity"
+            className="px-4 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity"
           >
             Save
           </button>

@@ -237,7 +237,7 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <p className="text-xs text-red-400">Failed to initialize agent editor: {error}</p>
+        <p className="text-xs text-[var(--color-status-error-soft)]">Failed to initialize agent editor: {error}</p>
         <button onClick={onClose} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag">&larr; Back</button>
       </div>
     )
@@ -301,7 +301,7 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
                     onClick={() => setPreviewMode(mode)}
                     className={`px-2 py-1 text-[10px] font-medium transition-colors no-drag cursor-pointer ${
                       previewMode === mode
-                        ? 'bg-[var(--color-accent)] text-white'
+                        ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                         : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)]'
                     }`}
                   >

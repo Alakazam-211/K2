@@ -286,7 +286,7 @@ function RunningAgentsTopBarButton(): React.JSX.Element {
         <path d="M13 17H18" />
       </svg>
       {agentCount > 0 && (
-        <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-white bg-green-500 rounded-full px-0.5">
+        <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-[var(--color-on-accent)] bg-[var(--color-status-ok)] rounded-full px-0.5">
           {agentCount > 99 ? '99+' : agentCount}
         </span>
       )}

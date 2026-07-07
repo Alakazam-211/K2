@@ -177,7 +177,7 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
   if (error) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-[var(--color-bg)]">
-        <span className="text-red-400 text-xs font-mono">Failed to load PDF</span>
+        <span className="text-[var(--color-status-error-soft)] text-xs font-mono">Failed to load PDF</span>
         <span className="text-[var(--color-text-muted)] text-[10px] font-mono max-w-[300px] text-center">
           {error}
         </span>

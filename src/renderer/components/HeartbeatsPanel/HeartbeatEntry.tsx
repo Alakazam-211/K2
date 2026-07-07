@@ -194,7 +194,7 @@ export function HeartbeatEntryRow({
           onClick={handleLaunch}
           disabled={busy || archivedOrDisabled}
           title={launchTooltip(entry)}
-          className="px-2 py-0.5 text-[9px] font-medium text-white bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+          className="px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
         >
           {busy ? '…' : 'Launch'}
         </button>

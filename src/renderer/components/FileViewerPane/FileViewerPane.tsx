@@ -562,7 +562,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           <div className="flex-1" />
           {onClose && (
             <button
-              className="p-1 text-[var(--color-text-muted)] hover:text-red-400 transition-colors"
+              className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors"
               onClick={onClose}
               title="Close"
             >
@@ -574,7 +574,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           )}
         </div>
         <div className="flex flex-1 flex-col items-center justify-center gap-3">
-          <span className="text-red-400 text-sm">{error}</span>
+          <span className="text-[var(--color-status-error-soft)] text-sm">{error}</span>
           <button
             className="text-xs text-[var(--color-accent)] hover:underline"
             onClick={loadFile}
@@ -631,7 +631,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
             <button
               className={`px-2 py-0.5 text-[10px] font-medium transition-colors ${
                 viewMode === 'rendered'
-                  ? 'bg-[var(--color-accent)] text-white'
+                  ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
               }`}
               onClick={() => setViewMode('rendered')}
@@ -641,7 +641,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
             <button
               className={`px-2 py-0.5 text-[10px] font-medium transition-colors ${
                 viewMode === 'raw'
-                  ? 'bg-[var(--color-accent)] text-white'
+                  ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
               }`}
               onClick={() => setViewMode('raw')}
@@ -711,7 +711,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         {/* Close */}
         {onClose && (
           <button
-            className="p-1 text-[var(--color-text-muted)] hover:text-red-400 transition-colors"
+            className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors"
             onClick={onClose}
             title="Close"
           >

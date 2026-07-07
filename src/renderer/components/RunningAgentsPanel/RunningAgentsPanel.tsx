@@ -434,8 +434,8 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
                     <button
                       className={`flex h-6 w-6 items-center justify-center transition-colors flex-shrink-0 ${
                         copiedId === agent.terminalId
-                          ? 'text-green-400'
-                          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/10'
+                          ? 'text-[var(--color-status-ok-soft)]'
+                          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)]'
                       }`}
                       onClick={(e) => {
                         e.stopPropagation()
@@ -502,7 +502,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
                         <button
                           onClick={() => handleSendMessage(agent.terminalId)}
                           disabled={!message.trim()}
-                          className="px-3 py-1.5 text-[10px] font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/90 transition-colors disabled:opacity-40"
+                          className="px-3 py-1.5 text-[10px] font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors disabled:opacity-40"
                         >
                           Send
                         </button>

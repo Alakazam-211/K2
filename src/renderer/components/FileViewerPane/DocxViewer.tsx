@@ -69,7 +69,7 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
   if (error) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-[var(--color-bg)]">
-        <span className="text-red-400 text-sm">Failed to load document</span>
+        <span className="text-[var(--color-status-error-soft)] text-sm">Failed to load document</span>
         <span className="text-xs text-[var(--color-text-muted)] max-w-md text-center px-4">
           {error}
         </span>

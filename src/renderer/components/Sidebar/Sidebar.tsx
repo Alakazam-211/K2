@@ -100,7 +100,7 @@ function AgentSpinner({ projectId }: { projectId: string }): React.JSX.Element |
   if (projectStatus === 'working' || projectStatus === 'permission') {
     return (
       <span className={`flex-shrink-0 text-[11px] font-mono ${
-        projectStatus === 'permission' ? 'text-red-400' : 'text-[var(--color-text-muted)]'
+        projectStatus === 'permission' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-muted)]'
       }`}>
         <span className="braille-spinner" />
       </span>
@@ -109,7 +109,7 @@ function AgentSpinner({ projectId }: { projectId: string }): React.JSX.Element |
 
   if (projectStatus === 'review') {
     return (
-      <span className="flex-shrink-0 text-[10px] text-green-400 font-mono">done</span>
+      <span className="flex-shrink-0 text-[10px] text-[var(--color-status-ok-soft)] font-mono">done</span>
     )
   }
 
@@ -162,7 +162,7 @@ const NavWorktreeRow = React.memo(function NavWorktreeRow({
         <span className="truncate flex-1">{branchName}</span>
         {hovered && (
           <button
-            className="flex-shrink-0 flex h-4 w-4 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/10 transition-colors"
+            className="flex-shrink-0 flex h-4 w-4 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)] transition-colors"
             onClick={(e) => { e.stopPropagation(); onClose() }}
             title="Hide from nav"
           >
@@ -545,7 +545,7 @@ function ProjectItem({
               setShowWorktreeDialog(true)
               if (!isExpanded) setIsExpanded(true)
             }}
-            className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.1] transition-colors cursor-pointer"
+            className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)] transition-colors cursor-pointer"
             title="New workspace"
           >
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -1105,10 +1105,10 @@ export default function Sidebar(): React.JSX.Element {
       {/* Workspace limit warning */}
       {!focusGroupsEnabled && projects.length >= 15 && (
         <div className="px-3 py-2 border-t border-[var(--color-border)]">
-          <p className="text-[10px] text-red-400 font-medium leading-snug">
+          <p className="text-[10px] text-[var(--color-status-error-soft)] font-medium leading-snug">
             Too many workspaces without Focus Groups. Enable Focus Groups to organize your workspaces before adding more.{' '}
             <button
-              className="underline text-red-400 hover:text-red-300 cursor-pointer"
+              className="underline text-[var(--color-status-error-soft)] hover:text-red-300 cursor-pointer"
               onClick={() => useSettingsStore.getState().openSettings('projects')}
             >
               Open Settings

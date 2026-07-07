@@ -364,7 +364,7 @@ function ActiveBarItem({
       <span className="text-[11px] truncate flex-1">{project.name}</span>
       {isAgentWorking && (
         <span className={`text-[11px] font-mono flex-shrink-0 ${
-          projectAgentStatus === 'permission' ? 'text-red-400' : 'text-[var(--color-text-muted)]'
+          projectAgentStatus === 'permission' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-muted)]'
         }`}>
           <span className="braille-spinner" />
         </span>
@@ -389,7 +389,7 @@ function ActiveBarItem({
       ) : (
         <span
           className={`flex-shrink-0 w-1.5 h-1.5 rounded-[1px] ${
-            hasLiveSession ? 'bg-green-500' : 'bg-white/20'
+            hasLiveSession ? 'bg-[var(--color-status-ok)]' : 'bg-[var(--color-wash-3)]'
           }`}
           title={hasLiveSession ? 'Live session running' : 'No live session'}
         />

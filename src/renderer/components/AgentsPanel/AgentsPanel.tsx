@@ -201,7 +201,7 @@ export default function AgentsPanel(): React.JSX.Element {
         </div>
         <button
           onClick={(e) => { e.stopPropagation(); handleLaunch(agent.name) }}
-          className="px-2 py-0.5 text-[10px] font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer flex-shrink-0"
+          className="px-2 py-0.5 text-[10px] font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer flex-shrink-0"
           title="Launch agent session"
         >
           Launch
@@ -244,7 +244,7 @@ export default function AgentsPanel(): React.JSX.Element {
               <div className="flex gap-2">
                 <button
                   onClick={() => handleLaunch(singleAgent.name)}
-                  className="px-3 py-1.5 text-[10px] font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
+                  className="px-3 py-1.5 text-[10px] font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
                 >
                   Launch
                 </button>
@@ -274,7 +274,7 @@ export default function AgentsPanel(): React.JSX.Element {
                     console.error('[agents] Setup failed:', e)
                   }
                 }}
-                className="self-start px-3 py-1.5 text-[10px] font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
+                className="self-start px-3 py-1.5 text-[10px] font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
               >
                 Set Up Agent
               </button>
@@ -319,11 +319,11 @@ export default function AgentsPanel(): React.JSX.Element {
               <div className="flex items-center gap-1 text-[9px] text-[var(--color-text-muted)] flex-shrink-0">
                 {wsInboxCount > 0 && <span className="text-[var(--color-accent)]" title="Undelegated">{wsInboxCount}u</span>}
                 {totalDelegated > 0 && <span className="text-yellow-400" title="Delegated">{totalDelegated}d</span>}
-                {totalDone > 0 && <span className="text-green-400" title="Done">{totalDone}✓</span>}
+                {totalDone > 0 && <span className="text-[var(--color-status-ok-soft)]" title="Done">{totalDone}✓</span>}
               </div>
               <button
                 onClick={(e) => { e.stopPropagation(); handleLaunch(manager.name) }}
-                className="px-2 py-0.5 text-[10px] font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer flex-shrink-0"
+                className="px-2 py-0.5 text-[10px] font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer flex-shrink-0"
                 title="Launch manager session"
               >
                 Launch
@@ -338,7 +338,7 @@ export default function AgentsPanel(): React.JSX.Element {
         <span className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
           Agent Templates
           {agentTemplates.length > 0 && (
-            <span className="text-[9px] tabular-nums font-medium px-1 py-0.5 bg-white/5 text-[var(--color-text-muted)]">{agentTemplates.length}</span>
+            <span className="text-[9px] tabular-nums font-medium px-1 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{agentTemplates.length}</span>
           )}
         </span>
       </div>

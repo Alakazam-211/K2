@@ -173,7 +173,7 @@ class FocusErrorBoundary extends React.Component<
   render(): React.ReactNode {
     if (this.state.error) {
       return (
-        <div className="flex h-full w-full items-center justify-center bg-[var(--color-bg)] text-red-400 text-xs p-8">
+        <div className="flex h-full w-full items-center justify-center bg-[var(--color-bg)] text-[var(--color-status-error-soft)] text-xs p-8">
           <div>
             <p className="font-bold mb-2">Focus window error:</p>
             <pre className="whitespace-pre-wrap">{this.state.error.message}</pre>

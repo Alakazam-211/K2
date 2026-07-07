@@ -94,7 +94,7 @@ export default function PresenceGrantToggle({
     >
       {error && (
         <span
-          className="max-w-[120px] truncate text-[9px] text-red-400"
+          className="max-w-[120px] truncate text-[9px] text-[var(--color-status-error-soft)]"
           title={error}
         >
           {error}

@@ -172,7 +172,7 @@ function PaneChrome({
             type="button"
             onClick={onClose}
             onMouseDown={(e) => e.stopPropagation()}
-            className="flex items-center justify-center w-4 h-4 flex-shrink-0 text-[var(--color-text-muted)] hover:text-red-400 transition-colors cursor-pointer"
+            className="flex items-center justify-center w-4 h-4 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors cursor-pointer"
             title="Close pane"
           >
             <svg width="8" height="8" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -268,7 +268,7 @@ function DashboardTerminalPane({
   if (phase.kind === 'error') {
     return (
       <PaneBody>
-        <p className="text-[11px] text-red-400 max-w-[36ch]">{phase.message}</p>
+        <p className="text-[11px] text-[var(--color-status-error-soft)] max-w-[36ch]">{phase.message}</p>
         <PaneActionButton onClick={() => void resolve().then(setPhase)}>Retry</PaneActionButton>
       </PaneBody>
     )
@@ -324,7 +324,7 @@ function PaneActionButton({
       className={`px-3 py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
         accent
           ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25'
-          : 'bg-white/[0.06] text-[var(--color-text-primary)] hover:bg-white/[0.1]'
+          : 'bg-white/[0.06] text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)]'
       }`}
     >
       {children}

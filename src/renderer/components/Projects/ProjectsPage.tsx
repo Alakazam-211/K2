@@ -90,7 +90,7 @@ function SelectedProjectView({
   if (error) {
     return (
       <div className="flex-1 flex items-center justify-center px-8">
-        <p className="text-[11px] text-red-400">Failed to load project: {error}</p>
+        <p className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load project: {error}</p>
       </div>
     )
   }

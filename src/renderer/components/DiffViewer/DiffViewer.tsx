@@ -82,7 +82,7 @@ export function DiffViewer({ filePath, className }: DiffViewerProps): React.JSX.
   if (error) {
     return (
       <div className={`flex items-center justify-center h-full ${className || ''}`}>
-        <span className="text-xs text-red-400">{error}</span>
+        <span className="text-xs text-[var(--color-status-error-soft)]">{error}</span>
       </div>
     )
   }
@@ -103,10 +103,10 @@ export function DiffViewer({ filePath, className }: DiffViewerProps): React.JSX.
         <span className="text-[10px] text-[var(--color-text-muted)]">{filePath}</span>
         <div className="ml-auto flex items-center gap-2">
           {stats.additions > 0 && (
-            <span className="text-[10px] text-green-400 font-mono">+{stats.additions}</span>
+            <span className="text-[10px] text-[var(--color-status-ok-soft)] font-mono">+{stats.additions}</span>
           )}
           {stats.deletions > 0 && (
-            <span className="text-[10px] text-red-400 font-mono">-{stats.deletions}</span>
+            <span className="text-[10px] text-[var(--color-status-error-soft)] font-mono">-{stats.deletions}</span>
           )}
         </div>
       </div>

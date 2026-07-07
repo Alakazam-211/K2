@@ -61,7 +61,7 @@ function statusChipClass(status: FeedbackStatus): string {
   return status === 'waiting'
     ? 'bg-orange-400/10 text-orange-400'
     : status === 'answered'
-      ? 'bg-green-400/10 text-green-400'
+      ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
       : 'bg-white/[0.06] text-[var(--color-text-muted)]'
 }
 
@@ -144,7 +144,7 @@ function CardStatusDropdown({
           {/* Answered shows as the current state but is not offered. */}
           {row.status === 'answered' && (
             <div
-              className="flex items-center gap-2 px-2 py-1.5 text-[11px] text-green-400 opacity-70 cursor-default select-none"
+              className="flex items-center gap-2 px-2 py-1.5 text-[11px] text-[var(--color-status-ok-soft)] opacity-70 cursor-default select-none"
               title="Answered is set by an actual reply, not by hand"
             >
               <span className="flex-1">Answered</span>
@@ -543,7 +543,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
 
           <div className="flex-1 overflow-y-auto min-h-0 px-3 pb-3">
             {error && (
-              <div className="px-1 py-3 text-[11px] text-red-400">Failed to load feedback: {error}</div>
+              <div className="px-1 py-3 text-[11px] text-[var(--color-status-error-soft)]">Failed to load feedback: {error}</div>
             )}
             {rows === null && !error && (
               <div className="px-1 py-8 text-center text-[var(--color-text-muted)] text-sm">Loading feedback…</div>

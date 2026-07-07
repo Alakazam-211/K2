@@ -776,7 +776,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 )
                 return (
                   <button
-                    className="ml-2 flex h-4 w-4 flex-shrink-0 items-center justify-center hover:bg-white/10 group/close"
+                    className="ml-2 flex h-4 w-4 flex-shrink-0 items-center justify-center hover:bg-[var(--color-wash-2)] group/close"
                     onClick={(e) => handleCloseTab(e, tab.id)}
                     title={
                       isHeartbeatTab

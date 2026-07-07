@@ -328,7 +328,7 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
         <div className="px-4 py-3 border-t border-[var(--color-border)] flex items-center justify-between">
           <button
             onClick={handleTurnOff}
-            className="text-[10px] text-[var(--color-text-muted)] hover:text-red-400 transition-colors cursor-pointer"
+            className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors cursor-pointer"
           >
             Turn off
           </button>
@@ -342,7 +342,7 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="px-4 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/90 transition-colors cursor-pointer disabled:opacity-50"
+              className="px-4 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors cursor-pointer disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save'}
             </button>
@@ -423,7 +423,7 @@ function ScheduledForm({
                 }}
                 className={`w-7 h-7 text-[10px] font-medium transition-colors cursor-pointer ${
                   state.days.includes(d.key)
-                    ? 'bg-[var(--color-accent)] text-white'
+                    ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                     : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-secondary)]'
                 }`}
               >
@@ -460,7 +460,7 @@ function ScheduledForm({
                   }}
                   className={`w-full aspect-square text-[10px] font-medium transition-colors cursor-pointer ${
                     state.daysOfMonth.includes(d)
-                      ? 'bg-[var(--color-accent)] text-white'
+                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                       : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-secondary)]'
                   }`}
                 >
@@ -514,7 +514,7 @@ function ScheduledForm({
                   }}
                   className={`px-2 py-1.5 text-[10px] font-medium transition-colors cursor-pointer ${
                     state.months.includes(m.key)
-                      ? 'bg-[var(--color-accent)] text-white'
+                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                       : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-secondary)]'
                   }`}
                 >

@@ -81,8 +81,8 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
         {/* Error */}
         {error ? (
           <div className="px-5 pb-4">
-            <div className="border border-red-500/30 bg-red-500/10 px-3 py-2">
-              <p className="text-[11px] text-red-400 whitespace-pre-wrap">{error}</p>
+            <div className="border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] px-3 py-2">
+              <p className="text-[11px] text-[var(--color-status-error-soft)] whitespace-pre-wrap">{error}</p>
             </div>
           </div>
         ) : null}

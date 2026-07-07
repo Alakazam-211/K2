@@ -14,8 +14,8 @@ import { useGitInfo, useGitChanges } from '@/hooks/useGit'
 
 const STATUS_CONFIG = {
   modified: { label: 'Modified', color: 'text-yellow-400', icon: 'M', bg: 'bg-yellow-400/10' },
-  added: { label: 'Added', color: 'text-green-400', icon: 'A', bg: 'bg-green-400/10' },
-  deleted: { label: 'Deleted', color: 'text-red-400', icon: 'D', bg: 'bg-red-400/10' },
+  added: { label: 'Added', color: 'text-[var(--color-status-ok-soft)]', icon: 'A', bg: 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)]' },
+  deleted: { label: 'Deleted', color: 'text-[var(--color-status-error-soft)]', icon: 'D', bg: 'bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)]' },
   untracked: { label: 'Untracked', color: 'text-neutral-400', icon: 'U', bg: 'bg-neutral-400/10' }
 } as const
 
@@ -188,9 +188,9 @@ export default function ChangesPanel(): React.JSX.Element {
           </span>
           {(gitInfo.ahead > 0 || gitInfo.behind > 0) && (
             <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
-              {gitInfo.ahead > 0 && <span className="text-green-400">{'\u2191'}{gitInfo.ahead}</span>}
+              {gitInfo.ahead > 0 && <span className="text-[var(--color-status-ok-soft)]">{'\u2191'}{gitInfo.ahead}</span>}
               {gitInfo.ahead > 0 && gitInfo.behind > 0 && ' '}
-              {gitInfo.behind > 0 && <span className="text-red-400">{'\u2193'}{gitInfo.behind}</span>}
+              {gitInfo.behind > 0 && <span className="text-[var(--color-status-error-soft)]">{'\u2193'}{gitInfo.behind}</span>}
             </span>
           )}
         </div>
@@ -237,14 +237,14 @@ export default function ChangesPanel(): React.JSX.Element {
       {totalCount > 0 && (
         <div className="border-t border-[var(--color-border)] p-2 flex flex-col gap-1">
           <button
-            className="w-full px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 transition-colors cursor-pointer"
+            className="w-full px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-colors cursor-pointer"
             onClick={() => handleAiCommit(false)}
           >
             AI Commit
           </button>
           {isWorktree && (
             <button
-              className="w-full px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 transition-colors cursor-pointer"
+              className="w-full px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-colors cursor-pointer"
               onClick={() => handleAiCommit(true)}
             >
               AI Commit & Merge
@@ -270,7 +270,7 @@ export default function ChangesPanel(): React.JSX.Element {
             }}
           />
           <button
-            className="w-full mt-1 px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="w-full mt-1 px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
             disabled={!commitMsg.trim() || committing}
             onClick={handleCommit}
           >

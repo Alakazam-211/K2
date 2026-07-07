@@ -273,7 +273,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
         {/* The stream, oldest-first. */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 px-3 py-2">
           {loadError ? (
-            <div className="text-[11px] text-red-400">Failed to load chat: {loadError}</div>
+            <div className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load chat: {loadError}</div>
           ) : messages === null ? (
             <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
               Loading chat…
@@ -350,7 +350,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             </div>
           ) : (
             <>
-              {sendError && <div className="mb-1.5 text-[11px] text-red-400">{sendError}</div>}
+              {sendError && <div className="mb-1.5 text-[11px] text-[var(--color-status-error-soft)]">{sendError}</div>}
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}

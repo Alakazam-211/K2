@@ -174,7 +174,7 @@ export default function MergeDialog(): React.JSX.Element | null {
               {loading ? (
                 <p className="text-xs text-[var(--color-text-muted)]">Loading diff preview...</p>
               ) : error ? (
-                <p className="text-xs text-red-400">{error}</p>
+                <p className="text-xs text-[var(--color-status-error-soft)]">{error}</p>
               ) : diffs.length === 0 ? (
                 <p className="text-xs text-[var(--color-text-muted)]">No changes to merge — branches are identical.</p>
               ) : (
@@ -185,10 +185,10 @@ export default function MergeDialog(): React.JSX.Element | null {
                       {diffs.length} file{diffs.length !== 1 ? 's' : ''} changed
                     </span>
                     {totalAdditions > 0 && (
-                      <span className="text-xs text-green-400 font-mono">+{totalAdditions}</span>
+                      <span className="text-xs text-[var(--color-status-ok-soft)] font-mono">+{totalAdditions}</span>
                     )}
                     {totalDeletions > 0 && (
-                      <span className="text-xs text-red-400 font-mono">-{totalDeletions}</span>
+                      <span className="text-xs text-[var(--color-status-error-soft)] font-mono">-{totalDeletions}</span>
                     )}
                   </div>
 
@@ -200,9 +200,9 @@ export default function MergeDialog(): React.JSX.Element | null {
                         className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
                       >
                         <span className={`text-[10px] font-bold w-4 text-center ${
-                          file.status === 'added' ? 'text-green-400' :
-                          file.status === 'deleted' ? 'text-red-400' :
-                          file.status === 'renamed' ? 'text-blue-400' :
+                          file.status === 'added' ? 'text-[var(--color-status-ok-soft)]' :
+                          file.status === 'deleted' ? 'text-[var(--color-status-error-soft)]' :
+                          file.status === 'renamed' ? 'text-[var(--color-accent-hover)]' :
                           'text-yellow-400'
                         }`}>
                           {file.status[0].toUpperCase()}
@@ -210,8 +210,8 @@ export default function MergeDialog(): React.JSX.Element | null {
                         <span className="text-xs text-[var(--color-text-secondary)] truncate flex-1">
                           {file.path}
                         </span>
-                        <span className="text-[10px] font-mono text-green-400">+{file.additions}</span>
-                        <span className="text-[10px] font-mono text-red-400">-{file.deletions}</span>
+                        <span className="text-[10px] font-mono text-[var(--color-status-ok-soft)]">+{file.additions}</span>
+                        <span className="text-[10px] font-mono text-[var(--color-status-error-soft)]">-{file.deletions}</span>
                       </div>
                     ))}
                   </div>
@@ -229,7 +229,7 @@ export default function MergeDialog(): React.JSX.Element | null {
 
           {step === 'success' && (
             <div>
-              <p className="text-xs text-green-400 mb-3">
+              <p className="text-xs text-[var(--color-status-ok-soft)] mb-3">
                 Merge successful! Branch &ldquo;{branch}&rdquo; has been merged.
               </p>
               {workspaceId && (
@@ -248,7 +248,7 @@ export default function MergeDialog(): React.JSX.Element | null {
               <div className="border border-[var(--color-border)]">
                 {conflicts.map((path) => (
                   <div key={path} className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0">
-                    <span className="text-[10px] font-bold text-red-400">!</span>
+                    <span className="text-[10px] font-bold text-[var(--color-status-error-soft)]">!</span>
                     <span className="text-xs text-[var(--color-text-secondary)] truncate">{path}</span>
                   </div>
                 ))}
@@ -268,7 +268,7 @@ export default function MergeDialog(): React.JSX.Element | null {
                 Cancel
               </button>
               <button
-                className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 disabled:opacity-40"
+                className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 disabled:opacity-40"
                 disabled={loading || diffs.length === 0}
                 onClick={handleMerge}
               >
@@ -279,7 +279,7 @@ export default function MergeDialog(): React.JSX.Element | null {
 
           {step === 'success' && (
             <button
-              className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90"
+              className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90"
               onClick={handleDone}
             >
               Done
@@ -289,7 +289,7 @@ export default function MergeDialog(): React.JSX.Element | null {
           {step === 'conflicts' && (
             <>
               <button
-                className="px-3 py-1.5 text-xs text-red-400 hover:text-red-300"
+                className="px-3 py-1.5 text-xs text-[var(--color-status-error-soft)] hover:text-red-300"
                 onClick={handleAbortMerge}
               >
                 Abort Merge

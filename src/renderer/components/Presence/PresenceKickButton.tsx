@@ -130,7 +130,7 @@ export default function PresenceKickButton({ user }: PresenceKickButtonProps): R
   if (error) {
     return (
       <span className="flex items-center gap-1.5">
-        <span className="max-w-[140px] truncate text-[10px] text-red-400" title={error}>
+        <span className="max-w-[140px] truncate text-[10px] text-[var(--color-status-error-soft)]" title={error}>
           {error}
         </span>
         <button
@@ -150,7 +150,7 @@ export default function PresenceKickButton({ user }: PresenceKickButtonProps): R
         <button
           onClick={() => void kick()}
           disabled={busy}
-          className="text-[10px] text-red-400 hover:underline no-drag cursor-pointer disabled:opacity-60"
+          className="text-[10px] text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer disabled:opacity-60"
         >
           {busy ? 'Kicking…' : 'Confirm kick'}
         </button>

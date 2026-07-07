@@ -729,7 +729,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
           </div>
         ) : error ? (
           <div className="px-3 py-6 text-center">
-            <p className="text-[11px] text-red-400 font-mono">Failed to load history</p>
+            <p className="text-[11px] text-[var(--color-status-error-soft)] font-mono">Failed to load history</p>
           </div>
         ) : sessions.length === 0 ? (
           <div className="px-3 py-6 text-center">

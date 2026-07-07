@@ -193,7 +193,7 @@ function InlineRename({
           {saving ? 'Saving…' : 'Save'}
         </button>
       </div>
-      {error && <p className="text-[10px] text-red-400">{error}</p>}
+      {error && <p className="text-[10px] text-[var(--color-status-error-soft)]">{error}</p>}
     </div>
   )
 }
@@ -281,7 +281,7 @@ function AddDashboardTab({
           {busy ? 'Adding…' : 'Add'}
         </button>
       </div>
-      {error && <p className="text-[10px] text-red-400">{error}</p>}
+      {error && <p className="text-[10px] text-[var(--color-status-error-soft)]">{error}</p>}
     </div>
   )
 }
@@ -474,7 +474,7 @@ function DashboardsBlock({
               Pinned HTML pages
             </p>
             {docsError ? (
-              <p className="text-[11px] text-red-400">Failed to load pinned pages: {docsError}</p>
+              <p className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load pinned pages: {docsError}</p>
             ) : docs === null ? (
               <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
             ) : docs.length === 0 ? (
@@ -543,7 +543,7 @@ function DashboardsBlock({
                 className={`px-2 py-0.5 text-[10px] flex-shrink-0 transition-colors ${
                   lastOne
                     ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
-                    : 'text-red-400 border border-red-400/30 hover:bg-red-400/10 cursor-pointer'
+                    : 'text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] cursor-pointer'
                 }`}
               >
                 Delete dashboard
@@ -856,7 +856,7 @@ function ProjectSettingsDetail({
                     type="button"
                     onClick={() => void saveIcon(null)}
                     disabled={iconBusy}
-                    className="px-2.5 py-1 text-xs text-red-400 border border-red-500/30 hover:bg-red-500/10 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className="px-2.5 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     Remove
                   </button>
@@ -923,12 +923,12 @@ function ProjectSettingsDetail({
                   placeholder="#rrggbb"
                   className={`w-20 px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none no-drag ${
                     hexError
-                      ? 'border-red-400/60'
+                      ? 'border-[color-mix(in_srgb,var(--color-status-error-soft)_60%,transparent)]'
                       : 'border-[var(--color-border)] focus:border-[var(--color-accent)]'
                   }`}
                 />
                 {hexError && (
-                  <span className="text-[10px] text-red-400">Use #rrggbb</span>
+                  <span className="text-[10px] text-[var(--color-status-error-soft)]">Use #rrggbb</span>
                 )}
               </div>
             )}
@@ -951,7 +951,7 @@ function ProjectSettingsDetail({
               title="Show in the nav's Pinned section (canonical — everyone sees it)"
             >
               <span
-                className={`w-2.5 h-2.5 bg-white block transition-transform ${
+                className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
                   detail.pinned ? 'translate-x-3.5' : 'translate-x-0.5'
                 }`}
               />
@@ -1004,7 +1004,7 @@ function ProjectSettingsDetail({
                     className={`px-2 py-0.5 text-[10px] flex-shrink-0 transition-colors ${
                       blocked !== null
                         ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
-                        : 'text-red-400 border border-red-400/30 hover:bg-red-400/10 cursor-pointer'
+                        : 'text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] cursor-pointer'
                     }`}
                   >
                     {memberBusy === m.workspaceId ? 'Removing…' : 'Remove'}
@@ -1125,7 +1125,7 @@ function ProjectSettingsDetail({
       {!readOnly && (
         <div className="space-y-2 pb-6">
           <SectionTitle>Danger zone</SectionTitle>
-          <div className="border border-red-400/30 px-3 py-2 flex items-center gap-3">
+          <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 flex items-center gap-3">
             <div className="flex-1 min-w-0">
               <p className="text-xs text-[var(--color-text-primary)]">Delete this project</p>
               <p className="text-[10px] text-[var(--color-text-muted)]">
@@ -1136,7 +1136,7 @@ function ProjectSettingsDetail({
             <button
               type="button"
               onClick={() => void deleteProject()}
-              className="px-2.5 py-1 text-[10px] font-medium text-red-400 border border-red-400/30 hover:bg-red-400/10 transition-colors cursor-pointer flex-shrink-0"
+              className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer flex-shrink-0"
             >
               Delete project
             </button>
@@ -1327,7 +1327,7 @@ export default function ProjectSettings(): React.JSX.Element {
         ) : selectedId === null || groups === null ? (
           <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
         ) : detailError ? (
-          <p className="text-[11px] text-red-400">Failed to load project: {detailError}</p>
+          <p className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load project: {detailError}</p>
         ) : detail === null || detail.id !== selectedId ? (
           /* Selection-switch staleness guard (the page idiom): never
              render the PREVIOUS project's data under a new title. */

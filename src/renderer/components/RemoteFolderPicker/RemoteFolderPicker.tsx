@@ -245,8 +245,8 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
         <div className="flex-1 overflow-y-auto min-h-[200px]">
           {error ? (
             <div className="px-5 py-4">
-              <div className="border border-red-500/30 bg-red-500/10 px-3 py-2">
-                <p className="text-[11px] text-red-400 whitespace-pre-wrap">{error}</p>
+              <div className="border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] px-3 py-2">
+                <p className="text-[11px] text-[var(--color-status-error-soft)] whitespace-pre-wrap">{error}</p>
               </div>
             </div>
           ) : loading ? (
@@ -262,9 +262,15 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
               {entries.map((e) => (
                 <button
                   key={e.path}
+<<<<<<< HEAD
                   className="w-full flex items-center gap-2 px-5 py-1.5 text-left text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.05]"
                   onDoubleClick={() => (e.isDirectory ? browse(e.path) : select(e.path))}
                   onClick={() => (e.isDirectory ? browse(e.path) : select(e.path))}
+=======
+                  className="w-full flex items-center gap-2 px-5 py-1.5 text-left text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)]"
+                  onDoubleClick={() => browse(e.path)}
+                  onClick={() => browse(e.path)}
+>>>>>>> a4082d8 (refactor(styles): wave-2b — component named color utilities onto contract slots)
                 >
                   {e.isDirectory ? (
                     <svg className="w-3.5 h-3.5 shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

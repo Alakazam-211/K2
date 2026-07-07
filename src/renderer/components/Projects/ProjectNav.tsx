@@ -386,7 +386,7 @@ export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX
         placeholder="Project name…"
         className="w-full px-2.5 py-1.5 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)] disabled:opacity-50"
       />
-      {error && <p className="text-[10px] text-red-400 leading-snug">{error}</p>}
+      {error && <p className="text-[10px] text-[var(--color-status-error-soft)] leading-snug">{error}</p>}
       <div className="flex items-center gap-1.5">
         <button
           className="flex-1 px-2 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/25 transition-colors disabled:opacity-50"

@@ -199,7 +199,7 @@ function ThreadTab({
   )
 
   if (error) {
-    return <div className="flex-1 px-4 py-3 text-[11px] text-red-400">Failed to load item: {error}</div>
+    return <div className="flex-1 px-4 py-3 text-[11px] text-[var(--color-status-error-soft)]">Failed to load item: {error}</div>
   }
   if (!item) {
     return (
@@ -287,7 +287,7 @@ function ThreadTab({
 
       {/* Reply box + status actions. */}
       <div className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
-        {actionError && <div className="mb-2 text-[11px] text-red-400">{actionError}</div>}
+        {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)]">{actionError}</div>}
         <textarea
           value={reply}
           onChange={(e) => setReply(e.target.value)}
@@ -489,14 +489,14 @@ function TerminalTab({
   if (phase.kind === 'error') {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-        <p className="text-xs text-red-400 max-w-[48ch]">{phase.message}</p>
+        <p className="text-xs text-[var(--color-status-error-soft)] max-w-[48ch]">{phase.message}</p>
         <button
           type="button"
           onClick={() => {
             setPhase({ kind: 'checking' })
             void resolve().then(setPhase)
           }}
-          className="px-3 py-1.5 text-[11px] font-medium bg-white/[0.06] text-[var(--color-text-primary)] hover:bg-white/[0.1] transition-colors cursor-pointer"
+          className="px-3 py-1.5 text-[11px] font-medium bg-white/[0.06] text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)] transition-colors cursor-pointer"
         >
           Retry
         </button>

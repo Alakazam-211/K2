@@ -257,7 +257,7 @@ function InlineNameEditor({
           if (value && value !== initialValue) onConfirm(value)
           else onCancel()
         }}
-        className="flex-1 min-w-0 px-1 py-0 text-[13px] leading-tight bg-[var(--color-bg-primary)] border border-[var(--color-accent)] text-[var(--color-text-primary)] outline-none"
+        className="flex-1 min-w-0 px-1 py-0 text-[13px] leading-tight bg-transparent border border-[var(--color-accent)] text-[var(--color-text-primary)] outline-none"
       />
     </div>
   )

@@ -154,7 +154,8 @@ function TabGroupColumn({
 
   return (
     <div
-      className="relative flex h-full flex-col overflow-hidden"
+      // ST3: tab strip ↔ pane content breathing room (0 in Square)
+      className="relative flex h-full flex-col overflow-hidden gap-[var(--gap-section)]"
       style={style}
       onMouseDown={onFocus}
       data-tab-group-index={groupIndex}
@@ -307,7 +308,8 @@ export function TerminalArea({ cwd }: TerminalAreaProps): React.JSX.Element {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       <PresetsBar cwd={cwd} />
-      <div ref={containerRef} className="flex flex-1 overflow-hidden">
+      {/* ST3: inter-column pane gap (0 in Square; resize handles keep their own width) */}
+      <div ref={containerRef} className="flex flex-1 overflow-hidden gap-[var(--gap-pane)]">
         {Array.from({ length: splitCount }, (_, i) => (
           <React.Fragment key={i}>
             {i > 0 && (

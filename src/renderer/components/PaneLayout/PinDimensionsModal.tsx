@@ -89,7 +89,9 @@ export default function PinDimensionsModal({
     width: '100%',
     padding: '4px 8px',
     fontSize: '12px',
-    background: 'var(--color-bg-primary)',
+    /* --color-bg-primary was never defined; invalid-at-computed-value behaved
+       like `unset` (transparent), overriding the UA input background. */
+    background: 'transparent',
     border: '1px solid var(--color-border)',
     color: 'var(--color-text-primary)',
     outline: 'none',
@@ -235,7 +237,9 @@ export default function PinDimensionsModal({
                 className="px-3 py-1 text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 style={{
                   background: 'var(--color-accent)',
-                  color: 'var(--color-bg-primary)',
+                  // --color-bg-primary was never defined; the invalid var
+                  // behaved like `unset` on this inherited property.
+                  color: 'inherit',
                 }}
                 disabled={!validation.ok || submitting}
                 onClick={handleApply}

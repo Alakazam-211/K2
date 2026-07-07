@@ -36,8 +36,9 @@ export default function Layout({
   const toggleLeftPanel = usePanelsStore((s) => s.toggleLeftPanel)
   const toggleRightPanel = usePanelsStore((s) => s.toggleRightPanel)
 
+  // App shell — ST3: window inset + canvas layer (both flush/0 in Square)
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg)]">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg-canvas)] p-[var(--inset-window)]">
       {/* TopBar */}
       <TopBar
         projectName={projectName}
@@ -50,8 +51,8 @@ export default function Layout({
         onToggleRightPanel={toggleRightPanel}
       />
 
-      {/* Content area */}
-      <div className="flex flex-1 overflow-hidden">
+      {/* Content area — ST3: sidebar | panes gap (0 in Square) */}
+      <div className="flex flex-1 overflow-hidden gap-[var(--gap-pane)]">
         {/* Primary sidebar: icon rail (always) + expanded panel (when not collapsed) */}
         {isCollapsed ? (
           <IconRail />

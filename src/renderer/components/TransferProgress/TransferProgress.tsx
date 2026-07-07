@@ -40,7 +40,7 @@ function TransferItem({ transfer }: { transfer: Transfer }): React.JSX.Element {
           </button>
         )}
       </div>
-      <div className="h-[3px] bg-[var(--color-bg-secondary)]">
+      <div className="h-[3px] bg-transparent">
         <div
           className="h-full transition-[width] duration-200"
           style={{

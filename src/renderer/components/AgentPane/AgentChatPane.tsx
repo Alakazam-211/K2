@@ -711,7 +711,7 @@ function RetryButton({ onClick, refreshing }: { onClick: () => void; refreshing:
       type="button"
       onClick={onClick}
       disabled={refreshing}
-      className="inline-flex items-center gap-1.5 px-3 py-1 rounded text-[11px] font-medium bg-[var(--color-bg-hover)] text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors no-drag cursor-pointer"
+      className="inline-flex items-center gap-1.5 px-3 py-1 rounded text-[11px] font-medium bg-transparent text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors no-drag cursor-pointer"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"

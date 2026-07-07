@@ -100,9 +100,34 @@ const DEFAULT_SETTINGS = {
     formatOnSave: false,
     vimMode: false,
   },
+  // Style System P3 — mirrors Rust `StyleSettings::default()`. Present in
+  // every real daemon response (typed struct), so the mock carries it too;
+  // the renderer's read-back applies it to <html> data-* attributes.
+  style: { id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '' },
 }
 
-function cannedResponse(pathname: string): { status: number; json: unknown } {
+/** One-level-nested deep merge matching the daemon's `deep_merge`
+ *  closely enough for settings echoes (object values merge, everything
+ *  else replaces). Keeps `/cli/settings/update` faithful: the real
+ *  daemon echoes the POST-MERGE snapshot, and the renderer's style
+ *  read-back re-applies whatever comes back — echoing pristine defaults
+ *  would visibly revert a just-committed style switch. Deterministic:
+ *  output depends only on DEFAULT_SETTINGS + the request body. */
+function mergeSettingsEcho(partial: unknown): unknown {
+  if (typeof partial !== 'object' || partial === null) return DEFAULT_SETTINGS
+  const out: Record<string, unknown> = { ...DEFAULT_SETTINGS }
+  for (const [k, v] of Object.entries(partial as Record<string, unknown>)) {
+    const base = out[k]
+    out[k] =
+      typeof v === 'object' && v !== null && !Array.isArray(v) &&
+      typeof base === 'object' && base !== null && !Array.isArray(base)
+        ? { ...(base as Record<string, unknown>), ...(v as Record<string, unknown>) }
+        : v
+  }
+  return out
+}
+
+function cannedResponse(pathname: string, postBody?: unknown): { status: number; json: unknown } {
   if (pathname === '/boot-status') {
     return { status: 200, json: { version: '0.0.0-parity', protocol: 1, phase: 'ready', detail: '' } }
   }
@@ -112,8 +137,11 @@ function cannedResponse(pathname: string): { status: number; json: unknown } {
   if (pathname === '/cli/projects/active') {
     return { status: 200, json: { projectId: null } }
   }
-  if (pathname === '/cli/settings/get' || pathname === '/cli/settings/update') {
+  if (pathname === '/cli/settings/get') {
     return { status: 200, json: DEFAULT_SETTINGS }
+  }
+  if (pathname === '/cli/settings/update') {
+    return { status: 200, json: mergeSettingsEcho(postBody) }
   }
   // Settings → General/Terminal render ClaudeAuthRefreshRow, which
   // destructures a status-indicator config keyed by `state`. 'unknown'
@@ -136,7 +164,13 @@ function cannedResponse(pathname: string): { status: number; json: unknown } {
 export async function installMockDaemon(page: Page): Promise<void> {
   await page.route(`http://${MOCK_HOST}:${MOCK_PORT}/**`, async (route) => {
     const { pathname } = new URL(route.request().url())
-    const { status, json } = cannedResponse(pathname)
+    let postBody: unknown
+    try {
+      postBody = route.request().postDataJSON()
+    } catch {
+      postBody = undefined
+    }
+    const { status, json } = cannedResponse(pathname, postBody)
     await route.fulfill({ status, json })
   })
   // Terminal panes / event streams open WebSockets. Accept the socket but

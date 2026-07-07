@@ -232,8 +232,15 @@ function mergeStyleDefaults(result: Partial<StyleSettingsBackend> | undefined): 
  *  restamps <html> + refreshes the localStorage mirror, so the daemon's
  *  value wins over whatever the pre-paint mirror stamped. Called on
  *  EVERY settings read-back (fetch, write echo, reset) — applyStyle is
- *  idempotent, so redundant calls are free. */
+ *  idempotent, so redundant calls are free.
+ *
+ *  Read-backs WITHOUT a `style` key are skipped entirely (not defaulted):
+ *  a pre-style daemon drops the key on every echo, and stamping defaults
+ *  from it would stomp the user's local selection back to charcoal on
+ *  every unrelated settings write. Daemons that know `style` always
+ *  include it (typed struct), so daemon-canonical still wins there. */
 function applyBackendStyle(result: Partial<StyleSettingsBackend> | undefined): void {
+  if (!result) return
   const style = mergeStyleDefaults(result)
   useStyleStore.getState().applyStyle({
     styleId: style.id,

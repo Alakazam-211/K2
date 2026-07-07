@@ -136,3 +136,12 @@ test('08-settings-connections', async ({ page }) => {
   await openSettings(page, 'connections')
   await capture(page, '08-settings-connections')
 })
+
+test('09-settings-styles', async ({ page }) => {
+  await bootApp(page)
+  await openSettings(page, 'styles')
+  // Marker: the detail pane's palette group header proves StylesSection
+  // (not a crashed boundary or another section) is on screen.
+  await expect(page.getByText('Palette', { exact: true })).toBeVisible()
+  await capture(page, '09-settings-styles')
+})

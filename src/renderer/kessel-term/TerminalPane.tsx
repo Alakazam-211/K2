@@ -38,6 +38,8 @@ import {
   recordSentActive,
   shouldEmitResize,
   shouldHoldGridWs,
+  shouldSendClaim,
+  type ClaimReason,
 } from './activeViewer'
 import {
   keyEventToSequence,
@@ -1519,8 +1521,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // accumulated many such hidden claimants, flooding the grid
       // broadcast. `recomputeAndSendActiveRef` reads the live
       // visibility/focus refs and routes through the dedup guard.
+      //
+      // Resurface-steal fix: 'restore', not an unconditional claim —
+      // sendable only if THIS client's recorded last-sent active for
+      // the session was `true` (we held the claim before the blip; a
+      // reconnect must not demote an active controller, and equally a
+      // passive pane's reconnect must not promote it over whoever
+      // controls the session now).
       try {
-        recomputeAndSendActiveRef.current()
+        recomputeAndSendActiveRef.current('restore')
       } catch {
         // WS could be in a half-open state right after handshake.
         // The set_active effect's focus subscriber + recompute effect
@@ -2228,11 +2237,56 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // convention in the overlay block below).
   const [readOnlyHint, setReadOnlyHint] = useState(false)
 
+  // ── Active-claim bookkeeping (declared before sendInput — its
+  // typing-auto-claim path below reads/writes these refs) ─────────
+  // Tracks the last `set_active` value we sent over THIS pane's WS so
+  // we can short-circuit duplicate emissions. Ref (not state) — the
+  // value is wire-protocol state, not React state; we never want a
+  // re-render from updating it. Reset to `null` (== "no value sent
+  // yet") whenever `wsRef.current` changes identity (a new WS = a new
+  // dedup window). See the set_active effect below.
+  const lastSentActiveRef = useRef<boolean | null>(null)
+  // 0.39.43 (PRD Issue A) — has THIS component instance sent its first
+  // `set_active` yet? The cross-remount dedup (skip a re-claim when a
+  // bare re-mount didn't change focus) only applies to the FIRST send
+  // of a fresh instance. Subsequent sends within the same instance —
+  // genuine focus transitions and WS-reconnect re-primes — must always
+  // go out (a reconnect's daemon subscriber is new and needs the claim).
+  const hasSentActiveThisInstanceRef = useRef(false)
+  // Issue #8 — stable handle to the "recompute desired active state and
+  // send it (dedup-guarded)" routine. Lives in a ref so the boot
+  // effect's WS-connect path (a different `[]`-deps effect) can call
+  // the latest implementation without taking it as a dep. The set_active
+  // effect below assigns it once on mount.
+  const recomputeAndSendActiveRef = useRef<(reason?: ClaimReason) => void>(
+    () => {},
+  )
+  // Resurface-steal fix — timestamp (performance.now clock) of the last
+  // DELIBERATE interaction with this pane: pointerdown/mousedown on the
+  // terminal container, real input reaching sendInput, or the user
+  // flipping the window mode to claimer. Ambient recomputes may only
+  // send a CLAIM within CLAIM_INTERACTION_WINDOW_MS of this stamp (see
+  // shouldSendClaim in activeViewer.ts). `-Infinity` = never interacted
+  // — deliberately NOT 0, so a pane mounted in the first 600ms after
+  // page load doesn't get a spurious interaction window.
+  const lastClaimInteractionRef = useRef(Number.NEGATIVE_INFINITY)
+
   // ── Send input / resize ───────────────────────────────────────
   const sendInput = useCallback((text: string) => {
     // S5 — viewer mode sends nothing (advisory; the daemon gate is
     // authoritative and also covers clients that skip this check).
     if (isViewerModeActive()) return
+    // Typing auto-claims server-side (the daemon's Input handler flips
+    // `active_subscriber`), so keep the CLIENT's controller mirror
+    // truthful: real input is a deliberate interaction — stamp it and
+    // send the claim BEFORE the input frame. Without this, the local
+    // `lastSentActiveRef`/indicator would say "passive" while the
+    // daemon already promoted us (breaking the focus-regain resize
+    // gate and the active-viewer UI).
+    if (lastSentActiveRef.current !== true) {
+      lastClaimInteractionRef.current = performance.now()
+      recomputeAndSendActiveRef.current('interaction')
+    }
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
     ws.send(JSON.stringify({ action: 'input', text }))
@@ -2390,27 +2444,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // mounted pane in a non-focused window would never tell the
   // daemon it exists, leaving `active_subscriber` stale until the
   // next focus transition.
-  // Tracks the last `set_active` value we sent over THIS pane's WS so
-  // we can short-circuit duplicate emissions. Ref (not state) — the
-  // value is wire-protocol state, not React state; we never want a
-  // re-render from updating it. Reset to `null` (== "no value sent
-  // yet") whenever `wsRef.current` changes identity (a new WS = a new
-  // dedup window). See the effect below.
-  const lastSentActiveRef = useRef<boolean | null>(null)
-  // 0.39.43 (PRD Issue A) — has THIS component instance sent its first
-  // `set_active` yet? The cross-remount dedup (skip a re-claim when a
-  // bare re-mount didn't change focus) only applies to the FIRST send
-  // of a fresh instance. Subsequent sends within the same instance —
-  // genuine focus transitions and WS-reconnect re-primes — must always
-  // go out (a reconnect's daemon subscriber is new and needs the claim).
-  const hasSentActiveThisInstanceRef = useRef(false)
-  // Issue #8 — stable handle to the "recompute desired active state and
-  // send it (dedup-guarded)" routine. Lives in a ref so the boot
-  // effect's WS-connect path (a different `[]`-deps effect) can call
-  // the latest implementation without taking it as a dep. The set_active
-  // effect below assigns it once on mount.
-  const recomputeAndSendActiveRef = useRef<() => void>(() => {})
-
   useEffect(() => {
     // The active-viewer handshake is a feature, not noise — it tells
     // the daemon WHICH connected client is the live viewer so it can
@@ -2489,7 +2522,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // and the visibility/focus recompute effect — converges on the
     // same dedup-guarded send. A pane that is hidden or blurred sends
     // `set_active(false)`; only the visible+focused pane claims.
-    const recomputeAndSendActive = (): void => {
+    //
+    // Resurface-steal fix — the predicate is NECESSARY but no longer
+    // SUFFICIENT for a claim. `reason` says what triggered this
+    // recompute; `shouldSendClaim` (pure, activeViewer.ts) lets a
+    // `true` through only when it's attributable to a deliberate
+    // interaction ('interaction', or 'ambient' within the interaction
+    // window of a pointerdown/keystroke stamp) or to a WS-reconnect
+    // restore of a claim this client already held. Ambient claims
+    // outside the window (OS focus regain, tab show, programmatic
+    // refocus, plain mount) are swallowed — we stay passive and do NOT
+    // touch the dedup state, so the daemon's current controller keeps
+    // the session. Releases (`false`) always pass straight through.
+    const recomputeAndSendActive = (reason: ClaimReason = 'ambient'): void => {
       const windowFocused = useWindowFocusStore.getState().isFocused
       // S5 — a viewer-mode window never claims (and a mode flip to
       // viewer computes `false`, releasing any claim we held). The
@@ -2501,6 +2546,28 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           paneFocused: paneFocusedRef.current,
           windowFocused,
         }) && !isViewerModeActive()
+      if (desired) {
+        const sessionId = sessionIdRef.current
+        // 'restore' is sendable only when THIS client's own recorded
+        // last-sent active for the session was `true` — a network blip
+        // must not demote an active controller, but a reconnecting
+        // passive pane must not promote itself either.
+        const restorable =
+          reason === 'restore' &&
+          sessionId !== null &&
+          getLastSentActive(sessionId) === true
+        if (
+          !shouldSendClaim({
+            desired,
+            reason,
+            lastInteractionAt: lastClaimInteractionRef.current,
+            now: performance.now(),
+            restorable,
+          })
+        ) {
+          return
+        }
+      }
       sendSetActive(desired)
     }
     // Expose the latest implementation to the boot effect's WS-connect
@@ -2508,11 +2575,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     recomputeAndSendActiveRef.current = recomputeAndSendActive
 
     let wasFocused = useWindowFocusStore.getState().isFocused
-    // Initial claim — happens after WS is open. The boot effect
-    // wires `wsRef.current` once the v2 spawn completes; if the
-    // WS isn't open yet when this fires, the send is a no-op.
-    // It's fine — the recompute paths below will claim when the
-    // user interacts / the pane becomes visible+focused.
+    // Initial recompute — ambient, so a plain mount can RELEASE (tell
+    // the daemon a blurred/hidden pane isn't the viewer) but never
+    // CLAIM (resurface-steal fix: mounting is not a deliberate act;
+    // the pointerdown/typing that follows will claim). If the WS
+    // isn't open yet when this fires, the send is a no-op — fine, the
+    // recompute paths below cover the user's first interaction.
     recomputeAndSendActive()
 
     const unsub = useWindowFocusStore.subscribe((state) => {
@@ -2625,7 +2693,17 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     const unsub = useWindowModeStore.subscribe((state, prev) => {
       if (state.mode !== prev.mode || state.resolved !== prev.resolved) {
         sendMode()
-        recomputeAndSendActiveRef.current()
+        // Resurface-steal fix: flipping to claimer is one of the four
+        // DELIBERATE acts allowed to claim (the toggle is a direct user
+        // gesture) — stamp the interaction window and recompute as
+        // 'interaction'. A flip to viewer computes desired=false and
+        // releases regardless of reason (releases are never gated).
+        if (state.mode === 'claimer') {
+          lastClaimInteractionRef.current = performance.now()
+          recomputeAndSendActiveRef.current('interaction')
+        } else {
+          recomputeAndSendActiveRef.current()
+        }
       }
     })
     return unsub
@@ -3160,6 +3238,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // typing keeps landing in this pane after a TUI click).
       ev.preventDefault()
       gestureForwardedRef.current = true
+      // Resurface-steal fix: a forwarded TUI click is a deliberate
+      // interaction — stamp BEFORE focusing the shadow input so the
+      // ambient recompute the focus event triggers may claim. (The
+      // React onMouseDown stamp also fires for this event, but this
+      // capture-phase handler is where focus() actually runs, so it
+      // stamps for itself rather than relying on handler ordering.)
+      lastClaimInteractionRef.current = performance.now()
       if (
         shadowInputRef.current &&
         document.activeElement !== shadowInputRef.current
@@ -3514,6 +3599,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   }, [hoveredLink])
 
   const handleMouseDown = useCallback(() => {
+    // Resurface-steal fix: a mousedown ON the pane is a deliberate
+    // interaction — stamp the claim window BEFORE the browser's
+    // focus-on-mousedown → onFocus → shadow.focus() → isFocused chain
+    // lands in the (ambient) recompute effect, so that recompute is
+    // attributed to this click and may claim.
+    lastClaimInteractionRef.current = performance.now()
     mouseDownLinkRef.current = hoveredLink?.link ?? null
     mouseDownInPaneRef.current = true
   }, [hoveredLink])

@@ -118,6 +118,70 @@ export function shouldEmitResize(inputs: ResizeEmitInputs): boolean {
   return inputs.visible && inputs.windowFocused
 }
 
+// Multiplayer resurface-steal fix — deliberate-interaction claim gate.
+//
+// `computeDesiredActive` answers "is this pane the one the user is
+// looking at?" — a NECESSARY condition for claiming, but not a
+// sufficient one. Keying the claim on it alone conflates SELECTION
+// with CONTROL: every ambient recompute (OS window focus regain, tab
+// becoming visible, programmatic shadow-input refocus, plain mount)
+// re-sent `{set_active:true}`, and the daemon is most-recent-claim-
+// wins — so merely resurfacing the K2 app RECLAIMED the session from
+// whoever took it over while you were away.
+//
+// The rule: a CLAIM may only ride a DELIBERATE interaction —
+// pointerdown/typing on the pane, flipping the window mode to
+// claimer, or a WS-reconnect restore of a claim THIS client already
+// held (a network blip must not demote an active controller).
+// RELEASES (`set_active:false`) stay ambient: losing focus/visibility
+// must always free the slot promptly.
+//
+// The interaction window exists because the deliberate act and the
+// recompute that actually fires are decoupled: pointerdown stamps the
+// timestamp, then focus → React state → effect-recompute runs a tick
+// or three later as an "ambient" recompute. Anything inside the
+// window is attributed to that interaction; anything outside (an
+// app-resurface minutes later) is not.
+export const CLAIM_INTERACTION_WINDOW_MS = 600
+
+/** What triggered this recompute of the active claim. */
+export type ClaimReason = 'ambient' | 'interaction' | 'restore'
+
+export interface ClaimSendInputs {
+  /** The computed desired active value (`computeDesiredActive` && mode). */
+  desired: boolean
+  /** What triggered the recompute. */
+  reason: ClaimReason
+  /** Timestamp (same clock as `now`) of the last deliberate
+   *  interaction with this pane; `-Infinity` if none ever. */
+  lastInteractionAt: number
+  /** Current timestamp (`performance.now()` in production). */
+  now: number
+  /** 'restore' only: this client's own recorded last-sent active for
+   *  the session was `true` (it held the claim before the reconnect). */
+  restorable?: boolean
+}
+
+/**
+ * Whether a computed `set_active` value may be SENT right now.
+ * Releases (`desired:false`) are always sendable. Claims
+ * (`desired:true`) are sendable only when attributable to a
+ * deliberate interaction ('interaction' directly, 'ambient' within
+ * `CLAIM_INTERACTION_WINDOW_MS` of one) or to a reconnect restore of
+ * a claim this client already held (`restorable`).
+ */
+export function shouldSendClaim(inputs: ClaimSendInputs): boolean {
+  if (!inputs.desired) return true
+  switch (inputs.reason) {
+    case 'interaction':
+      return true
+    case 'restore':
+      return inputs.restorable === true
+    case 'ambient':
+      return inputs.now - inputs.lastInteractionAt <= CLAIM_INTERACTION_WINDOW_MS
+  }
+}
+
 // 0.39.43 (PRD `daemon-multi-client-arbitration.md` Issue A) —
 // cross-remount active-claim dedup.
 //

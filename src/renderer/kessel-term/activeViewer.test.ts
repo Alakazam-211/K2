@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   __resetActiveViewerDedupForTests,
+  CLAIM_INTERACTION_WINDOW_MS,
   computeDesiredActive,
   getLastSentActive,
   recordSentActive,
   shouldEmitResize,
   shouldHoldGridWs,
+  shouldSendClaim,
   shouldSkipRemountReclaim,
 } from './activeViewer'
 
@@ -264,5 +266,179 @@ describe('cross-remount active-claim dedup', () => {
     // re-claims (genuine transition).
     expect(shouldSkipRemountReclaim(SID, false)).toBe(true)
     expect(shouldSkipRemountReclaim(SID, true)).toBe(false)
+  })
+})
+
+// Multiplayer resurface-steal fix — deliberate-interaction claim gate.
+// `computeDesiredActive` conflated SELECTION with CONTROL: every
+// ambient recompute (OS window focus regain, tab show, programmatic
+// refocus, plain mount) re-sent `set_active:true` and the daemon is
+// most-recent-claim-wins — so resurfacing the K2 app RECLAIMED the
+// session from whoever took over while you were away. `shouldSendClaim`
+// pins the new rule: releases are always sendable; claims only when
+// attributable to a deliberate interaction or a reconnect restore of a
+// claim this client already held.
+describe('shouldSendClaim', () => {
+  const NOW = 100_000 // a long-running app: performance.now() is large
+
+  describe('releases (desired=false) are always sendable', () => {
+    it('regardless of reason, interaction recency, or restorability', () => {
+      const reasons = ['ambient', 'interaction', 'restore'] as const
+      for (const reason of reasons) {
+        for (const lastInteractionAt of [Number.NEGATIVE_INFINITY, 0, NOW]) {
+          for (const restorable of [undefined, false, true]) {
+            expect(
+              shouldSendClaim({
+                desired: false,
+                reason,
+                lastInteractionAt,
+                now: NOW,
+                restorable,
+              }),
+            ).toBe(true)
+          }
+        }
+      }
+    })
+  })
+
+  describe('ambient claims', () => {
+    it('BLOCKED with no interaction ever (the resurface-steal case)', () => {
+      // The exact bug: user re-focuses the K2 window hours later; the
+      // isFocused-effect recompute is ambient with a stale (or never
+      // set) interaction stamp. The claim must NOT go out — whoever
+      // controls the session keeps it.
+      expect(
+        shouldSendClaim({
+          desired: true,
+          reason: 'ambient',
+          lastInteractionAt: Number.NEGATIVE_INFINITY,
+          now: NOW,
+        }),
+      ).toBe(false)
+    })
+
+    it('BLOCKED with an ancient interaction stamp (lastInteractionAt=0)', () => {
+      expect(
+        shouldSendClaim({
+          desired: true,
+          reason: 'ambient',
+          lastInteractionAt: 0,
+          now: NOW,
+        }),
+      ).toBe(false)
+    })
+
+    it('BLOCKED just outside the interaction window', () => {
+      expect(
+        shouldSendClaim({
+          desired: true,
+          reason: 'ambient',
+          lastInteractionAt: NOW - CLAIM_INTERACTION_WINDOW_MS - 1,
+          now: NOW,
+        }),
+      ).toBe(false)
+    })
+
+    it('sendable within the interaction window (pointerdown → async focus → effect chain)', () => {
+      // pointerdown stamps, then focus event → React state → effect
+      // recompute fires a few ticks later as 'ambient' — it must be
+      // attributed to that click and allowed to claim.
+      expect(
+        shouldSendClaim({
+          desired: true,
+          reason: 'ambient',
+          lastInteractionAt: NOW - 5,
+          now: NOW,
+        }),
+      ).toBe(true)
+      // Boundary: exactly the window edge is still attributable.
+      expect(
+        shouldSendClaim({
+          desired: true,
+          reason: 'ambient',
+          lastInteractionAt: NOW - CLAIM_INTERACTION_WINDOW_MS,
+          now: NOW,
+        }),
+      ).toBe(true)
+    })
+  })
+
+  describe('interaction claims', () => {
+    it('always sendable (typing / mode-flip-to-claimer recompute)', () => {
+      // The stamp may even be stale relative to `now` — the reason
+      // itself asserts deliberateness; the window only exists for the
+      // ambient recomputes that TRAIL an interaction.
+      expect(
+        shouldSendClaim({
+          desired: true,
+          reason: 'interaction',
+          lastInteractionAt: Number.NEGATIVE_INFINITY,
+          now: NOW,
+        }),
+      ).toBe(true)
+    })
+  })
+
+  describe('restore claims (WS reconnect)', () => {
+    it('sendable ONLY when this client already held the claim (restorable)', () => {
+      // Network blip while we were the active controller: the fresh
+      // daemon subscriber must be re-primed or we'd be silently demoted.
+      expect(
+        shouldSendClaim({
+          desired: true,
+          reason: 'restore',
+          lastInteractionAt: Number.NEGATIVE_INFINITY,
+          now: NOW,
+          restorable: true,
+        }),
+      ).toBe(true)
+    })
+
+    it('BLOCKED when not restorable — a passive pane must not promote itself on reconnect', () => {
+      expect(
+        shouldSendClaim({
+          desired: true,
+          reason: 'restore',
+          lastInteractionAt: Number.NEGATIVE_INFINITY,
+          now: NOW,
+          restorable: false,
+        }),
+      ).toBe(false)
+      // Omitted restorable (no recorded last-sent, e.g. fresh session
+      // whose first connect races a recompute) is NOT restorable.
+      expect(
+        shouldSendClaim({
+          desired: true,
+          reason: 'restore',
+          lastInteractionAt: Number.NEGATIVE_INFINITY,
+          now: NOW,
+        }),
+      ).toBe(false)
+    })
+
+    it('composes with the cross-remount map: recorded true ⇒ restorable, recorded false/absent ⇒ not', () => {
+      // Mirrors the TerminalPane wiring: `restorable =
+      // getLastSentActive(sessionId) === true` at the reconnect
+      // re-prime. Pin the exact map-derived truth here.
+      __resetActiveViewerDedupForTests()
+      const SID = 'session-reconnect'
+      const attempt = () =>
+        shouldSendClaim({
+          desired: true,
+          reason: 'restore',
+          lastInteractionAt: Number.NEGATIVE_INFINITY,
+          now: NOW,
+          restorable: getLastSentActive(SID) === true,
+        })
+      // Never sent anything → not restorable.
+      expect(attempt()).toBe(false)
+      // We held the claim before the blip → restorable.
+      recordSentActive(SID, true)
+      expect(attempt()).toBe(true)
+      // We had released before the blip → not restorable.
+      recordSentActive(SID, false)
+      expect(attempt()).toBe(false)
+    })
   })
 })

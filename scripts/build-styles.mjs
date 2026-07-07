@@ -41,6 +41,7 @@ const REQUIRED_COLOR_SLOTS = [
   'text-primary', 'text-secondary', 'text-muted',
   'accent', 'accent-hover', 'accent-soft', 'on-accent',
   'status-working', 'status-error', 'status-ok', 'status-warn',
+  'status-ok-soft', 'status-warn-soft', 'neutral', 'control-track-off',
   'diff-add-text', 'diff-remove-text', 'diff-modified-border',
   'code-inline', 'danger-hover',
   'overlay-soft-bg', 'overlay-soft-border',

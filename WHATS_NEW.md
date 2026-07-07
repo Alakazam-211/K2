@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.35 — Fresh-install pairing fix
+
+- **New installs pair with the daemon again.** A recent change stopped
+  creating a compatibility link the app relies on to find its daemon, so
+  brand-new installs on 0.40.33/0.40.34 couldn't connect on first launch.
+  Fixed — and if you already installed one of those versions, K2 repairs
+  the link automatically the next time it starts on this version.
+
 ## 0.40.34 — The web comes to K2
 
 - **A real browser tab.** K2 can now open web pages in a native browser

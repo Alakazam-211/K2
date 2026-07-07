@@ -858,7 +858,9 @@ function AppRoot(): React.JSX.Element {
     return (
       <>
         <PinnedChatRetainer />
-        <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg)]">
+        {/* p-[var(--inset-window)] (0 in Square): inset-aware styles float
+            Settings on the canvas like every other top-level surface. */}
+        <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg-canvas)] p-[var(--inset-window)]">
           {/* Settings renders its OWN top-bar (traffic-light spacer + "K2
               <Server>" + switcher, #686). No separate empty drag strip here —
               it stacked a second bar above Settings' top-bar, dropping "K2

@@ -47,6 +47,7 @@ const CONFIGS: QaConfig[] = [
   { name: 'paper-light', style: 'square', palette: 'paper', scheme: 'light', gaps: '' },
   { name: 'charcoal-spacious', style: 'square', palette: 'charcoal', scheme: 'dark', gaps: 'spacious' },
   { name: 'paper-spacious', style: 'square', palette: 'paper', scheme: 'light', gaps: 'spacious' },
+  { name: 'glass-obsidian', style: 'glass', palette: 'obsidian', scheme: 'dark', gaps: '' },
 ]
 
 /** Settle + capture into the config's qa shots dir, then verify the

@@ -259,7 +259,7 @@ export function ConnectionsSection(): React.JSX.Element {
       <div className="flex items-center gap-2 mb-2 px-3 py-2 border border-[var(--color-border)]">
         <span
           className="w-2 h-2 flex-shrink-0 rounded-full"
-          style={{ backgroundColor: activeHost === 'local' ? statusColor(connectionStatus) : '#6b7280' }}
+          style={{ backgroundColor: activeHost === 'local' ? statusColor(connectionStatus) : 'var(--color-neutral)' }}
         />
         <div className="flex flex-col min-w-0">
           <span className="text-xs text-[var(--color-text-primary)]">Local</span>
@@ -672,7 +672,7 @@ function HostTile({
       <div className="flex items-center gap-2">
         <span
           className="w-2 h-2 flex-shrink-0 rounded-full"
-          style={{ backgroundColor: isActive ? statusColor(connectionStatus) : '#6b7280' }}
+          style={{ backgroundColor: isActive ? statusColor(connectionStatus) : 'var(--color-neutral)' }}
         />
         <div className="flex flex-col min-w-0">
           <span className="text-xs text-[var(--color-text-primary)] truncate">{host.label}</span>

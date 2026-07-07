@@ -36,7 +36,7 @@ export function AgenticSystemsToggle(): React.JSX.Element {
         style={{
           width: 36,
           height: 20,
-          backgroundColor: enabled ? 'var(--color-accent)' : '#333',
+          backgroundColor: enabled ? 'var(--color-accent)' : 'var(--color-control-track-off)',
           border: 'none',
           transition: 'background-color 150ms',
         }}

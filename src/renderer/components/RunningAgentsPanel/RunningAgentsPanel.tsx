@@ -319,7 +319,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
       case 'working': return 'var(--color-accent)'
       case 'permission': return 'var(--color-status-error)'
       case 'review': return 'var(--color-status-ok)'
-      default: return '#6b7280'
+      default: return 'var(--color-neutral)'
     }
   }
 

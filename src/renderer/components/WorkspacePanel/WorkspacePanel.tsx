@@ -550,7 +550,7 @@ function ConnectedAgentsSection({ projectId }: { projectId: string }): React.JSX
             <div key={rel.id} className="flex items-center gap-2">
               <span
                 className="w-2 h-2 flex-shrink-0 rounded-full"
-                style={{ backgroundColor: source?.color || '#6b7280' }}
+                style={{ backgroundColor: source?.color || 'var(--color-neutral)' }}
               />
               <span className="text-[11px] text-[var(--color-text-secondary)] truncate">
                 {source?.name || 'Unknown'}

@@ -2730,7 +2730,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
                 >
                   <span
                     className="w-2 h-2 flex-shrink-0 rounded-full"
-                    style={{ backgroundColor: p.color || '#6b7280' }}
+                    style={{ backgroundColor: p.color || 'var(--color-neutral)' }}
                   />
                   <span className="text-xs text-[var(--color-text-primary)] truncate">{p.name}</span>
                   {p.agentMode && p.agentMode !== 'off' && (
@@ -2763,7 +2763,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
               >
                 <span
                   className="w-2 h-2 flex-shrink-0 rounded-full"
-                  style={{ backgroundColor: target?.color || '#6b7280' }}
+                  style={{ backgroundColor: target?.color || 'var(--color-neutral)' }}
                 />
                 <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">
                   {target?.name || 'Unknown workspace'}
@@ -2840,7 +2840,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
                 >
                   <span
                     className="w-2 h-2 flex-shrink-0 rounded-full"
-                    style={{ backgroundColor: source?.color || '#6b7280' }}
+                    style={{ backgroundColor: source?.color || 'var(--color-neutral)' }}
                   />
                   <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">
                     {source?.name || 'Unknown workspace'}

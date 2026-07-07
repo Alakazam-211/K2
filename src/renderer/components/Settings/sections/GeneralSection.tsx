@@ -117,7 +117,7 @@ export function GeneralSection(): React.JSX.Element {
             <div className="flex items-center gap-1.5">
               <span
                 className="w-1.5 h-1.5 flex-shrink-0"
-                style={{ backgroundColor: updateStatus === 'available' ? '#eab308' : '#4ade80' }}
+                style={{ backgroundColor: updateStatus === 'available' ? 'var(--color-status-warn-soft)' : 'var(--color-status-ok-soft)' }}
               />
               <span className="text-xs text-[var(--color-text-muted)]">
                 v{currentVersion || '...'}
@@ -396,7 +396,7 @@ function CompletionSoundRow(): React.JSX.Element {
         style={{
           width: 36,
           height: 20,
-          backgroundColor: enabled ? 'var(--color-accent)' : '#333',
+          backgroundColor: enabled ? 'var(--color-accent)' : 'var(--color-control-track-off)',
           border: 'none',
           transition: 'background-color 150ms',
         }}
@@ -556,7 +556,7 @@ function CLIVersionRow(): React.JSX.Element {
             <div className="flex items-center gap-1.5">
               <span
                 className="w-1.5 h-1.5 flex-shrink-0"
-                style={{ backgroundColor: updateAvailable ? '#eab308' : '#4ade80' }}
+                style={{ backgroundColor: updateAvailable ? 'var(--color-status-warn-soft)' : 'var(--color-status-ok-soft)' }}
               />
               <span className="text-xs text-[var(--color-text-muted)]">
                 v{status.installedVersion || '?'}
@@ -723,10 +723,10 @@ function DaemonRow(): React.JSX.Element {
   }, [])
 
   const dotColor = (() => {
-    if (!status) return '#6b7280'                          // loading
-    if (status.state === 'running') return '#4ade80'       // green
-    if (status.state === 'not_installed') return '#6b7280' // neutral
-    return '#eab308'                                        // yellow (unreachable)
+    if (!status) return 'var(--color-neutral)'                          // loading
+    if (status.state === 'running') return 'var(--color-status-ok-soft)'       // green
+    if (status.state === 'not_installed') return 'var(--color-neutral)' // neutral
+    return 'var(--color-status-warn-soft)'                                        // yellow (unreachable)
   })()
 
   const statusText = (() => {
@@ -885,7 +885,7 @@ function KeepDaemonOnQuitRow(): React.JSX.Element {
         style={{
           width: 36,
           height: 20,
-          backgroundColor: keep ? 'var(--color-accent)' : '#333',
+          backgroundColor: keep ? 'var(--color-accent)' : 'var(--color-control-track-off)',
           border: 'none',
           transition: 'background-color 150ms',
         }}

@@ -139,10 +139,10 @@ export default function AgentsPanel(): React.JSX.Element {
 
   // Status dot color based on work state
   const statusColor = (agent: K2soAgentInfo): string => {
-    if (agent.activeCount > 0) return '#eab308' // yellow — working
+    if (agent.activeCount > 0) return 'var(--color-status-warn-soft)' // yellow — working
     if (agent.doneCount > 0) return 'var(--color-status-ok)'   // green — has completed work
     if (agent.inboxCount > 0) return 'var(--color-accent)'  // blue — has pending work
-    return '#6b7280'                              // gray — idle
+    return 'var(--color-neutral)'                              // gray — idle
   }
 
   const agenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)

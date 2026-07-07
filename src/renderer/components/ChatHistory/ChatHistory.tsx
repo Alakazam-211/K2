@@ -442,7 +442,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
     // Show a simple context menu with pin + rename
     const menuDiv = document.createElement('div')
-    menuDiv.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;background:var(--color-bg-elevated);border:1px solid #333;padding:2px 0;min-width:140px;font-size:11px;font-family:var(--font-mono,monospace);`
+    menuDiv.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;background:var(--color-bg-elevated);border:1px solid var(--color-control-track-off);padding:2px 0;min-width:140px;font-size:11px;font-family:var(--font-mono,monospace);`
     const config = PROVIDER_CONFIG[session.provider]
     const resumeCmd = config
       ? `${config.command} ${config.resumeFlag} ${session.sessionId}`
@@ -477,7 +477,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       const btn = document.createElement('button')
       btn.textContent = item.label
       btn.style.cssText = 'display:block;width:100%;text-align:left;padding:4px 12px;background:none;border:none;color:#ccc;cursor:pointer;font:inherit;'
-      btn.onmouseenter = () => { btn.style.background = '#333' }
+      btn.onmouseenter = () => { btn.style.background = 'var(--color-control-track-off)' }
       btn.onmouseleave = () => { btn.style.background = 'none' }
       btn.onclick = () => { item.action(); closeMenu() }
       menuDiv.appendChild(btn)

@@ -318,7 +318,7 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
               color: isRunning
                 ? '#70c070'
                 : (isHovered ? '#e0e0e0' : '#808080'),
-              borderLeft: isRunning ? '2px solid #4ade80' : '2px solid transparent',
+              borderLeft: isRunning ? '2px solid var(--color-status-ok-soft)' : '2px solid transparent',
             }}
           >
             {showDropBefore && (
@@ -339,7 +339,7 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
                   display: 'inline-block',
                   width: '5px',
                   height: '5px',
-                  backgroundColor: '#4ade80',
+                  backgroundColor: 'var(--color-status-ok-soft)',
                   borderRadius: '50%',
                   marginLeft: '2px',
                   flexShrink: 0,

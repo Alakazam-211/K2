@@ -71,10 +71,10 @@ export function ClaudeAuthRefreshRow(): React.JSX.Element {
 
     const config: Record<ClaudeAuthState, { color: string; text: string }> = {
       valid: { color: 'var(--color-status-ok)', text: `Valid (${minutes}m)` },
-      expiring: { color: '#eab308', text: 'Expiring soon' },
+      expiring: { color: 'var(--color-status-warn-soft)', text: 'Expiring soon' },
       expired: { color: 'var(--color-status-error)', text: 'Expired' },
-      missing: { color: '#6b7280', text: 'No credentials' },
-      unknown: { color: '#6b7280', text: '' },
+      missing: { color: 'var(--color-neutral)', text: 'No credentials' },
+      unknown: { color: 'var(--color-neutral)', text: '' },
     }
 
     const { color, text } = config[authState]
@@ -111,7 +111,7 @@ export function ClaudeAuthRefreshRow(): React.JSX.Element {
           style={{
             width: 36,
             height: 20,
-            backgroundColor: claudeAuthAutoRefresh ? 'var(--color-accent)' : '#333',
+            backgroundColor: claudeAuthAutoRefresh ? 'var(--color-accent)' : 'var(--color-control-track-off)',
             border: 'none',
             transition: 'background-color 150ms',
           }}

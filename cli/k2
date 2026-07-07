@@ -622,40 +622,10 @@ except:
 " 2>/dev/null
 }
 
-cmd_heartbeat_noop() {
-    local agent=""
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --agent) agent="$2"; shift 2 ;;
-            *) [ -z "$agent" ] && agent="$1"; shift ;;
-        esac
-    done
-    if [ -z "$agent" ]; then
-        echo "Usage: k2 heartbeat noop --agent <name>" >&2
-        echo "  Report that the agent woke up but had nothing to do." >&2
-        echo "  This triggers auto-backoff and prunes the session transcript." >&2
-        exit 1
-    fi
-    cli_request "/cli/agents/heartbeat/noop" "agent=$(urlencode "$agent")" > /dev/null
-    echo "No-op recorded for agent $agent"
-}
-
-cmd_heartbeat_action() {
-    local agent=""
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --agent) agent="$2"; shift 2 ;;
-            *) [ -z "$agent" ] && agent="$1"; shift ;;
-        esac
-    done
-    if [ -z "$agent" ]; then
-        echo "Usage: k2 heartbeat action --agent <name>" >&2
-        echo "  Report that the agent took action (resets no-op counter)." >&2
-        exit 1
-    fi
-    cli_request "/cli/agents/heartbeat/action" "agent=$(urlencode "$agent")" > /dev/null
-    echo "Action recorded for agent $agent"
-}
+# 0.40.31: cmd_heartbeat_noop / cmd_heartbeat_action removed with the
+# legacy per-agent adaptive-backoff heartbeat API. The dispatch arms in
+# cmd_heartbeat_toggle route noop/action/force/set/get to
+# fail_deprecated; the daemon routes return HTTP 410.
 
 cmd_terminal_spawn() {
     local agent="" command="" title="" wait="" cwd="" sandbox=""
@@ -4961,104 +4931,24 @@ cmd_heartbeat_toggle() {
             cli_request "/cli/heartbeat" "enable=off"
             echo "Heartbeat disabled."
             ;;
+        # 0.40.31: the per-agent adaptive heartbeat verbs are retired with
+        # the legacy heartbeat.json API. Named workspace heartbeat
+        # schedules (`k2 heartbeat schedule ...` / `k2 heartbeat signal
+        # fire <name>`) are the only heartbeat control surface.
         noop)
-            shift
-            cmd_heartbeat_noop "$@"
+            fail_deprecated "heartbeat noop" "nothing — per-agent adaptive backoff was removed; heartbeat cadence is user-owned via 'k2 heartbeat schedule'"
             ;;
         action)
-            shift
-            cmd_heartbeat_action "$@"
+            fail_deprecated "heartbeat action" "nothing — per-agent adaptive backoff was removed; heartbeat cadence is user-owned via 'k2 heartbeat schedule'"
             ;;
         force)
-            # Force an immediate wake: k2 heartbeat force --agent name
-            shift
-            local agent=""
-            while [ $# -gt 0 ]; do
-                case "$1" in
-                    --agent) agent="$2"; shift 2 ;;
-                    *) [ -z "$agent" ] && agent="$1"; shift ;;
-                esac
-            done
-            if [ -z "$agent" ]; then
-                echo "Usage: k2 heartbeat force --agent <name>" >&2
-                exit 1
-            fi
-            cli_request "/cli/agents/heartbeat" "agent=$(urlencode "$agent")&force_wake=1"
-            echo "Force wake triggered for agent $agent"
+            fail_deprecated "heartbeat force" "k2 heartbeat signal fire <name>  (fires a named heartbeat now)"
             ;;
         set)
-            # Adaptive heartbeat: k2 heartbeat set --interval 60 --phase "active" [--agent name]
-            shift
-            local interval="" phase="" agent="" mode="" cost_budget=""
-            while [ $# -gt 0 ]; do
-                case "$1" in
-                    --interval) interval="$2"; shift 2 ;;
-                    --phase) phase="$2"; shift 2 ;;
-                    --agent) agent="$2"; shift 2 ;;
-                    --mode) mode="$2"; shift 2 ;;
-                    --cost-budget) cost_budget="$2"; shift 2 ;;
-                    *) shift ;;
-                esac
-            done
-            if [ -z "$agent" ]; then
-                echo "Usage: k2 heartbeat set --agent <name> [--interval N] [--phase \"...\"] [--mode heartbeat|persistent]" >&2
-                exit 1
-            fi
-            local params="agent=$(urlencode "$agent")"
-            [ -n "$interval" ] && params="${params}&interval=${interval}"
-            [ -n "$phase" ] && params="${params}&phase=$(urlencode "$phase")"
-            [ -n "$mode" ] && params="${params}&mode=$(urlencode "$mode")"
-            [ -n "$cost_budget" ] && params="${params}&cost_budget=$(urlencode "$cost_budget")"
-            cli_request "/cli/agents/heartbeat" "$params" | python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-    print(f'Heartbeat updated for agent:')
-    print(f'  Mode:     {d.get(\"mode\", \"?\")}')
-    print(f'  Phase:    {d.get(\"phase\", \"?\")}')
-    print(f'  Interval: {d.get(\"intervalSeconds\", \"?\")}s')
-    print(f'  Budget:   {d.get(\"costBudget\", \"?\")}')
-    nw = d.get('nextWake', '')
-    if nw:
-        print(f'  Next wake: {nw[:19]}')
-except:
-    print('Error: failed to parse response', file=sys.stderr)
-" 2>/dev/null
+            fail_deprecated "heartbeat set" "k2 heartbeat schedule add/edit --name <n> <spec>  (see 'k2 help heartbeat')"
             ;;
         get)
-            # Read heartbeat config: k2 heartbeat get --agent name
-            shift
-            local agent=""
-            while [ $# -gt 0 ]; do
-                case "$1" in
-                    --agent) agent="$2"; shift 2 ;;
-                    *) [ -z "$agent" ] && agent="$1"; shift ;;
-                esac
-            done
-            if [ -z "$agent" ]; then
-                echo "Usage: k2 heartbeat get --agent <name>" >&2
-                exit 1
-            fi
-            cli_request "/cli/agents/heartbeat" "agent=$(urlencode "$agent")" | python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-    print(f'Heartbeat config for agent:')
-    print(f'  Mode:          {d.get(\"mode\", \"?\")}')
-    print(f'  Phase:         {d.get(\"phase\", \"?\")}')
-    print(f'  Interval:      {d.get(\"intervalSeconds\", \"?\")}s')
-    print(f'  Min interval:  {d.get(\"minIntervalSeconds\", \"?\")}s')
-    print(f'  Max interval:  {d.get(\"maxIntervalSeconds\", \"?\")}s')
-    print(f'  Budget:        {d.get(\"costBudget\", \"?\")}')
-    print(f'  Auto-backoff:  {d.get(\"autoBackoff\", \"?\")}')
-    print(f'  No-ops:        {d.get(\"consecutiveNoOps\", 0)}')
-    nw = d.get('nextWake', '')
-    lw = d.get('lastWake', '')
-    if lw: print(f'  Last wake:     {lw[:19]}')
-    if nw: print(f'  Next wake:     {nw[:19]}')
-except:
-    print('Error: failed to parse response', file=sys.stderr)
-" 2>/dev/null
+            fail_deprecated "heartbeat get" "k2 heartbeat show <name> [--json]"
             ;;
         schedule)
             # Project-level schedule management
@@ -8361,6 +8251,16 @@ HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
   work move --from <a> --to <b>   → inbox move <id> <folder>
   work done                       → inbox archive <id>
   work send <ws> --title --body   → msg <ws> --inbox --title "..." --body "..."
+
+  # 0.40.31 — legacy per-agent adaptive heartbeat control removed
+  # (heartbeat.json; nothing consumed it since 0.39.0d). Named
+  # workspace heartbeat schedules are the only heartbeat surface.
+
+  heartbeat set --agent <n> ...   → heartbeat schedule add/edit --name <n> <spec>
+  heartbeat get --agent <n>       → heartbeat show <name> [--json]
+  heartbeat force --agent <n>     → heartbeat signal fire <name>
+  heartbeat noop|action           → (removed — adaptive backoff is gone;
+                                       the user owns wake cadence via schedules)
 
   --agent <name> flag             → --workspace <path>  (everywhere)
                                        Hard-removed; pass workspace explicitly.

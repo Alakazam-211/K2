@@ -471,45 +471,10 @@ else
     skip "heartbeat enable (project not in DB)"
 fi
 
-# Set heartbeat config for test-backend
-OUTPUT=$(run heartbeat set --agent test-backend --interval 120 --phase monitoring)
-if echo "$OUTPUT" | grep -q "120\|monitoring"; then
-    pass "heartbeat set interval and phase"
-else
-    fail "heartbeat set" "Output: $OUTPUT"
-fi
-
-# Get heartbeat config
-OUTPUT=$(run heartbeat get --agent test-backend)
-if echo "$OUTPUT" | grep -q "120\|monitoring"; then
-    pass "heartbeat get reads config"
-else
-    fail "heartbeat get" "Output: $OUTPUT"
-fi
-
-# Force wake
-OUTPUT=$(run heartbeat force --agent test-backend)
-if echo "$OUTPUT" | grep -q "Force wake\|force"; then
-    pass "heartbeat force wake"
-else
-    fail "heartbeat force" "Output: $OUTPUT"
-fi
-
-# Report no-op
-OUTPUT=$(run heartbeat noop --agent test-backend)
-if echo "$OUTPUT" | grep -q "No-op\|recorded"; then
-    pass "heartbeat noop"
-else
-    fail "heartbeat noop" "Output: $OUTPUT"
-fi
-
-# Report action
-OUTPUT=$(run heartbeat action --agent test-backend)
-if echo "$OUTPUT" | grep -q "Action\|recorded"; then
-    pass "heartbeat action"
-else
-    fail "heartbeat action" "Output: $OUTPUT"
-fi
+# (0.40.31: the per-agent adaptive verbs — heartbeat set/get/force/noop/
+# action — were deleted with the legacy heartbeat.json API; their tests
+# are removed. Named schedules are covered by the heartbeat schedule
+# tests below.)
 
 # Disable heartbeat
 run heartbeat off > /dev/null

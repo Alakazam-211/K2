@@ -7,13 +7,6 @@
 use k2_core::session::{CursorOp, CursorShape, EraseMode, Frame, ModeKind, Style};
 use k2_core::term::LineMux;
 
-/// Helper: extract Style from a Text frame (None = default style).
-fn text_frame_style(frame: &Frame) -> Option<&Option<Style>> {
-    match frame {
-        Frame::Text { style, .. } => Some(style),
-        _ => None,
-    }
-}
 
 /// Helper: collect all (bytes, style) tuples from Text frames.
 fn text_frames_with_styles(frames: &[Frame]) -> Vec<(&[u8], Option<Style>)> {

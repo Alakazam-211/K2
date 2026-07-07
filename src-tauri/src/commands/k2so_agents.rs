@@ -1108,6 +1108,14 @@ mod pure_helper_tests {
     //! run in microseconds and cover edge cases that would otherwise
     //! require scaffolding a full workspace.
     use super::*;
+    // Resolved directly from core: the module-level pub-use re-exports
+    // these once rode were removed in the 0.40.31 warning-zero pass.
+    use k2_core::workspace::agent::update_agent_md_field;
+    use k2_core::workspace::wake_prompts::{
+        compose_agent_wake_from_body, compose_manager_wake_from_body,
+        WAKEUP_TEMPLATE_WORKSPACE,
+    };
+    use k2_core::workspace::work_item::parse_work_item_content;
 
     // ── update_agent_md_field ────────────────────────────────────
     #[test]

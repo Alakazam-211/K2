@@ -196,7 +196,7 @@ fn serialize_signal_event(signal: &AgentSignal) -> Result<String, serde_json::Er
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k2_core::awareness::{AgentAddress, Delivery, SignalKind, WorkspaceId};
+    use k2_core::awareness::{AgentAddress, SignalKind};
 
     fn minimal_signal() -> AgentSignal {
         AgentSignal::new(

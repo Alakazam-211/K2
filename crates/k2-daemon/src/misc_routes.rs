@@ -1364,15 +1364,6 @@ mod api_key_route_tests {
     /// other across threads (`K2_API` / `K2_SANDBOX_API` are process-wide).
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Set-or-remove an env var, returning the previous value for restore.
-    fn swap_env(name: &str, val: Option<&str>) -> Option<std::ffi::OsString> {
-        let prev = std::env::var_os(name);
-        match val {
-            Some(v) => std::env::set_var(name, v),
-            None => std::env::remove_var(name),
-        }
-        prev
-    }
 
     fn restore_env(name: &str, prev: Option<std::ffi::OsString>) {
         match prev {

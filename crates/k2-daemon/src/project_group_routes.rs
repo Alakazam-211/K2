@@ -2417,7 +2417,7 @@ mod tests {
             // workspace_layouts FKs both columns (0009): workspace_id →
             // the legacy per-project `workspaces` rows — seed one per
             // layout row.
-            let mut insert = |project_id: &str, blob: String| {
+            let insert = |project_id: &str, blob: String| {
                 let ws_id = uuid::Uuid::new_v4().to_string();
                 conn.execute(
                     "INSERT INTO workspaces (id, project_id, name) VALUES (?1, ?2, 'main')",

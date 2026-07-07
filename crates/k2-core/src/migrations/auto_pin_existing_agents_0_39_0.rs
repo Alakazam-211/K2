@@ -142,6 +142,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // deliberate NOT-pinned emphasis in the test name
     fn manager_coordinator_pod_workspaces_are_NOT_pinned() {
         // 0.39.1 narrowed the filter — manager-mode workspaces never
         // auto-promoted pre-0.39.0 so they shouldn't be pinned by

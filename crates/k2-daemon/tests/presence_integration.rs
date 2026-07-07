@@ -31,7 +31,7 @@ use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 

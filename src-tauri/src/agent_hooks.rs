@@ -33,8 +33,7 @@ use k2_core::hook_config;
 // warning-clean.
 #[cfg(test)]
 use k2_core::agent_hooks::{
-    get_recent_events, map_event_type, record_recent_event, urldecode,
-    AgentLifecycleEvent, RecentEvent,
+    get_recent_events, map_event_type, record_recent_event, RecentEvent,
 };
 #[cfg(test)]
 const RECENT_EVENTS_CAP: usize = 50;

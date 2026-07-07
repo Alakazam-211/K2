@@ -30,6 +30,8 @@
 
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 /// Outcome of [`claim_port`]. The `port` is what the caller should
 /// publish into `~/.k2so/daemon.port` (always equals the port the

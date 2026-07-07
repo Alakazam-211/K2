@@ -6,16 +6,11 @@
 //! tempdirs for the filesystem side; liveness tests use the
 //! session::registry singleton so there's a `TEST_LOCK` for those.
 
-use std::path::PathBuf;
-use std::sync::Mutex;
 
 use k2_core::awareness::{
     self, AgentAddress, AgentInfo, AgentSignal, Delivery, DeliveryPlan,
-    Priority, RosterFilter, RosterState, SignalKind, TargetState, WorkspaceId,
+    Priority, RosterState, SignalKind, TargetState, WorkspaceId,
 };
-use k2_core::session::{registry, SessionId};
-
-static ROSTER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn workspace() -> WorkspaceId {
     WorkspaceId("k2so".into())

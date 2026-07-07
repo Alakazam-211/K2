@@ -151,6 +151,12 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # test binary run. Only active for cargo test / cargo bench.
 k2-core = { path = "../crates/k2-core", features = ["test-util"] }
 
+# benches/perf.rs drives raw SQLite inserts directly. rusqlite was removed
+# as a DIRECT dependency of this crate (Phase 2 close-out, 2026-05-23) but
+# the bench still needs it; dev-only, same bundled version k2-core pins,
+# so cargo reuses the one compiled artifact. Never ships in release.
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 # Sandbox dirs for the worktree command's path-safety unit tests.
 tempfile = "3"
 

@@ -834,7 +834,7 @@ mod migration_safety_tests {
     use crate::skills::version::{SKILL_BEGIN_MARKER, SKILL_END_MARKER};
     use crate::workspace::harness::{
         safe_symlink_harness_file, scaffold_aider_conf,
-        write_workspace_harness_discovery_targets, HARNESS_WORKSPACE_FILES,
+        write_workspace_harness_discovery_targets,
     };
     use crate::workspace::skill_regen::{
         content_hash_of, migrate_and_symlink_root_claude_md, mtime_secs, read_regen_hashes,

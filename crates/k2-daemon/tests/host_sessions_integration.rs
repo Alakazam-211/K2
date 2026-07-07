@@ -356,7 +356,7 @@ const SURFACE_OFF: &str = r#"{"error":"not found"}"#;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gate_off_host_sessions_are_surface_absent() {
     let _g = lock();
-    let _env = HostEnv::set(false);
+    let _env = HostEnv::set(false); // RAII guard — held to end of test
     let d = test_harness::start(OWNER_TOKEN).await;
 
     for (method, path, body) in [
@@ -523,7 +523,7 @@ async fn spawn_pins_cwd_mints_command_and_drops_caller_inputs() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn preset_env_reaches_spawned_child_environment() {
     let _g = lock();
-    let env = HostEnv::set(true);
+    let _env = HostEnv::set(true); // RAII guard — held to end of test (shim unused here)
     let d = test_harness::start(OWNER_TOKEN).await;
     setup_project("hs-preset-env");
 
@@ -608,7 +608,7 @@ async fn preset_env_reaches_spawned_child_environment() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_mapped_principal_key_reaches_child_environment() {
     let _g = lock();
-    let _env = HostEnv::set(true);
+    let _env = HostEnv::set(true); // RAII guard — held to end of test
     // The spawned PTY inherits this (daemon) process's env — scrub any
     // ambient credential vars so the ANTH_KEY_SEEN=unset assertion is about
     // K2's staging, not the developer's shell. Restored at the end.
@@ -720,7 +720,7 @@ async fn provider_mapped_principal_key_reaches_child_environment() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn uniform_404_for_unknown_ungranted_and_unknown_session() {
     let _g = lock();
-    let _env = HostEnv::set(true);
+    let _env = HostEnv::set(true); // RAII guard — held to end of test
     let d = test_harness::start(OWNER_TOKEN).await;
     setup_project("hs-uniform");
     let key = mint_api_key(d.port, "hs-elsewhere", "hs-some-other-ws").await;
@@ -764,7 +764,7 @@ async fn uniform_404_for_unknown_ungranted_and_unknown_session() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn canonical_session_is_off_limits_everywhere() {
     let _g = lock();
-    let _env = HostEnv::set(true);
+    let _env = HostEnv::set(true); // RAII guard — held to end of test
     let d = test_harness::start(OWNER_TOKEN).await;
     let ws_path = setup_project("hs-canon");
     let _ = ws_path;

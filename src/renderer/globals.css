@@ -44,7 +44,7 @@ body {
   background: var(--color-bg);
   color: var(--color-text-primary);
   overflow: hidden;
-  font-family: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -136,11 +136,11 @@ a,
     background: transparent;
   }
   .cm-editor .cm-scroller::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.25);
+    background: var(--color-scrollbar-thumb-strong);
     border-radius: 0;
   }
   .cm-editor .cm-scroller::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.4);
+    background: var(--color-scrollbar-thumb-strong-hover);
   }
   .cm-editor .cm-scroller::-webkit-scrollbar-corner {
     background: transparent;
@@ -166,7 +166,7 @@ a,
     height: 14px;
     min-width: 14px;
     background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    border: 1px solid var(--color-border-strong);
     cursor: pointer;
     position: relative;
     flex-shrink: 0;
@@ -183,7 +183,7 @@ a,
     top: 0px;
     width: 5px;
     height: 9px;
-    border: solid #fff;
+    border: solid var(--color-on-accent);
     border-width: 0 2px 2px 0;
     transform: rotate(45deg);
   }
@@ -197,7 +197,7 @@ a,
     color: var(--color-text-secondary) !important;
     padding: 3px 10px !important;
     font-size: 11px !important;
-    border-radius: 0 !important;
+    border-radius: var(--radius-field) !important;
     cursor: pointer;
     transition: background-color 150ms, color 150ms;
   }
@@ -220,7 +220,7 @@ a,
     transition: color 150ms !important;
   }
   .cm-panel.cm-search button[name="close"]:hover {
-    color: #f87171 !important;
+    color: var(--color-danger-hover) !important;
     background: transparent !important;
   }
   .cm-panel.cm-search input[type="text"],
@@ -262,8 +262,8 @@ a,
     border-left: 1px solid var(--color-border, #2a2a2a) !important;
   }
   .cm-minimap .cm-minimap-overlay {
-    background: rgba(255, 255, 255, 0.06) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    background: var(--color-overlay-soft-bg) !important;
+    border: 1px solid var(--color-overlay-soft-border) !important;
   }
 
   /* ── Git scrollbar annotations ──────────────────────────────────────── */
@@ -279,24 +279,24 @@ a,
 
   /* ── Git diff line highlights — gutter mode ─────────────────────────── */
   .cm-git-line-added {
-    background: rgba(34, 197, 94, 0.06) !important;
+    background: color-mix(in srgb, var(--color-status-ok) 6%, transparent) !important;
   }
   .cm-git-line-modified {
-    background: rgba(59, 130, 246, 0.06) !important;
+    background: color-mix(in srgb, var(--color-accent) 6%, transparent) !important;
   }
 
   /* ── Git diff line highlights — inline/PR mode ──────────────────────── */
   .cm-diff-line-added {
-    background: rgba(34, 197, 94, 0.12) !important;
-    border-left: 3px solid #22c55e;
+    background: color-mix(in srgb, var(--color-status-ok) 12%, transparent) !important;
+    border-left: 3px solid var(--color-status-ok);
   }
   .cm-diff-line-modified {
-    background: rgba(34, 197, 94, 0.10) !important;
-    border-left: 3px solid #86efac;
+    background: color-mix(in srgb, var(--color-status-ok) 10%, transparent) !important;
+    border-left: 3px solid var(--color-diff-modified-border);
   }
   .cm-diff-line-deleted {
-    background: rgba(239, 68, 68, 0.12) !important;
-    border-left: 3px solid #ef4444;
+    background: color-mix(in srgb, var(--color-status-error) 12%, transparent) !important;
+    border-left: 3px solid var(--color-status-error);
   }
 
   /* ── Git gutter ─────────────────────────────────────────────────────── */
@@ -316,16 +316,16 @@ a,
 /* ── react-mosaic overrides ──────────────────────────────────────────── */
 /* Strip default chrome so panes are borderless and dark */
 .mosaic-dark .mosaic-root {
-  background: #0a0a0a;
+  background: var(--color-bg-canvas);
 }
 
 .mosaic-dark .mosaic-tile {
-  margin: 1px;
+  margin: var(--gap-tile);
 }
 
 .mosaic-dark .mosaic-window,
 .mosaic-dark .mosaic-preview {
-  border-radius: 0;
+  border-radius: var(--radius-box);
   box-shadow: none;
 }
 
@@ -335,7 +335,7 @@ a,
 
 .mosaic-dark .mosaic-window-body {
   flex: 1;
-  background: #0a0a0a;
+  background: var(--color-bg);
 }
 
 .mosaic-dark .mosaic-split {
@@ -347,13 +347,13 @@ a,
 }
 
 .mosaic-dark .mosaic-split.-row {
-  width: 2px;
-  margin: 0 -1px;
+  width: var(--divider-width);
+  margin: 0 calc(var(--divider-width) / -2);
 }
 
 .mosaic-dark .mosaic-split.-column {
-  height: 2px;
-  margin: -1px 0;
+  height: var(--divider-width);
+  margin: calc(var(--divider-width) / -2) 0;
 }
 
 /* ── Markdown pane content ──────────────────────────────────────────── */
@@ -429,9 +429,9 @@ a,
 }
 
 .markdown-content pre {
-  background: #1a1a1a;
+  background: var(--color-bg-inset);
   border: 1px solid var(--color-border);
-  border-radius: 0;
+  border-radius: var(--radius-box);
   padding: 12px;
   margin: 0 0 12px 0;
   overflow-x: auto;
@@ -446,12 +446,12 @@ a,
 }
 
 .markdown-content code {
-  background: #1e1e1e;
-  color: #d7ba7d;
+  background: var(--color-bg-elevated);
+  color: var(--color-code-inline);
   padding: 2px 5px;
   font-size: 0.9em;
   font-family: 'MesloLGM Nerd Font', Menlo, Monaco, monospace;
-  border-radius: 0;
+  border-radius: var(--radius-box);
 }
 
 .markdown-content ul {
@@ -485,7 +485,7 @@ a,
   margin: 0 0 12px 0;
   padding: 8px 16px;
   border-left: 3px solid var(--color-accent);
-  background: #111111;
+  background: var(--color-bg-stripe);
   color: var(--color-text-muted);
 }
 
@@ -501,7 +501,7 @@ a,
 }
 
 .markdown-content thead th {
-  background: #1a1a1a;
+  background: var(--color-bg-inset);
   color: var(--color-text-primary);
   font-weight: 600;
   text-align: left;
@@ -516,11 +516,11 @@ a,
 }
 
 .markdown-content tbody tr:nth-child(even) {
-  background: #111111;
+  background: var(--color-bg-stripe);
 }
 
 .markdown-content tbody tr:nth-child(odd) {
-  background: #0a0a0a;
+  background: var(--color-bg);
 }
 
 .markdown-content hr {
@@ -554,12 +554,12 @@ a,
 }
 
 .markdown-content::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-scrollbar-thumb);
   border-radius: 0;
 }
 
 .markdown-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--color-scrollbar-thumb-hover);
 }
 
 /* ── Shiki code highlighting ────────────────────────────────────────── */
@@ -581,7 +581,7 @@ a,
 
 /* Within markdown, Shiki blocks need to match markdown code block styling */
 .markdown-content .code-highlighted pre {
-  background: #1a1a1a !important;
+  background: var(--color-bg-inset) !important;
   border: 1px solid var(--color-border);
   padding: 12px;
   margin: 0 0 12px 0;
@@ -685,7 +685,7 @@ a,
 }
 
 .docx-body th {
-  background: #1a1a1a;
+  background: var(--color-bg-inset);
   color: var(--color-text-primary);
   font-weight: 600;
   text-align: left;
@@ -700,11 +700,11 @@ a,
 }
 
 .docx-body tr:nth-child(even) {
-  background: #111111;
+  background: var(--color-bg-stripe);
 }
 
 .docx-body tr:nth-child(odd) {
-  background: #0a0a0a;
+  background: var(--color-bg);
 }
 
 .docx-body img {
@@ -716,7 +716,7 @@ a,
   margin: 0 0 12px 0;
   padding: 8px 16px;
   border-left: 3px solid var(--color-accent);
-  background: #111111;
+  background: var(--color-bg-stripe);
   color: var(--color-text-muted);
 }
 
@@ -750,12 +750,12 @@ a,
 }
 
 .docx-body::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-scrollbar-thumb);
   border-radius: 0;
 }
 
 .docx-body::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--color-scrollbar-thumb-hover);
 }
 
 /* ── Status dot pulse animation ───────────────────────────────────── */
@@ -785,7 +785,7 @@ a,
   right: 2px;
   width: 4px;
   height: 4px;
-  background: #f59e0b;
+  background: var(--color-status-warn);
 }
 
 /* ── Terminal activity indicator ───────────────────────────────── */
@@ -824,12 +824,12 @@ a,
 }
 
 .xterm-viewport::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-scrollbar-thumb);
   border-radius: 0;
 }
 
 .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--color-scrollbar-thumb-hover);
 }
 
 /* Tab bar horizontal scroll — hidden scrollbar, scroll via trackpad/wheel */
@@ -854,7 +854,7 @@ a,
   appearance: none;
   width: 10px;
   height: 10px;
-  background: white;
+  background: var(--color-on-accent);
   border: none;
   cursor: pointer;
 }
@@ -871,38 +871,38 @@ a,
 }
 
 @keyframes agent-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.4); }
-  50% { opacity: 0.7; box-shadow: 0 0 0 3px rgba(249, 115, 22, 0); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-status-working) 40%, transparent); }
+  50% { opacity: 0.7; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-status-working) 0%, transparent); }
 }
 
 /* Agent working dot (orange pulse) */
 .agent-dot-working {
   border-radius: 50%;
-  background-color: #f97316;
+  background-color: var(--color-status-working);
   animation: agent-pulse-working 1.5s infinite;
 }
 
 @keyframes agent-pulse-working {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.5); }
-  50% { opacity: 0.6; box-shadow: 0 0 0 3px rgba(249, 115, 22, 0); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-status-working) 50%, transparent); }
+  50% { opacity: 0.6; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-status-working) 0%, transparent); }
 }
 
 /* Agent permission dot (red pulse) */
 .agent-dot-permission {
   border-radius: 50%;
-  background-color: #ef4444;
+  background-color: var(--color-status-error);
   animation: agent-pulse-permission 1s infinite;
 }
 
 @keyframes agent-pulse-permission {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
-  50% { opacity: 0.6; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-status-error) 50%, transparent); }
+  50% { opacity: 0.6; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-status-error) 0%, transparent); }
 }
 
 /* Agent review dot (green static) */
 .agent-dot-review {
   border-radius: 50%;
-  background-color: #22c55e;
+  background-color: var(--color-status-ok);
 }
 
 /* Braille spinner */
@@ -928,13 +928,13 @@ a,
 /* ── Diff view ─────────────────────────────────────────────────────────── */
 
 .diff-line-add {
-  background: rgba(34, 197, 94, 0.08);
-  color: #a3e635;
+  background: color-mix(in srgb, var(--color-status-ok) 8%, transparent);
+  color: var(--color-diff-add-text);
 }
 
 .diff-line-remove {
-  background: rgba(239, 68, 68, 0.08);
-  color: #fca5a5;
+  background: color-mix(in srgb, var(--color-status-error) 8%, transparent);
+  color: var(--color-diff-remove-text);
 }
 
 .diff-line-context {
@@ -983,8 +983,8 @@ a,
 
 @keyframes settings-search-pulse {
   0%, 100% { background-color: transparent; }
-  15%      { background-color: rgba(147, 197, 253, 0.25); }
-  50%      { background-color: rgba(147, 197, 253, 0.15); }
+  15%      { background-color: color-mix(in srgb, var(--color-accent-soft) 25%, transparent); }
+  50%      { background-color: color-mix(in srgb, var(--color-accent-soft) 15%, transparent); }
 }
 
 .settings-search-pulse {

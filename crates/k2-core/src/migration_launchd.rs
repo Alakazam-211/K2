@@ -18,6 +18,7 @@
 //! Idempotent: a label whose plist no longer exists is skipped; bootout
 //! of a non-running label is ignored. macOS-only (no-op elsewhere).
 
+#[cfg(target_os = "macos")] // only the mac arm of migrate_launchd_labels touches paths
 use std::path::PathBuf;
 
 /// (old label, new label) pairs — new labels listed for the log only;

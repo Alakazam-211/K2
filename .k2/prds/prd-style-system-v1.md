@@ -1,6 +1,6 @@
 # PRD — K2 Style System V1 ("Styles")
 
-**Date:** 2026-07-06 · **Owner:** Rosson · **Status:** IN BUILD — P1 started 2026-07-06 on `feat/style-system` (ST6: nothing touches main until Checkpoint A passes)
+**Date:** 2026-07-06 · **Owner:** Rosson · **Status:** P1+P3+P4 BUILT + P2 color waves done (2026-07-07, `feat/style-system`, ~20 commits) — awaiting Rosson's combined checkpoint test (parity 9/9 byte-identical; Paper QA-verified; Spacious QA-verified after overlay-inset fix). Remaining: P2 primitives + lint ratchet, P5 Glass, P6 Bezel, P7 community CI, P8 release.
 **Research SSOT:** `.k2/notes/design-system-skins-research.md` (zite forensics, styling audit, architecture, Liquid Glass feasibility — all claims there are cited)
 
 ---

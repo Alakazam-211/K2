@@ -343,7 +343,11 @@ pub fn relaunch_via_open(_app: AppHandle) {
                     "#!/bin/bash\n\
                      # K2SO relaunch helper — waits for old process to exit, then reopens\n\
                      while kill -0 {pid} 2>/dev/null; do sleep 0.2; done\n\
-                     sleep 0.5\n\
+                     # 1.5s (was 0.5s): the old instance's WebKit helper\n\
+                     # processes can outlive the main PID briefly; launching\n\
+                     # into that window risks a webview that never commits\n\
+                     # its first navigation (black screen after self-update).\n\
+                     sleep 1.5\n\
                      open -a \"{bundle_path}\"\n\
                      rm -f \"$0\"\n"
                 );

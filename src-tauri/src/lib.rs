@@ -470,6 +470,27 @@ fn watchdog_decision(
     }
 }
 
+/// Append one line to `~/.k2/webview-watchdog.log` — the field log we ask
+/// users for when the window comes up black. Every recovery attempt (and
+/// the final give-up) writes here with distinct wording so a log alone
+/// tells us which path ran and how it went. Best-effort: never fails the
+/// watchdog.
+fn watchdog_field_log(line: &str) {
+    if let Ok(home) = std::env::var("HOME") {
+        let log_path = std::path::Path::new(&home)
+            .join(".k2")
+            .join("webview-watchdog.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
 /// Stage the bundled `frpc` tunnel client (shipped as a Tauri
 /// externalBin sidecar at `Contents/MacOS/frpc`) out to
 /// `~/.k2so/bin/frpc`, where the daemon's `resolve_frpc` finds it.
@@ -1128,6 +1149,24 @@ pub fn run() {
             // error sheet if reloads don't bring it back.
             if let Some(win) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
+                // Capture the app URL NOW, at spawn time, before anything can
+                // break — the hard-renavigate fallback below needs a known-good
+                // destination even when the webview's own URL has gone blank.
+                // If it's already unreadable/blank (pathological launch),
+                // reconstruct from config: dev → the configured devUrl, prod →
+                // the tauri://localhost custom-protocol origin.
+                let app_url = win
+                    .url()
+                    .ok()
+                    .filter(|u| !u.as_str().is_empty() && u.as_str() != "about:blank")
+                    .or_else(|| {
+                        if tauri::is_dev() {
+                            app.config().build.dev_url.clone()
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| "tauri://localhost".parse().ok());
                 std::thread::spawn(move || {
                     use std::sync::atomic::Ordering;
                     // Check cadence. Recovery latency ≈ MIN_STALE_STREAK
@@ -1181,11 +1220,68 @@ pub fn run() {
                                 stale_streak += 1;
                                 reloads += 1;
                                 log_debug!(
-                                    "[webview-watchdog] renderer heartbeat stale — reloading webview \
+                                    "[webview-watchdog] renderer heartbeat stale — recovering webview \
                                      (attempt {reloads}/{MAX_RELOADS})"
                                 );
-                                // Programmatic equivalent of right-click → Reload.
-                                let _ = win.eval("window.location.reload()");
+                                // ROOT CAUSE of the post-self-update black
+                                // screen: this used to be
+                                // `win.eval("window.location.reload()")`, which
+                                // needs a LIVE JS context in the very webview
+                                // it's trying to rescue — circular. When the
+                                // first navigation never commits (dead content
+                                // process after an update relaunch), all three
+                                // evals fail and the window stays black
+                                // (~/.k2/webview-watchdog.log proved exactly
+                                // that in the field). Recover natively instead:
+                                // WKWebView's reload works with a dead JS
+                                // context and respawns the content process.
+                                //
+                                // Native reload still needs a COMMITTED page to
+                                // reload, so when the current URL is blank /
+                                // off-app (nothing ever committed), or this is
+                                // the last budgeted attempt, escalate to a hard
+                                // renavigate to the app URL captured at spawn.
+                                let current_off_app = match win.url() {
+                                    // Can't even read the URL — treat the
+                                    // webview as off-app and renavigate.
+                                    Err(_) => true,
+                                    Ok(u) if u.as_str().is_empty() || u.as_str() == "about:blank" => true,
+                                    Ok(u) => match app_url.as_ref() {
+                                        Some(app) => u != *app,
+                                        None => false,
+                                    },
+                                };
+                                let last_attempt = reloads >= MAX_RELOADS;
+                                let renav_target = if last_attempt || current_off_app {
+                                    app_url.clone()
+                                } else {
+                                    None
+                                };
+                                if let Some(target) = renav_target {
+                                    let outcome = match win.navigate(target.clone()) {
+                                        Ok(()) => "ok".to_string(),
+                                        Err(e) => format!("err: {e}"),
+                                    };
+                                    log_debug!(
+                                        "[webview-watchdog] renavigate attempted to {target} \
+                                         (attempt {reloads}/{MAX_RELOADS}) -> {outcome}"
+                                    );
+                                    watchdog_field_log(&format!(
+                                        "renavigate attempted to {target} (attempt {reloads}/{MAX_RELOADS}) -> {outcome}",
+                                    ));
+                                } else {
+                                    let outcome = match win.reload() {
+                                        Ok(()) => "ok".to_string(),
+                                        Err(e) => format!("err: {e}"),
+                                    };
+                                    log_debug!(
+                                        "[webview-watchdog] native reload attempted \
+                                         (attempt {reloads}/{MAX_RELOADS}) -> {outcome}"
+                                    );
+                                    watchdog_field_log(&format!(
+                                        "native reload attempted (attempt {reloads}/{MAX_RELOADS}) -> {outcome}",
+                                    ));
+                                }
                             }
                             WatchdogAction::GiveUp => {
                                 // Show the error sheet + log ONCE per stale
@@ -1196,24 +1292,11 @@ pub fn run() {
                                     gave_up = true;
                                     log_debug!(
                                         "[webview-watchdog] renderer still silent after {MAX_RELOADS} \
-                                         reloads — giving up; surfacing error sheet"
+                                         recovery attempts — giving up; surfacing error sheet"
                                     );
-                                    if let Ok(home) = std::env::var("HOME") {
-                                        let log_path = std::path::Path::new(&home)
-                                            .join(".k2")
-                                            .join("webview-watchdog.log");
-                                        if let Ok(mut f) = std::fs::OpenOptions::new()
-                                            .create(true)
-                                            .append(true)
-                                            .open(&log_path)
-                                        {
-                                            use std::io::Write;
-                                            let _ = writeln!(
-                                                f,
-                                                "renderer JS unresponsive; {MAX_RELOADS} programmatic reloads failed",
-                                            );
-                                        }
-                                    }
+                                    watchdog_field_log(&format!(
+                                        "renderer JS unresponsive; {MAX_RELOADS} native recovery attempts failed",
+                                    ));
                                     use tauri_plugin_dialog::DialogExt;
                                     handle
                                         .dialog()

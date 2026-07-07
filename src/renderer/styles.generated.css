@@ -54,8 +54,12 @@
   --color-status-warn: #f59e0b;
   --color-status-ok-soft: #4ade80;
   --color-status-warn-soft: #eab308;
+  --color-status-error-soft: #f87171;
   --color-neutral: #6b7280;
   --color-control-track-off: #333333;
+  --color-wash-1: rgba(255, 255, 255, 0.05);
+  --color-wash-2: rgba(255, 255, 255, 0.1);
+  --color-wash-3: rgba(255, 255, 255, 0.2);
   --color-diff-add-text: #a3e635;
   --color-diff-remove-text: #fca5a5;
   --color-diff-modified-border: #86efac;
@@ -159,8 +163,12 @@
   --color-status-warn: #f59e0b;
   --color-status-ok-soft: #4ade80;
   --color-status-warn-soft: #eab308;
+  --color-status-error-soft: #f87171;
   --color-neutral: #6b7280;
   --color-control-track-off: #333333;
+  --color-wash-1: rgba(255, 255, 255, 0.05);
+  --color-wash-2: rgba(255, 255, 255, 0.1);
+  --color-wash-3: rgba(255, 255, 255, 0.2);
   --color-diff-add-text: #a3e635;
   --color-diff-remove-text: #fca5a5;
   --color-diff-modified-border: #86efac;
@@ -216,8 +224,12 @@
   --color-status-warn: #d97706;
   --color-status-ok-soft: #22c55e;
   --color-status-warn-soft: #ca8a04;
+  --color-status-error-soft: #b91c1c;
   --color-neutral: #6b7280;
   --color-control-track-off: #d4d4d8;
+  --color-wash-1: rgba(0, 0, 0, 0.04);
+  --color-wash-2: rgba(0, 0, 0, 0.08);
+  --color-wash-3: rgba(0, 0, 0, 0.16);
   --color-diff-add-text: #3f6212;
   --color-diff-remove-text: #b91c1c;
   --color-diff-modified-border: #4ade80;

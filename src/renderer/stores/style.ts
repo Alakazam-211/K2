@@ -15,7 +15,7 @@
 // ConnectionGate's deferred-import contract.
 
 import { create } from 'zustand'
-import type { StyleScheme } from '@/styles.generated'
+import { STYLES, type StyleMeta, type StyleScheme } from '@/styles.generated'
 import {
   DEFAULT_SELECTION,
   parseSchemeMode,
@@ -24,6 +24,7 @@ import {
   type SchemeMode,
   type StyleSelection,
 } from '@/lib/style-resolve'
+import { dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
 
 // ── localStorage mirror keys (dotted convention, see index.html) ─────
 const LS_STYLE = 'k2.style'
@@ -55,6 +56,28 @@ function osPrefersLight(): boolean {
   )
 }
 
+/** Stamp the style's dial tokens as inline custom properties on <html>.
+ *  Every dial token ANY style declares is cleared first (the registry
+ *  makes the full list enumerable), so switching styles never leaves a
+ *  stale dial value behind. Values come from the localStorage
+ *  `k2.dial.<styleId>.<dialId>` keys, falling back to each dial's
+ *  declared default (clamped — see lib/style-dials). */
+function stampDialProperties(style: StyleMeta): void {
+  const html = document.documentElement
+  for (const s of STYLES) {
+    for (const d of s.dials) html.style.removeProperty(d.token)
+  }
+  for (const dial of style.dials) {
+    let raw: string | null = null
+    try {
+      raw = localStorage.getItem(dialStorageKey(style.id, dial.id))
+    } catch {
+      // Privacy-mode storage failure → the dial rests at its default.
+    }
+    html.style.setProperty(dial.token, formatDialValue(dial, resolveDialValue(dial, raw)))
+  }
+}
+
 /** Stamp the resolved selection onto <html>. Exported for the Settings
  *  page's hover-preview, which is deliberately attribute-level only
  *  (no store/state/persistence writes) so a stray hover can never race
@@ -71,6 +94,7 @@ export function stampStyleAttributes(sel: StyleSelection): void {
   html.setAttribute('data-scheme', resolvedScheme)
   if (gapsPreset) html.setAttribute('data-gaps', gapsPreset)
   else html.removeAttribute('data-gaps')
+  stampDialProperties(style)
 }
 
 function writeMirror(sel: StyleSelection): void {

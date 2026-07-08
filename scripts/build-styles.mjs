@@ -151,6 +151,38 @@ function buildPaletteDecls(file, palette) {
   return lines
 }
 
+// Dials: user-adjustable knobs a manifest advertises (Settings→Styles).
+// Each dial writes one CSS custom property; values live in localStorage
+// (`k2.dial.<styleId>.<dialId>`) client-side, so the generator only has
+// to validate the METADATA — loudly, like every other contract slot.
+function buildDials(file, manifest) {
+  const dials = manifest.dials ?? []
+  if (!Array.isArray(dials)) fail(`${file}: "dials" must be an array`)
+  const seen = new Set()
+  for (const dial of dials) {
+    if (typeof dial !== 'object' || dial === null) fail(`${file}: each dial must be an object`)
+    for (const key of ['id', 'label', 'token', 'min', 'max']) {
+      if (dial[key] === undefined) fail(`${file}: dial is missing required field "${key}"`)
+    }
+    if (!/^[a-z][a-z0-9-]*$/.test(dial.id)) fail(`${file}: dial id "${dial.id}" must be kebab-case`)
+    if (seen.has(dial.id)) fail(`${file}: duplicate dial id "${dial.id}"`)
+    seen.add(dial.id)
+    if (typeof dial.token !== 'string' || !dial.token.startsWith('--'))
+      fail(`${file}: dial "${dial.id}" token "${dial.token}" must be a CSS custom property (start with --)`)
+    if (typeof dial.min !== 'number' || typeof dial.max !== 'number' || !(dial.min < dial.max))
+      fail(`${file}: dial "${dial.id}" needs numeric min < max (got min=${dial.min}, max=${dial.max})`)
+    if (dial.step !== undefined && (typeof dial.step !== 'number' || dial.step <= 0))
+      fail(`${file}: dial "${dial.id}" step must be a positive number`)
+    if (dial.unit !== undefined && typeof dial.unit !== 'string')
+      fail(`${file}: dial "${dial.id}" unit must be a string`)
+    if (dial.default !== undefined) {
+      if (typeof dial.default !== 'number' || dial.default < dial.min || dial.default > dial.max)
+        fail(`${file}: dial "${dial.id}" default ${dial.default} must lie within [${dial.min}, ${dial.max}]`)
+    }
+  }
+  return dials
+}
+
 function loadStyle(id) {
   const dir = join(STYLES_DIR, id)
   const manifestFile = relative(ROOT, join(dir, 'style.json'))
@@ -160,6 +192,7 @@ function loadStyle(id) {
   }
   if (manifest.id !== id) fail(`${manifestFile}: id "${manifest.id}" must match folder name "${id}"`)
   if (manifest.schemaVersion !== 1) fail(`${manifestFile}: unsupported schemaVersion ${manifest.schemaVersion}`)
+  const dials = buildDials(manifestFile, manifest)
 
   const tokensFile = relative(ROOT, join(dir, 'tokens.json'))
   const tokensJson = readJson(join(dir, 'tokens.json'))
@@ -221,7 +254,7 @@ function loadStyle(id) {
       fail(`${manifestFile}: defaultPalettes.${scheme} set but capabilities.schemes lacks "${scheme}"`)
   }
 
-  return { manifest, tokenDecls, gapPresets, palettes, overridesCss }
+  return { manifest, dials, tokenDecls, gapPresets, palettes, overridesCss }
 }
 
 // ── Build ────────────────────────────────────────────────────────────
@@ -313,6 +346,7 @@ const registry = styles.map((s) => ({
   defaultPalettes: s.manifest.defaultPalettes ?? {},
   capabilities: s.manifest.capabilities,
   gapPresets: Object.keys(s.gapPresets),
+  dials: s.dials,
   palettes: s.palettes.map(paletteMeta),
 }))
 
@@ -339,6 +373,23 @@ export interface StylePaletteMeta {
   terminal: StyleTerminalColors
 }
 
+/** A user-adjustable knob the style's manifest advertises. The dial
+ *  writes \`token\` as an inline custom property on <html>; values are
+ *  per-user (localStorage \`k2.dial.<styleId>.<dialId>\`). */
+export interface StyleDialMeta {
+  id: string
+  label: string
+  /** CSS custom property the dial writes, e.g. --material-blur. */
+  token: string
+  min: number
+  max: number
+  step?: number
+  /** Unit appended when writing the token, e.g. 'px'. */
+  unit?: string
+  /** Resting value when the user hasn't adjusted the dial. */
+  default?: number
+}
+
 export interface StyleMeta {
   id: string
   name: string
@@ -348,6 +399,7 @@ export interface StyleMeta {
   defaultPalettes: Partial<Record<StyleScheme, string>>
   capabilities: { gaps: boolean; backdrop: boolean; schemes: readonly StyleScheme[] }
   gapPresets: readonly string[]
+  dials: readonly StyleDialMeta[]
   palettes: readonly StylePaletteMeta[]
 }
 

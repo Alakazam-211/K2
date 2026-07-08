@@ -21,6 +21,23 @@ export interface StylePaletteMeta {
   terminal: StyleTerminalColors
 }
 
+/** A user-adjustable knob the style's manifest advertises. The dial
+ *  writes `token` as an inline custom property on <html>; values are
+ *  per-user (localStorage `k2.dial.<styleId>.<dialId>`). */
+export interface StyleDialMeta {
+  id: string
+  label: string
+  /** CSS custom property the dial writes, e.g. --material-blur. */
+  token: string
+  min: number
+  max: number
+  step?: number
+  /** Unit appended when writing the token, e.g. 'px'. */
+  unit?: string
+  /** Resting value when the user hasn't adjusted the dial. */
+  default?: number
+}
+
 export interface StyleMeta {
   id: string
   name: string
@@ -30,6 +47,7 @@ export interface StyleMeta {
   defaultPalettes: Partial<Record<StyleScheme, string>>
   capabilities: { gaps: boolean; backdrop: boolean; schemes: readonly StyleScheme[] }
   gapPresets: readonly string[]
+  dials: readonly StyleDialMeta[]
   palettes: readonly StylePaletteMeta[]
 }
 
@@ -53,6 +71,7 @@ export const STYLES: readonly StyleMeta[] = [
       ]
     },
     "gapPresets": [],
+    "dials": [],
     "palettes": [
       {
         "id": "graphite",
@@ -118,6 +137,18 @@ export const STYLES: readonly StyleMeta[] = [
       ]
     },
     "gapPresets": [],
+    "dials": [
+      {
+        "id": "frost",
+        "label": "Frost",
+        "token": "--material-blur",
+        "min": 0,
+        "max": 30,
+        "step": 1,
+        "unit": "px",
+        "default": 18
+      }
+    ],
     "palettes": [
       {
         "id": "obsidian",
@@ -188,6 +219,7 @@ export const STYLES: readonly StyleMeta[] = [
       "regular",
       "spacious"
     ],
+    "dials": [],
     "palettes": [
       {
         "id": "charcoal",

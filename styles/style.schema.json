@@ -59,7 +59,9 @@
               "token": { "type": "string", "description": "CSS custom property the dial writes, e.g. --material-tint-opacity." },
               "min": { "type": "number" },
               "max": { "type": "number" },
-              "step": { "type": "number" }
+              "step": { "type": "number" },
+              "unit": { "type": "string", "description": "CSS unit appended to the value when writing the token, e.g. \"px\"." },
+              "default": { "type": "number", "description": "Value used when the user hasn't adjusted the dial. Must lie within [min, max]." }
             }
           }
         }

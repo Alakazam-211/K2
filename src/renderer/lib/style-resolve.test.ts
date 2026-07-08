@@ -36,6 +36,7 @@ const fake: StyleMeta = {
   defaultPalettes: { dark: 'ink', light: 'chalk' },
   capabilities: { gaps: true, backdrop: false, schemes: ['dark', 'light'] },
   gapPresets: ['regular', 'spacious'],
+  dials: [],
   palettes: [
     { id: 'ink', name: 'Ink', schemes: ['dark'], swatch: swatchStub, terminal: terminalStub },
     { id: 'chalk', name: 'Chalk', schemes: ['light'], swatch: swatchStub, terminal: terminalStub },

@@ -16,8 +16,10 @@ import React, { useCallback, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { stampStyleAttributes, useStyleStore } from '@/stores/style'
 import type { StyleSelection } from '@/lib/style-resolve'
+import { dialDefault, dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
 import {
   STYLES,
+  type StyleDialMeta,
   type StyleMeta,
   type StylePaletteMeta,
   type StyleScheme,
@@ -32,6 +34,7 @@ export const STYLES_MANIFEST: SettingEntry[] = [
   { id: 'styles.palette', section: 'styles', label: 'Palette', description: 'Color palette within the selected style', keywords: ['palette', 'color', 'colors', 'theme', 'charcoal', 'paper', 'dark mode', 'light mode'] },
   { id: 'styles.scheme', section: 'styles', label: 'Scheme', description: 'Light / Dark / Auto — Auto follows the OS appearance', keywords: ['scheme', 'light', 'dark', 'auto', 'appearance', 'mode', 'night', 'day', 'os'] },
   { id: 'styles.density', section: 'styles', label: 'Density', description: 'Compact / Regular / Spacious gaps between panes and tiles', keywords: ['density', 'gaps', 'spacing', 'compact', 'regular', 'spacious', 'padding', 'tiles'] },
+  { id: 'styles.dials', section: 'styles', label: 'Dials', description: 'Style-specific adjustments the active style advertises (e.g. Glass frost)', keywords: ['dials', 'dial', 'knobs', 'frost', 'blur', 'adjust', 'tweak', 'slider', 'glass'] },
 ]
 
 const SCHEME_OPTIONS: { id: 'light' | 'dark' | 'auto'; label: string }[] = [
@@ -131,6 +134,48 @@ export function StylesSection(): React.JSX.Element {
 
   const handleDensityClick = (preset: string): void => {
     commit({ ...baseSel, gapsPreset: preset })
+  }
+
+  // ── Dials — the active style's manifest-advertised knobs ──────────
+  // Values are per-user, per-style (localStorage k2.dial.<style>.<dial>)
+  // and applied as inline custom properties on <html>; the style store
+  // re-stamps them on every apply, so this UI only needs to write the
+  // token live + persist. Local state mirrors the values for readouts.
+  const [dialValues, setDialValues] = useState<Record<string, number>>({})
+
+  const dialValue = (dial: StyleDialMeta): number => {
+    const key = dialStorageKey(selectedStyle.id, dial.id)
+    if (key in dialValues) return dialValues[key]
+    let raw: string | null = null
+    try {
+      raw = localStorage.getItem(key)
+    } catch {
+      // Privacy-mode storage failure → rest at the default.
+    }
+    return resolveDialValue(dial, raw)
+  }
+
+  const handleDialInput = (dial: StyleDialMeta, value: number): void => {
+    const key = dialStorageKey(selectedStyle.id, dial.id)
+    document.documentElement.style.setProperty(dial.token, formatDialValue(dial, value))
+    try {
+      localStorage.setItem(key, String(value))
+    } catch {
+      // Value still applies live; it just won't survive a relaunch.
+    }
+    setDialValues((m) => ({ ...m, [key]: value }))
+  }
+
+  const handleDialReset = (dial: StyleDialMeta): void => {
+    const key = dialStorageKey(selectedStyle.id, dial.id)
+    const value = dialDefault(dial)
+    document.documentElement.style.setProperty(dial.token, formatDialValue(dial, value))
+    try {
+      localStorage.removeItem(key)
+    } catch {
+      // Best-effort; the live value is already back at the default.
+    }
+    setDialValues((m) => ({ ...m, [key]: value }))
   }
 
   const schemeDisabled = (mode: 'light' | 'dark' | 'auto'): string | null => {
@@ -340,6 +385,47 @@ export function StylesSection(): React.JSX.Element {
             </div>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
               Gaps between panes, tiles and sections. Compact is {selectedStyle.name}&apos;s flush default.
+            </div>
+          </div>
+        )}
+
+        {/* Dials — manifest-advertised knobs; only for the ACTIVE style
+            (a dial tweaks the LIVE style, not a preview of another one) */}
+        {selectedIsActive && selectedStyle.dials.length > 0 && (
+          <div className="mb-6" data-settings-id="styles.dials">
+            <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
+              Dials
+            </div>
+            <div className="flex flex-col gap-2">
+              {selectedStyle.dials.map((dial) => {
+                const value = dialValue(dial)
+                return (
+                  <div key={dial.id} className="flex items-center gap-3">
+                    <span className="w-20 text-[11px] text-[var(--color-text-secondary)]">{dial.label}</span>
+                    <input
+                      type="range"
+                      min={dial.min}
+                      max={dial.max}
+                      step={dial.step ?? 1}
+                      value={value}
+                      onChange={(e) => handleDialInput(dial, Number(e.target.value))}
+                      className="w-40 no-drag k2so-slider"
+                    />
+                    <span className="w-12 text-[11px] text-[var(--color-text-muted)] tabular-nums">
+                      {formatDialValue(dial, value)}
+                    </span>
+                    <button
+                      onClick={() => handleDialReset(dial)}
+                      className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
+              {selectedStyle.name}&apos;s own adjustments — saved on this machine.
             </div>
           </div>
         )}

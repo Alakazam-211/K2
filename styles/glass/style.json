@@ -14,5 +14,8 @@
     "gaps": false,
     "backdrop": true,
     "schemes": ["dark"]
-  }
+  },
+  "dials": [
+    { "id": "frost", "label": "Frost", "token": "--material-blur", "min": 0, "max": 30, "step": 1, "unit": "px", "default": 18 }
+  ]
 }

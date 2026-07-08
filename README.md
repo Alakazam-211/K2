@@ -29,6 +29,9 @@ Reach your machine from anywhere. **K2 Connect** exposes your local K2 daemon ov
 
 K2 Connect's hosting backbone (tunnel control plane + relay) runs on dedicated infrastructure and lives in a **separate, private repository** — this open-core repo is the K2 app and daemon; the hosted relay is the closed half.
 
+### Styles
+K2's whole visual language is data. Pick a **Style** in Settings → Styles — **Square** (the classic flat look), **Liquid Glass** (frosted translucency), or **Bezel** (layered-ring cards) — then a palette within it (including **Paper**, a warm light mode), a Light/Dark/**Auto** scheme, and a density from flush to spacious. Terminal ANSI colors switch with the palette. Styles are schema-validated packages under [`styles/`](styles/) — community Styles and palettes arrive by PR ([CONTRIBUTING-STYLES.md](CONTRIBUTING-STYLES.md)).
+
 ### AI Workspace Assistant (Cmd+L)
 A local LLM (GGUF via llama.cpp with Metal acceleration) translates natural language into workspace operations -- split panes, open files, launch terminals, arrange layouts -- without leaving the keyboard.
 

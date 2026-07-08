@@ -1,0 +1,68 @@
+# Style System CI — validates Style packages (styles/) on PRs and captures
+# the per-style screenshot matrix as a reviewable artifact.
+#
+# Community contract (see CONTRIBUTING-STYLES.md): Styles are data folders
+# validated by scripts/build-styles.mjs — required slots, bounded
+# overrides.css, committed generated outputs. This workflow is the
+# enforcement half; the screenshot job gives reviewers eyes on every
+# submitted configuration without checking out the branch.
+
+name: styles
+
+on:
+  pull_request:
+    paths:
+      - 'styles/**'
+      - 'scripts/build-styles.mjs'
+      - 'scripts/check-style-lint.mjs'
+      - 'src/renderer/styles.generated.css'
+      - 'src/renderer/styles.generated.ts'
+      - 'tests/parity/**'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: schema + generated outputs + lint ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate style packages + generated outputs are current
+        run: bun run styles:check
+
+      - name: Style lint ratchet (no new raw colors)
+        run: bun run styles:lint
+
+      - name: Typecheck (registry compiles)
+        run: bun run typecheck:web
+
+  screenshots:
+    name: per-style screenshot matrix
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright WebKit
+        run: bunx playwright install --with-deps webkit
+
+      - name: Capture style QA matrix
+        run: bunx playwright test --config tests/parity/qa-styles.config.ts
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: style-screenshots
+          path: tests/parity/shots/qa-*/
+          retention-days: 14

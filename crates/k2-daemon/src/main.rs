@@ -68,6 +68,10 @@ mod heartbeat_routes;
 mod inbox_routes;
 mod llm_host;
 mod llm_routes;
+// K2 Mail foundation (prd-email-server-v1) — Stalwart-sidecar mail
+// family (supervisor/jmap/doctor skeletons + `/cli/mail/*` handlers).
+mod mail;
+mod mail_routes;
 mod misc_routes;
 mod ops_routes;
 mod ops_stream_ws;

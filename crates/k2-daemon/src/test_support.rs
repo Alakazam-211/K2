@@ -87,6 +87,16 @@ pub(crate) fn with_temp_home<F: FnOnce()>(f: F) {
     f();
 }
 
+/// Hold the crate-wide [`home_lock`] WITHOUT swapping `$HOME` — for tests
+/// that must hand-roll their own (deliberately SHORT) `$HOME` because a
+/// Unix-socket path is capped at `SUN_LEN` (~104 bytes) and [`TempHome`]'s
+/// tempdir path blows past it (see `cell_uds`'s tests). Such tests still
+/// mutate the process-global `$HOME`, so they MUST serialize with every
+/// other HOME mutator on this same lock.
+pub(crate) fn lock_home() -> MutexGuard<'static, ()> {
+    home_lock().lock().unwrap_or_else(|e| e.into_inner())
+}
+
 // ── Shared agent-hooks capture sink ───────────────────────────────────
 //
 // The agent-hooks sink slot (`k2_core::agent_hooks::set_sink`) is

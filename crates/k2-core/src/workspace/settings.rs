@@ -78,8 +78,23 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // writes this via `/cli/workspace/set` (validating the preset
         // CLI-side first).
         "default_agent",
+        // K2 Mail (prd-email-server-v1 §12 / D4) — per-workspace
+        // agent-send gating override. Values: 'off' | 'approval' | 'on'
+        // (write-validated below); NULL = inherit the global
+        // `AppSettings.mail_agent_send` default. Effective resolver:
+        // `mail_agent_send_for_path` (fail-closed to 'off').
+        "mail_agent_send",
+        // K2 Mail (prd-email-server-v1 §12 / D6) — per-workspace
+        // address-cap override. Non-negative integer, 0 = unlimited
+        // (write-validated below); NULL = inherit the global
+        // `AppSettings.mail_address_cap` default (5). Effective
+        // resolver: `mail_address_cap_for_path`.
+        "mail_address_cap",
     ]
 }
+
+/// The valid `mail_agent_send` gating modes (PRD §8.4 / D4).
+pub const MAIL_AGENT_SEND_MODES: [&str; 3] = ["off", "approval", "on"];
 
 /// Update a single project setting. Field names are allowlisted —
 /// the SQL interpolates the column name directly so any arbitrary
@@ -136,6 +151,21 @@ pub fn update_project_setting(
     if field == "use_session_stream" && value != "on" && value != "off" {
         return Err(format!(
             "use_session_stream must be 'on' or 'off', got {value:?}"
+        ));
+    }
+    // K2 Mail (D4): the send gate is a security gate — a typo must
+    // never leave it in an undefined state (the read side would fail
+    // closed to 'off', but reject the bad WRITE loudly too).
+    if field == "mail_agent_send" && !MAIL_AGENT_SEND_MODES.contains(&value) {
+        return Err(format!(
+            "mail_agent_send must be 'off', 'approval', or 'on', got {value:?}"
+        ));
+    }
+    // K2 Mail (D6): the cap must parse as a non-negative integer
+    // (0 = unlimited) so the minting check never reads garbage.
+    if field == "mail_address_cap" && value.parse::<u32>().is_err() {
+        return Err(format!(
+            "mail_address_cap must be a non-negative integer (0 = unlimited), got {value:?}"
         ));
     }
 
@@ -338,6 +368,70 @@ pub fn remote_instruct_allowed_for_path(project_path: &str) -> bool {
     }
     // Otherwise consult the per-workspace flag.
     get_allow_remote_instruct(project_path)
+}
+
+// ── K2 Mail (prd-email-server-v1 §12) — gating-setting resolvers ────────
+//
+// Global default in `AppSettings` (`mail_agent_send` / `mail_address_cap`),
+// per-workspace override columns on `projects` (migration 0072, NULL =
+// inherit). These two resolvers are the ONLY read path later slices may
+// use for gating decisions — never read the raw column or the raw
+// AppSettings field at a call site.
+
+/// The EFFECTIVE agent-send gating mode for `project_path` (D4):
+/// `off` | `approval` | `on`.
+///
+/// Per-workspace override wins when present AND valid; otherwise the
+/// global `AppSettings.mail_agent_send` default. FAIL-CLOSED: an
+/// unregistered workspace, a NULL column, or an unrecognized stored
+/// value at EITHER level resolves to `off` — outbound mail can never
+/// be enabled by accident or by a corrupt value.
+pub fn mail_agent_send_for_path(project_path: &str) -> String {
+    let per_workspace: Option<String> = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT mail_agent_send FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    };
+    let effective = match per_workspace {
+        Some(v) => v,
+        None => crate::app_settings::load().mail_agent_send,
+    };
+    if MAIL_AGENT_SEND_MODES.contains(&effective.as_str()) {
+        effective
+    } else {
+        "off".to_string()
+    }
+}
+
+/// The EFFECTIVE address cap for `project_path` (D6): number of
+/// addresses an agent may mint, `0` = unlimited.
+///
+/// Per-workspace override wins when present and non-negative; otherwise
+/// the global `AppSettings.mail_address_cap` default (5). A negative or
+/// unreadable stored value falls back to the global default (never to
+/// unlimited).
+pub fn mail_address_cap_for_path(project_path: &str) -> u32 {
+    let per_workspace: Option<i64> = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT mail_address_cap FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten()
+    };
+    match per_workspace {
+        Some(v) if v >= 0 => v as u32,
+        _ => crate::app_settings::load().mail_address_cap,
+    }
 }
 
 // ── B3a (sandbox) — per-workspace Anthropic API key (BYO key) ──────────
@@ -619,6 +713,129 @@ mod tests {
             remote_instruct_allowed_for_path(&path),
             "app-level master must opt in every workspace (back-compat)",
         );
+    }
+
+    // ── K2 Mail gating settings (prd-email-server-v1 §12) ──────────
+
+    /// `mail_agent_send`: write-validated enum; the EFFECTIVE resolver
+    /// prefers the per-workspace override, inherits the global default
+    /// when NULL, and fail-closes to "off" everywhere else.
+    #[test]
+    fn mail_agent_send_defaults_off_and_override_wins() {
+        let _g = HOME_TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        let path = unique_path("mail-send");
+        let _pid = insert_project(&path);
+
+        // Everything default → off (fail-closed), including for a path
+        // that isn't registered at all.
+        assert_eq!(mail_agent_send_for_path(&path), "off");
+        assert_eq!(mail_agent_send_for_path("/tmp/never-registered-mail"), "off");
+
+        // Global default flips → un-overridden workspaces inherit it.
+        crate::app_settings::update(serde_json::json!({ "mailAgentSend": "approval" }))
+            .expect("set global");
+        assert_eq!(mail_agent_send_for_path(&path), "approval");
+
+        // Per-workspace override wins over the global.
+        update_project_setting(&path, "mail_agent_send", "on").expect("override on");
+        assert_eq!(mail_agent_send_for_path(&path), "on");
+        update_project_setting(&path, "mail_agent_send", "off").expect("override off");
+        assert_eq!(mail_agent_send_for_path(&path), "off");
+
+        // A corrupt GLOBAL value fails closed to off (the workspace
+        // override is cleared by writing garbage directly — the write
+        // path would reject it, which is the next test).
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET mail_agent_send = NULL WHERE path = ?1",
+                rusqlite::params![path],
+            )
+            .expect("clear override");
+        }
+        crate::app_settings::update(serde_json::json!({ "mailAgentSend": "yolo" }))
+            .expect("set corrupt global");
+        assert_eq!(
+            mail_agent_send_for_path(&path),
+            "off",
+            "unknown global mode must fail closed"
+        );
+
+        // A corrupt STORED override also fails closed.
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET mail_agent_send = 'always' WHERE path = ?1",
+                rusqlite::params![path],
+            )
+            .expect("corrupt override directly");
+        }
+        assert_eq!(
+            mail_agent_send_for_path(&path),
+            "off",
+            "unknown stored override must fail closed"
+        );
+    }
+
+    /// The write path rejects anything outside off|approval|on and any
+    /// non-integer cap, loudly.
+    #[test]
+    fn mail_settings_write_validation() {
+        let path = unique_path("mail-validate");
+        let _pid = insert_project(&path);
+
+        let err = update_project_setting(&path, "mail_agent_send", "always")
+            .expect_err("bad mode must be rejected");
+        assert!(err.contains("mail_agent_send"), "got {err:?}");
+
+        for bad in ["-1", "five", "1.5", ""] {
+            let err = update_project_setting(&path, "mail_address_cap", bad)
+                .expect_err("bad cap must be rejected");
+            assert!(err.contains("mail_address_cap"), "'{bad}' → {err:?}");
+        }
+    }
+
+    /// `mail_address_cap`: default 5 (global), per-workspace override
+    /// wins, 0 = unlimited passes validation.
+    #[test]
+    fn mail_address_cap_default_and_override() {
+        let _g = HOME_TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        let path = unique_path("mail-cap");
+        let _pid = insert_project(&path);
+
+        // PRD default: 5 — for registered AND unregistered paths.
+        assert_eq!(mail_address_cap_for_path(&path), 5);
+        assert_eq!(mail_address_cap_for_path("/tmp/never-registered-cap"), 5);
+
+        // Global default is owner-tunable.
+        crate::app_settings::update(serde_json::json!({ "mailAddressCap": 9 }))
+            .expect("set global cap");
+        assert_eq!(mail_address_cap_for_path(&path), 9);
+
+        // Per-workspace override wins; 0 = unlimited is storable.
+        update_project_setting(&path, "mail_address_cap", "2").expect("override 2");
+        assert_eq!(mail_address_cap_for_path(&path), 2);
+        update_project_setting(&path, "mail_address_cap", "0").expect("override 0");
+        assert_eq!(mail_address_cap_for_path(&path), 0, "0 = unlimited");
+
+        // A negative value smuggled in directly falls back to the
+        // global default (never to unlimited).
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET mail_address_cap = -3 WHERE path = ?1",
+                rusqlite::params![path],
+            )
+            .expect("corrupt cap directly");
+        }
+        assert_eq!(mail_address_cap_for_path(&path), 9, "negative → global default");
     }
 
     // ── B3a per-workspace Anthropic API key (BYO key) ──────────────

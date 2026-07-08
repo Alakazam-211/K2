@@ -2951,6 +2951,136 @@ impl SubdomainWorkspace {
         )?;
         Ok(n > 0)
     }
+// ── K2 Mail (0072, prd-email-server-v1 §12) ────────────────────────────
+//
+// Row structs for the mail tables. Serialize camelCase — the wire
+// shape the `/cli/mail/*` routes return (same convention as the
+// feedback structs in `crate::feedback`). These are the K2-side
+// records ONLY: agent ownership, approvals, caps, doctor history.
+// Stalwart's own state (accounts, messages, DKIM keys) stays in
+// Stalwart, reached exclusively over its JMAP management API.
+
+/// The `mail_server` SINGLETON row (id = 1). "not-installed" is the
+/// ABSENCE of the row — `status` only covers installed lifecycles
+/// (`installing|running|degraded|stopped|disabled|error`). The
+/// `*_secret_ref` fields reference the daemon's secret storage, never
+/// secrets themselves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailServer {
+    pub id: i64,
+    pub status: String,
+    pub pinned_version: String,
+    pub installed_version: Option<String>,
+    pub hostname: Option<String>,
+    /// `tls-alpn` | `dns-01` | `http-01` (PRD §5.3 detect-and-adapt).
+    pub port_plan: Option<String>,
+    pub api_url: Option<String>,
+    pub admin_secret_ref: Option<String>,
+    pub api_key_ref: Option<String>,
+    pub installed_at: Option<i64>,
+    pub updated_at: i64,
+}
+
+/// One `mail_domains` row. `domain` is ALWAYS the normalized form
+/// (lowercase punycode A-label, no trailing dot —
+/// [`crate::mail_domain::normalize_mail_domain`]); display-decode at
+/// the edge. `dns_status_json` = per-record Valid/Missing/Wrong state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailDomain {
+    pub id: String,
+    pub domain: String,
+    pub stalwart_domain_id: Option<String>,
+    /// `direct` | `relay` | `receive-only` (PRD §8.3 / D1).
+    pub send_mode: String,
+    pub relay_config_id: Option<String>,
+    /// `pending` | `verified` | `error`.
+    pub status: String,
+    pub dns_status_json: Option<String>,
+    pub verified_at: Option<i64>,
+    pub last_checked_at: Option<i64>,
+    pub created_at: i64,
+}
+
+/// One `mail_relay_configs` row (smart-host outbound, PRD §8.3).
+/// `kind` is `smtp` in V1; the provider kinds exist in the schema so
+/// nothing may assume `kind == smtp`. `secret_ref` references the
+/// daemon's secret storage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailRelayConfig {
+    pub id: String,
+    pub kind: String,
+    pub host: Option<String>,
+    pub port: Option<i64>,
+    pub username: Option<String>,
+    pub secret_ref: Option<String>,
+    /// `implicit` | `starttls`.
+    pub tls_kind: Option<String>,
+    pub spf_include: Option<String>,
+    pub config_json: Option<String>,
+    pub created_at: i64,
+}
+
+/// One `mail_addresses` row — the binding of a Stalwart account to its
+/// OWNING workspace (PRD §7.1). `owner_project_id` = `projects.id`,
+/// resolved server-side from the calling token, never from a body.
+/// `client_id` powers idempotent minting (`k2 mail create --id`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAddress {
+    pub id: String,
+    pub address: String,
+    pub domain_id: String,
+    pub stalwart_account_id: Option<String>,
+    pub owner_project_id: String,
+    pub client_id: Option<String>,
+    /// `active` | `retired`.
+    pub status: String,
+    pub created_at: i64,
+    pub retired_at: Option<i64>,
+}
+
+/// One `mail_outbound` row — the approval queue AND the send audit log
+/// (PRD §8.4). A row is written BEFORE any hand-off to Stalwart in
+/// every gating mode (pre-mortem #11: no row, no send). `body_ref` /
+/// `attachments_ref` point at daemon-managed storage — message bodies
+/// are never inlined here and never logged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailOutbound {
+    pub id: String,
+    pub owner_project_id: String,
+    pub agent_name: String,
+    pub from_address: String,
+    /// JSON array of recipient addresses.
+    pub to_json: String,
+    pub cc_json: Option<String>,
+    pub subject: String,
+    pub body_ref: Option<String>,
+    pub attachments_ref: Option<String>,
+    /// `pending` | `approved` | `denied` | `sent` | `failed`.
+    pub status: String,
+    pub decided_by: Option<String>,
+    pub note: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub decided_at: Option<i64>,
+    pub sent_at: Option<i64>,
+}
+
+/// One `mail_doctor_runs` row (PRD §9). `domain_id` is `None` for
+/// server-level runs (network/PTR/blocklist checks have no domain).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailDoctorRun {
+    pub id: String,
+    pub domain_id: Option<String>,
+    pub results_json: String,
+    /// `pass` | `warn` | `fail` — the direct-send readiness grade.
+    pub grade: String,
+    pub ran_at: i64,
 }
 
 #[cfg(test)]
@@ -2971,6 +3101,182 @@ mod unit_tests {
 
     fn fresh() -> Connection {
         crate::db::isolated_test_connection()
+    }
+
+    /// 0072 (K2 Mail): the migration applies — every mail table exists
+    /// and round-trips a row; the per-workspace override columns landed
+    /// on `projects`.
+    #[test]
+    fn mail_migration_applies_and_roundtrips() {
+        let conn = fresh();
+        conn.execute(
+            "INSERT INTO mail_server (id, status, pinned_version, updated_at) \
+             VALUES (1, 'installing', '0.16.0', 100)",
+            [],
+        )
+        .expect("mail_server insert");
+        conn.execute(
+            "INSERT INTO mail_domains (id, domain, created_at) VALUES ('d1', 'acme.dev', 100)",
+            [],
+        )
+        .expect("mail_domains insert");
+        conn.execute(
+            "INSERT INTO mail_relay_configs (id, created_at) VALUES ('r1', 100)",
+            [],
+        )
+        .expect("mail_relay_configs insert");
+        conn.execute(
+            "INSERT INTO mail_addresses (id, address, domain_id, owner_project_id, created_at) \
+             VALUES ('a1', 'scout@acme.dev', 'd1', 'p1', 100)",
+            [],
+        )
+        .expect("mail_addresses insert");
+        conn.execute(
+            "INSERT INTO mail_outbound (id, owner_project_id, agent_name, from_address, \
+             to_json, subject, created_at, updated_at) \
+             VALUES ('o1', 'p1', 'scout', 'scout@acme.dev', '[\"x@example.com\"]', 's', 100, 100)",
+            [],
+        )
+        .expect("mail_outbound insert");
+        conn.execute(
+            "INSERT INTO mail_doctor_runs (id, results_json, grade, ran_at) \
+             VALUES ('dr1', '{}', 'warn', 100)",
+            [],
+        )
+        .expect("mail_doctor_runs insert");
+
+        // Defaults land per §12: receive-only, pending, smtp, active, pending.
+        let (send_mode, status): (String, String) = conn
+            .query_row(
+                "SELECT send_mode, status FROM mail_domains WHERE id = 'd1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("domain read");
+        assert_eq!(send_mode, "receive-only");
+        assert_eq!(status, "pending");
+        let kind: String = conn
+            .query_row("SELECT kind FROM mail_relay_configs WHERE id = 'r1'", [], |r| r.get(0))
+            .expect("relay read");
+        assert_eq!(kind, "smtp");
+        let addr_status: String = conn
+            .query_row("SELECT status FROM mail_addresses WHERE id = 'a1'", [], |r| r.get(0))
+            .expect("address read");
+        assert_eq!(addr_status, "active");
+        let out_status: String = conn
+            .query_row("SELECT status FROM mail_outbound WHERE id = 'o1'", [], |r| r.get(0))
+            .expect("outbound read");
+        assert_eq!(out_status, "pending");
+
+        // The per-workspace override columns exist on projects and
+        // backfill to NULL (inherit-global).
+        let pid = make_project_row(&conn, "/tmp/mail-mig-proj");
+        let (send, cap): (Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT mail_agent_send, mail_address_cap FROM projects WHERE id = ?1",
+                params![pid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("projects override read");
+        assert!(send.is_none() && cap.is_none(), "overrides backfill to NULL");
+    }
+
+    /// 0072 (K2 Mail): the CHECK-constrained enums reject invalid
+    /// values loudly, and the singleton/uniqueness constraints hold.
+    #[test]
+    fn mail_migration_check_constraints_enforced() {
+        let conn = fresh();
+        // mail_server is a singleton: id must be 1.
+        assert!(
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, updated_at) \
+                 VALUES (2, 'running', '0.16.0', 1)",
+                [],
+            )
+            .is_err(),
+            "mail_server id != 1 must be rejected"
+        );
+        // Bad enum values are rejected on every CHECKed column.
+        for (label, sql) in [
+            (
+                "mail_server.status",
+                "INSERT INTO mail_server (id, status, pinned_version, updated_at) \
+                 VALUES (1, 'exploded', '0.16.0', 1)",
+            ),
+            (
+                "mail_domains.send_mode",
+                "INSERT INTO mail_domains (id, domain, send_mode, created_at) \
+                 VALUES ('dx', 'x.dev', 'carrier-pigeon', 1)",
+            ),
+            (
+                "mail_domains.status",
+                "INSERT INTO mail_domains (id, domain, status, created_at) \
+                 VALUES ('dy', 'y.dev', 'maybe', 1)",
+            ),
+            (
+                "mail_relay_configs.kind",
+                "INSERT INTO mail_relay_configs (id, kind, created_at) \
+                 VALUES ('rx', 'sendmail', 1)",
+            ),
+            (
+                "mail_relay_configs.tls_kind",
+                "INSERT INTO mail_relay_configs (id, tls_kind, created_at) \
+                 VALUES ('ry', 'plaintext', 1)",
+            ),
+            (
+                "mail_addresses.status",
+                "INSERT INTO mail_addresses (id, address, domain_id, owner_project_id, status, created_at) \
+                 VALUES ('ax', 'x@x.dev', 'd', 'p', 'zombie', 1)",
+            ),
+            (
+                "mail_outbound.status",
+                "INSERT INTO mail_outbound (id, owner_project_id, agent_name, from_address, to_json, subject, status, created_at, updated_at) \
+                 VALUES ('ox', 'p', 'a', 'f@x.dev', '[]', 's', 'maybe', 1, 1)",
+            ),
+            (
+                "mail_doctor_runs.grade",
+                "INSERT INTO mail_doctor_runs (id, results_json, grade, ran_at) \
+                 VALUES ('dx', '{}', 'A+', 1)",
+            ),
+        ] {
+            assert!(conn.execute(sql, []).is_err(), "{label}: bad enum must be rejected");
+        }
+        // Duplicate domain / address / (owner, client_id) are rejected.
+        conn.execute(
+            "INSERT INTO mail_domains (id, domain, created_at) VALUES ('d1', 'acme.dev', 1)",
+            [],
+        )
+        .expect("first domain");
+        assert!(
+            conn.execute(
+                "INSERT INTO mail_domains (id, domain, created_at) VALUES ('d2', 'acme.dev', 1)",
+                [],
+            )
+            .is_err(),
+            "duplicate domain must be rejected"
+        );
+        conn.execute(
+            "INSERT INTO mail_addresses (id, address, domain_id, owner_project_id, client_id, created_at) \
+             VALUES ('a1', 'bot@acme.dev', 'd1', 'p1', 'signup-1', 1)",
+            [],
+        )
+        .expect("first address");
+        assert!(
+            conn.execute(
+                "INSERT INTO mail_addresses (id, address, domain_id, owner_project_id, client_id, created_at) \
+                 VALUES ('a2', 'bot2@acme.dev', 'd1', 'p1', 'signup-1', 1)",
+                [],
+            )
+            .is_err(),
+            "duplicate (owner, client_id) must be rejected (idempotent minting)"
+        );
+        // ...but the same client_id under ANOTHER workspace is fine.
+        conn.execute(
+            "INSERT INTO mail_addresses (id, address, domain_id, owner_project_id, client_id, created_at) \
+             VALUES ('a3', 'bot3@acme.dev', 'd1', 'p2', 'signup-1', 1)",
+            [],
+        )
+        .expect("same client_id, different owner");
     }
 
     fn make_project_row(conn: &Connection, path: &str) -> String {

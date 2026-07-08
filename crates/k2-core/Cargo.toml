@@ -100,6 +100,12 @@ llama-cpp-2 = { version = "0.1", default-features = false, features = ["sampler"
 # stack src-tauri uses).
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
+# IDN → punycode A-label normalization for mail domains
+# (mail_domain::normalize_mail_domain, prd-email-server-v1 pre-mortem
+# #14). Already in the tree transitively via url (2.5) — declared
+# explicitly because we call it directly. Same 1.x the lockfile pins.
+idna = "1"
+
 # Parallel work-stealing directory walker respecting .gitignore /
 # .k2soignore — llm::file_index::search_walk uses it for fuzzy file find.
 ignore = "0.4"

@@ -538,6 +538,28 @@ async fn handle_one_request(
             | "/cli/feedback/comment"
             | "/cli/feedback/answer"
             | "/cli/feedback/resolve"
+            // K2 Mail (prd-email-server-v1 §11) — every mutating
+            // `/cli/mail/*` path, listed NOW (foundation slice) so
+            // later slices never fight this allowlist. JSON-bodied
+            // POSTs; token_ok + require_post in the dedicated arm
+            // below, which ALSO owner-or-admin-gates the server/domain/
+            // config/approvals paths (PRD §10). Handlers are 501
+            // not_built stubs until their slice lands; reads (status/
+            // lists/messages/wait) are GETs via crate::cli::dispatch
+            // (mail_routes).
+            | "/cli/mail/server/enable"
+            | "/cli/mail/server/disable"
+            | "/cli/mail/server/uninstall"
+            | "/cli/mail/config/set"
+            | "/cli/mail/domain/add"
+            | "/cli/mail/domain/remove"
+            | "/cli/mail/domain/check"
+            | "/cli/mail/address/create"
+            | "/cli/mail/address/delete"
+            | "/cli/mail/send"
+            | "/cli/mail/reply"
+            | "/cli/mail/approvals/approve"
+            | "/cli/mail/approvals/deny"
             // Projects V1 P2 (prd-projects-v1 §4.1) — project-GROUP
             // mutations (NOT the legacy /cli/projects/* workspace
             // registry). JSON-bodied POSTs (msg carries free chat text;
@@ -3155,6 +3177,58 @@ async fn handle_one_request(
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
                 crate::feedback_routes::dispatch_post(&p_owned, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
+        // K2 Mail — `/cli/mail/*` mutations. JSON-bodied POSTs;
+        // token_ok + require_post per feedback_post_only_route_guards.
+        // OWNER-OR-ADMIN additionally gates the server/domain/config/
+        // approvals paths (PRD §10: server lifecycle + domains + mode/
+        // relay config + approvals are owner surface; address
+        // create/delete + send/reply stay workspace-token so agents
+        // can act — their own gating is the mail_agent_send mode +
+        // cap, enforced handler-side when the slices land). Handlers
+        // run in spawn_blocking (SQLite writes when built; 501
+        // not_built stubs today).
+        p if is_post && post_allowed && p.starts_with("/cli/mail/") => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            if crate::mail_routes::is_owner_level_mutation(p)
+                && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
+            {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"mail server, domain, config, and approval changes can only be made by the owner or an admin"}}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::mail_routes::dispatch_post(&p_owned, &body_bytes)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

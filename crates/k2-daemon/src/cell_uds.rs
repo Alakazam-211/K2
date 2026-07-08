@@ -206,6 +206,10 @@ mod unix_impl {
             // bytes on macOS), and the real `/var/folders/...` temp dir
             // blows past it once `/.k2/run/cells/<uuid>.sock` is appended.
             // A short `/tmp` base keeps the bound path under the limit.
+            // Serialize with every other $HOME mutator in the binary —
+            // HOME is process-global, and an unlocked swap here raced the
+            // TempHome tests (path re-derived from HOME mid-test).
+            let _home_lock = crate::test_support::lock_home();
             let prev = std::env::var_os("HOME");
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -292,6 +296,11 @@ mod unix_impl {
             // cross-uid `k2cell` chown is only assertable on-box (Linux, with
             // the dedicated user) — noted in the report.
             use std::os::unix::fs::PermissionsExt;
+            // Serialize with every other $HOME mutator (see the sibling
+            // bind test): set_cell_socket_owner re-derives the socket
+            // path from HOME, so a concurrent swap = chown on a path
+            // that no longer exists (the exact flake this fixes).
+            let _home_lock = crate::test_support::lock_home();
             let prev = std::env::var_os("HOME");
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

@@ -45,10 +45,10 @@
 //! are GETs through `crate::cli::dispatch` → [`dispatch`], which also
 //! answers 405 for mutations reached via the GET chain.
 //!
-//! Only `/cli/mail/status` is REAL in the foundation slice — it is the
-//! capability-gating seam (`supported: bool`) the Settings→Email page
-//! reads (pre-mortem #15). Every other route returns the structured
-//! `not_built` 501 from its per-concern file.
+//! REAL so far: `/cli/mail/status` (foundation — the capability-gating
+//! seam, `supported: bool`, pre-mortem #15) and the S2 domain family
+//! (`domain/add|remove|check|list|show`). Every other route returns
+//! the structured `not_built` 501 from its per-concern file.
 
 use std::collections::HashMap;
 
@@ -181,16 +181,15 @@ mod tests {
     }
 
     /// Every reserved route answers 501 not_built (never 404) so later
-    /// slices can rely on the partition map; status is the one real
-    /// route and answers 200.
+    /// slices can rely on the partition map; the REAL routes (status
+    /// from the foundation slice, the S2 domain family) answer their
+    /// own contracts.
     #[test]
-    fn reserved_routes_501_and_status_is_real() {
+    fn reserved_routes_501_and_real_routes_answer() {
         let params = HashMap::new();
         for route in [
             "/cli/mail/config",
             "/cli/mail/doctor",
-            "/cli/mail/domain/list",
-            "/cli/mail/domain/show",
             "/cli/mail/address/list",
             "/cli/mail/messages",
             "/cli/mail/read",
@@ -209,9 +208,6 @@ mod tests {
             "/cli/mail/server/disable",
             "/cli/mail/server/uninstall",
             "/cli/mail/config/set",
-            "/cli/mail/domain/add",
-            "/cli/mail/domain/remove",
-            "/cli/mail/domain/check",
             "/cli/mail/address/create",
             "/cli/mail/address/delete",
             "/cli/mail/send",
@@ -224,6 +220,27 @@ mod tests {
         }
         let resp = dispatch("/cli/mail/status", &params).expect("claimed");
         assert_eq!(resp.status, "200 OK", "status is REAL from day one");
+
+        // S2 — the domain family is REAL: reads answer through the
+        // shim (list 200; show without a domain = usage 400), and the
+        // mutations validate their bodies (`{}` = usage 400) instead
+        // of 501-ing. Deep behavior is owned by routes_domains tests.
+        let resp = dispatch("/cli/mail/domain/list", &params).expect("claimed");
+        assert_eq!(resp.status, "200 OK");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["ok"], true);
+        let resp = dispatch("/cli/mail/domain/show", &params).expect("claimed");
+        assert_eq!(resp.status, "400 Bad Request");
+        for route in [
+            "/cli/mail/domain/add",
+            "/cli/mail/domain/remove",
+            "/cli/mail/domain/check",
+        ] {
+            let resp = dispatch_post(route, b"{}");
+            assert_eq!(resp.status, "400 Bad Request", "route={route}");
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage", "route={route}");
+        }
     }
 
     /// The owner-or-admin classification the dispatcher arm relies on.

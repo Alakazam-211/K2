@@ -33,6 +33,15 @@
 //!   disable / uninstall of the Stalwart sidecar (S1). The ONLY module
 //!   that knows Stalwart exists as a process.
 //! - [`jmap`] — the typed client for Stalwart's management API.
+//! - [`domains`] — S2 domain onboarding: zone-file parsing, the DNS
+//!   record table, SPF split-config, add/remove/list/show ops (behind
+//!   the `DomainEngine` trait so tests never touch a network).
+//! - [`dns_verify`] — S2 DNS verification: the `DnsResolver` trait
+//!   (production: hickory system resolver; tests: canned answers),
+//!   per-record Valid/Missing/Wrong classification with expected-vs-
+//!   live diffs, and the background re-verification poller
+//!   (`dns_verify::spawn`, registered in main.rs next to the other
+//!   background loops).
 //! - [`doctor`] — deliverability checks (S6; `mail-auth` crate,
 //!   DNS/TCP probes, blocklists, the direct-send readiness grade).
 //! - `routes_*` — per-concern `/cli/mail/*` handlers, dispatched by
@@ -41,7 +50,9 @@
 //!   [`routes_domains`], [`routes_addresses`], [`routes_messages`],
 //!   [`routes_send`].
 
+pub mod dns_verify;
 pub mod doctor;
+pub mod domains;
 pub mod jmap;
 pub mod routes_addresses;
 pub mod routes_domains;

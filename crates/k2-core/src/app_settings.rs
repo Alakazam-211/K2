@@ -303,6 +303,18 @@ pub struct AppSettings {
     /// `workspace::settings::mail_address_cap_for_path`.
     #[serde(default = "default_mail_address_cap")]
     pub mail_address_cap: u32,
+    /// K2 Mail S2 (prd-email-server-v1 §11.1.2) — the GLOBAL default
+    /// mail domain agents mint on when they don't name one. Stored in
+    /// NORMALIZED form (lowercase punycode A-label; the write path
+    /// runs `mail_domain::normalize_mail_domain`). Empty (the default)
+    /// = "the first Verified domain" — resolved at read time by
+    /// `k2-daemon mail::domains::default_domain`, which also falls
+    /// back to first-verified when the configured value is no longer
+    /// a Verified domain. A typed field is required: `AppSettings`
+    /// round-trips through `serde_json::from_value` on every
+    /// `load`/`update`, which silently drops unknown keys.
+    #[serde(default)]
+    pub mail_default_domain: String,
     #[serde(default)]
     pub editor: EditorSettings,
     /// Style System P3 — the user's Style selection (style / palette /
@@ -552,6 +564,7 @@ impl Default for AppSettings {
             push_gateway_token: None,
             mail_agent_send: default_mail_agent_send(),
             mail_address_cap: default_mail_address_cap(),
+            mail_default_domain: String::new(),
             editor: EditorSettings::default(),
             style: StyleSettings::default(),
             companion: CompanionSettings::default(),

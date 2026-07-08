@@ -9,6 +9,10 @@
 //! (defaults are captured on first call, before any modification).
 
 #[cfg(target_os = "macos")]
+// cocoa/objc are deprecated in favor of objc2 but frozen as house deps for
+// now (see the objc2-migration note in Cargo.toml); same allow as
+// commands/permissions.rs.
+#[allow(deprecated)]
 mod imp {
   use std::sync::OnceLock;
 

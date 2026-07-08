@@ -58,6 +58,13 @@
 //!   content markers, the HTML-strip fallback, auth-verdict parsing,
 //!   workspace-jailed attachment output paths, and the §8.2 wait loop
 //!   with an injected clock/poller.
+//! - [`send`] — S5 outbound ops: the D4 fail-closed gate
+//!   (off/approval/on), the `mail_outbound` audit-then-maybe-submit
+//!   pipeline (pre-mortem #11: no row, no send), always-on rate limits,
+//!   send-mode enforcement (receive-only refusal + use-time relay
+//!   validation), §8.4 reply guardrails, approve/deny transitions, the
+//!   `--wait` decision poll — all behind `OutboundStore`/
+//!   `SubmitBackend` traits with injected fakes/clocks in tests.
 //! - [`doctor`] — deliverability checks (S6; `mail-auth` crate,
 //!   DNS/TCP probes, blocklists, the direct-send readiness grade).
 //! - `routes_*` — per-concern `/cli/mail/*` handlers, dispatched by
@@ -79,6 +86,7 @@ pub mod routes_messages;
 pub mod routes_send;
 pub mod routes_server;
 pub mod secrets;
+pub mod send;
 pub mod supervisor;
 pub mod sysops;
 

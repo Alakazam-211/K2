@@ -3195,9 +3195,9 @@ async fn handle_one_request(
         // relay config + approvals are owner surface; address
         // create/delete + send/reply stay workspace-token so agents
         // can act — their own gating is the mail_agent_send mode +
-        // cap, enforced handler-side when the slices land). Handlers
-        // run in spawn_blocking (SQLite writes when built; 501
-        // not_built stubs today).
+        // cap, enforced handler-side). Handlers run in spawn_blocking
+        // (SQLite writes + blocking Stalwart dials; S5's send/reply
+        // `--wait` holds the request up to 900 s).
         p if is_post && post_allowed && p.starts_with("/cli/mail/") => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -4139,6 +4139,33 @@ async fn handle_one_request(
                 }
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // K2 Mail S5 — the owner Approvals queue read. Owner verbs
+        // hard-fail for agent/workspace tokens SERVER-SIDE (PRD
+        // §11.1.3 — kills the self-approval temptation): token_ok +
+        // token_is_owner_or_admin, then the normal GET dispatch chain
+        // (SQLite-only — no engine dial, so no spawn_blocking needed).
+        p if p == "/cli/mail/approvals/list" => {
+            let _ = stream.read(&mut buf).await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"the approvals queue requires owner/admin — ask your human"}}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            let resp = crate::cli::dispatch(p, &params);
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
         }
         // K2 Mail S4 — the message-read family gets its own arm so it
         // runs in spawn_blocking: the handlers dial Stalwart over

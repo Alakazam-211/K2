@@ -37,6 +37,18 @@
 //!   5. [`StalwartBootstrap::configure_listeners`] — listener config
 //!      KEY names (carried from the pre-0.16 `server.listener.*`
 //!      scheme) + how a listener is removed/disabled.
+//!   6. S5 [`StalwartClient::submission_send`] — the outbound hand-off
+//!      (RFC 8621 §7 EmailSubmission over the loopback mgmt endpoint).
+//!      Uncertainties the first live send must confirm, all isolated in
+//!      that one function (+ its [`Self::identity_id_for`] helper):
+//!      whether Stalwart pre-creates an Identity per account address or
+//!      the `Identity/set create` fallback is needed; whether the
+//!      service account may create/submit in a MEMBER account via the
+//!      delegated `accountId` (the same S4 #1 scoping question);
+//!      whether a `drafts`-role mailbox exists on fresh accounts (the
+//!      inbox fallback covers its absence); and whether Stalwart stamps
+//!      `Message-ID`/`Date` on submission when the created Email lacks
+//!      them.
 
 use std::time::Duration;
 
@@ -449,14 +461,160 @@ impl StalwartClient {
         parse_account_set_destroyed(stalwart_account_id, &resp)
     }
 
-    /// S5 — hand an APPROVED outbound message to Stalwart's queue.
-    /// The audit row in `mail_outbound` exists BEFORE this is called
-    /// (pre-mortem #11: no row, no send); Stalwart's queue owns
-    /// retries (pre-mortem #9 — no daemon-side retry logic, ever).
-    #[allow(dead_code)] // S5 wires this into the approved-send path.
-    pub fn queue_submit(&self, outbound_id: &str) -> Result<(), String> {
-        let _ = outbound_id;
-        Err(super::not_built_err("S5", "jmap queue submit"))
+    // ── S5 outbound submission — LOCAL Stalwart only (loopback JMAP
+    //    EmailSubmission, RFC 8621 §7). The audit row in `mail_outbound`
+    //    exists BEFORE these are called (pre-mortem #11: no row, no
+    //    send); Stalwart's queue owns retries and the smart-host relay
+    //    routing (pre-mortem #9 — no daemon-side retry logic, ever).
+    //    Message content flows through here — never logged, never in
+    //    errors (errors carry method names + server SetErrors only). ──
+
+    /// ⚠ LIVE-BOX (S5 #1, module-header item 6): submit one composed
+    /// outbound message through the LOCAL Stalwart. Standard RFC 8621
+    /// shape: `Email/set create` (the full message as a JSON Email
+    /// object built by the ops layer — no MIME composing) +
+    /// `EmailSubmission/set create` referencing it (`#k2out`), in ONE
+    /// request; the SMTP envelope is explicit (`mailFrom` = the
+    /// server-stamped From, `rcptTo` = to+cc). Returns Ok when the
+    /// server ACCEPTED the message for delivery — never "delivered"
+    /// (pre-mortem #9: greylisting/retries are Stalwart's business).
+    pub fn submission_send(
+        &self,
+        account_id: &str,
+        from_email: &str,
+        rcpt_to: &[String],
+        email_create: serde_json::Value,
+    ) -> Result<(), String> {
+        if rcpt_to.is_empty() {
+            return Err("submission: empty rcptTo".to_string());
+        }
+        let identity_id = self.identity_id_for(account_id, from_email)?;
+        // Created emails need a mailbox: the drafts role when the
+        // account has one, else the inbox (fresh Stalwart accounts may
+        // lack a drafts mailbox — flagged in the module-header item 6).
+        let mailbox_id = match self.mailbox_role_id(account_id, "drafts")? {
+            Some(id) => id,
+            None => self.mailbox_inbox_id(account_id)?,
+        };
+        let mut email = email_create;
+        email["mailboxIds"] = serde_json::json!({ mailbox_id: true });
+        let envelope_rcpts: Vec<serde_json::Value> = rcpt_to
+            .iter()
+            .map(|e| serde_json::json!({ "email": e }))
+            .collect();
+        let body = serde_json::json!({
+            "using": JMAP_SUBMISSION_USING,
+            "methodCalls": [
+                [
+                    "Email/set",
+                    { "accountId": account_id, "create": { SUBMIT_EMAIL_TAG: email } },
+                    "0"
+                ],
+                [
+                    "EmailSubmission/set",
+                    {
+                        "accountId": account_id,
+                        "create": {
+                            SUBMIT_SUB_TAG: {
+                                "emailId": format!("#{SUBMIT_EMAIL_TAG}"),
+                                "identityId": identity_id,
+                                "envelope": {
+                                    "mailFrom": { "email": from_email },
+                                    "rcptTo": envelope_rcpts,
+                                },
+                            }
+                        }
+                    },
+                    "1"
+                ]
+            ],
+        });
+        let api_url = self.discover_api_url()?;
+        let reply = self.post_json_url(&api_url, &body)?;
+        parse_submission_created(&reply)
+    }
+
+    /// ⚠ LIVE-BOX (S5 #1 helper): the sending Identity for `from_email`
+    /// in `account_id` — `Identity/get`, matched case-insensitively on
+    /// the email; when the account has none (Stalwart may or may not
+    /// pre-create one per address), fall back to `Identity/set create`.
+    fn identity_id_for(&self, account_id: &str, from_email: &str) -> Result<String, String> {
+        let args =
+            self.submission_call(account_id, "Identity/get", serde_json::json!({ "ids": null }))?;
+        if let Some(id) = parse_identity_for(&args, from_email) {
+            return Ok(id);
+        }
+        let created = self.submission_call(
+            account_id,
+            "Identity/set",
+            serde_json::json!({
+                "create": { CREATE_TAG: { "email": from_email } }
+            }),
+        )?;
+        created["created"][CREATE_TAG]["id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| "Identity/set create: no created id in reply".to_string())
+    }
+
+    /// One JMAP method call with the SUBMISSION capabilities in `using`
+    /// (Identity/EmailSubmission objects, RFC 8621 §6/§7) — otherwise
+    /// identical to [`Self::mail_call`] (same delegated `accountId`
+    /// scoping, S4 #1).
+    fn submission_call(
+        &self,
+        account_id: &str,
+        method: &str,
+        mut args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        args["accountId"] = serde_json::Value::String(account_id.to_string());
+        let api_url = self.discover_api_url()?;
+        let body = serde_json::json!({
+            "using": JMAP_SUBMISSION_USING,
+            "methodCalls": [[method, args, "0"]],
+        });
+        let resp = self.post_json_url(&api_url, &body)?;
+        parse_method_response(method, &resp)
+    }
+
+    /// S4/S5 — a mailbox id by RFC 8621 role (`Ok(None)` = the account
+    /// has no mailbox with that role — not an error; callers decide).
+    pub fn mailbox_role_id(
+        &self,
+        account_id: &str,
+        role: &str,
+    ) -> Result<Option<String>, String> {
+        let args = self.mail_call(
+            account_id,
+            "Mailbox/query",
+            serde_json::json!({ "filter": { "role": role } }),
+        )?;
+        Ok(parse_query_ids(&args).into_iter().next())
+    }
+
+    /// S5 — the reply-relevant slice of one message (`k2 mail reply`):
+    /// sender, subject, thread id, `Message-ID` + raw `References`
+    /// headers (the §8.4 loop caps + In-Reply-To/References stamping),
+    /// and the Authentication-Results lines (the DMARC gate). Standard
+    /// RFC 8621 header-fetch — same stability class as the S4 reads.
+    /// `Ok(None)` = the server answered `notFound` (the route masks it).
+    pub fn email_get_reply_context(
+        &self,
+        account_id: &str,
+        email_id: &str,
+    ) -> Result<Option<ReplyContext>, String> {
+        let args = self.mail_call(
+            account_id,
+            "Email/get",
+            serde_json::json!({
+                "ids": [email_id],
+                "properties": [
+                    "id", "threadId", "from", "subject",
+                    MSGID_PROP, REFS_PROP, AUTH_RESULTS_PROP,
+                ],
+            }),
+        )?;
+        parse_reply_context(email_id, &args)
     }
 
     // ── S4 mail reads — STANDARD JMAP mail (RFC 8621: Email/query,
@@ -1019,6 +1177,26 @@ const BLOB_TIMEOUT: Duration = Duration::from_secs(60);
 /// layer, not here).
 const AUTH_RESULTS_PROP: &str = "header:Authentication-Results:asText:all";
 
+// ── S5 submission wire layer (RFC 8621 §6/§7) ───────────────────────────
+
+/// JMAP `using` for SUBMISSION calls (Identity + EmailSubmission live
+/// under the submission capability; mail rides along for the combined
+/// Email/set + EmailSubmission/set request).
+const JMAP_SUBMISSION_USING: [&str; 3] = [
+    "urn:ietf:params:jmap:core",
+    "urn:ietf:params:jmap:mail",
+    "urn:ietf:params:jmap:submission",
+];
+
+/// Creation tags inside the combined submit request (caller-chosen,
+/// stable so fixtures and parsers agree — the CREATE_TAG idiom).
+const SUBMIT_EMAIL_TAG: &str = "k2out";
+const SUBMIT_SUB_TAG: &str = "k2sub";
+
+/// Reply-context header-fetch properties (S5 §8.4 guardrails).
+const MSGID_PROP: &str = "header:Message-ID:asText";
+const REFS_PROP: &str = "header:References:asText";
+
 /// Envelope-only properties for the summaries list — deliberately no
 /// body/bodyValues entries (summaries never carry untrusted body
 /// content, and never pay body transfer costs).
@@ -1315,6 +1493,149 @@ fn parse_email_set_updated(id: &str, args: &serde_json::Value) -> Result<(), Str
     Err(format!("Email/set update: '{id}' not in the updated map"))
 }
 
+/// The reply-relevant slice of one message (S5 `k2 mail reply`,
+/// §8.4). Raw wire values only — verdict parsing (DMARC) and the
+/// guardrail decisions live at the ops layer ([`crate::mail::send`]),
+/// per the §17.5 route-layer rule.
+#[derive(Debug, Clone)]
+pub struct ReplyContext {
+    pub from: Vec<MailAddr>,
+    pub subject: String,
+    pub thread_id: Option<String>,
+    /// The original's `Message-ID` header (trimmed), for In-Reply-To.
+    pub message_id: Option<String>,
+    /// The original's raw `References` header text (loop caps + the
+    /// outgoing References chain).
+    pub references: Option<String>,
+    pub auth_results: Vec<String>,
+}
+
+/// Pure `Email/get` (reply-context) parser: `Ok(None)` when the server
+/// put the id in `notFound`; loud when it names neither.
+fn parse_reply_context(
+    email_id: &str,
+    args: &serde_json::Value,
+) -> Result<Option<ReplyContext>, String> {
+    let not_found = args
+        .get("notFound")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().any(|v| v.as_str() == Some(email_id)))
+        .unwrap_or(false);
+    if not_found {
+        return Ok(None);
+    }
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| {
+            a.iter()
+                .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(email_id))
+        })
+        .ok_or_else(|| {
+            format!("Email/get: '{email_id}' in neither list nor notFound")
+        })?;
+    let header_text = |prop: &str| -> Option<String> {
+        entry
+            .get(prop)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+    let auth_results = entry
+        .get(AUTH_RESULTS_PROP)
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(String::from).collect())
+        .unwrap_or_default();
+    Ok(Some(ReplyContext {
+        from: parse_addr_list(entry.get("from")),
+        subject: entry
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        thread_id: entry
+            .get("threadId")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        message_id: header_text(MSGID_PROP),
+        references: header_text(REFS_PROP),
+        auth_results,
+    }))
+}
+
+/// Pure `Identity/get` matcher: the id of the identity whose email
+/// equals `from_email` (ASCII-case-insensitive). `None` = no match
+/// (the caller falls back to `Identity/set create`).
+fn parse_identity_for(args: &serde_json::Value, from_email: &str) -> Option<String> {
+    args.get("list")?
+        .as_array()?
+        .iter()
+        .find(|e| {
+            e.get("email")
+                .and_then(|v| v.as_str())
+                .map(|em| em.eq_ignore_ascii_case(from_email))
+                .unwrap_or(false)
+        })
+        .and_then(|e| e.get("id"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+/// Pure parser for the combined submit reply: BOTH the `Email/set`
+/// create (`k2out`) and the `EmailSubmission/set` create (`k2sub`)
+/// must have succeeded — a JMAP-level `error`, a `notCreated` on
+/// either, or a missing response is a loud Err carrying the server's
+/// SetError (never the message content).
+fn parse_submission_created(reply: &serde_json::Value) -> Result<(), String> {
+    let responses = reply
+        .get("methodResponses")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "submission: reply has no methodResponses".to_string())?;
+    let mut email_ok = false;
+    let mut sub_ok = false;
+    for entry in responses {
+        let Some(arr) = entry.as_array() else { continue };
+        let name = arr.first().and_then(|v| v.as_str()).unwrap_or("");
+        let payload = arr.get(1).cloned().unwrap_or(serde_json::Value::Null);
+        match name {
+            "error" => {
+                let etype = payload["type"].as_str().unwrap_or("unknown");
+                let desc = payload["description"].as_str().unwrap_or("no description");
+                return Err(format!("submission: JMAP error '{etype}': {desc}"));
+            }
+            "Email/set" => {
+                if payload["created"].get(SUBMIT_EMAIL_TAG).is_some() {
+                    email_ok = true;
+                } else if let Some(err) = payload["notCreated"].get(SUBMIT_EMAIL_TAG) {
+                    return Err(format!(
+                        "submission: Email/set create rejected — {}",
+                        set_error_line(err)
+                    ));
+                }
+            }
+            "EmailSubmission/set" => {
+                if payload["created"].get(SUBMIT_SUB_TAG).is_some() {
+                    sub_ok = true;
+                } else if let Some(err) = payload["notCreated"].get(SUBMIT_SUB_TAG) {
+                    return Err(format!(
+                        "submission: EmailSubmission/set create rejected — {}",
+                        set_error_line(err)
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    if !email_ok {
+        return Err("submission: no successful Email/set create in reply".to_string());
+    }
+    if !sub_ok {
+        return Err("submission: no successful EmailSubmission/set create in reply".to_string());
+    }
+    Ok(())
+}
+
 /// Pure session-document parser for the RFC 8620 `downloadUrl`
 /// template — discovered, never hardcoded (the `apiUrl` rule).
 pub fn parse_session_download_url(
@@ -1442,18 +1763,110 @@ mod tests {
     }
 
     /// Constructor normalizes a trailing-slash base so path joins never
-    /// double the slash; the remaining typed stub (S5) fails with the
-    /// structured error. (The S2 domain + S3 account calls are REAL —
-    /// their behavior is owned by the fixture/loopback tests, never a
-    /// live dial from here.)
+    /// double the slash. (The S2 domain + S3 account + S5 submission
+    /// calls are REAL — their behavior is owned by the fixture tests,
+    /// never a live dial from here.)
     #[test]
-    fn client_construction_and_stub_errors() {
+    fn client_construction_normalizes_base() {
         let c = StalwartClient::new("https://127.0.0.1:8443///", "k2-test-key");
         assert_eq!(c.base_url, "https://127.0.0.1:8443");
-        assert!(c
-            .queue_submit("o1")
-            .unwrap_err()
-            .contains("not built yet — mail slice S5"));
+    }
+
+    // ── S5 submission parsers (fixtures — no network) ──
+
+    #[test]
+    fn identity_matcher_is_case_insensitive_and_none_when_absent() {
+        let args = serde_json::json!({
+            "list": [
+                { "id": "I1", "email": "other@acme.dev" },
+                { "id": "I2", "email": "Bot@ACME.dev", "name": "Bot" },
+            ]
+        });
+        assert_eq!(parse_identity_for(&args, "bot@acme.dev").as_deref(), Some("I2"));
+        assert_eq!(parse_identity_for(&args, "nobody@acme.dev"), None);
+        assert_eq!(parse_identity_for(&serde_json::json!({}), "x@y.z"), None);
+    }
+
+    #[test]
+    fn submission_reply_requires_both_creates() {
+        // Happy path: both created.
+        let ok = serde_json::json!({
+            "methodResponses": [
+                ["Email/set", { "created": { "k2out": { "id": "M9" } } }, "0"],
+                ["EmailSubmission/set", { "created": { "k2sub": { "id": "S1" } } }, "1"],
+            ]
+        });
+        parse_submission_created(&ok).expect("both created");
+
+        // Email/set notCreated surfaces the server's SetError.
+        let rejected = serde_json::json!({
+            "methodResponses": [
+                ["Email/set", { "notCreated": { "k2out": {
+                    "type": "invalidProperties", "description": "bad body"
+                } } }, "0"],
+            ]
+        });
+        let err = parse_submission_created(&rejected).expect_err("must reject");
+        assert!(err.contains("invalidProperties"), "{err}");
+
+        // EmailSubmission/set notCreated (e.g. forbiddenFrom) is loud.
+        let sub_rejected = serde_json::json!({
+            "methodResponses": [
+                ["Email/set", { "created": { "k2out": { "id": "M9" } } }, "0"],
+                ["EmailSubmission/set", { "notCreated": { "k2sub": {
+                    "type": "forbiddenFrom"
+                } } }, "1"],
+            ]
+        });
+        let err = parse_submission_created(&sub_rejected).expect_err("must reject");
+        assert!(err.contains("forbiddenFrom"), "{err}");
+
+        // A method-level JMAP error is loud; a half-answered reply
+        // (Email/set only) is loud too — a message created but never
+        // submitted must not read as success.
+        let jmap_err = serde_json::json!({
+            "methodResponses": [["error", { "type": "unknownMethod" }, "0"]]
+        });
+        assert!(parse_submission_created(&jmap_err).is_err());
+        let half = serde_json::json!({
+            "methodResponses": [
+                ["Email/set", { "created": { "k2out": { "id": "M9" } } }, "0"],
+            ]
+        });
+        let err = parse_submission_created(&half).expect_err("must reject");
+        assert!(err.contains("EmailSubmission/set"), "{err}");
+        assert!(parse_submission_created(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn reply_context_parses_headers_and_masks_not_found() {
+        let args = serde_json::json!({
+            "list": [{
+                "id": "M1",
+                "threadId": "T1",
+                "from": [{ "name": "GitHub", "email": "noreply@github.com" }],
+                "subject": "Verify your device",
+                "header:Message-ID:asText": " <abc@github.com> ",
+                "header:References:asText": "<r1@x> <r2@x>",
+                "header:Authentication-Results:asText:all": [
+                    "mx; spf=pass; dkim=pass; dmarc=fail"
+                ],
+            }]
+        });
+        let ctx = parse_reply_context("M1", &args)
+            .expect("parses")
+            .expect("found");
+        assert_eq!(ctx.from[0].email, "noreply@github.com");
+        assert_eq!(ctx.subject, "Verify your device");
+        assert_eq!(ctx.thread_id.as_deref(), Some("T1"));
+        assert_eq!(ctx.message_id.as_deref(), Some("<abc@github.com>"), "trimmed");
+        assert_eq!(ctx.references.as_deref(), Some("<r1@x> <r2@x>"));
+        assert_eq!(ctx.auth_results.len(), 1);
+
+        // notFound → Ok(None); neither → loud.
+        let nf = serde_json::json!({ "notFound": ["M1"], "list": [] });
+        assert!(parse_reply_context("M1", &nf).expect("parses").is_none());
+        assert!(parse_reply_context("M1", &serde_json::json!({ "list": [] })).is_err());
     }
 
     #[test]
@@ -1694,17 +2107,13 @@ mod s2_domain_tests {
     }
 
     /// Constructor normalizes a trailing-slash base so path joins never
-    /// double the slash; the remaining typed stub (S5) fails with the
-    /// structured error. (S3's account calls are REAL as of the
-    /// addresses slice — see `s3_account_tests`.)
+    /// double the slash. (Every typed call is REAL as of S5 — the last
+    /// stub, queue submit, became [`StalwartClient::submission_send`];
+    /// S3's account calls live in `s3_account_tests`.)
     #[test]
     fn client_construction_and_stub_errors() {
         let c = StalwartClient::new("https://127.0.0.1:8443///", "k2-test-key");
         assert_eq!(c.base_url, "https://127.0.0.1:8443");
-        assert!(c
-            .queue_submit("o1")
-            .unwrap_err()
-            .contains("not built yet — mail slice S5"));
     }
 
     // ── S2 — pure envelope + reply parsers (fixtures, no network) ───

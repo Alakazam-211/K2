@@ -146,6 +146,22 @@ pub enum HookEvent {
     /// status card + the standard app notification on failures. Only
     /// transitions emit — the health cadence never spams steady-state.
     MailServerStateChanged,
+    /// K2 Mail S5 (prd-email-server-v1 §8.4): fires when an agent's
+    /// outbound message lands in the owner's Approvals queue
+    /// (send/reply under `approval` gating). Payload: `{outboundId,
+    /// projectPath, agentName}` — deliberately CONTENT-FREE (no
+    /// subject/body/recipients, same rule as the feedback push
+    /// contract). Drives the Approvals-tab amber dot + the standard
+    /// app notification.
+    MailSendApprovalRequested,
+    /// K2 Mail S5 (prd-email-server-v1 §8.4): fires when a queued
+    /// outbound is DECIDED — approved+submitted, denied (with note),
+    /// failed at submission, or auto-denied on the 7-day expiry.
+    /// Payload: `{outboundId, status}` (the wire status, e.g.
+    /// `submitted`/`rejected`/`failed`). An agent's blocked
+    /// `send --wait` learns via its own poll; this event refreshes the
+    /// Approvals tab + outbox views.
+    MailSendDecided,
 }
 
 impl HookEvent {
@@ -176,6 +192,8 @@ impl HookEvent {
             Self::TunnelSubdomainsChanged => "tunnel:subdomains-changed",
             Self::MailDomainStatusChanged => "mail:domain-status-changed",
             Self::MailServerStateChanged => "mail:server-state-changed",
+            Self::MailSendApprovalRequested => "mail:send-approval-requested",
+            Self::MailSendDecided => "mail:send-decided",
         }
     }
 }
@@ -560,6 +578,12 @@ mod tests {
             HookEvent::MailDomainStatusChanged.event_name(),
             "mail:domain-status-changed"
         );
+        // K2 Mail S5 — send approvals (§8.4).
+        assert_eq!(
+            HookEvent::MailSendApprovalRequested.event_name(),
+            "mail:send-approval-requested"
+        );
+        assert_eq!(HookEvent::MailSendDecided.event_name(), "mail:send-decided");
     }
 
     #[test]

@@ -46,17 +46,22 @@
 //! are GETs through `crate::cli::dispatch` → [`dispatch`], which also
 //! answers 405 for mutations reached via the GET chain.
 //!
-//! REAL as of S1+S2+S3+S4: `/cli/mail/status` (the capability-gating
-//! seam the Settings→Email page reads, pre-mortem #15),
+//! REAL as of S1+S2+S3+S4+S5: `/cli/mail/status` (the capability-
+//! gating seam the Settings→Email page reads, pre-mortem #15),
 //! `/cli/mail/preflight`, the server lifecycle mutations
 //! (enable/disable/uninstall), the S2 domain family
 //! (`domain/add|remove|check|list|show`), the S3 address family
-//! (`address/create|delete|list`), and the S4 read family
+//! (`address/create|delete|list`), the S4 read family
 //! (`messages|read|attachments|wait` — note: the dispatcher gives
 //! those four GETs their own `spawn_blocking` arm, since they dial
 //! Stalwart over blocking reqwest and `wait` holds the request up to
-//! 900 s). Every other route returns the structured `not_built` 501
-//! from its per-concern file until its slice lands.
+//! 900 s), and the S5 send family (`send|reply|outbox|approvals/*` —
+//! POSTs already run in the mail POST arm's `spawn_blocking`; the
+//! `approvals/list` GET has its own dispatcher clause adding the
+//! owner-or-admin gate, §11.1.3: owner verbs hard-fail for agent
+//! tokens server-side). Every other route (config, doctor) returns
+//! the structured `not_built` 501 from its per-concern file until its
+//! slice lands.
 
 use std::collections::HashMap;
 
@@ -199,27 +204,14 @@ mod tests {
     #[test]
     fn reserved_routes_501_and_real_routes_answer() {
         let params = HashMap::new();
-        for route in [
-            "/cli/mail/config",
-            "/cli/mail/doctor",
-            "/cli/mail/outbox",
-            "/cli/mail/approvals/list",
-        ] {
+        for route in ["/cli/mail/config", "/cli/mail/doctor"] {
             let resp = dispatch(route, &params).expect("claimed");
             assert_eq!(resp.status, "501 Not Implemented", "route={route}");
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
             assert_eq!(v["error"]["code"], "not_built", "route={route}");
         }
-        for route in [
-            "/cli/mail/config/set",
-            "/cli/mail/send",
-            "/cli/mail/reply",
-            "/cli/mail/approvals/approve",
-            "/cli/mail/approvals/deny",
-        ] {
-            let resp = dispatch_post(route, b"{}");
-            assert_eq!(resp.status, "501 Not Implemented", "route={route}");
-        }
+        let resp = dispatch_post("/cli/mail/config/set", b"{}");
+        assert_eq!(resp.status, "501 Not Implemented");
         let resp = dispatch("/cli/mail/status", &params).expect("claimed");
         assert_eq!(resp.status, "200 OK", "status is REAL from day one");
 
@@ -269,6 +261,32 @@ mod tests {
         // S1 — preflight is REAL.
         let resp = dispatch("/cli/mail/preflight", &params).expect("claimed");
         assert_eq!(resp.status, "200 OK", "preflight is REAL as of S1");
+
+        // S5 — the send family is REAL: reads validate their params
+        // through the shim (outbox without a project = usage 400; the
+        // owner approvals queue answers 200 — its owner gate lives in
+        // the dispatcher clause), and the mutations validate their
+        // bodies (`{}` = usage 400) instead of 501-ing. Deep behavior
+        // is owned by routes_send/mail::send tests.
+        let resp = dispatch("/cli/mail/outbox", &params).expect("claimed");
+        assert_eq!(resp.status, "400 Bad Request");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "usage");
+        let resp = dispatch("/cli/mail/approvals/list", &params).expect("claimed");
+        assert_eq!(resp.status, "200 OK");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["ok"], true);
+        for route in [
+            "/cli/mail/send",
+            "/cli/mail/reply",
+            "/cli/mail/approvals/approve",
+            "/cli/mail/approvals/deny",
+        ] {
+            let resp = dispatch_post(route, b"{}");
+            assert_eq!(resp.status, "400 Bad Request", "route={route}: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage", "route={route}");
+        }
 
         // S4 — the read family is REAL: every route validates its
         // params through the shim (missing project/id = usage 400)

@@ -61,13 +61,15 @@ export const STYLES: readonly StyleMeta[] = [
     "description": "Experimental preview — layered-ring cards on warm graphite: hairline, bright gap, outer line. Tactile keycap controls, zite-gold accent.",
     "defaultPalette": "graphite",
     "defaultPalettes": {
-      "dark": "graphite"
+      "dark": "graphite",
+      "light": "porcelain"
     },
     "capabilities": {
       "gaps": false,
       "backdrop": false,
       "schemes": [
-        "dark"
+        "dark",
+        "light"
       ]
     },
     "gapPresets": [],
@@ -117,6 +119,51 @@ export const STYLES: readonly StyleMeta[] = [
             "background": 3815215
           }
         }
+      },
+      {
+        "id": "porcelain",
+        "name": "Porcelain",
+        "schemes": [
+          "light"
+        ],
+        "swatch": {
+          "bg": "#f7f6f2",
+          "surface": "#ffffff",
+          "elevated": "#f1efe9",
+          "accent": "#e6b400",
+          "textPrimary": "#1c1b18",
+          "border": "rgba(28, 26, 20, 0.08)"
+        },
+        "terminal": {
+          "foreground": 1841944,
+          "background": 16250610,
+          "palette": [
+            1841944,
+            11740702,
+            2583357,
+            10119688,
+            2972318,
+            8080006,
+            1011824,
+            9275774,
+            5723212,
+            13645864,
+            3115598,
+            12092170,
+            3699627,
+            9724063,
+            1214602,
+            657670
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 12092939
+          },
+          "selection": {
+            "text": null,
+            "background": 14999506
+          }
+        }
       }
     ]
   },
@@ -127,13 +174,15 @@ export const STYLES: readonly StyleMeta[] = [
     "description": "Experimental preview — frosted instrument glass over a deep ambient canvas. Chrome floats as translucent cards; terminals stay pure and opaque.",
     "defaultPalette": "obsidian",
     "defaultPalettes": {
-      "dark": "obsidian"
+      "dark": "obsidian",
+      "light": "veil"
     },
     "capabilities": {
       "gaps": false,
       "backdrop": true,
       "schemes": [
-        "dark"
+        "dark",
+        "light"
       ]
     },
     "gapPresets": [],
@@ -192,6 +241,51 @@ export const STYLES: readonly StyleMeta[] = [
           "selection": {
             "text": null,
             "background": 2765648
+          }
+        }
+      },
+      {
+        "id": "veil",
+        "name": "Veil",
+        "schemes": [
+          "light"
+        ],
+        "swatch": {
+          "bg": "#f2f4f8",
+          "surface": "rgba(255, 255, 255, 0.55)",
+          "elevated": "rgba(255, 255, 255, 0.68)",
+          "accent": "#2f6fe0",
+          "textPrimary": "#1a1d26",
+          "border": "rgba(20, 30, 60, 0.10)"
+        },
+        "terminal": {
+          "foreground": 1711398,
+          "background": 15922424,
+          "palette": [
+            1711398,
+            12726063,
+            1997894,
+            10711562,
+            3108832,
+            8014750,
+            948864,
+            9081768,
+            5002600,
+            14437195,
+            2595151,
+            12750098,
+            5211878,
+            9724856,
+            1413785,
+            526864
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 1711398
+          },
+          "selection": {
+            "text": null,
+            "background": 13161190
           }
         }
       }

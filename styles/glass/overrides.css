@@ -18,6 +18,15 @@
     var(--color-bg-canvas);
 }
 
+/* Light scheme (Veil): a pale daylight aurora — same geometry, washed tints. */
+[data-style="glass"][data-scheme="light"] body {
+  background:
+    radial-gradient(1200px 800px at 12% -8%, rgba(120, 150, 220, 0.25), transparent 60%),
+    radial-gradient(1000px 700px at 88% 108%, rgba(190, 150, 220, 0.18), transparent 62%),
+    radial-gradient(700px 500px at 70% 20%, rgba(120, 190, 200, 0.14), transparent 65%),
+    var(--color-bg-canvas);
+}
+
 [data-style="glass"] [data-surface="surface"],
 [data-style="glass"] [data-surface="elevated"],
 [data-style="glass"] [data-surface="stripe"] {

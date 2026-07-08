@@ -54,7 +54,15 @@
     "scrollbar-thumb": { "$value": "rgba(255, 250, 235, 0.10)", "$type": "color" },
     "scrollbar-thumb-hover": { "$value": "rgba(255, 250, 235, 0.20)", "$type": "color" },
     "scrollbar-thumb-strong": { "$value": "rgba(255, 250, 235, 0.25)", "$type": "color" },
-    "scrollbar-thumb-strong-hover": { "$value": "rgba(255, 250, 235, 0.40)", "$type": "color" }
+    "scrollbar-thumb-strong-hover": { "$value": "rgba(255, 250, 235, 0.40)", "$type": "color" },
+    "ring-edge": { "$value": "rgba(255, 255, 255, 0.06)", "$type": "color", "$description": "Surface ring top edge (ring.surface layer 1)." },
+    "ring-edge-strong": { "$value": "rgba(255, 255, 255, 0.10)", "$type": "color", "$description": "Keycap top glow (ring.field layer 1)." },
+    "ring-hairline": { "$value": "rgba(255, 255, 255, 0.08)", "$type": "color", "$description": "Inner hairline around cards." },
+    "ring-hairline-outer": { "$value": "rgba(255, 255, 255, 0.08)", "$type": "color", "$description": "Outer hairline beyond the gap." },
+    "ring-shadow": { "$value": "rgba(0, 0, 0, 0.32)", "$type": "color", "$description": "Drop shadow between hairline and gap." },
+    "ring-gap": { "$value": "#0c0b0a", "$type": "color", "$description": "THE gap ring — canvas-colored on dark (zite's inversion)." },
+    "ring-key-shade": { "$value": "rgba(0, 0, 0, 0.22)", "$type": "color", "$description": "Keycap bottom shade." },
+    "ring-key-line": { "$value": "rgba(0, 0, 0, 0.45)", "$type": "color", "$description": "Keycap dark outline." }
   },
   "terminal": {
     "fg": { "$value": "#e5e1d8", "$type": "color" },

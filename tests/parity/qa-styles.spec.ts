@@ -49,6 +49,8 @@ const CONFIGS: QaConfig[] = [
   { name: 'paper-spacious', style: 'square', palette: 'paper', scheme: 'light', gaps: 'spacious' },
   { name: 'glass-obsidian', style: 'glass', palette: 'obsidian', scheme: 'dark', gaps: '' },
   { name: 'bezel-graphite', style: 'bezel', palette: 'graphite', scheme: 'dark', gaps: '' },
+  { name: 'glass-veil', style: 'glass', palette: 'veil', scheme: 'light', gaps: '' },
+  { name: 'bezel-porcelain', style: 'bezel', palette: 'porcelain', scheme: 'light', gaps: '' },
 ]
 
 /** Settle + capture into the config's qa shots dir, then verify the

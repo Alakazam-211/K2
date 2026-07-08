@@ -8,12 +8,13 @@
   "description": "Experimental preview — frosted instrument glass over a deep ambient canvas. Chrome floats as translucent cards; terminals stay pure and opaque.",
   "defaultPalette": "obsidian",
   "defaultPalettes": {
-    "dark": "obsidian"
+    "dark": "obsidian",
+    "light": "veil"
   },
   "capabilities": {
     "gaps": false,
     "backdrop": true,
-    "schemes": ["dark"]
+    "schemes": ["dark", "light"]
   },
   "dials": [
     { "id": "frost", "label": "Frost", "token": "--material-blur", "min": 0, "max": 30, "step": 1, "unit": "px", "default": 18 }

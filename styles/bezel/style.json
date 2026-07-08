@@ -8,11 +8,12 @@
   "description": "Experimental preview — layered-ring cards on warm graphite: hairline, bright gap, outer line. Tactile keycap controls, zite-gold accent.",
   "defaultPalette": "graphite",
   "defaultPalettes": {
-    "dark": "graphite"
+    "dark": "graphite",
+    "light": "porcelain"
   },
   "capabilities": {
     "gaps": false,
     "backdrop": false,
-    "schemes": ["dark"]
+    "schemes": ["dark", "light"]
   }
 }

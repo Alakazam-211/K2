@@ -1342,6 +1342,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // 0.39.x (Issue #6): webview liveness watchdog heartbeat.
             renderer_heartbeat,
+            // Style System — traffic lights follow the style's window inset.
+            commands::traffic_lights::set_traffic_light_inset,
             // Embedded Browser Tab (S1 spike) — child-webview lifecycle.
             commands::browser_webviews::browser_create,
             commands::browser_webviews::browser_set_bounds,

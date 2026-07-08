@@ -15,6 +15,7 @@
 // ConnectionGate's deferred-import contract.
 
 import { create } from 'zustand'
+import { invoke } from '@tauri-apps/api/core'
 import { STYLES, type StyleMeta, type StyleScheme } from '@/styles.generated'
 import {
   DEFAULT_SELECTION,
@@ -95,6 +96,42 @@ export function stampStyleAttributes(sel: StyleSelection): void {
   if (gapsPreset) html.setAttribute('data-gaps', gapsPreset)
   else html.removeAttribute('data-gaps')
   stampDialProperties(style)
+  syncTrafficLights()
+}
+
+// ── macOS traffic lights follow the window inset ─────────────────────
+// Floating-chrome styles (Glass/Bezel/spacious presets) inset the whole
+// UI from the window edge, so the close/minimize/zoom buttons must move
+// down-right with it. AppKit resets standard-button frames on resize and
+// fullscreen transitions, so we also re-apply on window resize.
+// Fire-and-forget: in non-Tauri contexts (parity harness, plain browser)
+// the invoke rejects and the miss is purely cosmetic.
+let lastTrafficInset = -1
+
+function applyTrafficInset(inset: number): void {
+  void invoke('set_traffic_light_inset', { x: inset, y: inset }).catch(() => {})
+}
+
+function syncTrafficLights(): void {
+  if (typeof document === 'undefined' || typeof navigator === 'undefined') return
+  if (!navigator.platform.toLowerCase().includes('mac')) return
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--inset-window').trim()
+  const inset = Number.parseFloat(raw) || 0
+  if (inset === lastTrafficInset) return
+  lastTrafficInset = inset
+  applyTrafficInset(inset)
+}
+
+if (typeof window !== 'undefined') {
+  let queued = false
+  window.addEventListener('resize', () => {
+    if (queued || lastTrafficInset <= 0) return
+    queued = true
+    requestAnimationFrame(() => {
+      queued = false
+      applyTrafficInset(lastTrafficInset)
+    })
+  })
 }
 
 function writeMirror(sel: StyleSelection): void {

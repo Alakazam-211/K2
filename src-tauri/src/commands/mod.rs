@@ -65,3 +65,6 @@ pub mod local_upload;
 // Embedded Browser Tab (PRD prd-browser-pane-v1.md) — Rust-side child-
 // webview lifecycle; renderer gets commands, never webview capabilities.
 pub mod browser_webviews;
+
+// Style System — macOS traffic-light inset for floating-chrome styles.
+pub mod traffic_lights;

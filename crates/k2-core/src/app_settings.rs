@@ -77,6 +77,10 @@ fn default_active_window_hours() -> u32 {
     24
 }
 
+fn default_session_archive_days() -> u32 {
+    14
+}
+
 fn default_left_panel_tab() -> String {
     "files".to_string()
 }
@@ -169,6 +173,11 @@ pub struct AppSettings {
     pub left_panel_tabs: Vec<String>,
     #[serde(default = "default_right_panel_tabs")]
     pub right_panel_tabs: Vec<String>,
+    /// Session-archive sweep threshold in days (0 = disabled). Sessions
+    /// older than this are COPIED into `.k2/session-archive/` daily to
+    /// outlive provider transcript reaping (~30d). See session_archive.rs.
+    #[serde(default = "default_session_archive_days")]
+    pub session_archive_days: u32,
     /// Deprecated: workspace layouts now stored in SQLite workspace_layouts table.
     /// Kept for deserialization compat with old settings.json files; skipped on write.
     #[serde(default, skip_serializing)]
@@ -482,6 +491,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             terminal: default_terminal(),
+            session_archive_days: default_session_archive_days(),
             keybindings: HashMap::new(),
             project_settings: HashMap::new(),
             focus_groups_enabled: false,

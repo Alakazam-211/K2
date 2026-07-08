@@ -792,6 +792,19 @@ async fn async_main() {
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");
 
+    // Session-archive daily sweep (session_archive.rs): protects agent
+    // transcripts from provider reaping (~30d) by copying aged sessions
+    // into `.k2/session-archive/`. First pass ~2 min after boot (off the
+    // hot path), then every 24h. spawn_blocking: it's pure filesystem
+    // walking + copies, potentially GBs on the first pass.
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        loop {
+            let _ = tokio::task::spawn_blocking(k2_core::session_archive::run_daily_sweep).await;
+            tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
+        }
+    });
+
     // task #672 — canonical daemon-owned Active reaper. A single
     // long-lived task that owns the grace-reap of dormant workspace
     // chat PTYs, keyed on the canonical Active set (replaces the

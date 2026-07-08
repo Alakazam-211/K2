@@ -67,6 +67,7 @@ pub mod daemon_lifecycle;
 pub mod db;
 pub mod migration_home;
 pub mod paths;
+pub mod session_archive;
 pub mod migration_launchd;
 pub mod workspace_dir;
 pub use workspace_dir::workspace_dot_dir;

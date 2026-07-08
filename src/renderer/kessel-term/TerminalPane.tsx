@@ -25,6 +25,7 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { writeText as tauriClipboardWriteText } from '@tauri-apps/plugin-clipboard-manager'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 
 import { useKesselConfig } from '../kessel/config-context'
@@ -1777,21 +1778,60 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             // stomping passive viewers. Empty/dedupe policy rides
             // along inside shouldApplyOsc52Frame.
             const text = parsed.payload.text ?? ''
-            if (
-              !shouldApplyOsc52Frame({
-                visible: tabVisibleRef.current,
-                paneFocused: paneFocusedRef.current,
-                windowFocused: useWindowFocusStore.getState().isFocused,
-                lastApplied: lastOsc52AppliedRef.current,
-                incoming: text,
-              })
-            ) {
+            const gate = {
+              visible: tabVisibleRef.current,
+              paneFocused: paneFocusedRef.current,
+              windowFocused: useWindowFocusStore.getState().isFocused,
+              lastApplied: lastOsc52AppliedRef.current,
+              incoming: text,
+            }
+            if (import.meta.env.DEV) {
+              // eslint-disable-next-line no-console
+              console.warn(
+                `[kessel-term/osc52] frame arrived len=${text.length} ` +
+                  `visible=${gate.visible} paneFocused=${gate.paneFocused} ` +
+                  `windowFocused=${gate.windowFocused} ` +
+                  `deduped=${text.length > 0 && text === gate.lastApplied}`,
+              )
+            }
+            if (!shouldApplyOsc52Frame(gate)) {
+              if (import.meta.env.DEV) {
+                // eslint-disable-next-line no-console
+                console.warn('[kessel-term/osc52] gate BLOCKED the apply')
+              }
               break
             }
-            lastOsc52AppliedRef.current = text
-            navigator.clipboard.writeText(text).catch((err) =>
-              console.warn('[kessel-term/osc52] clipboard write failed:', err),
-            )
+            // Write via the Tauri clipboard plugin, NOT
+            // navigator.clipboard: this runs inside a WS onmessage
+            // handler, which carries no user-gesture activation, and
+            // WKWebView rejects gestureless web-clipboard writes with
+            // NotAllowedError (confirmed live 2026-07-07 — the frame
+            // arrived, every gate passed, the write died). The plugin
+            // goes through Rust (capability
+            // clipboard-manager:allow-write-text) and has no
+            // activation requirement. navigator.clipboard stays as
+            // the fallback for non-Tauri contexts (vite in a browser).
+            //
+            // Latch the dedupe ref only AFTER a successful OS write — a
+            // failed write must stay retryable (re-dragging the same
+            // text re-emits the same payload; latching up front would
+            // dedupe every retry into silence).
+            tauriClipboardWriteText(text)
+              .catch(() => navigator.clipboard.writeText(text))
+              .then(
+                () => {
+                  lastOsc52AppliedRef.current = text
+                  if (import.meta.env.DEV) {
+                    // eslint-disable-next-line no-console
+                    console.warn('[kessel-term/osc52] clipboard write OK')
+                  }
+                },
+                (err) =>
+                  console.warn(
+                    '[kessel-term/osc52] clipboard write failed:',
+                    err,
+                  ),
+              )
             break
           }
           case 'child_exit': {

@@ -11,8 +11,20 @@
 //! ([`StalwartClient::discover_api_url`], pure parser
 //! [`parse_session_api_url`], unit-tested against a fixture).
 //!
-//! The typed calls below are S1/S2/S3/S5 stubs returning the
+//! The S2 domain calls (`domain_create` / `domain_delete` /
+//! `domain_dns_zonefile`) are REAL: JMAP method calls composed here,
+//! posted to the DISCOVERED api url, parsed by pure fixture-tested
+//! parsers. The remaining typed calls are S1/S3/S5 stubs returning the
 //! structured not-built error; the transport helpers are real.
+//!
+//! LIVE-BOX VERIFICATION FLAG (S2): the exact `using` capability URN
+//! for Stalwart's Domain management methods and the property spellings
+//! (`dkimManagement: "automatic"`, `subAddressing: "enabled"`,
+//! server-set `dnsZoneFile`) follow the PRD script (§6.1) — Stalwart
+//! has no mgmt-API stability policy, so S2's first live-box run must
+//! confirm the envelope against the pinned v0.16.x before ship. The
+//! parsers are strict JMAP `/set`/`/get` shapes and will fail LOUDLY
+//! (named method + body excerpt) on any drift.
 
 use std::time::Duration;
 
@@ -78,14 +90,26 @@ impl StalwartClient {
         path: &str,
         body: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let url = format!("{}{}", self.base_url, path);
+        self.post_json_url(&format!("{}{}", self.base_url, path), path, body)
+    }
+
+    /// POST a JSON body to an ABSOLUTE url (the discovered JMAP apiUrl
+    /// is absolute, PRD §4.1). `label` is the short name used in error
+    /// lines so they never leak the full url/key.
+    fn post_json_url(
+        &self,
+        url: &str,
+        label: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let path = label;
         // Manual JSON body: the crate's reqwest is built without the
         // `json` feature (same minimal feature set the rest of the
         // daemon uses) — serialize + set the header ourselves.
         let payload =
             serde_json::to_string(body).map_err(|e| format!("POST {path}: body serialize: {e}"))?;
         let resp = Self::http()?
-            .post(&url)
+            .post(url)
             .bearer_auth(&self.api_key)
             .header("Content-Type", "application/json")
             .body(payload)
@@ -116,31 +140,63 @@ impl StalwartClient {
         parse_session_api_url(&self.base_url, &session)
     }
 
-    // ── Typed calls (stubs — bodies land in their slices) ───────────
+    // ── Typed calls (S2 domain calls REAL; S1/S3/S5 stubs) ──────────
 
-    /// S2 — `Domain/set create` with automatic DKIM + sub-addressing,
-    /// catch-all OFF (PRD §6.1). Returns the server-set domain id.
-    #[allow(dead_code)] // S2 wires this into domain add.
-    pub fn domain_create(&self, domain: &str) -> Result<String, String> {
-        let _ = domain;
-        Err(super::not_built_err("S2", "jmap Domain/set create"))
+    /// Compose + POST one JMAP method call against the DISCOVERED api
+    /// url and return that method's response arguments. The whole
+    /// Stalwart conversation for domains flows through here so the
+    /// envelope/parse rules live in exactly one place
+    /// ([`jmap_envelope`] + [`parse_method_response`], both pure and
+    /// fixture-tested).
+    fn mgmt_call(
+        &self,
+        method: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let api_url = self.discover_api_url()?;
+        let resp = self.post_json_url(&api_url, "jmap api", &jmap_envelope(method, args))?;
+        parse_method_response(method, &resp)
     }
 
-    /// S2 — destroy a domain (after the route layer's explicit
-    /// confirm + address retirement, PRD §6.6).
-    #[allow(dead_code)] // S2 wires this into domain remove.
+    /// S2 — `Domain/set create` with automatic DKIM key generation
+    /// (Ed25519 + RSA immediately), sub-addressing enabled, catch-all
+    /// OFF (spam magnet — per-domain opt-in later; PRD §6.1). Returns
+    /// the server-set domain id + `dnsZoneFile` when the create reply
+    /// carries it (server-set properties ride `created`; a missing
+    /// zone file falls back to [`Self::domain_dns_zonefile`]).
+    pub fn domain_create(&self, domain: &str) -> Result<CreatedDomain, String> {
+        let args = serde_json::json!({
+            "create": {
+                CREATE_TAG: {
+                    "name": domain,
+                    "dkimManagement": "automatic",
+                    "subAddressing": "enabled",
+                    "catchAllAddress": null,
+                }
+            }
+        });
+        let resp = self.mgmt_call("Domain/set", args)?;
+        parse_domain_set_created(&resp)
+    }
+
+    /// S2 — destroy a domain (the route layer has already required the
+    /// explicit confirm + retired the domain's addresses, PRD §6.6).
     pub fn domain_delete(&self, stalwart_domain_id: &str) -> Result<(), String> {
-        let _ = stalwart_domain_id;
-        Err(super::not_built_err("S2", "jmap Domain/set destroy"))
+        let args = serde_json::json!({ "destroy": [stalwart_domain_id] });
+        let resp = self.mgmt_call("Domain/set", args)?;
+        parse_domain_set_destroyed(stalwart_domain_id, &resp)
     }
 
     /// S2 — read the domain's server-set `dnsZoneFile` (the SSOT for
     /// the record table, PRD §6.2 — K2 computes nothing itself except
     /// relay-mode SPF adjustments).
-    #[allow(dead_code)] // S2 wires this into the record table.
     pub fn domain_dns_zonefile(&self, stalwart_domain_id: &str) -> Result<String, String> {
-        let _ = stalwart_domain_id;
-        Err(super::not_built_err("S2", "jmap Domain dnsZoneFile read"))
+        let args = serde_json::json!({
+            "ids": [stalwart_domain_id],
+            "properties": ["dnsZoneFile"],
+        });
+        let resp = self.mgmt_call("Domain/get", args)?;
+        parse_domain_get_zonefile(stalwart_domain_id, &resp)
     }
 
     /// S3 — `Account/set create` (type User, local-part + domain,
@@ -172,6 +228,140 @@ impl StalwartClient {
         let _ = outbound_id;
         Err(super::not_built_err("S5", "jmap queue submit"))
     }
+}
+
+/// A Stalwart domain the S2 create call just made: the server-set id
+/// plus the server-set `dnsZoneFile` when the create reply carried it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedDomain {
+    pub id: String,
+    pub dns_zone_file: Option<String>,
+}
+
+/// The client-chosen creation tag inside `Domain/set create` — any
+/// string works (JMAP creation ids are caller-chosen); ours is stable
+/// so fixtures and parsers agree.
+const CREATE_TAG: &str = "k2";
+
+/// The JMAP `using` capabilities for domain management calls.
+/// LIVE-BOX FLAG (see module docs): the Stalwart-specific URN must be
+/// confirmed against the pinned v0.16.x on the first live run.
+const JMAP_USING: [&str; 2] = [
+    "urn:ietf:params:jmap:core",
+    "https://stalw.art/jmap/domain",
+];
+
+/// Pure envelope builder for a single JMAP method call.
+fn jmap_envelope(method: &str, args: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "using": JMAP_USING,
+        "methodCalls": [[method, args, "0"]],
+    })
+}
+
+/// Pure response unwrapper: extract the first `methodResponses` entry,
+/// require it to answer `method` (a JMAP-level failure answers
+/// `error`), and return its arguments. Errors are one-line and name
+/// the method + the server's error type/description.
+fn parse_method_response(
+    method: &str,
+    resp: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let first = resp
+        .get("methodResponses")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| format!("{method}: reply has no methodResponses — not a JMAP response?"))?;
+    let name = first.first().and_then(|v| v.as_str()).unwrap_or("");
+    let args = first.get(1).cloned().unwrap_or(serde_json::Value::Null);
+    if name == method {
+        return Ok(args);
+    }
+    if name == "error" {
+        let etype = args.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let desc = args
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("no description");
+        return Err(format!("{method}: JMAP error '{etype}': {desc}"));
+    }
+    Err(format!("{method}: unexpected method response '{name}'"))
+}
+
+/// Format a JMAP SetError (`{type, description?}`) into one line.
+fn set_error_line(err: &serde_json::Value) -> String {
+    let etype = err.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+    match err.get("description").and_then(|v| v.as_str()) {
+        Some(d) => format!("{etype}: {d}"),
+        None => etype.to_string(),
+    }
+}
+
+/// Pure `Domain/set create` reply parser: our creation tag must appear
+/// under `created` (server-set id required; `dnsZoneFile` optional) —
+/// `notCreated` surfaces the server's SetError verbatim.
+fn parse_domain_set_created(args: &serde_json::Value) -> Result<CreatedDomain, String> {
+    if let Some(created) = args.get("created").and_then(|v| v.get(CREATE_TAG)) {
+        let id = created
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "Domain/set create: reply has no server-set 'id'".to_string())?;
+        let dns_zone_file = created
+            .get("dnsZoneFile")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(String::from);
+        return Ok(CreatedDomain { id: id.to_string(), dns_zone_file });
+    }
+    if let Some(err) = args.get("notCreated").and_then(|v| v.get(CREATE_TAG)) {
+        return Err(format!("Domain/set create rejected — {}", set_error_line(err)));
+    }
+    Err("Domain/set create: reply has neither created nor notCreated for our tag".to_string())
+}
+
+/// Pure `Domain/set destroy` reply parser: the id must appear under
+/// `destroyed`; `notDestroyed` surfaces the server's SetError.
+fn parse_domain_set_destroyed(
+    id: &str,
+    args: &serde_json::Value,
+) -> Result<(), String> {
+    let destroyed = args
+        .get("destroyed")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().any(|v| v.as_str() == Some(id)))
+        .unwrap_or(false);
+    if destroyed {
+        return Ok(());
+    }
+    if let Some(err) = args.get("notDestroyed").and_then(|v| v.get(id)) {
+        return Err(format!("Domain/set destroy rejected — {}", set_error_line(err)));
+    }
+    Err(format!("Domain/set destroy: '{id}' not in the destroyed list"))
+}
+
+/// Pure `Domain/get` reply parser: find our id in `list` and return
+/// its non-empty `dnsZoneFile`.
+fn parse_domain_get_zonefile(
+    id: &str,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id)));
+    let Some(entry) = entry else {
+        return Err(format!("Domain/get: domain '{id}' not in the reply list"));
+    };
+    entry
+        .get("dnsZoneFile")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .ok_or_else(|| format!("Domain/get: domain '{id}' has no dnsZoneFile"))
 }
 
 /// Pure session-document parser: extract `apiUrl` and absolutize it
@@ -270,23 +460,12 @@ mod tests {
     }
 
     /// Constructor normalizes a trailing-slash base so path joins never
-    /// double the slash; typed stubs fail with the structured error.
+    /// double the slash; the remaining typed stubs (S3/S5) fail with
+    /// the structured error.
     #[test]
     fn client_construction_and_stub_errors() {
         let c = StalwartClient::new("https://127.0.0.1:8443///", "k2-test-key");
         assert_eq!(c.base_url, "https://127.0.0.1:8443");
-        assert!(c
-            .domain_create("acme.dev")
-            .unwrap_err()
-            .contains("not built yet — mail slice S2"));
-        assert!(c
-            .domain_delete("d1")
-            .unwrap_err()
-            .contains("not built yet — mail slice S2"));
-        assert!(c
-            .domain_dns_zonefile("d1")
-            .unwrap_err()
-            .contains("not built yet — mail slice S2"));
         assert!(c
             .account_create("scout", "d1")
             .unwrap_err()
@@ -299,5 +478,220 @@ mod tests {
             .queue_submit("o1")
             .unwrap_err()
             .contains("not built yet — mail slice S5"));
+    }
+
+    // ── S2 — pure envelope + reply parsers (fixtures, no network) ───
+
+    #[test]
+    fn envelope_carries_using_and_single_method_call() {
+        let env = jmap_envelope("Domain/set", serde_json::json!({"destroy": ["d1"]}));
+        assert_eq!(env["using"][0], "urn:ietf:params:jmap:core");
+        assert_eq!(env["methodCalls"][0][0], "Domain/set");
+        assert_eq!(env["methodCalls"][0][1]["destroy"][0], "d1");
+        assert_eq!(env["methodCalls"][0][2], "0");
+    }
+
+    #[test]
+    fn method_response_unwraps_matching_method_and_surfaces_errors() {
+        let ok = serde_json::json!({
+            "methodResponses": [["Domain/set", { "created": {} }, "0"]],
+            "sessionState": "s1",
+        });
+        let args = parse_method_response("Domain/set", &ok).expect("unwrapped");
+        assert!(args.get("created").is_some());
+
+        // JMAP-level error → named type + description.
+        let err = serde_json::json!({
+            "methodResponses": [["error", {
+                "type": "unknownMethod",
+                "description": "Domain/set is not known",
+            }, "0"]],
+        });
+        let msg = parse_method_response("Domain/set", &err).expect_err("must reject");
+        assert!(msg.contains("unknownMethod"), "{msg}");
+        assert!(msg.contains("Domain/set is not known"), "{msg}");
+
+        // Not a JMAP response at all → loud.
+        let msg = parse_method_response("Domain/set", &serde_json::json!({"ok": true}))
+            .expect_err("must reject");
+        assert!(msg.contains("no methodResponses"), "{msg}");
+
+        // A different method answering → loud.
+        let odd = serde_json::json!({
+            "methodResponses": [["Domain/get", {}, "0"]],
+        });
+        let msg = parse_method_response("Domain/set", &odd).expect_err("must reject");
+        assert!(msg.contains("Domain/get"), "{msg}");
+    }
+
+    /// A realistic `Domain/set create` reply — server-set id +
+    /// dnsZoneFile ride `created` under our creation tag.
+    #[test]
+    fn domain_set_created_parses_id_and_zonefile() {
+        let args = serde_json::json!({
+            "created": {
+                "k2": {
+                    "id": "dom-7f3a",
+                    "dnsZoneFile": "acme.dev. IN MX 10 mail.acme.dev.\n",
+                }
+            },
+            "notCreated": null,
+        });
+        let created = parse_domain_set_created(&args).expect("created parsed");
+        assert_eq!(created.id, "dom-7f3a");
+        assert!(created.dns_zone_file.as_deref().unwrap().contains("MX"));
+
+        // Zone file absent from the create reply → None (the caller
+        // falls back to Domain/get).
+        let args = serde_json::json!({ "created": { "k2": { "id": "dom-1" } } });
+        let created = parse_domain_set_created(&args).expect("created parsed");
+        assert_eq!(created.dns_zone_file, None);
+
+        // notCreated → the server's SetError verbatim.
+        let args = serde_json::json!({
+            "notCreated": { "k2": { "type": "alreadyExists",
+                                     "description": "domain exists" } },
+        });
+        let msg = parse_domain_set_created(&args).expect_err("must reject");
+        assert!(msg.contains("alreadyExists"), "{msg}");
+        assert!(msg.contains("domain exists"), "{msg}");
+
+        // Neither → loud.
+        assert!(parse_domain_set_created(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn domain_set_destroyed_requires_id_in_destroyed_list() {
+        let ok = serde_json::json!({ "destroyed": ["dom-1", "dom-2"] });
+        parse_domain_set_destroyed("dom-1", &ok).expect("destroyed");
+
+        let rejected = serde_json::json!({
+            "notDestroyed": { "dom-1": { "type": "forbidden" } },
+        });
+        let msg = parse_domain_set_destroyed("dom-1", &rejected).expect_err("must reject");
+        assert!(msg.contains("forbidden"), "{msg}");
+
+        let silent = serde_json::json!({ "destroyed": [] });
+        assert!(parse_domain_set_destroyed("dom-1", &silent).is_err());
+    }
+
+    #[test]
+    fn domain_get_zonefile_finds_our_id() {
+        let args = serde_json::json!({
+            "list": [
+                { "id": "dom-other", "dnsZoneFile": "wrong.zone" },
+                { "id": "dom-1", "dnsZoneFile": "acme.dev. IN MX 10 mail.acme.dev." },
+            ],
+            "notFound": [],
+        });
+        assert_eq!(
+            parse_domain_get_zonefile("dom-1", &args).expect("found"),
+            "acme.dev. IN MX 10 mail.acme.dev."
+        );
+        // Missing id / empty zone file → loud.
+        assert!(parse_domain_get_zonefile("dom-9", &args).is_err());
+        let empty = serde_json::json!({ "list": [{ "id": "dom-1", "dnsZoneFile": "  " }] });
+        assert!(parse_domain_get_zonefile("dom-1", &empty).is_err());
+    }
+
+    // ── S2 — loopback mock round-trip (127.0.0.1 only, house rule) ──
+
+    /// Minimal one-shot HTTP responder: accepts `hits` connections on
+    /// a loopback port, reads each request (headers + Content-Length
+    /// body), records it, and answers the canned JSON.
+    fn spawn_mock_server(
+        replies: Vec<String>,
+    ) -> (u16, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for reply in replies {
+                let (mut sock, _) = match listener.accept() {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                // Read until the full head + declared body is in.
+                loop {
+                    let n = match sock.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    raw.extend_from_slice(&buf[..n]);
+                    if let Some(head_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+                        let want: usize = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if raw.len() >= head_end + 4 + want {
+                            break;
+                        }
+                    }
+                }
+                let _ = tx.send(String::from_utf8_lossy(&raw).to_string());
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+        (port, rx)
+    }
+
+    /// Full `domain_create` round-trip against a loopback mock: the
+    /// client discovers the api url from /.well-known/jmap, POSTs the
+    /// PRD §6.1 create envelope with the Bearer key, and parses the
+    /// created reply. Locks the whole S2 wire shape end to end.
+    #[test]
+    fn domain_create_round_trip_against_loopback_mock() {
+        let created_reply = serde_json::json!({
+            "methodResponses": [["Domain/set", {
+                "created": { "k2": {
+                    "id": "dom-42",
+                    "dnsZoneFile": "acme.dev. 3600 IN MX 10 mail.acme.dev.\n",
+                } },
+            }, "0"]],
+        })
+        .to_string();
+        // Reply 1: the session document (apiUrl is root-relative to
+        // prove absolutization rides the real path too).
+        let (port, rx) = spawn_mock_server(vec![
+            r#"{"apiUrl": "/jmap/", "capabilities": {}}"#.to_string(),
+            created_reply,
+        ]);
+
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let created = c.domain_create("acme.dev").expect("create round-trip");
+        assert_eq!(created.id, "dom-42");
+        assert!(created.dns_zone_file.as_deref().unwrap().contains("MX 10"));
+
+        // Request 1 hit the well-known session document with the key.
+        let req1 = rx.recv().expect("first request recorded");
+        assert!(req1.starts_with("GET /.well-known/jmap"), "{req1}");
+        assert!(req1.contains("authorization: Bearer k2-test-key")
+            || req1.contains("Authorization: Bearer k2-test-key"), "{req1}");
+
+        // Request 2 POSTed the JMAP envelope to the DISCOVERED path.
+        let req2 = rx.recv().expect("second request recorded");
+        assert!(req2.starts_with("POST /jmap/"), "{req2}");
+        let body_start = req2.find("\r\n\r\n").expect("body") + 4;
+        let body: serde_json::Value =
+            serde_json::from_str(&req2[body_start..]).expect("JSON body");
+        assert_eq!(body["methodCalls"][0][0], "Domain/set");
+        let create = &body["methodCalls"][0][1]["create"]["k2"];
+        assert_eq!(create["name"], "acme.dev");
+        assert_eq!(create["dkimManagement"], "automatic");
+        assert_eq!(create["subAddressing"], "enabled");
+        assert!(create["catchAllAddress"].is_null(), "catch-all OFF by default");
     }
 }

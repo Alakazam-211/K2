@@ -859,6 +859,14 @@ async fn async_main() {
     // federation is off or every queue is empty.
     let _federation_drain_handle = federation_drain::spawn();
 
+    // K2 Mail S2 (prd-email-server-v1 §6.3) — the mail-domain DNS
+    // verification poller: pending/broken domains re-check every ~5
+    // minutes (propagation retries never fail-fast, pre-mortem #4),
+    // Verified domains re-verify DAILY; a Verified→broken regression
+    // raises the standard `mail:domain-status-changed` event. No-op
+    // every tick while no mail domains exist (one indexed SELECT).
+    let _mail_dns_verify_handle = mail::dns_verify::spawn();
+
     // K2 Connect E2E (PRD `k2-connect-e2e-encryption.md` §4 Option A) —
     // when `K2_E2E` is on, stand up a SECOND listener that terminates TLS
     // itself for `<sub>.k2.dev` and splices the decrypted stream to the

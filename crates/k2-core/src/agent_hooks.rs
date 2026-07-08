@@ -132,6 +132,13 @@ pub enum HookEvent {
     /// session-events bus, so the broadcast can never drift from what
     /// `GET /cli/tunnel/subdomains` serves.
     TunnelSubdomainsChanged,
+    /// K2 Mail S2 (prd-email-server-v1 §6.3): fires when a mail
+    /// domain's verification status transitions — pending→Verified,
+    /// Verified→broken (the daily re-verify regression, `regressed:
+    /// true` — the case that must notify), broken→Verified. Payload:
+    /// `{domain, status, regressed}`. The Settings→Email page
+    /// refreshes its status chips on every fire.
+    MailDomainStatusChanged,
 }
 
 impl HookEvent {
@@ -160,6 +167,7 @@ impl HookEvent {
             Self::ProjectGroupLayoutChanged => "project-group:layout-changed",
             Self::ProjectGroupsChanged => "project-group:groups-changed",
             Self::TunnelSubdomainsChanged => "tunnel:subdomains-changed",
+            Self::MailDomainStatusChanged => "mail:domain-status-changed",
         }
     }
 }
@@ -538,6 +546,11 @@ mod tests {
         assert_eq!(
             HookEvent::TunnelSubdomainsChanged.event_name(),
             "tunnel:subdomains-changed"
+        );
+        // K2 Mail S2 — domain verification transitions (§6.3).
+        assert_eq!(
+            HookEvent::MailDomainStatusChanged.event_name(),
+            "mail:domain-status-changed"
         );
     }
 

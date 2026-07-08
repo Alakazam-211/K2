@@ -141,6 +141,14 @@ base64 = "0.22"
 sha2 = "0.10"
 minisign-verify = "0.2"
 
+# K2 Mail S2 — DNS verification for domain onboarding (prd-email-server-v1
+# §6.3). hickory-resolver (the maintained trust-dns successor; nothing else
+# in the tree links a DNS client) provides the blocking system-conf resolver
+# behind `mail::dns_verify::SystemResolver`; handlers + the poller call it
+# from spawn_blocking. Tests NEVER use it — every test goes through the
+# `DnsResolver` trait with canned answers (no real DNS in tests, ever).
+hickory-resolver = "0.24"
+
 # Sandbox P2b worker — Linux-only deps for the host jail. Both are OPTIONAL and
 # pulled in ONLY by the `sandbox-microvm` feature (via `dep:`), so a default or
 # macOS build never compiles them. `nix` gives us the namespace / mount /

@@ -46,12 +46,13 @@
 //! are GETs through `crate::cli::dispatch` → [`dispatch`], which also
 //! answers 405 for mutations reached via the GET chain.
 //!
-//! REAL as of S1+S2: `/cli/mail/status` (the capability-gating seam
+//! REAL as of S1+S2+S3: `/cli/mail/status` (the capability-gating seam
 //! the Settings→Email page reads, pre-mortem #15), `/cli/mail/preflight`,
-//! the server lifecycle mutations (enable/disable/uninstall), and the
-//! S2 domain family (`domain/add|remove|check|list|show`). Every other
-//! route returns the structured `not_built` 501 from its per-concern
-//! file until its slice lands.
+//! the server lifecycle mutations (enable/disable/uninstall), the
+//! S2 domain family (`domain/add|remove|check|list|show`), and the S3
+//! address family (`address/create|delete|list`). Every other route
+//! returns the structured `not_built` 501 from its per-concern file
+//! until its slice lands.
 
 use std::collections::HashMap;
 
@@ -197,7 +198,6 @@ mod tests {
         for route in [
             "/cli/mail/config",
             "/cli/mail/doctor",
-            "/cli/mail/address/list",
             "/cli/mail/messages",
             "/cli/mail/read",
             "/cli/mail/attachments",
@@ -212,8 +212,6 @@ mod tests {
         }
         for route in [
             "/cli/mail/config/set",
-            "/cli/mail/address/create",
-            "/cli/mail/address/delete",
             "/cli/mail/send",
             "/cli/mail/reply",
             "/cli/mail/approvals/approve",
@@ -240,6 +238,28 @@ mod tests {
             "/cli/mail/domain/remove",
             "/cli/mail/domain/check",
         ] {
+            let resp = dispatch_post(route, b"{}");
+            assert_eq!(resp.status, "400 Bad Request", "route={route}");
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage", "route={route}");
+        }
+
+        // S3 — the address family is REAL: the list read validates its
+        // params through the shim (missing project = usage 400; the
+        // owner table answers 200), and the mutations validate their
+        // bodies (`{}` = usage 400) instead of 501-ing. Deep behavior
+        // is owned by routes_addresses/mail::addresses tests.
+        let resp = dispatch("/cli/mail/address/list", &params).expect("claimed");
+        assert_eq!(resp.status, "400 Bad Request");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "usage");
+        let all_params: HashMap<String, String> =
+            HashMap::from([("all".to_string(), "true".to_string())]);
+        let resp = dispatch("/cli/mail/address/list", &all_params).expect("claimed");
+        assert_eq!(resp.status, "200 OK");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["ok"], true);
+        for route in ["/cli/mail/address/create", "/cli/mail/address/delete"] {
             let resp = dispatch_post(route, b"{}");
             assert_eq!(resp.status, "400 Bad Request", "route={route}");
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");

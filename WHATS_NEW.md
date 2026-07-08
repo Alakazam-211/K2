@@ -3,6 +3,27 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.38 — Make K2 yours: Styles
+
+- **Settings → Styles.** Pick K2's entire look: **Square** (the classic),
+  **Liquid Glass** (frosted translucent chrome over an ambient canvas), or
+  **Bezel** (layered-ring cards with a gold accent) — each with its own
+  palettes. Hover any option for a live preview; switching is instant, no
+  restart.
+- **Light mode.** Square ships **Paper**, a warm paper-and-ink light
+  palette — and a Light / Dark / **Auto** switch that follows your OS
+  appearance through the day.
+- **Density.** Square can breathe: Compact (the classic flush layout),
+  Regular, or Spacious — panes float apart on the canvas and the seams
+  stay draggable.
+- **Terminals are part of the theme.** Every palette carries a full
+  terminal color set (ANSI-16, cursor, selection) that live terminals pick
+  up the moment you switch.
+- **Glass has a Frost dial**, and reduced-transparency preferences are
+  respected everywhere.
+- **Make your own.** Styles are schema-validated data packages — see
+  CONTRIBUTING-STYLES.md to submit a palette or a whole new look by PR.
+
 ## 0.40.37 — Spring cleaning, part one
 
 - **The legacy `.k2so` era is ending — safely.** Every internal path now

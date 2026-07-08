@@ -46,13 +46,17 @@
 //! are GETs through `crate::cli::dispatch` → [`dispatch`], which also
 //! answers 405 for mutations reached via the GET chain.
 //!
-//! REAL as of S1+S2+S3: `/cli/mail/status` (the capability-gating seam
-//! the Settings→Email page reads, pre-mortem #15), `/cli/mail/preflight`,
-//! the server lifecycle mutations (enable/disable/uninstall), the
-//! S2 domain family (`domain/add|remove|check|list|show`), and the S3
-//! address family (`address/create|delete|list`). Every other route
-//! returns the structured `not_built` 501 from its per-concern file
-//! until its slice lands.
+//! REAL as of S1+S2+S3+S4: `/cli/mail/status` (the capability-gating
+//! seam the Settings→Email page reads, pre-mortem #15),
+//! `/cli/mail/preflight`, the server lifecycle mutations
+//! (enable/disable/uninstall), the S2 domain family
+//! (`domain/add|remove|check|list|show`), the S3 address family
+//! (`address/create|delete|list`), and the S4 read family
+//! (`messages|read|attachments|wait` — note: the dispatcher gives
+//! those four GETs their own `spawn_blocking` arm, since they dial
+//! Stalwart over blocking reqwest and `wait` holds the request up to
+//! 900 s). Every other route returns the structured `not_built` 501
+//! from its per-concern file until its slice lands.
 
 use std::collections::HashMap;
 
@@ -198,10 +202,6 @@ mod tests {
         for route in [
             "/cli/mail/config",
             "/cli/mail/doctor",
-            "/cli/mail/messages",
-            "/cli/mail/read",
-            "/cli/mail/attachments",
-            "/cli/mail/wait",
             "/cli/mail/outbox",
             "/cli/mail/approvals/list",
         ] {
@@ -269,6 +269,22 @@ mod tests {
         // S1 — preflight is REAL.
         let resp = dispatch("/cli/mail/preflight", &params).expect("claimed");
         assert_eq!(resp.status, "200 OK", "preflight is REAL as of S1");
+
+        // S4 — the read family is REAL: every route validates its
+        // params through the shim (missing project/id = usage 400)
+        // instead of 501-ing. Deep behavior is owned by
+        // routes_messages/mail::messages tests.
+        for route in [
+            "/cli/mail/messages",
+            "/cli/mail/read",
+            "/cli/mail/attachments",
+            "/cli/mail/wait",
+        ] {
+            let resp = dispatch(route, &params).expect("claimed");
+            assert_eq!(resp.status, "400 Bad Request", "route={route}");
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage", "route={route}");
+        }
     }
 
     /// The S1-real server mutations answer through their handlers (no

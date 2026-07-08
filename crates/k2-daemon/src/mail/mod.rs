@@ -52,6 +52,12 @@
 //!   live diffs, and the background re-verification poller
 //!   (`dns_verify::spawn`, registered in main.rs next to the other
 //!   background loops).
+//! - [`messages`] — S4 read + wait ops: the §17.5 provider seam
+//!   (`backend_for_address` + the `ReadBackend` trait — routes never
+//!   assume local Stalwart), §8.1 message shaping with the untrusted-
+//!   content markers, the HTML-strip fallback, auth-verdict parsing,
+//!   workspace-jailed attachment output paths, and the §8.2 wait loop
+//!   with an injected clock/poller.
 //! - [`doctor`] — deliverability checks (S6; `mail-auth` crate,
 //!   DNS/TCP probes, blocklists, the direct-send readiness grade).
 //! - `routes_*` — per-concern `/cli/mail/*` handlers, dispatched by
@@ -65,6 +71,7 @@ pub mod dns_verify;
 pub mod doctor;
 pub mod domains;
 pub mod jmap;
+pub mod messages;
 pub mod preflight;
 pub mod routes_addresses;
 pub mod routes_domains;

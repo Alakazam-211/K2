@@ -458,6 +458,167 @@ impl StalwartClient {
         let _ = outbound_id;
         Err(super::not_built_err("S5", "jmap queue submit"))
     }
+
+    // ── S4 mail reads — STANDARD JMAP mail (RFC 8621: Email/query,
+    //    Email/get, Email/set, blob download), which is stable across
+    //    Stalwart versions, unlike the ⚠ mgmt objects above. The ONE
+    //    flagged uncertainty is the account-scoping shape, isolated in
+    //    [`Self::mail_call`]. Message BODIES flow through here — they
+    //    are never logged (pre-mortem #16) and never appear in errors
+    //    (errors carry method names + server SetErrors only). ────────
+
+    /// ⚠ LIVE-BOX (S4 #1): HOW the k2-daemon service account reads
+    /// OTHER accounts' mail. Modeled as the most standard JMAP shape
+    /// (RFC 8620 delegated access): every method call carries
+    /// `accountId: <target Stalwart account>` while the HTTP
+    /// authorization stays the service account's ApiKey — Stalwart
+    /// admin-class principals can address member accounts this way.
+    /// If the live box refuses (a `forbidden`/`accountNotFound` JMAP
+    /// error), the fix lands HERE and nowhere else; candidate shapes
+    /// to try on the box: grant the service account per-account ACLs,
+    /// an admin masquerade header (`X-*`?), or widening the ApiKey's
+    /// permission list with the individual-access permission. Nothing
+    /// outside this function knows how scoping is spelled.
+    fn mail_call(
+        &self,
+        account_id: &str,
+        method: &str,
+        mut args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        args["accountId"] = serde_json::Value::String(account_id.to_string());
+        let api_url = self.discover_api_url()?;
+        let resp = self.post_json_url(&api_url, &mail_envelope(method, args))?;
+        parse_method_response(method, &resp)
+    }
+
+    /// S4 — the target account's Inbox mailbox id (`Mailbox/query`
+    /// filtered on the RFC 8621 `role: "inbox"`). Every read/wait
+    /// query scopes to it.
+    pub fn mailbox_inbox_id(&self, account_id: &str) -> Result<String, String> {
+        let args = self.mail_call(
+            account_id,
+            "Mailbox/query",
+            serde_json::json!({ "filter": { "role": "inbox" } }),
+        )?;
+        parse_query_ids(&args).into_iter().next().ok_or_else(|| {
+            "Mailbox/query: the account has no inbox mailbox".to_string()
+        })
+    }
+
+    /// S4 — `Email/query` newest-first (`receivedAt` desc) with a
+    /// caller-built RFC 8621 filter (the ops layer owns filter
+    /// semantics; this function owns only the wire shape).
+    pub fn email_query_ids(
+        &self,
+        account_id: &str,
+        filter: serde_json::Value,
+        limit: usize,
+    ) -> Result<Vec<String>, String> {
+        let args = self.mail_call(
+            account_id,
+            "Email/query",
+            serde_json::json!({
+                "filter": filter,
+                "sort": [{ "property": "receivedAt", "isAscending": false }],
+                "limit": limit,
+            }),
+        )?;
+        Ok(parse_query_ids(&args))
+    }
+
+    /// S4 — envelope-level `Email/get` for the summaries list (no
+    /// bodies ride this call, by construction — the properties list
+    /// has no body/bodyValues entries).
+    pub fn email_get_summaries(
+        &self,
+        account_id: &str,
+        ids: &[String],
+    ) -> Result<Vec<EmailSummary>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let args = self.mail_call(
+            account_id,
+            "Email/get",
+            serde_json::json!({ "ids": ids, "properties": SUMMARY_PROPERTIES }),
+        )?;
+        parse_email_summaries(&args)
+    }
+
+    /// S4 — one full message: envelope + text AND html bodyValues +
+    /// attachment metadata + the raw-message `blobId` + the
+    /// `Authentication-Results` headers (SPF/DKIM/DMARC verdicts on
+    /// the inbound). `Ok(None)` = the server answered `notFound` for
+    /// this id (the route masks it).
+    pub fn email_get_full(
+        &self,
+        account_id: &str,
+        email_id: &str,
+    ) -> Result<Option<EmailFull>, String> {
+        let args = self.mail_call(
+            account_id,
+            "Email/get",
+            serde_json::json!({
+                "ids": [email_id],
+                "properties": FULL_PROPERTIES,
+                "fetchTextBodyValues": true,
+                "fetchHTMLBodyValues": true,
+                "maxBodyValueBytes": MAX_BODY_VALUE_BYTES,
+            }),
+        )?;
+        parse_email_full(email_id, &args)
+    }
+
+    /// S4 — mark one message read (`Email/set` keyword patch on
+    /// `$seen`, RFC 8621 §4.1.1).
+    pub fn email_mark_seen(&self, account_id: &str, email_id: &str) -> Result<(), String> {
+        let args = self.mail_call(
+            account_id,
+            "Email/set",
+            serde_json::json!({ "update": { email_id: { "keywords/$seen": true } } }),
+        )?;
+        parse_email_set_updated(email_id, &args)
+    }
+
+    /// S4 — download one blob (attachment bytes, or the raw RFC 822
+    /// message via its `blobId`) through the session document's
+    /// `downloadUrl` template (RFC 8620 §2 — discovered, never
+    /// hardcoded, same rule as `apiUrl`).
+    pub fn blob_download(
+        &self,
+        account_id: &str,
+        blob_id: &str,
+        name: &str,
+        mime: &str,
+    ) -> Result<Vec<u8>, String> {
+        let session = self.get_json("/.well-known/jmap")?;
+        let template = parse_session_download_url(&self.base_url, &session)?;
+        let url = expand_download_url(&template, account_id, blob_id, name, mime);
+        self.get_bytes_url(&url)
+    }
+
+    /// Authenticated byte-download (its own client: blob transfers get
+    /// a longer budget than the 15 s mgmt calls). Errors never carry
+    /// the credential or the body.
+    fn get_bytes_url(&self, url: &str) -> Result<Vec<u8>, String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(BLOB_TIMEOUT)
+            .build()
+            .map_err(|e| format!("blob http client: {e}"))?;
+        let resp = self
+            .apply_auth(client.get(url))
+            .send()
+            .map_err(|e| format!("GET blob: {e}"))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .map_err(|e| format!("GET blob: read body: {e}"))?;
+        if !status.is_success() {
+            let excerpt: String = String::from_utf8_lossy(&bytes).chars().take(200).collect();
+            return Err(format!("GET blob: HTTP {status}: {excerpt}"));
+        }
+        Ok(bytes.to_vec())
+    }
 }
 
 /// Pure session-document parser: extract `apiUrl` and absolutize it
@@ -835,6 +996,378 @@ fn parse_domain_get_zonefile(
         .filter(|s| !s.is_empty())
         .map(String::from)
         .ok_or_else(|| format!("Domain/get: domain '{id}' has no dnsZoneFile"))
+}
+
+// ── S4 mail-read wire layer (RFC 8621 constants, structs, parsers) ─────
+
+/// JMAP `using` for MAIL data calls (RFC 8621) — distinct from the
+/// mgmt envelope's Stalwart-specific URNs.
+const JMAP_MAIL_USING: [&str; 2] = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"];
+
+/// Per-part body cap on `Email/get` (`maxBodyValueBytes`): 256 KiB of
+/// text per part is far beyond any verification mail and bounds the
+/// daemon's per-message memory. `isTruncated` rides the bodyValue when
+/// the server clipped.
+const MAX_BODY_VALUE_BYTES: u64 = 262_144;
+
+/// Blob transfers (attachments / raw messages) get a longer budget
+/// than the 15 s mgmt calls — still loopback.
+const BLOB_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// RFC 8621 §4.1.3 header-fetch property: every Authentication-Results
+/// header as raw text (SPF/DKIM/DMARC verdicts parsed at the ops
+/// layer, not here).
+const AUTH_RESULTS_PROP: &str = "header:Authentication-Results:asText:all";
+
+/// Envelope-only properties for the summaries list — deliberately no
+/// body/bodyValues entries (summaries never carry untrusted body
+/// content, and never pay body transfer costs).
+const SUMMARY_PROPERTIES: [&str; 8] = [
+    "id",
+    "threadId",
+    "from",
+    "to",
+    "subject",
+    "receivedAt",
+    "keywords",
+    "hasAttachment",
+];
+
+/// Full-read properties (§8.1): envelope + both body part lists +
+/// their values + attachment metadata + the raw-message blob id + the
+/// auth-results headers.
+const FULL_PROPERTIES: [&str; 15] = [
+    "id",
+    "blobId",
+    "threadId",
+    "from",
+    "to",
+    "cc",
+    "subject",
+    "receivedAt",
+    "keywords",
+    "hasAttachment",
+    "textBody",
+    "htmlBody",
+    "bodyValues",
+    "attachments",
+    AUTH_RESULTS_PROP,
+];
+
+/// Pure envelope builder for a single JMAP MAIL method call.
+fn mail_envelope(method: &str, args: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "using": JMAP_MAIL_USING,
+        "methodCalls": [[method, args, "0"]],
+    })
+}
+
+/// One RFC 8621 EmailAddress (`{name?, email}`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailAddr {
+    pub name: Option<String>,
+    pub email: String,
+}
+
+/// Envelope-level view of one message (the summaries list + the wait
+/// loop's match candidates).
+#[derive(Debug, Clone)]
+pub struct EmailSummary {
+    pub id: String,
+    pub thread_id: Option<String>,
+    pub from: Vec<MailAddr>,
+    pub to: Vec<MailAddr>,
+    pub subject: String,
+    /// RFC 8621 `receivedAt` (UTCDate, always `Z`).
+    pub received_at: String,
+    pub unread: bool,
+    pub has_attachment: bool,
+}
+
+/// Attachment metadata (§8.1 — bytes only move on explicit
+/// `attachments --get`, via [`StalwartClient::blob_download`]).
+#[derive(Debug, Clone)]
+pub struct AttachmentMeta {
+    pub blob_id: String,
+    pub filename: Option<String>,
+    pub mime: String,
+    pub size: u64,
+}
+
+/// One full message as fetched — RAW body text; the §8.1 shaping
+/// (untrusted-content markers, HTML-strip fallback, auth-verdict
+/// parsing) is deliberately NOT here (§17.5: it lives at the route/ops
+/// layer so any future backend inherits it).
+#[derive(Debug, Clone)]
+pub struct EmailFull {
+    pub summary: EmailSummary,
+    pub cc: Vec<MailAddr>,
+    /// Blob id of the raw RFC 822 message (`read --raw`).
+    pub blob_id: Option<String>,
+    pub text: Option<String>,
+    pub html: Option<String>,
+    pub attachments: Vec<AttachmentMeta>,
+    /// Raw Authentication-Results header lines, newest first as served.
+    pub auth_results: Vec<String>,
+}
+
+/// Pure `*/query` reply parser: the `ids` array (empty when absent —
+/// an empty result is not an error).
+fn parse_query_ids(args: &serde_json::Value) -> Vec<String> {
+    args.get("ids")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pure EmailAddress-list parser (`from`/`to`/`cc`).
+fn parse_addr_list(v: Option<&serde_json::Value>) -> Vec<MailAddr> {
+    v.and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| {
+                    let email = e.get("email").and_then(|v| v.as_str())?;
+                    Some(MailAddr {
+                        name: e
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(String::from),
+                        email: email.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pure per-entry summary parser. `id` is required (fail loud);
+/// everything else degrades to empty/false.
+fn parse_email_summary_entry(entry: &serde_json::Value) -> Result<EmailSummary, String> {
+    let id = entry
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Email/get: entry without an id".to_string())?;
+    let unread = !entry
+        .get("keywords")
+        .and_then(|k| k.get("$seen"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    Ok(EmailSummary {
+        id: id.to_string(),
+        thread_id: entry
+            .get("threadId")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        from: parse_addr_list(entry.get("from")),
+        to: parse_addr_list(entry.get("to")),
+        subject: entry
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        received_at: entry
+            .get("receivedAt")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        unread,
+        has_attachment: entry
+            .get("hasAttachment")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    })
+}
+
+/// Pure `Email/get` (summaries) reply parser.
+fn parse_email_summaries(args: &serde_json::Value) -> Result<Vec<EmailSummary>, String> {
+    args.get("list")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().map(parse_email_summary_entry).collect())
+        .unwrap_or_else(|| Err("Email/get: reply has no list".to_string()))
+}
+
+/// Assemble one body kind from RFC 8621 `textBody`/`htmlBody` part
+/// lists + `bodyValues` (multiple parts of the kind concatenate in
+/// order, per spec display semantics).
+fn body_text_from(entry: &serde_json::Value, key: &str, want_type: &str) -> Option<String> {
+    let values = entry.get("bodyValues")?.as_object()?;
+    let parts = entry.get(key)?.as_array()?;
+    let mut out = String::new();
+    for p in parts {
+        if p.get("type").and_then(|v| v.as_str()) != Some(want_type) {
+            continue;
+        }
+        let Some(pid) = p.get("partId").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if let Some(v) = values.get(pid).and_then(|v| v.get("value")).and_then(|v| v.as_str()) {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(v);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Pure `Email/get` (full) reply parser: `Ok(None)` when the server
+/// put the id in `notFound`; loud error when the reply names neither.
+fn parse_email_full(
+    email_id: &str,
+    args: &serde_json::Value,
+) -> Result<Option<EmailFull>, String> {
+    let not_found = args
+        .get("notFound")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().any(|v| v.as_str() == Some(email_id)))
+        .unwrap_or(false);
+    if not_found {
+        return Ok(None);
+    }
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| {
+            a.iter()
+                .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(email_id))
+        })
+        .ok_or_else(|| {
+            format!("Email/get: '{email_id}' in neither list nor notFound")
+        })?;
+    let summary = parse_email_summary_entry(entry)?;
+    let attachments = entry
+        .get("attachments")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| {
+                    // A part without a blobId cannot be fetched — skip
+                    // it rather than serve a dead index.
+                    let blob_id = p.get("blobId").and_then(|v| v.as_str())?;
+                    Some(AttachmentMeta {
+                        blob_id: blob_id.to_string(),
+                        filename: p
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(String::from),
+                        mime: p
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("application/octet-stream")
+                            .to_string(),
+                        size: p.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let auth_results = entry
+        .get(AUTH_RESULTS_PROP)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Some(EmailFull {
+        cc: parse_addr_list(entry.get("cc")),
+        blob_id: entry
+            .get("blobId")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        text: body_text_from(entry, "textBody", "text/plain"),
+        html: body_text_from(entry, "htmlBody", "text/html"),
+        attachments,
+        auth_results,
+        summary,
+    }))
+}
+
+/// Pure `Email/set` (mark-seen) reply parser — same contract as the
+/// S3 account update: the id must appear in `updated`.
+fn parse_email_set_updated(id: &str, args: &serde_json::Value) -> Result<(), String> {
+    let updated = args
+        .get("updated")
+        .and_then(|v| v.as_object())
+        .map(|m| m.contains_key(id))
+        .unwrap_or(false);
+    if updated {
+        return Ok(());
+    }
+    if let Some(err) = args.get("notUpdated").and_then(|v| v.get(id)) {
+        return Err(format!("Email/set update rejected — {}", set_error_line(err)));
+    }
+    Err(format!("Email/set update: '{id}' not in the updated map"))
+}
+
+/// Pure session-document parser for the RFC 8620 `downloadUrl`
+/// template — discovered, never hardcoded (the `apiUrl` rule).
+pub fn parse_session_download_url(
+    base_url: &str,
+    session: &serde_json::Value,
+) -> Result<String, String> {
+    let url = session
+        .get("downloadUrl")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            "JMAP session document has no usable 'downloadUrl'".to_string()
+        })?;
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return Ok(url.to_string());
+    }
+    if !url.starts_with('/') {
+        return Err(format!(
+            "JMAP session 'downloadUrl' is neither absolute nor root-relative: '{url}'"
+        ));
+    }
+    Ok(format!("{}{}", base_url.trim_end_matches('/'), url))
+}
+
+/// Percent-encode one URI component (RFC 3986 unreserved passthrough).
+fn encode_uri_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Expand the RFC 8620 download template's `{accountId}/{blobId}/
+/// {name}?accept={type}` placeholders (each component encoded).
+fn expand_download_url(
+    template: &str,
+    account_id: &str,
+    blob_id: &str,
+    name: &str,
+    mime: &str,
+) -> String {
+    template
+        .replace("{accountId}", &encode_uri_component(account_id))
+        .replace("{blobId}", &encode_uri_component(blob_id))
+        .replace("{name}", &encode_uri_component(name))
+        .replace("{type}", &encode_uri_component(mime))
 }
 
 /// Pure session-document parser: extract `apiUrl` and absolutize it
@@ -1567,5 +2100,314 @@ mod s3_account_tests {
             .account_create("bot", "dom-1", "super-secret-pw", 1, 1)
             .expect_err("closed port must fail");
         assert!(!err.contains("super-secret-pw"), "password leaked: {err}");
+    }
+}
+
+#[cfg(test)]
+mod s4_mail_tests {
+    use super::*;
+
+    // ── Pure fixture parsers (no network) ───────────────────────────
+
+    /// A realistic `Email/get` summaries reply entry set: one unread
+    /// with attachment, one read.
+    fn summaries_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "accountId": "acc-1",
+            "state": "s1",
+            "list": [
+                {
+                    "id": "M1",
+                    "threadId": "T1",
+                    "from": [{ "name": "GitHub", "email": "noreply@github.com" }],
+                    "to": [{ "name": null, "email": "bot@acme.dev" }],
+                    "subject": "Verify your device",
+                    "receivedAt": "2026-07-08T10:15:00Z",
+                    "keywords": {},
+                    "hasAttachment": true
+                },
+                {
+                    "id": "M2",
+                    "threadId": "T2",
+                    "from": [{ "email": "news@example.com" }],
+                    "to": [{ "email": "bot@acme.dev" }],
+                    "subject": "Weekly digest",
+                    "receivedAt": "2026-07-07T09:00:00Z",
+                    "keywords": { "$seen": true },
+                    "hasAttachment": false
+                }
+            ],
+            "notFound": []
+        })
+    }
+
+    #[test]
+    fn summaries_parse_envelope_unread_and_attachments() {
+        let list = parse_email_summaries(&summaries_fixture()).expect("parsed");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, "M1");
+        assert_eq!(list[0].thread_id.as_deref(), Some("T1"));
+        assert_eq!(list[0].from[0].name.as_deref(), Some("GitHub"));
+        assert_eq!(list[0].from[0].email, "noreply@github.com");
+        assert_eq!(list[0].subject, "Verify your device");
+        assert!(list[0].unread, "no $seen keyword = unread");
+        assert!(list[0].has_attachment);
+        assert!(!list[1].unread, "$seen = read");
+        // No list at all → loud; an entry without id → loud.
+        assert!(parse_email_summaries(&serde_json::json!({})).is_err());
+        let bad = serde_json::json!({ "list": [{ "subject": "x" }] });
+        assert!(parse_email_summaries(&bad).is_err());
+    }
+
+    /// A realistic full `Email/get` reply: multipart text+html with
+    /// bodyValues, one attachment, auth-results headers, blobId.
+    fn full_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "accountId": "acc-1",
+            "list": [{
+                "id": "M1",
+                "blobId": "B-raw",
+                "threadId": "T1",
+                "from": [{ "name": "GitHub", "email": "noreply@github.com" }],
+                "to": [{ "email": "bot@acme.dev" }],
+                "cc": [{ "name": "Ops", "email": "ops@acme.dev" }],
+                "subject": "Verify your device",
+                "receivedAt": "2026-07-08T10:15:00Z",
+                "keywords": {},
+                "hasAttachment": true,
+                "textBody": [
+                    { "partId": "1", "type": "text/plain" },
+                    { "partId": "3", "type": "text/plain" }
+                ],
+                "htmlBody": [{ "partId": "2", "type": "text/html" }],
+                "bodyValues": {
+                    "1": { "value": "Your code is 424242.", "isTruncated": false },
+                    "2": { "value": "<p>Your code is <b>424242</b>.</p>", "isTruncated": false },
+                    "3": { "value": "-- footer", "isTruncated": false }
+                },
+                "attachments": [
+                    { "blobId": "B1", "name": "invite.ics", "type": "text/calendar", "size": 512 },
+                    { "name": "no-blob.bin", "type": "application/octet-stream", "size": 9 }
+                ],
+                "header:Authentication-Results:asText:all": [
+                    " mail.acme.dev; spf=pass smtp.mailfrom=github.com; dkim=pass header.d=github.com; dmarc=pass"
+                ]
+            }],
+            "notFound": []
+        })
+    }
+
+    #[test]
+    fn full_parse_assembles_bodies_attachments_and_auth_headers() {
+        let full = parse_email_full("M1", &full_fixture())
+            .expect("parsed")
+            .expect("present");
+        assert_eq!(full.summary.id, "M1");
+        assert_eq!(full.blob_id.as_deref(), Some("B-raw"));
+        assert_eq!(
+            full.text.as_deref(),
+            Some("Your code is 424242.\n-- footer"),
+            "multiple text parts concatenate in order"
+        );
+        assert!(full.html.as_deref().unwrap().contains("<b>424242</b>"));
+        assert_eq!(full.cc[0].email, "ops@acme.dev");
+        assert_eq!(full.attachments.len(), 1, "blob-less part is skipped");
+        assert_eq!(full.attachments[0].blob_id, "B1");
+        assert_eq!(full.attachments[0].filename.as_deref(), Some("invite.ics"));
+        assert_eq!(full.attachments[0].mime, "text/calendar");
+        assert_eq!(full.attachments[0].size, 512);
+        assert!(full.auth_results[0].contains("spf=pass"));
+
+        // notFound → Ok(None) (the route masks it).
+        let nf = serde_json::json!({ "list": [], "notFound": ["M9"] });
+        assert!(parse_email_full("M9", &nf).expect("parsed").is_none());
+        // Neither list nor notFound → loud.
+        assert!(parse_email_full("M9", &serde_json::json!({ "list": [] })).is_err());
+    }
+
+    #[test]
+    fn email_set_updated_parses_ok_and_rejections() {
+        let ok = serde_json::json!({ "updated": { "M1": null } });
+        parse_email_set_updated("M1", &ok).expect("updated");
+        let rejected = serde_json::json!({
+            "notUpdated": { "M1": { "type": "notFound" } },
+        });
+        let msg = parse_email_set_updated("M1", &rejected).expect_err("must reject");
+        assert!(msg.contains("notFound"), "{msg}");
+        assert!(parse_email_set_updated("M1", &serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn download_url_discovery_and_expansion() {
+        let session = serde_json::json!({
+            "downloadUrl": "/jmap/download/{accountId}/{blobId}/{name}?accept={type}"
+        });
+        let template = parse_session_download_url("http://127.0.0.1:8180", &session)
+            .expect("template");
+        let url = expand_download_url(&template, "acc 1", "B/1", "réport.pdf", "application/pdf");
+        assert_eq!(
+            url,
+            "http://127.0.0.1:8180/jmap/download/acc%201/B%2F1/r%C3%A9port.pdf?accept=application%2Fpdf"
+        );
+        // Missing/garbage downloadUrl → loud.
+        assert!(parse_session_download_url("http://x", &serde_json::json!({})).is_err());
+        assert!(
+            parse_session_download_url("http://x", &serde_json::json!({ "downloadUrl": "jmap/" }))
+                .is_err()
+        );
+    }
+
+    // ── The ONE loopback mock round-trip for the S4 read path ────────
+    // (127.0.0.1 only, house rule — locks the wire shape end to end:
+    // discovery → mail envelope + accountId injection → query → get →
+    // mark-seen → blob download.)
+
+    use std::io::{Read, Write};
+
+    fn spawn_mock_server(
+        replies: Vec<String>,
+    ) -> (u16, std::sync::mpsc::Receiver<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for reply in replies {
+                let (mut sock, _) = match listener.accept() {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = match sock.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    raw.extend_from_slice(&buf[..n]);
+                    if let Some(head_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+                        let want: usize = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if raw.len() >= head_end + 4 + want {
+                            break;
+                        }
+                    }
+                }
+                let _ = tx.send(String::from_utf8_lossy(&raw).to_string());
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+        (port, rx)
+    }
+
+    fn body_json(req: &str) -> serde_json::Value {
+        let start = req.find("\r\n\r\n").expect("body") + 4;
+        serde_json::from_str(&req[start..]).expect("JSON body")
+    }
+
+    #[test]
+    fn mail_read_round_trip_against_loopback_mock() {
+        let session = r#"{"apiUrl": "/jmap/", "capabilities": {}}"#.to_string();
+        let query_reply = serde_json::json!({
+            "methodResponses": [["Email/query", { "ids": ["M1"] }, "0"]],
+        })
+        .to_string();
+        let get_reply = serde_json::json!({
+            "methodResponses": [["Email/get", summaries_fixture(), "0"]],
+        })
+        .to_string();
+        let seen_reply = serde_json::json!({
+            "methodResponses": [["Email/set", { "updated": { "M1": null } }, "0"]],
+        })
+        .to_string();
+        // Each mail_call discovers the api url first (session, call).
+        let (port, rx) = spawn_mock_server(vec![
+            session.clone(),
+            query_reply,
+            session.clone(),
+            get_reply,
+            session,
+            seen_reply,
+        ]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+
+        let ids = c
+            .email_query_ids("acc-7", serde_json::json!({ "inMailbox": "IB" }), 20)
+            .expect("query");
+        assert_eq!(ids, vec!["M1".to_string()]);
+        let summaries = c.email_get_summaries("acc-7", &ids).expect("get");
+        assert_eq!(summaries.len(), 2);
+        c.email_mark_seen("acc-7", "M1").expect("seen");
+
+        // Request 1: discovery. Request 2: the Email/query envelope —
+        // mail capability + the INJECTED accountId (the LIVE-BOX seam).
+        let _disc = rx.recv().expect("req1");
+        let q = rx.recv().expect("req2");
+        assert!(q.starts_with("POST /jmap/"), "{q}");
+        let v = body_json(&q);
+        assert_eq!(v["using"][1], "urn:ietf:params:jmap:mail");
+        assert_eq!(v["methodCalls"][0][0], "Email/query");
+        assert_eq!(v["methodCalls"][0][1]["accountId"], "acc-7");
+        assert_eq!(v["methodCalls"][0][1]["filter"]["inMailbox"], "IB");
+        assert_eq!(
+            v["methodCalls"][0][1]["sort"][0]["property"], "receivedAt");
+        assert_eq!(v["methodCalls"][0][1]["sort"][0]["isAscending"], false);
+        assert_eq!(v["methodCalls"][0][1]["limit"], 20);
+
+        let _disc = rx.recv().expect("req3");
+        let g = rx.recv().expect("req4");
+        let v = body_json(&g);
+        assert_eq!(v["methodCalls"][0][0], "Email/get");
+        assert_eq!(v["methodCalls"][0][1]["accountId"], "acc-7");
+        let props = v["methodCalls"][0][1]["properties"].as_array().unwrap();
+        assert!(
+            !props.iter().any(|p| p == "bodyValues"),
+            "summaries must never fetch bodies"
+        );
+
+        let _disc = rx.recv().expect("req5");
+        let s = rx.recv().expect("req6");
+        let v = body_json(&s);
+        assert_eq!(v["methodCalls"][0][0], "Email/set");
+        assert_eq!(v["methodCalls"][0][1]["update"]["M1"]["keywords/$seen"], true);
+    }
+
+    #[test]
+    fn blob_download_uses_discovered_template_with_auth() {
+        let session = serde_json::json!({
+            "apiUrl": "/jmap/",
+            "downloadUrl": "/jmap/download/{accountId}/{blobId}/{name}?accept={type}",
+        })
+        .to_string();
+        // Reply 2 is served as JSON content-type but blob_download only
+        // reads bytes — fine for the wire assertion.
+        let (port, rx) = spawn_mock_server(vec![session, "PDFBYTES".to_string()]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let bytes = c
+            .blob_download("acc-7", "B1", "report.pdf", "application/pdf")
+            .expect("blob");
+        assert_eq!(bytes, b"PDFBYTES");
+        let _disc = rx.recv().expect("req1");
+        let dl = rx.recv().expect("req2");
+        assert!(
+            dl.starts_with("GET /jmap/download/acc-7/B1/report.pdf?accept=application%2Fpdf"),
+            "{dl}"
+        );
+        assert!(
+            dl.contains("authorization: Bearer k2-test-key")
+                || dl.contains("Authorization: Bearer k2-test-key"),
+            "{dl}"
+        );
     }
 }

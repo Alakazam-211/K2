@@ -513,8 +513,12 @@ export default function App(): React.JSX.Element {
     // unlisten there is fine (the registry is gone); losing the whole
     // promise chain to an unhandled rejection is not.
     const safeUnlisten = (fn: () => void) => {
+      // The unlisten's failure surfaces ASYNC through the IPC bridge
+      // (observed live: unhandled rejection with the throw site inside
+      // fn()), so a bare try/catch is not enough — swallow the promise
+      // rejection too.
       try {
-        fn()
+        void Promise.resolve(fn()).catch(() => {})
       } catch {
         /* listener registry already torn down */
       }

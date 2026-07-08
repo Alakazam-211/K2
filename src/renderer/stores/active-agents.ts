@@ -178,6 +178,17 @@ function cancelUnseenDone(paneId: string): void {
  *  user isn't looking at the pane, mark it unseen-done + chime. */
 function armUnseenDone(paneId: string): void {
   cancelUnseenDone(paneId)
+  // 0.40.39 — daemon-truth gate (same false-idle class as the spinner
+  // fix): a hidden pane's parked client feed writes a false idle and
+  // used to arm this timer ~1s after switch-away, chiming ~5.5s later
+  // whether or not the agent finished. If the DAEMON still says the
+  // pane is working, this is a false client idle — don't arm; the
+  // daemon's own working→idle transition (applyDaemonActivity) arms
+  // the real one when the agent truly completes.
+  {
+    const daemon = useActiveAgentsStore.getState().daemonPaneStatuses.get(paneId)
+    if (daemon === 'working' || daemon === 'permission') return
+  }
   const firstActiveAt = _paneFirstActiveAt.get(paneId)
   if (firstActiveAt !== undefined && Date.now() - firstActiveAt < UNSEEN_DONE_SPAWN_GRACE_MS) {
     return
@@ -185,7 +196,13 @@ function armUnseenDone(paneId: string): void {
   const timer = setTimeout(() => {
     _unseenDoneTimers.delete(paneId)
     const s = useActiveAgentsStore.getState()
-    const status = s.paneStatuses.get(paneId) ?? 'idle'
+    // Merged status (0.40.39): the client map alone reports false idle
+    // for parked panes — daemon truth must veto the chime at fire time
+    // too (arming raced a daemon working transition).
+    const status = mergePaneStatus(
+      s.paneStatuses.get(paneId),
+      s.daemonPaneStatuses.get(paneId),
+    )
     // Belt-and-suspenders — re-entering working cancels the timer, but a
     // racing write could land between cancel and fire.
     if (status === 'working' || status === 'permission') return
@@ -436,16 +453,19 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       e.agentName
     const next: PaneStatus = e.status
     const map = new Map(get().daemonPaneStatuses)
-    if (map.get(paneId) === next) return
+    const prev = map.get(paneId)
+    if (prev === next) return
     map.set(paneId, next)
     set({ daemonPaneStatuses: map })
-    // Route completion through the same unseen-done/chime machinery so the
-    // chime fires on TRUE daemon-observed completion (this also retires
-    // the old false early-chime that fired ~5.5s after switch-away).
+    // Route completion through the same unseen-done/chime machinery so
+    // the chime fires on TRUE daemon-observed completion. Arm ONLY on a
+    // real working/permission→idle transition — a first-ever idle (e.g.
+    // unregister's final idle for a session never seen working) must not
+    // chime. NOTE: the map update above must land BEFORE armUnseenDone
+    // so its daemon-truth gate reads 'idle', not the stale 'working'.
     if (next === 'working') notePaneActive(paneId)
-    else if (next === 'idle') {
-      const client = get().paneStatuses.get(paneId)
-      if (client !== 'working') armUnseenDone(paneId)
+    else if (next === 'idle' && (prev === 'working' || prev === 'permission')) {
+      armUnseenDone(paneId)
     }
   },
 

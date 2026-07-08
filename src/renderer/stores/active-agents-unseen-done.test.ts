@@ -116,6 +116,39 @@ describe('F4 — unseen-done state machine', () => {
     vi.useRealTimers()
   })
 
+  it('0.40.39 — a client false idle while the DAEMON still says working must not chime; the daemon completion does', () => {
+    const store = useActiveAgentsStore.getState()
+    // Agent starts; daemon truth arrives (visibility-independent).
+    store.handleLifecycleEvent(PANE, '', 'start')
+    store.applyDaemonActivity({
+      workspacePath: '/x', agentName: `tab-${PANE}`, paneGroupId: PANE, status: 'working',
+    })
+    vi.advanceTimersByTime(6_000) // past spawn grace
+
+    // The switch-away false idle: the parked pane's idle watcher writes
+    // idle client-side while the agent is STILL working per the daemon.
+    store.recordTitleActivity(PANE, false)
+    vi.advanceTimersByTime(10_000)
+    expect(playCompletionSound).not.toHaveBeenCalled()
+    expect(useActiveAgentsStore.getState().unseenDone.has(PANE)).toBe(false)
+
+    // True completion: daemon working→idle → chime after the debounce.
+    useActiveAgentsStore.getState().applyDaemonActivity({
+      workspacePath: '/x', agentName: `tab-${PANE}`, paneGroupId: PANE, status: 'idle',
+    })
+    vi.advanceTimersByTime(4_000)
+    expect(playCompletionSound).toHaveBeenCalledTimes(1)
+    expect(useActiveAgentsStore.getState().unseenDone.has(PANE)).toBe(true)
+  })
+
+  it('0.40.39 — a first-ever daemon idle (session never observed working) never chimes', () => {
+    useActiveAgentsStore.getState().applyDaemonActivity({
+      workspacePath: '/x', agentName: `tab-${PANE}`, paneGroupId: PANE, status: 'idle',
+    })
+    vi.advanceTimersByTime(10_000)
+    expect(playCompletionSound).not.toHaveBeenCalled()
+  })
+
   it('a hook stop while the pane is not visible marks unseen-done after the 4s debounce and chimes', () => {
     workThenStop()
 

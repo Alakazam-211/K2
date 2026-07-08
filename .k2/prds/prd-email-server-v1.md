@@ -240,6 +240,21 @@ k2 mail approvals [list | approve <id> [--note …] | deny <id> --note …]
 
 **Exit codes:** 0 ok · 1 error · 2 wait/`--wait` timeout · 3 gated-off. Errors are one-line, actionable, and name the Settings page that fixes them (comprehension-gate style).
 
+### 11.1 Comprehension-gate adjustments (2026-07-08 — two zero-bias testers; BINDING on the CLI slice)
+
+1. **`k2 mail list` → `k2 mail addresses`** (primary verb; `list` stays as an alias printing the identical addresses table — both testers reached for `list` expecting *messages*).
+2. **New agent verb `k2 mail domains`** — read-only list of Verified domains agents may mint on, with the workspace default marked. (Both testers had no way to discover domains; `domain list` reads as owner-only.)
+3. **Owner-verb enforcement is stated, not implied:** owner verbs hard-fail for agent tokens server-side (exit 3, `error: requires owner/admin — ask your human`). The CLI help puts this line under the OWNER VERBS header. Kills the self-approval temptation (tester 1, severity-high safety finding) by making it visibly futile.
+4. **`--wait` defined in one clause** (send/reply help): "block until the message is decided: approved-and-submitted or denied (approval mode) / accepted-for-delivery (on mode). Exit 2 on timeout — the message is still queued; check `k2 mail outbox`."
+5. **Cap semantics decided + stated:** the cap counts ACTIVE addresses — `k2 mail delete` frees the slot immediately (abuse guard is the rate limits, not the cap). Cap-hit error text: `address cap reached (5/5). Retire one with 'k2 mail delete <addr>' (frees its slot) or ask your human to raise the cap in Settings → Email.`
+6. **`wait` output defined:** prints the FULL matched message in `read` format (no follow-up `read` needed) and marks it read. Looping `wait` is the blessed long-poll pattern (≤900 s per call); say so in help.
+7. **`send` accepts both** positional `<to>` and `--to <addr>` (tester reflex from `wait --to`).
+8. **`messages` gains `--from <substr>`**; help states match scopes: `--from` matches the From header (address + display name), `--query` matches subject AND body.
+9. **`outbox [<id>]`** point lookup added (and `--json` ids are stable `out_*`). Denied items show the owner's note inline in both formats.
+10. **`--id` help text:** "idempotency key — retrying with the same `--id` returns the existing address instead of erroring."
+11. **`attachments --get <n>`:** 1-based, matching the numbered attachment list `read` prints.
+12. **"queued for approval" exits 0** (the submission into the queue succeeded); state in help.
+
 ## 12. Data & defaults
 
 **Migration `crates/k2-core/drizzle_sql/0069_mail.sql`** (template: 0064_feedback.sql; unix-seconds timestamps, CHECK-constrained enums, project_id not a FK) + tuple in `db/mod.rs` + structs in `schema.rs`:

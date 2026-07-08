@@ -54,3 +54,14 @@ k2 mail approvals [list | approve <id> [--note …] | deny <id> --note …]
 3. Send hello@example.com a message with subject "hi" — and handle whatever happens.
 4. Your human denied a send. Find out why.
 5. You hit the address cap. What do you do (exact command/next step)?
+
+---
+
+## GATE RESULT (2026-07-08): 9/10 task-passes across two testers; adjustments adopted
+
+Surface changes now BINDING (full list: PRD §11.1): `list`→`addresses` (+alias) · new agent verb
+`k2 mail domains` · owner-verb enforcement stated (exit 3 for agents — server-enforced, not a label) ·
+`--wait` = block-until-decided (one clause) · cap counts ACTIVE addresses, delete frees the slot
+(error text says so) · `wait` prints the full message in read format + marks read; looping it is the
+blessed pattern · `send` takes positional to AND `--to` · `messages --from` added + match scopes stated ·
+`outbox [<id>]` point lookup · `--id` = idempotency key (help text) · attachments 1-based · queued = exit 0.

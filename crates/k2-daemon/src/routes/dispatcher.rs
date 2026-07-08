@@ -545,8 +545,9 @@ async fn handle_one_request(
             // below, which ALSO owner-or-admin-gates the server/domain/
             // config/approvals paths (PRD §10). Handlers are 501
             // not_built stubs until their slice lands; reads (status/
-            // lists/messages/wait) are GETs via crate::cli::dispatch
-            // (mail_routes).
+            // lists) are GETs via crate::cli::dispatch (mail_routes) —
+            // except the S4 read family (messages/read/attachments/
+            // wait), which has its own spawn_blocking GET arm below.
             | "/cli/mail/server/enable"
             | "/cli/mail/server/disable"
             | "/cli/mail/server/uninstall"
@@ -4138,6 +4139,36 @@ async fn handle_one_request(
                 }
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // K2 Mail S4 — the message-read family gets its own arm so it
+        // runs in spawn_blocking: the handlers dial Stalwart over
+        // BLOCKING reqwest, and `/cli/mail/wait` deliberately HOLDS the
+        // request open for up to 900 s (long-poll, PRD §8.2) — neither
+        // may pin an async runtime worker (the same reason the
+        // /cli/workspace/msg POST hops off the async path). Token gate
+        // + dispatch chain identical to the /cli/* catch-all below.
+        p if p == "/cli/mail/messages"
+            || p == "/cli/mail/read"
+            || p == "/cli/mail/attachments"
+            || p == "/cli/mail/wait" =>
+        {
+            let _ = stream.read(&mut buf).await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::cli::dispatch(&p_owned, &params)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
         }
         // Unified /cli/* dispatch. Auth + param validation +
         // per-route handler all live in `crate::cli::dispatch`; main.rs

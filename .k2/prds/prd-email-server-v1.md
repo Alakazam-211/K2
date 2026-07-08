@@ -403,6 +403,25 @@ cost real time or real damage, ranked by likelihood. Each: the failure → the g
     (misconfigured v6 rDNS is a classic silent spam-folder cause — prefer v4-only until doctor
     verifies v6); never log message bodies (privacy + disk), log envelopes + verdicts only.
 
+## 17.5 V2 seed: external inboxes (Rosson 2026-07-08) — keep the seam open in V1
+
+V2 will likely let agents read (and possibly send from) **external inboxes** — existing IMAP/JMAP
+accounts hosted elsewhere (Gmail app-passwords, Fastmail, company mail) — connected by the OWNER
+and granted per-agent. Not designed here (different risk class: real human correspondence, so it
+needs its own opt-in/grant/read-only-default design), but V1 must not foreclose it:
+
+- **Provider seam:** V1 code must not assume every address/message lives in local Stalwart.
+  Concretely: `mail_addresses` conceptually gains a provider kind later (`local` today); the
+  read/wait/messages paths in `routes_messages.rs` should resolve "which backend serves this
+  address" through one function (today: always the local StalwartClient) rather than inline
+  assumptions; the CLI verbs (`messages/read/wait/attachments`) are already backend-neutral in
+  their surface — keep them that way (no Stalwart-isms in output or flags).
+- Untrusted-content markers, per-agent ownership checks, and audit rows apply identically to any
+  future backend — build them at the route layer, not inside the JMAP client.
+- Likely V2 shape: `k2 mail connect` (owner-only) + `mail_external_accounts` table (kind ∈
+  imap|jmap|gmail-api…, secret refs, per-agent grants, read-only default) — analogous to how
+  `mail_relay_configs.kind` anticipates provider one-clicks.
+
 ## 18. Remaining open questions (non-blocking)
 
 1. Per-address IMAP creds for humans (V2) — decide when we surface "connect Apple Mail."

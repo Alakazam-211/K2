@@ -36,6 +36,13 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   // so the tab re-renders on daemon transitions; merged with the client
   // map so a hidden pane's false idle can't kill the spinner.
   const daemonStatusMap = useActiveAgentsStore((s) => s.daemonPaneStatuses)
+  // F4.1 (0.40.39) — per-TAB unseen-done: the tab whose agent finished
+  // while the user wasn't looking shows an amber square in the spinner/X
+  // slot until visited (markSeen clears the entry when the pane becomes
+  // visible+focused). Same store the Active bar's amber square reads, so
+  // the two can never disagree. Reserved orange TAB-highlight (API-
+  // launched tabs) is deliberately NOT reused here.
+  const unseenDoneMap = useActiveAgentsStore((s) => s.unseenDone)
   const effStatus = (id: string): PaneStatus =>
     mergePaneStatus(paneStatusMap.get(id), daemonStatusMap.get(id))
   // This TabBar is scoped to one workspace (`cwd`); resolve its projectId so
@@ -483,6 +490,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
             const s = effStatus(id)
             return s === 'working' || s === 'permission'
           })
+          const hasUnseenDone =
+            !isAgentActive && terminalIds.some(id => unseenDoneMap.has(id))
           const isDragged = reorderDragIndex === index
           const showDropBefore = reorderDropIndex === index
           const showDropAfter = reorderDropIndex === tabs.length && index === tabs.length - 1
@@ -562,10 +571,22 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               : undefined
             const chatWorking = chatStatus === 'working' || chatStatus === 'permission'
             const systemTabActive = isAgentActive || chatWorking
+            const chatUnseenDone =
+              !systemTabActive && section === 'chat' && projectId
+                ? unseenDoneMap.has(agentChatId(projectId, '')) ||
+                  terminalIds.some(id => unseenDoneMap.has(id))
+                : hasUnseenDone
 
             const iconSvg = (() => {
               if (systemTabActive) {
                 return <span className="braille-spinner text-[11px]" />
+              }
+              if (chatUnseenDone) {
+                // F4.1 — finished-while-unseen takes the icon slot (amber)
+                // until the tab is visited, matching the Active bar square.
+                return (
+                  <span className="block w-2.5 h-2.5 rounded-[2px] bg-[var(--color-status-warn-amber)]" />
+                )
               }
               if (section === 'inbox') {
                 // Inbox tray with downward arrow into it
@@ -798,12 +819,22 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                           : 'Hide tab — heartbeat keeps running in the background'
                         : isAgentActive
                           ? 'Agent is active — close anyway'
-                          : 'Close tab'
+                          : hasUnseenDone
+                            ? 'Agent finished while you were away — click the tab to review'
+                            : 'Close tab'
                     }
                   >
                     {isAgentActive ? (
                       <>
                         <span className="braille-spinner text-[10px] text-[var(--color-text-muted)] group-hover/close:hidden" />
+                        <span className="hidden group-hover/close:block">{closeGlyph}</span>
+                      </>
+                    ) : hasUnseenDone ? (
+                      <>
+                        {/* F4.1 — finished-while-unseen: amber square holds the
+                            slot until the tab is visited; hover still yields
+                            the X so it can be closed without visiting. */}
+                        <span className="block w-2.5 h-2.5 rounded-[2px] bg-[var(--color-status-warn-amber)] group-hover/close:hidden" />
                         <span className="hidden group-hover/close:block">{closeGlyph}</span>
                       </>
                     ) : (

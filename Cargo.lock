@@ -3129,6 +3129,7 @@ dependencies = [
  "flate2",
  "fontdue",
  "git2",
+ "idna",
  "ignore",
  "image",
  "k2-core",

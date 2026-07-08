@@ -562,6 +562,19 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0074_subdomain_workspaces",
             include_str!("../../drizzle_sql/0074_subdomain_workspaces.sql"),
         ),
+        // 0072 (K2 Mail foundation, prd-email-server-v1 §12): the
+        // K2-side mail state — `mail_server` (singleton install
+        // record; not-installed = no row) + `mail_domains` (normalized
+        // punycode domains + per-record DNS verification state) +
+        // `mail_relay_configs` (smart-host creds, kind anticipates V2
+        // providers) + `mail_addresses` (agent↔address ownership +
+        // idempotent-minting client_id) + `mail_outbound` (approval
+        // queue AND send audit log — a row lands BEFORE any hand-off
+        // to Stalwart, fail-closed) + `mail_doctor_runs` (deliverability
+        // history) + per-workspace `projects.mail_agent_send` /
+        // `projects.mail_address_cap` gating overrides (NULL = inherit
+        // the global AppSettings defaults: 'off' / 5). Additive.
+        ("0072_mail", include_str!("../../drizzle_sql/0072_mail.sql")),
     ];
 
     for (name, sql) in migrations {

@@ -72,6 +72,19 @@ fn default_agent() -> String {
     "claude".to_string()
 }
 
+/// K2 Mail (prd-email-server-v1 §8.4 / D4) — GLOBAL default agent-send
+/// gating mode. **MUST stay "off"**: outbound email is opt-in, per
+/// workspace, fail-closed.
+fn default_mail_agent_send() -> String {
+    "off".to_string()
+}
+
+/// K2 Mail (prd-email-server-v1 §7.2 / D6) — GLOBAL default address
+/// cap per agent. 0 = unlimited.
+fn default_mail_address_cap() -> u32 {
+    5
+}
+
 /// P1.C — default Active-Bar tenure window: 24 hours.
 fn default_active_window_hours() -> u32 {
     24
@@ -272,6 +285,24 @@ pub struct AppSettings {
     /// push to leave dormancy.
     #[serde(default)]
     pub push_gateway_token: Option<String>,
+    /// K2 Mail (prd-email-server-v1 §12 / D4) — the GLOBAL default
+    /// agent-send gating mode: `off` (default) | `approval` | `on`.
+    /// Per-workspace `projects.mail_agent_send` (migration 0072)
+    /// overrides it; the effective resolver is
+    /// `workspace::settings::mail_agent_send_for_path`, which
+    /// fail-closes to "off" on any unknown stored value. A typed field
+    /// is required: `AppSettings` round-trips through
+    /// `serde_json::from_value` on every `load`/`update`, which
+    /// silently drops keys with no matching field — an untyped key
+    /// would never persist.
+    #[serde(default = "default_mail_agent_send")]
+    pub mail_agent_send: String,
+    /// K2 Mail (prd-email-server-v1 §12 / D6) — the GLOBAL default
+    /// address cap per agent (0 = unlimited). Per-workspace
+    /// `projects.mail_address_cap` overrides it; effective resolver:
+    /// `workspace::settings::mail_address_cap_for_path`.
+    #[serde(default = "default_mail_address_cap")]
+    pub mail_address_cap: u32,
     #[serde(default)]
     pub editor: EditorSettings,
     /// Style System P3 — the user's Style selection (style / palette /
@@ -519,6 +550,8 @@ impl Default for AppSettings {
             use_llm_hitl_detection: false,
             push_gateway_url: None,
             push_gateway_token: None,
+            mail_agent_send: default_mail_agent_send(),
+            mail_address_cap: default_mail_address_cap(),
             editor: EditorSettings::default(),
             style: StyleSettings::default(),
             companion: CompanionSettings::default(),

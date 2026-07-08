@@ -103,6 +103,10 @@ pub mod inbox;
 // Phase 2.5c: historical migration helpers (one-shot, sentinel-gated).
 pub mod migrations;
 pub mod llm;
+// K2 Mail (prd-email-server-v1 pre-mortem #14) — the ONE mail-domain
+// normalization helper (lowercase punycode A-label) used at every
+// boundary. Store only what it returns; display-decode at the edge.
+pub mod mail_domain;
 // 0.40.34 — browser-open shim staging (~/.k2/bin/k2-open): xdg-open /
 // $BROWSER inside a K2 session surfaces the URL in the connected app
 // instead of launching a browser on the daemon's (possibly headless) box.

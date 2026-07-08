@@ -115,6 +115,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::push_routes::dispatch(path, params) {
         return resp;
     }
+    // K2 Mail — `/cli/mail/*` reads (status is REAL — the capability
+    // seam; the rest 501 until their slice lands) + the 405 guards for
+    // its POST-only mutations reached via the GET chain.
+    if let Some(resp) = crate::mail_routes::dispatch(path, params) {
+        return resp;
+    }
     // 0.40.34 — `/cli/browser/open-url` 405 guard for the POST-only
     // mutation reached via the GET chain (no browser GET reads).
     if let Some(resp) = crate::browser_routes::dispatch(path, params) {

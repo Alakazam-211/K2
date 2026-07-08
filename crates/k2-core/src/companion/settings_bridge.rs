@@ -100,8 +100,19 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    /// The provider slot is PROCESS-GLOBAL and last-writer-wins, so
+    /// the tests below — each of which installs/clears it and then
+    /// asserts on a read — must serialize on this lock or they stomp
+    /// each other under parallel scheduling (one test's clear landing
+    /// between a sibling's set and read).
+    fn slot_test_lock() -> parking_lot::MutexGuard<'static, ()> {
+        static LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+        LOCK.lock()
+    }
+
     #[test]
     fn read_without_provider_returns_defaults() {
+        let _g = slot_test_lock();
         // Clear any provider set by prior tests.
         *slot().lock() = None;
         let s = read_settings();
@@ -112,6 +123,7 @@ mod tests {
 
     #[test]
     fn set_provider_is_used_by_read() {
+        let _g = slot_test_lock();
         struct Fake;
         impl CompanionSettingsProvider for Fake {
             fn read(&self) -> CompanionSettingsSnapshot {
@@ -133,6 +145,7 @@ mod tests {
 
     #[test]
     fn clear_password_hash_delegates_to_provider() {
+        let _g = slot_test_lock();
         let counter = Arc::new(AtomicUsize::new(0));
         struct Fake(Arc<AtomicUsize>);
         impl CompanionSettingsProvider for Fake {

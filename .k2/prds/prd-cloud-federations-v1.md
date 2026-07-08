@@ -48,9 +48,13 @@ to believe it.** Every design decision follows from four rules:
   daemon with a **federation grant**: a short-lived document SIGNED by
   the cloud (Ed25519), carrying {federation_id, member identity, server
   scope, role, not_before, expires}. The daemon verifies the signature
-  against a cloud public key it pinned AT ENROLLMENT (key rotation =
-  overlapping keys in the enrollment record, same pattern as updater
-  signing). The relay CANNOT mint access: E2E tunnels are TLS-terminated
+  against a cloud public key it pinned AT ENROLLMENT. Key rotation =
+  overlapping keys in the enrollment record. IMPLEMENTER NOTE (validated
+  2026-07-08): this rotation mechanism is NET-NEW — the updater pins a
+  single static minisign key (no rotation precedent) and the cert broker
+  pins no app-level key at all (web PKI + bearer token). The nearest
+  in-repo Ed25519 precedent to copy is the daemon-peering envelope
+  signing in crates/k2-core/src/federation/envelope.rs. The relay CANNOT mint access: E2E tunnels are TLS-terminated
   at the daemon, and the relay never holds the cloud signing key.
 - **T3 — The local owner always outranks the federation.** Owner-role
   on the box beats any grant. The owner panel gets "Federated access"
@@ -66,7 +70,7 @@ to believe it.** Every design decision follows from four rules:
 
 | Object | Lives | Notes |
 |---|---|---|
-| Federation {id, name, owner_account, policy} | k2.dev cloud (Supabase, k2-connect repo) | RLS: only owner/managers read-write |
+| Federation {id, name, owner_account, policy} | k2.dev cloud — SCHEMA in k2-connect/supabase/migrations; DASHBOARD UI in the separate k2-dev-web repo (Next.js/Vercel; DashboardTabs in app/dashboard/page.tsx currently: subdomains, servers, password) | RLS: only owner/managers read-write |
 | Membership {federation_id, account_id, fed_role: manager\|member, server_role: admin\|member\|viewer} | cloud | `server_role` maps DIRECTLY onto the daemon's existing `connect_users::Role` — do NOT invent a new role lattice. Federated grants can never carry `owner`. |
 | Server enrollment {federation_id, subdomain, device_id, enrolled_by, cloud_pubkey_ids, status} | cloud + a mirror record on the daemon (`~/.k2/cloud-federation.json`) | daemon mirror is the daemon's source of truth for "am I enrolled + which keys do I trust" |
 | Grant (the signed credential) | minted by cloud on demand; cached on the member's DEVICE (keychain via existing `dev.k2.connect.*` service pattern — NEVER localStorage) | one grant per (member, server); renewed silently before expiry while the account session is valid |
@@ -84,7 +88,12 @@ to believe it.** Every design decision follows from four rules:
    pubkeys over its OWN tunnel-authenticated channel, writes
    `cloud-federation.json`, and confirms to the cloud. Result: T1 is
    structural — the code proves manager intent, the daemon action proves
-   owner control. (Same consent shape as the existing subdomain lease.)
+   owner control. (Template to copy — validated 2026-07-08: the hosted-provisioning
+   CALLBACK, where the box POSTs its ops credential back to the cloud
+   after provisioning (k2-dev-web app/api/servers/callback +
+   servers.ops_credential) — a real box→cloud confirm-back. The
+   subdomain lease is NOT this shape: it re-POSTs an RPC with the
+   keychain account session and never confirms back.)
 3. **Member connects (desktop/mobile):** app sign-in → fetch federated
    server list → merge into Connections (§6) → on connect, present the
    grant to the daemon (`Authorization: this is a new auth CLASS in the
@@ -94,6 +103,13 @@ to believe it.** Every design decision follows from four rules:
    shadow user `fed:<account_id>` with the grant's `server_role`, and
    everything downstream (presence, viewer/claimer gates, kick) works
    UNCHANGED because it already keys off connect-user roles.
+   IMPLEMENTER NOTE (validated 2026-07-08): the current ConnectUser row
+   REQUIRES password_hash and has no ephemeral marker
+   (connect_users.rs — add_user rejects empty passwords), so shadow
+   users need either new optional fields (ephemeral flag + grant_id,
+   password-less) or a parallel ephemeral store answering the same
+   role_for_user() seam. Reuse the ROLE LATTICE, not necessarily the
+   row shape — P8 is the failure mode if this gets fudged.
 4. **Revoke:** remove member on web → cloud stops renewing their grants
    (hard stop at TTL) AND pushes a best-effort revocation to each
    enrolled daemon over the tunnel (instant when online). Manager-facing
@@ -149,8 +165,10 @@ to believe it.** Every design decision follows from four rules:
 
 ## 8. Build order (each stage independently shippable)
 
-1. Cloud schema + Federations tab CRUD + invites (k2-connect repo,
-   Supabase RLS reviewed by a second person — RLS bugs are silent).
+1. Cloud schema (k2-connect/supabase/migrations — RLS reviewed by a
+   second person; RLS bugs are silent) + Federations tab CRUD + invites
+   in the SEPARATE k2-dev-web repo (new DashboardTab + app/federations
+   + app/api routes). TWO repos — bring both up before starting.
 2. Enrollment handshake (cloud endpoint + `k2 cloud-federation enroll`
    + owner-panel approve + `cloud-federation.json`).
 3. Daemon grant verification (new auth class in the dispatcher +

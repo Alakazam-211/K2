@@ -35,6 +35,13 @@ Read [`styles/README.md`](styles/README.md) for the folder anatomy and
   (spread rings), set `gap.*` large enough to clear them, and keep
   `divider.width ≈ 2 × gap.tile` so pane-divider dragging still works.
 
+## Author it live
+
+Run the app from source (`bun run dev`) with `bun run styles:watch` in a second
+terminal: every save of a style file regenerates the outputs and hot-reloads
+into the running app — your style shows up as a card in Settings → Styles, with
+live palette hover-previews, while you edit its JSON.
+
 ## Submitting
 
 1. `bun run styles:build` — regenerates `src/renderer/styles.generated.{css,ts}`;

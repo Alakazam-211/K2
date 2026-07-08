@@ -3,6 +3,8 @@
 //
 //   node scripts/build-styles.mjs          # build
 //   node scripts/build-styles.mjs --check  # verify the committed output is current (CI)
+//   node scripts/build-styles.mjs --watch  # rebuild on styles/ changes (live style
+//                                          # authoring: vite dev hot-reloads the output)
 //
 // Emits, in order:
 //   :root                                → the default style's default palette (pre-stamp fallback)
@@ -12,9 +14,10 @@
 // Every slot below is REQUIRED in every style/palette — a missing slot is a
 // hard build failure, never a silent fallback.
 
-import { readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync, statSync, watch } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const STYLES_DIR = join(ROOT, 'styles')
@@ -432,4 +435,21 @@ if (process.argv.includes('--check')) {
   writeFileSync(OUT_TS_FILE, ts)
   const paletteCount = styles.reduce((n, s) => n + s.palettes.length, 0)
   console.log(`build-styles: wrote ${relative(ROOT, OUT_FILE)} + .ts registry (${styles.length} style(s), ${paletteCount} palette(s))`)
+}
+
+// Live style authoring: rebuild on every styles/ change. Each rebuild runs
+// in a child process so a validation failure prints its error and the watch
+// survives (fail() calls process.exit). Pair with `bun run vite:dev` (or
+// `bun run dev`) — vite hot-reloads the regenerated outputs into the app.
+if (process.argv.includes('--watch')) {
+  console.log('build-styles: watching styles/ for changes… (ctrl-c to stop)')
+  let timer = null
+  watch(STYLES_DIR, { recursive: true }, (_event, filename) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      console.log(`build-styles: ${filename ?? 'styles/'} changed — rebuilding`)
+      const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], { stdio: 'inherit' })
+      if (r.status !== 0) console.error('build-styles: fix the error above — still watching')
+    }, 150)
+  })
 }

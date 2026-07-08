@@ -507,8 +507,20 @@ export default function App(): React.JSX.Element {
     // the Cmd+Shift+T multi-spawn bug). If we're torn down by the time a
     // listener registers, unlisten it immediately instead of keeping it.
     let torndown = false
+    // Unlisten can throw ("listeners[eventId] is undefined") when the
+    // Rust-side listener registry was already dropped — a late listen()
+    // resolving across a dev full-reload or window teardown. Losing the
+    // unlisten there is fine (the registry is gone); losing the whole
+    // promise chain to an unhandled rejection is not.
+    const safeUnlisten = (fn: () => void) => {
+      try {
+        fn()
+      } catch {
+        /* listener registry already torn down */
+      }
+    }
     const track = (fn: () => void) => {
-      if (torndown) fn()
+      if (torndown) safeUnlisten(fn)
       else unlisteners.push(fn)
     }
     import('@tauri-apps/api/event').then(({ listen }) => {
@@ -620,7 +632,7 @@ export default function App(): React.JSX.Element {
     })
     return () => {
       torndown = true
-      unlisteners.forEach((fn) => fn())
+      unlisteners.forEach(safeUnlisten)
     }
   }, [openSettings, toggleAssistant, toggleCommandPalette])
 

@@ -24,6 +24,9 @@ import {
 } from '@/styles.generated'
 import type { SettingEntry } from '../searchManifest'
 
+/** Registry terminal colors are 0xRRGGBB ints (Kessel's format). */
+const intToHex = (n: number): string => `#${n.toString(16).padStart(6, '0')}`
+
 export const STYLES_MANIFEST: SettingEntry[] = [
   { id: 'styles.style-picker', section: 'styles', label: 'Style', description: 'App-wide visual style (Square, community styles)', keywords: ['style', 'skin', 'theme', 'appearance', 'look', 'square', 'glass', 'bezel'] },
   { id: 'styles.palette', section: 'styles', label: 'Palette', description: 'Color palette within the selected style', keywords: ['palette', 'color', 'colors', 'theme', 'charcoal', 'paper', 'dark mode', 'light mode'] },
@@ -243,13 +246,19 @@ export function StylesSection(): React.JSX.Element {
                       : 'border-[var(--color-border)] bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-elevated)]'
                   } ${!supportsScheme ? 'opacity-50' : ''}`}
                 >
-                  <div className="flex gap-1 mb-2">
+                  <div className="flex gap-1 mb-1.5">
                     {([p.swatch.bg, p.swatch.surface, p.swatch.elevated, p.swatch.accent] as const).map((c, i) => (
                       <span
                         key={i}
                         className="w-5 h-5 border border-[var(--color-border)] flex-shrink-0"
                         style={{ backgroundColor: c }}
                       />
+                    ))}
+                  </div>
+                  {/* ANSI-16 strip — terminal colors are what this audience judges first */}
+                  <div className="flex mb-2 border border-[var(--color-border)]">
+                    {p.terminal.palette.map((n, i) => (
+                      <span key={i} className="h-1.5 flex-1" style={{ backgroundColor: intToHex(n) }} />
                     ))}
                   </div>
                   <div className="flex items-center justify-between">
@@ -335,65 +344,76 @@ export function StylesSection(): React.JSX.Element {
           </div>
         )}
 
-        {/* Live preview strip — pure divs on the contract tokens, so it
-            always shows the CURRENTLY STAMPED style (incl. hover previews). */}
+        {/* Live preview — a miniature K2 workspace on the contract tokens
+            (canvas, tab strip, tiled terminal panes using the real --term-*
+            colors), so it always shows the CURRENTLY STAMPED style,
+            including hover previews. */}
         <div className="mb-6" data-settings-id="styles.preview">
           <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
             Preview
           </div>
           <div
-            className="p-4 border border-[var(--color-border)] max-w-xl"
-            style={{ backgroundColor: 'var(--color-bg)', borderRadius: 'var(--radius-box)' }}
+            className="border border-[var(--color-border)] max-w-xl overflow-hidden"
+            style={{
+              backgroundColor: 'var(--color-bg-canvas)',
+              borderRadius: 'var(--radius-box)',
+              padding: 'calc(var(--inset-window) + 8px)',
+            }}
           >
-            {/* 3-tab strip */}
-            <div className="flex border-b border-[var(--color-border)] mb-3">
-              {['terminal', 'chat', 'files'].map((t, i) => (
+            {/* Mini tab strip with status dots */}
+            <div
+              className="flex items-center border border-[var(--color-border)]"
+              style={{
+                backgroundColor: 'var(--color-bg-surface)',
+                borderTopLeftRadius: 'var(--radius-box)',
+                borderTopRightRadius: 'var(--radius-box)',
+                marginBottom: 'var(--gap-section)',
+              }}
+            >
+              {['zsh', 'claude', 'logs'].map((t, i) => (
                 <div
                   key={t}
-                  className={`px-3 py-1 text-[11px] border-r border-[var(--color-border)] ${
+                  className="px-3 py-1 text-[10px]"
+                  style={
                     i === 0
-                      ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]'
-                      : 'text-[var(--color-text-muted)]'
-                  }`}
-                  style={{ borderTopLeftRadius: 'var(--radius-selector)', borderTopRightRadius: 'var(--radius-selector)' }}
+                      ? { color: 'var(--color-text-primary)', boxShadow: 'inset 0 -2px 0 0 var(--color-accent)' }
+                      : { color: 'var(--color-text-muted)' }
+                  }
                 >
                   {t}
                 </div>
               ))}
-            </div>
-            <div className="flex gap-3">
-              {/* Surface card */}
-              <div
-                className="flex-1 p-3 border border-[var(--color-border)]"
-                style={{ backgroundColor: 'var(--color-bg-surface)', borderRadius: 'var(--radius-box)' }}
-              >
-                <div className="text-[11px] text-[var(--color-text-primary)] mb-1">Surface</div>
-                <div className="text-[10px] text-[var(--color-text-secondary)]">Secondary text</div>
-                <div className="text-[10px] text-[var(--color-text-muted)]">Muted text</div>
+              <div className="ml-auto flex items-center gap-1.5 px-3">
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--color-status-working)' }} />
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--color-status-ok)' }} />
               </div>
-              {/* Elevated card + controls */}
+            </div>
+            {/* Mini mosaic — two terminal tiles; the seam between them is
+                the canvas, exactly like the real tiling grid */}
+            <div className="grid grid-cols-2" style={{ gap: 'calc(var(--gap-tile) * 2)' }}>
               <div
-                className="flex-1 p-3 border border-[var(--color-border)]"
-                style={{ backgroundColor: 'var(--color-bg-elevated)', borderRadius: 'var(--radius-box)' }}
+                className="border border-[var(--color-border)] p-2 leading-relaxed"
+                style={{ backgroundColor: 'var(--term-bg)', borderRadius: 'var(--radius-box)' }}
               >
-                <div className="text-[11px] text-[var(--color-text-primary)] mb-2">Elevated</div>
-                <div className="flex items-center gap-2">
-                  <div
-                    className="px-2.5 py-1 text-[10px]"
-                    style={{
-                      backgroundColor: 'var(--color-accent)',
-                      color: 'var(--color-on-accent)',
-                      borderRadius: 'var(--radius-field)',
-                    }}
-                  >
-                    Button
-                  </div>
-                  <div
-                    className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-muted)] flex-1 min-w-0"
-                    style={{ backgroundColor: 'var(--color-bg)', borderRadius: 'var(--radius-field)' }}
-                  >
-                    Input…
-                  </div>
+                <div className="text-[9px]" style={{ color: 'var(--term-fg)' }}>
+                  <span style={{ color: 'var(--term-ansi-10)' }}>➜</span>{' '}
+                  <span style={{ color: 'var(--term-ansi-12)' }}>~/k2</span> k2 agent list
+                </div>
+                <div className="text-[9px]" style={{ color: 'var(--term-ansi-2)' }}>✓ appa — ready</div>
+                <div className="text-[9px]" style={{ color: 'var(--term-ansi-3)' }}>● momo — working</div>
+              </div>
+              <div
+                className="border border-[var(--color-border)] p-2 leading-relaxed"
+                style={{ backgroundColor: 'var(--term-bg)', borderRadius: 'var(--radius-box)' }}
+              >
+                <div className="text-[9px]" style={{ color: 'var(--term-ansi-13)' }}>▍agent</div>
+                <div className="text-[9px]" style={{ color: 'var(--term-fg)' }}>Refactor complete.</div>
+                <div className="text-[9px]">
+                  <span style={{ color: 'var(--term-fg)' }}>$ </span>
+                  <span
+                    className="inline-block w-[6px] h-[10px] align-middle"
+                    style={{ backgroundColor: 'var(--term-cursor)' }}
+                  />
                 </div>
               </div>
             </div>

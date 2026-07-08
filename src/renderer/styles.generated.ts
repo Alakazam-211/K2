@@ -176,41 +176,41 @@ export const STYLES: readonly StyleMeta[] = [
           "light"
         ],
         "swatch": {
-          "bg": "#fafafa",
-          "surface": "#f1f1f2",
-          "elevated": "#e8e8ea",
-          "accent": "#2563eb",
-          "textPrimary": "#1c1c1f",
-          "border": "#d9d9de"
+          "bg": "#faf8f3",
+          "surface": "#f2efe8",
+          "elevated": "#e7e2d7",
+          "accent": "#255a92",
+          "textPrimary": "#221e15",
+          "border": "#dcd5c6"
         },
         "terminal": {
-          "foreground": 1842207,
-          "background": 16448250,
+          "foreground": 2235925,
+          "background": 16447731,
           "palette": [
-            1842207,
-            12131356,
-            4157217,
-            9724416,
-            2972318,
-            7031413,
-            292474,
-            9342616,
-            5592414,
-            14427686,
-            5147178,
-            11893504,
-            3433892,
-            9265050,
-            430228,
-            657930
+            2235925,
+            11740702,
+            2583357,
+            10119688,
+            2448018,
+            8080006,
+            1011824,
+            9603450,
+            5985349,
+            13645864,
+            3115598,
+            12092170,
+            3699627,
+            9724063,
+            1214602,
+            657414
           ],
           "cursor": {
             "text": null,
-            "cursor": 1842207
+            "cursor": 2235925
           },
           "selection": {
             "text": null,
-            "background": 13224399
+            "background": 14275264
           }
         }
       }

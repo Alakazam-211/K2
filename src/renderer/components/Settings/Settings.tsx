@@ -16,6 +16,7 @@ import { CompanionSection, COMPANION_MANIFEST } from './sections/CompanionSectio
 import { ConnectionsSection, CONNECTIONS_MANIFEST } from './sections/ConnectionsSection'
 import { K2ConnectSection, K2_CONNECT_MANIFEST } from './sections/K2ConnectSection'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
+import { EmailSection, EMAIL_MANIFEST } from './sections/EmailSection'
 // The Projects (project GROUPS) section — §6.5 relocation. NOT to be
 // confused with ProjectsSection above, the LEGACY workspaces section
 // (id 'projects', label "Workspaces").
@@ -41,6 +42,7 @@ const SECTIONS: { id: SettingsSection; label: string; agenticOnly?: boolean }[] 
   { id: 'project-groups', label: 'Projects' },
   { id: 'k2-connect', label: 'K2 Connect' },
   { id: 'companion', label: 'K2 Companion' },
+  { id: 'email', label: 'Email' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'code-editor', label: 'Code Editor' },
   { id: 'editors-agents', label: 'Editors & Agents' },
@@ -92,6 +94,7 @@ export default function Settings(): React.JSX.Element {
       ...COMPANION_MANIFEST,
       ...CONNECTIONS_MANIFEST,
       ...K2_CONNECT_MANIFEST,
+      ...EMAIL_MANIFEST,
       ...WAKE_SCHEDULER_MANIFEST,
       ...PERMISSIONS_MANIFEST,
       ...DICTATION_LAB_MANIFEST,
@@ -223,7 +226,8 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'projects' ||
           activeSection === 'project-groups' ||
           activeSection === 'k2-connect' ||
-          activeSection === 'connections'
+          activeSection === 'connections' ||
+          activeSection === 'email'
             ? 'overflow-hidden p-0'
             : activeSection === 'dictation-lab'
               ? 'overflow-hidden p-6'
@@ -299,6 +303,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'project-groups' && (
           <SectionErrorBoundary>
             <ProjectGroupSettings />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'email' && (
+          <SectionErrorBoundary>
+            <EmailSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'workspace-states' && (

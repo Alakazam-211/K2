@@ -187,7 +187,22 @@ export function localPairedPolicy(expectedVersion: string | null): AcceptancePol
         // A daemon answered, but it's not the one paired with this app
         // (e.g. an older daemon still up mid-update). Never mount against
         // it — wait for the kickstarted, correctly-versioned daemon.
-        return { kind: 'wait', reason: `version ${status.version} != app ${expectedVersion}` }
+        //
+        // Dev builds tolerate the skew instead: the Rust side's
+        // version-check deliberately leaves the installed daemon
+        // untouched in dev ("tolerating skew"), so exact equality here
+        // would gate a `tauri dev` app off a perfectly reachable daemon
+        // forever. Protocol compatibility still applies via /boot-status
+        // shape; releases keep the strict pairing check.
+        if (import.meta.env.DEV && !import.meta.env.TEST) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[connection-gate] DEV: tolerating daemon version skew ` +
+              `(daemon ${status.version}, app ${expectedVersion})`,
+          )
+        } else {
+          return { kind: 'wait', reason: `version ${status.version} != app ${expectedVersion}` }
+        }
       }
       if (status.phase !== 'ready') {
         // Correct daemon, still finishing first-boot migrations. Show the

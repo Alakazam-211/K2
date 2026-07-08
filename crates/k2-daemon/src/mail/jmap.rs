@@ -49,6 +49,11 @@
 //!      inbox fallback covers its absence); and whether Stalwart stamps
 //!      `Message-ID`/`Date` on submission when the created Email lacks
 //!      them.
+//!   7. S6 [`StalwartClient::relay_route_apply`] (+ [`relay_route_keys`])
+//!      — the smart-host outbound-route config keys
+//!      (`queue.route.<id>.*`) and how a route is BOUND to one sender
+//!      domain (a `sender-domain` key here; possibly a routing
+//!      expression upstream).
 
 use std::time::Duration;
 
@@ -387,6 +392,50 @@ impl StalwartClient {
         });
         let resp = self.mgmt_call("Domain/get", args)?;
         parse_domain_get_zonefile(stalwart_domain_id, &resp)
+    }
+
+    /// S6 — apply (`Some`) or clear (`None`) the SMART-HOST outbound
+    /// route for one domain (PRD §8.3: "the daemon configures
+    /// Stalwart's outbound route for that domain to the smart host").
+    /// Called by the S6 config surface when a domain's send mode
+    /// enters/leaves `relay` or its attached relay config changes.
+    /// The password rides the settings payload once and is never
+    /// logged (transport errors excerpt the RESPONSE body only).
+    ///
+    /// ⚠ LIVE-BOX (#7): the relay-route config-key scheme. Modeled on
+    /// the documented pre-0.16 `queue.route.<id>.*` block (address /
+    /// port / protocol / implicit-TLS / auth credentials) plus a
+    /// `sender-domain` binding key so ONLY this domain's outbound uses
+    /// the smart host — Stalwart may spell the binding as a routing
+    /// EXPRESSION instead of a per-route key. This function (and
+    /// [`relay_route_keys`]) is the single place to fix on the live
+    /// box; nothing else in the daemon knows the shape.
+    pub fn relay_route_apply(
+        &self,
+        domain: &str,
+        route: Option<&RelayRoute>,
+    ) -> Result<(), String> {
+        let api_url = self.discover_api_url()?;
+        let keys = relay_route_keys(domain);
+        match route {
+            Some(r) => {
+                let set: Vec<(String, serde_json::Value)> = keys
+                    .iter()
+                    .cloned()
+                    .zip([
+                        serde_json::json!(r.host),
+                        serde_json::json!(r.port),
+                        serde_json::json!("smtp"),
+                        serde_json::json!(r.implicit_tls),
+                        serde_json::json!(r.username),
+                        serde_json::json!(r.password),
+                        serde_json::json!(domain),
+                    ])
+                    .collect();
+                self.settings_set(&api_url, &set)
+            }
+            None => self.settings_destroy(&api_url, &keys),
+        }
     }
 
     /// S3 — `Account/set create` (PRD §7.1): one Stalwart account per
@@ -970,6 +1019,40 @@ impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
 pub struct CreatedDomain {
     pub id: String,
     pub dns_zone_file: Option<String>,
+}
+
+/// One smart-host outbound route (PRD §8.3): what Stalwart needs to
+/// relay a domain's outbound mail through the owner's SMTP provider.
+/// The password is the RESOLVED secret (the caller resolves the
+/// `mail_relay_configs.secret_ref` through the secret store) — it
+/// lives only for the duration of the apply call and is never logged.
+pub struct RelayRoute {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    /// true = implicit TLS (:465-style); false = STARTTLS.
+    pub implicit_tls: bool,
+}
+
+/// ⚠ LIVE-BOX (#7, helper): the config keys for one domain's relay
+/// route, in the order [`StalwartClient::relay_route_apply`] zips its
+/// values. Dots in the domain would read as key separators — the route
+/// id replaces them with dashes.
+pub fn relay_route_keys(domain: &str) -> Vec<String> {
+    let id = format!("k2-relay-{}", domain.replace('.', "-"));
+    [
+        "address",
+        "port",
+        "protocol",
+        "tls.implicit",
+        "auth.username",
+        "auth.secret",
+        "sender-domain",
+    ]
+    .iter()
+    .map(|k| format!("queue.route.{id}.{k}"))
+    .collect()
 }
 
 /// The client-chosen creation tag inside `Domain/set create` — any
@@ -2818,5 +2901,118 @@ mod s4_mail_tests {
                 || dl.contains("Authorization: Bearer k2-test-key"),
             "{dl}"
         );
+    }
+}
+
+#[cfg(test)]
+mod s6_relay_tests {
+    use super::*;
+
+    /// Same loopback mock the sibling test modules use (each module
+    /// keeps its own copy — house pattern).
+    fn spawn_mock_server(
+        replies: Vec<String>,
+    ) -> (u16, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for reply in replies {
+                let (mut sock, _) = match listener.accept() {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = match sock.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    raw.extend_from_slice(&buf[..n]);
+                    if let Some(head_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+                        let want: usize = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if raw.len() >= head_end + 4 + want {
+                            break;
+                        }
+                    }
+                }
+                let _ = tx.send(String::from_utf8_lossy(&raw).to_string());
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+        (port, rx)
+    }
+
+    #[test]
+    fn relay_route_keys_are_domain_scoped_and_dot_free() {
+        let keys = relay_route_keys("acme.dev");
+        assert_eq!(keys.len(), 7);
+        assert!(keys.iter().all(|k| k.starts_with("queue.route.k2-relay-acme-dev.")), "{keys:?}");
+        assert!(keys.iter().any(|k| k.ends_with(".auth.secret")));
+        assert!(keys.iter().any(|k| k.ends_with(".sender-domain")));
+        // Different domains never collide on a route id.
+        assert_ne!(relay_route_keys("a.dev")[0], relay_route_keys("b.dev")[0]);
+    }
+
+    /// Apply round-trip: discovery + one Settings/set carrying every
+    /// route key (creds ride the payload; the wire assertion is the
+    /// ONLY place the test looks for them).
+    #[test]
+    fn relay_route_apply_sets_and_clears_the_route_block() {
+        let ok = r#"{"methodResponses":[["Settings/set",{"updated":{}},"0"]]}"#.to_string();
+        let session = r#"{"apiUrl": "/jmap/", "capabilities": {}}"#.to_string();
+        let (port, rx) = spawn_mock_server(vec![session.clone(), ok.clone()]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let route = RelayRoute {
+            host: "smtp.mailgun.org".into(),
+            port: 587,
+            username: "postmaster@acme.dev".into(),
+            password: "relay-pw".into(),
+            implicit_tls: false,
+        };
+        c.relay_route_apply("acme.dev", Some(&route)).expect("apply");
+        let _disc = rx.recv().expect("req1");
+        let set = rx.recv().expect("req2");
+        let body: serde_json::Value =
+            serde_json::from_str(&set[set.find("\r\n\r\n").expect("body") + 4..]).expect("json");
+        assert_eq!(body["methodCalls"][0][0], "Settings/set");
+        let update = &body["methodCalls"][0][1]["update"];
+        assert_eq!(update["queue.route.k2-relay-acme-dev.address"], "smtp.mailgun.org");
+        assert_eq!(update["queue.route.k2-relay-acme-dev.port"], 587);
+        assert_eq!(update["queue.route.k2-relay-acme-dev.tls.implicit"], false);
+        assert_eq!(update["queue.route.k2-relay-acme-dev.auth.username"], "postmaster@acme.dev");
+        assert_eq!(update["queue.route.k2-relay-acme-dev.auth.secret"], "relay-pw");
+        assert_eq!(update["queue.route.k2-relay-acme-dev.sender-domain"], "acme.dev");
+
+        // Clear (None) destroys the same key set.
+        let (port, rx) = spawn_mock_server(vec![session, ok]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.relay_route_apply("acme.dev", None).expect("clear");
+        let _disc = rx.recv().expect("req1");
+        let destroy = rx.recv().expect("req2");
+        let body: serde_json::Value = serde_json::from_str(
+            &destroy[destroy.find("\r\n\r\n").expect("body") + 4..],
+        )
+        .expect("json");
+        let destroyed = body["methodCalls"][0][1]["destroy"].as_array().expect("destroy list");
+        assert_eq!(destroyed.len(), 7);
+        assert!(destroyed
+            .iter()
+            .all(|k| k.as_str().unwrap().starts_with("queue.route.k2-relay-acme-dev.")));
     }
 }

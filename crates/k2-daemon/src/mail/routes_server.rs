@@ -1,21 +1,26 @@
 //! `/cli/mail/*` — SERVER-concern handlers: status + preflight (REAL),
-//! enable / disable / uninstall (S1, REAL), config, doctor (stubs for
-//! S5/S6).
+//! enable / disable / uninstall (S1), config get/set + doctor (S6).
 //!
 //! Dispatched by the `crate::mail_routes` shim. AUTH/GATING contract
 //! for this file's mutations (PRD §10), enforced in the dispatcher's
 //! `/cli/mail/` POST arm and re-asserted per-handler as slices land:
-//! server enable/disable/uninstall + config = OWNER-OR-ADMIN
-//! (`token_is_owner_or_admin`), POST-only (`require_post` +
-//! `post_allowed`, house rule feedback_post_only_route_guards).
+//! server enable/disable/uninstall + config/set + the doctor RUN =
+//! OWNER-OR-ADMIN (`token_is_owner_or_admin`), POST-only
+//! (`require_post` + `post_allowed`, house rule
+//! feedback_post_only_route_guards). The config/doctor GETs are
+//! secret-free reads (the Settings page renders them for any authed
+//! token, like `/cli/mail/status`).
 //!
 //! Non-Linux daemons (D3): validation runs first (so the Mac
 //! example-page exercises real error text), then every mutation stops
 //! at the `mail_supported()` gate with the structured `unsupported`
-//! 409 — nothing system-level ever executes off-Linux.
+//! 409 — nothing system-level ever executes off-Linux, and the doctor
+//! never probes anything from a Mac.
 
 use std::collections::HashMap;
 
+use crate::mail::config::{self, CfgError};
+use crate::mail::doctor::{self, DocError};
 use crate::cli_response::CliResponse;
 use crate::mail::supervisor::{self, mail_supported, STALWART_PINNED_VERSION};
 
@@ -323,25 +328,247 @@ pub fn handle_server_uninstall(body: &[u8]) -> CliResponse {
     )
 }
 
-/// GET `/cli/mail/config` — S5: read the effective send-mode/relay/
-/// gating configuration.
+// ── S6: config + doctor ─────────────────────────────────────────────────
+
+fn cfg_error_response(err: CfgError) -> CliResponse {
+    match err {
+        CfgError::Usage(h) => err_json("400 Bad Request", "usage", h),
+        CfgError::NotFound(h) => err_json("404 Not Found", "not_found", h),
+        CfgError::NotReady(h) => err_json("503 Service Unavailable", "not_ready", h),
+        CfgError::Locked(h) => err_json("409 Conflict", "direct_locked", h),
+        CfgError::Conflict(h) => err_json("409 Conflict", "conflict", h),
+        CfgError::Engine(h) => err_json("502 Bad Gateway", "engine", h),
+    }
+}
+
+fn doc_error_response(err: DocError) -> CliResponse {
+    match err {
+        DocError::Usage(h) => err_json("400 Bad Request", "usage", h),
+        DocError::NotFound(h) => err_json("404 Not Found", "not_found", h),
+        DocError::NotReady(h) => err_json("503 Service Unavailable", "not_ready", h),
+        DocError::Engine(h) => err_json("502 Bad Gateway", "engine", h),
+    }
+}
+
+/// GET `/cli/mail/config` — S6: the effective configuration (global +
+/// per-workspace gating, limits, per-domain send modes, relay-config
+/// summaries — kind + host + username, NEVER secrets — and the latest
+/// server-level doctor grade). Pure read; renders on the Mac example
+/// page too (`supported` rides the reply).
 pub fn handle_config_get(_params: &HashMap<String, String>) -> CliResponse {
-    super::not_built("S5", "GET /cli/mail/config")
+    CliResponse::ok_json(config::config_json().to_string())
 }
 
-/// POST `/cli/mail/config/set` — S5: send-mode per domain, relay
-/// creds, `mail_agent_send` / `mail_address_cap` per workspace
-/// (owner-or-admin; the settings keys + resolvers already exist in
-/// k2-core: `workspace::settings::mail_agent_send_for_path` /
-/// `mail_address_cap_for_path`).
-pub fn handle_config_set(_body: &[u8]) -> CliResponse {
-    super::not_built("S5", "POST /cli/mail/config/set")
+/// POST `/cli/mail/config/set` body — the `k2 mail config` surface
+/// (§11): per-domain send mode (+ relay attach), relay-config CRUD,
+/// per-workspace and global D4/D6 gating.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct ConfigSetBody {
+    domain: Option<String>,
+    send_mode: Option<String>,
+    relay_config_id: Option<String>,
+    relay: Option<config::RelayUpsert>,
+    delete_relay_config: Option<String>,
+    workspace: Option<String>,
+    agent_send: Option<String>,
+    address_cap: Option<i64>,
+    defaults: Option<ConfigDefaultsBody>,
 }
 
-/// GET `/cli/mail/doctor` — S6: latest stored run (+ `?run=1` triggers
-/// a fresh one when built; method shape finalized in S6).
-pub fn handle_doctor(_params: &HashMap<String, String>) -> CliResponse {
-    super::not_built("S6", "GET /cli/mail/doctor")
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct ConfigDefaultsBody {
+    agent_send: Option<String>,
+    address_cap: Option<i64>,
+}
+
+const CONFIG_SET_SURFACE: &str =
+    "nothing to set. The surface: {domain + sendMode [+ relayConfigId]} · {relay: \
+     {id?, host, port, username, password|secretRef, tlsKind?, spfInclude?}} · \
+     {deleteRelayConfig} · {workspace + agentSend|addressCap} · {defaults: \
+     {agentSend?, addressCap?}}";
+
+/// POST `/cli/mail/config/set` — S6 (owner-or-admin, dispatcher-
+/// enforced). Validation first (the Mac example page exercises real
+/// error text), then the D3 platform gate, then the actions apply in
+/// order: relay upsert → relay delete → domain send mode → workspace
+/// gating → global defaults. The FIRST failure stops the sequence and
+/// returns its teaching error (earlier actions in the same call stay
+/// applied — the reply's `applied` object says exactly what landed).
+pub fn handle_config_set(body: &[u8]) -> CliResponse {
+    let b: ConfigSetBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+
+    // Shape validation before anything executes.
+    let wants_send_mode = b.send_mode.is_some() || b.domain.is_some();
+    if b.send_mode.is_some() && b.domain.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return err_json(
+            "400 Bad Request",
+            "usage",
+            "'sendMode' needs 'domain' — which domain's mode is changing?".to_string(),
+        );
+    }
+    if b.domain.is_some() && b.send_mode.is_none() {
+        return err_json(
+            "400 Bad Request",
+            "usage",
+            "'domain' given but no 'sendMode' — nothing to change for it".to_string(),
+        );
+    }
+    let wants_workspace = b.workspace.is_some();
+    if (b.agent_send.is_some() || b.address_cap.is_some()) && !wants_workspace {
+        return err_json(
+            "400 Bad Request",
+            "usage",
+            "'agentSend'/'addressCap' need 'workspace' — or wrap them in 'defaults' \
+             for the global default"
+                .to_string(),
+        );
+    }
+    let any_action = b.relay.is_some()
+        || b.delete_relay_config.is_some()
+        || wants_send_mode
+        || wants_workspace
+        || b.defaults.is_some();
+    if !any_action {
+        return err_json("400 Bad Request", "usage", CONFIG_SET_SURFACE.to_string());
+    }
+    // Workspace resolution is part of validation (registry read —
+    // platform-independent).
+    let workspace_path = match b.workspace.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(ws) => match crate::workspace_msg::resolve_workspace(ws) {
+            Some(path) => Some(path),
+            None => return crate::workspace_routes::workspace_not_found_response(ws),
+        },
+        None => {
+            if wants_workspace {
+                return err_json(
+                    "400 Bad Request",
+                    "usage",
+                    "'workspace' must not be empty".to_string(),
+                );
+            }
+            None
+        }
+    };
+
+    // D3: nothing mail-shaped executes off-Linux.
+    if !mail_supported() {
+        return unsupported();
+    }
+
+    let secrets = crate::mail::secrets::FileSecretStore::default();
+    // The live Stalwart engine, when reachable — only relay
+    // transitions require it; the ops layer says so when it's missing.
+    let engine = crate::mail::domains::engine_from_db().ok().map(|(c, _)| c);
+    let engine_ref: Option<&dyn config::RelayEngine> =
+        engine.as_ref().map(|c| c as &dyn config::RelayEngine);
+
+    let mut applied = serde_json::Map::new();
+
+    // 1. Relay upsert (its id feeds a same-call sendMode attach).
+    let mut created_relay_id: Option<String> = None;
+    if let Some(up) = &b.relay {
+        match config::upsert_relay(&secrets, engine_ref, up) {
+            Ok(v) => {
+                created_relay_id = v["id"].as_str().map(str::to_string);
+                applied.insert("relayConfig".to_string(), v);
+            }
+            Err(e) => return cfg_error_response(e),
+        }
+    }
+    // 2. Relay delete.
+    if let Some(id) = b.delete_relay_config.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        match config::delete_relay(&secrets, id) {
+            Ok(v) => {
+                applied.insert("deletedRelayConfig".to_string(), v["deleted"].clone());
+            }
+            Err(e) => return cfg_error_response(e),
+        }
+    }
+    // 3. Per-domain send mode.
+    if let (Some(domain), Some(mode)) = (b.domain.as_deref(), b.send_mode.as_deref()) {
+        let attach = b
+            .relay_config_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or(created_relay_id);
+        match config::set_send_mode(&secrets, engine_ref, domain, mode, attach.as_deref()) {
+            Ok(v) => {
+                applied.insert("sendMode".to_string(), v);
+            }
+            Err(e) => return cfg_error_response(e),
+        }
+    }
+    // 4. Per-workspace gating.
+    if let Some(path) = workspace_path.as_deref() {
+        match config::set_workspace_gating(path, b.agent_send.as_deref(), b.address_cap) {
+            Ok(v) => {
+                applied.insert("workspace".to_string(), v);
+            }
+            Err(e) => return cfg_error_response(e),
+        }
+    }
+    // 5. Global defaults.
+    if let Some(d) = &b.defaults {
+        match config::set_global_defaults(d.agent_send.as_deref(), d.address_cap) {
+            Ok(v) => {
+                applied.insert("defaults".to_string(), v["defaults"].clone());
+            }
+            Err(e) => return cfg_error_response(e),
+        }
+    }
+
+    CliResponse::ok_json(
+        serde_json::json!({ "ok": true, "applied": applied }).to_string(),
+    )
+}
+
+/// GET `/cli/mail/doctor[?domain=<d>]` — S6: the LATEST persisted run
+/// (`run: null` when none). Read-only — the Settings card and the
+/// direct-mode UI never trigger probes; `POST /cli/mail/doctor` runs
+/// them.
+pub fn handle_doctor(params: &HashMap<String, String>) -> CliResponse {
+    let domain = crate::cli::str_param(params, "domain");
+    let domain = if domain.is_empty() { None } else { Some(domain.as_str()) };
+    match doctor::latest_run_json(domain) {
+        Ok(run) => CliResponse::ok_json(
+            serde_json::json!({
+                "ok": true,
+                "supported": mail_supported(),
+                "run": run,
+            })
+            .to_string(),
+        ),
+        Err(e) => doc_error_response(e),
+    }
+}
+
+/// POST `/cli/mail/doctor` — S6: run the full check table NOW
+/// (owner-or-admin, dispatcher-enforced; the dispatcher's mail POST
+/// arm already runs this in `spawn_blocking` — the probes are blocking
+/// I/O). Body: `{"domain": "acme.dev"}` optional (server-level run
+/// without it). Persists a `mail_doctor_runs` row and returns the full
+/// graded report. On non-Linux daemons the D3 gate answers before ANY
+/// probe fires — the Mac example page stays network-silent.
+pub fn handle_doctor_run(body: &[u8]) -> CliResponse {
+    let parsed: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let domain = parsed["domain"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    if !mail_supported() {
+        return unsupported();
+    }
+    match doctor::run(domain) {
+        Ok(v) => CliResponse::ok_json(v.to_string()),
+        Err(e) => doc_error_response(e),
+    }
 }
 
 #[cfg(test)]
@@ -535,25 +762,116 @@ mod tests {
         clean_row();
     }
 
-    /// Every remaining stub answers the structured 501 (never a
-    /// 404/500) so callers can tell "reserved for a later slice" from
-    /// a bad path.
+    /// S6 — GET /cli/mail/config is a real, secret-free read that
+    /// renders everywhere (Mac example page included).
     #[test]
-    fn stubs_answer_structured_501() {
-        for (resp, slice) in [
-            (handle_config_get(&HashMap::new()), "S5"),
-            (handle_config_set(b"{}"), "S5"),
-            (handle_doctor(&HashMap::new()), "S6"),
+    fn config_get_answers_the_effective_configuration() {
+        let resp = handle_config_get(&HashMap::new());
+        assert_eq!(resp.status, "200 OK");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["supported"], cfg!(target_os = "linux"));
+        assert!(v["agentSend"]["default"].is_string());
+        assert!(v["limits"]["maxRecipients"].as_u64().unwrap() > 0);
+        assert!(v["domains"].is_array());
+        assert!(v["relayConfigs"].is_array());
+    }
+
+    /// S6 — POST /cli/mail/config/set: teaching validation runs BEFORE
+    /// the platform gate; every refusal names what is missing. (Deep
+    /// apply behavior is owned by mail::config's tests.)
+    #[test]
+    fn config_set_validates_teachingly_before_anything_executes() {
+        let resp = handle_config_set(b"not json");
+        assert_eq!(resp.status, "400 Bad Request");
+
+        // Empty body → the full surface in the hint.
+        let resp = handle_config_set(b"{}");
+        assert_eq!(resp.status, "400 Bad Request");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["error"]["code"], "usage");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("sendMode"), "{v}");
+
+        // sendMode without domain / domain without sendMode / gating
+        // without workspace: each teaches.
+        for (body, needle) in [
+            (br#"{"sendMode":"direct"}"# as &[u8], "'sendMode' needs 'domain'"),
+            (br#"{"domain":"acme.dev"}"#, "no 'sendMode'"),
+            (br#"{"agentSend":"on"}"#, "'workspace'"),
         ] {
-            assert_eq!(resp.status, "501 Not Implemented");
-            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
-            assert_eq!(v["ok"], false);
-            assert_eq!(v["error"]["code"], "not_built");
-            let hint = v["error"]["hint"].as_str().expect("hint");
-            assert!(
-                hint.contains(&format!("not built yet — mail slice {slice}")),
-                "{hint}"
+            let resp = handle_config_set(body);
+            assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            assert!(v["error"]["hint"].as_str().unwrap().contains(needle), "{v}");
+        }
+
+        // Unknown workspace → the shared 404 shape, before the gate.
+        let resp = handle_config_set(br#"{"workspace":"no-such-ws-xyz","agentSend":"on"}"#);
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+
+        if !cfg!(target_os = "linux") {
+            // A structurally-valid request stops at the D3 gate on a
+            // Mac — no ops, no secret-store writes.
+            let resp = handle_config_set(
+                br#"{"defaults":{"agentSend":"approval"}}"#,
             );
+            assert_eq!(resp.status, "409 Conflict");
+            assert!(resp.body.contains("unsupported"), "{}", resp.body);
+        }
+    }
+
+    /// S6 — the doctor GET serves the latest persisted run (null when
+    /// none) and NEVER probes; the POST validates + platform-gates
+    /// before any probe could fire.
+    #[test]
+    fn doctor_get_reads_and_post_gates() {
+        let _g = crate::mail::mail_server_test_lock();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_doctor_runs WHERE domain_id IS NULL", []);
+        }
+        let resp = handle_doctor(&HashMap::new());
+        assert_eq!(resp.status, "200 OK");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["ok"], true);
+        assert!(v["run"].is_null(), "no run on file yet: {v}");
+
+        // A stored run reads back through the route.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_doctor_runs (id, domain_id, results_json, grade, ran_at) \
+                 VALUES ('mdr-route-test', NULL, '{\"checks\":[]}', 'warn', 4242)",
+                [],
+            )
+            .expect("seed run");
+        }
+        let resp = handle_doctor(&HashMap::new());
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["run"]["grade"], "warn");
+        assert_eq!(v["run"]["ranAt"], 4242);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_doctor_runs WHERE id = 'mdr-route-test'", []);
+        }
+
+        // Unknown domain in the GET → 404 (never a probe).
+        let mut params = HashMap::new();
+        params.insert("domain".to_string(), "ghost-doctor.example".to_string());
+        let resp = handle_doctor(&params);
+        assert_eq!(resp.status, "404 Not Found");
+
+        // POST: bad JSON → 400; on a Mac a valid body stops at the D3
+        // gate (network-silent example page).
+        let resp = handle_doctor_run(b"not json");
+        assert_eq!(resp.status, "400 Bad Request");
+        if !cfg!(target_os = "linux") {
+            let resp = handle_doctor_run(b"{}");
+            assert_eq!(resp.status, "409 Conflict");
+            assert!(resp.body.contains("unsupported"), "{}", resp.body);
         }
     }
 }

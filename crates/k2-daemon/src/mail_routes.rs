@@ -16,6 +16,7 @@
 //! | GET  /cli/mail/config             | mail/routes_server.rs   |
 //! | POST /cli/mail/config/set         | mail/routes_server.rs   |
 //! | GET  /cli/mail/doctor             | mail/routes_server.rs   |
+//! | POST /cli/mail/doctor (run, S6)   | mail/routes_server.rs   |
 //! | POST /cli/mail/domain/add         | mail/routes_domains.rs  |
 //! | POST /cli/mail/domain/remove      | mail/routes_domains.rs  |
 //! | POST /cli/mail/domain/check       | mail/routes_domains.rs  |
@@ -59,9 +60,11 @@
 //! POSTs already run in the mail POST arm's `spawn_blocking`; the
 //! `approvals/list` GET has its own dispatcher clause adding the
 //! owner-or-admin gate, §11.1.3: owner verbs hard-fail for agent
-//! tokens server-side). Every other route (config, doctor) returns
-//! the structured `not_built` 501 from its per-concern file until its
-//! slice lands.
+//! tokens server-side). S6 completes the family: `config` +
+//! `config/set` (the owner config surface) and `doctor` — GET = the
+//! latest PERSISTED run (read-only, never probes), POST = run the
+//! probes now (owner-level, in the POST arm's `spawn_blocking`:
+//! blocking DNS/TCP/SMTP I/O). Every reserved path is now REAL.
 
 use std::collections::HashMap;
 
@@ -86,6 +89,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // the dispatcher's post_allowed list.
         "/cli/mail/preflight" => routes_server::handle_preflight(params),
         "/cli/mail/config" => routes_server::handle_config_get(params),
+        // GET = the latest persisted run only; POST /cli/mail/doctor
+        // (the probe run) arrives via dispatch_post — one path, two
+        // methods, matching §11's `k2 mail doctor` verb.
         "/cli/mail/doctor" => routes_server::handle_doctor(params),
         "/cli/mail/domain/list" => routes_domains::handle_domain_list(params),
         "/cli/mail/domain/show" => routes_domains::handle_domain_show(params),
@@ -129,6 +135,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/mail/server/disable" => routes_server::handle_server_disable(body),
         "/cli/mail/server/uninstall" => routes_server::handle_server_uninstall(body),
         "/cli/mail/config/set" => routes_server::handle_config_set(body),
+        "/cli/mail/doctor" => routes_server::handle_doctor_run(body),
         "/cli/mail/domain/add" => routes_domains::handle_domain_add(body),
         "/cli/mail/domain/remove" => routes_domains::handle_domain_remove(body),
         "/cli/mail/domain/check" => routes_domains::handle_domain_check(body),
@@ -152,6 +159,10 @@ pub fn is_owner_level_mutation(path: &str) -> bool {
         || path.starts_with("/cli/mail/domain/")
         || path.starts_with("/cli/mail/config/")
         || path.starts_with("/cli/mail/approvals/")
+        // The doctor RUN (POST /cli/mail/doctor) is an owner verb
+        // (§11/§11.1.3); the GET on the same path is a plain read and
+        // never reaches this classifier (it only sees POSTs).
+        || path == "/cli/mail/doctor"
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -197,21 +208,34 @@ mod tests {
         assert!(dispatch("/cli/mailbox", &params).is_none(), "no bare-prefix match");
     }
 
-    /// Every reserved route answers 501 not_built (never 404) so later
-    /// slices can rely on the partition map; the REAL routes (status
-    /// from the foundation slice, the S2 domain family) answer their
-    /// own contracts.
+    /// Every route in the partition map answers its REAL contract —
+    /// as of S6 nothing 501s any more.
     #[test]
     fn reserved_routes_501_and_real_routes_answer() {
         let params = HashMap::new();
+        // S6 — config + doctor are REAL: the GETs answer 200 (config =
+        // effective configuration; doctor = latest persisted run or
+        // null), config/set validates its body (`{}` = usage 400), and
+        // the doctor POST validates + stops at the platform gate on a
+        // Mac (never a probe from the example page). Deep behavior is
+        // owned by routes_server/mail::config/mail::doctor tests.
         for route in ["/cli/mail/config", "/cli/mail/doctor"] {
             let resp = dispatch(route, &params).expect("claimed");
-            assert_eq!(resp.status, "501 Not Implemented", "route={route}");
+            assert_eq!(resp.status, "200 OK", "route={route}: {}", resp.body);
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
-            assert_eq!(v["error"]["code"], "not_built", "route={route}");
+            assert_eq!(v["ok"], true, "route={route}");
         }
         let resp = dispatch_post("/cli/mail/config/set", b"{}");
-        assert_eq!(resp.status, "501 Not Implemented");
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "usage");
+        let resp = dispatch_post("/cli/mail/doctor", b"not json");
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        if !cfg!(target_os = "linux") {
+            let resp = dispatch_post("/cli/mail/doctor", b"{}");
+            assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+            assert!(resp.body.contains("unsupported"), "{}", resp.body);
+        }
         let resp = dispatch("/cli/mail/status", &params).expect("claimed");
         assert_eq!(resp.status, "200 OK", "status is REAL from day one");
 
@@ -339,6 +363,9 @@ mod tests {
             "/cli/mail/domain/check",
             "/cli/mail/approvals/approve",
             "/cli/mail/approvals/deny",
+            // The doctor RUN (POST; the GET read never reaches the
+            // classifier).
+            "/cli/mail/doctor",
         ] {
             assert!(is_owner_level_mutation(owner_path), "{owner_path}");
         }

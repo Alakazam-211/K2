@@ -42,6 +42,10 @@
 //! - [`domains`] — S2 domain onboarding: zone-file parsing, the DNS
 //!   record table, SPF split-config, add/remove/list/show ops (behind
 //!   the `DomainEngine` trait so tests never touch a network).
+//! - [`addresses`] — S3 agent address minting: local-part rule, caps
+//!   (ACTIVE-counted, §11.1.5), idempotent `--id`, retire-with-
+//!   retention, Stalwart account lifecycle behind the `AddressEngine`
+//!   trait (compensating destroy on late mint failure — no orphans).
 //! - [`dns_verify`] — S2 DNS verification: the `DnsResolver` trait
 //!   (production: hickory system resolver; tests: canned answers),
 //!   per-record Valid/Missing/Wrong classification with expected-vs-
@@ -56,6 +60,7 @@
 //!   [`routes_domains`], [`routes_addresses`], [`routes_messages`],
 //!   [`routes_send`].
 
+pub mod addresses;
 pub mod dns_verify;
 pub mod doctor;
 pub mod domains;

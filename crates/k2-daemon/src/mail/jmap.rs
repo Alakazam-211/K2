@@ -377,24 +377,76 @@ impl StalwartClient {
         parse_domain_get_zonefile(stalwart_domain_id, &resp)
     }
 
-    /// S3 — `Account/set create` (type User, local-part + domain,
-    /// random password K2 stores but never surfaces, quota per §12).
-    #[allow(dead_code)] // S3 wires this into address minting.
+    /// S3 — `Account/set create` (PRD §7.1): one Stalwart account per
+    /// minted address — local-part `name` bound to `domainId`, the
+    /// random vaulted password, and the §12 quotas. Returns the
+    /// server-set account id. The password never appears in errors or
+    /// logs (only the parse errors below surface, and they carry the
+    /// server's SetError — never our args).
+    ///
+    /// ⚠ LIVE-BOX (S3 #1): the account-creation shape. Uncertainties
+    /// the first live run must confirm (this function is the single
+    /// place to fix): the METHOD name (`Account/set` per the PRD §7.1
+    /// wording — Stalwart may spell it `Principal/set` like S1's
+    /// service account); the `type` value (`individual` carried from
+    /// S1's principal shape; the PRD says "User"); the domain-binding
+    /// key (`domainId`); the password key (`secret`, matching S1's
+    /// `principal_update_secret`); and BOTH §12 quota keys (`quota`
+    /// bytes + `maxMessages` count — Stalwart may express the message
+    /// cap elsewhere, e.g. only in server config).
     pub fn account_create(
         &self,
         local_part: &str,
         stalwart_domain_id: &str,
+        password: &str,
+        quota_bytes: u64,
+        max_messages: u64,
     ) -> Result<String, String> {
-        let _ = (local_part, stalwart_domain_id);
-        Err(super::not_built_err("S3", "jmap Account/set create"))
+        let args = serde_json::json!({
+            "create": {
+                CREATE_TAG: {
+                    "type": "individual",
+                    "name": local_part,
+                    "domainId": stalwart_domain_id,
+                    "secret": password,
+                    "quota": quota_bytes,
+                    "maxMessages": max_messages,
+                }
+            }
+        });
+        let resp = self.mgmt_call("Account/set", args)?;
+        parse_account_set_created(&resp)
     }
 
-    /// S3 — disable an account (address retire: stops receiving,
-    /// mailbox data kept for the retention window, PRD §7.2).
-    #[allow(dead_code)] // S3 wires this into address retire.
+    /// S3 — disable an account (address retire, PRD §7.2): the alias
+    /// stops receiving, mailbox DATA IS KEPT for the retention window
+    /// (§12) — never a destroy on the retire path.
+    ///
+    /// ⚠ LIVE-BOX (S3 #2): the disable property. Modeled as an
+    /// `Account/set update` flipping `active: false`; Stalwart may
+    /// spell it differently (e.g. an `enabled` flag or a type change)
+    /// — this function is the single place to fix.
     pub fn account_disable(&self, stalwart_account_id: &str) -> Result<(), String> {
-        let _ = stalwart_account_id;
-        Err(super::not_built_err("S3", "jmap Account/set disable"))
+        let args = serde_json::json!({
+            "update": { stalwart_account_id: { "active": false } }
+        });
+        let resp = self.mgmt_call("Account/set", args)?;
+        parse_account_set_updated(stalwart_account_id, &resp)
+    }
+
+    /// S3 — destroy an account. COMPENSATING ACTION ONLY (mint
+    /// rollback: Stalwart create succeeded but the K2 row write failed
+    /// — no orphans). The retire path uses [`Self::account_disable`];
+    /// nothing else may call this in V1 (the 90-day purge job that
+    /// eventually destroys retired accounts is a later slice — see the
+    /// retention seam in `mail::addresses`).
+    ///
+    /// ⚠ LIVE-BOX (S3 #1): same `Account/set` method-name uncertainty
+    /// as [`Self::account_create`].
+    pub fn account_destroy(&self, stalwart_account_id: &str) -> Result<(), String> {
+        let args = serde_json::json!({ "destroy": [stalwart_account_id] });
+        let resp = self.mgmt_call("Account/set", args)?;
+        parse_account_set_destroyed(stalwart_account_id, &resp)
     }
 
     /// S5 — hand an APPROVED outbound message to Stalwart's queue.
@@ -606,12 +658,15 @@ pub struct CreatedDomain {
 /// so fixtures and parsers agree.
 const CREATE_TAG: &str = "k2";
 
-/// The JMAP `using` capabilities for domain management calls.
-/// LIVE-BOX FLAG (see module docs): the Stalwart-specific URN must be
-/// confirmed against the pinned v0.16.x on the first live run.
-const JMAP_USING: [&str; 2] = [
+/// The JMAP `using` capabilities for management calls (S2 domains +
+/// S3 accounts share one envelope; extra capabilities in `using` are
+/// harmless per RFC 8620).
+/// LIVE-BOX FLAG (see module docs): BOTH Stalwart-specific URNs must
+/// be confirmed against the pinned v0.16.x on the first live run.
+const JMAP_USING: [&str; 3] = [
     "urn:ietf:params:jmap:core",
     "https://stalw.art/jmap/domain",
+    "https://stalw.art/jmap/principal",
 ];
 
 /// Pure envelope builder for a single JMAP method call.
@@ -703,6 +758,61 @@ fn parse_domain_set_destroyed(
         return Err(format!("Domain/set destroy rejected — {}", set_error_line(err)));
     }
     Err(format!("Domain/set destroy: '{id}' not in the destroyed list"))
+}
+
+/// Pure `Account/set create` reply parser (S3): our creation tag must
+/// appear under `created` with a server-set id — `notCreated`
+/// surfaces the server's SetError verbatim.
+fn parse_account_set_created(args: &serde_json::Value) -> Result<String, String> {
+    if let Some(created) = args.get("created").and_then(|v| v.get(CREATE_TAG)) {
+        return created
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .ok_or_else(|| "Account/set create: reply has no server-set 'id'".to_string());
+    }
+    if let Some(err) = args.get("notCreated").and_then(|v| v.get(CREATE_TAG)) {
+        return Err(format!("Account/set create rejected — {}", set_error_line(err)));
+    }
+    Err("Account/set create: reply has neither created nor notCreated for our tag".to_string())
+}
+
+/// Pure `Account/set update` reply parser (S3 disable): the id must
+/// appear as a key of the `updated` map (RFC 8620: id → server-changed
+/// props or null); `notUpdated` surfaces the server's SetError.
+fn parse_account_set_updated(id: &str, args: &serde_json::Value) -> Result<(), String> {
+    let updated = args
+        .get("updated")
+        .and_then(|v| v.as_object())
+        .map(|m| m.contains_key(id))
+        .unwrap_or(false);
+    if updated {
+        return Ok(());
+    }
+    if let Some(err) = args.get("notUpdated").and_then(|v| v.get(id)) {
+        return Err(format!("Account/set update rejected — {}", set_error_line(err)));
+    }
+    Err(format!("Account/set update: '{id}' not in the updated map"))
+}
+
+/// Pure `Account/set destroy` reply parser (S3 compensation): the id
+/// must appear under `destroyed`; `notDestroyed` surfaces the server's
+/// SetError.
+fn parse_account_set_destroyed(id: &str, args: &serde_json::Value) -> Result<(), String> {
+    let destroyed = args
+        .get("destroyed")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().any(|v| v.as_str() == Some(id)))
+        .unwrap_or(false);
+    if destroyed {
+        return Ok(());
+    }
+    if let Some(err) = args.get("notDestroyed").and_then(|v| v.get(id)) {
+        return Err(format!("Account/set destroy rejected — {}", set_error_line(err)));
+    }
+    Err(format!("Account/set destroy: '{id}' not in the destroyed list"))
 }
 
 /// Pure `Domain/get` reply parser: find our id in `list` and return
@@ -799,31 +909,14 @@ mod tests {
     }
 
     /// Constructor normalizes a trailing-slash base so path joins never
-    /// double the slash; typed stubs fail with the structured error.
+    /// double the slash; the remaining typed stub (S5) fails with the
+    /// structured error. (The S2 domain + S3 account calls are REAL —
+    /// their behavior is owned by the fixture/loopback tests, never a
+    /// live dial from here.)
     #[test]
     fn client_construction_and_stub_errors() {
         let c = StalwartClient::new("https://127.0.0.1:8443///", "k2-test-key");
         assert_eq!(c.base_url, "https://127.0.0.1:8443");
-        assert!(c
-            .domain_create("acme.dev")
-            .unwrap_err()
-            .contains("not built yet — mail slice S2"));
-        assert!(c
-            .domain_delete("d1")
-            .unwrap_err()
-            .contains("not built yet — mail slice S2"));
-        assert!(c
-            .domain_dns_zonefile("d1")
-            .unwrap_err()
-            .contains("not built yet — mail slice S2"));
-        assert!(c
-            .account_create("scout", "d1")
-            .unwrap_err()
-            .contains("not built yet — mail slice S3"));
-        assert!(c
-            .account_disable("a1")
-            .unwrap_err()
-            .contains("not built yet — mail slice S3"));
         assert!(c
             .queue_submit("o1")
             .unwrap_err()
@@ -1068,20 +1161,13 @@ mod s2_domain_tests {
     }
 
     /// Constructor normalizes a trailing-slash base so path joins never
-    /// double the slash; the remaining typed stubs (S3/S5) fail with
-    /// the structured error.
+    /// double the slash; the remaining typed stub (S5) fails with the
+    /// structured error. (S3's account calls are REAL as of the
+    /// addresses slice — see `s3_account_tests`.)
     #[test]
     fn client_construction_and_stub_errors() {
         let c = StalwartClient::new("https://127.0.0.1:8443///", "k2-test-key");
         assert_eq!(c.base_url, "https://127.0.0.1:8443");
-        assert!(c
-            .account_create("scout", "d1")
-            .unwrap_err()
-            .contains("not built yet — mail slice S3"));
-        assert!(c
-            .account_disable("a1")
-            .unwrap_err()
-            .contains("not built yet — mail slice S3"));
         assert!(c
             .queue_submit("o1")
             .unwrap_err()
@@ -1301,5 +1387,185 @@ mod s2_domain_tests {
         assert_eq!(create["dkimManagement"], "automatic");
         assert_eq!(create["subAddressing"], "enabled");
         assert!(create["catchAllAddress"].is_null(), "catch-all OFF by default");
+    }
+}
+
+#[cfg(test)]
+mod s3_account_tests {
+    use super::*;
+
+    // ── Pure reply parsers (fixtures, no network) ───────────────────
+
+    #[test]
+    fn account_set_created_parses_id_and_surfaces_rejections() {
+        let ok = serde_json::json!({
+            "created": { "k2": { "id": "acc-7f3a", "quota": 1073741824u64 } },
+            "notCreated": null,
+        });
+        assert_eq!(parse_account_set_created(&ok).expect("created"), "acc-7f3a");
+
+        // Server-set id missing/blank → loud.
+        let no_id = serde_json::json!({ "created": { "k2": { "quota": 1 } } });
+        assert!(parse_account_set_created(&no_id).is_err());
+        let blank = serde_json::json!({ "created": { "k2": { "id": "  " } } });
+        assert!(parse_account_set_created(&blank).is_err());
+
+        // notCreated → the server's SetError verbatim.
+        let rejected = serde_json::json!({
+            "notCreated": { "k2": { "type": "alreadyExists",
+                                    "description": "name is taken" } },
+        });
+        let msg = parse_account_set_created(&rejected).expect_err("must reject");
+        assert!(msg.contains("alreadyExists"), "{msg}");
+        assert!(msg.contains("name is taken"), "{msg}");
+
+        // Neither → loud.
+        assert!(parse_account_set_created(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn account_set_updated_requires_id_in_updated_map() {
+        // RFC 8620 /set: updated maps id → null (or server-set props).
+        let ok = serde_json::json!({ "updated": { "acc-1": null } });
+        parse_account_set_updated("acc-1", &ok).expect("updated");
+
+        let rejected = serde_json::json!({
+            "notUpdated": { "acc-1": { "type": "forbidden" } },
+        });
+        let msg = parse_account_set_updated("acc-1", &rejected).expect_err("must reject");
+        assert!(msg.contains("forbidden"), "{msg}");
+
+        // Someone ELSE updated / empty reply → loud, never a silent ok.
+        let other = serde_json::json!({ "updated": { "acc-9": null } });
+        assert!(parse_account_set_updated("acc-1", &other).is_err());
+        assert!(parse_account_set_updated("acc-1", &serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn account_set_destroyed_requires_id_in_destroyed_list() {
+        let ok = serde_json::json!({ "destroyed": ["acc-1", "acc-2"] });
+        parse_account_set_destroyed("acc-1", &ok).expect("destroyed");
+
+        let rejected = serde_json::json!({
+            "notDestroyed": { "acc-1": { "type": "notFound" } },
+        });
+        let msg = parse_account_set_destroyed("acc-1", &rejected).expect_err("must reject");
+        assert!(msg.contains("notFound"), "{msg}");
+
+        let silent = serde_json::json!({ "destroyed": [] });
+        assert!(parse_account_set_destroyed("acc-1", &silent).is_err());
+    }
+
+    // ── The ONE loopback mock round-trip for the S3 account call ────
+    // (127.0.0.1 only, house rule — locks the whole wire shape:
+    // discovery → envelope → create args → id extraction.)
+
+    /// Minimal sequential responder (the s2 module's `spawn_mock_server`
+    /// shape): accepts one connection per canned reply, records the raw
+    /// request, answers 200 JSON.
+    fn spawn_mock_server(
+        replies: Vec<String>,
+    ) -> (u16, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for reply in replies {
+                let (mut sock, _) = match listener.accept() {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = match sock.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    raw.extend_from_slice(&buf[..n]);
+                    if let Some(head_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+                        let want: usize = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if raw.len() >= head_end + 4 + want {
+                            break;
+                        }
+                    }
+                }
+                let _ = tx.send(String::from_utf8_lossy(&raw).to_string());
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+        (port, rx)
+    }
+
+    #[test]
+    fn account_create_round_trip_against_loopback_mock() {
+        let created_reply = serde_json::json!({
+            "methodResponses": [["Account/set", {
+                "created": { "k2": { "id": "acc-42" } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![
+            r#"{"apiUrl": "/jmap/", "capabilities": {}}"#.to_string(),
+            created_reply,
+        ]);
+
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let id = c
+            .account_create("research-bot", "dom-7", "s3cret-pw", 1_073_741_824, 10_000)
+            .expect("create round-trip");
+        assert_eq!(id, "acc-42");
+
+        // Request 1: discovery with the Bearer key.
+        let req1 = rx.recv().expect("first request recorded");
+        assert!(req1.starts_with("GET /.well-known/jmap"), "{req1}");
+        assert!(req1.contains("authorization: Bearer k2-test-key")
+            || req1.contains("Authorization: Bearer k2-test-key"), "{req1}");
+
+        // Request 2: the JMAP envelope on the DISCOVERED path with the
+        // §7.1/§12 create args.
+        let req2 = rx.recv().expect("second request recorded");
+        assert!(req2.starts_with("POST /jmap/"), "{req2}");
+        let body_start = req2.find("\r\n\r\n").expect("body") + 4;
+        let body: serde_json::Value =
+            serde_json::from_str(&req2[body_start..]).expect("JSON body");
+        assert_eq!(body["using"][0], "urn:ietf:params:jmap:core");
+        assert_eq!(body["methodCalls"][0][0], "Account/set");
+        let create = &body["methodCalls"][0][1]["create"]["k2"];
+        assert_eq!(create["type"], "individual");
+        assert_eq!(create["name"], "research-bot");
+        assert_eq!(create["domainId"], "dom-7");
+        assert_eq!(create["secret"], "s3cret-pw");
+        assert_eq!(create["quota"], 1_073_741_824u64, "§12: 1 GB quota at create");
+        assert_eq!(create["maxMessages"], 10_000, "§12: 10k message cap at create");
+    }
+
+    #[test]
+    fn account_engine_errors_never_leak_the_password() {
+        // A refused/failed create must surface the transport error
+        // without the secret riding along (mirrors the S1 credential
+        // rule). Closed port → immediate refusal, no live dial.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        drop(listener); // port now closed
+        let c = StalwartClient::new(format!("http://{addr}"), "k2-test-key");
+        let err = c
+            .account_create("bot", "dom-1", "super-secret-pw", 1, 1)
+            .expect_err("closed port must fail");
+        assert!(!err.contains("super-secret-pw"), "password leaked: {err}");
     }
 }

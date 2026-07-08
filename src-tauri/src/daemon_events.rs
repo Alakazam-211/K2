@@ -179,9 +179,8 @@ fn connect_once(app_handle: &AppHandle) -> ConnectOutcome {
 /// `daemon_client` only because the client's blocking reqwest semantics
 /// don't fit this thread's shape; the file paths stay in lockstep.
 fn read_daemon_credentials() -> Option<(u16, String)> {
-    let home = dirs::home_dir()?;
-    let port_path = home.join(".k2so/daemon.port");
-    let token_path = home.join(".k2so/daemon.token");
+    let port_path = k2_core::paths::k2_home().join("daemon.port");
+    let token_path = k2_core::paths::k2_home().join("daemon.token");
     let port = std::fs::read_to_string(&port_path).ok()?.trim().parse().ok()?;
     let token = std::fs::read_to_string(&token_path).ok()?.trim().to_string();
     if token.is_empty() {

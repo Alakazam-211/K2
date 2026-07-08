@@ -58,8 +58,8 @@ pub fn inbox_root() -> PathBuf {
         return root;
     }
     match dirs::home_dir() {
-        Some(home) => home.join(".k2so/awareness/inbox"),
-        None => PathBuf::from("/tmp/.k2so-awareness-inbox"),
+        Some(home) => home.join(".k2/awareness/inbox"),
+        None => PathBuf::from("/tmp/.k2-awareness-inbox"),
     }
 }
 

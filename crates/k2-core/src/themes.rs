@@ -124,7 +124,7 @@ pub fn delete(path: &str) -> Result<(), String> {
     let path = PathBuf::from(path);
     let dir = themes_dir();
     if !path.starts_with(&dir) {
-        return Err("Can only delete files inside ~/.k2so/themes/".into());
+        return Err("Can only delete files inside ~/.k2/themes/".into());
     }
     fs::remove_file(&path).map_err(|e| format!("Failed to delete theme: {e}"))?;
     Ok(())

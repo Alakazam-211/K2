@@ -11,7 +11,7 @@
 //!      same two stores.
 //!   4. Install / uninstall the launchd plist
 //!      (`~/Library/LaunchAgents/dev.k2.claude-auth.plist`)
-//!      that runs `~/.k2so/claude-auth-refresh.sh` every 20 minutes.
+//!      that runs `~/.k2/claude-auth-refresh.sh` every 20 minutes.
 //!
 //! Post-Unit-5, all four responsibilities live here so the refresh
 //! still happens when Tauri is closed. Routes:
@@ -173,14 +173,12 @@ fn write_credentials(updated_json: &serde_json::Value) -> Result<(), String> {
 
 // ── Scheduler helpers ───────────────────────────────────────────────────
 
-fn k2so_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".k2")
+fn k2_home_dir() -> PathBuf {
+    k2_core::paths::k2_home()
 }
 
 fn refresh_script_path() -> PathBuf {
-    k2so_dir().join("claude-auth-refresh.sh")
+    k2_home_dir().join("claude-auth-refresh.sh")
 }
 
 #[cfg(target_os = "macos")]
@@ -209,7 +207,7 @@ CRED_SERVICE="Claude Code-credentials"
 CRED_ACCOUNT="Claude Code"
 TOKEN_URL="{token_url}"
 CLIENT_ID="{client_id}"
-LOG_FILE="{home}/.k2so/claude-auth-refresh.log"
+LOG_FILE="{home}/.k2/claude-auth-refresh.log"
 BUFFER_SECONDS=300
 
 ts() {{ date '+%Y-%m-%d %H:%M:%S'; }}
@@ -333,7 +331,7 @@ fn generate_plist() -> String {
     <key>RunAtLoad</key>
     <false/>
     <key>StandardErrorPath</key>
-    <string>{home}/.k2so/claude-auth-refresh-stderr.log</string>
+    <string>{home}/.k2/claude-auth-refresh-stderr.log</string>
 </dict>
 </plist>"#,
         label = PLIST_LABEL,
@@ -633,9 +631,9 @@ pub fn handle_refresh_now() -> CliResponse {
 /// Idempotent — calling twice in a row reinstalls cleanly because
 /// `install_launchd` best-effort-unloads any prior plist first.
 pub fn handle_install_scheduler() -> CliResponse {
-    let dir = k2so_dir();
+    let dir = k2_home_dir();
     if let Err(e) = fs::create_dir_all(&dir) {
-        return CliResponse::bad_request(format!("Failed to create ~/.k2so: {e}"));
+        return CliResponse::bad_request(format!("Failed to create ~/.k2: {e}"));
     }
 
     let script_path = refresh_script_path();

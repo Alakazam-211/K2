@@ -284,7 +284,7 @@ async fn async_main() {
         }
     };
     if let Err(e) = fs::create_dir_all(&k2so_dir) {
-        log_debug!("[daemon] FATAL: create ~/.k2so: {e}");
+        log_debug!("[daemon] FATAL: create ~/.k2: {e}");
         std::process::exit(2);
     }
 

@@ -25,7 +25,7 @@ fn layers_dir(tier: &str) -> Result<PathBuf, String> {
     }
     let dir = dirs::home_dir()
         .ok_or("No home directory")?
-        .join(".k2so/templates")
+        .join(".k2/templates")
         .join(tier);
     let _ = fs::create_dir_all(&dir);
     Ok(dir)
@@ -120,7 +120,7 @@ pub fn get_content(tier: &str, filename: &str) -> Result<String, String> {
 mod tests {
     //! Tests for the Phase 2 Unit 6 skill_layers module.
     //!
-    //! `layers_dir()` hardcodes `dirs::home_dir().join(".k2so/templates/<tier>)`,
+    //! `layers_dir()` hardcodes `dirs::home_dir().join(".k2/templates/<tier>)`,
     //! so we install a fresh HOME for each test via a HomeGuard +
     //! serialized lock pattern (same shape as `app_settings::tests`).
     //!

@@ -12,7 +12,7 @@
 //! without Tauri ever launched) get cron working from the first
 //! `k2so heartbeat add` onward.
 //!
-//! Generates `~/.k2so/heartbeat.sh` (the bridge that asks the daemon
+//! Generates `~/.k2/heartbeat.sh` (the bridge that asks the daemon
 //! `/cli/heartbeat/active-projects` and ticks each one) and installs
 //! the launchd agent (macOS) or crontab entry (Linux). All file
 //! writes are atomic; launchctl operations are best-effort
@@ -39,7 +39,7 @@ pub const DEFAULT_INTERVAL_SECS: u32 = 60;
 /// installed cron is better than blocking the heartbeat add.
 pub fn ensure_cron_installed() -> Result<bool, String> {
     let k2so_home = home_dir().join(".k2");
-    fs::create_dir_all(&k2so_home).map_err(|e| format!("create ~/.k2so: {e}"))?;
+    fs::create_dir_all(&k2so_home).map_err(|e| format!("create ~/.k2: {e}"))?;
 
     let script_path = k2so_home.join("heartbeat.sh");
     let mut changed = false;
@@ -47,7 +47,7 @@ pub fn ensure_cron_installed() -> Result<bool, String> {
     // Write/refresh heartbeat.sh if it doesn't match the current
     // template. This catches users upgrading from a pre-P5.6
     // install whose on-disk script still references
-    // ~/.k2so/heartbeat-projects.txt.
+    // ~/.k2/heartbeat-projects.txt.
     let want_script = generate_heartbeat_script();
     let current_script = fs::read_to_string(&script_path).ok();
     if current_script.as_deref() != Some(&want_script) {
@@ -127,7 +127,7 @@ pub fn transport_installed() -> bool {
     }
 }
 
-/// Bash script written to `~/.k2so/heartbeat.sh`. Asks the daemon
+/// Bash script written to `~/.k2/heartbeat.sh`. Asks the daemon
 /// for active projects on every tick and forwards each to
 /// `/cli/scheduler-tick`. P5.6 retired the `heartbeat-projects.txt`
 /// dependency — the DB is the only source of truth for which
@@ -139,9 +139,9 @@ pub fn generate_heartbeat_script() -> String {
 # K2SO Agent Heartbeat — DO NOT EDIT (managed by K2SO daemon)
 # Asks the daemon which projects have active heartbeats, then ticks each.
 
-PORT_FILE="{home}/.k2so/heartbeat.port"
-LOG_FILE="{home}/.k2so/heartbeat.log"
-TOKEN_FILE="{home}/.k2so/heartbeat.token"
+PORT_FILE="{home}/.k2/heartbeat.port"
+LOG_FILE="{home}/.k2/heartbeat.log"
+TOKEN_FILE="{home}/.k2/heartbeat.token"
 
 ts() {{ date '+%Y-%m-%d %H:%M:%S'; }}
 
@@ -253,7 +253,7 @@ fn install_macos_if_missing(
     <key>RunAtLoad</key>
     <false/>
     <key>StandardErrorPath</key>
-    <string>{home}/.k2so/heartbeat-stderr.log</string>
+    <string>{home}/.k2/heartbeat-stderr.log</string>
 </dict>
 </plist>"#,
         script = script_path.to_string_lossy(),
@@ -378,7 +378,7 @@ fn home_dir() -> PathBuf {
 // `/cli/heartbeat/{install-launchd, uninstall-launchd, apply-wake-scheduler}`
 // routes.
 
-/// Write `heartbeat.sh` to `~/.k2so/` (chmod 0755). Idempotent —
+/// Write `heartbeat.sh` to `~/.k2/` (chmod 0755). Idempotent —
 /// callers can invoke before every install_launchd / install_cron pass
 /// without worrying about double-write.
 ///
@@ -386,7 +386,7 @@ fn home_dir() -> PathBuf {
 /// installer.
 pub fn write_heartbeat_script() -> Result<PathBuf, String> {
     let k2so_home = home_dir().join(".k2");
-    fs::create_dir_all(&k2so_home).map_err(|e| format!("create ~/.k2so: {e}"))?;
+    fs::create_dir_all(&k2so_home).map_err(|e| format!("create ~/.k2: {e}"))?;
 
     // Clean up the retired heartbeat-projects.txt artifact (pre-P5.6).
     let _ = fs::remove_file(k2so_home.join("heartbeat-projects.txt"));
@@ -462,7 +462,7 @@ pub fn install_heartbeat_launchd(
     <key>RunAtLoad</key>
     <false/>
     <key>StandardErrorPath</key>
-    <string>{home}/.k2so/heartbeat-stderr.log</string>
+    <string>{home}/.k2/heartbeat-stderr.log</string>
 </dict>
 </plist>"#,
         script = script_path.to_string_lossy(),

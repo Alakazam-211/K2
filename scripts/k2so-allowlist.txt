@@ -1,0 +1,17 @@
+# k2so-gate allowlist (PRD prd-k2so-cleanup-v1.md §5).
+# Format: <repo-relative path> :: <required substring on the hit line>
+# A substring of * allows the whole file. EVERY entry needs a reason.
+# Shrink freely; grow only with PRD-level review.
+
+# Migration code names the past by definition — it moves/symlinks the old
+# home and its tests build .k2so fixtures on purpose.
+crates/k2-core/src/migration_home.rs :: *
+
+# Legacy frpc probe candidate, deliberately kept ONE release behind the
+# 0.40.37 path exodus (PRD §3.2) so an install that staged frpc under the
+# old path before upgrading still resolves it. Remove in ≥0.40.38.
+crates/k2-core/src/tunnel/connector.rs :: .k2so/bin/frpc
+
+# CLI fallback for a machine whose home migration has not run yet (the
+# primary is ~/.k2 one line above). Remove when the symlink retires.
+cli/k2 :: K2_HOME="${HOME}/.k2so"

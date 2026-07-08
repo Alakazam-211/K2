@@ -11683,7 +11683,7 @@ EOF
                 echo "    --host:  restart a REMOTE daemon with no GUI by POSTing" >&2
                 echo "             <base-url>/cli/daemon/restart (e.g. --host https://<sub>.k2.dev)." >&2
                 echo "             Authorizes with the owner token OR an Owner/Admin connect-user" >&2
-                echo "             session token; --token defaults to ~/.k2so/daemon.token." >&2
+                echo "             session token; --token defaults to ~/.k2/daemon.token." >&2
                 echo "    --wait:  after the restart is accepted, poll <base>/boot-status every" >&2
                 echo "             ~2s up to ~60s until phase=ready, then print the version it" >&2
                 echo "             came back on. Timeout → message + non-zero exit." >&2

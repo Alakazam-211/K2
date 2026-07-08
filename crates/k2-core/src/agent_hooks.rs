@@ -391,7 +391,11 @@ pub fn handle_hook_complete(params: &HashMap<String, String>) -> &'static str {
 /// daemon returning an empty injections list, failing tier2 tests.
 pub fn check_hook_injections() -> serde_json::Value {
     let home = dirs::home_dir();
-    let notify_fragment = ".k2so/hooks/notify.sh";
+    let notify_fragment = ".k2/hooks/notify.sh";
+    // Legacy fragment accepted read-only: configs not yet rewritten by the
+    // app-side registration migration (0.40.37 §3.4) still resolve through
+    // the ~/.k2so compat symlink — they ARE injected.
+    let legacy_fragment = ".k2so/hooks/notify.sh";
 
     let check = |relative: &str| -> serde_json::Value {
         let path = match &home {
@@ -413,7 +417,8 @@ pub fn check_hook_injections() -> serde_json::Value {
             });
         }
         let content = std::fs::read_to_string(&path).unwrap_or_default();
-        let injected = content.contains(notify_fragment);
+        let injected =
+            content.contains(notify_fragment) || content.contains(legacy_fragment);
         serde_json::json!({
             "path": path_str,
             "exists": true,

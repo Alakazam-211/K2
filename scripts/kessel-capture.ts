@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { KesselClient } from '../src/renderer/kessel/client'
 import type { Frame } from '../src/renderer/kessel/types'
 
-const k2soDir = join(homedir(), '.k2so')
+const k2soDir = join(homedir(), '.k2')
 const port = parseInt(
   readFileSync(join(k2soDir, 'heartbeat.port'), 'utf-8').trim(),
   10,

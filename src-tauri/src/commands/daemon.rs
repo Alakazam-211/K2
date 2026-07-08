@@ -34,7 +34,7 @@ pub enum DaemonStatusResponse {
         pid: u32,
         port: u16,
     },
-    /// `~/.k2so/daemon.port` or `~/.k2so/daemon.token` not found. The
+    /// `~/.k2/daemon.port` or `~/.k2/daemon.token` not found. The
     /// install migration hasn't run yet, or the user uninstalled the
     /// plist.
     NotInstalled { reason: String },
@@ -110,7 +110,7 @@ pub fn daemon_install() -> Result<String, String> {
 }
 
 /// Unload the launch agent and delete the plist file. Does NOT delete
-/// the user's `~/.k2so/` data directory — that stays across install
+/// the user's `~/.k2/` data directory — that stays across install
 /// cycles on purpose. Also removes the `daemon.port` / `daemon.token`
 /// files so the frontend's `daemon_status` immediately reports
 /// `NotInstalled` instead of `Unreachable`.
@@ -213,7 +213,7 @@ pub fn daemon_log_tail(lines: Option<u32>) -> Result<String, String> {
 /// renderer so React can compose the Session Stream WebSocket URL
 /// (`ws://127.0.0.1:<port>/cli/sessions/subscribe?session=<uuid>&token=<token>`).
 ///
-/// Reads `~/.k2so/heartbeat.port` + `~/.k2so/heartbeat.token` —
+/// Reads `~/.k2/heartbeat.port` + `~/.k2/heartbeat.token` —
 /// the Phase 4 H7 files the daemon eagerly writes on startup.
 /// Intentionally reads the `heartbeat.*` pair (the public CLI-
 /// facing address) rather than `daemon.*` (the Tauri-internal
@@ -246,13 +246,13 @@ pub fn daemon_ws_url() -> DaemonWsUrlResponse {
 /// Resolve the WebSocket URL response from an explicit home directory.
 ///
 /// Split out from `daemon_ws_url()` so tests can point the lookup at a
-/// temp dir they fully control rather than the live `~/.k2so`. The real
+/// temp dir they fully control rather than the live `~/.k2`. The real
 /// directory can be mutated by a running agent-heartbeat daemon between
 /// a test's existence-check and its assertion (TOCTOU), which made the
 /// old `ws_url_not_installed_when_files_missing` test flaky.
 fn daemon_ws_url_in(home: &std::path::Path) -> DaemonWsUrlResponse {
-    let port_path = home.join(".k2so/heartbeat.port");
-    let token_path = home.join(".k2so/heartbeat.token");
+    let port_path = home.join(".k2/heartbeat.port");
+    let token_path = home.join(".k2/heartbeat.token");
 
     let port_raw = match std::fs::read_to_string(&port_path) {
         Ok(s) => s,
@@ -342,11 +342,11 @@ mod tests {
     #[test]
     fn ws_url_not_installed_when_files_missing() {
         // Point the lookup at a fresh temp dir we fully control, so the
-        // result can't depend on the live `~/.k2so` — a running
+        // result can't depend on the live `~/.k2` — a running
         // agent-heartbeat daemon can create/refresh `heartbeat.{port,token}`
         // between an existence-check and the assertion (TOCTOU), which is
         // exactly the flake this test used to hit. A brand-new temp dir
-        // has no `.k2so/heartbeat.*`, so `daemon_ws_url_in` must report
+        // has no `.k2/heartbeat.*`, so `daemon_ws_url_in` must report
         // NotInstalled deterministically regardless of any live daemon.
         let unique = format!(
             "k2so-ws-url-test-{}-{}",

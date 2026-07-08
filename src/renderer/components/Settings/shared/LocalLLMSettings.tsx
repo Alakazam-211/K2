@@ -194,14 +194,14 @@ export function LocalLLMSettings(): React.JSX.Element {
           <div className="px-4 py-3">
             <span className="text-xs text-[var(--color-text-primary)]">Custom Model</span>
             <p className="text-[10px] text-[var(--color-text-muted)] mt-1 mb-2">
-              Point to any GGUF model file. It will be copied to <span className="font-mono">~/.k2so/models/</span> automatically.
+              Point to any GGUF model file. It will be copied to <span className="font-mono">~/.k2/models/</span> automatically.
             </p>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={customPath}
                 onChange={(e) => setCustomPath(e.target.value)}
-                placeholder="~/.k2so/models/your-model.gguf"
+                placeholder="~/.k2/models/your-model.gguf"
                 className="flex-1 px-2 py-1.5 text-xs font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag"
               />
               <button

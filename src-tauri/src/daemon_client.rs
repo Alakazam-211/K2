@@ -3,7 +3,7 @@
 //! The daemon exposes a token-authed HTTP server on `127.0.0.1:<random>` —
 //! see `crates/k2so-daemon/src/main.rs`. This module is the Tauri app's
 //! counterpart: it discovers the daemon's port + token via the conventional
-//! `~/.k2so/daemon.port` / `~/.k2so/daemon.token` files and wraps
+//! `~/.k2/daemon.port` / `~/.k2/daemon.token` files and wraps
 //! `reqwest::blocking` calls so command handlers in `src-tauri` can proxy
 //! state-mutating work through the daemon instead of running it in-process.
 //!
@@ -52,7 +52,7 @@ pub struct DaemonClient {
 impl DaemonClient {
     /// Resolve a ready-to-use client.
     ///
-    /// Reads `~/.k2so/daemon.port` + `~/.k2so/daemon.token` and targets the
+    /// Reads `~/.k2/daemon.port` + `~/.k2/daemon.token` and targets the
     /// local bundled daemon at `http://127.0.0.1:<port>`. `Err` when either
     /// file is missing or malformed — caller's responsibility to trigger
     /// `launchctl load` and retry.
@@ -62,7 +62,7 @@ impl DaemonClient {
             .build()
             .map_err(|e| format!("build http client: {e}"))?;
         // Local bundled daemon: discover port + token from disk.
-        let k2so_dir = k2so_dir()?;
+        let k2so_dir = k2_home_dir()?;
         let port = read_port(&k2so_dir.join("daemon.port"))?;
         let token = read_token(&k2so_dir.join("daemon.token"))?;
         let base = format!("http://127.0.0.1:{port}");
@@ -176,7 +176,7 @@ fn pct_encode(s: &str) -> String {
     out
 }
 
-fn k2so_dir() -> Result<PathBuf, String> {
+fn k2_home_dir() -> Result<PathBuf, String> {
     Ok(dirs::home_dir()
         .ok_or_else(|| "home dir unavailable".to_string())?
         .join(".k2"))

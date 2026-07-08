@@ -27,7 +27,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn k2so_dir() -> PathBuf {
+fn k2_home_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
@@ -35,7 +35,7 @@ fn k2so_dir() -> PathBuf {
 
 /// Path to `~/.k2so/connect-hosts.json`.
 fn hosts_path() -> PathBuf {
-    k2so_dir().join("connect-hosts.json")
+    k2_home_dir().join("connect-hosts.json")
 }
 
 #[cfg(unix)]
@@ -94,9 +94,9 @@ pub fn connect_hosts_write(json: String) -> Result<(), String> {
         }
     }
 
-    let dir = k2so_dir();
+    let dir = k2_home_dir();
     if !dir.exists() {
-        fs::create_dir_all(&dir).map_err(|e| format!("create ~/.k2so: {e}"))?;
+        fs::create_dir_all(&dir).map_err(|e| format!("create ~/.k2: {e}"))?;
     }
     let file = hosts_path();
     let tmp = file.with_extension("json.tmp");

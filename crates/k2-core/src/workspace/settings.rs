@@ -741,7 +741,7 @@ mod tests {
         // `AppSettings::default()` value for `agentic_systems_enabled`.
         assert!(
             get_agentic_enabled(),
-            "fresh ~/.k2so/settings.json → agentic_systems_enabled defaults to true",
+            "fresh ~/.k2/settings.json → agentic_systems_enabled defaults to true",
         );
 
         // Set true → read true.
@@ -770,7 +770,7 @@ mod tests {
         // comment on `get_keep_daemon_on_quit` for the rationale.
         assert!(
             get_keep_daemon_on_quit(),
-            "fresh ~/.k2so/settings.json → keep_daemon_on_quit defaults to true",
+            "fresh ~/.k2/settings.json → keep_daemon_on_quit defaults to true",
         );
 
         set_keep_daemon_on_quit(false).expect("set false");

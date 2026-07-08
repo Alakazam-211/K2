@@ -19,7 +19,7 @@
 #
 # Sources, in order of precedence:
 #   1. FRPC_SRC=/path/to/frpc          — explicit override, any platform.
-#   2. macOS triples: a known-good frpc already staged at ~/.k2so/bin/frpc
+#   2. macOS triples: a known-good frpc already staged at ~/.k2/bin/frpc
 #      (historical maintainer-box flow, unchanged).
 #   3. Linux triples: download the pinned frp release archive straight
 #      from GitHub, verify it against the release's sha256 checksum
@@ -69,7 +69,7 @@ stage_from_local() {
     if [ ! -x "$src" ]; then
         echo "fetch-frpc: FATAL — no executable frpc at $src" >&2
         echo "  Set FRPC_SRC=/path/to/frpc, or place a working frpc client" >&2
-        echo "  (fatedier/frp v0.61+, Apache-2.0) at ~/.k2so/bin/frpc." >&2
+        echo "  (fatedier/frp v0.61+, Apache-2.0) at ~/.k2/bin/frpc." >&2
         exit 1
     fi
     cp "$src" "$DEST"
@@ -145,7 +145,7 @@ if [ -n "${FRPC_SRC:-}" ]; then
     stage_from_local "$FRPC_SRC"
 else
     case "$TRIPLE" in
-        *-apple-darwin) stage_from_local "$HOME/.k2so/bin/frpc" ;;
+        *-apple-darwin) stage_from_local "$HOME/.k2/bin/frpc" ;;
         *-linux-gnu)    stage_from_github ;;
         *)
             echo "fetch-frpc: FATAL — no source strategy for triple $TRIPLE (set FRPC_SRC)" >&2

@@ -29,6 +29,9 @@ echo "Building K2.app v${VER} — NO notarize / DMG / publish (local test build)
 # proves BOTH platforms: Linux first (fast — warm remote check is seconds),
 # then the long signed mac build below. Shared logic + designated-box
 # details in scripts/linux-build-gate.sh. Escape: K2_SKIP_LINUX_GATE=1.
+echo ""; echo "Step 0a: k2so gate..."
+bash "$PROJECT_DIR/scripts/k2so-gate.sh" || { echo "FATAL: k2so gate failed" >&2; exit 1; }
+
 echo ""; echo "Step 0: Linux build gate..."
 "$PROJECT_DIR/scripts/linux-build-gate.sh" || { echo "FATAL: Linux build gate failed" >&2; exit 1; }
 

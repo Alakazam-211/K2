@@ -58,7 +58,7 @@ Defaults:
 
 // ── Read daemon addr ───────────────────────────────────────────────
 
-const k2soDir = join(homedir(), '.k2so')
+const k2soDir = join(homedir(), '.k2')
 let port: number
 let token: string
 try {
@@ -68,7 +68,7 @@ try {
   )
   token = readFileSync(join(k2soDir, 'heartbeat.token'), 'utf-8').trim()
 } catch (e) {
-  console.error(`Failed to read ~/.k2so/heartbeat.{port,token}: ${e}`)
+  console.error(`Failed to read ~/.k2/heartbeat.{port,token}: ${e}`)
   console.error('Is the daemon running?')
   process.exit(1)
 }

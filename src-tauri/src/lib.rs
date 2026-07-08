@@ -87,8 +87,8 @@ use tauri::{Emitter, Manager};
 
 /// H7: sync `k2_core::hook_config` with the daemon's port + token so
 /// in-process Alacritty children emit `/hook/complete` requests at the
-/// daemon (the sole HTTP server post-H7). Reads `~/.k2so/daemon.port`
-/// + `~/.k2so/daemon.token` — written by the daemon on startup. Runs
+/// daemon (the sole HTTP server post-H7). Reads `~/.k2/daemon.port`
+/// + `~/.k2/daemon.token` — written by the daemon on startup. Runs
 /// off-thread with a small retry loop for the cold-start case where
 /// Tauri wins the race against launchd's daemon spawn.
 ///
@@ -100,9 +100,8 @@ use tauri::{Emitter, Manager};
 fn prime_hook_config_from_daemon() {
     std::thread::spawn(|| {
         use std::time::Duration;
-        let Some(home) = dirs::home_dir() else { return };
-        let port_path = home.join(".k2so/daemon.port");
-        let token_path = home.join(".k2so/daemon.token");
+        let port_path = k2_core::paths::k2_home().join("daemon.port");
+        let token_path = k2_core::paths::k2_home().join("daemon.token");
         for attempt in 0..5 {
             let port_ok = std::fs::read_to_string(&port_path)
                 .ok()
@@ -510,7 +509,7 @@ fn watchdog_field_log(line: &str) {
 
 /// Stage the bundled `frpc` tunnel client (shipped as a Tauri
 /// externalBin sidecar at `Contents/MacOS/frpc`) out to
-/// `~/.k2so/bin/frpc`, where the daemon's `resolve_frpc` finds it.
+/// `~/.k2/bin/frpc`, where the daemon's `resolve_frpc` finds it.
 ///
 /// We locate the sidecar next to the current executable — the same
 /// `current_exe().parent()` pattern used to find the bundled
@@ -544,14 +543,7 @@ fn stage_bundled_frpc() {
         }
     };
 
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => {
-            log_debug!("[k2so] no home dir; cannot stage frpc");
-            return;
-        }
-    };
-    let dest = home.join(".k2so/bin/frpc");
+    let dest = k2_core::paths::k2_bin().join("frpc");
 
     // Skip the copy when the staged bytes already match the sidecar.
     if dest.exists() {
@@ -641,7 +633,7 @@ pub fn run() {
             Ok(c) => c,
             Err(e) => {
                 log_debug!("[k2so] FATAL: Failed to initialize database: {}", e);
-                log_debug!("[k2so] The app will now exit. Check disk permissions and space at ~/.k2so/");
+                log_debug!("[k2so] The app will now exit. Check disk permissions and space at ~/.k2/");
                 std::process::exit(1);
             }
         }
@@ -759,8 +751,8 @@ pub fn run() {
             // so K2SO Connect and headless daemons pick it up.
 
             // Create skill layer template directories if they don't exist
-            if let Some(home) = dirs::home_dir() {
-                let templates = home.join(".k2so/templates");
+            {
+                let templates = k2_core::paths::k2_home().join("templates");
                 let _ = std::fs::create_dir_all(templates.join("manager"));
                 let _ = std::fs::create_dir_all(templates.join("agent-template"));
                 let _ = std::fs::create_dir_all(templates.join("custom-agent"));

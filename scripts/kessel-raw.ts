@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { KesselClient } from '../src/renderer/kessel/client'
 
-const k2soDir = join(homedir(), '.k2so')
+const k2soDir = join(homedir(), '.k2')
 const port = parseInt(readFileSync(join(k2soDir, 'heartbeat.port'), 'utf-8').trim(), 10)
 const token = readFileSync(join(k2soDir, 'heartbeat.token'), 'utf-8').trim()
 

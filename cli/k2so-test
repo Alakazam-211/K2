@@ -16,13 +16,13 @@ PASS=0
 FAIL=0
 
 # Connection
-PORT="${K2SO_PORT:-$(cat ~/.k2so/heartbeat.port 2>/dev/null)}"
-TOKEN="${K2SO_HOOK_TOKEN:-$(cat ~/.k2so/heartbeat.token 2>/dev/null)}"
+PORT="${K2SO_PORT:-$(cat ~/.k2/heartbeat.port 2>/dev/null)}"
+TOKEN="${K2SO_HOOK_TOKEN:-$(cat ~/.k2/heartbeat.token 2>/dev/null)}"
 PROJECT="${K2SO_PROJECT_PATH:-/Users/z3thon/DevProjects/Alakazam Labs/Choose-the-Right-AI}"
 
 if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
     echo -e "${RED}Cannot connect to K2SO. Need port and token.${NC}"
-    echo "Either run from a K2SO terminal or ensure ~/.k2so/heartbeat.{port,token} exist."
+    echo "Either run from a K2SO terminal or ensure ~/.k2/heartbeat.{port,token} exist."
     exit 1
 fi
 

@@ -804,7 +804,7 @@ function DaemonRow(): React.JSX.Element {
       {showingLog && (
         <div className="mt-2 p-2 bg-black/30 border border-[var(--color-border)] max-h-60 overflow-auto">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-[var(--color-text-muted)]">~/.k2so/daemon.stdout.log (last 300 lines)</span>
+            <span className="text-[10px] text-[var(--color-text-muted)]">~/.k2/daemon.stdout.log (last 300 lines)</span>
             <button
               onClick={() => setShowingLog(false)}
               className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"

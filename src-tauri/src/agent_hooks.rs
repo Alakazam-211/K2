@@ -199,7 +199,7 @@ fn shell_escape(s: &str) -> String {
 /// Generate the notify hook bash script content.
 ///
 /// The script reads the port and (optionally) the auth token from
-/// `~/.k2so/heartbeat.port` / `~/.k2so/heartbeat.token` at exec time
+/// `~/.k2/heartbeat.port` / `~/.k2/heartbeat.token` at exec time
 /// rather than baking them in. This means a K2SO restart (which picks a
 /// new random port + may rotate the token) doesn't silently break
 /// hooks in already-running Claude/Cursor/Gemini sessions.
@@ -213,8 +213,8 @@ pub fn generate_hook_script(_port: u16) -> String {
 
 # Port and token are read at exec time so a K2SO restart (new random
 # port / rotated token) doesn't break hooks in long-running LLM sessions.
-K2SO_PORT_FILE="$HOME/.k2so/heartbeat.port"
-K2SO_TOKEN_FILE="$HOME/.k2so/heartbeat.token"
+K2SO_PORT_FILE="$HOME/.k2/heartbeat.port"
+K2SO_TOKEN_FILE="$HOME/.k2/heartbeat.token"
 
 # COMPAT-58 (#58 Phase 1): capture the PTY-injected SCOPED token + per-cell
 # socket BEFORE the disk-token read below clobbers $K2SO_HOOK_TOKEN. The
@@ -292,7 +292,7 @@ exit 0
 "#.to_string()
 }
 
-/// Write the hook script to ~/.k2so/hooks/notify.sh
+/// Write the hook script to ~/.k2/hooks/notify.sh
 pub fn write_hook_script(port: u16) -> Result<String, String> {
     let home = dirs::home_dir().ok_or("No home directory")?;
     let hooks_dir = home.join(".k2").join("hooks");
@@ -314,9 +314,37 @@ pub fn write_hook_script(port: u16) -> Result<String, String> {
 }
 
 /// Register hooks with Claude Code (~/.claude/settings.json)
+/// PRD `prd-k2so-cleanup-v1.md` §3.4 — one-time in-place migration of a
+/// user's CLI config (Claude/Cursor/Gemini) that still carries the legacy
+/// injected path `~/.k2so/hooks/notify.sh`. Those files live OUTSIDE this
+/// repo, so no code rename can fix them — only this rewrite can. Raw
+/// string swap (the surrounding entry shape is untouched), persisted only
+/// when something actually changed; runs before every parse so one boot
+/// on 0.40.37 heals every config, and it is idempotent forever after.
+/// Until every install has booted once on ≥0.40.37, the `~/.k2so` compat
+/// symlink keeps even unmigrated configs working (PRD invariant I1).
+fn migrate_legacy_hook_path(path: &std::path::Path) {
+    let Ok(raw) = std::fs::read_to_string(path) else { return };
+    if !raw.contains(".k2so/hooks/notify.sh") {
+        return;
+    }
+    let fixed = raw.replace(".k2so/hooks/notify.sh", ".k2/hooks/notify.sh");
+    match std::fs::write(path, fixed) {
+        Ok(()) => k2_core::log_debug!(
+            "[agent-hooks] migrated legacy .k2so hook path in {}",
+            path.display()
+        ),
+        Err(e) => k2_core::log_debug!(
+            "[agent-hooks] FAILED to migrate legacy hook path in {}: {e}",
+            path.display()
+        ),
+    }
+}
+
 fn register_claude_hooks(hook_script: &str) -> Result<(), String> {
     let home = dirs::home_dir().ok_or("No home directory")?;
     let settings_path = home.join(".claude").join("settings.json");
+    migrate_legacy_hook_path(&settings_path);
 
     // Read existing settings or create new
     let mut settings: serde_json::Value = if settings_path.exists() {
@@ -351,7 +379,7 @@ fn register_claude_hooks(hook_script: &str) -> Result<(), String> {
         // Check if we already have a K2SO hook registered
         let existing = hooks_obj.get(*event);
         let already_registered = existing.map_or(false, |v| {
-            v.to_string().contains(".k2so/hooks/notify.sh")
+            v.to_string().contains(".k2/hooks/notify.sh")
         });
 
         if !already_registered {
@@ -377,6 +405,7 @@ fn register_claude_hooks(hook_script: &str) -> Result<(), String> {
 fn register_cursor_hooks(hook_script: &str) -> Result<(), String> {
     let home = dirs::home_dir().ok_or("No home directory")?;
     let hooks_path = home.join(".cursor").join("hooks.json");
+    migrate_legacy_hook_path(&hooks_path);
 
     let mut settings: serde_json::Value = if hooks_path.exists() {
         let raw = std::fs::read_to_string(&hooks_path).map_err(|e| e.to_string())?;
@@ -400,7 +429,7 @@ fn register_cursor_hooks(hook_script: &str) -> Result<(), String> {
         let hook_cmd = format!("[ -x {} ] && {} {} || true", escaped, escaped, mapped_type);
 
         let already_registered = hooks_obj.get(*event).map_or(false, |v| {
-            v.to_string().contains(".k2so/hooks/notify.sh")
+            v.to_string().contains(".k2/hooks/notify.sh")
         });
 
         if !already_registered {
@@ -429,6 +458,7 @@ fn register_cursor_hooks(hook_script: &str) -> Result<(), String> {
 fn register_gemini_hooks(hook_script: &str) -> Result<(), String> {
     let home = dirs::home_dir().ok_or("No home directory")?;
     let settings_path = home.join(".gemini").join("settings.json");
+    migrate_legacy_hook_path(&settings_path);
 
     let mut settings: serde_json::Value = if settings_path.exists() {
         let raw = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
@@ -459,7 +489,7 @@ fn register_gemini_hooks(hook_script: &str) -> Result<(), String> {
 
     for event in &events {
         let already_registered = hooks_obj.get(*event).map_or(false, |v| {
-            v.to_string().contains(".k2so/hooks/notify.sh")
+            v.to_string().contains(".k2/hooks/notify.sh")
         });
 
         if !already_registered {
@@ -490,7 +520,8 @@ fn register_gemini_hooks(hook_script: &str) -> Result<(), String> {
 #[allow(dead_code)]
 pub fn check_hook_injections() -> serde_json::Value {
     let home = dirs::home_dir();
-    let notify_fragment = ".k2so/hooks/notify.sh";
+    let notify_fragment = ".k2/hooks/notify.sh";
+    let legacy_fragment = ".k2so/hooks/notify.sh";
 
     let check = |relative: &str| -> serde_json::Value {
         let path = match &home {
@@ -506,7 +537,12 @@ pub fn check_hook_injections() -> serde_json::Value {
             });
         }
         let content = std::fs::read_to_string(&path).unwrap_or_default();
-        let injected = content.contains(notify_fragment);
+        // Accept the legacy fragment too: this is READ-ONLY reporting, and
+        // a config the register pass hasn't rewritten yet (§3.4 migration
+        // runs at registration time) still resolves through the compat
+        // symlink — it IS injected.
+        let injected =
+            content.contains(notify_fragment) || content.contains(legacy_fragment);
         serde_json::json!({
             "path": path_str,
             "exists": true,
@@ -656,11 +692,11 @@ mod tests {
             "port must not be baked in as a literal"
         );
         assert!(
-            script.contains("K2SO_PORT_FILE=\"$HOME/.k2so/heartbeat.port\""),
+            script.contains("K2SO_PORT_FILE=\"$HOME/.k2/heartbeat.port\""),
             "script must read port from heartbeat.port file"
         );
         assert!(
-            script.contains("K2SO_TOKEN_FILE=\"$HOME/.k2so/heartbeat.token\""),
+            script.contains("K2SO_TOKEN_FILE=\"$HOME/.k2/heartbeat.token\""),
             "script must prefer token from heartbeat.token file"
         );
         assert!(

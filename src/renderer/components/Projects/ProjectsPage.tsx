@@ -31,6 +31,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
+import { Surface } from '@/components/ui'
 import ProjectNav, { CreateProjectForm, ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
 import DashboardPresetsMenu from './DashboardPresetsMenu'
@@ -282,8 +283,10 @@ export default function ProjectsPage(): React.JSX.Element | null {
       {/* Top bar — mirrors the workspace TopBar's left cluster: traffic-
           light spacer + wordmark + SERVER DROPDOWN + the page switcher
           (§6.0: both visible on every page), draggable. */}
-      <div
-        className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none flex-shrink-0"
+      <Surface
+        role2="surface"
+        bordered={false}
+        className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         data-tauri-drag-region
         onMouseDown={(e) => {
           // The attribute alone only fires when the bar ITSELF is the click
@@ -380,7 +383,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
             )}
           </button>
         </div>
-      </div>
+      </Surface>
 
       {/* Body: left nav (expanded or icon rail, §6.7.1) + main area. */}
       <div className="flex-1 min-h-0 flex">

@@ -6,6 +6,7 @@ import {
 } from '../../../shared/constants'
 import { usePanelsStore } from '../../stores/panels'
 import { showContextMenu } from '../../lib/context-menu'
+import { Surface } from '@/components/ui'
 
 type PanelTab = 'files' | 'changes' | 'history' | 'workspace'
 
@@ -138,8 +139,10 @@ export default function TabbedPanel({
   }, [oppositeSide, oppositeLabel, thisSide])
 
   return (
-    <div
-      className="relative flex flex-col h-full bg-[var(--color-bg-surface)] overflow-hidden"
+    <Surface
+      role2="surface"
+      bordered={false}
+      className="relative flex flex-col h-full overflow-hidden"
       style={{ width }}
     >
       <PanelResizeHandle side={resizeSide} onWidthChange={onWidthChange} currentWidth={width} />
@@ -167,6 +170,6 @@ export default function TabbedPanel({
 
       {/* Tab content */}
       <div className="flex-1 overflow-hidden">{children}</div>
-    </div>
+    </Surface>
   )
 }

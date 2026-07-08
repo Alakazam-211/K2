@@ -59,6 +59,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
+import { Surface } from '@/components/ui'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
 import {
   EDGE_BAND_PX,
@@ -135,8 +136,10 @@ function PaneChrome({
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div
-      className={`flex flex-col h-full min-w-0 min-h-0 border bg-[var(--color-bg-surface)] transition-colors ${
+    <Surface
+      role2="surface"
+      bordered={false}
+      className={`flex flex-col h-full min-w-0 min-h-0 border transition-colors ${
         focused ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'
       }`}
     >
@@ -183,7 +186,7 @@ function PaneChrome({
         )}
       </div>
       <div className="flex-1 min-h-0 min-w-0">{children}</div>
-    </div>
+    </Surface>
   )
 }
 

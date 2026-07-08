@@ -24,6 +24,7 @@ import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
+import { Surface } from '@/components/ui'
 import {
   countByStatus,
   fetchAllFeedback,
@@ -206,6 +207,9 @@ export function FeedbackCard({
 }): React.JSX.Element {
   const dimmed = row.status === 'resolved' || row.status === 'dismissed'
   return (
+    // NOT Surface (P2 final wave): the selected state's `ring-1` sets
+    // box-shadow, and Surface's elevation slot `[box-shadow:var(--ring-surface)]`
+    // sorts LATER in the Tailwind bundle — it would clobber the accent ring.
     <div
       onClick={onSelect}
       className={`border bg-[var(--color-bg-surface)] p-3 cursor-pointer transition-colors ${
@@ -424,8 +428,10 @@ export default function FeedbackPage(): React.JSX.Element | null {
   return (
     <div className="fixed inset-[var(--inset-window)] z-50 flex flex-col bg-[var(--color-bg)]">
       {/* Top bar — mirrors AgentOps: traffic-light spacer + wordmark, draggable. */}
-      <div
-        className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none flex-shrink-0"
+      <Surface
+        role2="surface"
+        bordered={false}
+        className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         data-tauri-drag-region
         onMouseDown={(e) => {
           // The attribute alone only fires when the bar ITSELF is the click
@@ -466,7 +472,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
             </svg>
           </button>
         </div>
-      </div>
+      </Surface>
 
       {/* Master-detail: fluid list column left, response panel right.
           Below lg the columns stack 50/50 (the app window can go down to

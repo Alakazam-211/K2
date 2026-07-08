@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
-import { DialogScrim } from '@/components/ui'
+import { DialogScrim, Surface } from '@/components/ui'
 import Markdown from '../Markdown/Markdown'
 
 interface WhatsNewPayload {
@@ -275,7 +275,8 @@ export default function WhatsNewModal({
       />
 
       {/* Dialog */}
-      <div
+      <Surface
+        role2="surface"
         className="no-drag"
         style={{
           position: 'fixed',
@@ -287,8 +288,6 @@ export default function WhatsNewModal({
           maxHeight: '78vh',
           display: 'flex',
           flexDirection: 'column',
-          background: 'var(--color-bg-surface)',
-          border: '1px solid var(--color-border)',
           boxShadow:
             '0 12px 40px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4)',
           overflow: 'hidden'
@@ -438,7 +437,7 @@ export default function WhatsNewModal({
             Got it
           </button>
         </div>
-      </div>
+      </Surface>
     </>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { DialogScrim } from '@/components/ui'
+import { DialogScrim, Surface } from '@/components/ui'
 import { useCommandPaletteStore } from '../../stores/command-palette'
 import { useProjectsStore } from '../../stores/projects'
 import { useFocusGroupsStore } from '../../stores/focus-groups'
@@ -262,9 +262,10 @@ export default function CommandPalette(): React.JSX.Element | null {
       }}
       onKeyDown={handleKeyDown}
     >
-      <div
-        className="w-[560px] max-h-[60vh] flex flex-col overflow-hidden border border-[var(--color-border)]"
-        style={{ background: 'var(--color-bg-surface)', boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)' }}
+      <Surface
+        role2="surface"
+        className="w-[560px] max-h-[60vh] flex flex-col overflow-hidden"
+        style={{ boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)' }}
       >
         {/* Search input */}
         <div className="flex items-center border-b border-[var(--color-border)] px-4 py-3">
@@ -463,7 +464,7 @@ export default function CommandPalette(): React.JSX.Element | null {
             select
           </span>
         </div>
-      </div>
+      </Surface>
     </DialogScrim>
   )
 }

@@ -8,6 +8,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { agentNameFromId } from '@/lib/terminal-id'
+import { Surface } from '@/components/ui'
 
 interface RunningAgentInfo {
   terminalId: string
@@ -342,9 +343,10 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
       }}
       onKeyDown={handleKeyDown}
     >
-      <div
-        className="w-[600px] max-h-[60vh] flex flex-col overflow-hidden border border-[var(--color-border)]"
-        style={{ background: 'var(--color-bg-surface)', boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)' }}
+      <Surface
+        role2="surface"
+        className="w-[600px] max-h-[60vh] flex flex-col overflow-hidden"
+        style={{ boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)' }}
       >
         {/* Search input */}
         <div className="flex items-center border-b border-[var(--color-border)] px-4 py-3">
@@ -525,7 +527,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
           </span>
           <span className="text-[10px] text-[var(--color-text-muted)]">⌘J</span>
         </div>
-      </div>
+      </Surface>
     </div>
   )
 }

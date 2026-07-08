@@ -20,7 +20,10 @@ cd "$(dirname "$0")/.."
 PATTERN='~/\.k2so|\$HOME/\.k2so|HOME.*/\.k2so|home(_dir\(\))?\.join\("\.k2so|join\('"'"'\.k2so|homedir\(\), *'"'"'\.k2so|\{home\}/\.k2so|/tmp/\.k2so'
 ALLOWLIST="scripts/k2so-allowlist.txt"
 
+# The gate's own policy files necessarily CONTAIN the forbidden patterns
+# (that's their job) — exempt them from their own scan.
 hits=$(git grep -InE "$PATTERN" -- src-tauri crates src cli scripts \
+  ':!scripts/k2so-gate.sh' ':!scripts/k2so-allowlist.txt' \
   | grep -vE ':[0-9]+:\s*(//|#|\*|//!|///)' || true)
 
 fail=0

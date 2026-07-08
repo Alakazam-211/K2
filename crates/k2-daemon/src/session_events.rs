@@ -150,7 +150,8 @@ pub enum SessionEvent {
     //
     // **Routing classes** (see `session_events_ws::event_matches_workspace`):
     //   - APP-LEVEL  (forwarded to EVERY subscriber regardless of `?path=`):
-    //     `LlmStatusChanged`, `TunnelStatusChanged`, `AgentStatusChanged`.
+    //     `LlmStatusChanged`, `TunnelStatusChanged`, `AgentStatusChanged`,
+//     `SessionActivityChanged`.
     //   - WORKSPACE-SCOPED (forwarded only when the carried path matches
     //     the subscriber's `?path=` via the cwd-prefix rule):
     //     `ReviewQueueChanged`, `ReviewChanged`, `TabTitleChanged`,
@@ -198,6 +199,26 @@ pub enum SessionEvent {
         tab_id: String,
         /// Canonical bucket: `start` (working) | `stop` (idle) |
         /// `permission` (awaiting approval).
+        status: String,
+    },
+
+    /// 0.40.39 — daemon-side per-session activity (session_activity.rs,
+    /// the 0.40.23 deferred item). Title/Bell-derived working|idle|
+    /// permission, emitted on TRANSITIONS only, for EVERY live session
+    /// regardless of any client's pane visibility. APP-LEVEL routing.
+    /// Distinct from `AgentStatusChanged` (hook-driven lifecycle whose
+    /// `stop` arm drives toasts/review): this is high-frequency turn
+    /// state, consumed only by the activity store.
+    /// Wire: `{ "kind": "session_activity_changed", "workspacePath":
+    /// string, "agentName": string, "paneGroupId": string|null,
+    /// "status": "working"|"idle"|"permission" }`.
+    SessionActivityChanged {
+        #[serde(rename = "workspacePath")]
+        workspace_path: String,
+        #[serde(rename = "agentName")]
+        agent_name: String,
+        #[serde(rename = "paneGroupId")]
+        pane_group_id: Option<String>,
         status: String,
     },
 

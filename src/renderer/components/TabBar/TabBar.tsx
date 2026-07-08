@@ -2,7 +2,7 @@ import { useCallback, useState, useRef, useEffect, useMemo } from 'react'
 import { useTabsStore, type TerminalItemData } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
-import { useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
+import { useActiveAgentsStore, mergePaneStatus, type ActiveAgent, type PaneStatus } from '@/stores/active-agents'
 import { usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
@@ -32,6 +32,12 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   const unsplitTerminalArea = useTabsStore((s) => s.unsplitTerminalArea)
   const reorderTabs = useTabsStore((s) => s.reorderTabs)
   const paneStatusMap = useActiveAgentsStore((s) => s.paneStatuses)
+  // 0.40.39 — daemon-truth activity (visibility-independent). Subscribed
+  // so the tab re-renders on daemon transitions; merged with the client
+  // map so a hidden pane's false idle can't kill the spinner.
+  const daemonStatusMap = useActiveAgentsStore((s) => s.daemonPaneStatuses)
+  const effStatus = (id: string): PaneStatus =>
+    mergePaneStatus(paneStatusMap.get(id), daemonStatusMap.get(id))
   // This TabBar is scoped to one workspace (`cwd`); resolve its projectId so
   // the pinned Chat tab can read its daemon-backed chat pane's working status.
   // The chat pane is keyed `agent-chat:<projectId>` in `paneStatuses` — it's
@@ -474,7 +480,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           const terminalIds = Array.from(tab.paneGroups.values())
             .flatMap(pg => pg.items.filter(i => i.type === 'terminal').map(i => (i.data as TerminalItemData).terminalId))
           const isAgentActive = terminalIds.some(id => {
-            const s = paneStatusMap.get(id)
+            const s = effStatus(id)
             return s === 'working' || s === 'permission'
           })
           const isDragged = reorderDragIndex === index
@@ -552,7 +558,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
             // a passive queue with no working state. Same flag the Active bar
             // uses (paneStatuses, set by recordTitleActivity / lifecycle hook).
             const chatStatus = section === 'chat' && projectId
-              ? paneStatusMap.get(agentChatId(projectId, ''))
+              ? effStatus(agentChatId(projectId, ''))
               : undefined
             const chatWorking = chatStatus === 'working' || chatStatus === 'permission'
             const systemTabActive = isAgentActive || chatWorking

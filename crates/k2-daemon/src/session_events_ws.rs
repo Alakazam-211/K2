@@ -323,6 +323,9 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         SessionEvent::ProjectsChanged {} => return true,
         // 0.40.38 — chat-history refetch signal: app-level, all subscribers.
         SessionEvent::ChatHistoryChanged {} => return true,
+        // 0.40.39 — daemon-side activity: app-level (the store maps
+        // agent/pane keys itself; spinners exist on every host's UI).
+        SessionEvent::SessionActivityChanged { .. } => return true,
 
         // S1 presence — APP-LEVEL (the ActiveChanged convention): the
         // connected-users roster is daemon-global truth, forwarded to

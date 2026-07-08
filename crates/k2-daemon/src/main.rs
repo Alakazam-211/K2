@@ -105,6 +105,7 @@ mod v1_sandboxes;
 mod v1_host_sessions;
 // F2 (sandbox): per-session agent response log + ownership map (GET .../messages).
 mod sandbox_responses;
+mod session_activity;
 mod session_events;
 mod session_events_ws;
 mod session_lookup;

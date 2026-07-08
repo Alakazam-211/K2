@@ -117,6 +117,19 @@ export interface AgentStatusChangedEvent {
   status: 'start' | 'stop' | 'permission'
 }
 
+/** APP-LEVEL (0.40.39) — daemon-side per-session activity transition
+ *  (session_activity.rs): Title/Bell-derived, visibility-independent.
+ *  Feeds the activity store's daemon-truth map so tab spinners stay
+ *  correct for hidden/unmounted panes. */
+export interface SessionActivityChangedEvent {
+  kind: 'session_activity_changed'
+  workspacePath: string
+  agentName: string
+  /** terminalId for tab-spawned sessions ("tab-" stripped daemon-side). */
+  paneGroupId: string | null
+  status: 'working' | 'idle' | 'permission'
+}
+
 /** APP-LEVEL — K2 Connect tunnel connector state transitioned. Replaces
  *  the `/cli/tunnel/status` poll in `CompanionSection.tsx`. */
 export interface TunnelStatusChangedEvent {
@@ -269,6 +282,7 @@ export type SessionEventMessage =
   | ActiveChangedEvent
   | LlmStatusChangedEvent
   | AgentStatusChangedEvent
+  | SessionActivityChangedEvent
   | TunnelStatusChangedEvent
   | TabTitleChangedEvent
   | TabOrderChangedEvent
@@ -421,6 +435,7 @@ export function subscribeToWorkspaceSessionEvents(
         case 'project_groups_changed':
         case 'feedback_changed':
         case 'chat_history_changed':
+        case 'session_activity_changed':
           // App-level concerns (#672 / presence S2 / browser-pane 0.40.34
           // / remote live-update fix) — the per-workspace subscriber
           // ignores them; `subscribeToActiveState` consumes them. Swallow
@@ -616,6 +631,16 @@ export function onLlmStatusChanged(fn: LlmStatusHandler): UnsubscribeFn {
   return () => void _llmStatusHandlers.delete(fn)
 }
 
+type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
+const _sessionActivityHandlers = new Set<SessionActivityHandler>()
+
+/** Subscribe to APP-LEVEL `session_activity_changed` (0.40.39 daemon-side
+ *  activity). Returns an unsubscribe fn. */
+export function onSessionActivityChanged(fn: SessionActivityHandler): UnsubscribeFn {
+  _sessionActivityHandlers.add(fn)
+  return () => void _sessionActivityHandlers.delete(fn)
+}
+
 /** Subscribe to APP-LEVEL `agent_status_changed`. Returns an unsubscribe fn. */
 export function onAgentStatusChanged(fn: AgentStatusHandler): UnsubscribeFn {
   _agentStatusHandlers.add(fn)
@@ -706,6 +731,9 @@ function dispatchAppEvent(msg: SessionEventMessage): void {
       break
     case 'projects_changed':
       for (const h of _projectsChangedHandlers) h(msg)
+      break
+    case 'session_activity_changed':
+      for (const h of _sessionActivityHandlers) h(msg)
       break
     case 'agent_status_changed':
       for (const h of _agentStatusHandlers) h(msg)
@@ -843,6 +871,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
       if (
         msg.kind === 'llm_status_changed' ||
         msg.kind === 'agent_status_changed' ||
+        msg.kind === 'session_activity_changed' ||
         msg.kind === 'tunnel_status_changed' ||
         msg.kind === 'presence_changed' ||
         msg.kind === 'open_url' ||
@@ -853,7 +882,8 @@ export function subscribeToActiveState(): UnsubscribeFn {
         // fired off this socket — same latent gap, fixed alongside).
         msg.kind === 'projects_changed' ||
         msg.kind === 'project_groups_changed' ||
-        msg.kind === 'feedback_changed'
+        msg.kind === 'feedback_changed' ||
+        msg.kind === 'chat_history_changed'
       ) {
         dispatchAppEvent(msg)
         return

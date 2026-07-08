@@ -120,6 +120,11 @@ pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
         },
     );
 
+    // 0.40.39 — daemon-side activity observer (session_activity.rs):
+    // one task per live session, Title/Bell → working|idle|permission
+    // transitions on the app-level bus. Lives/dies with the PTY.
+    crate::session_activity::spawn_observer(key.clone(), Arc::clone(&session));
+
     // 0.38.5 — persist session-backing metadata so this PTY's spawn
     // args + session_id survive a daemon restart. Only stamp rows for
     // sessions where we have a resolvable workspace + a canonical
@@ -271,6 +276,19 @@ pub fn unregister(agent_name: &str) -> Option<Arc<DaemonPtySession>> {
                 workspace_path: cwd_emit.clone(),
                 pane_group_id: crate::session_events::pane_group_id_from_agent(agent_name),
                 agent_name: agent_name.to_string(),
+            },
+        );
+
+        // 0.40.39 — a force-removed session must not strand a WORKING
+        // spinner: emit the terminal idle here (the observer's own exit
+        // paths cover the normal ChildExit case; duplicate idles are
+        // transition-deduped client-side).
+        let _ = crate::session_events::emit(
+            crate::session_events::SessionEvent::SessionActivityChanged {
+                workspace_path: cwd_emit.clone(),
+                agent_name: agent_name.to_string(),
+                pane_group_id: crate::session_events::pane_group_id_from_agent(agent_name),
+                status: "idle".to_string(),
             },
         );
 

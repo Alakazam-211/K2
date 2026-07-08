@@ -25,9 +25,28 @@ import {
   onAppHello,
   onSessionAddedApp,
   onSessionRemovedApp,
+  onSessionActivityChanged,
 } from '@/stores/session-events'
 
 export type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
+
+/** 0.40.39 merge rule (pure, exported for tests) — the effective pane
+ *  status a spinner should show. Precedence:
+ *    1. client permission/review — hook-owned, higher signal than the
+ *       daemon's title-derived working/idle.
+ *    2. daemon truth if the daemon has spoken for this pane — this is
+ *       what keeps a HIDDEN tab's spinner alive (the parked client pane
+ *       writes a false idle; the daemon key overrides it).
+ *    3. client status otherwise (legacy panes, hermes/cursor with no
+ *       daemon signal, old daemons that never populate the daemon map). */
+export function mergePaneStatus(
+  client: PaneStatus | undefined,
+  daemon: PaneStatus | undefined,
+): PaneStatus {
+  if (client === 'permission' || client === 'review') return client
+  if (daemon !== undefined) return daemon
+  return client ?? 'idle'
+}
 
 /** Structural equality for the polled agents map. Lets `pollOnce` keep the
  *  existing `agents` Map reference (and avoid a spurious re-render of every
@@ -219,6 +238,19 @@ interface ActiveAgentsState {
   outputTimestamps: Map<string, number>
   /** Hook-based pane statuses keyed by paneId (terminalId) */
   paneStatuses: Map<string, PaneStatus>
+  /** 0.40.39 — DAEMON-TRUTH activity keyed by paneId (terminalId),
+   *  fed by session_activity_changed (Title/Bell, visibility-
+   *  independent). When a key exists here it OVERRIDES the client
+   *  paneStatuses for working/idle — that's what keeps a hidden tab's
+   *  spinner alive (the client pane writes a false idle when parked).
+   *  Client permission/review still win (hook-owned). Empty for old
+   *  daemons → behavior falls back to paneStatuses byte-for-byte. */
+  daemonPaneStatuses: Map<string, PaneStatus>
+  /** 0.40.39 — agentName → terminalId alias so a session_activity
+   *  event addressed by agentName (heartbeat/surfaced tabs whose
+   *  paneGroupId isn't the terminalId) maps to the right pane.
+   *  Registered by TerminalPane at spawn; outlives the pane. */
+  paneAgentAlias: Map<string, string>
   /** Maps paneId → projectId so we know which project an agent belongs to */
   paneProjectMap: Map<string, string>
   /** Terminals waiting to be briefly mounted off-screen to spawn their PTY */
@@ -248,6 +280,16 @@ interface ActiveAgentsState {
    *  pane isn't marked. */
   markSeen: (paneId: string) => void
   handleLifecycleEvent: (paneId: string, tabId: string, eventType: string) => void
+  /** 0.40.39 — apply a daemon-side activity transition. */
+  applyDaemonActivity: (e: {
+    workspacePath: string
+    agentName: string
+    paneGroupId: string | null
+    status: 'working' | 'idle' | 'permission'
+  }) => void
+  /** 0.40.39 — register agentName→terminalId so daemon activity events
+   *  addressed by agentName resolve to the right pane. */
+  bindPaneAgentName: (agentName: string, terminalId: string) => void
   addBackgroundSpawn: (spawn: BackgroundSpawn) => void
   removeBackgroundSpawn: (id: string) => void
   /** #688 — push a live PTY's cwd into `liveSessionCwds` (from a daemon
@@ -266,6 +308,8 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
   agents: new Map(),
   outputTimestamps: new Map(),
   paneStatuses: new Map(),
+  daemonPaneStatuses: new Map(),
+  paneAgentAlias: new Map(),
   paneProjectMap: new Map(),
   backgroundSpawns: [],
   liveSessionCwds: new Set(),
@@ -305,11 +349,14 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
   },
 
   hasActiveAgents: () => {
-    // Check both polling-detected agents and hook-detected working panes
-    const { agents, paneStatuses } = get()
+    // Check both polling-detected agents and effective (daemon-merged)
+    // pane statuses.
+    const { agents, paneStatuses, daemonPaneStatuses } = get()
     if (agents.size > 0) return true
-    for (const status of paneStatuses.values()) {
-      if (status === 'working' || status === 'permission') return true
+    const keys = new Set([...paneStatuses.keys(), ...daemonPaneStatuses.keys()])
+    for (const id of keys) {
+      const st = mergePaneStatus(paneStatuses.get(id), daemonPaneStatuses.get(id))
+      if (st === 'working' || st === 'permission') return true
     }
     return false
   },
@@ -321,20 +368,32 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
 
   isTerminalRunningAgent: (terminalId: string) => {
     if (get().agents.has(terminalId)) return true
-    const hookStatus = get().paneStatuses.get(terminalId)
-    return hookStatus === 'working' || hookStatus === 'permission'
+    const { paneStatuses, daemonPaneStatuses } = get()
+    const st = mergePaneStatus(
+      paneStatuses.get(terminalId),
+      daemonPaneStatuses.get(terminalId),
+    )
+    return st === 'working' || st === 'permission'
   },
 
-  getPaneStatus: (paneId: string) => get().paneStatuses.get(paneId) ?? 'idle',
+  getPaneStatus: (paneId: string) => {
+    const { paneStatuses, daemonPaneStatuses } = get()
+    return mergePaneStatus(paneStatuses.get(paneId), daemonPaneStatuses.get(paneId))
+  },
 
   /** Get the highest-priority agent status for a specific project. */
   getProjectStatus: (projectId: string): PaneStatus => {
-    const { paneStatuses, paneProjectMap } = get()
+    const { paneStatuses, daemonPaneStatuses, paneProjectMap } = get()
     let hasWorking = false
     let hasPermission = false
     let hasReview = false
-    for (const [paneId, status] of paneStatuses) {
+    const keys = new Set([...paneStatuses.keys(), ...daemonPaneStatuses.keys()])
+    for (const paneId of keys) {
       if (paneProjectMap.get(paneId) === projectId) {
+        const status = mergePaneStatus(
+          paneStatuses.get(paneId),
+          daemonPaneStatuses.get(paneId),
+        )
         if (status === 'permission') hasPermission = true
         else if (status === 'working') hasWorking = true
         else if (status === 'review') hasReview = true
@@ -348,11 +407,13 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
 
   /** Get the highest-priority agent status across all panes. */
   getAggregateStatus: (): PaneStatus => {
-    const { paneStatuses } = get()
+    const { paneStatuses, daemonPaneStatuses } = get()
     let hasWorking = false
     let hasPermission = false
     let hasReview = false
-    for (const status of paneStatuses.values()) {
+    const keys = new Set([...paneStatuses.keys(), ...daemonPaneStatuses.keys()])
+    for (const id of keys) {
+      const status = mergePaneStatus(paneStatuses.get(id), daemonPaneStatuses.get(id))
       if (status === 'permission') hasPermission = true
       else if (status === 'working') hasWorking = true
       else if (status === 'review') hasReview = true
@@ -362,6 +423,37 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     if (hasWorking) return 'working'
     if (hasReview) return 'review'
     return 'idle'
+  },
+
+  applyDaemonActivity: (e) => {
+    // Resolve the pane key: paneGroupId is the terminalId for tab-spawned
+    // sessions; else the agentName may be a bound alias (heartbeat/
+    // surfaced) or equal a projectId (pinned chat → agentChatId).
+    const { paneAgentAlias } = get()
+    const paneId =
+      e.paneGroupId ??
+      paneAgentAlias.get(e.agentName) ??
+      e.agentName
+    const next: PaneStatus = e.status
+    const map = new Map(get().daemonPaneStatuses)
+    if (map.get(paneId) === next) return
+    map.set(paneId, next)
+    set({ daemonPaneStatuses: map })
+    // Route completion through the same unseen-done/chime machinery so the
+    // chime fires on TRUE daemon-observed completion (this also retires
+    // the old false early-chime that fired ~5.5s after switch-away).
+    if (next === 'working') notePaneActive(paneId)
+    else if (next === 'idle') {
+      const client = get().paneStatuses.get(paneId)
+      if (client !== 'working') armUnseenDone(paneId)
+    }
+  },
+
+  bindPaneAgentName: (agentName, terminalId) => {
+    if (get().paneAgentAlias.get(agentName) === terminalId) return
+    const map = new Map(get().paneAgentAlias)
+    map.set(agentName, terminalId)
+    set({ paneAgentAlias: map })
   },
 
   recordOutput: (terminalId: string) => {
@@ -881,6 +973,7 @@ let agentHelloUnsub: (() => void) | null = null
 // gone). Module-level so stopAgentPolling can clean them up.
 let sessionAddedUnsub: (() => void) | null = null
 let sessionRemovedUnsub: (() => void) | null = null
+let sessionActivityUnsub: (() => void) | null = null
 
 // #688 — map a session's canonical key (`agent_name`, the v2_session_map
 // key, stable across its add/remove pair) → the cwd it reported. Lets a
@@ -910,6 +1003,18 @@ function trackSessionRemoved(agentName: string, cwdHint: string): void {
     if (remaining === cwd) return // another live session keeps it green
   }
   useActiveAgentsStore.getState().removeLiveSessionCwd(cwd)
+  // 0.40.39 — drop the daemon-truth key + alias for the gone session so a
+  // stale spinner can't linger (the daemon also emits a final idle, but
+  // this is the belt-and-suspenders for a force-removed session).
+  const st = useActiveAgentsStore.getState()
+  const terminalId = st.paneAgentAlias.get(agentName) ?? agentName
+  if (st.daemonPaneStatuses.has(terminalId) || st.paneAgentAlias.has(agentName)) {
+    const dmap = new Map(st.daemonPaneStatuses)
+    dmap.delete(terminalId)
+    const amap = new Map(st.paneAgentAlias)
+    amap.delete(agentName)
+    useActiveAgentsStore.setState({ daemonPaneStatuses: dmap, paneAgentAlias: amap })
+  }
 }
 
 export function startAgentPolling(): void {
@@ -948,6 +1053,16 @@ export function startAgentPolling(): void {
     sessionRemovedUnsub = onSessionRemovedApp((e) => {
       trackSessionRemoved(e.agent_name, e.workspace_path)
     })
+    // 0.40.39 — daemon-side activity (session_activity.rs). Visibility-
+    // independent working/idle/permission for EVERY session, so hidden/
+    // unmounted tab spinners stay correct. Gated on the capability so an
+    // old/remote daemon simply never populates daemonPaneStatuses and the
+    // merge rule falls back to the client feed.
+    if (serverSupports('session-activity')) {
+      sessionActivityUnsub = onSessionActivityChanged((e) => {
+        useActiveAgentsStore.getState().applyDaemonActivity(e)
+      })
+    }
   } else {
     // Fallback: legacy ~2.5s poll loop (older / remote daemon, no broadcasts).
     // Add jitter to avoid thundering-herd across multiple windows.
@@ -1521,6 +1636,10 @@ export function stopAgentPolling(): void {
     sessionRemovedUnsub()
     sessionRemovedUnsub = null
   }
+  if (sessionActivityUnsub) {
+    sessionActivityUnsub()
+    sessionActivityUnsub = null
+  }
   _liveSessionCwdByKey.clear()
   if (hookUnlisten) {
     hookUnlisten()
@@ -1581,6 +1700,8 @@ export function __resetAgentStateForHostSwitch(): void {
     agents: new Map(),
     outputTimestamps: new Map(),
     paneStatuses: new Map(),
+  daemonPaneStatuses: new Map(),
+  paneAgentAlias: new Map(),
     paneProjectMap: new Map(),
     backgroundSpawns: [],
     liveSessionCwds: new Set(),

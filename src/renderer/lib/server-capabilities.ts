@@ -83,6 +83,13 @@ export const FEATURES = {
    *  daemon (whose Role::from_wire rejects "viewer" with a 400) never
    *  gets a doomed set-role. */
   'viewer-role': '0.40.27',
+  /** Daemon-side per-session activity detection (session_activity.rs):
+   *  the daemon emits session_activity_changed (Title/Bell-derived
+   *  working/idle/permission) for every session regardless of pane
+   *  visibility. Gates the renderer subscription that feeds
+   *  daemonPaneStatuses; an older/remote daemon never emits it, so the
+   *  merge rule transparently falls back to client-side detection. */
+  'session-activity': '0.40.39',
 } as const
 
 export type FeatureKey = keyof typeof FEATURES

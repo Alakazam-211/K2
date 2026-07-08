@@ -1113,6 +1113,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // never matches a daemon-spawned session → /cli/sessions/v2/spawn
     // creates a duplicate PTY instead of attaching. See PRD.
     const agentName = attachAgentName ?? `tab-${terminalId}`
+    // 0.40.39 — register the alias so daemon session_activity events
+    // addressed by agentName (heartbeat / surfaced tabs whose agent_name
+    // isn't `tab-<terminalId>`) resolve to this pane's terminalId. The
+    // alias outlives the pane, so a hidden/unmounted tab still maps.
+    useActiveAgentsStore.getState().bindPaneAgentName(agentName, terminalId)
 
     async function boot() {
       perfLog('mount', spawnedAt

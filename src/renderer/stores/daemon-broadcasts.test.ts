@@ -48,6 +48,7 @@ const ev = vi.hoisted(() => {
     appHello: [] as Fn[],
     sessionAdded: [] as Fn[],
     sessionRemoved: [] as Fn[],
+    sessionActivity: [] as Fn[],
     tabSubs: [] as Array<{ path: string; handlers: Record<string, Fn> }>,
   }
   return { reg }
@@ -80,6 +81,10 @@ vi.mock('@/stores/session-events', () => ({
   onSessionRemovedApp: vi.fn((fn: (...a: unknown[]) => void) => {
     ev.reg.sessionRemoved.push(fn)
     return () => void (ev.reg.sessionRemoved = ev.reg.sessionRemoved.filter((f) => f !== fn))
+  }),
+  onSessionActivityChanged: vi.fn((fn: (...a: unknown[]) => void) => {
+    ev.reg.sessionActivity.push(fn)
+    return () => void (ev.reg.sessionActivity = ev.reg.sessionActivity.filter((f) => f !== fn))
   }),
   subscribeToWorkspaceTabEvents: vi.fn(
     (path: string, handlers: Record<string, (...a: unknown[]) => void>) => {

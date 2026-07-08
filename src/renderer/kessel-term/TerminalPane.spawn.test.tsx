@@ -109,6 +109,7 @@ vi.mock('@/stores/active-agents', () => ({
       recordOutput: vi.fn(),
       recordTitleActivity: vi.fn(),
       markSeen: vi.fn(),
+      bindPaneAgentName: vi.fn(),
       agents: new Map(),
     }),
   },

@@ -3,6 +3,28 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.36 — Copy that
+
+- **Copy in a remote terminal, paste on your machine — for real this
+  time.** Selecting text in a TUI on a remote server now lands on YOUR
+  clipboard. The 0.40.34 plumbing was right, but the final OS-clipboard
+  write was silently rejected by the webview; it now goes through a
+  native path that can't be. Copies go only to the person who made the
+  selection.
+- **Open any page in a browser tab.** Cmd+K, type or paste a URL (bare
+  domains like `example.com` work), hit Enter — a browser tab opens.
+  Previously only intercepted links could create one.
+- **Remote workspace images pick from the server.** Setting a workspace
+  or project icon while connected to a remote host now browses the
+  HOST's files in K2's own picker instead of your local Finder.
+- **Cmd+Shift+T spawns exactly one terminal.** A triple-stacked event
+  bug could spawn 2–4 agents per press. One press, one terminal.
+- **Server connections are more reliable for everyone, today.** A relay
+  fix (no app update needed) cures a class of "Server unreachable" /
+  silent connect failures where the app's requests could bypass tunnel
+  routing entirely. If relaunching K2 used to fix your connection —
+  this was why.
+
 ## 0.40.35 — Fresh-install pairing fix
 
 - **New installs pair with the daemon again.** A recent change stopped

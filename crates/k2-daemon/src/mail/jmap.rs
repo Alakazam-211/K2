@@ -2,8 +2,15 @@
 //!
 //! BOUNDARY (PRD §4 / pre-mortem #2): this is the ONLY way K2 talks to
 //! Stalwart — plain HTTP against its public management API, over
-//! localhost, authenticated with the least-privilege ApiKey the
-//! supervisor mints at bootstrap. No Stalwart crate is ever linked.
+//! localhost, authenticated with basic auth (bootstrap window) or the
+//! least-privilege ApiKey the supervisor mints. No Stalwart crate is
+//! ever linked.
+//!
+//! TLS: management traffic is PLAIN HTTP ON THE LOOPBACK ONLY (the
+//! supervisor's `STALWART_MGMT_URL` decision — see the doc comment
+//! there). This client therefore never needs
+//! `danger_accept_invalid_certs`; the default-verifying TLS stack
+//! stays intact for any https URL it is ever handed.
 //!
 //! ENDPOINT DISCOVERY (PRD §4.1): upstream docs are inconsistent about
 //! `/api` vs `/jmap`, so the API path is NEVER hardcoded — it is read
@@ -11,111 +18,131 @@
 //! ([`StalwartClient::discover_api_url`], pure parser
 //! [`parse_session_api_url`], unit-tested against a fixture).
 //!
-//! The S2 domain calls (`domain_create` / `domain_delete` /
-//! `domain_dns_zonefile`) are REAL: JMAP method calls composed here,
-//! posted to the DISCOVERED api url, parsed by pure fixture-tested
-//! parsers. The remaining typed calls are S1/S3/S5 stubs returning the
-//! structured not-built error; the transport helpers are real.
-//!
-//! LIVE-BOX VERIFICATION FLAG (S2): the exact `using` capability URN
-//! for Stalwart's Domain management methods and the property spellings
-//! (`dkimManagement: "automatic"`, `subAddressing: "enabled"`,
-//! server-set `dnsZoneFile`) follow the PRD script (§6.1) — Stalwart
-//! has no mgmt-API stability policy, so S2's first live-box run must
-//! confirm the envelope against the pinned v0.16.x before ship. The
-//! parsers are strict JMAP `/set`/`/get` shapes and will fail LOUDLY
-//! (named method + body excerpt) on any drift.
+//! ── ⚠ v0.16 API-SHAPE UNCERTAINTY (live-box verification list) ─────
+//! Stalwart v0.16 replaced its REST API with "every configuration and
+//! management action is a JMAP object" (release notes), but publishes
+//! no method-by-method reference yet. Every management call below is
+//! therefore ISOLATED in one small function carrying a `⚠ LIVE-BOX`
+//! doc comment; the S1 acceptance run on the rpm/scratch box verifies
+//! (and, where wrong, fixes) exactly these functions and their
+//! constants — nothing else in the daemon knows the shapes:
+//!   1. [`STALWART_ADMIN_CAPABILITY`] — the `using` URN for admin
+//!      objects.
+//!   2. [`StalwartClient::settings_set`] — method name (`Settings/set`
+//!      vs `Registry/set`) + args shape for key/value server config.
+//!   3. [`StalwartClient::principal_create`] / [`principal_query_id`] /
+//!      [`principal_update_secret`] — principal management shapes.
+//!   4. [`StalwartClient::api_key_create`] — ApiKey/set shape +
+//!      permission NAMES for the least-privilege list.
+//!   5. [`StalwartBootstrap::configure_listeners`] — listener config
+//!      KEY names (carried from the pre-0.16 `server.listener.*`
+//!      scheme) + how a listener is removed/disabled.
 
 use std::time::Duration;
 
+/// Authentication for one client: the bootstrap window uses HTTP basic
+/// auth (`admin` + one-time/rotated password); steady-state uses the
+/// minted ApiKey as a bearer token.
+#[derive(Clone)]
+pub enum Auth {
+    Bearer(String),
+    Basic { username: String, password: String },
+}
+
 /// Client for one Stalwart instance's management API.
 ///
-/// `base_url` is `mail_server.api_url` (e.g. `https://127.0.0.1:8443`,
-/// localhost-only in port plans B/C); `api_key` is resolved from the
-/// daemon's secret store via `mail_server.api_key_ref` — the caller
-/// passes the SECRET here, never the ref. Never logged.
-// dead_code allows in this file: the client's first production caller
-// is the S1 supervisor bootstrap — until then the binary compilation
-// (main.rs's private mod graph) sees no call sites. The transport +
-// parser are REAL and unit-tested below; remove the allows as S1 wires
-// them in.
-#[allow(dead_code)]
+/// `base_url` is `mail_server.api_url` (`http://127.0.0.1:8180`, the
+/// loopback-only plain-HTTP mgmt listener) or the bootstrap-window
+/// setup listener (`http://127.0.0.1:8080`). Secrets are passed here
+/// directly (resolved from the daemon's secret store by the caller —
+/// never the ref). Never logged.
 pub struct StalwartClient {
     base_url: String,
-    api_key: String,
+    auth: Auth,
 }
 
 /// Request timeout for mgmt calls — localhost, so generous is still
 /// snappy; long-poll reads (S4 `wait`) will use their own client.
-#[allow(dead_code)] // first caller: S1 supervisor bootstrap.
 const MGMT_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[allow(dead_code)] // first caller: S1 supervisor bootstrap.
+/// JMAP core capability URN (RFC 8620) — always in `using`.
+const JMAP_CORE_CAPABILITY: &str = "urn:ietf:params:jmap:core";
+
+/// ⚠ LIVE-BOX (#1): the capability URN Stalwart v0.16 expects in
+/// `using` for management/admin objects. Best documented understanding
+/// pending the official method reference.
+const STALWART_ADMIN_CAPABILITY: &str = "https://stalw.art/jmap/admin";
+
 impl StalwartClient {
+    /// Bearer-auth client (steady state: the minted ApiKey).
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self::with_auth(base_url, Auth::Bearer(api_key.into()))
+    }
+
+    /// Basic-auth client (bootstrap window: admin + one-time password).
+    pub fn new_basic(
+        base_url: impl Into<String>,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Self {
+        Self::with_auth(
+            base_url,
+            Auth::Basic { username: username.into(), password: password.into() },
+        )
+    }
+
+    fn with_auth(base_url: impl Into<String>, auth: Auth) -> Self {
         let mut base_url = base_url.into();
         while base_url.ends_with('/') {
             base_url.pop();
         }
-        Self { base_url, api_key: api_key.into() }
+        Self { base_url, auth }
     }
 
     fn http() -> Result<reqwest::blocking::Client, String> {
         reqwest::blocking::Client::builder()
             .timeout(MGMT_TIMEOUT)
-            // The sidecar's cert may be self-signed pre-ACME during
-            // bootstrap; S1 decides the exact trust story (pinned cert
-            // vs plain-HTTP-on-loopback). Default-verify until then.
             .build()
             .map_err(|e| format!("mgmt http client: {e}"))
     }
 
+    fn apply_auth(&self, req: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
+        match &self.auth {
+            Auth::Bearer(key) => req.bearer_auth(key),
+            Auth::Basic { username, password } => req.basic_auth(username, Some(password)),
+        }
+    }
+
     /// GET `base_url + path` (path must start with `/`), parse JSON.
-    /// The ApiKey rides `Authorization: Bearer` per Stalwart's API-key
-    /// auth. Errors are one-line: status + a short body excerpt —
-    /// never the key.
+    /// Errors are one-line: status + a short body excerpt — never the
+    /// credential.
     pub fn get_json(&self, path: &str) -> Result<serde_json::Value, String> {
         let url = format!("{}{}", self.base_url, path);
-        let resp = Self::http()?
-            .get(&url)
-            .bearer_auth(&self.api_key)
+        let resp = self
+            .apply_auth(Self::http()?.get(&url))
             .send()
             .map_err(|e| format!("GET {path}: {e}"))?;
         Self::json_or_err("GET", path, resp)
     }
 
-    /// POST a JSON body to `base_url + path`, parse the JSON reply.
-    pub fn post_json(
-        &self,
-        path: &str,
-        body: &serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        self.post_json_url(&format!("{}{}", self.base_url, path), path, body)
-    }
-
-    /// POST a JSON body to an ABSOLUTE url (the discovered JMAP apiUrl
-    /// is absolute, PRD §4.1). `label` is the short name used in error
-    /// lines so they never leak the full url/key.
-    fn post_json_url(
+    /// POST a JSON body to an ABSOLUTE url, parse the JSON reply.
+    pub fn post_json_url(
         &self,
         url: &str,
-        label: &str,
         body: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let path = label;
         // Manual JSON body: the crate's reqwest is built without the
         // `json` feature (same minimal feature set the rest of the
         // daemon uses) — serialize + set the header ourselves.
         let payload =
-            serde_json::to_string(body).map_err(|e| format!("POST {path}: body serialize: {e}"))?;
-        let resp = Self::http()?
-            .post(url)
-            .bearer_auth(&self.api_key)
+            serde_json::to_string(body).map_err(|e| format!("POST {url}: body serialize: {e}"))?;
+        let resp = self
+            .apply_auth(Self::http()?.post(url))
             .header("Content-Type", "application/json")
             .body(payload)
             .send()
-            .map_err(|e| format!("POST {path}: {e}"))?;
-        Self::json_or_err("POST", path, resp)
+            .map_err(|e| format!("POST {url}: {e}"))?;
+        Self::json_or_err("POST", url, resp)
     }
 
     fn json_or_err(
@@ -140,7 +167,158 @@ impl StalwartClient {
         parse_session_api_url(&self.base_url, &session)
     }
 
-    // ── Typed calls (S2 domain calls REAL; S1/S3/S5 stubs) ──────────
+    /// Authenticated liveness ping: the session document itself (any
+    /// authed principal can fetch it; a 401/refused/parse failure is a
+    /// health `degraded`).
+    pub fn ping(&self) -> Result<(), String> {
+        self.discover_api_url().map(|_| ())
+    }
+
+    /// One JMAP method call against the DISCOVERED api endpoint:
+    /// `[[method, args, "0"]]` with core + admin capabilities. Returns
+    /// the method-response payload; a JMAP-level `error` response (or
+    /// a `<Method>/set` reply carrying `notCreated`/`notUpdated`/
+    /// `notDestroyed`) is an `Err`.
+    pub fn jmap_call(
+        &self,
+        api_url: &str,
+        method: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let body = serde_json::json!({
+            "using": [JMAP_CORE_CAPABILITY, STALWART_ADMIN_CAPABILITY],
+            "methodCalls": [[method, args, "0"]],
+        });
+        let reply = self.post_json_url(api_url, &body)?;
+        parse_single_method_response(method, &reply)
+    }
+
+    // ── S1 bootstrap calls (each isolated; see the module-header
+    //    live-box list) ─────────────────────────────────────────────
+
+    /// ⚠ LIVE-BOX (#2): set server configuration key/value pairs.
+    /// Modeled as `Settings/set` with an `update` map keyed by setting
+    /// name; v0.16's release notes describe config-as-JMAP-objects but
+    /// the method may be `Registry/set` — this function is the single
+    /// place to fix.
+    pub fn settings_set(
+        &self,
+        api_url: &str,
+        settings: &[(String, serde_json::Value)],
+    ) -> Result<(), String> {
+        let map: serde_json::Map<String, serde_json::Value> =
+            settings.iter().cloned().collect();
+        self.jmap_call(api_url, "Settings/set", serde_json::json!({ "update": map }))
+            .map(|_| ())
+    }
+
+    /// ⚠ LIVE-BOX (#2): remove/unset configuration keys (used to tear
+    /// out default listeners: IMAP/POP3/ManageSieve/CalDAV + the :8080
+    /// setup listener).
+    pub fn settings_destroy(&self, api_url: &str, keys: &[String]) -> Result<(), String> {
+        self.jmap_call(api_url, "Settings/set", serde_json::json!({ "destroy": keys }))
+            .map(|_| ())
+    }
+
+    /// ⚠ LIVE-BOX (#3): create a principal (the least-privilege
+    /// `k2-daemon` service account). Returns the created principal id.
+    pub fn principal_create(
+        &self,
+        api_url: &str,
+        name: &str,
+        description: &str,
+    ) -> Result<String, String> {
+        let created = self.jmap_call(
+            api_url,
+            "Principal/set",
+            serde_json::json!({
+                "create": {
+                    "k2": {
+                        "type": "individual",
+                        "name": name,
+                        "description": description,
+                        // No mail delivery, no quota use — an
+                        // automation identity only.
+                        "quota": 0
+                    }
+                }
+            }),
+        )?;
+        created["created"]["k2"]["id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| {
+                format!("Principal/set create '{name}': no created id in reply")
+            })
+    }
+
+    /// ⚠ LIVE-BOX (#3): find a principal's id by name (used to address
+    /// the `admin` principal for the password rotation).
+    pub fn principal_query_id(&self, api_url: &str, name: &str) -> Result<String, String> {
+        let reply = self.jmap_call(
+            api_url,
+            "Principal/query",
+            serde_json::json!({ "filter": { "name": name } }),
+        )?;
+        reply["ids"][0]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| format!("Principal/query '{name}': no id returned"))
+    }
+
+    /// ⚠ LIVE-BOX (#3): set a principal's secret (rotate the bootstrap
+    /// admin password to the generated, vaulted value).
+    pub fn principal_update_secret(
+        &self,
+        api_url: &str,
+        principal_id: &str,
+        new_secret: &str,
+    ) -> Result<(), String> {
+        self.jmap_call(
+            api_url,
+            "Principal/set",
+            serde_json::json!({ "update": { principal_id: { "secret": new_secret } } }),
+        )
+        .map(|_| ())
+    }
+
+    /// ⚠ LIVE-BOX (#4): mint the scoped ApiKey for the service
+    /// account: Replace-mode permission list (domain/account/DKIM/queue
+    /// management only), allowedIps pinned to the loopback (pre-mortem
+    /// #13). Returns the SECRET (Stalwart shows it exactly once).
+    /// The permission NAMES are the flagged uncertainty.
+    pub fn api_key_create(&self, api_url: &str, account_id: &str) -> Result<String, String> {
+        let created = self.jmap_call(
+            api_url,
+            "ApiKey/set",
+            serde_json::json!({
+                "create": {
+                    "k": {
+                        "accountId": account_id,
+                        "description": "K2 daemon mail supervisor (least-privilege)",
+                        "permissions": {
+                            "mode": "Replace",
+                            "list": [
+                                "domain-get", "domain-set",
+                                "principal-get", "principal-set",
+                                "dkim-get", "dkim-set",
+                                "queue-get", "queue-set",
+                                "settings-get", "settings-set"
+                            ]
+                        },
+                        "allowedIps": ["127.0.0.1"]
+                    }
+                }
+            }),
+        )?;
+        created["created"]["k"]["secret"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| "ApiKey/set create: no secret in reply".to_string())
+    }
+
+    // ── Typed calls for later slices (S3/S5 stubs follow the REAL
+    //    S1 admin + S2 domain calls) ──────────────────────────────
 
     /// Compose + POST one JMAP method call against the DISCOVERED api
     /// url and return that method's response arguments. The whole
@@ -154,7 +332,7 @@ impl StalwartClient {
         args: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         let api_url = self.discover_api_url()?;
-        let resp = self.post_json_url(&api_url, "jmap api", &jmap_envelope(method, args))?;
+        let resp = self.post_json_url(&api_url, &jmap_envelope(method, args))?;
         parse_method_response(method, &resp)
     }
 
@@ -227,6 +405,191 @@ impl StalwartClient {
     pub fn queue_submit(&self, outbound_id: &str) -> Result<(), String> {
         let _ = outbound_id;
         Err(super::not_built_err("S5", "jmap queue submit"))
+    }
+}
+
+/// Pure session-document parser: extract `apiUrl` and absolutize it
+/// against `base_url` when relative. Kept free of I/O so it unit-tests
+/// against fixture JSON.
+pub fn parse_session_api_url(
+    base_url: &str,
+    session: &serde_json::Value,
+) -> Result<String, String> {
+    let api_url = session
+        .get("apiUrl")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            "JMAP session document has no usable 'apiUrl' — is this really a Stalwart \
+             /.well-known/jmap endpoint?"
+                .to_string()
+        })?;
+    if api_url.starts_with("http://") || api_url.starts_with("https://") {
+        return Ok(api_url.to_string());
+    }
+    if !api_url.starts_with('/') {
+        return Err(format!(
+            "JMAP session 'apiUrl' is neither absolute nor root-relative: '{api_url}'"
+        ));
+    }
+    Ok(format!("{}{}", base_url.trim_end_matches('/'), api_url))
+}
+
+/// Pure parser for a single-call JMAP reply: `methodResponses[0]` must
+/// echo `method` (an `"error"` name — or a `/set` reply with
+/// `notCreated`/`notUpdated`/`notDestroyed` entries — is an `Err` with
+/// the server's type/description).
+pub fn parse_single_method_response(
+    method: &str,
+    reply: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let first = reply["methodResponses"][0]
+        .as_array()
+        .ok_or_else(|| format!("{method}: reply has no methodResponses"))?;
+    let name = first.first().and_then(|v| v.as_str()).unwrap_or_default();
+    let payload = first.get(1).cloned().unwrap_or(serde_json::Value::Null);
+    if name == "error" {
+        let t = payload["type"].as_str().unwrap_or("unknown");
+        let desc = payload["description"].as_str().unwrap_or_default();
+        return Err(format!("{method}: JMAP error '{t}' {desc}").trim().to_string());
+    }
+    if name != method {
+        return Err(format!("{method}: unexpected response method '{name}'"));
+    }
+    for reject in ["notCreated", "notUpdated", "notDestroyed"] {
+        if let Some(map) = payload.get(reject).and_then(|v| v.as_object()) {
+            if !map.is_empty() {
+                let detail = serde_json::to_string(map).unwrap_or_default();
+                let excerpt: String = detail.chars().take(200).collect();
+                return Err(format!("{method}: {reject}: {excerpt}"));
+            }
+        }
+    }
+    Ok(payload)
+}
+
+// ── The supervisor's BootstrapApi implementation ────────────────────────
+
+/// Real [`crate::mail::supervisor::BootstrapApi`]: a basic-auth
+/// [`StalwartClient`] against the bootstrap-window listener, with the
+/// JMAP endpoint discovered once at `authenticate`.
+#[derive(Default)]
+pub struct StalwartBootstrap {
+    session: Option<(StalwartClient, String)>, // (client, discovered api url)
+}
+
+impl StalwartBootstrap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn session(&self) -> Result<&(StalwartClient, String), String> {
+        self.session
+            .as_ref()
+            .ok_or_else(|| "bootstrap API used before authenticate()".to_string())
+    }
+
+    fn settings(&self, settings: Vec<(String, serde_json::Value)>) -> Result<(), String> {
+        let (client, api_url) = self.session()?;
+        client.settings_set(api_url, &settings)
+    }
+}
+
+impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
+    fn authenticate(
+        &mut self,
+        base_url: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<(), String> {
+        let client = StalwartClient::new_basic(base_url, username, password);
+        let api_url = client.discover_api_url()?;
+        self.session = Some((client, api_url));
+        Ok(())
+    }
+
+    fn set_hostname(&mut self, hostname: &str) -> Result<(), String> {
+        self.settings(vec![(
+            "server.hostname".to_string(),
+            serde_json::json!(hostname),
+        )])
+    }
+
+    /// ⚠ LIVE-BOX (#5): listener configuration. Keys carried from the
+    /// documented pre-0.16 `server.listener.<id>.*` scheme; the §5.3
+    /// port plan decides the HTTPS bind; the `k2-mgmt` listener is the
+    /// PLAIN-HTTP LOOPBACK management endpoint (supervisor TLS
+    /// decision); the destroy list tears out every default listener we
+    /// must not serve (§10: IMAP/POP3/ManageSieve — CalDAV/CardDAV ride
+    /// the http listener and are disabled as features below).
+    fn configure_listeners(&mut self, port_plan: &str) -> Result<(), String> {
+        let https_bind = if port_plan == "tls-alpn" {
+            "[::]:443"
+        } else {
+            "127.0.0.1:8443"
+        };
+        let (client, api_url) = self.session()?;
+        client.settings_destroy(
+            api_url,
+            &[
+                "server.listener.imap".to_string(),
+                "server.listener.imaptls".to_string(),
+                "server.listener.pop3".to_string(),
+                "server.listener.pop3s".to_string(),
+                "server.listener.sieve".to_string(),
+            ],
+        )?;
+        let set: Vec<(String, serde_json::Value)> = vec![
+            ("server.listener.smtp.bind".into(), serde_json::json!("[::]:25")),
+            ("server.listener.smtp.protocol".into(), serde_json::json!("smtp")),
+            ("server.listener.submissions.bind".into(), serde_json::json!("[::]:465")),
+            ("server.listener.submissions.protocol".into(), serde_json::json!("smtp")),
+            ("server.listener.submissions.tls.implicit".into(), serde_json::json!(true)),
+            ("server.listener.submission.bind".into(), serde_json::json!("[::]:587")),
+            ("server.listener.submission.protocol".into(), serde_json::json!("smtp")),
+            ("server.listener.https.bind".into(), serde_json::json!(https_bind)),
+            ("server.listener.https.protocol".into(), serde_json::json!("http")),
+            ("server.listener.https.tls.implicit".into(), serde_json::json!(true)),
+            // The daemon's management path: loopback-only, plain HTTP.
+            ("server.listener.k2-mgmt.bind".into(), serde_json::json!("127.0.0.1:8180")),
+            ("server.listener.k2-mgmt.protocol".into(), serde_json::json!("http")),
+            // CalDAV/CardDAV/webmail surfaces stay off in V1 (§10).
+            ("calendar.enable".into(), serde_json::json!(false)),
+            ("contacts.enable".into(), serde_json::json!(false)),
+        ];
+        client.settings_set(api_url, &set)
+    }
+
+    /// ⚠ LIVE-BOX (#2): spam-filter enable key.
+    fn enable_spam_filter(&mut self) -> Result<(), String> {
+        self.settings(vec![(
+            "spam-filter.enable".to_string(),
+            serde_json::json!(true),
+        )])
+    }
+
+    fn create_service_account(&mut self) -> Result<String, String> {
+        let (client, api_url) = self.session()?;
+        client.principal_create(api_url, "k2-daemon", "K2 daemon mail supervisor")
+    }
+
+    fn mint_api_key(&mut self, account_id: &str) -> Result<String, String> {
+        let (client, api_url) = self.session()?;
+        client.api_key_create(api_url, account_id)
+    }
+
+    fn rotate_admin_password(&mut self, new_password: &str) -> Result<(), String> {
+        let (client, api_url) = self.session()?;
+        let admin_id = client.principal_query_id(api_url, "admin")?;
+        client.principal_update_secret(api_url, &admin_id, new_password)
+    }
+
+    /// ⚠ LIVE-BOX (#5): tear out the :8080 setup listener (pre-mortem
+    /// #13) — the LAST bootstrap API act.
+    fn disable_setup_listener(&mut self) -> Result<(), String> {
+        let (client, api_url) = self.session()?;
+        client.settings_destroy(api_url, &["server.listener.setup".to_string()])
     }
 }
 
@@ -369,33 +732,278 @@ fn parse_domain_get_zonefile(
 /// against fixture JSON (never a live fetch — house rule: no network
 /// in tests).
 #[allow(dead_code)] // first caller: S1 supervisor bootstrap (unit-tested today).
-pub fn parse_session_api_url(
-    base_url: &str,
-    session: &serde_json::Value,
-) -> Result<String, String> {
-    let api_url = session
-        .get("apiUrl")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            "JMAP session document has no usable 'apiUrl' — is this really a Stalwart \
-             /.well-known/jmap endpoint?"
-                .to_string()
-        })?;
-    if api_url.starts_with("http://") || api_url.starts_with("https://") {
-        return Ok(api_url.to_string());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// A trimmed real-shaped Stalwart JMAP session document (fixture —
+    /// no network). Stalwart serves absolute URLs here.
+    const SESSION_FIXTURE: &str = r#"{
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {
+                "maxSizeUpload": 50000000,
+                "maxConcurrentRequests": 4
+            },
+            "urn:ietf:params:jmap:mail": {}
+        },
+        "accounts": {
+            "a": { "name": "k2-daemon", "isPersonal": false, "isReadOnly": false }
+        },
+        "primaryAccounts": { "urn:ietf:params:jmap:mail": "a" },
+        "username": "k2-daemon",
+        "apiUrl": "https://127.0.0.1:8443/jmap/",
+        "downloadUrl": "https://127.0.0.1:8443/jmap/download/{accountId}/{blobId}/{name}?accept={type}",
+        "uploadUrl": "https://127.0.0.1:8443/jmap/upload/{accountId}/",
+        "eventSourceUrl": "https://127.0.0.1:8443/jmap/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+        "state": "cyrus-0;p-5;vfs-0"
+    }"#;
+
+    #[test]
+    fn session_fixture_parses_to_absolute_api_url() {
+        let session: serde_json::Value =
+            serde_json::from_str(SESSION_FIXTURE).expect("fixture is valid JSON");
+        let url = parse_session_api_url("https://127.0.0.1:8443", &session)
+            .expect("apiUrl extracted");
+        assert_eq!(url, "https://127.0.0.1:8443/jmap/");
     }
-    if !api_url.starts_with('/') {
-        return Err(format!(
-            "JMAP session 'apiUrl' is neither absolute nor root-relative: '{api_url}'"
-        ));
+
+    #[test]
+    fn relative_api_url_is_absolutized_against_base() {
+        let session = serde_json::json!({ "apiUrl": "/api/jmap/" });
+        assert_eq!(
+            parse_session_api_url("https://127.0.0.1:8443/", &session).expect("joined"),
+            "https://127.0.0.1:8443/api/jmap/"
+        );
     }
-    Ok(format!("{}{}", base_url.trim_end_matches('/'), api_url))
+
+    #[test]
+    fn missing_or_garbage_api_url_fails_loudly() {
+        for session in [
+            serde_json::json!({}),
+            serde_json::json!({ "apiUrl": "" }),
+            serde_json::json!({ "apiUrl": 42 }),
+            serde_json::json!({ "capabilities": {} }),
+        ] {
+            let err = parse_session_api_url("https://127.0.0.1:8443", &session)
+                .expect_err("must reject");
+            assert!(err.contains("apiUrl"), "{err}");
+        }
+        // Neither absolute nor root-relative → loud, named value.
+        let err = parse_session_api_url(
+            "https://127.0.0.1:8443",
+            &serde_json::json!({ "apiUrl": "jmap/" }),
+        )
+        .expect_err("must reject");
+        assert!(err.contains("jmap/"), "{err}");
+    }
+
+    /// Constructor normalizes a trailing-slash base so path joins never
+    /// double the slash; typed stubs fail with the structured error.
+    #[test]
+    fn client_construction_and_stub_errors() {
+        let c = StalwartClient::new("https://127.0.0.1:8443///", "k2-test-key");
+        assert_eq!(c.base_url, "https://127.0.0.1:8443");
+        assert!(c
+            .domain_create("acme.dev")
+            .unwrap_err()
+            .contains("not built yet — mail slice S2"));
+        assert!(c
+            .domain_delete("d1")
+            .unwrap_err()
+            .contains("not built yet — mail slice S2"));
+        assert!(c
+            .domain_dns_zonefile("d1")
+            .unwrap_err()
+            .contains("not built yet — mail slice S2"));
+        assert!(c
+            .account_create("scout", "d1")
+            .unwrap_err()
+            .contains("not built yet — mail slice S3"));
+        assert!(c
+            .account_disable("a1")
+            .unwrap_err()
+            .contains("not built yet — mail slice S3"));
+        assert!(c
+            .queue_submit("o1")
+            .unwrap_err()
+            .contains("not built yet — mail slice S5"));
+    }
+
+    #[test]
+    fn method_response_parser_handles_ok_error_and_rejections() {
+        // Success payload comes back verbatim.
+        let ok = serde_json::json!({
+            "methodResponses": [["Settings/set", { "updated": { "server.hostname": null } }, "0"]]
+        });
+        let payload = parse_single_method_response("Settings/set", &ok).expect("ok");
+        assert!(payload["updated"].is_object());
+
+        // JMAP-level error → Err with type + description.
+        let err = serde_json::json!({
+            "methodResponses": [["error", { "type": "forbidden", "description": "nope" }, "0"]]
+        });
+        let e = parse_single_method_response("Settings/set", &err).expect_err("error reply");
+        assert!(e.contains("forbidden") && e.contains("nope"), "{e}");
+
+        // A /set reply that quietly rejected the create → Err.
+        let not_created = serde_json::json!({
+            "methodResponses": [["ApiKey/set", {
+                "created": null,
+                "notCreated": { "k": { "type": "forbidden" } }
+            }, "0"]]
+        });
+        let e = parse_single_method_response("ApiKey/set", &not_created)
+            .expect_err("notCreated must be an error");
+        assert!(e.contains("notCreated"), "{e}");
+
+        // Mismatched method name → Err.
+        let wrong = serde_json::json!({ "methodResponses": [["Core/echo", {}, "0"]] });
+        let e = parse_single_method_response("Settings/set", &wrong).expect_err("wrong method");
+        assert!(e.contains("Core/echo"), "{e}");
+
+        // No methodResponses at all → Err.
+        let e = parse_single_method_response("Settings/set", &serde_json::json!({}))
+            .expect_err("empty reply");
+        assert!(e.contains("methodResponses"), "{e}");
+    }
+
+    // ── Loopback mock-server tests (ephemeral port; the one allowed
+    //    form of network in tests) ───────────────────────────────────
+
+    /// Serve exactly `responses.len()` HTTP exchanges on an ephemeral
+    /// loopback port; captured requests come back through the handle.
+    fn serve(
+        responses: Vec<&'static str>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral bind");
+        let addr = listener.local_addr().expect("addr");
+        let handle = std::thread::spawn(move || {
+            let mut captured = Vec::new();
+            for body in responses {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut buf = vec![0u8; 65536];
+                let mut req = String::new();
+                loop {
+                    let n = stream.read(&mut buf).expect("read");
+                    req.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    // Complete when headers ended and any content-length
+                    // body has arrived.
+                    if let Some(head_end) = req.find("\r\n\r\n") {
+                        let clen = req
+                            .lines()
+                            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                            .and_then(|l| l.split(':').nth(1))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if req.len() >= head_end + 4 + clen {
+                            break;
+                        }
+                    }
+                }
+                captured.push(req);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(resp.as_bytes()).expect("write");
+            }
+            captured
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[test]
+    fn settings_set_posts_a_jmap_envelope_with_basic_auth() {
+        let (base, server) = serve(vec![
+            r#"{"methodResponses":[["Settings/set",{"updated":{}},"0"]]}"#,
+        ]);
+        let client = StalwartClient::new_basic(&base, "admin", "one-time-pw");
+        let api_url = format!("{base}/jmap");
+        client
+            .settings_set(&api_url, &[("server.hostname".into(), serde_json::json!("mail.acme.dev"))])
+            .expect("settings_set ok");
+        let reqs = server.join().expect("server thread");
+        let req = &reqs[0];
+        assert!(req.starts_with("POST /jmap HTTP/1.1"), "{req}");
+        // Basic base64("admin:one-time-pw").
+        assert!(req.contains("authorization: Basic YWRtaW46b25lLXRpbWUtcHc=")
+            || req.contains("Authorization: Basic YWRtaW46b25lLXRpbWUtcHc="), "{req}");
+        let body = &req[req.find("\r\n\r\n").expect("body") + 4..];
+        let v: serde_json::Value = serde_json::from_str(body).expect("json body");
+        assert_eq!(v["using"][0], "urn:ietf:params:jmap:core");
+        assert_eq!(v["methodCalls"][0][0], "Settings/set");
+        assert_eq!(
+            v["methodCalls"][0][1]["update"]["server.hostname"],
+            "mail.acme.dev"
+        );
+    }
+
+    #[test]
+    fn api_key_create_extracts_the_once_shown_secret_and_pins_loopback() {
+        let (base, server) = serve(vec![
+            r#"{"methodResponses":[["ApiKey/set",{"created":{"k":{"id":"key1","secret":"s3cr3t-once"}}},"0"]]}"#,
+        ]);
+        let client = StalwartClient::new_basic(&base, "admin", "pw");
+        let api_url = format!("{base}/jmap");
+        let secret = client.api_key_create(&api_url, "principal-k2").expect("created");
+        assert_eq!(secret, "s3cr3t-once");
+        let reqs = server.join().expect("server thread");
+        let body = &reqs[0][reqs[0].find("\r\n\r\n").expect("body") + 4..];
+        let v: serde_json::Value = serde_json::from_str(body).expect("json");
+        let create = &v["methodCalls"][0][1]["create"]["k"];
+        assert_eq!(create["accountId"], "principal-k2");
+        assert_eq!(create["allowedIps"][0], "127.0.0.1", "pre-mortem #13: loopback-pinned");
+        assert_eq!(create["permissions"]["mode"], "Replace", "least-privilege, never Inherit");
+    }
+
+    #[test]
+    fn bootstrap_discovers_api_url_then_routes_calls_through_it() {
+        // Exchange 1: /.well-known/jmap discovery (relative apiUrl).
+        // Exchange 2: the Settings/set ride the discovered path.
+        let (base, server) = serve(vec![
+            r#"{"apiUrl":"/api/jmap/"}"#,
+            r#"{"methodResponses":[["Settings/set",{"updated":{}},"0"]]}"#,
+        ]);
+        use crate::mail::supervisor::BootstrapApi;
+        let mut api = StalwartBootstrap::new();
+        api.authenticate(&base, "admin", "pw").expect("authenticate");
+        api.set_hostname("mail.acme.dev").expect("set_hostname");
+        let reqs = server.join().expect("server thread");
+        assert!(reqs[0].starts_with("GET /.well-known/jmap HTTP/1.1"), "{}", reqs[0]);
+        assert!(reqs[1].starts_with("POST /api/jmap/ HTTP/1.1"), "discovered path used: {}", reqs[1]);
+        // Using before authenticate fails loudly.
+        let mut cold = StalwartBootstrap::new();
+        let err = cold.set_hostname("x").expect_err("must fail");
+        assert!(err.contains("before authenticate"), "{err}");
+    }
+
+    #[test]
+    fn http_error_replies_surface_status_without_credentials() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut buf = [0u8; 8192];
+            let _ = stream.read(&mut buf);
+            let body = r#"{"error":"unauthorized"}"#;
+            let resp = format!(
+                "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(resp.as_bytes()).expect("write");
+        });
+        let client = StalwartClient::new(format!("http://{addr}"), "bad-key");
+        let err = client.get_json("/.well-known/jmap").expect_err("401 is an error");
+        server.join().expect("server thread");
+        assert!(err.contains("401"), "{err}");
+        assert!(!err.contains("bad-key"), "credential must never appear in errors: {err}");
+    }
 }
 
 #[cfg(test)]
-mod tests {
+mod s2_domain_tests {
     use super::*;
 
     /// A trimmed real-shaped Stalwart JMAP session document (fixture —

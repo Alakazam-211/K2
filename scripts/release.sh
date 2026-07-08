@@ -568,7 +568,12 @@ else
     git commit -m "chore(release): ${TAG}"
     echo "  Committed version bump."
 fi
-git push origin HEAD
+# HEAD:main, not bare HEAD — release worktrees run DETACHED (worktrees
+# can't check out a branch already held by the main checkout), and a
+# bare `git push origin HEAD` fails there ("not a full refname") AFTER
+# the build/sign/notarize already succeeded (v0.40.39 hit this; the
+# tail had to be run by hand).
+git push origin HEAD:main
 git tag -fa "$TAG" -m "K2 ${TAG}"
 git push origin "refs/tags/${TAG}" --force
 echo "  Pushed main + tag ${TAG} at $(git rev-parse --short HEAD)."

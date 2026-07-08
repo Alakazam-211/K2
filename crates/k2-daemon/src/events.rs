@@ -127,6 +127,21 @@ impl AgentHookEventSink for DaemonBroadcastSink {
                     crate::session_events::SessionEvent::ProjectGroupsChanged { reason },
                 );
             }
+            // 0.40.38 — project SETTINGS mutations (mode/worktree/states/
+            // heartbeat-schedule/lifecycle) fire SyncProjects on the
+            // loopback bus only; mirror as the app-level ProjectsChanged
+            // refetch signal so REMOTE clients see settings changes live.
+            HookEvent::SyncProjects => {
+                let _ = crate::session_events::emit(
+                    crate::session_events::SessionEvent::ProjectsChanged {},
+                );
+            }
+            // 0.40.38 — chat session rename/pin/refresh, same story.
+            HookEvent::SyncChatHistory | HookEvent::ChatRefreshed => {
+                let _ = crate::session_events::emit(
+                    crate::session_events::SessionEvent::ChatHistoryChanged {},
+                );
+            }
             HookEvent::FeedbackCreated
             | HookEvent::FeedbackAnswered
             | HookEvent::FeedbackStatusChanged

@@ -189,6 +189,7 @@ pub fn handle_set_tab_title(body: &[u8]) -> CliResponse {
                     project: project_id.clone(),
                     tab_id: b.tab_id.clone(),
                     title: b.title.clone(),
+                    locked: b.locked,
                 },
             );
             CliResponse::ok_json(r#"{"success":true}"#.to_string())
@@ -1458,10 +1459,12 @@ mod set_tab_title_tests {
                     project,
                     tab_id,
                     title,
+                    locked,
                 }) if tab_id == "tab-xyz" => {
                     assert_eq!(workspace_path, path);
                     assert_eq!(project, project_id);
                     assert_eq!(title, "Hello Tab");
+                    assert!(!locked, "body omitted locked → defaults false");
                     break;
                 }
                 Ok(_) => continue,           // contamination from another test

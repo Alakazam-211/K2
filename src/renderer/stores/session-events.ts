@@ -254,6 +254,13 @@ export interface FeedbackChangedEvent {
   reason: string
 }
 
+/** 0.40.38 remote live-update — chat-history list mutated (session
+ *  rename / pin / refresh). Payload-free refetch signal (ProjectsChanged
+ *  convention). */
+export interface ChatHistoryChangedEvent {
+  kind: 'chat_history_changed'
+}
+
 export type SessionEventMessage =
   | SessionAddedEvent
   | SessionRemovedEvent
@@ -271,6 +278,7 @@ export type SessionEventMessage =
   | OpenUrlEvent
   | ProjectGroupsChangedEvent
   | FeedbackChangedEvent
+  | ChatHistoryChangedEvent
 
 export interface SessionEventHandlers {
   onAdded?: (event: SessionAddedEvent) => void
@@ -412,6 +420,7 @@ export function subscribeToWorkspaceSessionEvents(
         case 'projects_changed':
         case 'project_groups_changed':
         case 'feedback_changed':
+        case 'chat_history_changed':
           // App-level concerns (#672 / presence S2 / browser-pane 0.40.34
           // / remote live-update fix) — the per-workspace subscriber
           // ignores them; `subscribeToActiveState` consumes them. Swallow
@@ -579,6 +588,7 @@ type OpenUrlHandler = (url: string, source: OpenUrlEvent['source']) => void
 // idiom) — consumers never need the `kind` discriminant.
 type ProjectGroupsChangedHandler = (reason: string) => void
 type FeedbackChangedHandler = (reason: string) => void
+type ChatHistoryChangedHandler = () => void
 
 const _llmStatusHandlers = new Set<LlmStatusHandler>()
 const _projectsChangedHandlers = new Set<ProjectsChangedHandler>()
@@ -591,6 +601,7 @@ const _presenceChangedHandlers = new Set<PresenceChangedHandler>()
 const _openUrlHandlers = new Set<OpenUrlHandler>()
 const _projectGroupsChangedHandlers = new Set<ProjectGroupsChangedHandler>()
 const _feedbackChangedHandlers = new Set<FeedbackChangedHandler>()
+const _chatHistoryChangedHandlers = new Set<ChatHistoryChangedHandler>()
 
 /** Subscribe to APP-LEVEL `projects_changed` (0.39.45, GH #18/#26).
  *  Returns an unsubscribe fn. */
@@ -679,6 +690,15 @@ export function onFeedbackChanged(fn: FeedbackChangedHandler): UnsubscribeFn {
   return () => void _feedbackChangedHandlers.delete(fn)
 }
 
+/** 0.40.38 remote live-update — subscribe to APP-LEVEL
+ *  `chat_history_changed` (chat session renamed / pinned / refreshed on
+ *  the host). Refetch signal; module-level registry survives host-switch
+ *  WS teardown/reopen. */
+export function onChatHistoryChanged(fn: ChatHistoryChangedHandler): UnsubscribeFn {
+  _chatHistoryChangedHandlers.add(fn)
+  return () => void _chatHistoryChangedHandlers.delete(fn)
+}
+
 function dispatchAppEvent(msg: SessionEventMessage): void {
   switch (msg.kind) {
     case 'llm_status_changed':
@@ -710,6 +730,9 @@ function dispatchAppEvent(msg: SessionEventMessage): void {
       break
     case 'feedback_changed':
       for (const h of _feedbackChangedHandlers) h(msg.reason)
+      break
+    case 'chat_history_changed':
+      for (const h of _chatHistoryChangedHandlers) h()
       break
     default:
       break

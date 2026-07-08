@@ -562,6 +562,11 @@ export interface TerminalItemData {
   cwd: string
   command?: string
   args?: string[]
+  /** Display-only echo of the launching command for the tab agent icon
+   *  (0.40.38). Survives restores where `command` is deliberately
+   *  dropped (v2 daemon-owned) or the daemon row is gone (dead PTY /
+   *  remote re-login). Never sent to spawn. */
+  commandHint?: string
   sessionId?: string  // CLI tool session ID for resume on restart
   /** performance.now() timestamp captured at the moment the user
    *  pressed Cmd+T / Cmd+Shift+T / Cmd+D to create this terminal.
@@ -747,6 +752,11 @@ export interface SerializedTerminalItemV2 {
    *  only and re-derived from the next spawn response. Optional, so
    *  older layouts missing it deserialize to undefined (default-OFF). */
   sandbox?: boolean
+  /** Display-only hint of the launching command (0.40.38) — drives the
+   *  tab agent icon across restores (incl. dead-PTY and remote
+   *  re-login). NEVER restored into `command` itself: `command` in the
+   *  spawn body would re-launch the agent on a cold restore. */
+  commandHint?: string
 }
 
 /** Legacy v1 terminal shape — read-only, never emitted by 0.38.0+.
@@ -1263,6 +1273,9 @@ function serializeTab(tab: Tab): SerializedTab {
           // reattach re-asks). The resolved `sandboxBackend` stays
           // runtime-only and is re-derived from the spawn response.
           sandbox: d.sandbox,
+          // Icon continuity across restores — live command wins, else
+          // carry the prior hint forward.
+          commandHint: d.command ?? d.commandHint,
         }
         return v2
       } else if (item.type === 'agent') {
@@ -3466,6 +3479,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                 // D9 — restore the sandbox request intent (default-OFF
                 // for legacy layouts where the field is absent).
                 sandbox: t.sandbox,
+                // Icon continuity (0.40.38): display-only.
+                commandHint: t.commandHint,
               },
             }
           } else if (si.type === 'agent') {
@@ -3548,7 +3563,12 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
       tabCounter++
       return {
-        id: crypto.randomUUID(),
+        // Reuse the daemon-canonical serialized id (fall back for legacy
+        // layouts saved before ids were serialized). Re-minting here broke
+        // cross-client tab identity: TabTitleChanged events + tab_titles
+        // snapshots key on the RENAMER's id, so every other client
+        // silently no-op'd (the remote-rename-invisible bug, 2026-07-08).
+        id: serializedTab.id ?? crypto.randomUUID(),
         title: serializedTab.title,
         mosaicTree: remappedTree,
         paneGroups,
@@ -3610,6 +3630,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                       // D9 — restore the sandbox request intent
                       // (default-OFF for legacy layouts).
                       sandbox: t.sandbox,
+                      // Icon continuity (0.40.38): display-only.
+                      commandHint: t.commandHint,
                     },
                   }
                 } else if (si.type === 'agent') {
@@ -3648,10 +3670,13 @@ export const useTabsStore = create<TabsState>((set, get) => ({
           }
           tabCounter++
           return {
-            id: crypto.randomUUID(),
+            // Same id-reuse rule as the group-0 restore above — re-minting
+            // broke cross-client tab identity for renames.
+            id: serializedTab.id ?? crypto.randomUUID(),
             title: serializedTab.title,
             mosaicTree: remapMosaicIds(serializedTab.mosaicTree, idMap),
             paneGroups,
+            ...(serializedTab.locked ? { locked: true } : {}),
           }
         })
         // per-client-view-state.md (Phase 1) — split-group selection is also
@@ -4109,15 +4134,18 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       if (get().activeWorkspaceKey !== key || get().tabs.length > 0) return
 
       try {
-        const json = await invoke<string>('k2so_sessions_list_for_workspace', { path: cwd })
-        const sessions: Array<{
-          sessionId: string
-          agentName: string
-          command: string | null
-          args: string[]
-          cwd: string
-          isV2: boolean
-        }> = JSON.parse(json)
+        // Host-aware (0.40.38) — same fix as fetchDaemonSessions: the
+        // Tauri invoke only ever asked the LOCAL daemon.
+        const sessions = await daemonCliGet<
+          Array<{
+            sessionId: string
+            agentName: string
+            command: string | null
+            args: string[]
+            cwd: string
+            isV2: boolean
+          }>
+        >('sessions/list-for-workspace', { path: cwd })
 
         const adoptable = sessions.filter(
           (s) => s.isV2 && typeof s.agentName === 'string' && s.agentName.startsWith('tab-'),
@@ -4553,8 +4581,14 @@ interface DaemonSessionRow {
  *  authoritative. */
 async function fetchDaemonSessions(projectPath: string): Promise<DaemonSessionRow[] | null> {
   try {
-    const json = await invoke<string>('k2so_sessions_list_for_workspace', { path: projectPath })
-    return JSON.parse(json) as DaemonSessionRow[]
+    // Host-aware (0.40.38): the old `k2so_sessions_list_for_workspace`
+    // Tauri invoke is hard-wired to the LOCAL daemon, so on a remote
+    // host reconcile asked the wrong machine, got nothing, and never
+    // refilled item `command` — which is what drives tab agent icons
+    // (the icons-vanish-on-relogin bug).
+    return await daemonCliGet<DaemonSessionRow[]>('sessions/list-for-workspace', {
+      path: projectPath,
+    })
   } catch (err) {
     console.warn('[tabs] daemon list_sessions failed for', projectPath, err)
     return null
@@ -5242,7 +5276,18 @@ function tryReorderTabsInPlace(key: string, layout: SerializedLayout): boolean {
     const live = bySignature.get(sig)
     if (!live || consumed.has(live)) return false
     consumed.add(live)
-    reordered.push(live)
+    // A title-only change ships as the same tab SET (signatures match),
+    // so this fast path used to reuse the stale live Tab and silently
+    // drop a peer's rename until a full rebuild. Adopt the incoming
+    // title + locked while preserving identity/paneGroups (no remount).
+    if (
+      st.title !== live.title ||
+      (st.locked ?? false) !== (live.locked ?? false)
+    ) {
+      reordered.push({ ...live, title: st.title, locked: st.locked })
+    } else {
+      reordered.push(live)
+    }
   }
   if (reordered.length !== liveTabs.length) return false
 

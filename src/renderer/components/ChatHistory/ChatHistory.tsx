@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { onChatHistoryChanged } from '@/stores/session-events'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
@@ -305,6 +306,17 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   useEffect(() => {
     fetchSessions(true)
     fetchCustomNames()
+  }, [fetchSessions, fetchCustomNames])
+
+  // 0.40.38 remote live-update — the host emits chat_history_changed on
+  // session rename/pin/refresh; refetch immediately instead of waiting
+  // for the 30s poll (which was the only path for REMOTE clients — the
+  // legacy /events bus is loopback-only and never reached them).
+  useEffect(() => {
+    return onChatHistoryChanged(() => {
+      fetchSessions(false)
+      fetchCustomNames()
+    })
   }, [fetchSessions, fetchCustomNames])
 
   // Poll every 30 seconds for new sessions

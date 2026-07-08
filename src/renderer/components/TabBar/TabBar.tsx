@@ -31,7 +31,6 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   const splitTerminalArea = useTabsStore((s) => s.splitTerminalArea)
   const unsplitTerminalArea = useTabsStore((s) => s.unsplitTerminalArea)
   const reorderTabs = useTabsStore((s) => s.reorderTabs)
-  const agentMap = useActiveAgentsStore((s) => s.agents)
   const paneStatusMap = useActiveAgentsStore((s) => s.paneStatuses)
   // This TabBar is scoped to one workspace (`cwd`); resolve its projectId so
   // the pinned Chat tab can read its daemon-backed chat pane's working status.
@@ -464,17 +463,20 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         {tabs.map((tab, index) => {
           const isActive = tab.id === activeTabId
           const isDirty = tab.isDirty ?? false
-          const agentsInTab = Array.from(agentMap.values()).filter(a => a.tabId === tab.id)
-          const hasAgent = agentsInTab.length > 0
-          const hasActiveAgent = agentsInTab.some(a => a.status === 'active')
-          // Also check hook-based pane statuses (more reliable than polling)
+          // Braille spinner reads ONLY the canonical activity store
+          // (paneStatuses — snapshot-driven detection + title/bell
+          // heuristics + daemon lifecycle broadcasts), the same source
+          // the nav Active bar and sidebar use. The legacy 5s
+          // output-recency `agents` map used to OR in here, lighting
+          // the spinner when the Active bar showed idle (and vice
+          // versa). The close-confirmation dialog reads agents on demand
+          // via getState().getAgentsInTab — no subscription needed here.
           const terminalIds = Array.from(tab.paneGroups.values())
             .flatMap(pg => pg.items.filter(i => i.type === 'terminal').map(i => (i.data as TerminalItemData).terminalId))
-          const hasWorkingHook = terminalIds.some(id => {
+          const isAgentActive = terminalIds.some(id => {
             const s = paneStatusMap.get(id)
             return s === 'working' || s === 'permission'
           })
-          const isAgentActive = hasActiveAgent || hasWorkingHook
           const isDragged = reorderDragIndex === index
           const showDropBefore = reorderDropIndex === index
           const showDropAfter = reorderDropIndex === tabs.length && index === tabs.length - 1
@@ -488,7 +490,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           for (const [, pg] of tab.paneGroups) {
             for (const item of pg.items) {
               if (item.type === 'terminal') {
-                const cmd = (item.data as TerminalItemData).command
+                const d = item.data as TerminalItemData
+                // commandHint = serialized display-only echo (0.40.38) —
+                // keeps the agent icon across restores where live
+                // `command` is dropped (dead PTY / remote re-login).
+                const cmd = d.command ?? d.commandHint
                 if (cmd) { cliAgent = cmd; break }
               }
               if (item.type === 'agent') {
@@ -679,8 +685,6 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   icon = <AgentIcon agent={cliAgent} size={12} />
                 }
 
-                // Activity state
-                const isActive = hasAgent && hasActiveAgent
 
                 if (icon) {
                   return (

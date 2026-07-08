@@ -253,7 +253,11 @@ pub enum SessionEvent {
     /// up in window B + the mobile companion.
     ///
     /// Wire: `{ "kind": "tab_title_changed", "workspacePath": string,
-    /// "project": string, "tabId": string, "title": string }`.
+    /// "project": string, "tabId": string, "title": string,
+    /// "locked": bool }`. `locked` distinguishes a USER rename (sticky —
+    /// receivers must not let PTY/OSC titles clobber it) from an auto
+    /// title; it was missing pre-0.40.38, so remote receivers applied
+    /// renames unlocked and the next PTY title overwrote them.
     /// `workspacePath` is the project path used by the prefix filter;
     /// `project` is the same value echoed under the contract name the
     /// route request uses (kept distinct so the filter field can't
@@ -265,6 +269,7 @@ pub enum SessionEvent {
         #[serde(rename = "tabId")]
         tab_id: String,
         title: String,
+        locked: bool,
     },
 
     /// #677.3 — workspace tab-order persistence advanced. WORKSPACE-
@@ -319,6 +324,14 @@ pub enum SessionEvent {
     /// free — consumers re-fetch the canonical list rather than
     /// patching from a diff.
     ProjectsChanged {},
+
+    /// 0.40.38 — chat-history list mutated (session rename/pin/refresh).
+    /// APP-LEVEL refetch signal (no payload — ProjectsChanged convention).
+    /// Mirrored from HookEvent::SyncChatHistory / ChatRefreshed in
+    /// events.rs so remote clients see chat-list changes live (they
+    /// previously rode only the loopback /events bus).
+    /// Wire: `{ "kind": "chat_history_changed" }`.
+    ChatHistoryChanged {},
 
     /// S1 (presence/multiplayer arc) — the connected-users roster
     /// changed (a `/cli/sessions/events` socket registered or
@@ -636,13 +649,15 @@ mod tests {
             project: "proj-uuid".into(),
             tab_id: "tab-7".into(),
             title: "My Tab".into(),
+            locked: true,
         });
         assert_eq!(json["kind"], "tab_title_changed");
         assert_eq!(json["workspacePath"], "/x/foo");
         assert_eq!(json["project"], "proj-uuid");
         assert_eq!(json["tabId"], "tab-7");
         assert_eq!(json["title"], "My Tab");
-        assert_keys(&json, &["kind", "workspacePath", "project", "tabId", "title"]);
+        assert_eq!(json["locked"], true);
+        assert_keys(&json, &["kind", "workspacePath", "project", "tabId", "title", "locked"]);
     }
 
     #[test]

@@ -321,6 +321,8 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         // no single workspace to scope to (the new project isn't in
         // any subscriber's `?path=` yet, by definition).
         SessionEvent::ProjectsChanged {} => return true,
+        // 0.40.38 — chat-history refetch signal: app-level, all subscribers.
+        SessionEvent::ChatHistoryChanged {} => return true,
 
         // S1 presence — APP-LEVEL (the ActiveChanged convention): the
         // connected-users roster is daemon-global truth, forwarded to
@@ -493,6 +495,7 @@ mod tests {
             project: "p".into(),
             tab_id: "t".into(),
             title: "T".into(),
+            locked: false,
         };
         let order = SessionEvent::TabOrderChanged {
             workspace_path: "/x/foo".into(),

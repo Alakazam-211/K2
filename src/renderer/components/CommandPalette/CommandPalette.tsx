@@ -3,6 +3,7 @@ import { useCommandPaletteStore } from '../../stores/command-palette'
 import { useProjectsStore } from '../../stores/projects'
 import { useFocusGroupsStore } from '../../stores/focus-groups'
 import { useSidebarStore } from '../../stores/sidebar'
+import { useTabsStore } from '../../stores/tabs'
 import ProjectAvatar from '../Sidebar/ProjectAvatar'
 
 interface FocusGroupResult {
@@ -23,7 +24,33 @@ interface ProjectResult {
   iconUrl?: string | null
 }
 
-type Result = FocusGroupResult | ProjectResult
+/** Browser-pane arc — the ONLY manual way to mint a browser tab (every
+ *  other path is an intercepted `open_url`). Typing/pasting a URL or a
+ *  bare domain into the palette surfaces this result; Enter opens it in
+ *  a new embedded browser tab. */
+interface UrlResult {
+  type: 'url'
+  url: string
+}
+
+type Result = FocusGroupResult | ProjectResult | UrlResult
+
+/** Normalize a palette query into an openable https URL, or null when
+ *  it doesn't look like one. Accepts explicit http(s):// URLs and bare
+ *  domains with at least one dot ("google.com", "docs.k2.dev/path") —
+ *  the latter get https:// prefixed. Deliberately conservative: a
+ *  workspace named "my.project" still matches the project list, and
+ *  both results simply appear. */
+export function queryAsUrl(raw: string): string | null {
+  const q = raw.trim()
+  if (!q || /\s/.test(q)) return null
+  if (/^https?:\/\/\S+$/i.test(q)) return q
+  // Bare domain: label(.label)+ with an alphabetic TLD, optional /path.
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}(:\d{1,5})?(\/\S*)?$/i.test(q)) {
+    return `https://${q}`
+  }
+  return null
+}
 
 export default function CommandPalette(): React.JSX.Element | null {
   const isOpen = useCommandPaletteStore((s) => s.isOpen)
@@ -85,6 +112,11 @@ export default function CommandPalette(): React.JSX.Element | null {
     const q = query.trim()
     const items: Result[] = []
 
+    // URL-shaped query → "open in browser tab" result FIRST (Enter with
+    // no arrowing opens it). Workspace/group matches still list below.
+    const url = queryAsUrl(q)
+    if (url) items.push({ type: 'url', url })
+
     // Focus groups (only if enabled)
     if (focusGroupsEnabled) {
       const matchingGroups = focusGroups.filter(
@@ -129,6 +161,11 @@ export default function CommandPalette(): React.JSX.Element | null {
   // Select a result
   const selectResult = useCallback(
     (result: Result) => {
+      if (result.type === 'url') {
+        useTabsStore.getState().openUrlInNewTab(result.url)
+        close()
+        return
+      }
       if (result.type === 'focus-group') {
         // autoActivate: false — we pick + activate the first project
         // ourselves below; the store's nested activation would switch
@@ -206,11 +243,13 @@ export default function CommandPalette(): React.JSX.Element | null {
   if (!isOpen) return null
 
   // Split results into sections for rendering
+  const urlResults = results.filter((r): r is UrlResult => r.type === 'url')
   const focusGroupResults = results.filter((r): r is FocusGroupResult => r.type === 'focus-group')
   const projectResults = results.filter((r): r is ProjectResult => r.type === 'project')
 
-  // Calculate global index offset for project section
-  const projectIndexOffset = focusGroupResults.length
+  // Global index offsets per section (results order: url, groups, projects)
+  const focusGroupIndexOffset = urlResults.length
+  const projectIndexOffset = urlResults.length + focusGroupResults.length
 
   return (
     <div
@@ -248,7 +287,7 @@ export default function CommandPalette(): React.JSX.Element | null {
               setQuery(e.target.value)
               setSelectedIndex(0)
             }}
-            placeholder="Search workspaces and focus groups..."
+            placeholder="Search workspaces, or type a URL to open a browser tab..."
             spellCheck={false}
             autoComplete="off"
             className="flex-1 bg-transparent text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none"
@@ -270,6 +309,49 @@ export default function CommandPalette(): React.JSX.Element | null {
             </div>
           )}
 
+          {/* Browser section — URL-shaped query */}
+          {urlResults.map((result, i) => {
+            const isSelected = i === selectedIndex
+            return (
+              <div key={`url-${result.url}`}>
+                <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                  Browser
+                </div>
+                <div
+                  className="flex items-center gap-3 px-4 py-2 cursor-pointer"
+                  style={{
+                    background: isSelected ? 'var(--color-accent)' : 'transparent',
+                    color: isSelected ? '#fff' : 'var(--color-text-primary)'
+                  }}
+                  onClick={() => selectResult(result)}
+                  onMouseEnter={() => setSelectedIndex(i)}
+                >
+                  <div
+                    className="w-6 h-6 flex items-center justify-center flex-shrink-0 border border-[var(--color-border)]"
+                    style={{ background: 'var(--color-bg)' }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                      <path
+                        d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm5.5 7a5.5 5.5 0 0 1-.7 2.68c-.44-.34-1.06-.62-1.83-.83.11-.59.17-1.21.17-1.85s-.06-1.26-.17-1.85c.77-.21 1.39-.49 1.83-.83.45.8.7 1.71.7 2.68ZM8 13.5c-.51 0-1.2-.94-1.55-2.55.5-.06 1.02-.1 1.55-.1s1.05.04 1.55.1C9.2 12.56 8.51 13.5 8 13.5Zm0-4c-.62 0-1.22.05-1.79.13A9.4 9.4 0 0 1 6.1 8c0-.57.04-1.12.11-1.63.57.08 1.17.13 1.79.13s1.22-.05 1.79-.13c.07.51.11 1.06.11 1.63 0 .57-.04 1.12-.11 1.63A12.7 12.7 0 0 0 8 9.5Zm0-7c.51 0 1.2.94 1.55 2.55-.5.06-1.02.1-1.55.1s-1.05-.04-1.55-.1C6.8 3.44 7.49 2.5 8 2.5Zm-3.13 1.5c-.2.7-.32 1.48-.37 2.3-.6-.17-1.06-.38-1.36-.6A5.53 5.53 0 0 1 4.87 4Zm-2.37 4c0-.97.25-1.88.7-2.68.44.34 1.06.62 1.83.83A11.6 11.6 0 0 0 4.86 8c0 .64.06 1.26.17 1.85-.77.21-1.39.49-1.83.83A5.5 5.5 0 0 1 2.5 8Zm2.37 4a5.53 5.53 0 0 1-1.73-1.7c.3-.22.76-.43 1.36-.6.05.82.17 1.6.37 2.3Zm6.26 0c.2-.7.32-1.48.37-2.3.6.17 1.06.38 1.36.6a5.53 5.53 0 0 1-1.73 1.7Zm.37-6.7a13.3 13.3 0 0 0-.37-2.3c.73.4 1.33.99 1.73 1.7-.3.22-.76.43-1.36.6Z"
+                        fill="currentColor"
+                        opacity="0.7"
+                      />
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs truncate block">Open in browser tab</span>
+                    <span
+                      className="text-[10px] truncate block"
+                      style={{ color: isSelected ? 'rgba(255,255,255,0.5)' : 'var(--color-text-muted)' }}
+                    >
+                      {result.url}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+
           {/* Focus Groups section */}
           {focusGroupResults.length > 0 && (
             <>
@@ -277,7 +359,7 @@ export default function CommandPalette(): React.JSX.Element | null {
                 Focus Groups
               </div>
               {focusGroupResults.map((result, i) => {
-                const globalIndex = i
+                const globalIndex = focusGroupIndexOffset + i
                 const isSelected = globalIndex === selectedIndex
                 return (
                   <div

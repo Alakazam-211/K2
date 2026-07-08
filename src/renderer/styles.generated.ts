@@ -37,6 +37,71 @@ export const DEFAULT_STYLE_ID = "square"
 
 export const STYLES: readonly StyleMeta[] = [
   {
+    "id": "bezel",
+    "name": "Bezel",
+    "author": "Alakazam Labs",
+    "description": "Experimental preview — layered-ring cards on warm graphite: hairline, bright gap, outer line. Tactile keycap controls, zite-gold accent.",
+    "defaultPalette": "graphite",
+    "defaultPalettes": {
+      "dark": "graphite"
+    },
+    "capabilities": {
+      "gaps": false,
+      "backdrop": false,
+      "schemes": [
+        "dark"
+      ]
+    },
+    "gapPresets": [],
+    "palettes": [
+      {
+        "id": "graphite",
+        "name": "Graphite",
+        "schemes": [
+          "dark"
+        ],
+        "swatch": {
+          "bg": "#100f0e",
+          "surface": "#1b1a18",
+          "elevated": "#252320",
+          "accent": "#ffc700",
+          "textPrimary": "#eae6de",
+          "border": "rgba(255, 255, 255, 0.07)"
+        },
+        "terminal": {
+          "foreground": 15065560,
+          "background": 1052430,
+          "palette": [
+            1512980,
+            15619927,
+            5226351,
+            15054908,
+            7317464,
+            12618436,
+            6078648,
+            13222580,
+            7301471,
+            15959429,
+            8049812,
+            15649124,
+            9683176,
+            14002392,
+            8705485,
+            16052455
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 16762624
+          },
+          "selection": {
+            "text": null,
+            "background": 3815215
+          }
+        }
+      }
+    ]
+  },
+  {
     "id": "glass",
     "name": "Liquid Glass",
     "author": "Alakazam Labs",

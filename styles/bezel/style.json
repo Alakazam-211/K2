@@ -1,0 +1,18 @@
+{
+  "$schema": "../style.schema.json#/$defs/manifest",
+  "id": "bezel",
+  "name": "Bezel",
+  "author": "Alakazam Labs",
+  "version": "0.1.0",
+  "schemaVersion": 1,
+  "description": "Experimental preview — layered-ring cards on warm graphite: hairline, bright gap, outer line. Tactile keycap controls, zite-gold accent.",
+  "defaultPalette": "graphite",
+  "defaultPalettes": {
+    "dark": "graphite"
+  },
+  "capabilities": {
+    "gaps": false,
+    "backdrop": false,
+    "schemes": ["dark"]
+  }
+}

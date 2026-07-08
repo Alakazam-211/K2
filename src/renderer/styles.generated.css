@@ -105,6 +105,111 @@
   --term-ansi-15: #eeeeec;
 }
 
+/* ── Style: Bezel (bezel) v0.1.0 ── */
+[data-style="bezel"] {
+  --radius-box: 12px;
+  --radius-field: 8px;
+  --radius-selector: 6px;
+  --gap-pane: 8px;
+  --gap-tile: 8px;
+  --gap-section: 10px;
+  --inset-window: 10px;
+  --divider-width: 16px;
+  --divider-color: transparent;
+  --ring-surface: 0 -1px 0 0 rgba(255, 255, 255, 0.06), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.32), 0 0 0 3px var(--color-bg-canvas), 0 0 0 4px rgba(255, 255, 255, 0.08);
+  --ring-field: inset 0 1px 0 rgba(255, 255, 255, 0.10), inset 0 -2px 0 rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(0, 0, 0, 0.45);
+  --ring-focus: 0 0 0 1px var(--color-bg-canvas), 0 0 0 3px var(--color-accent);
+  --shadow-1: 0 1px 1px -0.5px rgba(0, 0, 0, 0.25);
+  --shadow-2: 0 3px 3px -1.5px rgba(0, 0, 0, 0.22), 0 1px 1px -0.5px rgba(0, 0, 0, 0.25);
+  --shadow-3: 0 6px 6px -3px rgba(0, 0, 0, 0.22), 0 3px 3px -1.5px rgba(0, 0, 0, 0.22), 0 1px 1px -0.5px rgba(0, 0, 0, 0.25);
+  --shadow-4: 0 12px 12px -6px rgba(0, 0, 0, 0.22), 0 6px 6px -3px rgba(0, 0, 0, 0.22), 0 3px 3px -1.5px rgba(0, 0, 0, 0.22), 0 1px 1px -0.5px rgba(0, 0, 0, 0.25);
+  --shadow-5: 0 24px 24px -12px rgba(0, 0, 0, 0.28), 0 12px 12px -6px rgba(0, 0, 0, 0.22), 0 6px 6px -3px rgba(0, 0, 0, 0.22), 0 3px 3px -1.5px rgba(0, 0, 0, 0.25);
+  --material-blur: 0px;
+  --material-saturate: 100%;
+  --material-tint: transparent;
+  --material-tint-opacity: 0;
+  --density-scale: 1;
+  --motion-duration-fast: 120ms;
+  --motion-duration-medium: 150ms;
+  --motion-duration-slow: 280ms;
+  --motion-ease-standard: ease-out;
+  --font-ui: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-display: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
+}
+[data-style="bezel"][data-palette="graphite"] {
+  --color-bg: #100f0e;
+  --color-bg-surface: #1b1a18;
+  --color-bg-elevated: #252320;
+  --color-bg-inset: #171614;
+  --color-bg-stripe: #141312;
+  --color-bg-canvas: #0c0b0a;
+  --color-bg-hover: #252320;
+  --color-border: rgba(255, 255, 255, 0.07);
+  --color-border-strong: rgba(255, 255, 255, 0.26);
+  --color-text-primary: #eae6de;
+  --color-text-secondary: #a89f92;
+  --color-text-muted: #6f695f;
+  --color-accent: #ffc700;
+  --color-accent-hover: #ffd54d;
+  --color-accent-soft: #ffe38a;
+  --color-on-accent: #1a1400;
+  --color-status-working: #f28b3b;
+  --color-status-error: #ee5757;
+  --color-status-ok: #4fbf6f;
+  --color-status-warn: #e5b83c;
+  --color-status-ok-soft: #7ad494;
+  --color-status-warn-soft: #eec964;
+  --color-status-error-soft: #f38585;
+  --color-neutral: #8a8275;
+  --color-control-track-off: #2e2c28;
+  --color-status-error-bright: #f9b0b0;
+  --color-status-error-text: #f07a7a;
+  --color-status-working-soft: #f6a967;
+  --color-status-warn-text: #eec964;
+  --color-status-warn-amber: #e5b83c;
+  --color-status-warn-amber-soft: #efd382;
+  --color-status-warn-amber-bright: #f7e4ad;
+  --color-status-ok-hover: #3da45c;
+  --color-danger: #d13b3b;
+  --color-danger-active: #b02f2f;
+  --color-wash-1: rgba(255, 250, 235, 0.04);
+  --color-wash-2: rgba(255, 250, 235, 0.08);
+  --color-wash-3: rgba(255, 250, 235, 0.16);
+  --color-scrim: rgba(8, 7, 5, 0.55);
+  --color-danger-muted: #a83636;
+  --color-diff-add-text: #a9d16f;
+  --color-diff-remove-text: #f9b0b0;
+  --color-diff-modified-border: #7ad494;
+  --color-code-inline: #e0b56e;
+  --color-danger-hover: #f38585;
+  --color-overlay-soft-bg: rgba(255, 250, 235, 0.05);
+  --color-overlay-soft-border: rgba(255, 250, 235, 0.08);
+  --color-scrollbar-thumb: rgba(255, 250, 235, 0.10);
+  --color-scrollbar-thumb-hover: rgba(255, 250, 235, 0.20);
+  --color-scrollbar-thumb-strong: rgba(255, 250, 235, 0.25);
+  --color-scrollbar-thumb-strong-hover: rgba(255, 250, 235, 0.40);
+  --term-fg: #e5e1d8;
+  --term-bg: #100f0e;
+  --term-cursor: #ffc700;
+  --term-selection: #3a372f;
+  --term-ansi-0: #171614;
+  --term-ansi-1: #ee5757;
+  --term-ansi-2: #4fbf6f;
+  --term-ansi-3: #e5b83c;
+  --term-ansi-4: #6fa7d8;
+  --term-ansi-5: #c08ac4;
+  --term-ansi-6: #5cc0b8;
+  --term-ansi-7: #c9c2b4;
+  --term-ansi-8: #6f695f;
+  --term-ansi-9: #f38585;
+  --term-ansi-10: #7ad494;
+  --term-ansi-11: #eec964;
+  --term-ansi-12: #93c0e8;
+  --term-ansi-13: #d5a8d8;
+  --term-ansi-14: #84d5cd;
+  --term-ansi-15: #f4f0e7;
+}
+
 /* ── Style: Liquid Glass (glass) v0.1.0 ── */
 [data-style="glass"] {
   --radius-box: 14px;

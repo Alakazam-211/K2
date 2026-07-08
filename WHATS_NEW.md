@@ -3,6 +3,19 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.37 — Spring cleaning, part one
+
+- **The legacy `.k2so` era is ending — safely.** Every internal path now
+  uses `~/.k2` directly, and on first launch K2 quietly rewrites any
+  agent CLI configs (Claude/Cursor/Gemini) that still pointed at the old
+  location. Nothing changes for you; the compatibility link stays in
+  place as a safety net while the transition completes over the next
+  releases. A new build-time guard makes sure the old paths can never
+  sneak back in.
+- **Settings tell the truth about file locations.** A few Settings labels
+  showed the old `~/.k2so/...` paths for models and logs; they now show
+  where the files actually live.
+
 ## 0.40.36 — Copy that
 
 - **Copy in a remote terminal, paste on your machine — for real this

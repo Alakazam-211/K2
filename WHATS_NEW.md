@@ -3,6 +3,36 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.39 — The agent status you can trust
+
+- **Tab spinners tell the truth now.** The little braille spinner on a
+  tab used to die a second after you switched away — the app lost sight
+  of hidden panes. Activity detection now lives in the daemon, which
+  watches every session whether or not anyone's looking, so spinners
+  stay accurate across tab switches, across windows, and across remote
+  connections.
+- **The completion chime rings when the agent actually finishes.** Same
+  root cause: switching away used to fire the chime ~5 seconds later
+  regardless of whether the agent was done. Now it rings at the real
+  moment of completion — and only for work you weren't watching.
+- **An amber square shows you WHICH tab finished.** When an agent
+  completes while you're elsewhere, its tab now shows an amber square in
+  the spinner slot (matching the Active bar's amber dot) until you visit
+  it. Lots of tabs, one chime — now you know where to look. Hover still
+  gives you the ✕ if you just want to close it.
+- **Your agent sessions are now archived before providers delete them.**
+  Some agent CLIs quietly remove session transcripts after ~30 days. K2
+  now sweeps daily and copies aging sessions into
+  `.k2/session-archive/` inside each project (originals untouched —
+  resume keeps working). Default is 14 days; configurable via the
+  `session_archive_days` setting, `0` disables.
+- **Remote sessions feel local.** Tab renames, project settings, and
+  chat history now update instantly for everyone connected to a server —
+  no more reloading to see a teammate's changes.
+- **Tab icons survive logout.** Agent launcher icons (and launch
+  commands shown in tab tooltips) no longer vanish when you log out of a
+  server and back in.
+
 ## 0.40.38 — Make K2 yours: Styles
 
 - **Settings → Styles.** Pick K2's entire look: **Square** (the classic),

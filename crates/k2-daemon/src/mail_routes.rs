@@ -9,6 +9,7 @@
 //! | path                              | handler file            |
 //! |-----------------------------------|-------------------------|
 //! | GET  /cli/mail/status  (REAL)     | mail/routes_server.rs   |
+//! | GET  /cli/mail/preflight (REAL,S1)| mail/routes_server.rs   |
 //! | POST /cli/mail/server/enable      | mail/routes_server.rs   |
 //! | POST /cli/mail/server/disable     | mail/routes_server.rs   |
 //! | POST /cli/mail/server/uninstall   | mail/routes_server.rs   |
@@ -45,10 +46,12 @@
 //! are GETs through `crate::cli::dispatch` → [`dispatch`], which also
 //! answers 405 for mutations reached via the GET chain.
 //!
-//! REAL so far: `/cli/mail/status` (foundation — the capability-gating
-//! seam, `supported: bool`, pre-mortem #15) and the S2 domain family
-//! (`domain/add|remove|check|list|show`). Every other route returns
-//! the structured `not_built` 501 from its per-concern file.
+//! REAL as of S1+S2: `/cli/mail/status` (the capability-gating seam
+//! the Settings→Email page reads, pre-mortem #15), `/cli/mail/preflight`,
+//! the server lifecycle mutations (enable/disable/uninstall), and the
+//! S2 domain family (`domain/add|remove|check|list|show`). Every other
+//! route returns the structured `not_built` 501 from its per-concern
+//! file until its slice lands.
 
 use std::collections::HashMap;
 
@@ -68,6 +71,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
     let resp = match path {
         // ── Reads ───────────────────────────────────────────────────
         "/cli/mail/status" => routes_server::handle_status(params),
+        // S1: read-only preflight checklist (PRD §5.1). GET-only by
+        // design — it mutates nothing, so it is deliberately NOT in
+        // the dispatcher's post_allowed list.
+        "/cli/mail/preflight" => routes_server::handle_preflight(params),
         "/cli/mail/config" => routes_server::handle_config_get(params),
         "/cli/mail/doctor" => routes_server::handle_doctor(params),
         "/cli/mail/domain/list" => routes_domains::handle_domain_list(params),
@@ -204,9 +211,6 @@ mod tests {
             assert_eq!(v["error"]["code"], "not_built", "route={route}");
         }
         for route in [
-            "/cli/mail/server/enable",
-            "/cli/mail/server/disable",
-            "/cli/mail/server/uninstall",
             "/cli/mail/config/set",
             "/cli/mail/address/create",
             "/cli/mail/address/delete",
@@ -240,6 +244,31 @@ mod tests {
             assert_eq!(resp.status, "400 Bad Request", "route={route}");
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
             assert_eq!(v["error"]["code"], "usage", "route={route}");
+        }
+
+        // S1 — preflight is REAL.
+        let resp = dispatch("/cli/mail/preflight", &params).expect("claimed");
+        assert_eq!(resp.status, "200 OK", "preflight is REAL as of S1");
+    }
+
+    /// The S1-real server mutations answer through their handlers (no
+    /// 404/501): enable validates its body, disable/uninstall answer
+    /// the structured not-installed conflict on an empty table.
+    /// (Deeper behavior is tested in mail::routes_server.)
+    #[test]
+    fn s1_server_mutations_are_wired_to_real_handlers() {
+        let _g = crate::mail::mail_server_test_lock();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+        }
+        let resp = dispatch_post("/cli/mail/server/enable", b"{}");
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        for route in ["/cli/mail/server/disable", "/cli/mail/server/uninstall"] {
+            let resp = dispatch_post(route, b"{}");
+            assert_eq!(resp.status, "409 Conflict", "route={route}: {}", resp.body);
+            assert!(resp.body.contains("not_installed"), "{}", resp.body);
         }
     }
 

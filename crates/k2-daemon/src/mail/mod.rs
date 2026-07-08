@@ -32,6 +32,12 @@
 //! - [`supervisor`] — install / bootstrap / health / upgrade /
 //!   disable / uninstall of the Stalwart sidecar (S1). The ONLY module
 //!   that knows Stalwart exists as a process.
+//! - [`preflight`] — the §5.1 read-only checklist (S1); pure logic
+//!   over an injected environment trait.
+//! - [`sysops`] — every fs/systemd/download/journald effect behind one
+//!   trait (S1) so the whole install flow unit-tests as a sequence.
+//! - [`secrets`] — the 0600-file secret store behind the
+//!   `mail_server.*_secret_ref` columns (S1).
 //! - [`jmap`] — the typed client for Stalwart's management API.
 //! - [`domains`] — S2 domain onboarding: zone-file parsing, the DNS
 //!   record table, SPF split-config, add/remove/list/show ops (behind
@@ -54,14 +60,31 @@ pub mod dns_verify;
 pub mod doctor;
 pub mod domains;
 pub mod jmap;
+pub mod preflight;
 pub mod routes_addresses;
 pub mod routes_domains;
 pub mod routes_messages;
 pub mod routes_send;
 pub mod routes_server;
+pub mod secrets;
 pub mod supervisor;
+pub mod sysops;
 
 use crate::cli_response::CliResponse;
+
+/// Serializes every test that touches the SINGLETON `mail_server` row
+/// (the process-global shared test DB makes concurrent row writers
+/// race — the tree has been bitten by exactly this class of flake).
+/// Every test that inserts/updates/deletes `mail_server` MUST hold
+/// this guard for its whole body.
+#[cfg(test)]
+pub(crate) fn mail_server_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{Mutex, OnceLock};
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
 
 /// The structured "not built yet" reply every stub handler returns —
 /// 501 with a stable machine code so callers (and later the CLI) can

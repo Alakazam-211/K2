@@ -575,6 +575,16 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // `projects.mail_address_cap` gating overrides (NULL = inherit
         // the global AppSettings defaults: 'off' / 5). Additive.
         ("0072_mail", include_str!("../../drizzle_sql/0072_mail.sql")),
+        // 0073 (K2 Mail S1, prd-email-server-v1 §4.1/§5.2): the enable
+        // flow's resumable-state-machine columns on `mail_server` —
+        // `enable_progress_json` (per-step completion, polled by
+        // GET /cli/mail/status; re-enable resumes) + `last_error`
+        // (most recent supervisor failure, surfaced verbatim).
+        // Additive.
+        (
+            "0073_mail_enable_progress",
+            include_str!("../../drizzle_sql/0073_mail_enable_progress.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

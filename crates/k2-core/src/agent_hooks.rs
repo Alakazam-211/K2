@@ -139,6 +139,13 @@ pub enum HookEvent {
     /// `{domain, status, regressed}`. The Settings→Email page
     /// refreshes its status chips on every fire.
     MailDomainStatusChanged,
+    /// K2 Mail S1 (prd-email-server-v1 §4.1): fires when the Stalwart
+    /// sidecar's supervised state TRANSITIONS (running → degraded /
+    /// stopped, enable finished/failed, disabled, uninstalled).
+    /// Payload: `{state, previous, detail?}`. Drives the Settings→Email
+    /// status card + the standard app notification on failures. Only
+    /// transitions emit — the health cadence never spams steady-state.
+    MailServerStateChanged,
 }
 
 impl HookEvent {
@@ -168,6 +175,7 @@ impl HookEvent {
             Self::ProjectGroupsChanged => "project-group:groups-changed",
             Self::TunnelSubdomainsChanged => "tunnel:subdomains-changed",
             Self::MailDomainStatusChanged => "mail:domain-status-changed",
+            Self::MailServerStateChanged => "mail:server-state-changed",
         }
     }
 }

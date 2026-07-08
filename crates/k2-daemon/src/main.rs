@@ -789,6 +789,14 @@ async fn async_main() {
     // defaults.
     let _watchdog_handle = watchdog::spawn(watchdog::config_from_env());
 
+    // K2 Mail S1 — Stalwart sidecar health cadence. No-op unless the
+    // daemon is a Linux box (mail_supported); then a single detached
+    // thread checks systemd state + the authed mgmt-API ping every
+    // 60 s (skipping while an enable runs / nothing is installed),
+    // persists transitions onto `mail_server.status`, and raises the
+    // standard `mail:server-state-changed` event on failures.
+    mail::supervisor::spawn_health_loop();
+
     // heartbeat.port watchdog — see `run_heartbeat_port_watchdog` docs.
     // The daemon takes over `~/.k2so/heartbeat.port` whenever Tauri
     // isn't writing to it, so the CLI and launchd-triggered heartbeat

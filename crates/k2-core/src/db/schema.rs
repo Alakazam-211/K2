@@ -2980,6 +2980,13 @@ pub struct MailServer {
     pub api_key_ref: Option<String>,
     pub installed_at: Option<i64>,
     pub updated_at: i64,
+    /// S1 (0073): per-step completion state of the resumable enable
+    /// machine (`{"steps":{"download":{…}},…}`), polled by
+    /// GET /cli/mail/status; re-enable resumes from it.
+    pub enable_progress_json: Option<String>,
+    /// S1 (0073): most recent supervisor error (enable-step failure /
+    /// health degradation detail), surfaced verbatim in status.
+    pub last_error: Option<String>,
 }
 
 /// One `mail_domains` row. `domain` is ALWAYS the normalized form

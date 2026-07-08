@@ -686,31 +686,12 @@ impl DomainEngine for StalwartClient {
 /// Resolve a `mail_server.*_secret_ref` to its secret value.
 ///
 /// S1 HANDSHAKE SEAM: the supervisor slice owns WHERE secrets live;
-/// until it lands, the two spellings below are the contract it must
-/// emit refs in (`env:<VAR>` or an absolute file path — 0600, root of
-/// trust is the box itself). Anything else fails loudly here rather
-/// than guessing.
-fn resolve_secret_ref(secret_ref: &str) -> Result<String, String> {
-    if let Some(var) = secret_ref.strip_prefix("env:") {
-        return std::env::var(var).map_err(|_| format!("secret env var '{var}' is not set"));
-    }
-    let path = secret_ref.strip_prefix("file:").unwrap_or(secret_ref);
-    if path.starts_with('/') {
-        return std::fs::read_to_string(path)
-            .map(|s| s.trim().to_string())
-            .map_err(|e| format!("secret file '{path}': {e}"))
-            .and_then(|s| {
-                if s.is_empty() {
-                    Err(format!("secret file '{path}' is empty"))
-                } else {
-                    Ok(s)
-                }
-            });
-    }
-    Err(format!(
-        "unrecognized secret ref '{secret_ref}' (expected env:<VAR> or an absolute file path)"
-    ))
-}
+/// the shared helper accepts the two spellings the contract allows
+/// (`env:<VAR>` or an absolute file path — 0600, root of trust is the
+/// box itself). Anything else fails loudly there rather than guessing.
+/// (S6 moved the helper to [`super::secrets::resolve_secret_ref`] so
+/// the relay-config surface shares one resolution point.)
+use super::secrets::resolve_secret_ref;
 
 /// The `mail_server` fields S2 needs (hostname rides along for the
 /// PTR row + MX synthesis).

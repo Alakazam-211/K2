@@ -543,15 +543,20 @@ async fn handle_one_request(
             // later slices never fight this allowlist. JSON-bodied
             // POSTs; token_ok + require_post in the dedicated arm
             // below, which ALSO owner-or-admin-gates the server/domain/
-            // config/approvals paths (PRD §10). Handlers are 501
-            // not_built stubs until their slice lands; reads (status/
-            // lists) are GETs via crate::cli::dispatch (mail_routes) —
-            // except the S4 read family (messages/read/attachments/
-            // wait), which has its own spawn_blocking GET arm below.
+            // config/approvals/doctor paths (PRD §10). As of S6 every
+            // handler is REAL; reads (status/lists) are GETs via
+            // crate::cli::dispatch (mail_routes) — except the S4 read
+            // family (messages/read/attachments/wait), which has its
+            // own spawn_blocking GET arm below.
             | "/cli/mail/server/enable"
             | "/cli/mail/server/disable"
             | "/cli/mail/server/uninstall"
             | "/cli/mail/config/set"
+            // S6: POST /cli/mail/doctor = run the probes NOW (owner
+            // verb; blocking DNS/TCP/SMTP I/O — served by the mail
+            // POST arm's spawn_blocking). The GET on the same path
+            // stays in the read chain (latest persisted run).
+            | "/cli/mail/doctor"
             | "/cli/mail/domain/add"
             | "/cli/mail/domain/remove"
             | "/cli/mail/domain/check"
@@ -3221,7 +3226,7 @@ async fn handle_one_request(
                     &mut *stream,
                     "403 Forbidden",
                     "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"mail server, domain, config, and approval changes can only be made by the owner or an admin"}}"#,
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"mail server, domain, config, approval, and doctor actions can only be made by the owner or an admin"}}"#,
                 )
                 .await;
                 return DispatchOutcome::Done;

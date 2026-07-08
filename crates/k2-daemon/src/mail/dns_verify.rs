@@ -57,13 +57,20 @@ pub struct MxHost {
     pub exchange: String,
 }
 
-/// The two lookups S2 verification needs. Object-safe on purpose —
-/// handlers take `&dyn DnsResolver` so tests inject canned answers.
+/// The lookups mail verification needs: MX + TXT for the S2 record
+/// table, A + PTR for the S6 doctor (FCrDNS + DNSBL — one resolver
+/// abstraction for the whole family, never two). Object-safe on
+/// purpose — handlers take `&dyn DnsResolver` so tests inject canned
+/// answers.
 pub trait DnsResolver: Send + Sync {
     fn mx(&self, name: &str) -> Result<Vec<MxHost>, DnsError>;
     /// TXT answers with their chunk structure preserved (one inner
     /// `Vec<String>` per record — a >255-char value arrives split).
     fn txt(&self, name: &str) -> Result<Vec<Vec<String>>, DnsError>;
+    /// A-record answers (S6: forward-confirm rDNS, DNSBL queries).
+    fn a(&self, name: &str) -> Result<Vec<std::net::Ipv4Addr>, DnsError>;
+    /// PTR names for `ip` (S6: rDNS/FCrDNS).
+    fn ptr(&self, ip: std::net::IpAddr) -> Result<Vec<String>, DnsError>;
 }
 
 /// Production resolver: hickory (system configuration — the same
@@ -124,6 +131,24 @@ impl DnsResolver for SystemResolver {
                             .map(|chunk| String::from_utf8_lossy(chunk).to_string())
                             .collect()
                     })
+                    .collect()
+            })
+            .map_err(map_resolve_err)
+    }
+
+    fn a(&self, name: &str) -> Result<Vec<std::net::Ipv4Addr>, DnsError> {
+        self.inner
+            .ipv4_lookup(fqdn(name))
+            .map(|l| l.iter().map(|a| a.0).collect())
+            .map_err(map_resolve_err)
+    }
+
+    fn ptr(&self, ip: std::net::IpAddr) -> Result<Vec<String>, DnsError> {
+        self.inner
+            .reverse_lookup(ip)
+            .map(|l| {
+                l.iter()
+                    .map(|ptr| ptr.0.to_utf8().trim_end_matches('.').to_string())
                     .collect()
             })
             .map_err(map_resolve_err)
@@ -528,6 +553,14 @@ mod tests {
                 return Err(DnsError::Other("timeout".to_string()));
             }
             self.txt.get(name).cloned().ok_or(DnsError::NotFound)
+        }
+        fn a(&self, _name: &str) -> Result<Vec<std::net::Ipv4Addr>, DnsError> {
+            // S2 verification never issues A lookups — the doctor's
+            // own fakes cover them.
+            Err(DnsError::NotFound)
+        }
+        fn ptr(&self, _ip: std::net::IpAddr) -> Result<Vec<String>, DnsError> {
+            Err(DnsError::NotFound)
         }
     }
 

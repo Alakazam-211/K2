@@ -65,8 +65,18 @@
 //!   validation), §8.4 reply guardrails, approve/deny transitions, the
 //!   `--wait` decision poll — all behind `OutboundStore`/
 //!   `SubmitBackend` traits with injected fakes/clocks in tests.
-//! - [`doctor`] — deliverability checks (S6; `mail-auth` crate,
-//!   DNS/TCP probes, blocklists, the direct-send readiness grade).
+//! - [`doctor`] — S6 deliverability doctor: the MiaB-style check table
+//!   (PTR/FCrDNS, outbound-25 with provider coaching, DNSBLs, the
+//!   open-relay self-test, STARTTLS/cert, disk, per-domain DNS
+//!   posture via `dns_verify`), persisted `mail_doctor_runs` history,
+//!   and the `direct_send_gate` that locks direct mode on a failing
+//!   grade. Probes behind the `DoctorEnv` trait (+ the shared
+//!   `DnsResolver`) — no real network in tests.
+//! - [`config`] — S6 owner config surface: per-domain send mode
+//!   (doctor-gated `direct`, relay-route push/clear through jmap's
+//!   single ⚠ LIVE-BOX #7 function), kind-agnostic relay-config CRUD
+//!   (secrets only ever as refs), and the D4/D6 gating settings
+//!   (per-workspace + global).
 //! - `routes_*` — per-concern `/cli/mail/*` handlers, dispatched by
 //!   the thin `crate::mail_routes` shim so later slices don't collide:
 //!   [`routes_server`] (status/enable/disable/uninstall/config/doctor),
@@ -74,6 +84,7 @@
 //!   [`routes_send`].
 
 pub mod addresses;
+pub mod config;
 pub mod dns_verify;
 pub mod doctor;
 pub mod domains;
@@ -90,8 +101,6 @@ pub mod send;
 pub mod supervisor;
 pub mod sysops;
 
-use crate::cli_response::CliResponse;
-
 /// Serializes every test that touches the SINGLETON `mail_server` row
 /// (the process-global shared test DB makes concurrent row writers
 /// race — the tree has been bitten by exactly this class of flake).
@@ -106,28 +115,11 @@ pub(crate) fn mail_server_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|p| p.into_inner())
 }
 
-/// The structured "not built yet" reply every stub handler returns —
-/// 501 with a stable machine code so callers (and later the CLI) can
-/// tell "route reserved for a future slice" from a real 404.
-pub(crate) fn not_built(slice: &str, what: &str) -> CliResponse {
-    CliResponse {
-        status: "501 Not Implemented",
-        content_type: "application/json",
-        body: serde_json::json!({
-            "ok": false,
-            "error": {
-                "code": "not_built",
-                "hint": format!("{what}: not built yet — mail slice {slice}"),
-            },
-        })
-        .to_string(),
-    }
-}
-
-/// The same "not built yet" contract for non-route skeleton fns
-/// ([`supervisor`], [`doctor`], the typed [`jmap`] calls): a structured
-/// one-line error, never a panic/todo!() — a stray call in production
-/// must fail loudly AND recoverably.
+/// The "not built yet" contract for non-route skeleton fns (today only
+/// [`supervisor`]'s upgrade op): a structured one-line error, never a
+/// panic/todo!() — a stray call in production must fail loudly AND
+/// recoverably. (The route-side 501 twin retired with S6 — every
+/// `/cli/mail/*` route in the partition map is real now.)
 pub(crate) fn not_built_err(slice: &str, what: &str) -> String {
     format!("{what}: not built yet — mail slice {slice}")
 }

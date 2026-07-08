@@ -28,6 +28,42 @@ pub trait SecretStore: Send + Sync {
     fn delete(&self, sref: &str) -> Result<(), String>;
 }
 
+/// Resolve a SCHEME-form secret ref: `env:<VAR>` or an absolute file
+/// path (optionally `file:`-prefixed, 0600 — the root of trust is the
+/// box itself). These are the operator-supplied spellings (relay
+/// credentials via `k2 mail config --relay-secret-ref`, the
+/// `mail_server.*_secret_ref` handshake seam); the [`FileSecretStore`]
+/// `mailsec_*` refs are the daemon-minted third form. Anything else
+/// fails LOUDLY rather than guessing — and the error carries the ref,
+/// never a secret value.
+pub fn resolve_secret_ref(secret_ref: &str) -> Result<String, String> {
+    if let Some(var) = secret_ref.strip_prefix("env:") {
+        return std::env::var(var).map_err(|_| format!("secret env var '{var}' is not set"));
+    }
+    let path = secret_ref.strip_prefix("file:").unwrap_or(secret_ref);
+    if path.starts_with('/') {
+        return fs::read_to_string(path)
+            .map(|s| s.trim().to_string())
+            .map_err(|e| format!("secret file '{path}': {e}"))
+            .and_then(|s| {
+                if s.is_empty() {
+                    Err(format!("secret file '{path}' is empty"))
+                } else {
+                    Ok(s)
+                }
+            });
+    }
+    Err(format!(
+        "unrecognized secret ref '{secret_ref}' (expected env:<VAR> or an absolute file path)"
+    ))
+}
+
+/// Is `sref` one of the scheme forms [`resolve_secret_ref`] handles
+/// (vs a store-minted `mailsec_*` ref)?
+pub fn is_scheme_ref(sref: &str) -> bool {
+    sref.starts_with("env:") || sref.starts_with("file:") || sref.starts_with('/')
+}
+
 /// The real 0600-file store. `Default` points at
 /// `~/.k2/mail-secrets.json`; tests construct with a temp path.
 pub struct FileSecretStore {
@@ -112,6 +148,16 @@ impl SecretStore for FileSecretStore {
     }
 
     fn resolve(&self, sref: &str) -> Result<Option<String>, String> {
+        // Scheme refs (env:<VAR> / absolute path) resolve WITHOUT the
+        // file map — one resolution point for all three ref forms, so
+        // relay configs whose credentials the owner keeps in an env
+        // var or a root-owned file work through the same SecretStore
+        // the send path already consults. A set-but-unresolvable
+        // scheme ref is a loud Err (the operator pointed somewhere
+        // broken), not a silent None.
+        if is_scheme_ref(sref) {
+            return resolve_secret_ref(sref).map(Some);
+        }
         let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
         Ok(self
             .load()?
@@ -218,6 +264,34 @@ mod tests {
         fs::write(dir.join("mail-secrets.json"), b"{ not json").expect("write");
         let err = store.resolve("mailsec_x_0").expect_err("must fail loud");
         assert!(err.contains("parse"), "{err}");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn scheme_refs_resolve_through_the_store_without_the_file_map() {
+        let (store, dir) = temp_store();
+        // env: form — resolves, and a MISSING var is a loud Err (never
+        // a silent None: the operator pointed at something broken).
+        std::env::set_var("K2_TEST_MAIL_RELAY_PW", "relay-pw");
+        assert_eq!(
+            store.resolve("env:K2_TEST_MAIL_RELAY_PW").expect("resolve"),
+            Some("relay-pw".into())
+        );
+        assert!(store.resolve("env:K2_TEST_MAIL_RELAY_PW_MISSING").is_err());
+        // Absolute-path form — trims, empty file fails loudly.
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let f = dir.join("relay-secret");
+        fs::write(&f, "  file-pw\n").expect("write");
+        assert_eq!(
+            store.resolve(f.to_str().unwrap()).expect("resolve"),
+            Some("file-pw".into())
+        );
+        fs::write(&f, "").expect("write");
+        assert!(store.resolve(f.to_str().unwrap()).is_err(), "empty file fails loudly");
+        // Unknown scheme fails loudly through the bare helper.
+        assert!(resolve_secret_ref("keychain:whatever").is_err());
+        assert!(is_scheme_ref("env:X") && is_scheme_ref("/abs/path") && is_scheme_ref("file:/x"));
+        assert!(!is_scheme_ref("mailsec_relay_abc123"));
         let _ = fs::remove_dir_all(dir);
     }
 

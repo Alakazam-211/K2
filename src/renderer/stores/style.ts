@@ -1,4 +1,4 @@
-// Style System P3 — the renderer's live Style selection.
+// Style System — the renderer's live Style selection (per-client view state).
 //
 // Owns the (styleId, paletteId, schemeMode, gapsPreset) selection plus
 // its resolved derivatives, and is the ONLY writer of the <html>
@@ -6,13 +6,15 @@
 // paint (index.html's inline bootstrap stamps them pre-paint from the
 // localStorage mirror this store maintains).
 //
-// Persistence is daemon-canonical and lives in stores/settings.ts
-// (`updateStyleSettings` / the fetchSettings read-back, which calls
-// `applyStyle` here so the daemon's value wins over the mirror).
+// SSOT is localStorage on THIS install (thin-client view state). The
+// daemon may still echo a legacy `style` key for back-compat, but it is
+// NEVER authority after the one-shot migration (`k2.style.migrated`).
+// Host switch / fetchSettings must not restyle from the daemon.
+// `settings.updateStyleSettings` writes the mirror only (no daemon POST).
 // IMPORTANT: this module must NOT import stores/settings.ts — settings
-// fires a daemon fetch at module-init and imports us for the read-back
-// apply; importing it back would both cycle and defeat the
-// ConnectionGate's deferred-import contract.
+// fires a daemon fetch at module-init and imports us for migration;
+// importing it back would both cycle and defeat the ConnectionGate's
+// deferred-import contract.
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
@@ -28,15 +30,29 @@ import {
 import { dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
 
 // ── localStorage mirror keys (dotted convention, see index.html) ─────
-const LS_STYLE = 'k2.style'
-const LS_PALETTE = 'k2.palette' // resolved palette for the CURRENT scheme
-const LS_SCHEME = 'k2.scheme' // the MODE, including 'auto'
-const LS_GAPS = 'k2.gaps'
+export const LS_STYLE = 'k2.style'
+export const LS_PALETTE = 'k2.palette' // resolved palette for the CURRENT scheme
+export const LS_SCHEME = 'k2.scheme' // the MODE, including 'auto'
+export const LS_GAPS = 'k2.gaps'
+/** One-shot upgrade flag: after `1`, daemon style is never re-applied. */
+export const LS_STYLE_MIGRATED = 'k2.style.migrated'
+
 /** Per-scheme resolved palette (`k2.palette.dark` / `k2.palette.light`)
  *  so the pre-paint bootstrap is right even after an OS appearance flip
  *  while the app was closed (mode 'auto' resolves to a different scheme
  *  than the one `k2.palette` was written under). */
-const lsPaletteFor = (scheme: StyleScheme): string => `${LS_PALETTE}.${scheme}`
+export const lsPaletteFor = (scheme: StyleScheme): string => `${LS_PALETTE}.${scheme}`
+
+/** Keys that peer windows write — a `storage` event on any of these
+ *  restamps this window from the local mirror (multi-window sync). */
+export const STYLE_MIRROR_STORAGE_KEYS: readonly string[] = [
+  LS_STYLE,
+  LS_PALETTE,
+  LS_SCHEME,
+  LS_GAPS,
+  lsPaletteFor('dark'),
+  lsPaletteFor('light'),
+]
 
 interface StyleState extends StyleSelection {
   /** schemeMode resolved against the OS appearance. */
@@ -44,8 +60,9 @@ interface StyleState extends StyleSelection {
   /** Palette id after the per-style fallback chain. */
   resolvedPaletteId: string
   /** Resolve `sel` (merged over the current selection), stamp <html>,
-   *  refresh the localStorage mirror. Idempotent. Does NOT persist —
-   *  callers that commit go through settings.updateStyleSettings. */
+   *  refresh the localStorage mirror. Idempotent. Does NOT talk to the
+   *  daemon — SSOT is localStorage; callers that commit a user choice
+   *  also go through settings.updateStyleSettings (local-only). */
   applyStyle: (sel: Partial<StyleSelection>) => void
 }
 
@@ -82,7 +99,7 @@ function stampDialProperties(style: StyleMeta): void {
 /** Stamp the resolved selection onto <html>. Exported for the Settings
  *  page's hover-preview, which is deliberately attribute-level only
  *  (no store/state/persistence writes) so a stray hover can never race
- *  the daemon round-trip. */
+ *  a commit. */
 export function stampStyleAttributes(sel: StyleSelection): void {
   if (typeof document === 'undefined') return
   const { style, resolvedScheme, resolvedPalette, gapsPreset } = resolveStyleSelection(
@@ -149,15 +166,13 @@ function writeMirror(sel: StyleSelection): void {
       )
     }
   } catch {
-    // Quota/privacy failures only cost the pre-paint mirror; the daemon
-    // read-back re-applies the canonical selection right after boot.
+    // Quota/privacy failures only cost the pre-paint mirror; the live
+    // store + <html> attributes still reflect the selection.
   }
 }
 
-/** Best-effort boot selection from the localStorage mirror. `k2.palette`
- *  holds the RESOLVED palette (close enough as the "chosen" one until
- *  the daemon read-back corrects it a beat later). */
-function readMirror(): StyleSelection {
+/** Best-effort boot selection from the localStorage mirror. */
+export function readMirror(): StyleSelection {
   if (typeof localStorage === 'undefined') return { ...DEFAULT_SELECTION }
   try {
     return {
@@ -168,6 +183,120 @@ function readMirror(): StyleSelection {
     }
   } catch {
     return { ...DEFAULT_SELECTION }
+  }
+}
+
+/** True when the install already has a style + scheme selection in
+ *  localStorage (the PRD "mirror complete" check). */
+export function isMirrorComplete(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  try {
+    return localStorage.getItem(LS_STYLE) != null && localStorage.getItem(LS_SCHEME) != null
+  } catch {
+    return false
+  }
+}
+
+export function isStyleMigrated(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  try {
+    return localStorage.getItem(LS_STYLE_MIGRATED) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function markStyleMigrated(): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(LS_STYLE_MIGRATED, '1')
+  } catch {
+    // Privacy-mode: migration will re-run next session; harmless.
+  }
+}
+
+/**
+ * Snapshot whether the install already had a local style selection
+ * BEFORE this process's boot `applyStyle` stamped defaults into the
+ * mirror. Boot always writes the resolved selection (so the next
+ * pre-paint bootstrap is warm); without this snapshot the one-shot
+ * migration would treat those boot-stamped defaults as "user already
+ * chose locally" and never seed from a daemon that still holds the
+ * pre-upgrade selection.
+ *
+ * `let` (not const) so unit tests can simulate empty vs complete
+ * pre-boot mirrors without re-importing the module.
+ */
+let _preBootMirrorComplete: boolean =
+  typeof localStorage !== 'undefined' ? isMirrorComplete() : false
+
+/** Test/introspection helper — pre-boot completeness (captured at import). */
+export function wasPreBootMirrorComplete(): boolean {
+  return _preBootMirrorComplete
+}
+
+/** Test-only: override the pre-boot mirror snapshot. */
+export function __setPreBootMirrorCompleteForTests(complete: boolean): void {
+  _preBootMirrorComplete = complete
+}
+
+/** Daemon-shaped style payload (matches `StyleSettingsBackend` fields). */
+export interface DaemonStyleSeed {
+  id?: string
+  palette?: string
+  scheme?: string
+  gaps?: string
+}
+
+/**
+ * One-shot upgrade migration: seed localStorage from a daemon style
+ * echo only when this install has no prior local selection.
+ *
+ * Rules (in order):
+ *  1. Already migrated → no-op forever
+ *  2. Pre-boot mirror was complete → mark migrated, keep local
+ *  3. Daemon returned a style → apply once to local, mark migrated
+ *  4. Else → mark migrated (defaults already live from boot)
+ */
+export function migrateStyleFromDaemon(daemonStyle: DaemonStyleSeed | undefined | null): void {
+  if (isStyleMigrated()) return
+
+  if (_preBootMirrorComplete) {
+    markStyleMigrated()
+    return
+  }
+
+  if (daemonStyle && hasDaemonStylePayload(daemonStyle)) {
+    const sel: StyleSelection = {
+      styleId: daemonStyle.id ?? DEFAULT_SELECTION.styleId,
+      paletteId: daemonStyle.palette ?? DEFAULT_SELECTION.paletteId,
+      schemeMode: parseSchemeMode(daemonStyle.scheme),
+      gapsPreset: daemonStyle.gaps ?? DEFAULT_SELECTION.gapsPreset,
+    }
+    useStyleStore.getState().applyStyle(sel)
+    markStyleMigrated()
+    return
+  }
+
+  markStyleMigrated()
+}
+
+function hasDaemonStylePayload(s: DaemonStyleSeed): boolean {
+  return s.id != null || s.palette != null || s.scheme != null || s.gaps != null
+}
+
+/** Map live style-store state into the settings-store shape. */
+export function styleSelectionToBackend(sel: {
+  styleId: string
+  paletteId: string
+  schemeMode: SchemeMode
+  gapsPreset: string
+}): { id: string; palette: string; scheme: string; gaps: string } {
+  return {
+    id: sel.styleId,
+    palette: sel.paletteId,
+    scheme: sel.schemeMode,
+    gaps: sel.gapsPreset,
   }
 }
 
@@ -202,8 +331,9 @@ export const useStyleStore = create<StyleState>((set, get) => ({
 if (typeof window !== 'undefined') {
   // Attributes were already stamped pre-paint by index.html's bootstrap;
   // re-applying makes the store state, mirror (incl. the per-scheme
-  // keys) and any resolution fallback consistent with it. The daemon
-  // fetch in stores/settings.ts corrects this moments later.
+  // keys) and any resolution fallback consistent with it. Daemon style
+  // is only consulted once via migrateStyleFromDaemon on first settings
+  // load when the pre-boot mirror was empty.
   useStyleStore.getState().applyStyle({})
 
   // Live OS-appearance listener: only acts when the MODE is 'auto'
@@ -221,4 +351,22 @@ if (typeof window !== 'undefined') {
     // only seam on older webviews.
     else if (typeof mq.addListener === 'function') mq.addListener(onChange)
   }
+
+  // Multi-window local sync: peer windows write the same localStorage
+  // keys; the browser fires `storage` only in *other* documents. Re-read
+  // the mirror and restamp — never take style authority from
+  // daemon `sync:settings` / fetchSettings.
+  const mirrorKeySet = new Set<string>(STYLE_MIRROR_STORAGE_KEYS)
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.storageArea && e.storageArea !== localStorage) return
+    // `key === null` means clear(); re-apply defaults from empty mirror.
+    if (e.key !== null && !mirrorKeySet.has(e.key)) return
+    restampFromLocalMirror()
+  })
+}
+
+/** Re-read the localStorage mirror and applyStyle. Used by the multi-
+ *  window `storage` listener; exported for unit tests. */
+export function restampFromLocalMirror(): void {
+  useStyleStore.getState().applyStyle(readMirror())
 }

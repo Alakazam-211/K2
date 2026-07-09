@@ -1,11 +1,17 @@
 import { create } from 'zustand'
-import { emit } from '@tauri-apps/api/event'
 import { getDefaultKeybindings } from '@shared/hotkeys'
-import type { AppSettingsResponse, EditorSettingsBackend, StyleSettingsBackend } from '@shared/types'
-// Style System P3 — the live selection store. settings.ts owns
-// persistence (daemon-canonical); style.ts owns the DOM stamping +
-// localStorage mirror. One-way import (style.ts must never import us).
-import { useStyleStore } from '@/stores/style'
+import type { EditorSettingsBackend, StyleSettingsBackend } from '@shared/types'
+// Style System — live selection is per-client view state in style.ts
+// (localStorage SSOT). settings.ts only keeps a convenience mirror of
+// the selection for the settings store shape; it must NEVER POST style
+// to the daemon or restamp from a daemon read-back after migration.
+// One-way import (style.ts must never import us).
+import {
+  markStyleMigrated,
+  migrateStyleFromDaemon,
+  styleSelectionToBackend,
+  useStyleStore,
+} from '@/stores/style'
 import { parseSchemeMode } from '@/lib/style-resolve'
 // Phase 2 Unit 7a — settings live in the daemon; renderer hits
 // `/cli/settings/{get,update,reset}` directly. The Tauri `settings_*`
@@ -17,7 +23,8 @@ import {
   settingsReset,
 } from '@/lib/daemon-settings'
 // #625 — re-fetch settings against the NEW host on a host switch so the
-// client is a pure view of the active host's daemon.
+// client is a pure view of the active host's daemon. Style is NOT part
+// of that view — host switch must not change appearance.
 import { onActiveHostChange } from '@/stores/connect-host'
 
 // NOTE the naming collision: 'projects' is the LEGACY workspaces section
@@ -91,10 +98,10 @@ interface SettingsState {
   // Editor settings
   editor: EditorSettingsBackend
 
-  // Style System P3 — the persisted Style selection (style / palette /
-  // scheme mode / gaps preset). Daemon-canonical; stores/style.ts holds
-  // the live resolved state + stamps <html>. Every read-back below
-  // re-applies it there so the daemon wins over the localStorage mirror.
+  // Style System — convenience mirror of the per-client Style selection
+  // (style / palette / scheme mode / gaps preset). SSOT is localStorage
+  // via stores/style.ts; this field is kept in sync on local commits and
+  // after migration. Daemon read-backs must NOT overwrite live appearance.
   style: StyleSettingsBackend
 
   // Default AI agent. Canonically an agent_presets id (UUID); legacy
@@ -215,39 +222,18 @@ function mergeEditorDefaults(result: Partial<EditorSettingsBackend> | undefined)
   return { ...DEFAULT_EDITOR, ...result }
 }
 
-/** Style System P3 — mirrors the daemon's `StyleSettings::default()`
- *  (Square / charcoal / dark / base density). */
+/** Defaults matching Square / charcoal / dark / base density (same as
+ *  style-resolve DEFAULT_SELECTION). Used only as the settings-store
+ *  initial value before the style store is consulted. */
 const DEFAULT_STYLE: StyleSettingsBackend = {
   id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '',
 }
 
-/** Merge backend style result with defaults (older daemons omit `style`
- *  entirely; partial snapshots may omit fields). */
-function mergeStyleDefaults(result: Partial<StyleSettingsBackend> | undefined): StyleSettingsBackend {
-  if (!result) return { ...DEFAULT_STYLE }
-  return { ...DEFAULT_STYLE, ...result }
-}
-
-/** Push a daemon-canonical style read-back into the live style store —
- *  restamps <html> + refreshes the localStorage mirror, so the daemon's
- *  value wins over whatever the pre-paint mirror stamped. Called on
- *  EVERY settings read-back (fetch, write echo, reset) — applyStyle is
- *  idempotent, so redundant calls are free.
- *
- *  Read-backs WITHOUT a `style` key are skipped entirely (not defaulted):
- *  a pre-style daemon drops the key on every echo, and stamping defaults
- *  from it would stomp the user's local selection back to charcoal on
- *  every unrelated settings write. Daemons that know `style` always
- *  include it (typed struct), so daemon-canonical still wins there. */
-function applyBackendStyle(result: Partial<StyleSettingsBackend> | undefined): void {
-  if (!result) return
-  const style = mergeStyleDefaults(result)
-  useStyleStore.getState().applyStyle({
-    styleId: style.id,
-    paletteId: style.palette,
-    schemeMode: parseSchemeMode(style.scheme),
-    gapsPreset: style.gaps,
-  })
+/** Snapshot the live per-client style selection into the settings-store
+ *  shape. Prefer this over any daemon `style` echo. */
+function styleFromLocalStore(): StyleSettingsBackend {
+  const s = useStyleStore.getState()
+  return styleSelectionToBackend(s)
 }
 
 async function persistAndApply(
@@ -271,15 +257,12 @@ async function persistAndApply(
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
-      style: mergeStyleDefaults(result.style),
+      // Style is client-local SSOT — never adopt the daemon echo here.
+      style: styleFromLocalStore(),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,
       loaded: true
     })
-    // Echo-apply: the daemon's post-merge style is canonical — restamp
-    // this window from it (covers writes made by OTHER settings keys
-    // too, since the daemon echoes the full snapshot).
-    applyBackendStyle(result.style)
   } catch (e) {
     console.warn('[settings] persistAndApply failed:', e)
   }
@@ -509,26 +492,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   updateStyleSettings: async (partial: Partial<StyleSettingsBackend>) => {
-    const prev = get().style
-    const merged = { ...prev, ...partial }
-    set({ style: merged }) // optimistic
-    // Apply live immediately (idempotent — the Settings page usually
-    // already applied via the style store before committing here).
-    applyBackendStyle(merged)
-    try {
-      await persistAndApply(set, { style: merged })
-      // Cross-window sync: other windows re-fetch settings and restamp
-      // their own <html> via the fetchSettings read-back. Fire-and-forget
-      // (non-Tauri/web contexts have no event backend) — pattern per
-      // stores/projects.ts emitProjectsChanged.
-      void emit('sync:settings').catch((e) =>
-        console.warn('[settings] sync:settings emit failed:', e),
-      )
-    } catch (err) {
-      console.error('[settings] Failed to persist style settings:', err)
-      set({ style: prev })
-      applyBackendStyle(prev)
-    }
+    // Per-client view state only — apply via style store / localStorage.
+    // Do NOT POST style to the daemon (connect users must not share skins
+    // via AppSettings; host switch must not change appearance).
+    // Multi-window sync is via `storage` events on k2.style / k2.palette /
+    // k2.scheme / k2.gaps (see style.ts) — not daemon sync:settings.
+    const merged = { ...get().style, ...partial }
+    set({ style: merged })
+    useStyleStore.getState().applyStyle({
+      styleId: merged.id,
+      paletteId: merged.palette,
+      schemeMode: parseSchemeMode(merged.scheme),
+      gapsPreset: merged.gaps,
+    })
+    // Explicit user choice commits the one-shot migration so a later
+    // daemon echo can never restamp.
+    markStyleMigrated()
   },
 
   setDefaultAgent: async (agent: string) => {
@@ -554,9 +533,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
-      style: mergeStyleDefaults(result.style),
+      // Style stays client-local — reset-all does not adopt daemon defaults.
+      style: styleFromLocalStore(),
     })
-    applyBackendStyle(result.style)
   },
 
   fetchSettings: async () => {
@@ -576,6 +555,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
     // If a write happened while we were fetching, skip — the write's result is fresher
     if (_writeSeq !== seqBefore) return
+    // One-shot migration: seed local from daemon style only when this
+    // install has no prior local selection. After migration, daemon
+    // style is ignored forever (host switch / sync:settings refetch
+    // must not restyle).
+    migrateStyleFromDaemon(result.style)
     set({
       terminal: result.terminal,
       keybindings: result.keybindings,
@@ -590,15 +574,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
-      style: mergeStyleDefaults(result.style),
+      // Always reflect the live local selection — never the daemon echo.
+      style: styleFromLocalStore(),
       lastActiveProjectId: result.lastActiveProjectId ?? null,
       lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,
       loaded: true
     })
-    // Daemon-canonical style wins over the localStorage-mirror boot
-    // apply. Also the restamp path for cross-window `sync:settings`
-    // (useWindowSync → fetchSettings → here).
-    applyBackendStyle(result.style)
   }
 }))
 

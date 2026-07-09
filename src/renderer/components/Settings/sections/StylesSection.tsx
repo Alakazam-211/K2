@@ -7,10 +7,12 @@
 // Interaction contract:
 // - HOVER previews are strictly attribute-level (stampStyleAttributes)
 //   with no store/state/persistence writes, so a stray hover can never
-//   race the daemon round-trip; mouse-leave restores the committed
-//   selection's attributes.
+//   race a commit; mouse-leave restores the committed selection's
+//   attributes.
 // - CLICK commits: applyStyle (store + <html> + localStorage mirror)
-//   then updateStyleSettings (daemon persistence + cross-window sync).
+//   then updateStyleSettings (settings-store mirror only — style is
+//   per-client view state, never daemon-canonical; multi-window sync
+//   is via localStorage `storage` events).
 
 import React, { useCallback, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'

@@ -8,7 +8,8 @@
 //      existing daemon PTY — AgentChatPane's mechanism). Live/dormant
 //      handling mirrors the feedback Terminal tab: liveness via
 //      sessions/lookup-by-agent, a dormant session shows the wake
-//      affordance → POST workspace/ensure-pinned-chat, then attaches.
+//      affordance → activateProject(member) + ensure-pinned-chat, then
+//      attaches (PRD §4.3.1; without activate active_reaper reaps ~15s).
 //   2. `htmlDoc` — a pinned HTML document (#587), rendered with the
 //      FileViewerPane html-category machinery: host-aware fs/read-file,
 //      sandboxed <iframe srcDoc> (allow-scripts, NO allow-same-origin),
@@ -55,9 +56,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { activateProject } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
+import {
+  activateOnLiveSessionAttach,
+  wakeCanonicalMemberSession,
+} from './wake-member-session'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { Surface } from '@/components/ui'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
@@ -241,19 +247,32 @@ function DashboardTerminalPane({
     }
   }, [projectPath, resolve])
 
-  // Wake a dormant canonical session — the daemon-owned find-or-spawn
-  // AgentChatPane and the feedback tab ride (ensure-pinned-chat), then
-  // attach under the same key.
+  // Live attach (wake success or passive attach of an already-alive PTY):
+  // client is watching ⇒ Active. activateProject is deduped / no-op when
+  // already active for this member id.
+  useEffect(() => {
+    if (phase.kind !== 'live') return
+    activateOnLiveSessionAttach(workspaceId, activateProject)
+  }, [phase.kind, workspaceId])
+
+  // Wake a dormant canonical session — activate (PRD §4.3.1) then the
+  // daemon-owned find-or-spawn AgentChatPane and the feedback tab ride
+  // (ensure-pinned-chat), then attach under the same key.
+  // Without activate, active_reaper reaps the chat PTY after ~15s.
   const wake = useCallback(async (): Promise<void> => {
     if (!projectPath) return
     setPhase({ kind: 'waking' })
     try {
-      await daemonCliPost('workspace/ensure-pinned-chat', { project: projectPath })
+      await wakeCanonicalMemberSession(workspaceId, projectPath, {
+        activateProject,
+        ensurePinnedChat: (project) =>
+          daemonCliPost('workspace/ensure-pinned-chat', { project }),
+      })
       setPhase({ kind: 'live' })
     } catch (e) {
       setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e) })
     }
-  }, [projectPath])
+  }, [projectPath, workspaceId])
 
   if (!member || !projectPath) {
     return (

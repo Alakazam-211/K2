@@ -14,14 +14,20 @@
 // /cli/sessions/v2/spawn reuses the existing daemon PTY — the same
 // mechanism as AgentChatPane and the orange-tab sandbox adoption). A
 // live session attaches immediately; a dormant one shows "Wake session"
-// (canonical → ensure-pinned-chat, sandbox → sandbox/reopen) and then
-// attaches; no session_id shows a plain empty state.
+// (canonical → activate + ensure-pinned-chat, sandbox → activate +
+// sandbox/reopen) and then attaches; no session_id shows a plain empty
+// state. PRD §4.3.1: open/attach ⇒ activate so active_reaper spares it.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { KeyCombo } from '@/components/KeySymbol'
+import { activateProject } from '@/stores/projects'
+import {
+  activateOnLiveSessionAttach,
+  wakeCanonicalMemberSession,
+} from '@/components/Projects/wake-member-session'
 import {
   commentFeedback,
   fetchFeedbackShow,
@@ -438,21 +444,37 @@ function TerminalTab({
     }
   }, [sessionId, resolve])
 
+  // Live attach (wake success or already-alive PTY): client watching ⇒
+  // Active so active_reaper spares the chat. Deduped / no-op when already
+  // active for this workspace id.
+  useEffect(() => {
+    if (phase.kind !== 'live') return
+    activateOnLiveSessionAttach(projectId, activateProject)
+  }, [phase.kind, projectId])
+
   // Wake a dormant session via the existing wake paths, then attach.
+  // Canonical: activate (PRD §4.3.1) before ensure-pinned-chat so Active
+  // is set before reaper arms — without it, active_reaper reaps after ~15s.
   const wake = useCallback(async (): Promise<void> => {
     if (!projectPath || !sessionId) return
     setPhase({ kind: 'waking' })
     try {
       if (sessionKind === 'canonical') {
         // Daemon-owned find-or-spawn under the canonical project-id key —
-        // the same wake AgentChatPane rides.
-        await daemonCliPost('workspace/ensure-pinned-chat', { project: projectPath })
+        // the same wake AgentChatPane rides; activate first (see helper).
+        await wakeCanonicalMemberSession(projectId, projectPath, {
+          activateProject,
+          ensurePinnedChat: (project) =>
+            daemonCliPost('workspace/ensure-pinned-chat', { project }),
+        })
         setPhase({ kind: 'live', agentName: projectId, cwd: projectPath })
         return
       }
-      // Sandbox: re-mount the cell's persistent layer + resume, then poll
-      // the live list until the session registers (the reopen returns as
-      // soon as the relaunch is accepted).
+      // Sandbox: mark workspace Active (client watching), re-mount the
+      // cell's persistent layer + resume, then poll the live list until
+      // the session registers (the reopen returns as soon as the relaunch
+      // is accepted).
+      activateOnLiveSessionAttach(projectId, activateProject)
       await daemonCliPost('sandbox/reopen', {
         project_path: projectPath,
         session_id: sessionId,

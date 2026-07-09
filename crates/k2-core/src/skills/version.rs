@@ -50,9 +50,14 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// now teach the API read-back contract — "Respond to your API caller"
 /// (`k2 respond` / `k2 respond --final` when the session was launched
 /// through the K2 API and `K2_HOOK_TOKEN` is staged).
-pub const SKILL_VERSION_MANAGER: u32 = 4;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 4;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 4;
+///
+/// Manager / K2SO-agent / custom-agent bumped to 5 in 0.40.x (K2 Mail
+/// S8): skills now teach the `k2 mail` surface — minting, reading with
+/// the untrusted-content markers, the `wait` loop pattern, and send
+/// governance (off | approval | on; queued IS success).
+pub const SKILL_VERSION_MANAGER: u32 = 5;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 5;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 5;
 pub const SKILL_VERSION_TEMPLATE: u32 = 2;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
@@ -71,7 +76,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// management on the agent plane (`k2 agent hire --project`,
 /// `set --add-project/--remove-project`, `get <ws> projects`, and the
 /// first-member-becomes-PoC rule).
-pub const SKILL_VERSION_WORKSPACE: u32 = 10;
+/// (10 was taken on main in 0.40.41.) Bumped to 11 in 0.40.x
+/// (K2 Mail S8): the loadable k2-cli skill gains the "Email"
+/// (`k2 mail`) section — minting, untrusted-content markers, the
+/// `wait` loop, send governance.
+pub const SKILL_VERSION_WORKSPACE: u32 = 11;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

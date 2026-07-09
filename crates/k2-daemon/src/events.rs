@@ -170,6 +170,21 @@ impl AgentHookEventSink for DaemonBroadcastSink {
                     },
                 );
             }
+            // K2 Mail (S8) — same seam for the four `mail:*` hooks, which
+            // EmailSection.tsx's module header flagged as missing: without
+            // this mirror a remote Settings→Email page (K2 Connect) never
+            // sees server/domain/approvals changes live. Refetch signal
+            // only — never message content on the bus.
+            HookEvent::MailServerStateChanged
+            | HookEvent::MailDomainStatusChanged
+            | HookEvent::MailSendApprovalRequested
+            | HookEvent::MailSendDecided => {
+                let name = event.event_name();
+                let reason = name.strip_prefix("mail:").unwrap_or(name).to_string();
+                let _ = crate::session_events::emit(
+                    crate::session_events::SessionEvent::MailChanged { reason },
+                );
+            }
             _ => {}
         }
 
@@ -332,14 +347,15 @@ mod tests {
     }
 
     /// Remote live-update fix — the sink mirrors every `project-group:*`
-    /// / `feedback:*` HookEvent onto the host-aware session-events bus as
-    /// `ProjectGroupsChanged { reason }` / `FeedbackChanged { reason }`,
-    /// with `reason` = the hook name minus its bus prefix. Without this
+    /// / `feedback:*` / `mail:*` HookEvent onto the host-aware
+    /// session-events bus as `ProjectGroupsChanged { reason }` /
+    /// `FeedbackChanged { reason }` / `MailChanged { reason }`, with
+    /// `reason` = the hook name minus its bus prefix. Without this
     /// mirror a K2 Connect client never sees these changes (the legacy
     /// `/events` WS is loopback-only). Drains a real bus subscription —
     /// unrelated events from parallel tests are skipped, not failed on.
     #[test]
-    fn project_group_and_feedback_hooks_mirror_to_session_events_bus() {
+    fn project_group_feedback_and_mail_hooks_mirror_to_session_events_bus() {
         use crate::session_events::SessionEvent;
 
         let tx = broadcast::Sender::<WireEvent>::new(16);
@@ -355,6 +371,10 @@ mod tests {
             (HookEvent::FeedbackAnswered, "answered"),
             (HookEvent::FeedbackStatusChanged, "status-changed"),
             (HookEvent::FeedbackCommented, "commented"),
+            (HookEvent::MailServerStateChanged, "server-state-changed"),
+            (HookEvent::MailDomainStatusChanged, "domain-status-changed"),
+            (HookEvent::MailSendApprovalRequested, "send-approval-requested"),
+            (HookEvent::MailSendDecided, "send-decided"),
         ];
         for (hook, want_reason) in cases {
             let mut rx = crate::session_events::subscribe();
@@ -377,6 +397,13 @@ mod tests {
                         | HookEvent::FeedbackStatusChanged
                         | HookEvent::FeedbackCommented,
                     ) => reason == want_reason,
+                    (
+                        SessionEvent::MailChanged { reason },
+                        HookEvent::MailServerStateChanged
+                        | HookEvent::MailDomainStatusChanged
+                        | HookEvent::MailSendApprovalRequested
+                        | HookEvent::MailSendDecided,
+                    ) => reason == want_reason,
                     _ => false, // contamination from a parallel test — keep draining
                 };
                 if hit {
@@ -387,16 +414,18 @@ mod tests {
             assert!(found, "no session-events mirror for {hook:?} (want reason {want_reason:?})");
         }
 
-        // A non-project-group / non-feedback hook must NOT mint either
-        // mirror kind (spot-check the match arms stay scoped).
+        // A non-project-group / non-feedback / non-mail hook must NOT
+        // mint any mirror kind (spot-check the match arms stay scoped).
         let mut rx = crate::session_events::subscribe();
         sink.emit(HookEvent::SyncProjects, serde_json::json!({}));
         while let Ok(got) = rx.try_recv() {
             if matches!(
                 got,
-                SessionEvent::ProjectGroupsChanged { .. } | SessionEvent::FeedbackChanged { .. }
+                SessionEvent::ProjectGroupsChanged { .. }
+                    | SessionEvent::FeedbackChanged { .. }
+                    | SessionEvent::MailChanged { .. }
             ) {
-                panic!("SyncProjects must not mirror as a project-group/feedback signal");
+                panic!("SyncProjects must not mirror as a project-group/feedback/mail signal");
             }
         }
     }

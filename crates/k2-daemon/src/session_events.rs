@@ -466,6 +466,23 @@ pub enum SessionEvent {
     /// one of `created` | `answered` | `status-changed` | `commented`.
     /// Refetch signal only, no item payload.
     FeedbackChanged { reason: String },
+
+    /// Remote live-update fix — mail state changed (server state /
+    /// domain verification / an outbound approval requested or
+    /// decided). APP-LEVEL twin of the legacy `mail:*` HookEvents
+    /// (loopback-only bus, same story as
+    /// [`SessionEvent::ProjectGroupsChanged`]). Emitted ADDITIVELY
+    /// alongside every mail HookEvent (see `events.rs::
+    /// DaemonBroadcastSink`) so a remote renderer's Settings→Email
+    /// page refetches live — its module header flagged exactly this
+    /// seam.
+    ///
+    /// Wire: `{ "kind": "mail_changed", "reason": string }` with
+    /// `reason` = the legacy hook name minus its `mail:` prefix —
+    /// one of `server-state-changed` | `domain-status-changed` |
+    /// `send-approval-requested` | `send-decided`. Refetch signal
+    /// only, no payload (never message content on the bus).
+    MailChanged { reason: String },
 }
 
 /// One nested-subdomain target on the wire (0074): the internal endpoint
@@ -1214,6 +1231,20 @@ mod tests {
         });
         assert_eq!(json["kind"], "feedback_changed");
         assert_eq!(json["reason"], "created");
+        assert_keys(&json, &["kind", "reason"]);
+    }
+
+    /// K2 Mail FROZEN WIRE CONTRACT: `{ "kind": "mail_changed",
+    /// "reason": string }` with `reason` = the legacy hook name minus
+    /// its `mail:` prefix. The Settings→Email consumer switches on
+    /// `reason`; a tag/field drift fails CI loudly.
+    #[test]
+    fn mail_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::MailChanged {
+            reason: "send-approval-requested".into(),
+        });
+        assert_eq!(json["kind"], "mail_changed");
+        assert_eq!(json["reason"], "send-approval-requested");
         assert_keys(&json, &["kind", "reason"]);
     }
 

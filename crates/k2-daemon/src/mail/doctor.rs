@@ -1157,6 +1157,98 @@ pub fn direct_send_gate() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "grade": grade, "ranAt": run["ranAt"] }))
 }
 
+// ── Nightly server-level run (PRD §9 "auto-run nightly") ───────────────
+
+/// Sweep tick — cheap when nothing is due (one indexed SELECT), same
+/// shape as `dns_verify`'s poller.
+const DEFAULT_NIGHTLY_TICK_SECS: u64 = 3_600;
+/// A server-level run is re-taken daily.
+const NIGHTLY_INTERVAL_SECS: i64 = 86_400;
+
+fn nightly_tick_interval() -> std::time::Duration {
+    let secs = std::env::var("K2_MAIL_DOCTOR_TICK_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT_NIGHTLY_TICK_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Pure due-schedule for the nightly loop: ONLY a `running` server is
+/// ever probed (a stopped/disabled/installing/erroring sidecar would
+/// grade garbage and the probes assume a live loopback SMTP), and a
+/// running one is due when there is no server-level run yet or the
+/// last one is a day old. `k2 mail doctor` / the Settings card can
+/// always force a run regardless.
+pub fn nightly_due(server_status: Option<&str>, last_ran_at: Option<i64>, now: i64) -> bool {
+    if server_status != Some("running") {
+        return false;
+    }
+    match last_ran_at {
+        None => true,
+        Some(t) => now - t >= NIGHTLY_INTERVAL_SECS,
+    }
+}
+
+/// One blocking sweep: read the schedule inputs, and when due invoke
+/// `run_server_doctor` (production: [`run`]`(None)`, which persists
+/// via [`persist_run`] — the same S6 machinery the route uses).
+///
+/// The runner is INJECTED so this function is testable without any
+/// network: tests pass a recording fake; only `spawn_nightly` binds
+/// the real [`run`] — the house rule that no test path can dial out.
+fn nightly_sweep_once(run_server_doctor: &dyn Fn()) {
+    let (status, last_ran_at): (Option<String>, Option<i64>) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let status = conn
+            .query_row("SELECT status FROM mail_server WHERE id = 1", [], |r| r.get(0))
+            .ok();
+        let last_ran_at = conn
+            .query_row(
+                "SELECT ran_at FROM mail_doctor_runs WHERE domain_id IS NULL \
+                 ORDER BY ran_at DESC, rowid DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        (status, last_ran_at)
+    };
+    if nightly_due(status.as_deref(), last_ran_at, now_secs()) {
+        run_server_doctor();
+    }
+}
+
+/// Register the nightly doctor loop (main.rs, next to
+/// `dns_verify::spawn`). No-op unless this daemon can host mail at all
+/// (the `spawn_health_loop` gate); after that, every tick is one cheap
+/// SELECT until an installed server is `running` and a daily
+/// server-level run is due — then the REAL doctor runs and persists,
+/// so the direct-send gate + Settings card always have a fresh grade
+/// and a regression (new blocklist hit, expired cert, blocked :25)
+/// surfaces within a day instead of at send time.
+pub fn spawn_nightly() -> Option<tokio::task::JoinHandle<()>> {
+    if !super::supervisor::mail_supported() {
+        return None;
+    }
+    Some(tokio::spawn(async move {
+        let tick = nightly_tick_interval();
+        k2_core::log_debug!("[mail/doctor] nightly loop started — tick={}s", tick.as_secs());
+        loop {
+            // Blocking probes + SQLite — keep them off the async reactor.
+            let _ = tokio::task::spawn_blocking(|| {
+                nightly_sweep_once(&|| {
+                    if let Err(e) = run(None) {
+                        k2_core::log_debug!("[mail/doctor] nightly run failed: {e:?}");
+                    }
+                })
+            })
+            .await;
+            tokio::time::sleep(tick).await;
+        }
+    }))
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests — canned resolver + recording env (no network)
 // ──────────────────────────────────────────────────────────────────────
@@ -1656,5 +1748,75 @@ mod tests {
             }
             other => panic!("expected NotReady, got {other:?}"),
         }
+    }
+
+    // ── Nightly loop (schedule + sweep gating; the runner is ALWAYS
+    //    injected here — no test path can reach the real probes) ──
+
+    #[test]
+    fn nightly_due_only_probes_a_running_server_daily() {
+        assert!(!nightly_due(None, None, 1000), "not installed → never due");
+        for st in ["installing", "stopped", "disabled", "error"] {
+            assert!(!nightly_due(Some(st), None, 1000), "'{st}' must never probe");
+        }
+        assert!(nightly_due(Some("running"), None, 1000), "running + no run on file → due");
+        assert!(!nightly_due(Some("running"), Some(1000), 1000 + 86_399), "fresh run → not due");
+        assert!(
+            nightly_due(Some("running"), Some(1000), 1000 + 86_400),
+            "running re-runs at the daily boundary"
+        );
+    }
+
+    #[test]
+    fn nightly_sweep_gates_on_server_state_and_run_freshness() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _g = crate::mail::mail_server_test_lock();
+        clear_runs();
+        let delete_server_row = || {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+        };
+        let seed_server = |status: &str| {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, updated_at) \
+                 VALUES (1, ?1, 'v0.16.0', 'mail.acme.dev', 100)",
+                rusqlite::params![status],
+            )
+            .expect("seed server row");
+        };
+        let calls = AtomicUsize::new(0);
+        let fake_run = || {
+            calls.fetch_add(1, Ordering::SeqCst);
+        };
+
+        // No server row → never runs.
+        delete_server_row();
+        nightly_sweep_once(&fake_run);
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "not installed → no run");
+
+        // Installed but not running → never runs.
+        seed_server("stopped");
+        nightly_sweep_once(&fake_run);
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "stopped → no run");
+
+        // Running + no server-level run on file → runs once.
+        seed_server("running");
+        nightly_sweep_once(&fake_run);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "running + nothing on file → due");
+
+        // A fresh server-level run persisted (ran_at = now) → skipped
+        // until the daily boundary.
+        let report = run_checks(&healthy_dns(), &FakeEnv::default(), &ctx(), None, 1000);
+        let _ = persist_run(None, &report).expect("persist");
+        nightly_sweep_once(&fake_run);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "fresh run on file → skipped");
+
+        delete_server_row();
+        clear_runs();
     }
 }

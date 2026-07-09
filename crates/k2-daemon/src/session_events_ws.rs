@@ -351,6 +351,12 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         SessionEvent::ProjectGroupsChanged { .. } => return true,
         SessionEvent::FeedbackChanged { .. } => return true,
 
+        // K2 Mail — APP-LEVEL: the mail server / domains / approvals
+        // queue are daemon-global owner surface, not tied to one
+        // workspace. Same routing class as FeedbackChanged so a
+        // remote Settings→Email page refetches live.
+        SessionEvent::MailChanged { .. } => return true,
+
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter below routes them to
         // the matching subscriber exactly like SessionAdded/Removed.
@@ -487,7 +493,13 @@ mod tests {
         let feedback = SessionEvent::FeedbackChanged {
             reason: "created".into(),
         };
-        for ev in [&llm, &tunnel, &tunnel_subs, &agent, &presence, &open_url, &project_groups, &feedback] {
+        // K2 Mail — the mail refetch signal is daemon-global too.
+        let mail = SessionEvent::MailChanged {
+            reason: "send-decided".into(),
+        };
+        for ev in
+            [&llm, &tunnel, &tunnel_subs, &agent, &presence, &open_url, &project_groups, &feedback, &mail]
+        {
             assert!(event_matches_workspace(ev, "/x/foo"));
             assert!(event_matches_workspace(ev, "/totally/unrelated"));
             assert!(event_matches_workspace(ev, ""));

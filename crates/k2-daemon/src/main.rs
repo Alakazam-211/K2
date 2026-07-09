@@ -875,6 +875,17 @@ async fn async_main() {
     // every tick while no mail domains exist (one indexed SELECT).
     let _mail_dns_verify_handle = mail::dns_verify::spawn();
 
+    // K2 Mail S8 (prd-email-server-v1 §9) — the nightly deliverability
+    // doctor: a server-level `k2 mail doctor` run re-taken daily while
+    // (and ONLY while) the mail server is `running`, persisted through
+    // the same S6 run machinery the route uses, so the direct-send gate
+    // + Settings card always hold a fresh grade and a regression (new
+    // blocklist hit, expiring cert, blocked :25) surfaces within a day
+    // instead of at send time. `None` off Linux (mail unsupported);
+    // one cheap SELECT per tick otherwise (K2_MAIL_DOCTOR_TICK_SECS
+    // overrides the hourly sweep for tests).
+    let _mail_doctor_nightly_handle = mail::doctor::spawn_nightly();
+
     // K2 Connect E2E (PRD `k2-connect-e2e-encryption.md` §4 Option A) —
     // when `K2_E2E` is on, stand up a SECOND listener that terminates TLS
     // itself for `<sub>.k2.dev` and splices the decrypted stream to the

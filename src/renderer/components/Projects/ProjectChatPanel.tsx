@@ -24,14 +24,14 @@
 //     §6.7.3): the PARENT gates the mount on it, and the top-bar toggle
 //     carries the unread dot while closed. The seen semantics are
 //     unchanged — a mounted panel means the messages are on screen.
-//   - Presence viewers (resolved viewer-mode window, the P5 idiom) can
-//     read; the composer is hidden behind a read-only note.
+//   - Connect role gates the composer (not window-mode): Owner/Admin/
+//     Member can post; Viewer reads only. Fail-closed while role loads.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
-import { useWindowModeStore } from '@/stores/window-mode'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { KeyCombo } from '@/components/KeySymbol'
+import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import {
   fetchProjectGroupMessages,
   postProjectGroupMessage,
@@ -41,12 +41,14 @@ import {
 import {
   MESSAGES_DEFAULT_LIMIT,
   canLoadEarlier,
+  canPostProjectChat,
   clampChatPanelWidth,
   composerPlaceholder,
   deliveredLine,
   mergeMessages,
   nextEarlierLimit,
   pocLabel,
+  type ConnectRole,
 } from './project-chat'
 
 // Resize-handle hit-area thickness (px), centered on the panel's left
@@ -62,9 +64,19 @@ interface LastPost {
 
 export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): React.JSX.Element {
   const revision = useProjectGroupsStore((s) => s.revision)
-  // Presence-arc read-only signal (the P5 idiom): a RESOLVED viewer-mode
-  // window reads the stream but never posts.
-  const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
+  // Connect role (whoami cache shared with presence kick) — not window-mode.
+  // null while loading or unresolved → fail-closed (composer hidden).
+  const [connectRole, setConnectRole] = useState<ConnectRole | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void fetchViewerRole().then((role) => {
+      if (!cancelled) setConnectRole(role)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const readOnly = !canPostProjectChat(connectRole)
 
   // null = never fetched (loading state on first expand).
   const [messages, setMessages] = useState<ProjectGroupMessage[] | null>(null)
@@ -342,11 +354,11 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
           )}
         </div>
 
-        {/* Composer — the human owner's seam; hidden for viewers. */}
+        {/* Composer — gated on Connect role (≥ Member); hidden for Viewers. */}
         <div className="border-t border-[var(--color-border)] px-3 py-2 flex-shrink-0">
           {readOnly ? (
             <div className="text-[10px] text-[var(--color-text-muted)] py-1">
-              Viewing read-only — posting is disabled.
+              Viewers can read project chat but can&rsquo;t post.
             </div>
           ) : (
             <>

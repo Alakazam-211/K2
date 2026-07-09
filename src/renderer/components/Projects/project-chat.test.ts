@@ -11,6 +11,7 @@ import {
   MESSAGES_DEFAULT_LIMIT,
   MESSAGES_MAX_LIMIT,
   canLoadEarlier,
+  canPostProjectChat,
   clampChatPanelWidth,
   composerPlaceholder,
   deliveredLine,
@@ -196,5 +197,21 @@ describe('deliveredLine (§6.4 indicator mapping)', () => {
     expect(deliveredLine(false, 'no_agent_mode', 'Scout')).toBe('PoC session unreachable')
     expect(deliveredLine(false, 'workspace_not_found', 'Scout')).toBe('PoC session unreachable')
     expect(deliveredLine(false, null, 'Scout')).toBe('PoC session unreachable')
+  })
+})
+
+describe('canPostProjectChat (Connect role ≥ Member; fail-closed)', () => {
+  it('owner, admin, member can post', () => {
+    expect(canPostProjectChat('owner')).toBe(true)
+    expect(canPostProjectChat('admin')).toBe(true)
+    expect(canPostProjectChat('member')).toBe(true)
+  })
+
+  it('viewer cannot post', () => {
+    expect(canPostProjectChat('viewer')).toBe(false)
+  })
+
+  it('null/unresolved is fail-closed', () => {
+    expect(canPostProjectChat(null)).toBe(false)
   })
 })

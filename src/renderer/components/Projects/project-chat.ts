@@ -89,6 +89,18 @@ export function composerPlaceholder(
   return label !== null ? `Message ${label}` : 'Message the PoC'
 }
 
+// ── Connect-role post gate (not window-mode) ─────────────────────────────
+// Project chat postability is a Connect *role* decision (≥ Member),
+// independent of presence window-mode (viewer/claimer). Fail-closed:
+// null/unresolved → cannot post.
+
+export type ConnectRole = 'owner' | 'admin' | 'member' | 'viewer'
+
+/** Project chat postability: ≥ Member. null/unresolved → false (fail-closed). */
+export function canPostProjectChat(role: ConnectRole | null): boolean {
+  return role === 'owner' || role === 'admin' || role === 'member'
+}
+
 /** The §6.4 line under a just-sent message, from the msg response's
  *  delivery outcome. `author-is-poc` shouldn't occur for owner posts —
  *  handled gracefully as "nothing to report" (the post itself is fine). */

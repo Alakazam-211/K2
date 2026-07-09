@@ -13,10 +13,15 @@
 //! `routes::dispatcher` with `token_ok` auth (owner AND connect-user
 //! sessions — connect users see projects too). GET-chain hits on POST
 //! paths return 405 (`feedback_post_only_route_guards` house rule).
-//! The `dashboard/*` mutations — and the §6.7.7 `set-icon` /
-//! `set-color` appearance mutations — additionally require the
-//! owner-or-admin bit (PRD §6.3 resolved Q2 — viewers see but cannot
-//! save), enforced in the dispatcher arm where the query string lives.
+//! Project chat post (`msg`) additionally requires role ≥ Member
+//! (Owner/Admin/Member; Viewers may read but cannot post). The
+//! `dashboard/*` mutations — and the §6.7.7 `set-icon` / `set-color`
+//! appearance mutations — additionally require the owner-or-admin bit
+//! (PRD §6.3 resolved Q2 — viewers see but cannot save), enforced in
+//! the dispatcher arm where the query string lives. Human chat author
+//! attribution is resolved from the session token in the dispatcher
+//! (owner → `"owner"`, connect-user → username) and passed into
+//! `handle_msg` — never defaulted to `"owner"` for multi-user posts.
 //!
 //! Error contract: `{"ok":false,"error":{"code","hint"}}` with stable
 //! codes — `not_found` / `ambiguous_id` (CLI exit 4; the ambiguous hint
@@ -227,7 +232,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 /// Dispatch a `/cli/project-group/*` POST body to its handler.
 /// Exact-match paths; unknown paths 404 (mirrors
 /// `feedback_routes::dispatch_post`).
-pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
+///
+/// `session_author` is the daemon-resolved authed actor (`"owner"` or a
+/// connect-user username) — resolved by the dispatcher from the session
+/// token, never from the body. Used only by `msg` for human author
+/// attribution when the body omits `author`.
+pub fn dispatch_post(path: &str, body: &[u8], session_author: &str) -> CliResponse {
     match path {
         "/cli/project-group/create" => handle_create(body),
         "/cli/project-group/rename" => handle_rename(body),
@@ -237,7 +247,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/project-group/add-member" => handle_add_member(body),
         "/cli/project-group/remove-member" => handle_remove_member(body),
         "/cli/project-group/set-poc" => handle_set_poc(body),
-        "/cli/project-group/msg" => handle_msg(body),
+        "/cli/project-group/msg" => handle_msg(body, session_author),
         "/cli/project-group/set-icon" => handle_set_icon(body),
         "/cli/project-group/set-color" => handle_set_color(body),
         "/cli/project-group/dashboard/save-layout" => handle_save_layout(body),
@@ -918,9 +928,10 @@ pub fn handle_set_poc(body: &[u8]) -> CliResponse {
 
 // ── The chat post + §4.3 PoC injection ────────────────────────────────
 
-/// `POST /cli/project-group/msg` body. `author` defaults to `owner`
-/// (the app drawer posts author-less); member agents pass their own
-/// workspace name via the CLI.
+/// `POST /cli/project-group/msg` body. When `author` is omitted the app
+/// drawer is posting as a human — the daemon fills author from the
+/// session (`session_author`: `"owner"` or connect-user username).
+/// Member agents pass their own workspace name via the CLI.
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct MsgBody {
@@ -941,18 +952,27 @@ fn project_payload(group_name: &str, body: &str) -> String {
 ///
 /// | actor                    | stored | emits | injected into PoC |
 /// |--------------------------|--------|-------|-------------------|
-/// | human (`owner`)          | yes    | yes   | yes (wake=true)   |
+/// | human (session author)   | yes    | yes   | yes (wake=true)   |
 /// | member agent, not PoC    | yes    | yes   | yes (wake=true)   |
 /// | the PoC itself           | yes    | yes   | NO — never self-inject (`author-is-poc`) |
 /// | non-member workspace     | NO (`not_a_member`) | no | no       |
 ///
-/// Membership is enforced here (core stores what it is told): `owner`
-/// is always allowed; any other author must resolve to a MEMBER
-/// workspace. PoC identity is read at store time — a post racing a
-/// reassignment injects into whoever is PoC when the message lands. A
-/// delivery failure never fails the store; the outcome rides the
-/// response (`delivered` / `deliveryReason` / `deliveredSessionId`).
-pub fn handle_msg(body: &[u8]) -> CliResponse {
+/// Author attribution:
+/// - Body omits `author` (UI human post): use `session_author` from the
+///   dispatcher (owner token → `"owner"`, connect-user → username).
+///   Humans do NOT require project-group workspace membership.
+/// - Body includes `author` (agent CLI): membership is enforced —
+///   `"owner"` is always allowed; any other author must resolve to a
+///   MEMBER workspace.
+///
+/// PoC identity is read at store time — a post racing a reassignment
+/// injects into whoever is PoC when the message lands. A delivery
+/// failure never fails the store; the outcome rides the response
+/// (`delivered` / `deliveryReason` / `deliveredSessionId`).
+///
+/// Role gate (Owner|Admin|Member; Viewer → 403) is enforced in the
+/// dispatcher before this handler runs.
+pub fn handle_msg(body: &[u8], session_author: &str) -> CliResponse {
     let b: MsgBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -971,53 +991,62 @@ pub fn handle_msg(body: &[u8]) -> CliResponse {
         return resolve_error_response(&b.group, ResolveError::NotFound);
     };
 
-    // Author attribution + route-level membership enforcement (§3):
-    // author ∈ {owner, a member workspace}. Core's post_message stores
-    // what it is told — the gate lives HERE.
+    // Author attribution + route-level membership enforcement (§3).
+    // Core's post_message stores what it is told — the gate lives HERE
+    // for agent authors; human authors come from the session token.
     let author_given = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let author = author_given.unwrap_or("owner");
-    let author_workspace_id: Option<String> = if author == "owner" {
-        None // the human — always allowed.
-    } else {
-        let Some(path) = crate::workspace_msg::resolve_workspace(author) else {
-            return error_response(
-                "403 Forbidden",
-                "not_a_member",
-                format!(
-                    "author '{author}' is not a registered workspace — only 'owner' or a \
-                     member workspace's agent can post to '{}'",
-                    group.name
-                ),
-            );
-        };
-        let workspace_id = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
-        };
-        let Some(workspace_id) = workspace_id else {
-            return error_response(
-                "403 Forbidden",
-                "not_a_member",
-                format!("author workspace not registered: {path}"),
-            );
-        };
-        let members = match project_groups::list_members(&group_id) {
-            Ok(m) => m,
-            Err(e) => return core_error(e),
-        };
-        if !members.iter().any(|m| m.workspace_id == workspace_id) {
-            return error_response(
-                "403 Forbidden",
-                "not_a_member",
-                format!(
-                    "author '{author}' is not a member of project '{}' — add it first",
-                    group.name
-                ),
-            );
+    let (author_owned, author_workspace_id): (String, Option<String>) = match author_given {
+        // UI human post — session-resolved author; no workspace membership.
+        None => {
+            let a = session_author.trim();
+            let a = if a.is_empty() { "owner" } else { a };
+            (a.to_string(), None)
         }
-        Some(workspace_id)
+        // Explicit human/legacy "owner" author — always allowed.
+        Some("owner") => ("owner".to_string(), None),
+        // Agent CLI — must resolve to a MEMBER workspace.
+        Some(author) => {
+            let Some(path) = crate::workspace_msg::resolve_workspace(author) else {
+                return error_response(
+                    "403 Forbidden",
+                    "not_a_member",
+                    format!(
+                        "author '{author}' is not a registered workspace — only 'owner' or a \
+                         member workspace's agent can post to '{}'",
+                        group.name
+                    ),
+                );
+            };
+            let workspace_id = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
+            };
+            let Some(workspace_id) = workspace_id else {
+                return error_response(
+                    "403 Forbidden",
+                    "not_a_member",
+                    format!("author workspace not registered: {path}"),
+                );
+            };
+            let members = match project_groups::list_members(&group_id) {
+                Ok(m) => m,
+                Err(e) => return core_error(e),
+            };
+            if !members.iter().any(|m| m.workspace_id == workspace_id) {
+                return error_response(
+                    "403 Forbidden",
+                    "not_a_member",
+                    format!(
+                        "author '{author}' is not a member of project '{}' — add it first",
+                        group.name
+                    ),
+                );
+            }
+            (author.to_string(), Some(workspace_id))
+        }
     };
+    let author = author_owned.as_str();
 
     // Store.
     let msg = match project_groups::post_message(&group_id, author, &b.body) {
@@ -1068,7 +1097,8 @@ pub fn handle_msg(body: &[u8]) -> CliResponse {
                     let payload = project_payload(&group.name, &msg.body);
                     // An owner post is framed with the owner's display
                     // name (the composer's server-side resolution, cf.
-                    // feedback D3); agents are framed as themselves.
+                    // feedback D3); agents and connect-users are framed
+                    // as themselves.
                     let from = if author == "owner" {
                         crate::workspace_msg::resolve_owner_from()
                     } else {
@@ -1438,7 +1468,12 @@ mod tests {
     }
 
     fn post_json(path: &str, body: serde_json::Value) -> CliResponse {
-        dispatch_post(path, body.to_string().as_bytes())
+        // Default session actor is the owner (matches pre-multi-user tests).
+        dispatch_post(path, body.to_string().as_bytes(), "owner")
+    }
+
+    fn post_json_as(path: &str, body: serde_json::Value, session_author: &str) -> CliResponse {
+        dispatch_post(path, body.to_string().as_bytes(), session_author)
     }
 
     fn ok_json(resp: CliResponse) -> serde_json::Value {
@@ -1897,6 +1932,65 @@ mod tests {
             project_payload("release-41", "ship it"),
             "[project:release-41] ship it"
         );
+    }
+
+    /// Human author attribution from the session token (D3): when the
+    /// body omits `author`, the stored author is the daemon-resolved
+    /// session actor — owner token → `"owner"`, connect-user → that
+    /// user's username. Connect-user humans do NOT require project-group
+    /// workspace membership (they are not agent authors).
+    #[test]
+    fn project_group_msg_session_author_attribution() {
+        let g = create_group_via_route(&gname("session-author"));
+        let gid = g["id"].as_str().expect("id").to_string();
+
+        // Owner session + omitted author → stored as "owner".
+        let posted = ok_json(post_json_as(
+            "/cli/project-group/msg",
+            serde_json::json!({ "group": gid, "body": "from the host" }),
+            "owner",
+        ));
+        assert_eq!(posted["author"], "owner");
+
+        // Connect-user session + omitted author → stored as their username.
+        // No workspace membership required (human post, not agent CLI).
+        let posted = ok_json(post_json_as(
+            "/cli/project-group/msg",
+            serde_json::json!({ "group": gid, "body": "from alice on connect" }),
+            "alice",
+        ));
+        assert_eq!(
+            posted["author"], "alice",
+            "connect-user human posts must attribute to the session username"
+        );
+        assert_eq!(posted["delivered"], false);
+        assert_eq!(posted["deliveryReason"], "no_poc");
+
+        // Explicit agent author still takes the body path (membership).
+        let (_ws_id, ws_name, _) = insert_workspace("agent-author");
+        // Non-member workspace still refused.
+        let resp = post_json_as(
+            "/cli/project-group/msg",
+            serde_json::json!({
+                "group": gid,
+                "body": "agent says hi",
+                "author": ws_name,
+            }),
+            "alice", // session is human; body author wins for agent CLI
+        );
+        assert_eq!(resp.status, "403 Forbidden", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "not_a_member");
+
+        // Stored messages: owner + alice only (refused agent never stored).
+        let page = ok_json(messages(&gid, &[]));
+        let authors: Vec<&str> = page["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["author"].as_str().expect("author"))
+            .collect();
+        assert_eq!(authors, vec!["owner", "alice"]);
     }
 
     /// Messages route paging params: after (strictly greater) + limit
@@ -2512,7 +2606,7 @@ mod tests {
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
             assert!(resp.body.contains("POST required"), "body={}", resp.body);
         }
-        let resp = dispatch_post("/cli/project-group/unknown", b"{}");
+        let resp = dispatch_post("/cli/project-group/unknown", b"{}", "owner");
         assert_eq!(resp.status, "404 Not Found");
         // Unclaimed paths stay unclaimed on the GET chain.
         assert!(dispatch("/cli/project-group/unknown", &params).is_none());

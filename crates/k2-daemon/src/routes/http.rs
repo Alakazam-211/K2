@@ -106,6 +106,16 @@ pub(crate) fn token_is_owner_or_admin(query: &str, owner_token: &str) -> bool {
     actor_role(query, owner_token).is_some_and(k2_core::connect_users::can_manage_users)
 }
 
+/// Owner|Admin|Member gate in the SYNC boolean shape (mirrors
+/// [`token_is_owner_or_admin`]). True when the actor's role is at least
+/// Member — the project-chat post floor (`POST /cli/project-group/msg`).
+/// Viewers can read project chat but cannot post; unknown/missing/empty
+/// tokens fail closed.
+pub(crate) fn token_is_at_least_member(query: &str, owner_token: &str) -> bool {
+    actor_role(query, owner_token)
+        .is_some_and(|r| r >= k2_core::connect_users::Role::Member)
+}
+
 /// F4 (prd-v1-api-completion §6) — OWNER-TIER gate for `/cli/api-keys/*`,
 /// resolving the ACTING IDENTITY for the audit trail.
 ///
@@ -1293,6 +1303,84 @@ mod tests {
                 !token_is_owner_or_admin("project=/tmp/x", owner),
                 "missing token param must be rejected",
             );
+        });
+    }
+
+    // ── token_is_at_least_member: project-chat post floor (Owner|Admin|Member)
+    //
+    // `POST /cli/project-group/msg` admits Owner/Admin/Member; Viewers may
+    // read project chat but cannot post. Mirrors the owner-or-admin gate's
+    // shape; uses the Role Ord floor `>= Member`. set_role revokes live
+    // sessions, so the role is set BEFORE the session is minted.
+
+    #[test]
+    fn token_is_at_least_member_accepts_owner_token() {
+        assert!(token_is_at_least_member("token=owner-secret", "owner-secret"));
+    }
+
+    #[test]
+    fn token_is_at_least_member_accepts_admin_session() {
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            k2_core::connect_users::add_user("admin_chat", "password123").expect("add_user");
+            k2_core::connect_users::set_role(
+                "admin_chat",
+                k2_core::connect_users::Role::Admin,
+            )
+            .expect("set_role admin");
+            let session = k2_core::connect_users::create_session("admin_chat");
+            assert!(
+                token_is_at_least_member(&format!("token={session}"), owner),
+                "Admin-role session must pass the ≥ Member gate",
+            );
+        });
+    }
+
+    #[test]
+    fn token_is_at_least_member_accepts_member_session() {
+        // THE positive regression lock: Member (add_user default) can post.
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            k2_core::connect_users::add_user("member_chat", "password123").expect("add_user");
+            let session = k2_core::connect_users::create_session("member_chat");
+            assert!(
+                token_is_at_least_member(&format!("token={session}"), owner),
+                "Member-role session must pass the ≥ Member gate",
+            );
+        });
+    }
+
+    #[test]
+    fn token_is_at_least_member_rejects_viewer_session() {
+        // THE negative regression lock: Viewer is token_ok but cannot post.
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            k2_core::connect_users::add_user("viewer_chat", "password123").expect("add_user");
+            k2_core::connect_users::set_role(
+                "viewer_chat",
+                k2_core::connect_users::Role::Viewer,
+            )
+            .expect("set_role viewer");
+            let session = k2_core::connect_users::create_session("viewer_chat");
+            // Sanity: token_ok still admits the Viewer (read path).
+            assert!(
+                token_ok(&format!("token={session}"), owner),
+                "Viewer sessions remain token_ok (can read)",
+            );
+            assert!(
+                !token_is_at_least_member(&format!("token={session}"), owner),
+                "Viewer-role session must NOT pass the ≥ Member gate",
+            );
+        });
+    }
+
+    #[test]
+    fn token_is_at_least_member_rejects_unknown_and_empty() {
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            assert!(!token_is_at_least_member("token=not-a-session", owner));
+            assert!(!token_is_at_least_member("token=", owner));
+            assert!(!token_is_at_least_member("project=/tmp/x", owner));
         });
     }
 

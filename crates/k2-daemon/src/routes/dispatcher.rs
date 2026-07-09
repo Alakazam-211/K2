@@ -3069,13 +3069,18 @@ async fn handle_one_request(
         // dashboard/reorder).
         // JSON-bodied POSTs; token_ok (owner OR connect-user session —
         // connect users see projects too, PRD §4.1) + require_post per
-        // feedback_post_only_route_guards. The `dashboard/*` mutations
+        // feedback_post_only_route_guards. Project chat post (`msg`)
+        // additionally requires role ≥ Member (Owner/Admin/Member;
+        // Viewers may read but cannot post). The `dashboard/*` mutations
         // — and the §6.7.7 `set-icon`/`set-color` appearance mutations
         // — are additionally owner-or-admin-gated (PRD §6.3 resolved
         // Q2: owners and admins create/rearrange/save; viewers and
         // non-admin users see but cannot change). Handlers run in
         // spawn_blocking (SQLite writes + the PoC injection's wake path
-        // can block).
+        // can block). Session author for chat attribution is resolved
+        // HERE from the token (owner → "owner", connect-user → username)
+        // and passed into the handler — never trusted from the body for
+        // human posts (D3).
         p if is_post && post_allowed && p.starts_with("/cli/project-group/") => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -3087,6 +3092,22 @@ async fn handle_one_request(
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            // Project chat: Owner / Admin / Member can post; Viewer → 403.
+            // Does NOT tighten dashboard/* / set-icon / set-color (those
+            // stay owner-or-admin below).
+            if p == "/cli/project-group/msg"
+                && !super::http::token_is_at_least_member(&query, state.token.as_str())
+            {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"viewers can read project chat but cannot post"}}"#,
                 )
                 .await;
                 return DispatchOutcome::Done;
@@ -3106,10 +3127,24 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            // Resolve acting identity for chat author attribution (D3).
+            // Same shape as `/cli/push/*`: owner token → "owner", else
+            // the connect-user session's username.
+            let session_author = if super::http::token_is_owner(&query, state.token.as_str()) {
+                "owner".to_string()
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .unwrap_or_else(|| "owner".to_string())
+            };
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                crate::project_group_routes::dispatch_post(&p_owned, &body_bytes)
+                crate::project_group_routes::dispatch_post(
+                    &p_owned,
+                    &body_bytes,
+                    &session_author,
+                )
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

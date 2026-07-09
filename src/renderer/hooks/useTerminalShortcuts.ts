@@ -15,10 +15,18 @@ import type { TerminalPane } from '@/stores/tabs'
 /**
  * Registers global keyboard shortcuts for terminal tab/pane management.
  *
+ * Single keyboard owner for these chords — native menu accelerators for
+ * the same keys MUST stay unbound in menu.rs (duplicate menu+keydown
+ * fire = multi-spawn / multi-note bugs). Menu clicks still emit
+ * menu:new-document / menu:new-tab / … and App.tsx handles those.
+ *
+ * - Cmd+N         — New untitled document (note)
  * - Cmd+T         — New tab
+ * - Cmd+Shift+T   — Launch default agent
  * - Cmd+W         — Close active tab
  * - Cmd+D         — Split pane vertically
  * - Cmd+Shift+D   — Split pane horizontally
+ * - Cmd+O         — Open workspace
  * - Cmd+Alt+Left  — Previous tab
  * - Cmd+Alt+Right — Next tab
  * - Cmd+1-9       — Switch to workspace by index

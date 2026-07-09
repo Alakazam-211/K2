@@ -31,21 +31,22 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
         "File",
         true,
         &[
-            &MenuItem::with_id(handle, "new-document", "New Document", true, Some("CmdOrCtrl+N"))?,
-            // NO accelerators on new-tab / launch-agent — the webview
-            // keydown handler (useTerminalShortcuts.ts) owns Cmd+T /
-            // Cmd+Shift+T. Binding them here TOO double-fires the spawn
-            // (one press = menu event + keydown = 2+ terminals; the
-            // multi-spawn bug, 2026-07-07). Same duplicate-binding trap
-            // tray.rs documents for Cmd+Q. Menu items stay clickable.
+            // NO accelerators on any File action that useTerminalShortcuts.ts
+            // also binds (Cmd+N / T / Shift+T / D / O / W). Binding here AND
+            // in the webview double-fires (menu event + keydown) — the
+            // Cmd+Shift+T multi-spawn bug (2026-07-07) and the same-class
+            // Cmd+N multi-note bug (2026-07-09). Same duplicate-binding trap
+            // tray.rs documents for Cmd+Q. Menu items stay clickable; the
+            // webview keydown is the single keyboard owner.
+            &MenuItem::with_id(handle, "new-document", "New Document", true, None::<&str>)?,
             &MenuItem::with_id(handle, "new-tab", "New Tab", true, None::<&str>)?,
             &MenuItem::with_id(handle, "launch-agent", "Launch Default Agent", true, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
-            &MenuItem::with_id(handle, "split-pane", "Split Pane", true, Some("CmdOrCtrl+D"))?,
+            &MenuItem::with_id(handle, "split-pane", "Split Pane", true, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
-            &MenuItem::with_id(handle, "open-workspace", "Open Workspace...", true, Some("CmdOrCtrl+O"))?,
+            &MenuItem::with_id(handle, "open-workspace", "Open Workspace...", true, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
-            &MenuItem::with_id(handle, "close-tab", "Close Tab", true, Some("CmdOrCtrl+W"))?,
+            &MenuItem::with_id(handle, "close-tab", "Close Tab", true, None::<&str>)?,
         ],
     )?;
 

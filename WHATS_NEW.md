@@ -3,6 +3,24 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.40 — Project chat, your styles, and sessions that stay awake
+
+- **Project chat is for the whole team.** Owners, Admins, and Members can
+  all message a project's Point of Contact from Project Chat. Viewers stay
+  read-only. Posts also show who actually sent them — not always as the
+  host owner.
+- **Your look stays yours when you switch servers.** Styles (Square /
+  Glass / Bezel, palette, light/dark/auto, density) are personal to your
+  app, not shared via the server. Connecting to a remote host no longer
+  swaps your theme for someone else's day-shift skin.
+- **Cmd+N creates one note.** A double-bound menu shortcut was opening
+  several untitled documents at once — the same class of bug we fixed for
+  Cmd+Shift+T. One press, one note.
+- **Wake session in Projects stays alive.** Waking a team-member agent
+  from a project dashboard now marks that workspace Active, so the
+  session-cleanup reaper no longer kills it after ~15 seconds while you're
+  still watching.
+
 ## 0.40.39 — The agent status you can trust
 
 - **Tab spinners tell the truth now.** The little braille spinner on a

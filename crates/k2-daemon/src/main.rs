@@ -505,7 +505,7 @@ async fn async_main() {
     // 0.40.41 — self-stage the `k2` CLI on headless Linux servers. macOS
     // keeps the app-managed symlink; on Linux the CLI otherwise only
     // arrives via the provision/migration step, which the nsi migration
-    // skipped (prd-cloud-server-upgrade §9 L-cli). Linux-only, never
+    // skipped (internal migration-runbook lesson L-cli). Linux-only, never
     // clobbers a symlink, non-fatal.
     match k2_core::cli_stage::stage_cli() {
         Ok(Some(path)) => log_debug!("[daemon] k2 CLI staged: {}", path.display()),

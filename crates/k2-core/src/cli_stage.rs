@@ -7,7 +7,7 @@
 //! provision script `install`s it (Linux). A headless Linux SERVER has no
 //! app, so if the provision/migration step is skipped the CLI silently
 //! never appears — daemon + data present, `k2` command absent. That bit
-//! the nsi migration (see `prd-cloud-server-upgrade-v1.md` §9 L-cli).
+//! the nsi migration (internal migration-runbook lesson L-cli).
 //!
 //! Fix: the daemon self-stages the CLI at boot, exactly like the
 //! `k2-open` shim ([`crate::open_shim`]) — embed `cli/k2` via

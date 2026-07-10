@@ -58,8 +58,13 @@ hardware**. Everything in §4 follows from this.
 - `~/.claude/projects/<slug>/` — memory + session `.jsonl` transcripts
   (chat history), `~/.claude/history.jsonl`, `~/.cursor/chats` if present
 
-**REGENERATE on the new box (never copy):** `daemon.token`, `*.port`,
-`bin/` (arch-specific — frpc + shims), `sandbox-*` state.
+**REGENERATE / INSTALL on the new box (never copy):** `daemon.token`,
+`*.port`, `bin/` (arch-specific — frpc + shims), `sandbox-*` state, AND
+the **`k2` CLI itself**: `install -m 0755 cli/k2 /usr/local/bin/k2`
+(version-matched to the daemon, or curl the raw from the release tag). It
+lives OUTSIDE `~/.k2` so rsync never carries it, and a headless Linux
+server has no desktop app to self-heal the symlink macOS does — so it
+must be installed explicitly (see §9 L-cli).
 
 **RE-AUTH (keychain-bound, cannot move — the operator/box redoes once):**
 Claude auth for agents (`dev.k2.claude-auth`), K2 Connect account
@@ -90,7 +95,9 @@ Target: bigger box B_new.
 2. **Pre-sync (no downtime):** with B_old LIVE, rsync the big cold data
    (workspace trees, ~/.claude) B_old→B_new. Runs minutes–hours; customer
    unaffected. (This is the nsi "staging" phase.)
-3. **Arm cutover (no downtime):** install/verify frpc on B_new; stage the
+3. **Arm cutover (no downtime):** install/verify frpc AND the `k2` CLI on
+   B_new (`install -m 0755 cli/k2 /usr/local/bin/k2`; confirm `k2 help`
+   round-trips to the daemon — §9 L-cli); stage the
    carried `~/.k2` identity files EXCEPT the live-lease bits held back;
    run an OFFLINE boot check on B_new with the tunnel DISABLED (frpc held
    aside) + lease off — daemon must reach `phase: ready`, DB integrity
@@ -209,6 +216,19 @@ Target: bigger box B_new.
   temp migration SSH key was deleted from both ends after. The codified
   runner must scrub its per-job key at handoff (same as the pool-agent's
   single-use key).
+- **L-cli: the `k2` CLI is INSTALLED, not carried — and Linux won't
+  self-heal it.** On the nsi run the CLI never reached B_new: it lives at
+  `/usr/local/bin/k2` (a symlink into K2.app on macOS; an `install`ed copy
+  of `cli/k2` on Linux), NOT inside `~/.k2`, so rsync never carried it;
+  the daemon self-stages only the `k2-open` shim, not the CLI; and a
+  headless Linux box has no desktop app to re-link it at boot. Net: daemon
+  + data present, `k2` command absent (found + fixed 2026-07-10 on nsi via
+  `install -m 0755 cli/k2 /usr/local/bin/k2` — the CLI is a bash script
+  that talks HTTP via `~/.k2/heartbeat.{port,token}`, so it works the
+  instant it exists). DURABLE FIX (0.40.40+): have the daemon self-stage
+  the `k2` CLI at boot the same way it stages `k2-open` (`open_shim.rs`
+  `include_str!` pattern) so every Linux server self-heals and this step
+  can never be skipped again.
 
 ## 10. PRE-MORTEM — "the upgrade feature lost someone's server"
 - **P1. Both daemons live at once → subdomain war.** Ordering bug started

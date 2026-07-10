@@ -4172,17 +4172,24 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
-        // K2 Mail S4 — the message-read family gets its own arm so it
-        // runs in spawn_blocking: the handlers dial Stalwart over
-        // BLOCKING reqwest, and `/cli/mail/wait` deliberately HOLDS the
-        // request open for up to 900 s (long-poll, PRD §8.2) — neither
-        // may pin an async runtime worker (the same reason the
-        // /cli/workspace/msg POST hops off the async path). Token gate
-        // + dispatch chain identical to the /cli/* catch-all below.
-        p if p == "/cli/mail/messages"
-            || p == "/cli/mail/read"
-            || p == "/cli/mail/attachments"
-            || p == "/cli/mail/wait" =>
+        // K2 Mail — EVERY mail GET runs in spawn_blocking. The handlers
+        // are written blocking-style throughout (rusqlite + BLOCKING
+        // reqwest): `/cli/mail/preflight` dials the public-IP services,
+        // `/cli/mail/status?health=1` pings Stalwart, and
+        // `/cli/mail/wait` deliberately HOLDS the request open for up
+        // to 900 s (long-poll, PRD §8.2) — none may pin an async
+        // runtime worker. LIVE-BOX LESSON (k2-sandbox-01, 2026-07-10):
+        // this arm originally listed only the S4 read family; a real
+        // `GET /cli/mail/preflight` then dropped its blocking reqwest
+        // client on the async worker and panicked tokio ("Cannot drop
+        // a runtime in a context where blocking is not allowed") —
+        // empty reply on the wire. Blanket-matching the family is the
+        // durable fix (a future mail GET can't reintroduce it). POSTs
+        // never reach here (the is_post mail arm above matches first);
+        // the exact-path `/cli/mail/approvals/list` arm above also
+        // stays ahead of this one. Token gate + dispatch chain
+        // identical to the /cli/* catch-all below.
+        p if p.starts_with("/cli/mail/") =>
         {
             let _ = stream.read(&mut buf).await;
             if !super::http::token_ok(&query, state.token.as_str()) {

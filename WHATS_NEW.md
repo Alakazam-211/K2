@@ -3,6 +3,29 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.41 — The heartbeat CLI you were promised
+
+- **`k2 heartbeat --help` is finally just help.** Asking any heartbeat
+  command for help used to get parsed as a schedule and *written* —
+  routine discovery corrupted your schedule state. Help now prints usage
+  and exits, everywhere, guaranteed. (GH#22, #23, #24)
+- **The documented commands exist now.** `k2 heartbeat schedule
+  add/list/remove/edit/rename/enable/disable` and `k2 heartbeat signal
+  fire/wakeup/wake` — the surface the docs and skills always described —
+  are wired to the real named-heartbeat system. Bare `k2 heartbeat`
+  lists your schedules instead of erroring. Unknown subcommands and
+  misspelled flags are loud usage errors instead of silent writes or
+  silently-ignored options. (GH#10, #24)
+- **Give a heartbeat its job at birth.** `k2 heartbeat schedule add
+  --instructions "..."` (or `--instructions-file <path>`) writes the
+  WAKEUP.md at create time — no more schedules that fire with no defined
+  work, and no $EDITOR required for headless agents. (GH#23, #24)
+- **No more heartbeats that can never fire.** Creating a heartbeat now
+  warns loudly if the schedule transport (launchd/cron) isn't installed
+  or has stopped ticking. The daemon also rejects junk schedule writes
+  from older CLIs and cleans up any junk they already left behind.
+  (GH#22, #23)
+
 ## 0.40.40 — Project chat, your styles, and sessions that stay awake
 
 - **Project chat is for the whole team.** Owners, Admins, and Members can

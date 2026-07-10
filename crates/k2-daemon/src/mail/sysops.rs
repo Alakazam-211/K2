@@ -48,8 +48,6 @@ pub trait SystemOps: Send + Sync {
     /// `systemctl` where a non-zero exit is an ANSWER, not an error
     /// (`is-active` exits 3 for "inactive"). Returns trimmed stdout.
     fn systemctl_query(&self, args: &[&str]) -> String;
-    /// Last `lines` of `journalctl -u <unit>`.
-    fn journalctl_unit(&self, unit: &str, lines: u32) -> Result<String, String>;
     /// Sleep — injected so retry loops are instant in tests.
     fn sleep_ms(&self, ms: u64);
 }
@@ -194,13 +192,6 @@ impl SystemOps for RealSystemOps {
             .unwrap_or_default()
     }
 
-    fn journalctl_unit(&self, unit: &str, lines: u32) -> Result<String, String> {
-        Self::run_ok(
-            "journalctl",
-            &["-u", unit, "-n", &lines.to_string(), "--no-pager", "-o", "cat"],
-        )
-    }
-
     fn sleep_ms(&self, ms: u64) {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
@@ -223,8 +214,6 @@ pub(crate) mod fake {
         pub download_body: Vec<u8>,
         /// `Err` to simulate a failed download.
         pub download_error: Option<String>,
-        /// Journal text returned by `journalctl_unit`.
-        pub journal: String,
         /// Paths reported as existing.
         pub existing_paths: Vec<String>,
         /// Canned `systemctl_query` answers keyed by joined args.
@@ -237,7 +226,6 @@ pub(crate) mod fake {
                 ops: Mutex::new(Vec::new()),
                 download_body: Vec::new(),
                 download_error: None,
-                journal: String::new(),
                 existing_paths: Vec::new(),
                 query_answers: HashMap::new(),
             }
@@ -302,10 +290,6 @@ pub(crate) mod fake {
             let key = args.join(" ");
             self.record(format!("systemctl? {key}"));
             self.query_answers.get(&key).cloned().unwrap_or_default()
-        }
-        fn journalctl_unit(&self, unit: &str, lines: u32) -> Result<String, String> {
-            self.record(format!("journalctl {unit} -n {lines}"));
-            Ok(self.journal.clone())
         }
         fn sleep_ms(&self, _ms: u64) {
             // Instant in tests.

@@ -24,8 +24,10 @@
 //!    accounts, messages, DKIM keys. Never mirror Stalwart state we
 //!    don't need; never store K2 governance state in Stalwart.
 //! 4. **The mgmt API endpoint is DISCOVERED, never hardcoded.** Read
-//!    the JMAP session document at `/.well-known/jmap` (PRD §4.1) —
-//!    upstream docs disagree about `/api` vs `/jmap`.
+//!    the JMAP session document at `/jmap/session` (live-verified on
+//!    v0.16.10 — `/.well-known/jmap` is empty there) and REBASE the
+//!    served urls onto the loopback base (normal mode serves absolute
+//!    urls on the mail hostname).
 //! 5. **Linux-only at runtime, compiled everywhere.** The whole module
 //!    compiles + unit-tests on macOS; [`supervisor::mail_supported`]
 //!    (a RUNTIME `cfg!` check) is the single capability gate the

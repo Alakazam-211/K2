@@ -36,6 +36,9 @@ jobs:
       - name: k2so gate (PRD prd-k2so-cleanup-v1 §5)
         run: bash scripts/k2so-gate.sh
 
+      - name: private-docs gate (cloud-business docs stay in the private repo)
+        run: bash scripts/private-docs-gate.sh
+
       - name: Typecheck renderer (tsconfig.web.json)
         run: bun run typecheck:web
 

@@ -8,6 +8,22 @@
 //! drop-in (§10), and drives it exclusively over its HTTP management
 //! API ([`super::jmap`]).
 //!
+//! BOOTSTRAP MODEL (✔ LIVE-VERIFIED v0.16.10, 2026-07-10): started
+//! with `--config <path>` and the file ABSENT, Stalwart enters
+//! bootstrap mode (ephemeral store, plain-HTTP `http-recovery`
+//! listener on :8080). The DETERMINISTIC credential path is
+//! `STALWART_RECOVERY_ADMIN=admin:<password>` in the unit environment
+//! — no journal scraping. Setup completes with ONE `x:Bootstrap/set`
+//! (the only settable object in bootstrap mode): it writes the flat
+//! DataStore JSON (`{"@type":"RocksDb","path":…}`) to the config path
+//! — which must be WRITABLE BY THE stalwart USER (chown + the
+//! ReadWritePaths drop-in line; the first live run failed exactly
+//! there) — and returns the PROVISIONED admin (`admin@<domain>` + a
+//! fresh random secret) in the reply. After a restart the server runs
+//! in normal mode; the recovery env credential REMAINS VALID in normal
+//! mode (verified), so the machine's `recovery-off` step strips it
+//! from the unit before the final restart.
+//!
 //! The enable flow is an idempotent, RESUMABLE state machine: each
 //! step records completion in `mail_server.enable_progress_json`
 //! (0073) — a crashed/interrupted enable resumes instead of
@@ -53,8 +69,9 @@ pub struct StalwartArtifact {
 /// time (2026-07-08): (1) extracted from the release's signed sigstore
 /// bundles (`…tar.gz.sigstore.json` → messageSignature.messageDigest),
 /// (2) sha256 of the actually-downloaded tarballs. Both matched.
-/// glibc builds — K2 Linux deployments are Ubuntu/Debian-class boxes
-/// (musl/Alpine support would add the musl triples here).
+/// (Re-verified against a fresh download during the 2026-07-10 live
+/// rework.) glibc builds — K2 Linux deployments are Ubuntu/Debian-
+/// class boxes (musl/Alpine support would add the musl triples here).
 pub const STALWART_SHA256: &[StalwartArtifact] = &[
     StalwartArtifact {
         arch: "x86_64",
@@ -117,16 +134,20 @@ pub const STALWART_UNIT_PATH: &str = "/etc/systemd/system/stalwart.service";
 pub const STALWART_DROPIN_DIR: &str = "/etc/systemd/system/stalwart.service.d";
 pub const STALWART_DROPIN_PATH: &str = "/etc/systemd/system/stalwart.service.d/k2-hardening.conf";
 
-/// Stalwart's first-run bootstrap listener (plain HTTP, the ":8080
-/// setup listener" the bootstrap disables as its last act).
+/// Stalwart's bootstrap-mode listener (plain HTTP `http-recovery` on
+/// :8080 — ✔ live-verified). After Bootstrap/set + restart the
+/// DEFAULT registry listeners still include a world-bound plain-HTTP
+/// `http` listener on :8080, so this URL stays the mgmt dial until
+/// the port-plan step retargets that listener to [`STALWART_MGMT_URL`]
+/// and the final restart applies it.
 pub const STALWART_SETUP_URL: &str = "http://127.0.0.1:8080";
 
-/// The PERMANENT management endpoint the daemon talks to: a dedicated
-/// plain-HTTP listener bound to 127.0.0.1 only.
+/// The PERMANENT management endpoint the daemon talks to: the default
+/// `http` listener retargeted to 127.0.0.1 only.
 ///
 /// TLS DECISION (S1, foundation flagged): the mgmt path uses plain
 /// HTTP on the loopback, both during bootstrap (Stalwart's own :8080
-/// setup listener is plain HTTP) and permanently (this listener).
+/// listener is plain HTTP) and permanently (this listener).
 /// Rationale: loopback traffic never leaves the kernel, so TLS adds
 /// no confidentiality against an attacker who couldn't already read
 /// process memory — while a self-signed-cert mgmt listener would force
@@ -155,9 +176,19 @@ pub fn mail_supported() -> bool {
 // ── Systemd unit + §10 hardening drop-in ────────────────────────────────
 
 /// The service unit K2 writes (upstream ships none for our layout).
-/// Hardening lives in the drop-in so the split mirrors PRD §10
+/// `recovery_admin_password`: present during install (deterministic
+/// bootstrap credential, ✔ live-verified `STALWART_RECOVERY_ADMIN`
+/// env form); the `recovery-off` step rewrites the unit WITHOUT it
+/// once the provisioned admin + ApiKey are vaulted (the env credential
+/// stays valid even in normal mode — verified — so leaving it would be
+/// a standing backdoor). The unit is written 0600 for exactly this
+/// reason. Hardening lives in the drop-in so the split mirrors PRD §10
 /// verbatim and a future unit rewrite can't silently drop it.
-pub fn systemd_unit() -> String {
+pub fn systemd_unit(recovery_admin_password: Option<&str>) -> String {
+    let env_line = match recovery_admin_password {
+        Some(pw) => format!("Environment=STALWART_RECOVERY_ADMIN=admin:{pw}\n"),
+        None => String::new(),
+    };
     format!(
         "[Unit]\n\
          Description=Stalwart mail server (managed by the K2 Mail supervisor)\n\
@@ -169,6 +200,7 @@ pub fn systemd_unit() -> String {
          ExecStart={STALWART_BIN} --config {STALWART_CONFIG}\n\
          User={STALWART_USER}\n\
          Group={STALWART_USER}\n\
+         {env_line}\
          StandardOutput=journal\n\
          StandardError=journal\n\
          \n\
@@ -177,12 +209,15 @@ pub fn systemd_unit() -> String {
     )
 }
 
-/// PRD §10, verbatim.
+/// PRD §10, verbatim — plus `/etc/stalwart` in ReadWritePaths:
+/// ✔ LIVE-VERIFIED the Bootstrap/set persists the DataStore config to
+/// that path AS THE stalwart USER (the first live attempt failed with
+/// `Permission denied (os error 13)` until the dir was writable).
 pub fn hardening_dropin() -> &'static str {
     "[Service]\n\
      ProtectSystem=strict\n\
      ProtectHome=yes\n\
-     ReadWritePaths=/var/lib/stalwart /var/log/stalwart\n\
+     ReadWritePaths=/var/lib/stalwart /var/log/stalwart /etc/stalwart\n\
      NoNewPrivileges=yes\n\
      PrivateTmp=yes\n\
      CapabilityBoundingSet=CAP_NET_BIND_SERVICE\n\
@@ -190,113 +225,65 @@ pub fn hardening_dropin() -> &'static str {
      Restart=on-failure\n"
 }
 
-/// Minimal first-boot config: RocksDB stores under the hardened data
-/// dir + file logging. Everything else (hostname, listeners, spam
-/// filter) is applied over the management API during bootstrap — the
-/// v0.16 model keeps runtime config in the database, not this file.
-///
-/// ⚠ LIVE-BOX VERIFICATION REQUIRED (S1 acceptance, rpm/scratch box):
-/// v0.16 rebuilt the config layer ("config.json" per current install
-/// docs; pre-0.16 was TOML). The store/directory/tracer key shapes
-/// below are the pre-0.16 names carried into JSON as the best
-/// documented understanding — verify Stalwart v0.16.10 accepts this
-/// file AND still enters bootstrap mode (one-time admin password in
-/// the journal) when started with it. If v0.16 wants a different
-/// bootstrap arrangement (e.g. empty config, CLI init), this function
-/// is the single place to fix.
-pub fn initial_config_json() -> String {
-    serde_json::json!({
-        "storage": {
-            "data": "rocksdb",
-            "blob": "rocksdb",
-            "fts": "rocksdb",
-            "lookup": "rocksdb",
-            "directory": "internal"
-        },
-        "store": {
-            "rocksdb": {
-                "type": "rocksdb",
-                "path": format!("{STALWART_DATA_DIR}/data"),
-                "compression": "lz4"
-            }
-        },
-        "directory": {
-            "internal": { "type": "internal", "store": "rocksdb" }
-        },
-        "tracer": {
-            "log": {
-                "type": "log",
-                "level": "info",
-                "path": STALWART_LOG_DIR,
-                "prefix": "stalwart.log",
-                "rotate": "daily"
-            }
-        }
-    })
-    .to_string()
-}
-
-/// Extract the one-time admin password from Stalwart's first-run
-/// journal output. Documented format (install docs, v0.16):
-///
-/// ```text
-/// 🔑 Stalwart bootstrap mode - temporary administrator account
-///    username: admin   password: XXXXXXXXXXXXXXXX
-/// ```
-///
-/// The LAST occurrence wins (a re-flashed box may have logged more
-/// than one bootstrap). Pure parser — unit-tested against the fixture;
-/// the exact wording is ⚠ live-box-verified at S1 acceptance.
-pub fn parse_bootstrap_admin_password(journal: &str) -> Option<String> {
-    let mut armed = false;
-    let mut found = None;
-    for line in journal.lines() {
-        if line.contains("bootstrap mode") {
-            armed = true;
-            continue;
-        }
-        if !armed {
-            continue;
-        }
-        if let Some(idx) = line.find("password:") {
-            if let Some(tok) = line[idx + "password:".len()..].split_whitespace().next() {
-                if !tok.is_empty() {
-                    found = Some(tok.to_string());
-                }
-            }
-            armed = false;
-        }
+/// The default domain the mail hostname implies — Stalwart's guided
+/// setup REQUIRES one (it hosts the provisioned `admin@<domain>`
+/// account). Deterministic registrable-domain guess: strip the
+/// left-most label when the hostname has ≥3 labels
+/// (`mail.acme.dev` → `acme.dev`), else the hostname itself. The
+/// owner's real mail domains arrive later via `k2 mail domain add`
+/// (which reuses this domain when it matches).
+pub fn default_domain_for(hostname: &str) -> String {
+    let labels: Vec<&str> = hostname.split('.').collect();
+    if labels.len() >= 3 {
+        labels[1..].join(".")
+    } else {
+        hostname.to_string()
     }
-    found
 }
 
 // ── Management-API seam for the bootstrap sequence ──────────────────────
 
+/// The permanent admin account Stalwart provisions during
+/// `x:Bootstrap/set` (returned ONCE in the set reply — the secret is
+/// vaulted immediately and never logged).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminCredentials {
+    /// `admin@<default domain>` (basic-auth username).
+    pub username: String,
+    pub secret: String,
+}
+
 /// The typed management operations the enable machine performs against
 /// Stalwart, as a seam: the real impl is [`super::jmap::StalwartBootstrap`]
-/// (HTTP against the loopback mgmt API); tests inject a recording fake.
+/// (HTTP against the loopback listeners); tests inject a recording fake.
 pub trait BootstrapApi: Send {
-    /// Basic-auth session against `base_url` + JMAP endpoint discovery
-    /// (`/.well-known/jmap` — never hardcode `/api` vs `/jmap`).
+    /// Basic-auth session against `base_url` (+ session-document
+    /// discovery — the probe doubles as the credential check).
     fn authenticate(&mut self, base_url: &str, username: &str, password: &str)
         -> Result<(), String>;
-    fn set_hostname(&mut self, hostname: &str) -> Result<(), String>;
-    /// Apply the §5.3 port plan: SMTP 25/465/587, HTTPS per plan
-    /// (:443 for `tls-alpn`, 127.0.0.1:8443 otherwise), the loopback
-    /// plain-HTTP mgmt listener, and NO IMAP/POP3/ManageSieve/CalDAV/
-    /// CardDAV listeners (§10).
+    /// Complete Stalwart's guided setup (bootstrap mode only): ONE
+    /// `x:Bootstrap/set` carrying hostname, default domain, the
+    /// RocksDB DataStore, DKIM generation on, and the ACME choice
+    /// (`request_tls_certificate` = the §5.3 `tls-alpn` plan). Returns
+    /// the PROVISIONED admin credentials from the reply.
+    fn complete_bootstrap(
+        &mut self,
+        hostname: &str,
+        default_domain: &str,
+        request_tls_certificate: bool,
+    ) -> Result<AdminCredentials, String>;
+    /// Apply the §5.3 port plan (NORMAL mode): destroy the
+    /// IMAP/POP3/ManageSieve listeners (§10), retarget the :8080 http
+    /// listener to the loopback mgmt bind, bind HTTPS per plan, add
+    /// the :587 submission listener. Sockets move on the final
+    /// restart.
     fn configure_listeners(&mut self, port_plan: &str) -> Result<(), String>;
-    fn enable_spam_filter(&mut self) -> Result<(), String>;
-    /// Create the least-privilege `k2-daemon` service account; returns
-    /// its principal id.
-    fn create_service_account(&mut self) -> Result<String, String>;
-    /// Mint the scoped, localhost-allowlisted ApiKey for the service
-    /// account; returns the SECRET (shown once by Stalwart).
+    /// Create the admin-role `k2-daemon` service account in the
+    /// default domain; returns its account id.
+    fn create_service_account(&mut self, default_domain: &str) -> Result<String, String>;
+    /// Mint the loopback-allowlisted ApiKey on the service account;
+    /// returns the SECRET (shown once by Stalwart).
     fn mint_api_key(&mut self, account_id: &str) -> Result<String, String>;
-    fn rotate_admin_password(&mut self, new_password: &str) -> Result<(), String>;
-    /// Disable the :8080 setup listener (pre-mortem #13) — the LAST
-    /// API act of bootstrap.
-    fn disable_setup_listener(&mut self) -> Result<(), String>;
 }
 
 // ── mail_server row helpers ─────────────────────────────────────────────
@@ -436,8 +423,18 @@ pub fn end_enable() {
 }
 
 /// The ordered step ids — the contract between the machine and status
-/// renderers (S7 orders the progress list with this; tests assert
-/// completeness against it today).
+/// renderers (the Settings→Email page mirrors this list in
+/// `email-api.ts`; tests assert completeness against it today).
+///
+/// Reworked for the live-verified v0.16.10 flow: `config` now CLEARS a
+/// stale config file (Stalwart itself writes it during bootstrap);
+/// `bootstrap` replaces the journal-scrape `admin-password` step
+/// (deterministic recovery credential + `x:Bootstrap/set`);
+/// `restart-normal` leaves bootstrap mode; `rotate-admin` is GONE
+/// (Bootstrap/set provisions a fresh random admin secret itself);
+/// `setup-listener-off` became part of `server-config` (the :8080
+/// listener IS the retargeted mgmt listener); `recovery-off` strips
+/// the recovery env credential before the final restart.
 #[allow(dead_code)] // S7 Settings→Email consumes the ordering.
 pub const ENABLE_STEPS: &[&str] = &[
     "preflight",
@@ -449,14 +446,18 @@ pub const ENABLE_STEPS: &[&str] = &[
     "config",
     "unit",
     "start",
-    "admin-password",
+    "bootstrap",
+    "restart-normal",
     "server-config",
     "service-account",
     "api-key",
-    "rotate-admin",
-    "setup-listener-off",
+    "recovery-off",
     "restart",
 ];
+
+/// How long the machine waits for a just-(re)started Stalwart to
+/// answer its management listener.
+const AUTH_RETRIES: u32 = 15;
 
 /// Preflight → install → bootstrap, resumable. The caller (route) has
 /// already run + passed preflight and picked `port_plan`; each step
@@ -494,6 +495,7 @@ pub fn run_enable(
     }
 
     ensure_installing_row(hostname, port_plan)?;
+    let default_domain = default_domain_for(hostname);
 
     let fail = |step: &str, err: String| -> String {
         let msg = format!("{step}: {err}");
@@ -535,7 +537,7 @@ pub fn run_enable(
         mark_step("extract");
     }
 
-    // ── System user + directories + config + unit ─────────────────
+    // ── System user + directories + config-clear + unit ───────────
     if !step_is_done("system-user") {
         set_current("system-user");
         ops.ensure_system_user(STALWART_USER)
@@ -548,6 +550,10 @@ pub fn run_enable(
             ops.create_dir_all(STALWART_CONFIG_DIR)?;
             ops.create_dir_all(STALWART_DATA_DIR)?;
             ops.create_dir_all(STALWART_LOG_DIR)?;
+            // The config dir too: Bootstrap/set writes config.json AS
+            // THE stalwart USER (✔ live-verified perm failure without
+            // this).
+            ops.chown_recursive(STALWART_CONFIG_DIR, STALWART_USER)?;
             ops.chown_recursive(STALWART_DATA_DIR, STALWART_USER)?;
             ops.chown_recursive(STALWART_LOG_DIR, STALWART_USER)
         })()
@@ -556,14 +562,29 @@ pub fn run_enable(
     }
     if !step_is_done("config") {
         set_current("config");
-        ops.write_file(STALWART_CONFIG, initial_config_json().as_bytes(), 0o644)
-            .map_err(|e| fail("config", e))?;
+        // Bootstrap mode REQUIRES the config file ABSENT (Stalwart
+        // itself writes the flat DataStore JSON during Bootstrap/set,
+        // ✔ live-verified). A stale file from a broken install would
+        // boot a half-configured server instead — clear it.
+        if ops.path_exists(STALWART_CONFIG) {
+            ops.remove_path(STALWART_CONFIG)
+                .map_err(|e| fail("config", e))?;
+        }
         mark_step("config");
     }
     if !step_is_done("unit") {
         set_current("unit");
         (|| -> Result<(), String> {
-            ops.write_file(STALWART_UNIT_PATH, systemd_unit().as_bytes(), 0o644)?;
+            let recovery_pw = generate_secret()?;
+            let sref = secrets.store("recovery-admin", &recovery_pw)?;
+            progress_extra_set("recoveryAdminRef", &sref);
+            // 0600: the unit embeds the recovery credential until the
+            // recovery-off step strips it.
+            ops.write_file(
+                STALWART_UNIT_PATH,
+                systemd_unit(Some(&recovery_pw)).as_bytes(),
+                0o600,
+            )?;
             ops.create_dir_all(STALWART_DROPIN_DIR)?;
             ops.write_file(STALWART_DROPIN_PATH, hardening_dropin().as_bytes(), 0o644)?;
             ops.systemctl(&["daemon-reload"]).map(|_| ())
@@ -578,72 +599,82 @@ pub fn run_enable(
         mark_step("start");
     }
 
-    // ── Bootstrap over the management API ──────────────────────────
-    // Authentication re-runs on EVERY (re)entry while API steps remain
-    // (it isn't a marked step): pre-rotate we use the one-time journal
-    // password, post-rotate the vaulted one. Both talk to the :8080
-    // setup listener — the loopback mgmt listener only exists after
-    // server-config + restart.
-    let api_steps_remain = !step_is_done("setup-listener-off");
+    // ── Guided setup over the bootstrap listener ────────────────────
+    if !step_is_done("bootstrap") {
+        set_current("bootstrap");
+        let sref = progress_extra("recoveryAdminRef").ok_or_else(|| {
+            fail("bootstrap", "recovery admin ref missing from progress state".to_string())
+        })?;
+        let recovery_pw = secrets
+            .resolve(&sref)
+            .map_err(|e| fail("bootstrap", e))?
+            .ok_or_else(|| {
+                fail(
+                    "bootstrap",
+                    format!("secret ref {sref} missing from the mail secret store"),
+                )
+            })?;
+        // The service may still be coming up — poll the listener.
+        authenticate_with_retry(ops, api, STALWART_SETUP_URL, "admin", &recovery_pw)
+            .map_err(|e| fail("bootstrap", e))?;
+        let creds = api
+            .complete_bootstrap(hostname, &default_domain, port_plan == "tls-alpn")
+            .map_err(|e| fail("bootstrap", e))?;
+        let sref = secrets
+            .store("admin", &creds.secret)
+            .map_err(|e| fail("bootstrap", e))?;
+        set_row_field("admin_secret_ref", &sref);
+        progress_extra_set("adminUsername", &creds.username);
+        mark_step("bootstrap");
+    }
+
+    // Leave bootstrap mode: the DataStore config file now exists, so a
+    // restart boots the real store in normal mode.
+    if !step_is_done("restart-normal") {
+        set_current("restart-normal");
+        ops.systemctl(&["restart", STALWART_UNIT])
+            .map_err(|e| fail("restart-normal", e))?;
+        mark_step("restart-normal");
+    }
+
+    // ── Provisioning over the normal-mode mgmt listener ─────────────
+    // Authentication re-runs on every (re)entry while API steps remain
+    // (it isn't a marked step): the provisioned admin + vaulted
+    // secret. The default :8080 http listener answers until the final
+    // restart applies the port plan; a post-final-restart RESUME finds
+    // it on :8180 instead — try both.
+    let api_steps_remain =
+        !(step_is_done("server-config") && step_is_done("service-account") && step_is_done("api-key"));
     if api_steps_remain {
-        let password = match row_field("admin_secret_ref") {
-            Some(sref) => secrets
-                .resolve(&sref)
-                .map_err(|e| fail("admin-password", e))?
-                .ok_or_else(|| {
-                    fail(
-                        "admin-password",
-                        format!("secret ref {sref} missing from the mail secret store"),
-                    )
-                })?,
-            None => {
-                set_current("admin-password");
-                let mut captured = None;
-                // The password line lands in the journal within the
-                // first seconds of the first start; poll briefly.
-                for attempt in 0..15 {
-                    let journal = ops
-                        .journalctl_unit(STALWART_UNIT, 200)
-                        .map_err(|e| fail("admin-password", e))?;
-                    if let Some(pw) = parse_bootstrap_admin_password(&journal) {
-                        captured = Some(pw);
-                        break;
-                    }
-                    if attempt < 14 {
-                        ops.sleep_ms(1000);
-                    }
-                }
-                let pw = captured.ok_or_else(|| {
-                    fail(
-                        "admin-password",
-                        "one-time admin password not found in the stalwart journal \
-                         (bootstrap-mode line missing) — is the service running?"
-                            .to_string(),
-                    )
-                })?;
-                mark_step("admin-password");
-                pw
-            }
-        };
-        api.authenticate(STALWART_SETUP_URL, "admin", &password)
-            .map_err(|e| fail("admin-password", e))?;
+        let username = progress_extra("adminUsername")
+            .unwrap_or_else(|| format!("admin@{default_domain}"));
+        let sref = row_field("admin_secret_ref").ok_or_else(|| {
+            fail("server-config", "admin secret ref missing — re-run enable".to_string())
+        })?;
+        let admin_pw = secrets
+            .resolve(&sref)
+            .map_err(|e| fail("server-config", e))?
+            .ok_or_else(|| {
+                fail(
+                    "server-config",
+                    format!("secret ref {sref} missing from the mail secret store"),
+                )
+            })?;
+        authenticate_either(ops, api, &username, &admin_pw)
+            .map_err(|e| fail("server-config", e))?;
     }
 
     if !step_is_done("server-config") {
         set_current("server-config");
-        (|| -> Result<(), String> {
-            api.set_hostname(hostname)?;
-            api.configure_listeners(port_plan)?;
-            api.enable_spam_filter()
-        })()
-        .map_err(|e| fail("server-config", e))?;
+        api.configure_listeners(port_plan)
+            .map_err(|e| fail("server-config", e))?;
         mark_step("server-config");
     }
 
     if !step_is_done("service-account") {
         set_current("service-account");
         let account_id = api
-            .create_service_account()
+            .create_service_account(&default_domain)
             .map_err(|e| fail("service-account", e))?;
         progress_extra_set("serviceAccountId", &account_id);
         mark_step("service-account");
@@ -665,29 +696,27 @@ pub fn run_enable(
         mark_step("api-key");
     }
 
-    if !step_is_done("rotate-admin") {
-        set_current("rotate-admin");
-        let new_password = generate_secret().map_err(|e| fail("rotate-admin", e))?;
-        api.rotate_admin_password(&new_password)
-            .map_err(|e| fail("rotate-admin", e))?;
-        let sref = secrets
-            .store("admin", &new_password)
-            .map_err(|e| fail("rotate-admin", e))?;
-        set_row_field("admin_secret_ref", &sref);
-        mark_step("rotate-admin");
+    // Strip the recovery credential from the unit BEFORE the final
+    // restart: ✔ live-verified the env credential still authenticates
+    // in NORMAL mode, so leaving it would be a standing backdoor
+    // (pre-mortem #13 class).
+    if !step_is_done("recovery-off") {
+        set_current("recovery-off");
+        (|| -> Result<(), String> {
+            ops.write_file(STALWART_UNIT_PATH, systemd_unit(None).as_bytes(), 0o600)?;
+            ops.systemctl(&["daemon-reload"])?;
+            if let Some(sref) = progress_extra("recoveryAdminRef") {
+                let _ = secrets.delete(&sref);
+            }
+            Ok(())
+        })()
+        .map_err(|e| fail("recovery-off", e))?;
+        mark_step("recovery-off");
     }
 
-    if !step_is_done("setup-listener-off") {
-        set_current("setup-listener-off");
-        api.disable_setup_listener()
-            .map_err(|e| fail("setup-listener-off", e))?;
-        mark_step("setup-listener-off");
-    }
-
-    // Final restart so the bootstrap listener set (mgmt on :8180, SMTP
-    // ports, setup listener gone) is live. ⚠ live-box verification:
-    // v0.16 may hot-apply listener changes; the restart is belt+braces
-    // either way.
+    // Final restart: applies the port plan (mgmt on :8180, SMTP
+    // 25/465/587, IMAP/POP3/Sieve gone — ✔ live-verified listener
+    // changes only take effect on restart) and drops the recovery env.
     if !step_is_done("restart") {
         set_current("restart");
         ops.systemctl(&["restart", STALWART_UNIT])
@@ -713,6 +742,58 @@ pub fn run_enable(
     set_last_error(None);
     emit_state_change("installing", "running", None);
     Ok(())
+}
+
+/// Authenticate against `base_url`, retrying while the service is
+/// still coming up (bounded; sleeps ride [`SystemOps`] so tests are
+/// instant).
+fn authenticate_with_retry(
+    ops: &dyn SystemOps,
+    api: &mut dyn BootstrapApi,
+    base_url: &str,
+    username: &str,
+    password: &str,
+) -> Result<(), String> {
+    let mut last_err = String::new();
+    for attempt in 0..AUTH_RETRIES {
+        match api.authenticate(base_url, username, password) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = e,
+        }
+        if attempt + 1 < AUTH_RETRIES {
+            ops.sleep_ms(1000);
+        }
+    }
+    Err(format!("management API not reachable at {base_url}: {last_err}"))
+}
+
+/// Authenticate against the pre-plan (:8080) listener, falling back to
+/// the post-plan mgmt listener (:8180) — a resume after the final
+/// restart finds the mgmt API there instead.
+fn authenticate_either(
+    ops: &dyn SystemOps,
+    api: &mut dyn BootstrapApi,
+    username: &str,
+    password: &str,
+) -> Result<(), String> {
+    // One quick probe first (no retry storm when the other URL is the
+    // live one).
+    if api.authenticate(STALWART_SETUP_URL, username, password).is_ok() {
+        return Ok(());
+    }
+    if api.authenticate(STALWART_MGMT_URL, username, password).is_ok() {
+        return Ok(());
+    }
+    // Neither answered instantly — the service may be restarting; give
+    // the pre-plan URL the patient retry, then the mgmt URL once more.
+    match authenticate_with_retry(ops, api, STALWART_SETUP_URL, username, password) {
+        Ok(()) => Ok(()),
+        Err(first) => api
+            .authenticate(STALWART_MGMT_URL, username, password)
+            .map_err(|second| {
+                format!("admin authentication failed on both listeners — {first}; {second}")
+            }),
+    }
 }
 
 // ── Health ──────────────────────────────────────────────────────────────
@@ -871,6 +952,12 @@ pub fn uninstall_with(
             let _ = secrets.delete(&sref);
         }
     }
+    // The recovery-admin secret lives only in progress state (cleared
+    // by recovery-off on a completed enable; still present after an
+    // aborted one).
+    if let Some(sref) = progress_extra("recoveryAdminRef") {
+        let _ = secrets.delete(&sref);
+    }
     let previous = current_status().unwrap_or_else(|| "unknown".into());
     {
         let db = k2_core::db::shared();
@@ -951,12 +1038,14 @@ mod tests {
     }
 
     #[test]
-    fn hardening_dropin_is_prd_10_verbatim() {
+    fn hardening_dropin_is_prd_10_verbatim_plus_config_dir() {
         let d = hardening_dropin();
         for directive in [
             "ProtectSystem=strict",
             "ProtectHome=yes",
-            "ReadWritePaths=/var/lib/stalwart /var/log/stalwart",
+            // /etc/stalwart is live-verified load-bearing: Bootstrap/set
+            // writes config.json as the stalwart user.
+            "ReadWritePaths=/var/lib/stalwart /var/log/stalwart /etc/stalwart",
             "NoNewPrivileges=yes",
             "PrivateTmp=yes",
             "CapabilityBoundingSet=CAP_NET_BIND_SERVICE",
@@ -965,35 +1054,22 @@ mod tests {
         ] {
             assert!(d.contains(directive), "missing {directive}");
         }
-        let unit = systemd_unit();
+        let unit = systemd_unit(Some("recovery-pw"));
         assert!(unit.contains("ExecStart=/usr/local/bin/stalwart --config /etc/stalwart/config.json"));
         assert!(unit.contains("User=stalwart"));
+        assert!(unit.contains("Environment=STALWART_RECOVERY_ADMIN=admin:recovery-pw"));
+        // The recovery-off rewrite drops the credential entirely.
+        let stripped = systemd_unit(None);
+        assert!(!stripped.contains("STALWART_RECOVERY_ADMIN"));
     }
 
     #[test]
-    fn bootstrap_password_parser_reads_the_documented_journal_shape() {
-        let journal = "\
-starting Stalwart v0.16.10
-🔑 Stalwart bootstrap mode - temporary administrator account
-   username: admin   password: kHgv8PZLq2NwXbTA
-listener started on 0.0.0.0:8080
-";
-        assert_eq!(
-            parse_bootstrap_admin_password(journal).as_deref(),
-            Some("kHgv8PZLq2NwXbTA")
-        );
-        // Last occurrence wins (re-flashed box logged twice).
-        let twice = format!(
-            "{journal}\n🔑 Stalwart bootstrap mode - temporary administrator account\n\
-             username: admin   password: SECONDpw999\n"
-        );
-        assert_eq!(parse_bootstrap_admin_password(&twice).as_deref(), Some("SECONDpw999"));
-        // A stray "password:" with no bootstrap banner does NOT match.
-        assert_eq!(
-            parse_bootstrap_admin_password("auth failed: bad password: tries=3"),
-            None
-        );
-        assert_eq!(parse_bootstrap_admin_password(""), None);
+    fn default_domain_strips_the_host_label() {
+        assert_eq!(default_domain_for("mail.acme.dev"), "acme.dev");
+        assert_eq!(default_domain_for("mail.k2livebox.test"), "k2livebox.test");
+        assert_eq!(default_domain_for("mx.mail.acme.dev"), "mail.acme.dev");
+        // Two labels: the hostname IS the domain.
+        assert_eq!(default_domain_for("acme.dev"), "acme.dev");
     }
 
     // ── Enable-machine fakes ────────────────────────────────────────
@@ -1002,6 +1078,8 @@ listener started on 0.0.0.0:8080
     struct FakeApi {
         calls: Vec<String>,
         fail_on: Option<&'static str>,
+        /// URLs authenticate() must refuse (post-restart resume story).
+        refuse_urls: Vec<&'static str>,
     }
 
     impl FakeApi {
@@ -1016,30 +1094,36 @@ listener started on 0.0.0.0:8080
 
     impl BootstrapApi for FakeApi {
         fn authenticate(&mut self, base: &str, user: &str, _pw: &str) -> Result<(), String> {
+            if self.refuse_urls.contains(&base) {
+                self.calls.push(format!("authenticate-refused {base} {user}"));
+                return Err(format!("connection refused: {base}"));
+            }
             self.check(&format!("authenticate {base} {user}"))
         }
-        fn set_hostname(&mut self, hostname: &str) -> Result<(), String> {
-            self.check(&format!("set_hostname {hostname}"))
+        fn complete_bootstrap(
+            &mut self,
+            hostname: &str,
+            default_domain: &str,
+            request_tls: bool,
+        ) -> Result<AdminCredentials, String> {
+            self.check(&format!(
+                "complete_bootstrap {hostname} {default_domain} tls={request_tls}"
+            ))?;
+            Ok(AdminCredentials {
+                username: format!("admin@{default_domain}"),
+                secret: "provisioned-admin-secret".into(),
+            })
         }
         fn configure_listeners(&mut self, plan: &str) -> Result<(), String> {
             self.check(&format!("configure_listeners {plan}"))
         }
-        fn enable_spam_filter(&mut self) -> Result<(), String> {
-            self.check("enable_spam_filter")
-        }
-        fn create_service_account(&mut self) -> Result<String, String> {
-            self.check("create_service_account")?;
-            Ok("principal-k2".into())
+        fn create_service_account(&mut self, default_domain: &str) -> Result<String, String> {
+            self.check(&format!("create_service_account {default_domain}"))?;
+            Ok("acct-k2".into())
         }
         fn mint_api_key(&mut self, account_id: &str) -> Result<String, String> {
             self.check(&format!("mint_api_key {account_id}"))?;
-            Ok("minted-api-key-secret".into())
-        }
-        fn rotate_admin_password(&mut self, _new: &str) -> Result<(), String> {
-            self.check("rotate_admin_password")
-        }
-        fn disable_setup_listener(&mut self) -> Result<(), String> {
-            self.check("disable_setup_listener")
+            Ok("API_minted-key-secret".into())
         }
     }
 
@@ -1086,11 +1170,6 @@ listener started on 0.0.0.0:8080
         }
     }
 
-    const BOOTSTRAP_JOURNAL: &str = "\
-🔑 Stalwart bootstrap mode - temporary administrator account
-   username: admin   password: one-time-pw-42
-";
-
     fn db_guard() -> std::sync::MutexGuard<'static, ()> {
         crate::mail::mail_server_test_lock()
     }
@@ -1107,7 +1186,6 @@ listener started on 0.0.0.0:8080
         clean_row();
         let ops = FakeSystemOps {
             download_body: FAKE_BINARY.to_vec(),
-            journal: BOOTSTRAP_JOURNAL.to_string(),
             ..FakeSystemOps::default()
         };
         let mut api = FakeApi::default();
@@ -1127,10 +1205,13 @@ listener started on 0.0.0.0:8080
                 "mkdir /etc/stalwart".to_string(),
                 "mkdir /var/lib/stalwart".to_string(),
                 "mkdir /var/log/stalwart".to_string(),
+                "chown stalwart /etc/stalwart".to_string(),
                 "chown stalwart /var/lib/stalwart".to_string(),
                 "chown stalwart /var/log/stalwart".to_string(),
-                format!("write /etc/stalwart/config.json ({} bytes, mode 644)", initial_config_json().len()),
-                format!("write /etc/systemd/system/stalwart.service ({} bytes, mode 644)", systemd_unit().len()),
+                format!(
+                    "write /etc/systemd/system/stalwart.service ({} bytes, mode 600)",
+                    systemd_unit(Some(&secrets_stored_secret(&secrets, "recovery-admin"))).len()
+                ),
                 "mkdir /etc/systemd/system/stalwart.service.d".to_string(),
                 format!(
                     "write /etc/systemd/system/stalwart.service.d/k2-hardening.conf ({} bytes, mode 644)",
@@ -1138,32 +1219,45 @@ listener started on 0.0.0.0:8080
                 ),
                 "systemctl daemon-reload".to_string(),
                 "systemctl enable --now stalwart".to_string(),
-                "journalctl stalwart -n 200".to_string(),
+                "systemctl restart stalwart".to_string(),
+                format!(
+                    "write /etc/systemd/system/stalwart.service ({} bytes, mode 600)",
+                    systemd_unit(None).len()
+                ),
+                "systemctl daemon-reload".to_string(),
                 "systemctl restart stalwart".to_string(),
             ]
         );
-        // The management-API sequence, in order.
+        // The management-API sequence, in order: recovery-admin auth →
+        // guided setup → provisioned-admin auth → port plan → service
+        // account → api key.
         assert_eq!(
             api.calls,
             vec![
                 "authenticate http://127.0.0.1:8080 admin",
-                "set_hostname mail.acme.dev",
+                "complete_bootstrap mail.acme.dev acme.dev tls=true",
+                "authenticate http://127.0.0.1:8080 admin@acme.dev",
                 "configure_listeners tls-alpn",
-                "enable_spam_filter",
-                "create_service_account",
-                "mint_api_key principal-k2",
-                "rotate_admin_password",
-                "disable_setup_listener",
+                "create_service_account acme.dev",
+                "mint_api_key acct-k2",
             ]
         );
-        // Secrets: api key + rotated admin, both vaulted.
+        // Secrets: recovery admin + provisioned admin + api key, all
+        // vaulted; recovery deleted by recovery-off.
         {
             let stored = secrets.stored.lock().unwrap();
-            assert_eq!(stored.len(), 2);
-            assert_eq!(stored[0].0, "api-key");
-            assert_eq!(stored[0].1, "minted-api-key-secret");
+            assert_eq!(stored.len(), 3);
+            assert_eq!(stored[0].0, "recovery-admin");
+            assert_eq!(stored[0].1.len(), 64, "generated recovery password");
             assert_eq!(stored[1].0, "admin");
-            assert_eq!(stored[1].1.len(), 64, "rotated password is a generated secret");
+            assert_eq!(stored[1].1, "provisioned-admin-secret");
+            assert_eq!(stored[2].0, "api-key");
+            assert_eq!(stored[2].1, "API_minted-key-secret");
+            assert_eq!(
+                *secrets.deleted.lock().unwrap(),
+                vec!["mailsec_recovery-admin_test".to_string()],
+                "recovery-off deletes the recovery secret"
+            );
         }
         // Row landed running with refs + urls + version.
         assert_eq!(current_status().as_deref(), Some("running"));
@@ -1179,16 +1273,28 @@ listener started on 0.0.0.0:8080
         clean_row();
     }
 
+    /// Extract the stored secret of `kind` (test helper for the unit
+    /// byte-length assertion above).
+    fn secrets_stored_secret(secrets: &FakeSecrets, kind: &str) -> String {
+        secrets
+            .stored
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(k, _)| k == kind)
+            .map(|(_, s)| s.clone())
+            .expect("secret stored")
+    }
+
     #[test]
     fn enable_resumes_after_a_mid_flow_failure_without_redoing_work() {
         let _g = db_guard();
         clean_row();
         let art = fake_artifact();
 
-        // First run: the service-account call fails mid-bootstrap.
+        // First run: the service-account call fails mid-provisioning.
         let ops = FakeSystemOps {
             download_body: FAKE_BINARY.to_vec(),
-            journal: BOOTSTRAP_JOURNAL.to_string(),
             ..FakeSystemOps::default()
         };
         let mut api = FakeApi { fail_on: Some("create_service_account"), ..FakeApi::default() };
@@ -1200,11 +1306,10 @@ listener started on 0.0.0.0:8080
         assert!(row_field("last_error").expect("recorded").contains("injected"));
 
         // Second run: binary already on disk + steps marked — resume
-        // must NOT re-download/extract/start, must re-authenticate,
-        // and must finish.
+        // must NOT re-download/extract/start/re-bootstrap, must
+        // re-authenticate as the PROVISIONED admin, and must finish.
         let ops2 = FakeSystemOps {
             download_body: FAKE_BINARY.to_vec(),
-            journal: BOOTSTRAP_JOURNAL.to_string(),
             existing_paths: vec![STALWART_BIN.to_string()],
             ..FakeSystemOps::default()
         };
@@ -1220,17 +1325,51 @@ listener started on 0.0.0.0:8080
             !ops_lines.iter().any(|l| l.contains("enable --now")),
             "resume must not re-run completed start: {ops_lines:?}"
         );
-        // journalctl re-read is fine (auth re-runs every entry); the
-        // API sequence resumes AT the failed step.
+        // The API sequence resumes AT the failed step with a fresh
+        // admin session (bootstrap NOT re-run — the admin is already
+        // provisioned and vaulted).
         assert_eq!(
             api2.calls,
             vec![
-                "authenticate http://127.0.0.1:8080 admin",
-                "create_service_account",
-                "mint_api_key principal-k2",
-                "rotate_admin_password",
-                "disable_setup_listener",
+                "authenticate http://127.0.0.1:8080 admin@acme.dev",
+                "create_service_account acme.dev",
+                "mint_api_key acct-k2",
             ]
+        );
+        assert_eq!(current_status().as_deref(), Some("running"));
+        clean_row();
+    }
+
+    /// A resume AFTER the final restart finds :8080 dead — the machine
+    /// falls back to the :8180 mgmt listener.
+    #[test]
+    fn resume_auth_falls_back_to_the_mgmt_listener() {
+        let _g = db_guard();
+        clean_row();
+        let art = fake_artifact();
+        let ops = FakeSystemOps {
+            download_body: FAKE_BINARY.to_vec(),
+            ..FakeSystemOps::default()
+        };
+        // First run fails at api-key (after server-config +
+        // service-account) — the retry lands post-restart in spirit.
+        let mut api = FakeApi { fail_on: Some("mint_api_key"), ..FakeApi::default() };
+        let secrets = FakeSecrets::default();
+        let _ = run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "http-01")
+            .expect_err("injected failure");
+
+        let ops2 = FakeSystemOps {
+            existing_paths: vec![STALWART_BIN.to_string()],
+            ..FakeSystemOps::default()
+        };
+        let mut api2 = FakeApi { refuse_urls: vec![STALWART_SETUP_URL], ..FakeApi::default() };
+        run_enable(&ops2, &mut api2, &secrets, &art, "mail.acme.dev", "http-01")
+            .expect("resume succeeds via mgmt listener");
+        assert!(
+            api2.calls
+                .contains(&format!("authenticate {STALWART_MGMT_URL} admin@acme.dev")),
+            "{:?}",
+            api2.calls
         );
         assert_eq!(current_status().as_deref(), Some("running"));
         clean_row();
@@ -1282,6 +1421,28 @@ listener started on 0.0.0.0:8080
         assert!(err.contains("0.17.0"), "{err}");
         assert!(err.contains("refusing"), "{err}");
         assert!(ops.recorded().is_empty(), "no writes when refusing (PRD §4)");
+        clean_row();
+    }
+
+    #[test]
+    fn stale_config_file_is_cleared_before_first_start() {
+        let _g = db_guard();
+        clean_row();
+        let ops = FakeSystemOps {
+            download_body: FAKE_BINARY.to_vec(),
+            existing_paths: vec![STALWART_CONFIG.to_string()],
+            ..FakeSystemOps::default()
+        };
+        let mut api = FakeApi::default();
+        let secrets = FakeSecrets::default();
+        let art = fake_artifact();
+        run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "http-01")
+            .expect("enable succeeds");
+        assert!(
+            ops.recorded().contains(&format!("rm {STALWART_CONFIG}")),
+            "a stale config file must be removed (bootstrap requires it ABSENT): {:?}",
+            ops.recorded()
+        );
         clean_row();
     }
 
@@ -1379,7 +1540,7 @@ listener started on 0.0.0.0:8080
         uninstall_with(&ops, &FakeSecrets::default(), false).expect("uninstall no purge");
         let lines = ops.recorded();
         assert!(!lines.iter().any(|l| l.contains("/var/lib/stalwart")), "{lines:?}");
-        assert!(!lines.iter().any(|l| l.contains("/etc/stalwart")), "{lines:?}");
+        assert!(!lines.iter().any(|l| l.contains("rm /etc/stalwart")), "{lines:?}");
         clean_row();
     }
 

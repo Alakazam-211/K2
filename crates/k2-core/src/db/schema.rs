@@ -3090,6 +3090,42 @@ pub struct MailDoctorRun {
     pub ran_at: i64,
 }
 
+/// One `mail_external_inboxes` row (0074, PRD §17.5) — the user's OWN
+/// external email account (Gmail app-password, Fastmail, company
+/// IMAP), bound to exactly ONE workspace at add time. Agents in that
+/// workspace read the inbox and save reply DRAFTS into the account's
+/// real Drafts folder; there is NO send path from an external account
+/// in V1. The password lives in the daemon vault under the
+/// deterministic key `ext-inbox-<id>` — never a field here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailExternalInbox {
+    pub id: String,
+    /// The bound workspace (`projects.id`) — the ONLY workspace whose
+    /// agents can see this inbox (masked `not_found` everywhere else).
+    pub owner_project_id: String,
+    /// Normalized (lowercase local part + punycode A-label domain),
+    /// UNIQUE — the §17.5 `backend_for_address` seam key.
+    pub email_address: String,
+    pub display_name: Option<String>,
+    /// `imap` in V1; `jmap` / `gmail-api` (OAuth2) anticipated in the
+    /// CHECK — nothing may assume `kind == 'imap'`.
+    pub kind: String,
+    pub host: String,
+    pub port: i64,
+    /// `implicit-tls` | `starttls` — TLS is never optional.
+    pub tls: String,
+    pub username: String,
+    /// `None` = autodetect (LIST SPECIAL-USE `\Drafts`, then common
+    /// names); a value overrides detection.
+    pub drafts_folder: Option<String>,
+    /// `connected` | `error` (last add/draft outcome).
+    pub status: String,
+    pub last_checked_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub created_at: i64,
+}
+
 #[cfg(test)]
 mod unit_tests {
     //! Per-struct CRUD + invariant coverage for schema.rs. Each test
@@ -3284,6 +3320,82 @@ mod unit_tests {
             [],
         )
         .expect("same client_id, different owner");
+    }
+
+    /// 0074 (K2 Mail S9): `mail_external_inboxes` applies — defaults
+    /// land (`imap` / `implicit-tls` / `connected`), the address is
+    /// UNIQUE, the CHECKed enums reject invalid values (there is no
+    /// plaintext TLS kind, by construction), and NO credential column
+    /// exists on the table.
+    #[test]
+    fn mail_external_inboxes_migration_defaults_and_constraints() {
+        let conn = fresh();
+        conn.execute(
+            "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, \
+             host, port, username, created_at) \
+             VALUES ('x1', 'p1', 'rosson@example.com', 'imap.example.com', 993, \
+             'rosson@example.com', 100)",
+            [],
+        )
+        .expect("external inbox insert");
+        let (kind, tls, status): (String, String, String) = conn
+            .query_row(
+                "SELECT kind, tls, status FROM mail_external_inboxes WHERE id = 'x1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("external inbox read");
+        assert_eq!((kind.as_str(), tls.as_str(), status.as_str()), ("imap", "implicit-tls", "connected"));
+
+        // One row per account — even bound to a DIFFERENT workspace.
+        assert!(
+            conn.execute(
+                "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, \
+                 host, port, username, created_at) \
+                 VALUES ('x2', 'p2', 'rosson@example.com', 'imap.example.com', 993, 'u', 1)",
+                [],
+            )
+            .is_err(),
+            "duplicate email_address must be rejected"
+        );
+        for (label, sql) in [
+            (
+                "mail_external_inboxes.kind",
+                "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, kind, \
+                 host, port, username, created_at) \
+                 VALUES ('xk', 'p', 'k@example.com', 'pop3', 'h', 993, 'u', 1)",
+            ),
+            (
+                "mail_external_inboxes.tls",
+                "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, tls, \
+                 host, port, username, created_at) \
+                 VALUES ('xt', 'p', 't@example.com', 'plaintext', 'h', 143, 'u', 1)",
+            ),
+            (
+                "mail_external_inboxes.status",
+                "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, status, \
+                 host, port, username, created_at) \
+                 VALUES ('xs', 'p', 's@example.com', 'maybe', 'h', 993, 'u', 1)",
+            ),
+        ] {
+            assert!(conn.execute(sql, []).is_err(), "{label}: bad enum must be rejected");
+        }
+        // The vault, not the table, holds the secret: no password-ish
+        // column may ever exist here.
+        let mut stmt = conn
+            .prepare("SELECT name FROM pragma_table_info('mail_external_inboxes')")
+            .expect("table info");
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .expect("cols")
+            .filter_map(Result::ok)
+            .collect();
+        for banned in ["password", "secret", "secret_ref", "pass"] {
+            assert!(
+                !cols.iter().any(|c| c.contains(banned)),
+                "credential-shaped column '{banned}' must not exist: {cols:?}"
+            );
+        }
     }
 
     fn make_project_row(conn: &Connection, path: &str) -> String {

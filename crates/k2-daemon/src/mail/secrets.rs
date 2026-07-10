@@ -26,6 +26,14 @@ pub trait SecretStore: Send + Sync {
     fn store(&self, kind: &str, secret: &str) -> Result<String, String>;
     fn resolve(&self, sref: &str) -> Result<Option<String>, String>;
     fn delete(&self, sref: &str) -> Result<(), String>;
+    /// Store under an EXACT, caller-chosen key (S9 external inboxes:
+    /// the vault key is the DETERMINISTIC `ext-inbox-<row-id>` so no
+    /// ref column ever exists in the DB — the row id IS the ref).
+    /// Defaulted to an error so the pre-S9 fakes keep compiling; any
+    /// store that backs external inboxes overrides it.
+    fn store_exact(&self, _key: &str, _secret: &str) -> Result<(), String> {
+        Err("store_exact: not supported by this secret store".to_string())
+    }
 }
 
 /// Resolve a SCHEME-form secret ref: `env:<VAR>` or an absolute file
@@ -174,6 +182,21 @@ impl SecretStore for FileSecretStore {
         }
         Ok(())
     }
+
+    fn store_exact(&self, key: &str, secret: &str) -> Result<(), String> {
+        // Refuse keys that would COLLIDE with the other ref forms —
+        // a scheme-shaped key would become unreachable via resolve()
+        // (scheme refs short-circuit before the file map).
+        if key.is_empty() || is_scheme_ref(key) {
+            return Err(format!(
+                "store_exact: invalid key '{key}' (must be a plain map key, not a scheme ref)"
+            ));
+        }
+        let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let mut map = self.load()?;
+        map.insert(key.to_string(), serde_json::Value::String(secret.to_string()));
+        self.save(&map)
+    }
 }
 
 #[cfg(unix)]
@@ -254,6 +277,28 @@ mod tests {
         );
         // Deleting an unknown ref is a no-op, not an error.
         store.delete("mailsec_unknown_0").expect("delete unknown");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// S9: exact-key store/resolve/delete round-trip (the
+    /// `ext-inbox-<row-id>` deterministic-key path) — and
+    /// scheme-shaped keys are refused (they'd be unreachable).
+    #[test]
+    fn store_exact_roundtrips_and_refuses_scheme_keys() {
+        let (store, dir) = temp_store();
+        store.store_exact("ext-inbox-abc123", "app-password").expect("store_exact");
+        assert_eq!(
+            store.resolve("ext-inbox-abc123").expect("resolve"),
+            Some("app-password".into())
+        );
+        // Overwrite in place (re-add with a new password).
+        store.store_exact("ext-inbox-abc123", "rotated").expect("overwrite");
+        assert_eq!(store.resolve("ext-inbox-abc123").expect("resolve"), Some("rotated".into()));
+        store.delete("ext-inbox-abc123").expect("delete");
+        assert_eq!(store.resolve("ext-inbox-abc123").expect("resolve"), None);
+        for bad in ["", "env:X", "file:/x", "/abs/path"] {
+            assert!(store.store_exact(bad, "s").is_err(), "key '{bad}' must be refused");
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

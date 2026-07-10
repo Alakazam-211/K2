@@ -6316,6 +6316,17 @@ cmd_schema() {
       ]
     },
     {
+      "name": "mail draft",
+      "usage": "k2 mail draft <message-id> (--body <text> | --body-file <f>) [--json]",
+      "description": "Save a reply DRAFT into your human's external assistant inbox (their own Gmail/IMAP account bound to this workspace): the draft lands in the account's real Drafts folder, threaded onto the source message — your human reviews and sends it from their own mail client. Sending from an external account is IMPOSSIBLE (drafts only, no code path). For K2-hosted messages use 'k2 mail reply' instead (a K2-hosted id errors with that pointer).",
+      "args": [{"name": "message-id", "required": true}],
+      "flags": [
+        {"name": "--body", "arg": "text", "description": "The draft reply text."},
+        {"name": "--body-file", "arg": "f", "description": "Read the draft text from a file."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "mail outbox",
       "usage": "k2 mail outbox [<id>] [--limit N] [--json]",
       "description": "Your outbound messages + status (pending_approval / approved / submitted / rejected / failed), newest first. Rejected items carry your human's note inline. Point lookup by out_... id (ids are stable in --json).",
@@ -6333,9 +6344,27 @@ cmd_schema() {
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
+      "name": "mail external",
+      "usage": "k2 mail external add <address> --host <imap-host> --workspace <ws> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] | list | remove <address> (owner surface)",
+      "description": "Connect the user's OWN external email accounts (Gmail app-password, Fastmail, company IMAP) as assistant inboxes — OWNER verbs (agent tokens exit 3). Each account binds to exactly ONE workspace: its agents read the inbox via the normal messages/read/wait verbs and save reply drafts via 'k2 mail draft'; sending from an external account has no code path. The password is vaulted daemon-side, never in the DB, never in output, never on argv (--pass-stdin pipes it; --pass-ref resolves env:<VAR> / an absolute file path once).",
+      "args": [{"name": "address", "required": false}],
+      "flags": [
+        {"name": "--host", "arg": "h", "description": "IMAP server (add)."},
+        {"name": "--workspace", "arg": "ws", "description": "The ONE workspace to bind (add)."},
+        {"name": "--pass-stdin", "arg": null, "description": "Read the app-password from stdin (add)."},
+        {"name": "--pass-ref", "arg": "ref", "description": "Resolve the password once from env:<VAR> / an absolute file path (add)."},
+        {"name": "--port", "arg": "n", "description": "Default 993 implicit-tls / 143 starttls (add)."},
+        {"name": "--tls", "arg": "kind", "description": "implicit-tls (default) | starttls; always certificate-verified (add)."},
+        {"name": "--user", "arg": "login", "description": "IMAP login if not the address (add)."},
+        {"name": "--name", "arg": "display", "description": "Display name for drafts' From header (add)."},
+        {"name": "--drafts-folder", "arg": "f", "description": "Pin the Drafts folder; default autodetect via SPECIAL-USE (add)."},
+        {"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}
+      ]
+    },
+    {
       "name": "mail",
-      "usage": "k2 mail <status|domain|doctor|config|approvals> ... (owner surface)",
-      "description": "Owner-level mail management: status (server health/version/port plan), domain add|list|show|check|remove (DNS record table + live verification), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps), approvals list|approve|deny (deny requires --note). Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 mail <status|domain|doctor|config|approvals|external> ... (owner surface)",
+      "description": "Owner-level mail management: status (server health/version/port plan), domain add|list|show|check|remove (DNS record table + live verification), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps), approvals list|approve|deny (deny requires --note), external add|list|remove (your own external accounts as read+draft assistant inboxes). Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -11524,6 +11553,10 @@ _mail_py() {
     M_RELAY_PORT="${M_RELAY_PORT:-}" M_RELAY_USER="${M_RELAY_USER:-}" \
     M_RELAY_PASS="${M_RELAY_PASS:-}" M_AGENT_SEND="${M_AGENT_SEND:-}" \
     M_ADDRESS_CAP="${M_ADDRESS_CAP:-}" M_WORKSPACE="${M_WORKSPACE:-}" \
+    M_HOST="${M_HOST:-}" M_PORT="${M_PORT:-}" M_TLS="${M_TLS:-}" \
+    M_USER="${M_USER:-}" M_NAME="${M_NAME:-}" \
+    M_DRAFTS_FOLDER="${M_DRAFTS_FOLDER:-}" \
+    M_PASS="${M_PASS:-}" M_PASS_REF="${M_PASS_REF:-}" \
     python3 - <<'PYEOF'
 import base64, json, os, sys, time
 import urllib.error, urllib.parse, urllib.request
@@ -12143,6 +12176,70 @@ elif verb == "approvals_deny":
         print(dumps(d))
     else:
         print("%s rejected — your note reaches the agent in its outbox." % d.get("id", ""))
+
+elif verb == "draft":
+    # S9: reply DRAFT into the workspace's external assistant inbox.
+    # The daemon composes + APPENDs with \Draft; nothing is ever sent.
+    d = call("POST", "/cli/mail/draft",
+             body={"project": ws_path, "id": env("M_ID"), "body": env("M_BODY")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print(d.get("hint") or "draft saved to '%s' in %s"
+              % (d.get("folder", "?"), d.get("address", "?")))
+
+elif verb == "external_add":
+    # S9 owner verb: connect an external account and bind it to ONE
+    # workspace. The credential rides the request body once and is
+    # vaulted daemon-side — it never appears in any response or log.
+    body = {"project": env("M_WORKSPACE"), "address": env("M_ADDRESS"),
+            "host": env("M_HOST")}
+    for envk, key in (("M_PORT", "port"), ("M_TLS", "tls"), ("M_USER", "username"),
+                      ("M_NAME", "displayName"), ("M_DRAFTS_FOLDER", "draftsFolder")):
+        v = env(envk)
+        if v != "":
+            body[key] = int(v) if key == "port" else v
+    if env("M_PASS"):
+        body["password"] = env("M_PASS")
+    elif env("M_PASS_REF"):
+        body["passwordRef"] = env("M_PASS_REF")
+    # The live connect check can take a moment against a slow host.
+    d = call("POST", "/cli/mail/external/add", body=body, timeout=90)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("connected %s -> workspace %s" % (d.get("address", "?"), env("M_WORKSPACE")))
+        if d.get("draftsFolder"):
+            print("drafts folder: %s" % d["draftsFolder"])
+        else:
+            print("no Drafts folder detected — set one with --drafts-folder if 'k2 mail draft' errors")
+        print("agents in that workspace can now READ this inbox and save reply drafts;")
+        print("sending from it is impossible (drafts only — you send from your own mail client).")
+
+elif verb == "external_list":
+    d = call("GET", "/cli/mail/external/list")
+    rows = d.get("inboxes") or []
+    if as_json:
+        print(dumps(d))
+    elif not rows:
+        print("No external inboxes connected — add one: k2 mail external add <address> --host <imap-host> --workspace <ws> --pass-stdin")
+    else:
+        w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
+        print(("%-" + str(w) + "s%-11s%-24s%s") % ("ADDRESS", "STATUS", "WORKSPACE", "HOST"))
+        for r in rows:
+            print(("%-" + str(w) + "s%-11s%-24s%s") % (
+                r.get("address", ""), r.get("status", "?"),
+                r.get("holderWorkspace") or r.get("holderProjectId", "?"),
+                "%s:%s (%s)" % (r.get("host", "?"), r.get("port", "?"), r.get("tls", "?"))))
+            if r.get("lastError"):
+                print("    last error: %s" % r["lastError"])
+
+elif verb == "external_remove":
+    d = call("POST", "/cli/mail/external/remove", body={"address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("removed %s — its stored credential was deleted from the vault." % d.get("address", "?"))
 
 else:
     die({"code": "usage", "hint": "unknown mail verb '%s'" % verb})
@@ -12789,6 +12886,161 @@ cmd_mail_approvals() {
     esac
 }
 
+# S9 (PRD §17.5): save a reply DRAFT into an external assistant
+# inbox's real Drafts folder. Agent verb — read + draft is ALL an
+# agent can do with an external account; the human reviews and sends
+# from their own mail client.
+cmd_mail_draft() {
+    if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
+    local id="" body="" body_file="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --body)
+                [ $# -ge 2 ] || { _mail_err "usage" "--body requires the draft text"; exit 2; }
+                body="$2"; shift 2 ;;
+            --body-file)
+                [ $# -ge 2 ] || { _mail_err "usage" "--body-file requires a file path"; exit 2; }
+                body_file="$2"; shift 2 ;;
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one <message-id> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$id" ]; then
+        _mail_err "usage" "draft requires a <message-id> (from 'k2 mail messages')"
+        exit 2
+    fi
+    if [ -n "$body" ] && [ -n "$body_file" ]; then
+        _mail_err "usage" "--body and --body-file are mutually exclusive"
+        exit 2
+    fi
+    if [ -n "$body_file" ]; then
+        if [ ! -f "$body_file" ]; then
+            _mail_err "usage" "--body-file: no such file '$body_file'"
+            exit 2
+        fi
+        body="$(cat "$body_file")" || {
+            _mail_err "usage" "--body-file: cannot read '$body_file'"
+            exit 2
+        }
+    fi
+    if [ -z "$body" ]; then
+        _mail_err "usage" "draft requires --body <text> or --body-file <f>"
+        exit 2
+    fi
+    local M_VERB="draft" M_JSON="$as_json" M_ID="$id" M_BODY="$body"
+    _mail_py
+}
+
+# S9 (PRD §17.5): the user's OWN external accounts (Gmail, Fastmail,
+# company IMAP), each bound to exactly ONE workspace. OWNER family —
+# server-enforced (agent tokens exit 3). The password never rides argv:
+# --pass-stdin pipes it, --pass-ref points at env:<VAR> / an absolute
+# file path (resolved once daemon-side, then vaulted).
+cmd_mail_external() {
+    if _wants_help "$@"; then cmd_help_mail_external; exit 0; fi
+    local sub=""
+    case "${1:-}" in
+        add|list|remove) sub="$1"; shift ;;
+        "") cmd_help_mail_external; exit 0 ;;
+        -*) sub="list" ;;  # bare `k2 mail external --json` = list
+        *)
+            _mail_err "usage" "unknown external command '${1:-}' — usage: k2 mail external <add|list|remove>"
+            exit 2 ;;
+    esac
+    local address="" workspace="" host="" port="" tls="" user="" name="" \
+          drafts_folder="" pass_stdin=false pass_ref="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace)
+                [ $# -ge 2 ] || { _mail_err "usage" "--workspace requires a value (the ONE workspace to bind)"; exit 2; }
+                workspace="$2"; shift 2 ;;
+            --host)
+                [ $# -ge 2 ] || { _mail_err "usage" "--host requires a value (e.g. imap.gmail.com)"; exit 2; }
+                host="$2"; shift 2 ;;
+            --port)
+                [ $# -ge 2 ] || { _mail_err "usage" "--port requires a number"; exit 2; }
+                if ! _mail_is_uint "$2"; then
+                    _mail_err "usage" "--port must be a number (default: 993 implicit-tls / 143 starttls)"
+                    exit 2
+                fi
+                port="$2"; shift 2 ;;
+            --tls)
+                [ $# -ge 2 ] || { _mail_err "usage" "--tls requires implicit-tls or starttls"; exit 2; }
+                tls="$2"; shift 2 ;;
+            --user)
+                [ $# -ge 2 ] || { _mail_err "usage" "--user requires the IMAP login (default: the address)"; exit 2; }
+                user="$2"; shift 2 ;;
+            --name)
+                [ $# -ge 2 ] || { _mail_err "usage" "--name requires a display name"; exit 2; }
+                name="$2"; shift 2 ;;
+            --drafts-folder)
+                [ $# -ge 2 ] || { _mail_err "usage" "--drafts-folder requires a folder name"; exit 2; }
+                drafts_folder="$2"; shift 2 ;;
+            --pass-stdin) pass_stdin=true; shift ;;
+            --pass-ref)
+                [ $# -ge 2 ] || { _mail_err "usage" "--pass-ref requires env:<VAR> or an absolute file path"; exit 2; }
+                pass_ref="$2"; shift 2 ;;
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — see k2 mail external --help"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one <address> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    case "$sub" in
+        add)
+            if [ -z "$address" ] || [ -z "$host" ] || [ -z "$workspace" ]; then
+                _mail_err "usage" "external add requires <address> --host <imap-host> --workspace <ws> (+ --pass-stdin | --pass-ref <ref>)"
+                exit 2
+            fi
+            local pass=""
+            if $pass_stdin; then
+                if [ -n "$pass_ref" ]; then
+                    _mail_err "usage" "--pass-stdin and --pass-ref are mutually exclusive"
+                    exit 2
+                fi
+                # The app-password arrives on stdin — NEVER argv (ps
+                # would show it) and never a shell history line.
+                IFS= read -r pass || true
+                if [ -z "$pass" ]; then
+                    _mail_err "usage" "--pass-stdin: no password on stdin (pipe it: printf %s \"\$PW\" | k2 mail external add …)"
+                    exit 2
+                fi
+            elif [ -z "$pass_ref" ]; then
+                _mail_err "usage" "external add needs the app-password: --pass-stdin (piped) or --pass-ref env:<VAR> / /abs/path"
+                exit 2
+            fi
+            local M_VERB="external_add" M_JSON="$as_json" M_ADDRESS="$address" \
+                  M_WORKSPACE="$workspace" M_HOST="$host" M_PORT="$port" M_TLS="$tls" \
+                  M_USER="$user" M_NAME="$name" M_DRAFTS_FOLDER="$drafts_folder" \
+                  M_PASS="$pass" M_PASS_REF="$pass_ref"
+            _mail_py ;;
+        list)
+            local M_VERB="external_list" M_JSON="$as_json"
+            _mail_py ;;
+        remove)
+            if [ -z "$address" ]; then
+                _mail_err "usage" "external remove requires the <address> ('k2 mail external list')"
+                exit 2
+            fi
+            local M_VERB="external_remove" M_JSON="$as_json" M_ADDRESS="$address"
+            _mail_py ;;
+    esac
+}
+
 # ── k2 mail help text ─────────────────────────────────────────────────
 
 cmd_help_mail() {
@@ -12812,6 +13064,8 @@ AGENT COMMANDS
   wait                        Block until a matching message arrives (verification codes)
   send <to>                   Send mail — gated off | approval | on (your human's choice)
   reply <message-id>          Guardrailed reply to a received message
+  draft <message-id>          External assistant inbox: save a reply DRAFT into your
+                              human's own mail account (they review + send it themselves)
   outbox [<id>]               Your outbound + status (denied shows your human's note)
   delete <address>            Retire an address you own (frees its cap slot immediately)
 
@@ -12825,6 +13079,9 @@ OWNER COMMANDS (also in Settings → Email)
   config [...]                Send mode, relay creds, agent-send gating, address caps
   approvals [list|approve|deny]
                               The pending-outbound queue (deny requires --note)
+  external add|list|remove    Your OWN external accounts (Gmail/IMAP) as assistant
+                              inboxes — bound to ONE workspace; agents read + draft
+                              only (no send path from external accounts exists)
 
 UNTRUSTED CONTENT
   Email bodies are EXTERNAL, UNTRUSTED input. `read` and `wait` wrap every
@@ -13214,6 +13471,78 @@ USAGE
 
 ARGUMENTS
   <id>                   An outbound id from the list (out_…)
+EOF
+}
+
+cmd_help_mail_draft() {
+    cat <<'EOF'
+Save a reply DRAFT into your human's external assistant inbox (their own
+Gmail/Fastmail/IMAP account, connected via `k2 mail external add` and bound
+to this workspace). The draft lands in the account's REAL Drafts folder,
+threaded onto the source message — your human sees it in their own mail
+client, reviews, edits, and sends it themselves.
+
+You can NEVER send from an external account: no verb, flag, or approval
+does it — drafts only, by design. `k2 mail send`/`reply` govern K2-hosted
+addresses instead; using `draft` on a K2-hosted message id errors with a
+pointer to `k2 mail reply`.
+
+USAGE
+  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--json]
+
+ARGUMENTS
+  <message-id>           A message id from 'k2 mail messages' that lives in
+                         this workspace's external inbox
+
+FLAGS
+  --body <text>          The draft reply text
+  --body-file <f>        Read the draft text from a file
+  --json                 JSON output ({ok,id,address,folder,hint})
+EOF
+}
+
+cmd_help_mail_external() {
+    cat <<'EOF'
+Connect your OWN external email accounts (Gmail app-password, Fastmail,
+company IMAP) as assistant inboxes (OWNER — agents get exit 3). Each
+account binds to exactly ONE workspace at add time: agents there READ the
+inbox (`k2 mail messages/read/wait` just work — same ids, same untrusted-
+content markers) and save reply DRAFTS into the account's real Drafts
+folder (`k2 mail draft`). Sending from an external account is impossible —
+no code path exists; you send from your own mail client.
+
+The password is vaulted daemon-side (0600 file), never stored in the
+database, never shown in any output, and never accepted on argv.
+
+USAGE
+  k2 mail external add <address> --host <imap-host> --workspace <ws>
+                       (--pass-stdin | --pass-ref <ref>)
+                       [--port <n>] [--tls implicit-tls|starttls]
+                       [--user <login>] [--name <display>]
+                       [--drafts-folder <folder>] [--json]
+  k2 mail external list [--json]
+  k2 mail external remove <address> [--json]
+
+FLAGS (add)
+  --host <h>             The IMAP server, e.g. imap.gmail.com
+  --workspace <ws>       The ONE workspace whose agents may read this inbox
+  --pass-stdin           Read the app-password from stdin (pipe it in)
+  --pass-ref <ref>       Or resolve it once from env:<VAR> / an absolute
+                         file path ON THE DAEMON'S BOX (the house
+                         secret-ref forms) — never the password on argv
+  --port <n>             Default: 993 (implicit-tls) / 143 (starttls)
+  --tls <kind>           implicit-tls (default) | starttls — always verified,
+                         plaintext IMAP does not exist here
+  --user <login>         IMAP login if it differs from the address
+  --name <display>       Display name used on drafts' From header
+  --drafts-folder <f>    Pin the Drafts folder (default: autodetect via
+                         SPECIAL-USE \Drafts, then common names)
+
+EXAMPLES
+  printf %s "$APP_PW" | k2 mail external add rosson@gmail.com \
+      --host imap.gmail.com --workspace ~/DevProjects/K2 --pass-stdin
+  k2 mail external add ops@acme.com --host mail.acme.com --tls starttls \
+      --workspace acme-ops --pass-ref env:ACME_MAIL_PW
 EOF
 }
 
@@ -13883,6 +14212,10 @@ case "${1:-help}" in
             wait)        shift 2; cmd_mail_wait "$@" ;;
             send)        shift 2; cmd_mail_send "$@" ;;
             reply)       shift 2; cmd_mail_reply "$@" ;;
+            # S9: save a reply DRAFT into an external assistant
+            # inbox's real Drafts folder (agent verb; read + draft
+            # only — sending from an external account does not exist).
+            draft)       shift 2; cmd_mail_draft "$@" ;;
             outbox)      shift 2; cmd_mail_outbox "$@" ;;
             delete)      shift 2; cmd_mail_delete "$@" ;;
             status)      shift 2; cmd_mail_status "$@" ;;
@@ -13890,6 +14223,9 @@ case "${1:-help}" in
             doctor)      shift 2; cmd_mail_doctor "$@" ;;
             config)      shift 2; cmd_mail_config "$@" ;;
             approvals)   shift 2; cmd_mail_approvals "$@" ;;
+            # S9: the user's OWN external accounts (owner family;
+            # deliberately `external`, never `inbox` — PRD §11).
+            external)    shift 2; cmd_mail_external "$@" ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;
             *)
                 _mail_err "usage" "unknown command '${2:-}' — see k2 mail --help"

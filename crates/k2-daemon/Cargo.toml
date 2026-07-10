@@ -149,6 +149,24 @@ minisign-verify = "0.2"
 # `DnsResolver` trait with canned answers (no real DNS in tests, ever).
 hickory-resolver = "0.24"
 
+# K2 Mail S9 — external assistant inboxes (prd-email-server-v1 §17.5): a
+# sync IMAP client for the user's OWN accounts (Gmail app-passwords,
+# Fastmail, company IMAP). `imap` 3.x is the maintained line (2.x is
+# frozen); rustls-tls ONLY — TLS verification is always on (rustls-connector
+# + platform root store), and native-tls stays out of the tree. Every
+# protocol effect is wrapped behind `mail::external::ImapOps`, so unit
+# tests use fakes / a scripted loopback mock — never a real mail host.
+# imap-proto is imap's wire-type crate (NameAttribute::Drafts for the
+# SPECIAL-USE detection); pinned to the minor imap itself uses.
+# mail-parser (Apache-2.0/MIT standalone LIBRARY — not the Stalwart server;
+# the §4 no-linking rule is about the AGPL sidecar) parses fetched RFC 822
+# bytes into text/html/attachments; `full_encoding` pulls encoding_rs so
+# non-UTF-8 charsets in real human inboxes (ISO-8859-*, Shift-JIS, …)
+# decode instead of mojibake.
+imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
+imap-proto = "0.16"
+mail-parser = { version = "0.11", default-features = false, features = ["full_encoding"] }
+
 # Sandbox P2b worker — Linux-only deps for the host jail. Both are OPTIONAL and
 # pulled in ONLY by the `sandbox-microvm` feature (via `dep:`), so a default or
 # macOS build never compiles them. `nix` gives us the namespace / mount /

@@ -35,6 +35,10 @@
 //! | GET  /cli/mail/approvals/list     | mail/routes_send.rs     |
 //! | POST /cli/mail/approvals/approve  | mail/routes_send.rs     |
 //! | POST /cli/mail/approvals/deny     | mail/routes_send.rs     |
+//! | POST /cli/mail/external/add       | mail/routes_external.rs |
+//! | POST /cli/mail/external/remove    | mail/routes_external.rs |
+//! | GET  /cli/mail/external/list      | mail/routes_external.rs |
+//! | POST /cli/mail/draft              | mail/routes_external.rs |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -65,12 +69,22 @@
 //! latest PERSISTED run (read-only, never probes), POST = run the
 //! probes now (owner-level, in the POST arm's `spawn_blocking`:
 //! blocking DNS/TCP/SMTP I/O). Every reserved path is now REAL.
+//!
+//! S9 extends the family with EXTERNAL assistant inboxes (PRD §17.5):
+//! `external/add|remove` (owner POSTs) + `external/list` (owner GET,
+//! own dispatcher clause like `approvals/list`) + `draft` (workspace-
+//! token POST — the agent's save-a-reply-draft verb; it dials the
+//! user's IMAP host, so it rides the POST arm's `spawn_blocking`).
+//! Reads of external MESSAGES have no routes here — they flow through
+//! the EXISTING `messages|read|attachments|wait` handlers via the
+//! §17.5 `backend_for_address` seam.
 
 use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
 use crate::mail::{
-    routes_addresses, routes_domains, routes_messages, routes_send, routes_server,
+    routes_addresses, routes_domains, routes_external, routes_messages, routes_send,
+    routes_server,
 };
 
 /// Mail-domain GET dispatch. Returns `Some(resp)` for a handled path,
@@ -102,6 +116,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/wait" => routes_messages::handle_wait(params),
         "/cli/mail/outbox" => routes_send::handle_outbox(params),
         "/cli/mail/approvals/list" => routes_send::handle_approvals_list(params),
+        "/cli/mail/external/list" => routes_external::handle_external_list(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -117,7 +132,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/send"
         | "/cli/mail/reply"
         | "/cli/mail/approvals/approve"
-        | "/cli/mail/approvals/deny" => CliResponse::method_not_allowed(),
+        | "/cli/mail/approvals/deny"
+        | "/cli/mail/external/add"
+        | "/cli/mail/external/remove"
+        | "/cli/mail/draft" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -145,6 +163,9 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/mail/reply" => routes_send::handle_reply(body),
         "/cli/mail/approvals/approve" => routes_send::handle_approvals_approve(body),
         "/cli/mail/approvals/deny" => routes_send::handle_approvals_deny(body),
+        "/cli/mail/external/add" => routes_external::handle_external_add(body),
+        "/cli/mail/external/remove" => routes_external::handle_external_remove(body),
+        "/cli/mail/draft" => routes_external::handle_draft(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -152,13 +173,19 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
 /// Owner-level `/cli/mail/*` mutations — the paths the dispatcher's
 /// POST arm additionally gates with `token_is_owner_or_admin` (PRD
 /// §10: server enable/disable/uninstall + domain add/remove/check +
-/// mode/relay config + approvals = owner-or-admin; address
-/// create/delete + send/reply stay workspace-token so agents can act).
+/// mode/relay config + approvals + S9 external-inbox CRUD =
+/// owner-or-admin; address create/delete + send/reply + S9 `draft`
+/// stay workspace-token so agents can act).
 pub fn is_owner_level_mutation(path: &str) -> bool {
     path.starts_with("/cli/mail/server/")
         || path.starts_with("/cli/mail/domain/")
         || path.starts_with("/cli/mail/config/")
         || path.starts_with("/cli/mail/approvals/")
+        // S9: connecting/removing the user's OWN external account is
+        // owner surface (it binds credentials + a workspace); the
+        // agent verb on that inbox is `draft`, which is deliberately
+        // NOT in this set.
+        || path.starts_with("/cli/mail/external/")
         // The doctor RUN (POST /cli/mail/doctor) is an owner verb
         // (§11/§11.1.3); the GET on the same path is a plain read and
         // never reaches this classifier (it only sees POSTs).
@@ -194,6 +221,9 @@ mod tests {
             "/cli/mail/reply",
             "/cli/mail/approvals/approve",
             "/cli/mail/approvals/deny",
+            "/cli/mail/external/add",
+            "/cli/mail/external/remove",
+            "/cli/mail/draft",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
@@ -327,6 +357,27 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
             assert_eq!(v["error"]["code"], "usage", "route={route}");
         }
+
+        // S9 — the external family is REAL: the owner list answers 200
+        // through the shim (its owner gate lives in the dispatcher
+        // clause, like approvals/list), and the mutations + draft
+        // validate their bodies (`{}` = usage 400) instead of 501-ing.
+        // Deep behavior is owned by routes_external/mail::external
+        // tests.
+        let resp = dispatch("/cli/mail/external/list", &params).expect("claimed");
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["ok"], true);
+        for route in [
+            "/cli/mail/external/add",
+            "/cli/mail/external/remove",
+            "/cli/mail/draft",
+        ] {
+            let resp = dispatch_post(route, b"{}");
+            assert_eq!(resp.status, "400 Bad Request", "route={route}: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage", "route={route}");
+        }
     }
 
     /// The S1-real server mutations answer through their handlers (no
@@ -363,6 +414,9 @@ mod tests {
             "/cli/mail/domain/check",
             "/cli/mail/approvals/approve",
             "/cli/mail/approvals/deny",
+            // S9: connecting an external account = owner surface.
+            "/cli/mail/external/add",
+            "/cli/mail/external/remove",
             // The doctor RUN (POST; the GET read never reaches the
             // classifier).
             "/cli/mail/doctor",
@@ -374,6 +428,9 @@ mod tests {
             "/cli/mail/address/delete",
             "/cli/mail/send",
             "/cli/mail/reply",
+            // S9: drafting into the bound external inbox is the AGENT
+            // verb — workspace token, ownership-masked handler-side.
+            "/cli/mail/draft",
         ] {
             assert!(!is_owner_level_mutation(agent_path), "{agent_path}");
         }

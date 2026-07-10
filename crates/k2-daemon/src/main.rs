@@ -502,6 +502,17 @@ async fn async_main() {
         Err(e) => log_debug!("[daemon] WARN: stage browser-open shim: {e}"),
     }
 
+    // 0.40.41 — self-stage the `k2` CLI on headless Linux servers. macOS
+    // keeps the app-managed symlink; on Linux the CLI otherwise only
+    // arrives via the provision/migration step, which the nsi migration
+    // skipped (prd-cloud-server-upgrade §9 L-cli). Linux-only, never
+    // clobbers a symlink, non-fatal.
+    match k2_core::cli_stage::stage_cli() {
+        Ok(Some(path)) => log_debug!("[daemon] k2 CLI staged: {}", path.display()),
+        Ok(None) => {}
+        Err(e) => log_debug!("[daemon] WARN: stage k2 CLI: {e}"),
+    }
+
     log_debug!(
         "[daemon] Listening on 127.0.0.1:{} — daemon.{{port,token}} + heartbeat.{{port,token}} published to {}",
         port,

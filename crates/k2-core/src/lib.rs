@@ -42,6 +42,7 @@ pub mod chat_history;
 // state locations, scrub secrets, exclude bulk, tar/gz a manifest-driven
 // bundle). Powers both the high-bar push (P2) and the README fallback
 // (P3). HTTP/Tauri-free; see module docs + PRD k2-connect-clone-to.md.
+pub mod cli_stage;
 pub mod clone;
 pub mod companion;
 // Phase 2.5e: workspace-to-workspace connections registry (relocated

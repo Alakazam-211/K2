@@ -529,6 +529,20 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0071_api_key_provider",
             include_str!("../../drizzle_sql/0071_api_key_provider.sql"),
         ),
+        // 0072 (GH#22/#23/#24): heal junk per-project heartbeat schedules
+        // written by pre-0.40.41 CLIs that misparsed `--help`/subcommand
+        // words as a schedule frequency and POSTed them to the legacy
+        // /cli/heartbeat/schedule route verbatim. Resets rows with an
+        // invalid heartbeat_mode, or mode='scheduled' whose schedule JSON
+        // is missing/malformed or carries a $.frequency outside
+        // daily/weekly/monthly/yearly, to off + NULL + disabled.
+        // json_valid() guards json_extract() so malformed JSON can't
+        // abort the migration. The route now rejects these writes
+        // (misc_routes.rs validate_heartbeat_schedule_write).
+        (
+            "0072_clear_junk_heartbeat_schedules",
+            include_str!("../../drizzle_sql/0072_clear_junk_heartbeat_schedules.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1101,6 +1115,85 @@ mod tests {
             danger.as_deref(),
             Some(r#"["--custom-flag"]"#),
             "reseed must never overwrite non-NULL metadata"
+        );
+    }
+
+    /// 0072: junk heartbeat rows from the GH#22/#23/#24 CLI misparse
+    /// (mode usually the valid 'scheduled' with a garbage $.frequency
+    /// like "--help"; sometimes a junk mode outright) reset to
+    /// off/NULL/disabled — while every legitimate shape survives
+    /// untouched. Fresh installs run 0072 against an empty table, so
+    /// the healing UPDATE is exercised here by re-applying the SQL to
+    /// seeded rows (the statement is idempotent by construction).
+    #[test]
+    fn migration_0072_heals_junk_heartbeat_schedule_rows() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+
+        let insert = |id: &str, mode: &str, schedule: Option<&str>, enabled: i64| {
+            conn.execute(
+                "INSERT INTO projects (id, name, path, heartbeat_mode, heartbeat_schedule, heartbeat_enabled) \
+                 VALUES (?1, ?1, ?1, ?2, ?3, ?4)",
+                params![id, mode, schedule, enabled],
+            )
+            .unwrap();
+        };
+        // The junk shapes actually observed (GH#22/#23/#24) + edge cases.
+        insert("junk-freq", "scheduled", Some(r#"{"frequency":"--help","time":"09:00"}"#), 1);
+        insert("junk-word", "scheduled", Some(r#"{"frequency":"add"}"#), 1);
+        insert("junk-not-json", "scheduled", Some("--help"), 1);
+        insert("junk-no-freq", "scheduled", Some(r#"{"time":"09:00"}"#), 1);
+        insert("junk-null-schedule", "scheduled", None, 1);
+        insert("junk-mode", "--help", Some(r#"{"frequency":"daily"}"#), 1);
+        // Legitimate rows that must survive byte-identically.
+        insert("keep-off", "off", None, 0);
+        insert("keep-hourly", "hourly", Some(r#"{"start":"00:00","end":"23:59","every_seconds":300}"#), 1);
+        insert("keep-weekly", "scheduled", Some(r#"{"frequency":"weekly","time":"09:00"}"#), 1);
+
+        conn.execute_batch(include_str!(
+            "../../drizzle_sql/0072_clear_junk_heartbeat_schedules.sql"
+        ))
+        .unwrap();
+
+        let row = |id: &str| -> (String, Option<String>, i64) {
+            conn.query_row(
+                "SELECT heartbeat_mode, heartbeat_schedule, heartbeat_enabled \
+                 FROM projects WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+        };
+        for id in [
+            "junk-freq",
+            "junk-word",
+            "junk-not-json",
+            "junk-no-freq",
+            "junk-null-schedule",
+            "junk-mode",
+        ] {
+            assert_eq!(
+                row(id),
+                ("off".into(), None, 0),
+                "{id} must be healed to off/NULL/disabled"
+            );
+        }
+        assert_eq!(row("keep-off"), ("off".into(), None, 0));
+        assert_eq!(
+            row("keep-hourly"),
+            (
+                "hourly".into(),
+                Some(r#"{"start":"00:00","end":"23:59","every_seconds":300}"#.into()),
+                1
+            )
+        );
+        assert_eq!(
+            row("keep-weekly"),
+            (
+                "scheduled".into(),
+                Some(r#"{"frequency":"weekly","time":"09:00"}"#.into()),
+                1
+            )
         );
     }
 

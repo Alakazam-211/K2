@@ -487,35 +487,50 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 
                 if let Some(mode) = opt_param(params, "mode") {
                     let schedule = opt_param(params, "schedule");
-                    let hb_enabled = if mode == "off" { "0" } else { "1" };
 
-                    let res = conn
-                        .execute(
-                            "UPDATE projects SET heartbeat_mode = ?1, heartbeat_schedule = ?2, heartbeat_enabled = ?3 WHERE path = ?4",
-                            rusqlite::params![mode, schedule, hb_enabled, p],
-                        )
-                        .map(|_| ())
-                        .map_err(|e| format!("DB update failed: {}", e));
-                    drop(conn);
+                    // GH#22/#23/#24 defense-in-depth: pre-0.40.41 CLIs
+                    // misparsed `--help`/subcommand words as a schedule
+                    // frequency and POSTed the junk here verbatim — this
+                    // route wrote it into `projects` with success:true.
+                    // The CLI is fixed, but stale CLIs in the field still
+                    // hit this route: validate before touching the row so
+                    // they get a loud 400 instead of a poisoned schedule.
+                    if let Err(msg) =
+                        validate_heartbeat_schedule_write(&mode, schedule.as_deref())
+                    {
+                        drop(conn);
+                        CliResponse::bad_request(msg)
+                    } else {
+                        let hb_enabled = if mode == "off" { "0" } else { "1" };
 
-                    match res {
-                        Ok(()) => {
-                            // Nudge the Tauri side to refresh its
-                            // launchd/cron installer via SyncProjects.
-                            k2_core::agent_hooks::emit(
-                                k2_core::agent_hooks::HookEvent::SyncProjects,
-                                serde_json::Value::Null,
-                            );
-                            CliResponse::ok_json(
-                                serde_json::json!({
-                                    "success": true,
-                                    "mode": mode,
-                                    "schedule": schedule,
-                                })
-                                .to_string(),
+                        let res = conn
+                            .execute(
+                                "UPDATE projects SET heartbeat_mode = ?1, heartbeat_schedule = ?2, heartbeat_enabled = ?3 WHERE path = ?4",
+                                rusqlite::params![mode, schedule, hb_enabled, p],
                             )
+                            .map(|_| ())
+                            .map_err(|e| format!("DB update failed: {}", e));
+                        drop(conn);
+
+                        match res {
+                            Ok(()) => {
+                                // Nudge the Tauri side to refresh its
+                                // launchd/cron installer via SyncProjects.
+                                k2_core::agent_hooks::emit(
+                                    k2_core::agent_hooks::HookEvent::SyncProjects,
+                                    serde_json::Value::Null,
+                                );
+                                CliResponse::ok_json(
+                                    serde_json::json!({
+                                        "success": true,
+                                        "mode": mode,
+                                        "schedule": schedule,
+                                    })
+                                    .to_string(),
+                                )
+                            }
+                            Err(e) => CliResponse::bad_request(e),
                         }
-                        Err(e) => CliResponse::bad_request(e),
                     }
                 } else {
                     let res = conn.query_row(
@@ -1354,6 +1369,153 @@ pub fn handle_v1_ping(principal_id: &str) -> CliResponse {
         })
         .to_string(),
     )
+}
+
+/// GH#22/#23/#24 defense-in-depth: validate a `/cli/heartbeat/schedule`
+/// write before it reaches `projects`. Pre-0.40.41 CLIs misparsed
+/// `--help` (and bare subcommand words like "add"/"list"/"remove") on
+/// heartbeat subcommands as a schedule frequency and POSTed the junk
+/// here verbatim; the route wrote it with success:true. The CLI is
+/// fixed separately, but stale CLIs in the field still hit this route —
+/// reject anything outside the real vocabulary. `Err` carries the
+/// CLI-facing message (rendered as a 400 by the caller).
+fn validate_heartbeat_schedule_write(mode: &str, schedule: Option<&str>) -> Result<(), String> {
+    const MODES: &str = r#""off" | "hourly" | "scheduled""#;
+    const FREQUENCIES: &str = r#""daily" | "weekly" | "monthly" | "yearly""#;
+    match mode {
+        // "off" clears the schedule — nothing further to validate.
+        "off" => Ok(()),
+        "hourly" => {
+            let raw = schedule.ok_or_else(|| {
+                "Invalid schedule for mode \"hourly\": missing schedule param \
+                 (JSON object with a numeric every_seconds)"
+                    .to_string()
+            })?;
+            let parsed: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+                format!("Invalid schedule for mode \"hourly\": not valid JSON ({e})")
+            })?;
+            if parsed.get("every_seconds").is_some_and(|v| v.is_number()) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Invalid schedule for mode \"hourly\": {raw:?} — \
+                     JSON must carry a numeric every_seconds"
+                ))
+            }
+        }
+        "scheduled" => {
+            let raw = schedule.ok_or_else(|| {
+                format!(
+                    "Invalid schedule for mode \"scheduled\": missing schedule param \
+                     (JSON object with a frequency of {FREQUENCIES})"
+                )
+            })?;
+            let parsed: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+                format!("Invalid schedule for mode \"scheduled\": not valid JSON ({e})")
+            })?;
+            // Exactly the GH#22/#23/#24 junk vector: mode was always the
+            // valid "scheduled", the frequency carried the garbage.
+            match parsed.get("frequency").and_then(|v| v.as_str()) {
+                Some(f) if matches!(f, "daily" | "weekly" | "monthly" | "yearly") => Ok(()),
+                Some(f) => Err(format!(
+                    "Invalid schedule frequency {f:?}: must be one of {FREQUENCIES}"
+                )),
+                None => Err(format!(
+                    "Invalid schedule for mode \"scheduled\": {raw:?} — \
+                     JSON must carry a string frequency (one of {FREQUENCIES})"
+                )),
+            }
+        }
+        other => Err(format!(
+            "Invalid heartbeat mode {other:?}: must be one of {MODES}"
+        )),
+    }
+}
+
+#[cfg(test)]
+mod heartbeat_schedule_validation_tests {
+    use super::validate_heartbeat_schedule_write as validate;
+
+    /// The real vocabulary passes: off (no schedule needed), hourly with
+    /// a numeric every_seconds, scheduled with each of the four valid
+    /// frequencies.
+    #[test]
+    fn accepts_the_real_vocabulary() {
+        assert_eq!(validate("off", None), Ok(()));
+        // "off" ignores whatever schedule tags along.
+        assert_eq!(validate("off", Some("anything")), Ok(()));
+        assert_eq!(
+            validate("hourly", Some(r#"{"start":"00:00","end":"23:59","every_seconds":300}"#)),
+            Ok(())
+        );
+        for freq in ["daily", "weekly", "monthly", "yearly"] {
+            assert_eq!(
+                validate("scheduled", Some(&format!(r#"{{"frequency":"{freq}","time":"09:00"}}"#))),
+                Ok(()),
+                "frequency {freq:?} must be accepted"
+            );
+        }
+    }
+
+    /// GH#22/#23/#24: junk modes from stale CLIs (misparsed flags and
+    /// subcommand words) are rejected, and the message names both the
+    /// offending value and the allowed set.
+    #[test]
+    fn rejects_junk_modes_from_stale_clis() {
+        for junk in ["--help", "add", "list", "remove", ""] {
+            let err = validate(junk, None).expect_err(&format!("mode {junk:?} must be rejected"));
+            assert!(err.contains(&format!("{junk:?}")), "error must name the value: {err}");
+            assert!(
+                err.contains(r#""off" | "hourly" | "scheduled""#),
+                "error must list the allowed modes: {err}"
+            );
+        }
+    }
+
+    /// GH#22/#23/#24: the exact junk vector — mode was the valid
+    /// "scheduled" but the frequency carried garbage. Missing schedule,
+    /// malformed JSON, missing frequency, and out-of-vocabulary
+    /// frequency all reject.
+    #[test]
+    fn rejects_junk_scheduled_frequencies() {
+        assert!(validate("scheduled", None).is_err(), "missing schedule must reject");
+        assert!(
+            validate("scheduled", Some("--help")).is_err(),
+            "non-JSON schedule must reject"
+        );
+        assert!(
+            validate("scheduled", Some(r#"{"time":"09:00"}"#)).is_err(),
+            "missing frequency must reject"
+        );
+        assert!(
+            validate("scheduled", Some(r#"{"frequency":42}"#)).is_err(),
+            "non-string frequency must reject"
+        );
+        for junk in ["--help", "add", "list", "remove", "fortnightly"] {
+            let err = validate("scheduled", Some(&format!(r#"{{"frequency":"{junk}"}}"#)))
+                .expect_err(&format!("frequency {junk:?} must be rejected"));
+            assert!(err.contains(&format!("{junk:?}")), "error must name the value: {err}");
+            assert!(
+                err.contains(r#""daily" | "weekly" | "monthly" | "yearly""#),
+                "error must list the allowed frequencies: {err}"
+            );
+        }
+    }
+
+    /// hourly requires a JSON schedule with a numeric every_seconds.
+    #[test]
+    fn rejects_hourly_without_numeric_every_seconds() {
+        assert!(validate("hourly", None).is_err(), "missing schedule must reject");
+        assert!(validate("hourly", Some("not json")).is_err(), "non-JSON must reject");
+        assert!(
+            validate("hourly", Some(r#"{"start":"00:00"}"#)).is_err(),
+            "missing every_seconds must reject"
+        );
+        assert!(
+            validate("hourly", Some(r#"{"every_seconds":"300"}"#)).is_err(),
+            "string every_seconds must reject"
+        );
+    }
 }
 
 #[cfg(test)]

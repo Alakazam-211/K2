@@ -231,7 +231,8 @@ struct GlossaryEntry {
 /// Glossary terms — the original 17 from PRD A10/A22/A23 (long-form
 /// definitions are the verbatim mock text where applicable) plus the
 /// 0.40.x `feedback` / `poc` / `project` surfaces and the K2 Mail
-/// family (`mail` / `mail-approvals` / `mail-doctor`).
+/// family (`mail` / `mail-approvals` / `mail-doctor` /
+/// `mail-external`).
 const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "activity",
@@ -292,6 +293,11 @@ const GLOSSARY: &[GlossaryEntry] = &[
         term: "mail-approvals",
         summary: "Per-message human approval queue for outbound agent email",
         definition: "The pending-outbound queue used when a workspace's send mode is `approval`: each `k2 mail send`/`reply` stores the full rendered message and waits for the owner to Approve or Deny (with an optional note) in Settings → Email.\n\nFor the agent: `queued for approval (out_…)` + exit 0 IS success — the queueing succeeded. Track it with `k2 mail outbox [<id>]`; `--wait` blocks until decided (exit 2 = timed out, still queued). A denial note lands in the outbox — a denial is your human's decision; raise it with `k2 feedback ask`, never retry-loop.\n\nApprovals are an OWNER verb: `k2 mail approvals [list|approve|deny]` is enforced server-side — agent tokens exit 3, so approving your own mail is futile.",
+    },
+    GlossaryEntry {
+        term: "mail-external",
+        summary: "The user's own email account as a read+draft assistant inbox",
+        definition: "An EXTERNAL assistant inbox: the user's own email account (Gmail app-password, Fastmail, company IMAP) connected with `k2 mail external add` (owner verb) and bound to exactly ONE workspace. Agents in that workspace become the user's email assistant: the account's messages appear through the normal `k2 mail messages`/`read`/`wait` verbs (same ids, same BEGIN/END EXTERNAL EMAIL untrusted-content markers), and `k2 mail draft <message-id> --body <t>` saves a reply DRAFT into the account's real Drafts folder — the user sees it in their own mail client, reviews, and sends it themselves.\n\nAgents can NEVER send from an external account: no verb, flag, or approval does it (drafts only, by design — V1 has no code path). `k2 mail send`/`reply` govern K2-hosted addresses instead. Any workspace other than the bound one gets `not_found`, like all mail ownership.\n\nManagement is owner-only: `k2 mail external add|list|remove`. Credentials live in the daemon's vault — never in the database, never in any output.",
     },
     GlossaryEntry {
         term: "mail-doctor",

@@ -13,9 +13,15 @@
 //! `not_found` (a workspace never learns what exists outside it).
 //!
 //! §17.5 seam: each address resolves its backend through
-//! [`messages::backend_for_address`] — today always local Stalwart via
+//! [`messages::backend_for_address`] — local Stalwart via
 //! `domains::engine_from_db` (503 `not_ready` when the server isn't
-//! up). No handler talks to the JMAP client directly.
+//! up), or (S9) the user's OWN external IMAP inbox via
+//! [`external::ExternalImapBackend`] when the address has a
+//! `mail_external_inboxes` row bound to the calling workspace.
+//! Ownership masking, §8.1 markers, and never-log-bodies apply
+//! IDENTICALLY to both — external content flows through the same
+//! handlers below, no duplication. No handler talks to a protocol
+//! client directly.
 //!
 //! UNTRUSTED-CONTENT contract (§8.1): bodies come back wrapped in the
 //! exact BEGIN/END EXTERNAL EMAIL markers (applied in
@@ -39,8 +45,9 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 
 use crate::cli_response::CliResponse;
-use crate::mail::domains;
 use crate::mail::messages::{self, MailBackend, ReadBackend, ReadError, WatchAddress};
+use crate::mail::secrets::SecretStore as _;
+use crate::mail::{domains, external, external_imap};
 
 // ── Response helpers (the S2/S3 error contract) ─────────────────────────
 
@@ -91,10 +98,12 @@ fn resolve_caller(project: &str) -> Result<(String, String), CliResponse> {
     }
 }
 
-/// §17.5: resolve one address's backend and construct it. Today every
-/// address answers `LocalStalwart` → the production JMAP client from
-/// the `mail_server` row (503 `not_ready` when absent/stopped). V2
-/// external backends slot in as new match arms — callers only see
+/// §17.5: resolve one address's backend and construct it — the ONLY
+/// place a backend is instantiated. `LocalStalwart` → the production
+/// JMAP client from the `mail_server` row (503 `not_ready` when
+/// absent/stopped); `ExternalImap` (S9) → the address's
+/// `mail_external_inboxes` row + its vault credential (503 when the
+/// credential is gone — re-add fixes it). Callers only ever see
 /// `dyn ReadBackend`.
 fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
     match messages::backend_for_address(address) {
@@ -104,43 +113,98 @@ fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
             })?;
             Ok(Box::new(messages::StalwartReadBackend::new(client)))
         }
+        MailBackend::ExternalImap => {
+            // A remove can race the seam answer — mask, like any
+            // unknown address.
+            let Some(row) = external::inbox_for_address(address) else {
+                return Err(error_response(
+                    "404 Not Found",
+                    "not_found",
+                    &format!("no address '{address}' in this workspace"),
+                ));
+            };
+            let secrets = crate::mail::secrets::FileSecretStore::default();
+            let password = match secrets.resolve(&external::vault_key(&row.id)) {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    return Err(error_response(
+                        "503 Service Unavailable",
+                        "not_ready",
+                        &format!(
+                            "credentials for '{address}' are missing from the vault — your \
+                             human can reconnect it with 'k2 mail external add'"
+                        ),
+                    ))
+                }
+                Err(hint) => {
+                    return Err(error_response("503 Service Unavailable", "not_ready", &hint))
+                }
+            };
+            Ok(Box::new(external::ExternalImapBackend::new(
+                row,
+                password,
+                std::sync::Arc::new(external_imap::RealImapOps),
+            )))
+        }
     }
 }
 
 /// The (address, account) watch list for a request: an explicit
 /// address must pass the masked ownership gate; no address = every
-/// ACTIVE address the workspace owns. Rows minted in a degraded state
-/// (no Stalwart account) fail loudly when explicitly targeted and are
-/// skipped in the all-addresses sweep (doc'd on `mail::addresses`).
+/// ACTIVE address the workspace owns PLUS (S9) every external inbox
+/// bound to it — external handles "just work" in messages/read/wait,
+/// no new flags. Rows minted in a degraded state (no Stalwart account)
+/// fail loudly when explicitly targeted and are skipped in the
+/// all-addresses sweep (doc'd on `mail::addresses`).
 fn watch_list(
     project_id: &str,
     explicit: Option<&str>,
 ) -> Result<Vec<WatchAddress>, CliResponse> {
     if let Some(addr) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
-        let row = messages::owned_active_address(project_id, addr)
-            .map_err(read_error_response)?;
-        let Some(account_id) = row.stalwart_account_id else {
-            return Err(error_response(
-                "502 Bad Gateway",
-                "engine",
-                &format!("address '{}' has no mailbox on the mail server", row.address),
-            ));
+        let local_err = match messages::owned_active_address(project_id, addr) {
+            Ok(row) => {
+                let Some(account_id) = row.stalwart_account_id else {
+                    return Err(error_response(
+                        "502 Bad Gateway",
+                        "engine",
+                        &format!("address '{}' has no mailbox on the mail server", row.address),
+                    ));
+                };
+                return Ok(vec![WatchAddress { address: row.address, account_id }]);
+            }
+            Err(e @ ReadError::Usage(_)) => return Err(read_error_response(e)),
+            Err(e) => e,
         };
-        return Ok(vec![WatchAddress { address: row.address, account_id }]);
+        // Not a minted address of this workspace — an external inbox
+        // bound to it answers instead; anything else keeps the SAME
+        // masked not_found (the failure never reveals which world the
+        // address lives in).
+        return match external::owned_external_inbox(project_id, addr) {
+            Ok(ext) => Ok(vec![WatchAddress {
+                address: ext.email_address,
+                account_id: ext.id,
+            }]),
+            Err(_) => Err(read_error_response(local_err)),
+        };
     }
-    let watch: Vec<WatchAddress> = messages::active_addresses_for_project(project_id)
+    let mut watch: Vec<WatchAddress> = messages::active_addresses_for_project(project_id)
         .into_iter()
         .filter_map(|r| {
             let account_id = r.stalwart_account_id?;
             Some(WatchAddress { address: r.address, account_id })
         })
         .collect();
+    watch.extend(external::inboxes_for_project(project_id).into_iter().map(|r| {
+        WatchAddress { address: r.email_address, account_id: r.id }
+    }));
     Ok(watch)
 }
 
 /// Decode + ownership-gate an opaque message id: the address inside
-/// the token must be an ACTIVE address of the CALLING workspace. Every
-/// mismatch answers the same masked message-level not_found.
+/// the token must be an ACTIVE address of the CALLING workspace — or
+/// (S9) an external inbox BOUND to it (the backend handle is then the
+/// external row id). Every mismatch answers the same masked
+/// message-level not_found.
 fn owned_message(
     project_id: &str,
     token: &str,
@@ -164,7 +228,12 @@ fn owned_message(
         Err(ReadError::Usage(hint)) => {
             return Err(error_response("400 Bad Request", "usage", &hint))
         }
-        Err(_) => return Err(masked()),
+        Err(_) => {
+            return match external::owned_external_inbox(project_id, &address) {
+                Ok(ext) => Ok((ext.email_address, ext.id, email_id)),
+                Err(_) => Err(masked()),
+            }
+        }
     };
     let Some(account_id) = row.stalwart_account_id else {
         return Err(masked());
@@ -561,12 +630,20 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
             ),
         );
     };
-    // §17.5: all watched addresses resolve their backend through the
-    // seam (one shared instance while everything is local Stalwart).
-    let backend = match backend_for(&watch[0].address) {
-        Ok(b) => b,
-        Err(resp) => return resp,
-    };
+    // §17.5: EVERY watched address resolves its own backend through
+    // the seam — since S9 a workspace can watch local Stalwart
+    // addresses and external IMAP inboxes in the same wait.
+    let mut backends: Vec<Box<dyn ReadBackend>> = Vec::with_capacity(watch.len());
+    for w in &watch {
+        match backend_for(&w.address) {
+            Ok(b) => backends.push(b),
+            Err(resp) => return resp,
+        }
+    }
+    let pairs: Vec<(&WatchAddress, &dyn ReadBackend)> = watch
+        .iter()
+        .zip(backends.iter().map(|b| b.as_ref()))
+        .collect();
     let filters = messages::WaitFilters {
         from: crate::cli::opt_param(params, "from"),
         subject: crate::cli::opt_param(params, "subject"),
@@ -579,8 +656,7 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
     };
     let mut sleep = |d: std::time::Duration| std::thread::sleep(d);
     match messages::wait_for_match(
-        backend.as_ref(),
-        &watch,
+        &pairs,
         &filters,
         timeout_secs,
         messages::WAIT_GRACE_SECS,

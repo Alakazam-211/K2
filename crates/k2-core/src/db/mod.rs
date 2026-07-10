@@ -585,6 +585,17 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0073_mail_enable_progress",
             include_str!("../../drizzle_sql/0073_mail_enable_progress.sql"),
         ),
+        // 0074 (K2 Mail S9, prd-email-server-v1 §17.5):
+        // `mail_external_inboxes` — the user's OWN external accounts
+        // (IMAP in V1), each bound to exactly ONE workspace whose
+        // agents read the inbox + save reply DRAFTS into the account's
+        // real Drafts folder (no send path exists). Credentials live
+        // in the daemon vault under `ext-inbox-<id>`, never in a
+        // column. Additive.
+        (
+            "0074_mail_external_inboxes",
+            include_str!("../../drizzle_sql/0074_mail_external_inboxes.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

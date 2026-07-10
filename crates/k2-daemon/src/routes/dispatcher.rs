@@ -566,6 +566,16 @@ async fn handle_one_request(
             | "/cli/mail/reply"
             | "/cli/mail/approvals/approve"
             | "/cli/mail/approvals/deny"
+            // S9 external assistant inboxes (PRD §17.5): owner CRUD
+            // (add/remove — owner-or-admin-gated in the mail POST arm
+            // via is_owner_level_mutation) + the agent `draft` verb
+            // (workspace token; APPENDs a \Draft into the user's OWN
+            // external account — no send path exists). add + draft
+            // dial the user's IMAP host → the POST arm's
+            // spawn_blocking covers them.
+            | "/cli/mail/external/add"
+            | "/cli/mail/external/remove"
+            | "/cli/mail/draft"
             // Projects V1 P2 (prd-projects-v1 §4.1) — project-GROUP
             // mutations (NOT the legacy /cli/projects/* workspace
             // registry). JSON-bodied POSTs (msg carries free chat text;
@@ -4145,12 +4155,14 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
-        // K2 Mail S5 — the owner Approvals queue read. Owner verbs
-        // hard-fail for agent/workspace tokens SERVER-SIDE (PRD
-        // §11.1.3 — kills the self-approval temptation): token_ok +
+        // K2 Mail S5 + S9 — the owner reads: the Approvals queue and
+        // the external-inbox table. Owner verbs hard-fail for
+        // agent/workspace tokens SERVER-SIDE (PRD §11.1.3 — kills the
+        // self-approval temptation; S9: agents never enumerate the
+        // user's connected accounts): token_ok +
         // token_is_owner_or_admin, then the normal GET dispatch chain
         // (SQLite-only — no engine dial, so no spawn_blocking needed).
-        p if p == "/cli/mail/approvals/list" => {
+        p if p == "/cli/mail/approvals/list" || p == "/cli/mail/external/list" => {
             let _ = stream.read(&mut buf).await;
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let r = crate::cli::CliResponse::forbidden();
@@ -4162,7 +4174,7 @@ async fn handle_one_request(
                     &mut *stream,
                     "403 Forbidden",
                     "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"the approvals queue requires owner/admin — ask your human"}}"#,
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"this mail surface requires owner/admin — ask your human"}}"#,
                 )
                 .await;
                 return DispatchOutcome::Done;

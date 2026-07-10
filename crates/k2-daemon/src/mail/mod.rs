@@ -6,12 +6,15 @@
 //! LICENSE rules as much as architecture rules (PRD §4, pre-mortem #2)
 //! — every slice built on this module must keep them:
 //!
-//! 1. **Stalwart code is never linked, vendored, or patched.** No
-//!    Stalwart crate in any Cargo.toml, no copied source file, ever.
-//!    Communication is EXCLUSIVELY Stalwart's public HTTP management
-//!    API ([`jmap`]) + systemd ([`supervisor`]). If the mgmt API can't
-//!    do something, that's a feature gap to design around — not a
-//!    reason to reach into their code.
+//! 1. **Stalwart SERVER code is never linked, vendored, or patched.**
+//!    No stalwart-mail crate in any Cargo.toml, no copied source file,
+//!    ever. Communication is EXCLUSIVELY Stalwart's public HTTP
+//!    management API ([`jmap`]) + systemd ([`supervisor`]). If the
+//!    mgmt API can't do something, that's a feature gap to design
+//!    around — not a reason to reach into their code. (The rule is
+//!    about the AGPL server: `mail-parser`, a standalone
+//!    Apache-2.0/MIT LIBRARY that happens to share an author, is
+//!    linked for S9's RFC 822 parsing and is fine.)
 //! 2. **Binaries come from upstream at install time.** The supervisor
 //!    downloads the PINNED release tarball from Stalwart's own GitHub
 //!    releases (sha256-verified); K2 never redistributes the binary.
@@ -77,22 +80,35 @@
 //!   single ⚠ LIVE-BOX #7 function), kind-agnostic relay-config CRUD
 //!   (secrets only ever as refs), and the D4/D6 gating settings
 //!   (per-workspace + global).
+//! - [`external`] — S9 external assistant inboxes (PRD §17.5): the
+//!   user's OWN accounts (Gmail app-password, Fastmail, company IMAP)
+//!   bound to exactly ONE workspace; agents READ them through the
+//!   §17.5 seam and save reply DRAFTS into the account's real Drafts
+//!   folder. No send path exists. Everything behind the `ImapOps`
+//!   trait; credentials in the vault under `ext-inbox-<row-id>`.
+//! - [`external_imap`] — the production `ImapOps`: the `imap` crate
+//!   over rustls (verification always on), the ONLY module speaking
+//!   IMAP wire protocol. Its module header lists the ⚠ LIVE-BOX
+//!   functions (SPECIAL-USE-in-plain-LIST variance, SEARCH charset).
 //! - `routes_*` — per-concern `/cli/mail/*` handlers, dispatched by
 //!   the thin `crate::mail_routes` shim so later slices don't collide:
 //!   [`routes_server`] (status/enable/disable/uninstall/config/doctor),
 //!   [`routes_domains`], [`routes_addresses`], [`routes_messages`],
-//!   [`routes_send`].
+//!   [`routes_send`], [`routes_external`] (external CRUD + draft).
 
 pub mod addresses;
 pub mod config;
 pub mod dns_verify;
 pub mod doctor;
 pub mod domains;
+pub mod external;
+pub mod external_imap;
 pub mod jmap;
 pub mod messages;
 pub mod preflight;
 pub mod routes_addresses;
 pub mod routes_domains;
+pub mod routes_external;
 pub mod routes_messages;
 pub mod routes_send;
 pub mod routes_server;

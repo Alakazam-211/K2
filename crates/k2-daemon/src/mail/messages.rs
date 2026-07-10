@@ -48,22 +48,31 @@ pub fn wrap_untrusted(body: &str) -> String {
 
 // ── §17.5 provider seam ─────────────────────────────────────────────────
 
-/// Which backend serves an address. V1 has exactly one variant; V2's
-/// external inboxes (PRD §17.5) add kinds like `ExternalImap`,
-/// `ExternalJmap`, `GmailApi` — resolved from a future
-/// `mail_addresses.provider` / `mail_external_accounts` lookup. Until
-/// then every K2-minted address is local Stalwart.
+/// Which backend serves an address. S9 filled the seam's first
+/// external variant: an address with a `mail_external_inboxes` row is
+/// served by the user's OWN IMAP account (read + draft only — PRD
+/// §17.5); everything else is a K2-minted local Stalwart address.
+/// Future kinds (`ExternalJmap`, `GmailApi`) are new variants here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MailBackend {
     LocalStalwart,
+    /// The address is an external assistant inbox (S9). The
+    /// workspace-binding check happens at the route layer (masked
+    /// `not_found`), exactly like local ownership — this enum only
+    /// answers WHICH engine speaks for the address.
+    ExternalImap,
 }
 
 /// THE seam function (§17.5 BINDING): routes resolve "which backend
-/// serves this address" here and nowhere else. Today: always local
-/// Stalwart. V2 reads the address row's provider kind instead —
-/// callers already treat the result as opaque.
-pub fn backend_for_address(_address: &str) -> MailBackend {
-    MailBackend::LocalStalwart
+/// serves this address" here and nowhere else. An address found in
+/// `mail_external_inboxes` routes to the IMAP backend; every K2-minted
+/// address stays local Stalwart. Callers treat the result as opaque.
+pub fn backend_for_address(address: &str) -> MailBackend {
+    if crate::mail::external::inbox_for_address(address).is_some() {
+        MailBackend::ExternalImap
+    } else {
+        MailBackend::LocalStalwart
+    }
 }
 
 /// What S4 needs from any mail backend. Production impl is
@@ -657,6 +666,11 @@ pub struct WatchAddress {
 /// (§11.1.6) — `Ok(None)` = timeout (the route answers
 /// `{ok:true, timedOut:true}`, the CLI maps it to exit 2).
 ///
+/// Each watched mailbox carries ITS OWN backend (§17.5): since S9 a
+/// workspace's watch list can mix local Stalwart addresses and
+/// external IMAP inboxes — the route resolves each through
+/// [`backend_for_address`] and pairs them here.
+///
 /// `now_unix` and `sleep` are INJECTED: production passes the system
 /// clock + `thread::sleep`; tests pass a fake clock that advances on
 /// `sleep` — the suite never waits a real 300 s.
@@ -664,8 +678,7 @@ pub struct WatchAddress {
 /// Bodies are never logged from here (pre-mortem #16); the one debug
 /// line carries the subject only.
 pub fn wait_for_match(
-    backend: &dyn ReadBackend,
-    watch: &[WatchAddress],
+    watch: &[(&WatchAddress, &dyn ReadBackend)],
     filters: &WaitFilters,
     timeout_secs: u64,
     grace_secs: i64,
@@ -677,7 +690,7 @@ pub fn wait_for_match(
     let since = started - grace_secs;
     let deadline = started.saturating_add(timeout_secs as i64);
     loop {
-        for w in watch {
+        for (w, backend) in watch {
             let filter = ListFilter {
                 unread_only: false,
                 query: None,
@@ -994,9 +1007,10 @@ pub(crate) mod tests {
             vec![summary("M1", ("GitHub", "noreply@github.com"), "Verify your device", at)],
         );
         let (_t, mut now, mut sleep) = fake_clock(start);
-        let watch = [WatchAddress { address: "bot@acme.dev".into(), account_id: "acc-1".into() }];
+        let w = WatchAddress { address: "bot@acme.dev".into(), account_id: "acc-1".into() };
+        let watch = [(&w, &backend as &dyn ReadBackend)];
         let filters = WaitFilters { from: None, subject: Some("verify".to_string()) };
-        let got = wait_for_match(&backend, &watch, &filters, 300, 60, 2, &mut now, &mut sleep)
+        let got = wait_for_match(&watch, &filters, 300, 60, 2, &mut now, &mut sleep)
             .expect("no engine error")
             .expect("matched");
         assert_eq!(got["subject"], "Verify your device");
@@ -1015,9 +1029,9 @@ pub(crate) mod tests {
     fn wait_times_out_on_the_injected_clock_without_real_sleeps() {
         let backend = FakeBackend::default(); // never any mail
         let (_t, mut now, mut sleep) = fake_clock(1_000_000);
-        let watch = [WatchAddress { address: "bot@acme.dev".into(), account_id: "acc-1".into() }];
+        let w = WatchAddress { address: "bot@acme.dev".into(), account_id: "acc-1".into() };
+        let watch = [(&w, &backend as &dyn ReadBackend)];
         let got = wait_for_match(
-            &backend,
             &watch,
             &WaitFilters::default(),
             10, // 10s timeout
@@ -1050,9 +1064,9 @@ pub(crate) mod tests {
             )],
         );
         let (_t, mut now, mut sleep) = fake_clock(1_000_000);
-        let watch = [WatchAddress { address: "bot@acme.dev".into(), account_id: "acc-1".into() }];
+        let w = WatchAddress { address: "bot@acme.dev".into(), account_id: "acc-1".into() };
+        let watch = [(&w, &backend as &dyn ReadBackend)];
         let got = wait_for_match(
-            &backend,
             &watch,
             &WaitFilters::default(),
             300,
@@ -1086,9 +1100,9 @@ pub(crate) mod tests {
             }
         }
         let (_t, mut now, mut sleep) = fake_clock(0);
-        let watch = [WatchAddress { address: "a@b.c".into(), account_id: "acc".into() }];
+        let w = WatchAddress { address: "a@b.c".into(), account_id: "acc".into() };
+        let watch = [(&w, &Broken as &dyn ReadBackend)];
         let err = wait_for_match(
-            &Broken,
             &watch,
             &WaitFilters::default(),
             300,
@@ -1146,7 +1160,44 @@ pub(crate) mod tests {
     // ── seam ──
 
     #[test]
-    fn provider_seam_answers_local_stalwart_today() {
-        assert_eq!(backend_for_address("anything@acme.dev"), MailBackend::LocalStalwart);
+    fn provider_seam_routes_external_rows_and_defaults_local() {
+        // No mail_external_inboxes row → local Stalwart.
+        assert_eq!(
+            backend_for_address("anything@acme.dev"),
+            MailBackend::LocalStalwart
+        );
+        // A seeded external row flips ONLY its own address to the
+        // IMAP backend (normalization applies — the seam key is the
+        // stored normalized form).
+        let addr = format!(
+            "seam-{}@ext-seam.example",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        );
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, \
+                 host, port, username, created_at) VALUES (?1, 'p-seam', ?2, 'h', 993, ?2, 1)",
+                rusqlite::params![id, addr],
+            )
+            .expect("seed external inbox");
+        }
+        assert_eq!(backend_for_address(&addr), MailBackend::ExternalImap);
+        assert_eq!(
+            backend_for_address(&addr.to_uppercase()),
+            MailBackend::ExternalImap,
+            "seam lookups normalize"
+        );
+        assert_eq!(backend_for_address("other@acme.dev"), MailBackend::LocalStalwart);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute(
+                "DELETE FROM mail_external_inboxes WHERE id = ?1",
+                rusqlite::params![id],
+            );
+        }
     }
 }

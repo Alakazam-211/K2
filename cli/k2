@@ -760,6 +760,39 @@ hb_parse_spec() {
             echo "Error: times must be HH:MM 24-hour (got '$t')" >&2; exit 2
         fi
     done
+    # GH#27: day/month VALUES were stored unvalidated — `--weekly --days
+    # foobar` persisted "days":["foobar"] and could never fire. Frequency
+    # is known here, so validate per-frequency before the spec is built
+    # (monthly/yearly take day-of-month numbers; everything else takes
+    # 3-letter day names, matching the JSON builder below).
+    local tok
+    if [ -n "$days" ]; then
+        case "$frequency" in
+            monthly|yearly)
+                for tok in $(printf '%s' "$days" | tr ',' ' '); do
+                    if ! [[ "$tok" =~ ^[0-9]+$ ]] || [ "$tok" -lt 1 ] || [ "$tok" -gt 31 ]; then
+                        echo "Error: --days for --$frequency takes day-of-month numbers 1-31 (got '$tok')" >&2; exit 2
+                    fi
+                done
+                ;;
+            *)
+                for tok in $(printf '%s' "$days" | tr ',' ' '); do
+                    case "$(printf '%s' "$tok" | tr '[:upper:]' '[:lower:]')" in
+                        mon|tue|wed|thu|fri|sat|sun) ;;
+                        *) echo "Error: --days for --$frequency takes a comma list of mon,tue,wed,thu,fri,sat,sun (got '$tok')" >&2; exit 2 ;;
+                    esac
+                done
+                ;;
+        esac
+    fi
+    if [ -n "$months" ]; then
+        for tok in $(printf '%s' "$months" | tr ',' ' '); do
+            case "$(printf '%s' "$tok" | tr '[:upper:]' '[:lower:]')" in
+                jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec) ;;
+                *) echo "Error: --months takes a comma list of jan,feb,mar,apr,may,jun,jul,aug,sep,oct,nov,dec (got '$tok')" >&2; exit 2 ;;
+            esac
+        done
+    fi
     # Build JSON spec
     python3 -c "
 import json
@@ -771,7 +804,7 @@ if '$days':
         spec['days_of_month'] = [int(x) for x in d if x.strip().isdigit()]
     else:
         spec['days'] = [x.strip().lower() for x in d]
-if '$months': spec['months'] = '$months'.split(',')
+if '$months': spec['months'] = [x.strip().lower() for x in '$months'.split(',')]
 if '$every': spec['every_seconds'] = int('$every') * (60 if '$unit' == 'minutes' else 3600 if '$unit' == 'hours' else 1)
 if '$start': spec['start'] = '$start'
 if '$end': spec['end'] = '$end'
@@ -862,6 +895,28 @@ elif stale is not None and stale > 900 and d.get('enabledCount', 0) > 0:
 }
 
 cmd_heartbeat_list() {
+    # GH#27: --json dumps the raw daemon array (pass-through, no table);
+    # --archived delegates to the archived listing (either flag order).
+    local as_json=0 archived=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json)     as_json=1; shift ;;
+            --archived) archived=1; shift ;;
+            *) shift ;;
+        esac
+    done
+    if [ "$archived" = "1" ]; then
+        if [ "$as_json" = "1" ]; then
+            cmd_heartbeat_list_archived --json
+        else
+            cmd_heartbeat_list_archived
+        fi
+        return
+    fi
+    if [ "$as_json" = "1" ]; then
+        cli_request "/cli/heartbeat/list"
+        return
+    fi
     cli_request "/cli/heartbeat/list" | python3 -c "
 import json, sys
 try:
@@ -883,6 +938,19 @@ try:
         if 'days' in spec: sched_parts.append(f'on {\", \".join(spec[\"days\"])}')
         if 'days_of_month' in spec: sched_parts.append(f'day(s) {\",\".join(str(d) for d in spec[\"days_of_month\"])}')
         if 'months' in spec: sched_parts.append(f'in {\",\".join(spec[\"months\"])}')
+        # GH#27: hourly rows showed '-' — derive a human string from
+        # every_seconds / start / end (e.g. 'every 30m, 09:00-17:00').
+        if 'every_seconds' in spec:
+            es = int(spec['every_seconds'])
+            if es and es % 3600 == 0: every = f'{es // 3600}h'
+            elif es and es % 60 == 0: every = f'{es // 60}m'
+            else: every = f'{es}s'
+            hourly = f'every {every}'
+            if spec.get('start') or spec.get('end'):
+                hourly += f\", {spec.get('start', '00:00')}-{spec.get('end', '23:59')}\"
+            sched_parts.append(hourly)
+        elif spec.get('start') or spec.get('end'):
+            sched_parts.append(f\"{spec.get('start', '00:00')}-{spec.get('end', '23:59')}\")
         sched = ' '.join(sched_parts) or '-'
         last = (r.get('lastFired') or 'never')[:19].replace('T', ' ')
         en = 'yes' if r.get('enabled') else 'no'
@@ -949,6 +1017,18 @@ except Exception as e:
 }
 
 cmd_heartbeat_list_archived() {
+    # GH#27: --json = raw daemon array pass-through, no table.
+    local as_json=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            *) shift ;;
+        esac
+    done
+    if [ "$as_json" = "1" ]; then
+        cli_request "/cli/heartbeat/list-archived"
+        return
+    fi
     cli_request "/cli/heartbeat/list-archived" | python3 -c "
 import json, sys
 try:
@@ -970,13 +1050,28 @@ except Exception as e:
 
 # Manually fire one specific heartbeat (skips the schedule window
 # but respects the agent lock so this never double-spawns).
+# GH#27: the daemon refuses to fire a DISABLED heartbeat unless force=1;
+# --force passes that override.
 cmd_heartbeat_fire() {
-    local name="${1:-}"
-    [ -z "$name" ] && { echo "Usage: k2 heartbeat fire <name>" >&2; exit 1; }
-    cli_request "/cli/heartbeat/fire" "name=$(urlencode "$name")" | python3 -c "
+    local name="" force=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force) force=1; shift ;;
+            -*) echo "Unknown flag for 'heartbeat signal fire': $1" >&2
+                echo "Usage: k2 heartbeat signal fire <name> [--force]" >&2
+                exit 2 ;;
+            *) if [ -z "$name" ]; then name="$1"; fi; shift ;;
+        esac
+    done
+    [ -z "$name" ] && { echo "Usage: k2 heartbeat signal fire <name> [--force]" >&2; exit 1; }
+    local params="name=$(urlencode "$name")"
+    [ "$force" = "1" ] && params="${params}&force=1"
+    cli_request "/cli/heartbeat/fire" "$params" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
+    if 'error' in d:
+        print(f\"Error: {d['error']}\", file=sys.stderr); sys.exit(1)
     decision = d.get('decision', '?')
     name = d.get('name', '?')
     agent = d.get('agent', '?')
@@ -1001,8 +1096,21 @@ cmd_heartbeat_enable_disable() {
     local enabled="$1"; shift
     local name="${1:-}"
     [ -z "$name" ] && { echo "Usage: k2 heartbeat enable|disable <name>" >&2; exit 1; }
-    cli_request "/cli/heartbeat/enable" "name=$(urlencode "$name")&enabled=$enabled" > /dev/null
-    echo "Heartbeat '$name' ${enabled}d"
+    # GH#27: this used to print "Heartbeat 'x' trued/falsed" and swallowed
+    # daemon errors (> /dev/null). Surface {"error"} with exit 1 and say
+    # Enabled/Disabled like a human would.
+    local verb="Enabled"
+    [ "$enabled" = "false" ] && verb="Disabled"
+    cli_request "/cli/heartbeat/enable" "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f'Error: {e}', file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get('error'):
+    print(f\"Error: {d['error']}\", file=sys.stderr); sys.exit(1)
+" || exit 1
+    echo "$verb heartbeat: $name"
 }
 
 # 0.37.8 — flip the per-heartbeat opt-in to deliver WAKEUP.md into the
@@ -1127,32 +1235,46 @@ except Exception as e:
 "
 }
 
-# Change an existing heartbeat's schedule. Mirrors the flag surface of
-# `cmd_heartbeat_add` — the NAME is positional-or-flag, all other args
-# go through hb_parse_spec. The heartbeat's folder/wakeup.md are left
-# alone; only the spec/frequency change.
+# Change an existing heartbeat's schedule and/or wake instructions.
+# Mirrors the flag surface of `cmd_heartbeat_add` — the NAME is
+# positional-or-flag, schedule args go through hb_parse_spec, and
+# (GH#27) --instructions/--instructions-file rewrite the WAKEUP.md the
+# same way add does. With ONLY instructions (no schedule flags) the
+# schedule-edit call is skipped entirely and just the file is rewritten.
 cmd_heartbeat_edit() {
-    local name=""
+    local name="" instructions="" instructions_file="" have_instructions=0 have_spec=0
     # Support both `edit <name>` and `edit --name <name>` to stay
     # consistent with add/remove/rename argument styles.
     if [[ $# -gt 0 && "$1" != --* ]]; then
         name="$1"; shift
     fi
+    local spec_args=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --name) name="$2"; shift 2 ;;
-            *) break ;;
+            --instructions) instructions="$2"; have_instructions=1; shift 2 ;;
+            --instructions-file) instructions_file="$2"; have_instructions=1; shift 2 ;;
+            *) spec_args+=("$1"); have_spec=1; shift ;;
         esac
     done
-    [ -z "$name" ] && { echo "Usage: k2 heartbeat edit <name> --daily|--weekly|... [--time HH:MM] [--days ...]" >&2; exit 1; }
-    local spec_output
-    spec_output=$(hb_parse_spec "$@")
-    local spec_json
-    spec_json=$(echo "$spec_output" | head -1)
-    local freq
-    freq=$(echo "$spec_output" | grep '^FREQ:' | sed 's/^FREQ://')
-    local params="name=$(urlencode "$name")&frequency=$freq&spec=$(urlencode "$spec_json")"
-    cli_request "/cli/heartbeat/edit" "$params" | python3 -c "
+    [ -z "$name" ] && { echo "Usage: k2 heartbeat edit <name> [--daily|--weekly|... <spec>] [--instructions \"...\"|--instructions-file <path>]" >&2; exit 1; }
+    if [ "$have_spec" != "1" ] && [ "$have_instructions" != "1" ]; then
+        echo "Usage: k2 heartbeat edit <name> [--daily|--weekly|... <spec>] [--instructions \"...\"|--instructions-file <path>]" >&2
+        exit 1
+    fi
+    if [ -n "$instructions_file" ]; then
+        [ -f "$instructions_file" ] || { echo "Error: --instructions-file not found: $instructions_file" >&2; exit 1; }
+        instructions="$(cat "$instructions_file")"
+    fi
+    if [ "$have_spec" = "1" ]; then
+        local spec_output
+        spec_output=$(hb_parse_spec ${spec_args[@]+"${spec_args[@]}"})
+        local spec_json
+        spec_json=$(echo "$spec_output" | head -1)
+        local freq
+        freq=$(echo "$spec_output" | grep '^FREQ:' | sed 's/^FREQ://')
+        local params="name=$(urlencode "$name")&frequency=$freq&spec=$(urlencode "$spec_json")"
+        cli_request "/cli/heartbeat/edit" "$params" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1163,6 +1285,36 @@ try:
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
 "
+    fi
+    if [ "$have_instructions" = "1" ]; then
+        # Resolve the WAKEUP.md the same way `heartbeat signal wakeup`
+        # does: the row's workspace-relative wakeupPath joined onto the
+        # workspace base. Written only AFTER a successful schedule edit
+        # (a failed edit above already exited non-zero).
+        local rel_path
+        rel_path=$(cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+import json, os, sys
+try:
+    rows = json.loads(sys.stdin.read())
+    row = next((r for r in rows if r.get('name') == os.environ['NAME']), None)
+    if not row:
+        print(f'No heartbeat named \"{os.environ[\"NAME\"]}\" in this workspace.', file=sys.stderr)
+        sys.exit(1)
+    print(row.get('wakeupPath') or '')
+except SystemExit:
+    raise
+except Exception as e:
+    print(f'Error: {e}', file=sys.stderr); sys.exit(1)
+")
+        local lookup_code=$?
+        if [ $lookup_code -ne 0 ]; then exit $lookup_code; fi
+        [ -z "$rel_path" ] && { echo "Heartbeat '$name' has no wakeup path on file." >&2; exit 1; }
+        local base="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
+        local abs_path="$base/$rel_path"
+        mkdir -p "$(dirname "$abs_path")"
+        printf '%s\n' "$instructions" > "$abs_path"
+        echo "Wake instructions written ($(printf '%s' "$instructions" | wc -c | tr -d ' ') bytes): $abs_path"
+    fi
 }
 
 # Print a single heartbeat's full details. Default output is human-readable
@@ -1289,6 +1441,21 @@ cmd_heartbeat_status() {
         esac
     done
     [ -z "$name" ] && { echo "Usage: k2 heartbeat status <name> [--limit N]" >&2; exit 1; }
+    # GH#27: an unknown name used to print 'No fire history ... yet',
+    # implying the heartbeat exists. Check existence first (same message
+    # shape as `heartbeat show`).
+    cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+import json, os, sys
+try:
+    rows = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f'Error: {e}', file=sys.stderr); sys.exit(1)
+if isinstance(rows, dict):
+    print(f\"Error: {rows.get('error', rows)}\", file=sys.stderr); sys.exit(1)
+if not any(r.get('name') == os.environ['NAME'] for r in rows):
+    print(f'No heartbeat named \"{os.environ[\"NAME\"]}\" in this workspace.', file=sys.stderr)
+    sys.exit(1)
+" || exit 1
     cli_request "/cli/heartbeat/status" "name=$(urlencode "$name")&limit=$limit" | python3 -c "
 import json, sys
 try:
@@ -5886,22 +6053,24 @@ cmd_schema() {
     {
       "name": "heartbeat schedule",
       "usage": "k2 heartbeat schedule <add|list|remove|unarchive|edit|rename|enable|disable> [...]",
-      "description": "CRUD on named heartbeats. add/edit take --name <n> plus a spec: --daily|--weekly|--monthly|--yearly|--hourly with --time HH:MM / --days / --months / --every N --unit minutes|hours / --start / --end. Unknown sub-verbs or spec flags are usage errors (exit 2), never writes.",
+      "description": "CRUD on named heartbeats. add/edit take --name <n> plus a spec: --daily|--weekly|--monthly|--yearly|--hourly with --time HH:MM / --days / --months / --every N --unit minutes|hours / --start / --end. Values are validated: weekly --days = mon..sun, monthly/yearly --days = 1-31, --months = jan..dec (3-letter). Unknown sub-verbs, spec flags, or bad values are usage errors (exit 2), never writes. edit may pass only --instructions/--instructions-file to rewrite the WAKEUP.md without touching the schedule.",
       "args": [{"name": "subcommand", "required": true}],
       "flags": [
         {"name": "--name", "arg": "n", "description": "Heartbeat name (add/edit)."},
-        {"name": "--instructions", "arg": "text", "description": "With add: write the WAKEUP.md (the job that runs on fire) at create time."},
-        {"name": "--instructions-file", "arg": "path", "description": "With add: read the WAKEUP.md content from a file."},
+        {"name": "--instructions", "arg": "text", "description": "With add/edit: write the WAKEUP.md (the job that runs on fire)."},
+        {"name": "--instructions-file", "arg": "path", "description": "With add/edit: read the WAKEUP.md content from a file."},
         {"name": "--archived", "arg": null, "description": "With list: show archived heartbeats instead of active."},
+        {"name": "--json", "arg": null, "description": "With list (and list --archived): dump the raw JSON array, no table."},
         {"name": "--purge", "arg": null, "description": "With remove: hard-delete row + folder (default is soft-archive)."}
       ]
     },
     {
       "name": "heartbeat signal",
       "usage": "k2 heartbeat signal <fire|wakeup|wake> [<name>]",
-      "description": "One-shot triggers: 'fire <n>' runs a heartbeat now (skips the schedule window); 'wakeup <n>' prints its WAKEUP.md (--path-only for the path, --edit to open your editor); 'wake' auto-wakes the manager, no name needed.",
+      "description": "One-shot triggers: 'fire <n>' runs a heartbeat now (skips the schedule window; a DISABLED heartbeat is refused unless --force); 'wakeup <n>' prints its WAKEUP.md (--path-only for the path, --edit to open your editor); 'wake' auto-wakes the manager, no name needed.",
       "args": [{"name": "subcommand", "required": true}, {"name": "name", "required": false}],
       "flags": [
+        {"name": "--force", "arg": null, "description": "With fire: fire even if the heartbeat is disabled."},
         {"name": "--path-only", "arg": null, "description": "With wakeup: print the absolute WAKEUP.md path only."},
         {"name": "--edit", "arg": null, "description": "With wakeup: open the WAKEUP.md in your editor."}
       ]
@@ -8545,16 +8714,20 @@ SCHEDULE (CRUD on heartbeat definitions)
          --hourly --start 09:00 --end 17:00 --every 30 --unit minutes
        --instructions "text" | --instructions-file <path>
          write the WAKEUP.md (the job that runs on fire) at create time
-  heartbeat schedule list [--archived]
+  heartbeat schedule list [--archived] [--json]  (--json: raw array)
   heartbeat schedule remove <n> [--purge]
   heartbeat schedule unarchive <n>
-  heartbeat schedule edit <n> <new-spec>
+  heartbeat schedule edit <n> [<new-spec>] [--instructions "..."]
+       spec flags change the schedule; --instructions/--instructions-file
+       rewrite the WAKEUP.md (either or both)
   heartbeat schedule rename <old> <new>
   heartbeat schedule enable <n>                  Resume scheduling
   heartbeat schedule disable <n>                 Pause scheduling
 
 SIGNAL (immediate one-shot triggers)
-  heartbeat signal fire <n>      Fire one heartbeat now (skips schedule window)
+  heartbeat signal fire <n> [--force]
+                                 Fire one heartbeat now (skips schedule
+                                 window; --force: fire even if disabled)
   heartbeat signal wakeup <n>    Print/edit the WAKEUP.md
   heartbeat signal wake          Auto-wake (no name needed)
 
@@ -11764,12 +11937,10 @@ EOF
                 shift 2
                 case "${1:-}" in
                     ""|list)
+                        # GH#27: pass flags through — cmd_heartbeat_list
+                        # handles --json and --archived (in either order).
                         [ "${1:-}" = "list" ] && shift
-                        if [ "${1:-}" = "--archived" ]; then
-                            cmd_heartbeat_list_archived
-                        else
-                            cmd_heartbeat_list "$@"
-                        fi
+                        cmd_heartbeat_list "$@"
                         ;;
                     add)        shift; cmd_heartbeat_add "$@" ;;
                     remove)     shift; cmd_heartbeat_remove "$@" ;;

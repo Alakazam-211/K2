@@ -1415,8 +1415,8 @@ fn resolve_project_id(conn: &rusqlite::Connection, project: &str) -> Result<Stri
 /// POST /cli/tunnel/subdomains/claim — attribute a nested subdomain
 /// label to the acting workspace (0074). `label` = the nested label
 /// (e.g. `staging`); `project` = the workspace path (CLI) or project id
-/// (renderer). Called by the `k2 connect subdomain create/point` stamp
-/// seams AND the explicit `k2 connect subdomain claim` adopt verb — the
+/// (renderer). Called by the `k2 publish subdomain create/point` stamp
+/// seams AND the explicit `k2 publish subdomain claim` adopt verb — the
 /// label need NOT be in the cached routing map yet (a freshly-created
 /// label lands there on the next refresh tick; a claim of a
 /// never-provisioned label is harmless, snapshot readers ignore it).
@@ -1458,7 +1458,7 @@ pub fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
 }
 
 /// POST /cli/tunnel/subdomains/unclaim — drop a label's workspace
-/// attribution (0074). Called by the `k2 connect subdomain rm` stamp
+/// attribution (0074). Called by the `k2 publish subdomain rm` stamp
 /// seam and the explicit `unclaim` verb. `removed:false` = the label
 /// wasn't attributed (reported honestly, still a 200 — the desired end
 /// state holds). Emits `tunnel_subdomains_changed` only when a row was

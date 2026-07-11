@@ -118,12 +118,16 @@ fi
 # cmd_daemon_install (which is defined before the router runs).
 _skip_conn_gate=0
 [ "${1:-}" = "daemon" ] && [ "${2:-}" = "install" ] && _skip_conn_gate=1
-# `k2 connect ...` (Pro-subdomain mgmt) talks to the hosted control
+# `k2 publish ...` (Pro-subdomain mgmt) talks to the hosted control
 # plane + reads ~/.k2/tunnel.json, so it must not be blocked by the
 # no-daemon gate. (Its 0074 attribution seams — claim/unclaim + the
 # create/point/rm stamps — DO talk to the local daemon, but check
 # PORT/TOKEN themselves: stamps degrade to a warning, claim/unclaim
 # fail loud.)
+[ "${1:-}" = "publish" ] && _skip_conn_gate=1
+# 0.40.41 BREAKING: `connect` was renamed to `publish`. The router's
+# did-you-mean arm below must fire even with no daemon running (and
+# before any HTTP), so the retired verb skips the gate too.
 [ "${1:-}" = "connect" ] && _skip_conn_gate=1
 # `k2 --schema` (GH#8 #4) prints a STATIC command-surface manifest — it
 # talks to nothing, so it must work even with no daemon running (its whole
@@ -4518,7 +4522,7 @@ cli_post() {
 #   POST /cli/tunnel/start[?subdomain=<s>]   GET /cli/tunnel/status   POST /cli/tunnel/stop
 #   GET /cli/tunnel/subdomains — the daemon's cached nested-subdomain
 #   routing map (label -> internal target); read-only, distinct from
-#   `k2 connect subdomain list` which asks the CONTROL PLANE directly.
+#   `k2 publish subdomain list` which asks the CONTROL PLANE directly.
 cmd_tunnel() {
     local sub="${1:-status}"
     shift || true
@@ -4655,7 +4659,7 @@ if not targets:
 
 # ── K2 Connect — Pro multi-subdomain (PRD k2-connect-e2e-encryption.md §7) ──
 #
-# `k2 connect subdomain <create|list|point|rm>` manages the nested
+# `k2 publish subdomain <create|list|point|rm>` manages the nested
 # `<label>.<sub>.k2.dev` routing entries for a Pro account. Unlike the rest
 # of this CLI (which calls the LOCAL daemon), these talk DIRECTLY to the
 # hosted control plane — the daemon doesn't proxy account management. The
@@ -4790,36 +4794,36 @@ _connect_curl() {
     printf '%s\n%s' "$code" "$resp"
 }
 
-_connect_usage() {
-    echo "Usage: k2 connect <status|subdomain> ..." >&2
+_publish_usage() {
+    echo "Usage: k2 publish <status|subdomain> ..." >&2
     echo "  status                                Connected subdomain + its plan" >&2
     echo "  subdomain <create|list|point|rm|claim|unclaim> ...  Manage Pro nested subdomains + workspace attribution" >&2
     echo "  (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)" >&2
 }
 
-cmd_connect() {
+cmd_publish() {
     local sub="${1:-}"
     shift || true
     case "$sub" in
         status)
-            cmd_connect_status "$@"
+            cmd_publish_status "$@"
             ;;
         subdomain)
-            cmd_connect_subdomain "$@"
+            cmd_publish_subdomain "$@"
             ;;
         ""|help|--help|-h)
-            _connect_usage
+            _publish_usage
             exit 1
             ;;
         *)
-            echo "Unknown 'k2 connect' subcommand: $sub" >&2
-            _connect_usage
+            echo "Unknown 'k2 publish' subcommand: $sub" >&2
+            _publish_usage
             exit 1
             ;;
     esac
 }
 
-# `k2 connect status` — show the CONNECTED subdomain and its plan.
+# `k2 publish status` — show the CONNECTED subdomain and its plan.
 #
 # Resolves the local tunnel (token + subdomain label from ~/.k2/tunnel.json),
 # calls GET /subdomains (authenticated by the token), and picks the row for
@@ -4827,7 +4831,7 @@ cmd_connect() {
 # whose tunnel_token matched), else falling back to the local subdomain
 # label. Displays the per-row `tier` (free|single|pro) as a friendly plan.
 # Display is UX only — the create/point gate is enforced server-side.
-cmd_connect_status() {
+cmd_publish_status() {
     if [ -z "$(_connect_bearer_token)" ]; then
         echo "Error: no K2 Connect tunnel token found in ${K2_HOME}/tunnel.json." >&2
         echo "Select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first." >&2
@@ -4907,7 +4911,7 @@ _subdomain_attrib_post() {
 # Best-effort attribution stamp AFTER a successful control-plane
 # create/point/rm. The control-plane mutation already landed — a failed
 # stamp must not fail the command; warn with the manual remediation
-# (`k2 connect subdomain claim/unclaim <label>`) instead. Always
+# (`k2 publish subdomain claim/unclaim <label>`) instead. Always
 # returns 0.
 _stamp_subdomain_attrib() {
     local verb="$1" label="$2" resp
@@ -4917,15 +4921,15 @@ _stamp_subdomain_attrib() {
     fi
     if [ "$verb" = "claim" ]; then
         echo "Warning: workspace attribution was not recorded on the daemon (unreachable?)." >&2
-        echo "  Adopt it later from the owning workspace: k2 connect subdomain claim $label" >&2
+        echo "  Adopt it later from the owning workspace: k2 publish subdomain claim $label" >&2
     else
         echo "Warning: workspace attribution was not removed on the daemon (unreachable?)." >&2
-        echo "  Remove it later: k2 connect subdomain unclaim $label" >&2
+        echo "  Remove it later: k2 publish subdomain unclaim $label" >&2
     fi
     return 0
 }
 
-cmd_connect_subdomain() {
+cmd_publish_subdomain() {
     local action="${1:-list}"
     shift 2>/dev/null || true
     # 0074 — claim/unclaim adopt/release a label's workspace attribution
@@ -4937,7 +4941,7 @@ cmd_connect_subdomain() {
         claim|unclaim)
             local label="${1:-}"
             if [ -z "$label" ]; then
-                echo "Usage: k2 connect subdomain $action <label>" >&2
+                echo "Usage: k2 publish subdomain $action <label>" >&2
                 exit 1
             fi
             if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
@@ -4987,8 +4991,8 @@ else:
                 esac
             done
             if [ -z "$label" ] || [ -z "$target" ]; then
-                echo "Usage: k2 connect subdomain create <label> --target <endpoint>" >&2
-                echo "  e.g. k2 connect subdomain create staging --target localhost:3000" >&2
+                echo "Usage: k2 publish subdomain create <label> --target <endpoint>" >&2
+                echo "  e.g. k2 publish subdomain create staging --target localhost:3000" >&2
                 exit 1
             fi
             local body
@@ -5057,7 +5061,7 @@ else:
                 esac
             done
             if [ -z "$label" ] || [ -z "$target" ]; then
-                echo "Usage: k2 connect subdomain point <label> --target <endpoint>" >&2
+                echo "Usage: k2 publish subdomain point <label> --target <endpoint>" >&2
                 exit 1
             fi
             local body
@@ -5076,7 +5080,7 @@ print("  effective: %s" % d.get("effective","?"))
             local label="${1:-}"
             shift 2>/dev/null || true
             if [ -z "$label" ]; then
-                echo "Usage: k2 connect subdomain rm <label>" >&2
+                echo "Usage: k2 publish subdomain rm <label>" >&2
                 exit 1
             fi
             _connect_curl DELETE "/subdomains/$(urlencode "$label")" | _connect_subdomain_render '
@@ -5087,7 +5091,7 @@ print("Removed %s" % (d.get("removed") or "(subdomain)"))
             _stamp_subdomain_attrib unclaim "$label"
             ;;
         *)
-            echo "Usage: k2 connect subdomain <create|list|point|rm|claim|unclaim> ..." >&2
+            echo "Usage: k2 publish subdomain <create|list|point|rm|claim|unclaim> ..." >&2
             echo "  create  <label> --target <endpoint>  Create a nested subdomain (attributed to this workspace)" >&2
             echo "  list                                 List your subdomains" >&2
             echo "  point   <label> --target <endpoint>  Repoint to a new endpoint" >&2
@@ -6315,13 +6319,20 @@ cmd_schema() {
     {
       "name": "tunnel subdomains",
       "usage": "k2 tunnel subdomains [--json]",
-      "description": "Daemon-cached nested-subdomain routing map (label -> internal target + attributed workspace). Read-only; distinct from 'k2 connect subdomain list' (control plane).",
+      "description": "Daemon-cached nested-subdomain routing map (label -> internal target + attributed workspace). Read-only; distinct from 'k2 publish subdomain list' (control plane).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "Raw JSON pass-through ({primary, targets: {label: {target, projectId}}})."}]
     },
     {
-      "name": "connect subdomain claim",
-      "usage": "k2 connect subdomain claim <label>",
+      "name": "publish",
+      "usage": "k2 publish <status|subdomain> ...",
+      "description": "K2 Connect Pro subdomains + plan (talks to the hosted control plane): status, subdomain create/list/point/rm/claim/unclaim.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "publish subdomain claim",
+      "usage": "k2 publish subdomain claim <label>",
       "description": "Adopt an existing nested subdomain label for the CURRENT workspace (daemon-local attribution; 'unclaim' drops it). create/point/rm stamp attribution automatically.",
       "args": [{"name": "label", "required": true}],
       "flags": []
@@ -9321,14 +9332,14 @@ TUNNEL (K2 Connect — expose this daemon at https://<user>.k2.dev)
   tunnel status [--json]                        Running? + public URL
   tunnel subdomains [--json]                    Daemon-cached nested map (label -> target + workspace)
 
-CONNECT (K2 Connect — Pro subdomains + plan; talks to the control plane)
-  connect status                                Connected subdomain + its plan
-  connect subdomain list                        Your subdomains + plan/status
-  connect subdomain create <label> --target <e> Create a nested subdomain (Pro; attributed to this workspace)
-  connect subdomain point <label> --target <e>  Repoint a subdomain (Pro)
-  connect subdomain rm <label>                  Remove a subdomain (Pro)
-  connect subdomain claim <label>               Adopt an existing label for THIS workspace (daemon-local)
-  connect subdomain unclaim <label>             Drop a label's workspace attribution (daemon-local)
+PUBLISH (K2 Connect — Pro subdomains + plan; talks to the control plane)
+  publish status                                Connected subdomain + its plan
+  publish subdomain list                        Your subdomains + plan/status
+  publish subdomain create <label> --target <e> Create a nested subdomain (Pro; attributed to this workspace)
+  publish subdomain point <label> --target <e>  Repoint a subdomain (Pro)
+  publish subdomain rm <label>                  Remove a subdomain (Pro)
+  publish subdomain claim <label>               Adopt an existing label for THIS workspace (daemon-local)
+  publish subdomain unclaim <label>             Drop a label's workspace attribution (daemon-local)
   (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)
 
 SETTINGS
@@ -12327,10 +12338,18 @@ EOF
         # P3a (sandbox) — owner-only API-key auth-tier management for /v1/*.
         shift; cmd_api_key "$@"
         ;;
-    connect)
+    publish)
         # K2 Connect account/Pro-subdomain management (calls the hosted
         # control plane directly, not the local daemon).
-        shift; cmd_connect "$@"
+        shift; cmd_publish "$@"
+        ;;
+    connect)
+        # 0.40.41 BREAKING: `k2 connect` was renamed to `k2 publish`
+        # (the CLI verb only — the K2 Connect product/Settings branding
+        # is unchanged). No alias, no forwarding: fail loud with a
+        # one-line pointer, before any HTTP.
+        echo "Unknown command: connect — did you mean 'k2 publish'?" >&2
+        exit 1
         ;;
     companion)
         # Phase 2.1: hard-deprecated. Companion is daemon-owned.

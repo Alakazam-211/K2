@@ -116,7 +116,7 @@ export function TunnelUrlsPanel(): React.JSX.Element {
           <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
             No nested URLs —{' '}
             <span className="font-mono">
-              k2 connect subdomain create &lt;label&gt; --target localhost:&lt;port&gt;
+              k2 publish subdomain create &lt;label&gt; --target localhost:&lt;port&gt;
             </span>
           </p>
         ) : (
@@ -152,7 +152,7 @@ export function TunnelUrlsPanel(): React.JSX.Element {
                   </span>
                   <span
                     className={`text-[11px] truncate ${info.projectId ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-muted)]'}`}
-                    title={info.projectId ?? 'Not attributed to a workspace — adopt with: k2 connect subdomain claim <label>'}
+                    title={info.projectId ?? 'Not attributed to a workspace — adopt with: k2 publish subdomain claim <label>'}
                   >
                     {workspaceName(info.projectId)}
                   </span>

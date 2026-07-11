@@ -15,6 +15,13 @@ files in the repo root for the full developer-facing changelog.
   the heartbeat delivers. Agents get the same lever via
   `k2 heartbeat session <name> [--pinned|--auto|--set <id> --provider <p>]`.
 
+- **`k2 connect` is now `k2 publish` (breaking).** Putting a subdomain
+  on the internet is *publishing*, so the CLI verb finally says so:
+  `k2 publish status` and `k2 publish subdomain
+  create/list/point/rm/claim/unclaim`. There is no alias — `k2 connect`
+  now fails with a one-line pointer to the new verb. (Only the CLI verb
+  changed; the K2 Connect product and Settings page keep their name.)
+
 - **`k2 heartbeat --help` is finally just help.** Asking any heartbeat
   command for help used to get parsed as a schedule and *written* —
   routine discovery corrupted your schedule state. Help now prints usage

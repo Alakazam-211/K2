@@ -9,7 +9,7 @@ import {
 
 // URLs — a collapsible Workspace-drawer section showing THIS workspace's
 // nested K2 Connect URLs only: the labels whose 0074 attribution row
-// points at this project (`k2 connect subdomain create/point/claim` from
+// points at this project (`k2 publish subdomain create/point/claim` from
 // the workspace stamps it). Deliberately NOT the server-wide view — no
 // primary-tunnel details, no other workspaces' rows; that generic surface
 // lives in Settings → K2 Connect (TunnelUrlsPanel). Shares its
@@ -103,7 +103,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
             </p>
           ) : rows.length === 0 ? (
             <p className="text-[10px] text-[var(--color-text-muted)]">
-              Ask your agent to host using k2 connect
+              Ask your agent to publish it with k2 publish
             </p>
           ) : (
             <div className="space-y-1.5">

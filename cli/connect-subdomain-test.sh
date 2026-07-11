@@ -1,5 +1,5 @@
 #!/bin/bash
-# Self-contained test for `k2 connect subdomain` (PRD k2-connect-e2e-encryption.md §7).
+# Self-contained test for `k2 publish subdomain` (PRD k2-connect-e2e-encryption.md §7).
 #
 # Stands up a throwaway mock control plane on loopback, points the CLI at it
 # via $K2_CONNECT_BASE, and exercises every subcommand:
@@ -89,7 +89,7 @@ export K2_CONNECT_BASE="http://127.0.0.1:${PORT}"
 # connection exists — this test must never mutate a real daemon's
 # attribution table, so it pins the no-daemon state (stamps degrade to
 # the warning path, claim/unclaim fail loud; both asserted below).
-run() { HOME="$TEST_HOME" K2_PORT= K2SO_PORT= K2_HOOK_TOKEN= K2SO_HOOK_TOKEN= "$K2_BIN" connect subdomain "$@" 2>&1; }
+run() { HOME="$TEST_HOME" K2_PORT= K2SO_PORT= K2_HOOK_TOKEN= K2SO_HOOK_TOKEN= "$K2_BIN" publish subdomain "$@" 2>&1; }
 set_resp() { printf '%s\n%s' "$1" "$2" > "$RESP_FILE"; }
 req_line() { head -1 "$REQ_FILE"; }
 req_body() { tail -n +3 "$REQ_FILE"; }
@@ -106,16 +106,16 @@ echo "$out" | grep -q "staging.rosson.k2.dev" && [ $rc -eq 0 ] && ok "create pri
 # 0074 — with NO daemon reachable, the attribution stamp degrades to a
 # warning naming the claim remediation, and the create still exits 0.
 echo "$out" | grep -q "Warning: workspace attribution was not recorded" && \
-echo "$out" | grep -q "k2 connect subdomain claim staging" && [ $rc -eq 0 ] \
+echo "$out" | grep -q "k2 publish subdomain claim staging" && [ $rc -eq 0 ] \
     && ok "create stamp degrades to claim-hint warning (rc still 0)" \
     || bad "create stamp warning: $out (rc=$rc)"
 
 # create — 403 pro_required -> FRIENDLY upsell (not a raw 403), points at
-# `k2 connect upgrade`. Server may name the gated subdomain in `detail`.
+# `k2 publish upgrade`. Server may name the gated subdomain in `detail`.
 set_resp 403 '{"error":"pro_required","detail":"staging.rosson.k2.dev"}'
 out="$(run create staging --target localhost:3000)"; rc=$?
 echo "$out" | grep -qi "needs the Pro plan" && [ $rc -ne 0 ] && ok "403 pro_required -> friendly upsell (rc!=0)" || bad "pro_required upsell: $out (rc=$rc)"
-echo "$out" | grep -q "k2 connect upgrade" && ok "pro_required upsell names 'k2 connect upgrade'" || bad "pro_required missing upgrade hint: $out"
+echo "$out" | grep -q "k2 publish upgrade" && ok "pro_required upsell names 'k2 publish upgrade'" || bad "pro_required missing upgrade hint: $out"
 echo "$out" | grep -q "staging.rosson.k2.dev" && ok "pro_required upsell names the subdomain (from detail)" || bad "pro_required missing subdomain: $out"
 
 # create — 409 label_taken
@@ -165,7 +165,7 @@ out="$(run rm staging)"; rc=$?
 echo "$out" | grep -q "Removed staging" && [ $rc -eq 0 ] && ok "rm prints removed" || bad "rm output: $out"
 # 0074 — rm's unclaim stamp degrades to the unclaim-hint warning, rc 0.
 echo "$out" | grep -q "Warning: workspace attribution was not removed" && \
-echo "$out" | grep -q "k2 connect subdomain unclaim staging" && [ $rc -eq 0 ] \
+echo "$out" | grep -q "k2 publish subdomain unclaim staging" && [ $rc -eq 0 ] \
     && ok "rm stamp degrades to unclaim-hint warning (rc still 0)" \
     || bad "rm stamp warning: $out (rc=$rc)"
 
@@ -182,7 +182,7 @@ echo "$out" | grep -qi "records attribution on the local K2 daemon" && [ $rc -ne
     && ok "unclaim without daemon fails loud" || bad "unclaim no-daemon: $out (rc=$rc)"
 [ "$(req_line)" = "SENTINEL" ] && ok "claim/unclaim never call the control plane" || bad "claim hit control plane: $(req_line)"
 out="$(run claim)"; rc=$?
-echo "$out" | grep -qi "Usage: k2 connect subdomain claim" && [ $rc -ne 0 ] \
+echo "$out" | grep -qi "Usage: k2 publish subdomain claim" && [ $rc -ne 0 ] \
     && ok "claim without label -> usage" || bad "claim no-label: $out (rc=$rc)"
 
 # rm — 403 primary_undeletable
@@ -197,11 +197,11 @@ echo "$out" | grep -qi "Tunnel token rejected" && [ $rc -ne 0 ] && ok "invalid_t
 
 # ── arg validation (no network) ──────────────────────────────────────────
 out="$(run create staging)"; rc=$?
-echo "$out" | grep -qi "Usage: k2 connect subdomain create" && [ $rc -ne 0 ] && ok "create without --target -> usage" || bad "create no-target: $out"
+echo "$out" | grep -qi "Usage: k2 publish subdomain create" && [ $rc -ne 0 ] && ok "create without --target -> usage" || bad "create no-target: $out"
 
-# ── connect status (plan display) ─────────────────────────────────────────
-# `connect status` (not `subdomain`) — uses its own dispatch path.
-runc() { HOME="$TEST_HOME" "$K2_BIN" connect "$@" 2>&1; }
+# ── publish status (plan display) ─────────────────────────────────────────
+# `publish status` (not `subdomain`) — uses its own dispatch path.
+runc() { HOME="$TEST_HOME" "$K2_BIN" publish "$@" 2>&1; }
 
 # Pro plan on the connected (tunnel.json: rosson) subdomain.
 set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"pro","primary":true},{"label":"z3thon","host":"z3thon.k2.dev","tier":"free"}]}'
@@ -214,7 +214,7 @@ echo "$out" | grep -qi "Plan: Pro" && echo "$out" | grep -qi "nested subdomains 
 set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"single","primary":true}]}'
 out="$(runc status)"; rc=$?
 echo "$out" | grep -qi "Plan: Single" && echo "$out" | grep -qi "upgrade to Pro" && ok "status shows Single + upgrade prompt" || bad "status single: $out"
-echo "$out" | grep -q "k2 connect upgrade" && ok "status single names 'k2 connect upgrade'" || bad "status single upgrade hint: $out"
+echo "$out" | grep -q "k2 publish upgrade" && ok "status single names 'k2 publish upgrade'" || bad "status single upgrade hint: $out"
 
 # Free plan.
 set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"free","primary":true}]}'
@@ -226,7 +226,7 @@ set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"fr
 out="$(runc status)"; rc=$?
 echo "$out" | grep -q "Connected: other.k2.dev" && echo "$out" | grep -qi "Plan: Pro" && ok "status honours server 'connected' flag" || bad "status connected-flag: $out"
 
-# ── connect upgrade (checkout) ────────────────────────────────────────────
+# ── publish upgrade (checkout) ────────────────────────────────────────────
 set_resp 200 '{"url":"https://checkout.stripe.com/c/pay/test_123"}'
 out="$(runc upgrade)"; rc=$?
 [ "$(req_line)" = "POST /billing/checkout" ] && ok "upgrade -> POST /billing/checkout" || bad "upgrade method/path: $(req_line)"

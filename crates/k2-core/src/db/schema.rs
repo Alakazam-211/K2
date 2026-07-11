@@ -2906,7 +2906,7 @@ impl SchedulerMeta {
 /// 0074 — which WORKSPACE a nested K2 Connect subdomain label belongs
 /// to. Daemon-local overlay on the control-plane-owned routing map
 /// (`tunnel::subdomains`): `label` (lowercase nested label, e.g.
-/// `staging`) → `projects.id`. Written by the `k2 connect subdomain
+/// `staging`) → `projects.id`. Written by the `k2 publish subdomain
 /// create/point/claim` seams, removed by `rm`/`unclaim`. Labels are
 /// normalized lowercase to match `SubdomainMap::from_rows`; no FK on
 /// purpose — a label may predate/outlive the workspace registry, and

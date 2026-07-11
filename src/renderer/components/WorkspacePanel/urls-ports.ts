@@ -67,7 +67,7 @@ export function workspaceTargets(
 }
 
 /** How many server-wide nested URLs have NO workspace attribution — the
- *  drawer's claim-hint counter (`k2 connect subdomain claim <label>`). */
+ *  drawer's claim-hint counter (`k2 publish subdomain claim <label>`). */
 export function unattributedCount(targets: Record<string, SubdomainTargetInfo>): number {
   return Object.values(targets).filter((t) => t.projectId === null).length
 }

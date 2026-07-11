@@ -313,7 +313,7 @@ async fn handle_one_request(
             | "/cli/tunnel/start"
             | "/cli/tunnel/stop"
             // 0074 — nested-subdomain workspace attribution writes
-            // (`k2 connect subdomain claim/unclaim` + the create/point/rm
+            // (`k2 publish subdomain claim/unclaim` + the create/point/rm
             // stamp seams). Method-gated per-handler below
             // (feedback_post_only_route_guards); token_ok tier — the
             // write is workspace metadata (label → project id), not

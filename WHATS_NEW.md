@@ -5,6 +5,16 @@ files in the repo root for the full developer-facing changelog.
 
 ## 0.40.41 — The heartbeat CLI you were promised
 
+- **Point a heartbeat at a trained session.** Every heartbeat tile (in
+  Workspace Settings and the Heartbeat Settings page) now has a delivery
+  drop-down: **Pinned chat**, **Own session** (fresh on next fire), or
+  any saved session in the workspace — Claude, Codex, Gemini, whichever.
+  Train a session once, then let the heartbeat wake *that exact session*
+  on schedule; a one-line wakeup is enough because the session already
+  knows the flow. The open button beside it jumps straight to wherever
+  the heartbeat delivers. Agents get the same lever via
+  `k2 heartbeat session <name> [--pinned|--auto|--set <id> --provider <p>]`.
+
 - **`k2 heartbeat --help` is finally just help.** Asking any heartbeat
   command for help used to get parsed as a schedule and *written* —
   routine discovery corrupted your schedule state. Help now prints usage

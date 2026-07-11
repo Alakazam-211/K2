@@ -339,11 +339,18 @@ export type InboxLevel = 'read' | 'draft' | 'send'
  *  `maxLevel`); a linked inbox sends out as your real external account. */
 export type InboxSource = 'hosted' | 'linked'
 
-/** One participant on an inbox — the Primary or a grant. */
+/** One participant on an inbox — the Primary or a grant. `canManage` lets the
+ *  workspace move/organize mail (folders); `canDelete` lets it move messages to
+ *  Trash. **`canDelete` requires `canManage`** — the daemon validates this and
+ *  the UI must never send `canDelete: true` with `canManage: false`. */
 export interface InboxParticipant {
   projectId: string
   workspace: string | null
   level: InboxLevel
+  /** May move/organize mail into folders. */
+  canManage: boolean
+  /** May move messages to Trash (recoverable). Requires `canManage`. */
+  canDelete: boolean
 }
 
 /** One inbox in the unified catalog (GET /cli/mail/inboxes). NEVER carries
@@ -422,6 +429,20 @@ export async function setInboxLevel(body: {
   level: InboxLevel
 }): Promise<{ ok: boolean }> {
   return daemonCliPost('mail/access/set-level', body)
+}
+
+/** POST /cli/mail/access/set-manage — set a workspace's mailbox-management
+ *  capabilities. Pass the Primary's own project to change the Primary. Sets
+ *  BOTH flags at once; **`canDelete: true` requires `canManage: true`** (the
+ *  daemon rejects the invalid combo, and callers must never send it). 403
+ *  `not-primary` unless the caller is the current Primary. */
+export async function setInboxManage(body: {
+  address: string
+  project: string
+  canManage: boolean
+  canDelete: boolean
+}): Promise<{ ok: boolean }> {
+  return daemonCliPost('mail/access/set-manage', body)
 }
 
 // ── Linked-inbox provisioning (Email Link — cross-platform, GH #28) ─────
@@ -630,14 +651,14 @@ export const SAMPLE_INBOXES: Inbox[] = [
   {
     address: 'research-bot@example.org', source: 'hosted', displayName: null,
     status: 'running',
-    primary: { projectId: 'example-ws-1', workspace: 'research-bot', level: 'send' },
-    grants: [{ projectId: 'example-ws-2', workspace: 'signup-runner', level: 'read' }],
+    primary: { projectId: 'example-ws-1', workspace: 'research-bot', level: 'send', canManage: true, canDelete: true },
+    grants: [{ projectId: 'example-ws-2', workspace: 'signup-runner', level: 'read', canManage: false, canDelete: false }],
     yourLevel: 'send', maxLevel: 'send', domain: 'example.org',
   },
   {
     address: 'signup-runner@example.org', source: 'hosted', displayName: null,
     status: 'running',
-    primary: { projectId: 'example-ws-2', workspace: 'signup-runner', level: 'draft' },
+    primary: { projectId: 'example-ws-2', workspace: 'signup-runner', level: 'draft', canManage: true, canDelete: false },
     grants: [], yourLevel: 'send', maxLevel: 'send', domain: 'example.org',
   },
 ]

@@ -16,15 +16,18 @@
 
 import React, { useCallback, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
+import { Toggle } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
 import {
   grantInboxAccess,
   mailErrorMessage,
   revokeInboxAccess,
   setInboxLevel,
+  setInboxManage,
   setInboxPrimary,
   type Inbox,
   type InboxLevel,
+  type InboxParticipant,
 } from './email-api'
 
 const LEVEL_LABEL: Record<InboxLevel, string> = {
@@ -50,6 +53,52 @@ function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.El
     <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
       {children}
     </h3>
+  )
+}
+
+/** The per-workspace mailbox-management capabilities: "Allow inbox management"
+ *  and, nested beneath it, "Allow delete". Delete requires management, so the
+ *  nested toggle only appears while management is ON, and turning management
+ *  OFF forces delete OFF in the same change — the callback NEVER emits the
+ *  invalid `canDelete && !canManage` combo the daemon rejects. */
+function ManageToggles({
+  participant,
+  disabled,
+  onChange,
+}: {
+  participant: InboxParticipant
+  disabled: boolean
+  /** Emits the resulting flags; delete is already forced false when manage
+   *  goes off, so this is always a server-valid pair. */
+  onChange: (canManage: boolean, canDelete: boolean) => void
+}): React.JSX.Element {
+  const { canManage, canDelete } = participant
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <Toggle
+          checked={canManage}
+          disabled={disabled}
+          // Manage off → delete off, in one server-valid change.
+          onChange={(next) => onChange(next, next ? canDelete : false)}
+          aria-label="Allow inbox management"
+        />
+        <span className="text-[11px] text-[var(--color-text-secondary)]">
+          Allow inbox management
+        </span>
+      </div>
+      {canManage && (
+        <div className="flex items-center gap-2 pl-5">
+          <Toggle
+            checked={canDelete}
+            disabled={disabled}
+            onChange={(next) => onChange(true, next)}
+            aria-label="Allow delete"
+          />
+          <span className="text-[11px] text-[var(--color-text-secondary)]">Allow delete</span>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -121,6 +170,35 @@ export function InboxAccessPanel({
     [inbox.address, inbox.grants, patchInbox],
   )
 
+  // Change a participant's management capabilities (Primary OR a grant, keyed
+  // by projectId). Enforces canDelete⇒canManage client-side so the payload is
+  // never the combo the daemon rejects. Optimistic.
+  const changeManage = useCallback(
+    async (projectId: string, canManage: boolean, canDelete: boolean): Promise<void> => {
+      const nextDelete = canManage ? canDelete : false
+      setError(null)
+      setPending(`manage:${projectId}`)
+      const beforePrimary = inbox.primary
+      const beforeGrants = inbox.grants
+      const apply = (p: InboxParticipant): InboxParticipant =>
+        p.projectId === projectId ? { ...p, canManage, canDelete: nextDelete } : p
+      patchInbox(inbox.address, (i) => ({
+        ...i,
+        primary: apply(i.primary),
+        grants: i.grants.map(apply),
+      }))
+      try {
+        await setInboxManage({ address: inbox.address, project: projectId, canManage, canDelete: nextDelete })
+      } catch (e) {
+        patchInbox(inbox.address, (i) => ({ ...i, primary: beforePrimary, grants: beforeGrants }))
+        setError(mailErrorMessage(e))
+      } finally {
+        setPending(null)
+      }
+    },
+    [inbox.address, inbox.primary, inbox.grants, patchInbox],
+  )
+
   const doRevoke = useCallback(
     async (projectId: string): Promise<void> => {
       setError(null)
@@ -158,7 +236,7 @@ export function InboxAccessPanel({
           .concat([{ ...i.primary }])
         return {
           ...i,
-          primary: { projectId: target.projectId, workspace: target.workspace, level: target.level },
+          primary: { ...target },
           grants,
         }
       })
@@ -186,7 +264,7 @@ export function InboxAccessPanel({
       const exists = i.grants.some((g) => g.projectId === projectId)
       const grants = exists
         ? i.grants.map((g) => (g.projectId === projectId ? { ...g, level } : g))
-        : [...i.grants, { projectId, workspace: projectName(projectId), level }]
+        : [...i.grants, { projectId, workspace: projectName(projectId), level, canManage: false, canDelete: false }]
       return { ...i, grants }
     })
     try {
@@ -227,54 +305,73 @@ export function InboxAccessPanel({
         )}{' '}
         Agents use the inbox via <span className="font-mono">k2 mail</span>.
       </p>
+      <p className="text-[10px] text-[var(--color-text-muted)]">
+        <strong>Inbox management</strong> lets a workspace move and organize mail into folders;{' '}
+        <strong>Allow delete</strong> lets it move messages to Trash (recoverable) — not permanent
+        removal. Delete requires management.
+      </p>
 
       <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
         {/* Primary row — workspace + its own level (editable), no remove. */}
-        <div className="flex items-center gap-2 px-3 py-2">
-          <span className="text-xs text-[var(--color-text-primary)] truncate flex-1 min-w-0">
-            {inbox.primary.workspace ?? inbox.primary.projectId}
-          </span>
-          <span className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-accent)] bg-[var(--color-accent)]/15 flex-shrink-0">
-            Primary
-          </span>
-          <SettingDropdown
-            value={inbox.primary.level}
-            options={options}
-            onChange={(v) => void changePrimaryLevel(v as InboxLevel)}
-            className={`flex-shrink-0 ${disabledCls ?? ''}`}
+        <div className="px-3 py-2 space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[var(--color-text-primary)] truncate flex-1 min-w-0">
+              {inbox.primary.workspace ?? inbox.primary.projectId}
+            </span>
+            <span className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-accent)] bg-[var(--color-accent)]/15 flex-shrink-0">
+              Primary
+            </span>
+            <SettingDropdown
+              value={inbox.primary.level}
+              options={options}
+              onChange={(v) => void changePrimaryLevel(v as InboxLevel)}
+              className={`flex-shrink-0 ${disabledCls ?? ''}`}
+            />
+          </div>
+          <ManageToggles
+            participant={inbox.primary}
+            disabled={!canMutate || busy}
+            onChange={(m, d) => void changeManage(primaryId, m, d)}
           />
         </div>
 
         {/* Grant rows */}
         {inbox.grants.map((g) => (
-          <div key={g.projectId} className="flex items-center gap-2 px-3 py-2">
-            <span className="text-xs text-[var(--color-text-primary)] truncate flex-1 min-w-0">
-              {g.workspace ?? projectName(g.projectId)}
-            </span>
-            <SettingDropdown
-              value={g.level}
-              options={options}
-              onChange={(v) => void changeGrantLevel(g.projectId, v as InboxLevel)}
-              className={`flex-shrink-0 ${disabledCls ?? ''}`}
+          <div key={g.projectId} className="px-3 py-2 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-[var(--color-text-primary)] truncate flex-1 min-w-0">
+                {g.workspace ?? projectName(g.projectId)}
+              </span>
+              <SettingDropdown
+                value={g.level}
+                options={options}
+                onChange={(v) => void changeGrantLevel(g.projectId, v as InboxLevel)}
+                className={`flex-shrink-0 ${disabledCls ?? ''}`}
+              />
+              <button
+                type="button"
+                disabled={!canMutate || busy}
+                onClick={() => void doMakePrimary(g.projectId)}
+                title="Transfer Primary to this workspace"
+                className="px-2 py-1 text-[10px] font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
+              >
+                {pending === `primary:${g.projectId}` ? '…' : 'Make Primary'}
+              </button>
+              <button
+                type="button"
+                disabled={!canMutate || busy}
+                onClick={() => void doRevoke(g.projectId)}
+                title="Remove this workspace's access"
+                className="px-2 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
+              >
+                {pending === g.projectId ? '…' : 'Remove'}
+              </button>
+            </div>
+            <ManageToggles
+              participant={g}
+              disabled={!canMutate || busy}
+              onChange={(m, d) => void changeManage(g.projectId, m, d)}
             />
-            <button
-              type="button"
-              disabled={!canMutate || busy}
-              onClick={() => void doMakePrimary(g.projectId)}
-              title="Transfer Primary to this workspace"
-              className="px-2 py-1 text-[10px] font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
-            >
-              {pending === `primary:${g.projectId}` ? '…' : 'Make Primary'}
-            </button>
-            <button
-              type="button"
-              disabled={!canMutate || busy}
-              onClick={() => void doRevoke(g.projectId)}
-              title="Remove this workspace's access"
-              className="px-2 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
-            >
-              {pending === g.projectId ? '…' : 'Remove'}
-            </button>
           </div>
         ))}
 

@@ -1,6 +1,6 @@
 {
   "name": "k2",
-  "version": "0.40.40",
+  "version": "0.40.41",
   "description": "Developer workspace with terminal panes, git worktrees, and agent presets",
   "author": "Alakazam Labs",
   "license": "FSL-1.1-Apache-2.0",

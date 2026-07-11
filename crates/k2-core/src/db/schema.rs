@@ -1685,6 +1685,15 @@ pub struct AgentHeartbeat {
     /// the spec evaluates cleanly again or the schedule is edited.
     /// Pre-0062 this state was invisible: enabled-but-dark forever.
     pub schedule_error: Option<String>,
+    /// 0073 — provider key (`claude` | `grok` | `codex` | …, the
+    /// `ProviderResume` table vocabulary) that owns `last_session_id`
+    /// when the user pinned this heartbeat to a SPECIFIC saved
+    /// session via the delivery drop-down / `k2 heartbeat session
+    /// --set`. NULL = the workspace default agent (the pre-0073
+    /// behavior): the fire path probes + resumes with the default
+    /// agent's adapter. Cleared alongside `last_session_id` by the
+    /// self-heal path and by delivery mode `auto`.
+    pub session_provider: Option<String>,
 }
 
 impl AgentHeartbeat {
@@ -1737,7 +1746,7 @@ impl AgentHeartbeat {
 
     /// Column list for SELECTs. Centralised so adding a new column means
     /// updating one constant + `from_row`, not five query strings.
-    const COLS: &'static str = "id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, last_session_id, archived_at, created_at, concurrency_policy, starting_deadline_secs, active_deadline_secs, in_flight_started_at, active_terminal_id, use_workspace_session, consecutive_failures, next_retry_at, disabled_reason, schedule_error";
+    const COLS: &'static str = "id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, last_session_id, archived_at, created_at, concurrency_policy, starting_deadline_secs, active_deadline_secs, in_flight_started_at, active_terminal_id, use_workspace_session, consecutive_failures, next_retry_at, disabled_reason, schedule_error, session_provider";
 
     pub fn get_by_name(conn: &Connection, project_id: &str, name: &str) -> Result<Option<AgentHeartbeat>> {
         let sql = format!(
@@ -1789,9 +1798,9 @@ impl AgentHeartbeat {
             let hb = Self::from_row(row)?;
             // Two extra columns appended in the SELECT above. Their
             // indices follow the AgentHeartbeat fields (which Self::COLS
-            // produced) — 21 fields + project_name (21) + project_path (22).
-            let project_name: String = row.get(21)?;
-            let project_path: String = row.get(22)?;
+            // produced) — 22 fields + project_name (22) + project_path (23).
+            let project_name: String = row.get(22)?;
+            let project_path: String = row.get(23)?;
             Ok((hb, project_name, project_path))
         })?;
         rows.collect()
@@ -1974,15 +1983,39 @@ impl AgentHeartbeat {
     /// exists on disk (daemon-restart-during-spawn race) — clearing
     /// here lets the next fire fall through to fresh_fire and pick a
     /// new pinned UUID instead of looping on `claude --resume <ghost>`.
+    /// 0073: also nulls `session_provider` — a ghost id's provider
+    /// pin is meaningless once the id itself is gone, and leaving it
+    /// behind would make the NEXT saved id probe the wrong store.
     pub fn clear_session_id(
         conn: &Connection,
         project_id: &str,
         name: &str,
     ) -> Result<usize> {
         conn.execute(
-            "UPDATE workspace_heartbeats SET last_session_id = NULL \
+            "UPDATE workspace_heartbeats \
+             SET last_session_id = NULL, session_provider = NULL \
              WHERE project_id = ?1 AND name = ?2",
             params![project_id, name],
+        )
+    }
+
+    /// 0073 — set (or clear, both `None`) the heartbeat's delivery
+    /// session: `last_session_id` + the provider that owns it, in one
+    /// statement so a reader never observes a half-written pair.
+    /// Used by `k2so_heartbeat_set_session` (mode `session` writes
+    /// both; mode `auto` clears both).
+    pub fn set_session(
+        conn: &Connection,
+        project_id: &str,
+        name: &str,
+        session_id: Option<&str>,
+        provider: Option<&str>,
+    ) -> Result<usize> {
+        conn.execute(
+            "UPDATE workspace_heartbeats \
+             SET last_session_id = ?1, session_provider = ?2 \
+             WHERE project_id = ?3 AND name = ?4",
+            params![session_id, provider, project_id, name],
         )
     }
 
@@ -2282,6 +2315,7 @@ impl AgentHeartbeat {
             next_retry_at: row.get(18)?,
             disabled_reason: row.get(19)?,
             schedule_error: row.get(20)?,
+            session_provider: row.get(21)?,
         })
     }
 

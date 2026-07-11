@@ -636,6 +636,7 @@ mod tests {
             next_retry_at: None,
             disabled_reason: None,
             schedule_error: None,
+            session_provider: None,
         }
     }
 

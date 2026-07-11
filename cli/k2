@@ -1029,6 +1029,86 @@ except Exception as e:
 "
 }
 
+# 0073 — heartbeat DELIVERY-SESSION control: where a fire's wake
+# message lands.
+#   k2 heartbeat session <name>                    # show current target
+#   k2 heartbeat session <name> --pinned           # workspace pinned chat
+#   k2 heartbeat session <name> --auto             # own session, new on next fire
+#   k2 heartbeat session <name> --set <session-id> --provider <p>
+# The set path hits /cli/heartbeat/set-session; the daemon validates
+# the provider, refuses the reserved pinned-chat session, and requires
+# the session to exist on disk. Read path is client-side off
+# /cli/heartbeat/list (same pattern as `heartbeat show`).
+cmd_heartbeat_session() {
+    local name="" mode="" session_id="" provider=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --pinned)   mode="pinned"; shift ;;
+            --auto)     mode="auto"; shift ;;
+            --set)      mode="session"; session_id="${2:-}"; shift 2 ;;
+            --provider) provider="${2:-}"; shift 2 ;;
+            -*)
+                echo "Unknown flag for 'heartbeat session': $1" >&2
+                echo "Usage: k2 heartbeat session <name> [--pinned | --auto | --set <session-id> --provider <p>]" >&2
+                exit 1
+                ;;
+            *)  if [ -z "$name" ]; then name="$1"; fi; shift ;;
+        esac
+    done
+    [ -z "$name" ] && { echo "Usage: k2 heartbeat session <name> [--pinned | --auto | --set <session-id> --provider <p>]" >&2; exit 1; }
+
+    if [ -z "$mode" ]; then
+        # Read-only: print the current delivery target.
+        cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+import json, sys, os
+name = os.environ['NAME']
+try:
+    rows = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f'Error: {e}', file=sys.stderr); sys.exit(1)
+row = next((r for r in rows if r.get('name') == name), None)
+if row is None:
+    print(f'No heartbeat named \"{name}\" in this workspace.', file=sys.stderr)
+    sys.exit(1)
+if row.get('useWorkspaceSession'):
+    print('pinned  (delivers into the workspace pinned chat)')
+elif row.get('lastSessionId'):
+    provider = row.get('sessionProvider') or 'default-agent'
+    print(f\"{provider}:{row['lastSessionId']}\")
+else:
+    print('auto  (own session - new on next fire)')
+"
+        return
+    fi
+
+    if [ "$mode" = "session" ]; then
+        [ -z "$session_id" ] && { echo "Usage: k2 heartbeat session <name> --set <session-id> --provider <p>" >&2; exit 1; }
+        [ -z "$provider" ] && { echo "--set requires --provider <p> (claude, grok, cursor, gemini, pi, codex, hermes)" >&2; exit 1; }
+    elif [ -n "$provider" ]; then
+        echo "--provider only applies with --set <session-id>" >&2; exit 1
+    fi
+
+    cli_request "/cli/heartbeat/set-session" \
+        "name=$(urlencode "$name")&mode=$mode&session_id=$(urlencode "$session_id")&provider=$(urlencode "$provider")" \
+        | NAME="$name" python3 -c "
+import json, sys, os
+name = os.environ['NAME']
+try:
+    d = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f'Error: {e}', file=sys.stderr); sys.exit(1)
+if not d.get('success'):
+    print(f\"Error: {d.get('error', 'unknown')}\", file=sys.stderr); sys.exit(1)
+mode = d.get('mode')
+if mode == 'pinned':
+    print(f'Heartbeat \"{name}\" now delivers into the workspace pinned chat.')
+elif mode == 'auto':
+    print(f'Heartbeat \"{name}\" now uses its own session (new on next fire).')
+else:
+    print(f\"Heartbeat \\\"{name}\\\" now delivers into {d.get('provider')}:{d.get('sessionId')}.\")
+"
+}
+
 cmd_heartbeat_rename() {
     local from="${1:-}"
     local to="${2:-}"
@@ -5827,6 +5907,18 @@ cmd_schema() {
       ]
     },
     {
+      "name": "heartbeat session",
+      "usage": "k2 heartbeat session <name> [--pinned | --auto | --set <session-id> --provider <p>]",
+      "description": "Show or set where a heartbeat's wake message lands: the workspace pinned chat (--pinned), the heartbeat's own session minted fresh on the next fire (--auto), or a specific saved provider session (--set + --provider). With no flags, prints the current target.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--pinned", "arg": null, "description": "Deliver into the workspace pinned chat session."},
+        {"name": "--auto", "arg": null, "description": "Own session - a new one is minted on the next fire."},
+        {"name": "--set", "arg": "session-id", "description": "Deliver into this saved session (must exist on disk; requires --provider)."},
+        {"name": "--provider", "arg": "p", "description": "Provider owning the saved session: claude, grok, cursor, gemini, pi, codex, or hermes."}
+      ]
+    },
+    {
       "name": "heartbeat show",
       "usage": "k2 heartbeat show <name> [--json]",
       "description": "One heartbeat's full details (schedule, enabled, last fire, saved session).",
@@ -8465,6 +8557,15 @@ SIGNAL (immediate one-shot triggers)
   heartbeat signal fire <n>      Fire one heartbeat now (skips schedule window)
   heartbeat signal wakeup <n>    Print/edit the WAKEUP.md
   heartbeat signal wake          Auto-wake (no name needed)
+
+DELIVERY (where a fire's wake message lands)
+  heartbeat session <n>          Show the current delivery target
+  heartbeat session <n> --pinned Deliver into the workspace pinned chat
+  heartbeat session <n> --auto   Own session (a new one on the next fire)
+  heartbeat session <n> --set <session-id> --provider <p>
+                                 Deliver into a specific saved session
+                                 (p: claude, grok, cursor, gemini, pi,
+                                 codex, hermes; the session must exist)
 
 INSPECTION (read-only)
   heartbeat show <n> [--json]    Single heartbeat details
@@ -11727,6 +11828,7 @@ EOF
                     *) echo "Usage: k2 heartbeat use-pinned-session [on|off] <name>" >&2; exit 1 ;;
                 esac
                 ;;
+            session)        shift 2; cmd_heartbeat_session "$@" ;;
             rename)         shift 2; cmd_heartbeat_rename "$@" ;;
             edit)           shift 2; cmd_heartbeat_edit "$@" ;;
             show)           shift 2; cmd_heartbeat_show "$@" ;;

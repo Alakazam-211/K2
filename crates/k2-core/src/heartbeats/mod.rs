@@ -274,6 +274,135 @@ pub fn k2so_heartbeat_set_use_workspace_session(
         .map_err(|e| e.to_string())
 }
 
+/// 0073 — set a heartbeat's DELIVERY SESSION: where a fire's wake
+/// message lands. Three modes (the Settings drop-down / `k2 heartbeat
+/// session` vocabulary):
+///
+/// - `"pinned"` — deliver into the workspace's pinned chat session
+///   (`use_workspace_session = 1`). The heartbeat's own
+///   `last_session_id`/`session_provider` stay untouched so switching
+///   back restores the historical thread — same contract as
+///   [`k2so_heartbeat_set_use_workspace_session`].
+/// - `"auto"` — the heartbeat's own session, minted fresh on the next
+///   fire: `use_workspace_session = 0`, `last_session_id = NULL`,
+///   `session_provider = NULL`.
+/// - `"session"` — a SPECIFIC saved session. Requires `session_id` +
+///   `provider`; validates (loudly, per test discipline):
+///   (a) the provider is known to the `ProviderResume` adapter table;
+///   (b) the session is NOT the workspace's pinned chat session
+///       (that one is reserved — use mode `pinned`);
+///   (c) the provider's session file exists on disk for this project.
+///   Then `use_workspace_session = 0` + both columns set atomically.
+///
+/// Returns `{"success":true,"mode":...}` (+ `sessionId`/`provider`
+/// for mode `session`) so the route can echo the applied state.
+pub fn k2so_heartbeat_set_session(
+    project_path: String,
+    name: String,
+    mode: String,
+    session_id: Option<String>,
+    provider: Option<String>,
+) -> Result<serde_json::Value, String> {
+    // ── Resolve + validate under the lock ──────────────────────────
+    let (project_id, pinned_session_id) = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let project_id = resolve_project_id(&conn, &project_path)
+            .ok_or_else(|| format!("Project not found: {}", project_path))?;
+        // Loud failure on a bogus name — a silent 0-row UPDATE would
+        // let the UI think the drop-down took effect.
+        AgentHeartbeat::get_by_name(&conn, &project_id, &name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Heartbeat '{}' not found", name))?;
+        let pinned = crate::db::schema::WorkspaceSession::get(&conn, &project_id)
+            .ok()
+            .flatten()
+            .and_then(|ws| ws.session_id);
+        (project_id, pinned)
+    };
+
+    match mode.as_str() {
+        "pinned" => {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::set_use_workspace_session(&conn, &project_id, &name, true)
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "success": true, "mode": "pinned" }))
+        }
+        "auto" => {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::set_use_workspace_session(&conn, &project_id, &name, false)
+                .map_err(|e| e.to_string())?;
+            AgentHeartbeat::set_session(&conn, &project_id, &name, None, None)
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "success": true, "mode": "auto" }))
+        }
+        "session" => {
+            let session_id = session_id
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "mode 'session' requires a 'session_id' parameter".to_string())?;
+            let provider = provider
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "mode 'session' requires a 'provider' parameter".to_string())?;
+            // (a) provider must be a known ProviderResume adapter —
+            // an unknown provider could never be probed or resumed.
+            let adapter = crate::workspace::provider_resume::provider_resume_for_provider(
+                &provider,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "unknown provider '{}' — no resume adapter; known providers: \
+                     claude, grok, cursor, gemini, pi, codex, hermes",
+                    provider
+                )
+            })?;
+            // (b) the pinned chat session is the workspace chat tab's
+            // lane; pointing a heartbeat at it directly would collide
+            // with the deliver_live cascade. Mode `pinned` exists for
+            // exactly that intent.
+            if pinned_session_id.as_deref() == Some(session_id.as_str()) {
+                return Err(
+                    "the pinned chat session is reserved; choose mode=pinned instead"
+                        .to_string(),
+                );
+            }
+            // (c) the session must actually exist on disk — a typo'd
+            // or deleted id fails HERE (loudly), not silently at the
+            // next 3am fire. Disk probe runs without the DB lock.
+            if !adapter.session_file_exists(&session_id, &project_path) {
+                return Err(format!(
+                    "no {} session '{}' found on disk for this workspace — \
+                     cannot deliver a heartbeat into a session that does not exist",
+                    provider, session_id
+                ));
+            }
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::set_use_workspace_session(&conn, &project_id, &name, false)
+                .map_err(|e| e.to_string())?;
+            AgentHeartbeat::set_session(
+                &conn,
+                &project_id,
+                &name,
+                Some(&session_id),
+                Some(&provider),
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({
+                "success": true,
+                "mode": "session",
+                "sessionId": session_id,
+                "provider": provider,
+            }))
+        }
+        other => Err(format!(
+            "unknown mode '{}' — expected 'pinned', 'auto', or 'session'",
+            other
+        )),
+    }
+}
+
 /// Replace a heartbeat row's `frequency` + `spec_json` in place. Used
 /// when the user edits the schedule via the Settings UI.
 pub fn k2so_heartbeat_edit(
@@ -609,6 +738,7 @@ pub fn k2so_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
                 "enabled": hb.enabled,
                 "lastFired": hb.last_fired,
                 "lastSessionId": hb.last_session_id,
+                "sessionProvider": hb.session_provider,
                 "createdAt": hb.created_at,
                 "concurrencyPolicy": hb.concurrency_policy,
                 "startingDeadlineSecs": hb.starting_deadline_secs,
@@ -667,9 +797,299 @@ pub fn k2so_workspace_set_show_heartbeat_sessions(
 
 #[cfg(test)]
 mod tests {
-    //! Behaviour lives in src-tauri's integration tests today —
+    //! Legacy CRUD behaviour lives in src-tauri's integration tests —
     //! `src-tauri/src/commands/k2so_agents.rs` has 30+ tests that
-    //! exercise these same functions under their original call sites.
-    //! Once the commands module itself moves into core the tests can
-    //! come along.
+    //! exercise those functions under their original call sites.
+    //!
+    //! `k2so_heartbeat_set_session` (0073) is tested HERE — it was
+    //! born in core, so its mode/validation matrix has no other home.
+
+    use super::*;
+
+    /// Scratch-$HOME guard for the on-disk session probe (mode
+    /// `session` validation (c)). Same pattern as
+    /// `workspace::provider_resume::tests::HomeGuard`.
+    struct HomeGuard {
+        original: Option<std::ffi::OsString>,
+        home: std::path::PathBuf,
+        _lock: parking_lot::MutexGuard<'static, ()>,
+    }
+
+    impl HomeGuard {
+        fn new(label: &str) -> Self {
+            let lock = crate::themes::HOME_LOCK.lock();
+            let home = std::env::temp_dir().join(format!(
+                "k2-hb-set-session-{label}-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&home).unwrap();
+            let original = std::env::var_os("HOME");
+            std::env::set_var("HOME", &home);
+            Self { original, home, _lock: lock }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match self.original.take() {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.home);
+        }
+    }
+
+    /// Register a project + one heartbeat row named `hb`. Returns the
+    /// project_id. Project path must be unique per test (shared DB).
+    fn seed_project_and_heartbeat(project_path: &str) -> String {
+        crate::db::init_for_tests();
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let project_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, 'hb-session-test', ?2)",
+            rusqlite::params![project_id, project_path],
+        )
+        .unwrap();
+        AgentHeartbeat::insert(
+            &conn,
+            &uuid::Uuid::new_v4().to_string(),
+            &project_id,
+            "hb",
+            "daily",
+            "{}",
+            ".k2/heartbeats/hb/WAKEUP.md",
+            true,
+        )
+        .unwrap();
+        project_id
+    }
+
+    fn hb_row(project_id: &str) -> AgentHeartbeat {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        AgentHeartbeat::get_by_name(&conn, project_id, "hb")
+            .unwrap()
+            .expect("heartbeat row exists")
+    }
+
+    /// Seed a saved delivery session directly (bypassing the disk
+    /// probe) so mode transitions can be asserted.
+    fn seed_saved_session(project_id: &str, session_id: &str, provider: &str) {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        AgentHeartbeat::set_session(
+            &conn, project_id, "hb", Some(session_id), Some(provider),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn set_session_pinned_flips_flag_and_preserves_saved_session() {
+        let path = format!("/fixture/hb-set-session-pinned-{}", uuid::Uuid::new_v4());
+        let project_id = seed_project_and_heartbeat(&path);
+        seed_saved_session(&project_id, "historic-sid", "grok");
+
+        let v = k2so_heartbeat_set_session(path, "hb".into(), "pinned".into(), None, None)
+            .expect("pinned mode succeeds");
+        assert_eq!(v["success"], true);
+        assert_eq!(v["mode"], "pinned");
+
+        let hb = hb_row(&project_id);
+        assert!(hb.use_workspace_session, "pinned sets the flag");
+        assert_eq!(
+            hb.last_session_id.as_deref(),
+            Some("historic-sid"),
+            "pinned must NOT clear the historical session id"
+        );
+        assert_eq!(
+            hb.session_provider.as_deref(),
+            Some("grok"),
+            "pinned must NOT clear the historical provider"
+        );
+    }
+
+    #[test]
+    fn set_session_auto_clears_both_fields_and_flag() {
+        let path = format!("/fixture/hb-set-session-auto-{}", uuid::Uuid::new_v4());
+        let project_id = seed_project_and_heartbeat(&path);
+        seed_saved_session(&project_id, "old-sid", "claude");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::set_use_workspace_session(&conn, &project_id, "hb", true).unwrap();
+        }
+
+        let v = k2so_heartbeat_set_session(path, "hb".into(), "auto".into(), None, None)
+            .expect("auto mode succeeds");
+        assert_eq!(v["mode"], "auto");
+
+        let hb = hb_row(&project_id);
+        assert!(!hb.use_workspace_session, "auto clears the pinned flag");
+        assert_eq!(hb.last_session_id, None, "auto clears last_session_id");
+        assert_eq!(hb.session_provider, None, "auto clears session_provider");
+    }
+
+    #[test]
+    fn set_session_session_mode_requires_id_and_provider() {
+        let path = format!("/fixture/hb-set-session-req-{}", uuid::Uuid::new_v4());
+        let _pid = seed_project_and_heartbeat(&path);
+
+        let err = k2so_heartbeat_set_session(
+            path.clone(), "hb".into(), "session".into(), None, Some("claude".into()),
+        )
+        .unwrap_err();
+        assert!(err.contains("session_id"), "err={err}");
+
+        let err = k2so_heartbeat_set_session(
+            path, "hb".into(), "session".into(), Some("sid-1".into()), None,
+        )
+        .unwrap_err();
+        assert!(err.contains("provider"), "err={err}");
+    }
+
+    #[test]
+    fn set_session_unknown_provider_errors() {
+        let path = format!("/fixture/hb-set-session-unk-{}", uuid::Uuid::new_v4());
+        let _pid = seed_project_and_heartbeat(&path);
+        let err = k2so_heartbeat_set_session(
+            path,
+            "hb".into(),
+            "session".into(),
+            Some("sid-1".into()),
+            Some("aider".into()),
+        )
+        .unwrap_err();
+        assert!(err.contains("unknown provider 'aider'"), "err={err}");
+    }
+
+    #[test]
+    fn set_session_pinned_chat_session_is_reserved() {
+        let path = format!("/fixture/hb-set-session-resv-{}", uuid::Uuid::new_v4());
+        let project_id = seed_project_and_heartbeat(&path);
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            crate::db::schema::WorkspaceSession::upsert(
+                &conn,
+                &uuid::Uuid::new_v4().to_string(),
+                &project_id,
+                None,
+                Some("the-pinned-sid"),
+                "claude",
+                "user",
+                "running",
+            )
+            .unwrap();
+        }
+        let err = k2so_heartbeat_set_session(
+            path,
+            "hb".into(),
+            "session".into(),
+            Some("the-pinned-sid".into()),
+            Some("claude".into()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "the pinned chat session is reserved; choose mode=pinned instead"
+        );
+    }
+
+    #[test]
+    fn set_session_missing_session_file_errors_loudly() {
+        let _guard = HomeGuard::new("missing-file");
+        let path = format!("/fixture/hb-set-session-miss-{}", uuid::Uuid::new_v4());
+        let project_id = seed_project_and_heartbeat(&path);
+        let err = k2so_heartbeat_set_session(
+            path,
+            "hb".into(),
+            "session".into(),
+            Some("ghost-sid".into()),
+            Some("claude".into()),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("claude") && err.contains("ghost-sid"),
+            "error must name the provider and the id: {err}"
+        );
+        // Nothing written on the failure path.
+        let hb = hb_row(&project_id);
+        assert_eq!(hb.last_session_id, None);
+        assert_eq!(hb.session_provider, None);
+    }
+
+    #[test]
+    fn set_session_session_mode_sets_both_fields_when_file_exists() {
+        let guard = HomeGuard::new("happy");
+        let path = format!("/fixture/hb-set-session-ok-{}", uuid::Uuid::new_v4());
+        let project_id = seed_project_and_heartbeat(&path);
+        let sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeee0073";
+        // Claude on-disk fixture the probe accepts.
+        let hash = crate::chat_history::claude_project_hash(&path);
+        let dir = guard.home.join(".claude").join("projects").join(&hash);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{sid}.jsonl")), b"{\"cwd\":\"/x\"}\n").unwrap();
+        // Flag ON beforehand so we can assert mode `session` clears it.
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::set_use_workspace_session(&conn, &project_id, "hb", true).unwrap();
+        }
+
+        let v = k2so_heartbeat_set_session(
+            path,
+            "hb".into(),
+            "session".into(),
+            Some(sid.into()),
+            Some("claude".into()),
+        )
+        .expect("session mode succeeds with the file on disk");
+        assert_eq!(v["success"], true);
+        assert_eq!(v["mode"], "session");
+        assert_eq!(v["sessionId"], sid);
+        assert_eq!(v["provider"], "claude");
+
+        let hb = hb_row(&project_id);
+        assert!(!hb.use_workspace_session, "session mode clears the pinned flag");
+        assert_eq!(hb.last_session_id.as_deref(), Some(sid));
+        assert_eq!(hb.session_provider.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn set_session_unknown_mode_and_missing_heartbeat_error() {
+        let path = format!("/fixture/hb-set-session-bad-{}", uuid::Uuid::new_v4());
+        let _pid = seed_project_and_heartbeat(&path);
+        let err = k2so_heartbeat_set_session(
+            path.clone(), "hb".into(), "banana".into(), None, None,
+        )
+        .unwrap_err();
+        assert!(err.contains("unknown mode 'banana'"), "err={err}");
+
+        let err = k2so_heartbeat_set_session(
+            path, "no-such-hb".into(), "auto".into(), None, None,
+        )
+        .unwrap_err();
+        assert!(err.contains("'no-such-hb' not found"), "err={err}");
+    }
+
+    /// The self-heal `clear_session_id` must clear BOTH the ghost id
+    /// and its provider pin — a leftover provider would make the next
+    /// saved id probe the wrong store.
+    #[test]
+    fn clear_session_id_clears_the_provider_pin_too() {
+        let path = format!("/fixture/hb-clear-both-{}", uuid::Uuid::new_v4());
+        let project_id = seed_project_and_heartbeat(&path);
+        seed_saved_session(&project_id, "ghost", "grok");
+
+        let db = crate::db::shared();
+        let conn = db.lock();
+        AgentHeartbeat::clear_session_id(&conn, &project_id, "hb").unwrap();
+        let hb = AgentHeartbeat::get_by_name(&conn, &project_id, "hb")
+            .unwrap()
+            .unwrap();
+        assert_eq!(hb.last_session_id, None);
+        assert_eq!(hb.session_provider, None, "self-heal must clear session_provider");
+    }
 }

@@ -202,14 +202,36 @@ pub fn smart_launch_with_origin(
         let conn = db.lock();
         k2_core::workspace::agent_resolve::resolve_agent_command(&conn, project_path)
     };
+    // 0073 — session-provider override: a heartbeat whose delivery
+    // session was pinned to a SPECIFIC provider's saved session
+    // (`workspace_heartbeats.session_provider`, set via
+    // /cli/heartbeat/set-session mode=session) probes and resumes
+    // with THAT provider's adapter instead of the workspace default
+    // agent's. NULL/empty = the pre-0073 behavior, byte-identical.
+    let session_provider = hb
+        .session_provider
+        .as_deref()
+        .filter(|s| !s.is_empty());
+    let resolved_for_resume =
+        resolve_session_provider_command(session_provider, &resolved_default);
     let saved_jsonl_exists = saved_session
         .as_deref()
         .map(|s| {
-            k2_core::workspace::provider_resume::provider_resume_for_command(
-                &resolved_default.command,
-            )
-            .map(|adapter| adapter.session_file_exists(s, project_path))
-            .unwrap_or(false)
+            let adapter = match session_provider {
+                // Provider pinned with the session id → its own store.
+                // Unknown provider (can't happen via set-session's
+                // validation, but rows are data) → None → treated as
+                // missing, so the planner self-heals to a fresh fire.
+                Some(p) => {
+                    k2_core::workspace::provider_resume::provider_resume_for_provider(p)
+                }
+                None => k2_core::workspace::provider_resume::provider_resume_for_command(
+                    &resolved_default.command,
+                ),
+            };
+            adapter
+                .map(|a| a.session_file_exists(s, project_path))
+                .unwrap_or(false)
         })
         .unwrap_or(false);
 
@@ -263,13 +285,59 @@ pub fn smart_launch_with_origin(
                 // Unreachable: planner returned Inject only when a
                 // candidate existed. Defensive fall-through to resume.
                 run_resume_and_fire(project_path, &project_id, &agent_name, &hb,
-                    &wakeup_abs, &session_id, &resolved_default, catchup_of)
+                    &wakeup_abs, &session_id, &resolved_for_resume, catchup_of)
             }
         }
         LaunchDecision::ResumeAndFire { claude_session_id } => {
             run_resume_and_fire(project_path, &project_id, &agent_name, &hb,
-                &wakeup_abs, &claude_session_id, &resolved_default, catchup_of)
+                &wakeup_abs, &claude_session_id, &resolved_for_resume, catchup_of)
         }
+    }
+}
+
+/// 0073 — resolve the command the ResumeAndFire branch spawns when the
+/// heartbeat carries a `session_provider` override. Pure, so the
+/// override policy is unit-testable:
+///
+/// - `None`/no override → the workspace default agent's resolved
+///   command, unchanged (pre-0073 behavior).
+/// - override matches the default agent's provider → keep the default
+///   resolution (preserves the preset's args/env/readiness).
+/// - override differs → the override provider's bare binary from the
+///   adapter table (no preset args — the saved session belongs to a
+///   different provider than the workspace's preset, so the preset's
+///   flags don't apply; claude-specific flags are re-added by
+///   `plan_resume_fire`'s claude arm when the override IS claude).
+/// - override unknown to the adapter table → the default resolution
+///   (the on-disk probe already returned `false` for an unknown
+///   provider, so the planner self-heals to a fresh fire and this
+///   value is never used for a resume).
+pub fn resolve_session_provider_command(
+    session_provider: Option<&str>,
+    resolved_default: &k2_core::workspace::agent_resolve::ResolvedAgentCommand,
+) -> k2_core::workspace::agent_resolve::ResolvedAgentCommand {
+    use k2_core::workspace::provider_resume as pr;
+    let Some(provider) = session_provider.filter(|s| !s.is_empty()) else {
+        return resolved_default.clone();
+    };
+    // Default agent already speaks this provider — keep its preset.
+    if pr::provider_resume_for_command(&resolved_default.command)
+        .map(|a| a.provider == provider)
+        .unwrap_or(false)
+    {
+        return resolved_default.clone();
+    }
+    match pr::provider_resume_for_provider(provider) {
+        Some(adapter) => k2_core::workspace::agent_resolve::ResolvedAgentCommand {
+            command: adapter.command.to_string(),
+            args: Vec::new(),
+            preset_id: None,
+            source: resolved_default.source.clone(),
+            danger_flags: None,
+            env: None,
+            readiness: None,
+        },
+        None => resolved_default.clone(),
     }
 }
 
@@ -1267,5 +1335,90 @@ mod decision_tests {
                 .expect("hermes has an adapter since Slice 6");
         assert_eq!(args, vec!["--resume".to_string(), "HRM-SID".to_string()]);
         assert_eq!(delivery, ResumePromptDelivery::PtyWrite("WAKE".to_string()));
+    }
+
+    // ── resolve_session_provider_command — 0073 override policy ──────
+
+    /// No override (NULL/empty session_provider) = the pre-0073
+    /// behavior, byte-identical: the workspace default resolution.
+    #[test]
+    fn session_provider_none_or_empty_keeps_the_default_resolution() {
+        let default = resolved_cmd("claude", &["--dangerously-skip-permissions"]);
+        assert_eq!(resolve_session_provider_command(None, &default), default);
+        assert_eq!(resolve_session_provider_command(Some(""), &default), default);
+    }
+
+    /// Override matching the default agent's own provider keeps the
+    /// full default resolution — preset args survive.
+    #[test]
+    fn session_provider_matching_default_keeps_preset_args() {
+        let default = resolved_cmd("grok", &["--always-approve"]);
+        let r = resolve_session_provider_command(Some("grok"), &default);
+        assert_eq!(r, default, "same-provider override must keep the preset");
+        // Path-qualified default binary still matches by basename.
+        let default = resolved_cmd("/usr/local/bin/claude", &["--model", "opus"]);
+        assert_eq!(
+            resolve_session_provider_command(Some("claude"), &default),
+            default
+        );
+    }
+
+    /// Override differing from the default agent resolves the
+    /// OVERRIDE provider's bare binary (adapter-table command).
+    #[test]
+    fn session_provider_override_picks_the_override_providers_binary() {
+        let default = resolved_cmd("claude", &["--dangerously-skip-permissions"]);
+        let r = resolve_session_provider_command(Some("grok"), &default);
+        assert_eq!(r.command, "grok");
+        assert!(r.args.is_empty(), "no preset args cross a provider boundary");
+        // cursor's binary differs from its provider key.
+        let r = resolve_session_provider_command(Some("cursor"), &default);
+        assert_eq!(r.command, "cursor-agent");
+    }
+
+    /// A claude-session override on a non-claude default regains the
+    /// full claude resume grammar through plan_resume_fire.
+    #[test]
+    fn session_provider_claude_override_plans_claude_resume_grammar() {
+        let default = resolved_cmd("grok", &["--always-approve"]);
+        let r = resolve_session_provider_command(Some("claude"), &default);
+        assert!(r.is_claude());
+        let (args, delivery) =
+            plan_resume_fire(&r, "SID-73", "WAKE").expect("claude always plans");
+        assert_eq!(
+            args,
+            vec![
+                "--dangerously-skip-permissions".to_string(),
+                "--print".to_string(),
+                "--resume".to_string(),
+                "SID-73".to_string(),
+                "WAKE".to_string(),
+            ]
+        );
+        assert_eq!(delivery, ResumePromptDelivery::PositionalArg);
+    }
+
+    /// A grok-session override on a claude default plans grok's own
+    /// resume grammar — no claude flags invented.
+    #[test]
+    fn session_provider_grok_override_plans_grok_resume_grammar() {
+        let default = resolved_cmd("claude", &["--dangerously-skip-permissions"]);
+        let r = resolve_session_provider_command(Some("grok"), &default);
+        let (args, delivery) =
+            plan_resume_fire(&r, "GSID", "WAKE").expect("grok has an adapter");
+        assert_eq!(args, vec!["--resume".to_string(), "GSID".to_string()]);
+        assert_eq!(delivery, ResumePromptDelivery::PtyWrite("WAKE".to_string()));
+    }
+
+    /// Unknown override provider (rows are data) degrades to the
+    /// default resolution — the on-disk probe already returned false
+    /// for it, so the planner self-heals to a fresh fire.
+    #[test]
+    fn session_provider_unknown_override_falls_back_to_default() {
+        let default = resolved_cmd("claude", &["--dangerously-skip-permissions"]);
+        assert_eq!(
+            resolve_session_provider_command(Some("aider"), &default),
+            default
+        );
     }
 }

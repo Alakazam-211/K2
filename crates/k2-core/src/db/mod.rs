@@ -543,6 +543,16 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0072_clear_junk_heartbeat_schedules",
             include_str!("../../drizzle_sql/0072_clear_junk_heartbeat_schedules.sql"),
         ),
+        // 0073: user-selectable heartbeat delivery session —
+        // `workspace_heartbeats.session_provider` records which
+        // provider's session store `last_session_id` belongs to when
+        // the user pins a heartbeat to a SPECIFIC saved session. NULL
+        // (the backfill) = the workspace default agent, the pre-0073
+        // behavior. Additive.
+        (
+            "0073_heartbeat_session_provider",
+            include_str!("../../drizzle_sql/0073_heartbeat_session_provider.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1195,6 +1205,36 @@ mod tests {
                 1
             )
         );
+    }
+
+    /// 0073: the `session_provider` column lands on
+    /// `workspace_heartbeats`, the migration is registered in
+    /// `_migrations`, and a re-run is a no-op (a second ALTER of the
+    /// same column would error — the `already_applied` guard is what
+    /// makes this idempotent).
+    #[test]
+    fn migration_0073_adds_session_provider_column() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        let has: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('workspace_heartbeats') \
+                 WHERE name = 'session_provider'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has, 1, "workspace_heartbeats.session_provider must exist");
+        let applied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM _migrations WHERE name = '0073_heartbeat_session_provider'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1, "0073 must be registered exactly once");
+        // Re-run: must not attempt the ALTER again (would error).
+        run_migrations(&conn).unwrap();
     }
 
     // ── purge_orphan_project_children self-heal ───────────────────

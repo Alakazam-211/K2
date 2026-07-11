@@ -16,6 +16,8 @@
 //! - `/cli/heartbeat/remove` — hard delete.
 //! - `/cli/heartbeat/enable` / `/cli/heartbeat/set-use-workspace-session`
 //!   — flip per-row flags.
+//! - `/cli/heartbeat/set-session` — pick the delivery session
+//!   (pinned chat / own-auto / a specific saved provider session).
 //! - `/cli/heartbeat/edit` / `/cli/heartbeat/rename` — mutate the row.
 //! - `/cli/heartbeat/status` — last-N fires for one schedule.
 //! - `/cli/heartbeat/fires-list` — recent fires across the project.
@@ -295,6 +297,36 @@ pub fn dispatch_get(
                 enabled,
             )
             .map(|_| r#"{"success":true}"#.to_string())
+        }
+        "/cli/heartbeat/set-session" => {
+            // 0073 — user-selectable delivery session. Modes:
+            // `pinned` (workspace pinned chat), `auto` (own session,
+            // new on next fire), `session` (a specific saved session;
+            // requires `session_id` + `provider`, validated in core:
+            // known provider, not the pinned chat session, exists on
+            // disk). Success echoes the applied state:
+            // {"success":true,"mode":...[,"sessionId","provider"]}.
+            let name = params.get("name").cloned().unwrap_or_default();
+            let mode = params.get("mode").cloned().unwrap_or_default();
+            let session_id = params
+                .get("session_id")
+                .cloned()
+                .filter(|s| !s.is_empty());
+            let provider = params
+                .get("provider")
+                .cloned()
+                .filter(|s| !s.is_empty());
+            if name.is_empty() || mode.is_empty() {
+                return Err("Missing 'name' or 'mode' parameter".to_string());
+            }
+            hb::k2so_heartbeat_set_session(
+                project_path.to_string(),
+                name,
+                mode,
+                session_id,
+                provider,
+            )
+            .map(|v| v.to_string())
         }
         "/cli/heartbeat/edit" => {
             let name = params.get("name").cloned().unwrap_or_default();

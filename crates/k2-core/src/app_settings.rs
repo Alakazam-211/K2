@@ -287,7 +287,7 @@ pub struct AppSettings {
     pub push_gateway_token: Option<String>,
     /// K2 Mail (prd-email-server-v1 §12 / D4) — the GLOBAL default
     /// agent-send gating mode: `off` (default) | `approval` | `on`.
-    /// Per-workspace `projects.mail_agent_send` (migration 0072)
+    /// Per-workspace `projects.mail_agent_send` (migration 0075)
     /// overrides it; the effective resolver is
     /// `workspace::settings::mail_agent_send_for_path`, which
     /// fail-closes to "off" on any unknown stored value. A typed field

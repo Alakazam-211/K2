@@ -1477,7 +1477,7 @@ mod tests {
             "k2-cli skill must point custom agents at the agent contract",
         );
         // K2 Mail S8: the `k2 mail` surface + its guardrails
-        // (SKILL_VERSION_WORKSPACE bumped 9→10 for this section).
+        // (SKILL_VERSION_WORKSPACE bumped 9→11 for this section; 10 taken on main).
         assert!(
             body.contains("k2 mail create") && body.contains("--id = idempotency key"),
             "k2-cli skill must teach idempotent minting",

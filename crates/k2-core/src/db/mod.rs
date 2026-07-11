@@ -562,7 +562,7 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0074_subdomain_workspaces",
             include_str!("../../drizzle_sql/0074_subdomain_workspaces.sql"),
         ),
-        // 0072 (K2 Mail foundation, prd-email-server-v1 §12): the
+        // 0075 (K2 Mail foundation, prd-email-server-v1 §12): the
         // K2-side mail state — `mail_server` (singleton install
         // record; not-installed = no row) + `mail_domains` (normalized
         // punycode domains + per-record DNS verification state) +
@@ -574,7 +574,7 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // history) + per-workspace `projects.mail_agent_send` /
         // `projects.mail_address_cap` gating overrides (NULL = inherit
         // the global AppSettings defaults: 'off' / 5). Additive.
-        ("0072_mail", include_str!("../../drizzle_sql/0072_mail.sql")),
+        ("0075_mail", include_str!("../../drizzle_sql/0075_mail.sql")),
         // 0073 (K2 Mail S1, prd-email-server-v1 §4.1/§5.2): the enable
         // flow's resumable-state-machine columns on `mail_server` —
         // `enable_progress_json` (per-step completion, polled by
@@ -582,8 +582,8 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // (most recent supervisor failure, surfaced verbatim).
         // Additive.
         (
-            "0073_mail_enable_progress",
-            include_str!("../../drizzle_sql/0073_mail_enable_progress.sql"),
+            "0076_mail_enable_progress",
+            include_str!("../../drizzle_sql/0076_mail_enable_progress.sql"),
         ),
         // 0074 (K2 Mail S9, prd-email-server-v1 §17.5):
         // `mail_external_inboxes` — the user's OWN external accounts
@@ -593,8 +593,8 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // in the daemon vault under `ext-inbox-<id>`, never in a
         // column. Additive.
         (
-            "0074_mail_external_inboxes",
-            include_str!("../../drizzle_sql/0074_mail_external_inboxes.sql"),
+            "0077_mail_external_inboxes",
+            include_str!("../../drizzle_sql/0077_mail_external_inboxes.sql"),
         ),
     ];
 

@@ -2951,7 +2951,9 @@ impl SubdomainWorkspace {
         )?;
         Ok(n > 0)
     }
-// ── K2 Mail (0072, prd-email-server-v1 §12) ────────────────────────────
+}
+
+// ── K2 Mail (0075, prd-email-server-v1 §12) ────────────────────────────
 //
 // Row structs for the mail tables. Serialize camelCase — the wire
 // shape the `/cli/mail/*` routes return (same convention as the
@@ -3146,7 +3148,7 @@ mod unit_tests {
         crate::db::isolated_test_connection()
     }
 
-    /// 0072 (K2 Mail): the migration applies — every mail table exists
+    /// 0075 (K2 Mail): the migration applies — every mail table exists
     /// and round-trips a row; the per-workspace override columns landed
     /// on `projects`.
     #[test]

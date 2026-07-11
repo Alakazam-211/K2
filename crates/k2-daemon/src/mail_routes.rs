@@ -37,6 +37,8 @@
 //! | POST /cli/mail/approvals/deny     | mail/routes_send.rs     |
 //! | POST /cli/mail/external/add       | mail/routes_external.rs |
 //! | POST /cli/mail/external/remove    | mail/routes_external.rs |
+//! | POST /cli/mail/external/grant     | mail/routes_external.rs |
+//! | POST /cli/mail/external/revoke    | mail/routes_external.rs |
 //! | GET  /cli/mail/external/list      | mail/routes_external.rs |
 //! | POST /cli/mail/draft              | mail/routes_external.rs |
 //!
@@ -135,6 +137,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/approvals/deny"
         | "/cli/mail/external/add"
         | "/cli/mail/external/remove"
+        | "/cli/mail/external/grant"
+        | "/cli/mail/external/revoke"
         | "/cli/mail/draft" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
@@ -165,6 +169,8 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/mail/approvals/deny" => routes_send::handle_approvals_deny(body),
         "/cli/mail/external/add" => routes_external::handle_external_add(body),
         "/cli/mail/external/remove" => routes_external::handle_external_remove(body),
+        "/cli/mail/external/grant" => routes_external::handle_external_grant(body),
+        "/cli/mail/external/revoke" => routes_external::handle_external_revoke(body),
         "/cli/mail/draft" => routes_external::handle_draft(body),
         _ => CliResponse::not_found(),
     }
@@ -223,6 +229,8 @@ mod tests {
             "/cli/mail/approvals/deny",
             "/cli/mail/external/add",
             "/cli/mail/external/remove",
+            "/cli/mail/external/grant",
+            "/cli/mail/external/revoke",
             "/cli/mail/draft",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
@@ -371,6 +379,8 @@ mod tests {
         for route in [
             "/cli/mail/external/add",
             "/cli/mail/external/remove",
+            "/cli/mail/external/grant",
+            "/cli/mail/external/revoke",
             "/cli/mail/draft",
         ] {
             let resp = dispatch_post(route, b"{}");
@@ -415,8 +425,11 @@ mod tests {
             "/cli/mail/approvals/approve",
             "/cli/mail/approvals/deny",
             // S9: connecting an external account = owner surface.
+            // S10: granting/revoking per-role access = owner surface.
             "/cli/mail/external/add",
             "/cli/mail/external/remove",
+            "/cli/mail/external/grant",
+            "/cli/mail/external/revoke",
             // The doctor RUN (POST; the GET read never reaches the
             // classifier).
             "/cli/mail/doctor",

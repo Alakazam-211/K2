@@ -596,6 +596,16 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0077_mail_external_inboxes",
             include_str!("../../drizzle_sql/0077_mail_external_inboxes.sql"),
         ),
+        // 0078 (K2 Mail S10, prd-email-server-v1 §17.5): per-role
+        // access grants on external inboxes — the owner workspace keeps
+        // full read+draft + sole management, additional workspaces get
+        // a 'read' or 'draft' grant row. `external remove` cascades
+        // these in code (inbox_id is not a FK — the 0064 idiom).
+        // Additive.
+        (
+            "0078_mail_external_inbox_grants",
+            include_str!("../../drizzle_sql/0078_mail_external_inbox_grants.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

@@ -217,11 +217,18 @@ Contact.
 k2 heartbeat                                   # list active schedules
 k2 heartbeat schedule list [--archived]
 k2 heartbeat show <name> [--json]
-k2 heartbeat schedule add --name <n> --daily --time HH:MM
+k2 heartbeat schedule add --name <n> --daily --time HH:MM \
+    --instructions "..."                       # wire the WAKEUP.md at create time
 k2 heartbeat signal wakeup <name>              # print/edit the WAKEUP.md
 k2 heartbeat signal fire <name>                # fire now (skip schedule window)
 k2 heartbeat signal wake                       # auto-wake (no name needed)
+k2 heartbeat session <name>                    # show where the wake message lands
+k2 heartbeat session <name> --pinned | --auto | --set <session-id> --provider <p>
+                                               # pinned chat / fresh-per-fire /
+                                               #   a specific trained session
 ```
+A heartbeat keeps reusing its saved session, so you can train a session on a
+flow once and have the schedule repeat it with a one-line wakeup.
 Run `k2 heartbeat --help` for the full surface.
 
 ## Agent presets (which agent program a workspace launches)

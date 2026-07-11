@@ -71,7 +71,7 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// management on the agent plane (`k2 agent hire --project`,
 /// `set --add-project/--remove-project`, `get <ws> projects`, and the
 /// first-member-becomes-PoC rule).
-pub const SKILL_VERSION_WORKSPACE: u32 = 9;
+pub const SKILL_VERSION_WORKSPACE: u32 = 10;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

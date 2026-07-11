@@ -112,7 +112,8 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   companion: 'K2 Companion',
   connections: 'Connections',
   'k2-connect': 'K2 Connect',
-  email: 'Email',
+  'email-hosting': 'Email Hosting',
+  'email-link': 'Email Link',
 }
 
 /** Suppress unused-type warning since IndexedEntry is reserved for future optimization. */

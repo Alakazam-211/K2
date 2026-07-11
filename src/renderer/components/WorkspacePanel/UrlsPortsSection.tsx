@@ -102,23 +102,9 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
               Not available on this daemon.
             </p>
           ) : rows.length === 0 ? (
-            <div className="space-y-1">
-              <p className="text-[10px] text-[var(--color-text-muted)]">
-                No URLs for this workspace —{' '}
-                <span className="font-mono text-[var(--color-text-secondary)]">
-                  k2 connect subdomain create &lt;label&gt; --target localhost:&lt;port&gt;
-                </span>
-              </p>
-              {claimable > 0 && (
-                <p className="text-[10px] text-[var(--color-text-muted)]">
-                  {claimable} server-wide URL{claimable === 1 ? '' : 's'} without a workspace —
-                  adopt one with{' '}
-                  <span className="font-mono text-[var(--color-text-secondary)]">
-                    k2 connect subdomain claim &lt;label&gt;
-                  </span>
-                </p>
-              )}
-            </div>
+            <p className="text-[10px] text-[var(--color-text-muted)]">
+              Ask your agent to host using k2 connect
+            </p>
           ) : (
             <div className="space-y-1.5">
               {rows.map(([label, info]) => {

@@ -33,7 +33,7 @@ use base64::Engine as _;
 
 use crate::mail::addresses::{self, AddrError};
 use crate::mail::jmap::{AttachmentMeta, EmailFull, EmailSummary, MailAddr};
-use crate::mail::messages::{ListFilter, ReadBackend};
+use crate::mail::messages::{ListError, ListFilter, ReadBackend};
 use crate::mail::secrets::SecretStore;
 use k2_core::db::schema::MailExternalInbox;
 use mail_parser::{MessageParser, MimeHeaders as _};
@@ -191,15 +191,19 @@ pub trait ImapOps: Send + Sync {
         inbox: &MailExternalInbox,
         password: &str,
     ) -> Result<ConnectCheck, String>;
-    /// INBOX summaries, newest first, server-side filtered where the
-    /// protocol allows (client-side re-filtering happens above).
+    /// Mailbox summaries, newest first, server-side filtered where the
+    /// protocol allows (client-side re-filtering happens above). The
+    /// target folder (`filter.folder`) and the page window
+    /// (`filter.offset` + `limit`) are honored by the impl; a mistyped
+    /// folder is [`ListError::UnknownFolder`] (uniform with the hosted
+    /// backend), everything else [`ListError::Engine`].
     fn list_inbox(
         &self,
         inbox: &MailExternalInbox,
         password: &str,
         filter: &ListFilter,
         limit: usize,
-    ) -> Result<Vec<EmailSummary>, String>;
+    ) -> Result<Vec<EmailSummary>, ListError>;
     fn fetch_raw(
         &self,
         inbox: &MailExternalInbox,
@@ -259,7 +263,7 @@ impl ReadBackend for ExternalImapBackend {
         account_id: &str,
         filter: &ListFilter,
         limit: usize,
-    ) -> Result<Vec<EmailSummary>, String> {
+    ) -> Result<Vec<EmailSummary>, ListError> {
         self.check_handle(account_id)?;
         self.ops.list_inbox(&self.inbox, &self.password, filter, limit)
     }
@@ -893,6 +897,27 @@ pub fn pick_drafts_folder(folders: &[(String, bool)]) -> Option<String> {
     None
 }
 
+/// Pure Junk-folder pick over a LIST survey (the `--junk` convenience):
+/// a `\Junk` SPECIAL-USE attribute wins; otherwise the common names,
+/// case-insensitively, in specificity order. `folders` =
+/// `(name, has_junk_special_use)` — same shape as
+/// [`pick_drafts_folder`], so the survey feeds both.
+pub fn pick_junk_folder(folders: &[(String, bool)]) -> Option<String> {
+    if let Some((name, _)) = folders.iter().find(|(_, special)| *special) {
+        return Some(name.clone());
+    }
+    const COMMON: [&str; 5] = ["Junk", "Spam", "[Gmail]/Spam", "Junk E-mail", "INBOX.Junk"];
+    for want in COMMON {
+        if let Some((name, _)) = folders
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(want))
+        {
+            return Some(name.clone());
+        }
+    }
+    None
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests — fakes + fixtures, no network (house rules).
 // ──────────────────────────────────────────────────────────────────────
@@ -932,7 +957,7 @@ pub(crate) mod tests {
             _password: &str,
             _filter: &ListFilter,
             _limit: usize,
-        ) -> Result<Vec<EmailSummary>, String> {
+        ) -> Result<Vec<EmailSummary>, ListError> {
             let mut out = Vec::new();
             for (tok, raw) in &self.raw_by_token {
                 out.push(full_from_raw(tok, raw)?.summary);
@@ -1251,6 +1276,24 @@ a,b\r\n1,2\r\n\
         assert_eq!(pick_drafts_folder(&f), Some("[Gmail]/Drafts".to_string()));
         assert_eq!(pick_drafts_folder(&[("INBOX".to_string(), false)]), None);
         assert_eq!(pick_drafts_folder(&[]), None);
+    }
+
+    #[test]
+    fn junk_folder_pick_prefers_special_use_then_common_names() {
+        // SPECIAL-USE \Junk wins regardless of name.
+        let f = vec![
+            ("INBOX".to_string(), false),
+            ("Unerwünscht".to_string(), true),
+            ("Spam".to_string(), false),
+        ];
+        assert_eq!(pick_junk_folder(&f), Some("Unerwünscht".to_string()));
+        // Fallback order + case-insensitivity: Junk > Spam > ...
+        let f = vec![("Spam".to_string(), false), ("junk".to_string(), false)];
+        assert_eq!(pick_junk_folder(&f), Some("junk".to_string()));
+        let f = vec![("[Gmail]/Spam".to_string(), false)];
+        assert_eq!(pick_junk_folder(&f), Some("[Gmail]/Spam".to_string()));
+        assert_eq!(pick_junk_folder(&[("INBOX".to_string(), false)]), None);
+        assert_eq!(pick_junk_folder(&[]), None);
     }
 
     // ── validation ──

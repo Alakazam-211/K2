@@ -884,23 +884,39 @@ impl StalwartClient {
 
     /// S4 — `Email/query` newest-first (`receivedAt` desc) with a
     /// caller-built RFC 8621 filter (the ops layer owns filter
-    /// semantics; this function owns only the wire shape).
+    /// semantics; this function owns only the wire shape). `offset` is
+    /// the RFC 8621 `position` — the pagination cursor an agent walks a
+    /// large mailbox by (0 for the first page).
     pub fn email_query_ids(
         &self,
         account_id: &str,
         filter: serde_json::Value,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<String>, String> {
+        let mut query = serde_json::json!({
+            "filter": filter,
+            "sort": [{ "property": "receivedAt", "isAscending": false }],
+            "limit": limit,
+        });
+        if offset > 0 {
+            query["position"] = serde_json::json!(offset);
+        }
+        let args = self.mail_call(account_id, "Email/query", query)?;
+        Ok(parse_query_ids(&args))
+    }
+
+    /// S4 (triage) — every mailbox of an account as `(id, name, role)`
+    /// so the read path can resolve `--folder`/`--junk` to a mailbox id
+    /// (and teach with the real names on a miss). Standard RFC 8621
+    /// `Mailbox/get` — same stability class as the Email reads.
+    pub fn mailbox_list(&self, account_id: &str) -> Result<Vec<MailboxInfo>, String> {
         let args = self.mail_call(
             account_id,
-            "Email/query",
-            serde_json::json!({
-                "filter": filter,
-                "sort": [{ "property": "receivedAt", "isAscending": false }],
-                "limit": limit,
-            }),
+            "Mailbox/get",
+            serde_json::json!({ "ids": null, "properties": ["id", "name", "role"] }),
         )?;
-        Ok(parse_query_ids(&args))
+        Ok(parse_mailbox_list(&args))
     }
 
     /// S4 — envelope-level `Email/get` for the summaries list (no
@@ -1229,6 +1245,41 @@ fn parse_listeners(args: &serde_json::Value) -> Result<Vec<ListenerInfo>, String
             Ok(ListenerInfo { id: id.to_string(), name: name.to_string() })
         })
         .collect()
+}
+
+/// One mailbox (folder) of an account — the read path's `--folder`/
+/// `--junk` resolution surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxInfo {
+    pub id: String,
+    pub name: String,
+    /// The RFC 8621 role (`inbox`/`junk`/`sent`/…) when the mailbox has
+    /// one; `None` for user-created folders.
+    pub role: Option<String>,
+}
+
+/// Pure `Mailbox/get` reply parser: `list` of `{id, name, role}`
+/// (roleless folders keep `None`). Entries without an id are skipped
+/// (never a hard error — a partial folder list still lets `--folder`
+/// resolve).
+fn parse_mailbox_list(args: &serde_json::Value) -> Vec<MailboxInfo> {
+    args.get("list")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|m| {
+                    let id = m.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty())?;
+                    let name = m.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                    let role = m
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    Some(MailboxInfo { id: id.to_string(), name: name.to_string(), role })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Pure `*/set create` reply parser: our creation tag must appear
@@ -3138,7 +3189,7 @@ mod s4_mail_tests {
         let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
 
         let ids = c
-            .email_query_ids("acc-7", serde_json::json!({ "inMailbox": "IB" }), 20)
+            .email_query_ids("acc-7", serde_json::json!({ "inMailbox": "IB" }), 20, 0)
             .expect("query");
         assert_eq!(ids, vec!["M1".to_string()]);
         let summaries = c.email_get_summaries("acc-7", &ids).expect("get");

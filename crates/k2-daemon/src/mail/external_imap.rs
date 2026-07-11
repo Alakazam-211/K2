@@ -31,7 +31,7 @@ use crate::mail::external::{
     self, ConnectCheck, ImapOps, RawEmail, TLS_IMPLICIT, TLS_STARTTLS,
 };
 use crate::mail::jmap::{EmailSummary, MailAddr};
-use crate::mail::messages::ListFilter;
+use crate::mail::messages::{ListError, ListFilter, MailFolder};
 use imap::types::{Flag, Name};
 use imap::{ClientBuilder, ConnectionMode, TlsKind};
 use imap_proto::types::NameAttribute;
@@ -107,6 +107,55 @@ fn survey_folders(session: &mut ImapSession) -> Result<Vec<(String, bool)>, Stri
         .collect())
 }
 
+/// `LIST "" *` → `(name, has \Junk special-use)` pairs, feeding the
+/// pure [`external::pick_junk_folder`] and the `--folder` name match.
+/// Same LIVE-BOX caveats as [`survey_folders`] (SPECIAL-USE + UTF-7).
+fn survey_read_folders(session: &mut ImapSession) -> Result<Vec<(String, bool)>, String> {
+    let names = session
+        .list(Some(""), Some("*"))
+        .map_err(|e| imap_err("LIST", e))?;
+    Ok(names
+        .iter()
+        .map(|n: &Name| {
+            let junk = n
+                .attributes()
+                .iter()
+                .any(|a| matches!(a, NameAttribute::Junk));
+            (n.name().to_string(), junk)
+        })
+        .collect())
+}
+
+/// Resolve `filter.folder` to the mailbox name to SELECT. Inbox is the
+/// literal `INBOX` (no LIST round trip). Junk/Named do ONE LIST and
+/// match on `\Junk` special-use / name (case-insensitive); a miss is
+/// [`ListError::UnknownFolder`] listing the real folders so the agent
+/// can retry — never a silent fall-through to INBOX.
+fn resolve_read_folder(
+    session: &mut ImapSession,
+    folder: &MailFolder,
+) -> Result<String, ListError> {
+    if let MailFolder::Inbox = folder {
+        return Ok("INBOX".to_string());
+    }
+    let folders = survey_read_folders(session)?;
+    let names = || folders.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+    match folder {
+        MailFolder::Inbox => unreachable!(),
+        MailFolder::Junk => external::pick_junk_folder(&folders).ok_or_else(|| {
+            ListError::UnknownFolder { requested: "junk".to_string(), available: names() }
+        }),
+        MailFolder::Named(want) => folders
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(want))
+            .map(|(name, _)| name.clone())
+            .ok_or_else(|| ListError::UnknownFolder {
+                requested: want.clone(),
+                available: names(),
+            }),
+    }
+}
+
 /// Resolve the drafts folder: the configured override must EXIST
 /// (typo protection at add time); otherwise autodetect.
 fn resolve_drafts_folder(
@@ -162,8 +211,16 @@ pub fn build_search_query(filter: &ListFilter) -> String {
     if filter.unread_only {
         parts.push("UNSEEN".to_string());
     }
-    if let Some(since) = filter.since_unix {
-        parts.push(format!("SINCE {}", imap_date(since)));
+    // SINCE is INTERNALDATE >= that DAY (RFC 3501 is day-granular — the
+    // route's `summary_matches` keeps second precision). The wait grace
+    // (`since_unix`) and the `--since` window collapse to the tighter
+    // (later) lower bound.
+    if let Some(after) = filter.since_unix.into_iter().chain(filter.after_unix).max() {
+        parts.push(format!("SINCE {}", imap_date(after)));
+    }
+    // BEFORE is INTERNALDATE < that day — the `--before` upper bound.
+    if let Some(before) = filter.before_unix {
+        parts.push(format!("BEFORE {}", imap_date(before)));
     }
     if let Some(from) = filter.from.as_deref().filter(|s| !s.is_empty()) {
         parts.push(format!("FROM {}", imap_quote(from)));
@@ -261,9 +318,10 @@ impl ImapOps for RealImapOps {
         password: &str,
         filter: &ListFilter,
         limit: usize,
-    ) -> Result<Vec<EmailSummary>, String> {
+    ) -> Result<Vec<EmailSummary>, ListError> {
         let mut session = login(inbox, password)?;
-        let mailbox = session.select("INBOX").map_err(|e| imap_err("SELECT INBOX", e))?;
+        let target = resolve_read_folder(&mut session, &filter.folder)?;
+        let mailbox = session.select(&target).map_err(|e| imap_err("SELECT", e))?;
         let uidvalidity = mailbox.uid_validity.unwrap_or(0);
         let mut uids: Vec<u32> = session
             .uid_search(build_search_query(filter))
@@ -272,9 +330,10 @@ impl ImapOps for RealImapOps {
             .collect();
         // Newest first ≈ highest UID first (UIDs ascend with arrival
         // within one UIDVALIDITY generation); the route re-sorts the
-        // merged list by date anyway.
+        // merged list by date anyway. `offset` is the pagination cursor:
+        // skip that many of the newest before taking a page.
         uids.sort_unstable_by(|a, b| b.cmp(a));
-        uids.truncate(limit);
+        let uids: Vec<u32> = uids.into_iter().skip(filter.offset).take(limit).collect();
         if uids.is_empty() {
             let _ = session.logout();
             return Ok(Vec::new());
@@ -401,6 +460,7 @@ mod tests {
             query: Some("verify \"now\"".to_string()),
             from: Some("git\\hub".to_string()),
             since_unix: Some(1_783_000_000), // 2026-07-02
+            ..Default::default()
         };
         let q = build_search_query(&f);
         assert!(q.starts_with("UNSEEN SINCE "), "{q}");
@@ -416,6 +476,22 @@ mod tests {
     fn imap_date_is_english_and_unpadded() {
         // 2026-07-08 12:00 UTC.
         assert_eq!(imap_date(1_783_512_000), "8-Jul-2026");
+    }
+
+    #[test]
+    fn search_query_emits_since_and_before_date_window() {
+        let f = ListFilter {
+            after_unix: Some(1_783_512_000),  // 2026-07-08
+            before_unix: Some(1_783_598_400), // 2026-07-09
+            ..Default::default()
+        };
+        let q = build_search_query(&f);
+        assert!(q.contains("SINCE 8-Jul-2026"), "{q}");
+        assert!(q.contains("BEFORE 9-Jul-2026"), "{q}");
+        // The wait grace and --since window collapse to the later SINCE.
+        let f = ListFilter { since_unix: Some(1), after_unix: Some(1_783_512_000), ..Default::default() };
+        let q = build_search_query(&f);
+        assert!(q.contains("SINCE 8-Jul-2026") && !q.contains("SINCE 1-Jan-1970"), "{q}");
     }
 
     // ── the scripted loopback mock ──

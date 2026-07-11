@@ -79,13 +79,15 @@ pub fn backend_for_address(address: &str) -> MailBackend {
 /// the backend-side mailbox handle (`mail_addresses.
 /// stalwart_account_id` for the local backend).
 pub trait ReadBackend {
-    /// Inbox summaries, newest first, server-side filtered.
+    /// Inbox summaries, newest first, server-side filtered. The target
+    /// mailbox (`filter.folder`) and the pagination window
+    /// (`filter.offset` + `limit`) are honored by the backend.
     fn list_inbox(
         &self,
         account_id: &str,
         filter: &ListFilter,
         limit: usize,
-    ) -> Result<Vec<EmailSummary>, String>;
+    ) -> Result<Vec<EmailSummary>, ListError>;
     /// One full message; `Ok(None)` = unknown id (the route masks it).
     fn fetch_full(&self, account_id: &str, email_id: &str) -> Result<Option<EmailFull>, String>;
     fn mark_seen(&self, account_id: &str, email_id: &str) -> Result<(), String>;
@@ -127,6 +129,45 @@ impl StalwartReadBackend {
             .insert(account_id.to_string(), id.clone());
         Ok(id)
     }
+
+    /// Resolve `filter.folder` to a JMAP mailbox id. Inbox uses the
+    /// cached role lookup; Junk/Named do ONE `Mailbox/get` and match on
+    /// role (`junk`) or name (case-insensitive) — an unmatched name is
+    /// [`ListError::UnknownFolder`] carrying the real folder names so
+    /// the agent can retry.
+    fn resolve_mailbox_id(
+        &self,
+        account_id: &str,
+        folder: &MailFolder,
+    ) -> Result<String, ListError> {
+        if matches!(folder, MailFolder::Inbox) {
+            return Ok(self.inbox_id(account_id)?);
+        }
+        let boxes = self.client.mailbox_list(account_id).map_err(ListError::Engine)?;
+        let names = || boxes.iter().map(|m| m.name.clone()).collect::<Vec<_>>();
+        match folder {
+            MailFolder::Inbox => unreachable!(),
+            MailFolder::Junk => boxes
+                .iter()
+                .find(|m| m.role.as_deref() == Some("junk"))
+                .map(|m| m.id.clone())
+                .ok_or_else(|| ListError::UnknownFolder {
+                    requested: "junk".to_string(),
+                    available: names(),
+                }),
+            MailFolder::Named(want) => boxes
+                .iter()
+                .find(|m| {
+                    m.name.eq_ignore_ascii_case(want)
+                        || m.role.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(want))
+                })
+                .map(|m| m.id.clone())
+                .ok_or_else(|| ListError::UnknownFolder {
+                    requested: want.clone(),
+                    available: names(),
+                }),
+        }
+    }
 }
 
 impl ReadBackend for StalwartReadBackend {
@@ -135,12 +176,15 @@ impl ReadBackend for StalwartReadBackend {
         account_id: &str,
         filter: &ListFilter,
         limit: usize,
-    ) -> Result<Vec<EmailSummary>, String> {
-        let inbox = self.inbox_id(account_id)?;
+    ) -> Result<Vec<EmailSummary>, ListError> {
+        let mailbox_id = self.resolve_mailbox_id(account_id, &filter.folder)?;
         let ids = self
             .client
-            .email_query_ids(account_id, jmap_filter_json(&inbox, filter), limit)?;
-        self.client.email_get_summaries(account_id, &ids)
+            .email_query_ids(account_id, jmap_filter_json(&mailbox_id, filter), limit, filter.offset)
+            .map_err(ListError::Engine)?;
+        self.client
+            .email_get_summaries(account_id, &ids)
+            .map_err(ListError::Engine)
     }
     fn fetch_full(&self, account_id: &str, email_id: &str) -> Result<Option<EmailFull>, String> {
         self.client.email_get_full(account_id, email_id)
@@ -161,15 +205,79 @@ impl ReadBackend for StalwartReadBackend {
 
 // ── Query filters (route semantics → RFC 8621 wire shape) ──────────────
 
+/// Which mailbox a read targets. Default = the Inbox (every existing
+/// caller). `Junk` is the `--junk` convenience (JMAP role `junk` /
+/// IMAP `\Junk` special-use or a Junk/Spam-named folder); `Named` is an
+/// arbitrary `--folder <name>` resolved case-insensitively by the
+/// backend (unknown → [`ListError::UnknownFolder`], never a silent
+/// INBOX fallback).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MailFolder {
+    Inbox,
+    Junk,
+    Named(String),
+}
+
+impl Default for MailFolder {
+    fn default() -> Self {
+        MailFolder::Inbox
+    }
+}
+
 /// The list/wait filter in ROUTE terms (§11.1.8 semantics): `from`
 /// matches the From header (address + display name), `query` matches
 /// subject AND body, `since_unix` is the wait grace boundary.
+///
+/// Triage additions (read path): `after_unix`/`before_unix` are the
+/// `--since`/`--before` DATE WINDOW (distinct from `since_unix`, which
+/// is only the wait's 60 s grace boundary — the two never coexist in
+/// one request but are combined defensively where they would). `folder`
+/// selects a mailbox other than the Inbox. `offset` is the pagination
+/// cursor (server-side position: JMAP `Email/query.position`, IMAP a
+/// slice of the newest-first UID list).
 #[derive(Debug, Default, Clone)]
 pub struct ListFilter {
     pub unread_only: bool,
     pub query: Option<String>,
     pub from: Option<String>,
     pub since_unix: Option<i64>,
+    pub after_unix: Option<i64>,
+    pub before_unix: Option<i64>,
+    pub folder: MailFolder,
+    pub offset: usize,
+}
+
+/// A list/read failure, split so the route can answer the RIGHT code:
+/// an engine/transport fault is a 502 `engine`; a mistyped `--folder`
+/// is a 400 `usage` that TEACHES (lists the folders that DO exist). The
+/// split lives here (ops layer) so BOTH backends — hosted JMAP and
+/// linked IMAP — classify a bad folder identically (the §17.5 uniform
+/// seam), never one 400 and the other 502.
+#[derive(Debug)]
+pub enum ListError {
+    Engine(String),
+    UnknownFolder { requested: String, available: Vec<String> },
+}
+
+impl std::fmt::Display for ListError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ListError::Engine(s) => write!(f, "{s}"),
+            ListError::UnknownFolder { requested, available } => write!(
+                f,
+                "no folder '{requested}' here — available: {}",
+                if available.is_empty() { "(none)".to_string() } else { available.join(", ") }
+            ),
+        }
+    }
+}
+
+/// A bare engine/transport `String` is the common case — let `?` lift
+/// it straight into [`ListError::Engine`] inside the backends.
+impl From<String> for ListError {
+    fn from(s: String) -> Self {
+        ListError::Engine(s)
+    }
 }
 
 /// Pure translation to an RFC 8621 `Email/query` filter. Multiple
@@ -184,8 +292,16 @@ pub fn jmap_filter_json(inbox_id: &str, f: &ListFilter) -> serde_json::Value {
     if let Some(from) = f.from.as_deref().filter(|s| !s.is_empty()) {
         cond["from"] = serde_json::json!(from);
     }
-    if let Some(since) = f.since_unix {
-        cond["after"] = serde_json::json!(unix_to_iso(since));
+    // `after` (RFC 8621: receivedAt >= after) is the newest lower bound
+    // among the wait grace (`since_unix`) and the `--since` window — the
+    // two never both appear on one request, but MAX keeps the tighter
+    // one if they ever did.
+    if let Some(after) = f.since_unix.into_iter().chain(f.after_unix).max() {
+        cond["after"] = serde_json::json!(unix_to_iso(after));
+    }
+    // `before` (receivedAt < before) is the `--before` upper bound.
+    if let Some(before) = f.before_unix {
+        cond["before"] = serde_json::json!(unix_to_iso(before));
     }
     let Some(q) = f.query.as_deref().filter(|s| !s.is_empty()) else {
         return cond;
@@ -214,6 +330,48 @@ fn unix_to_iso(secs: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
         .unwrap_or_default()
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Parse a `--since`/`--before` value to unix seconds. Two forms:
+///   * `YYYY-MM-DD` → that calendar day at 00:00 UTC.
+///   * a relative age `<n><unit>` where unit ∈ `m`(inutes)/`h`(ours)/
+///     `d`(ays)/`w`(eeks) → `now_unix` minus that span (so `--since 7d`
+///     is "the last week").
+/// `now_unix` is injected (pure/testable). A bad value is a loud Err
+/// the route maps to 400 `usage` — never a silently-dropped filter.
+pub fn parse_date_bound(s: &str, now_unix: i64) -> Result<i64, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty date value".to_string());
+    }
+    // Relative age: digits then one unit letter.
+    if s.len() > 1 {
+        let (num, unit) = s.split_at(s.len() - 1);
+        let per = match unit {
+            "m" => Some(60i64),
+            "h" => Some(3600),
+            "d" => Some(86_400),
+            "w" => Some(604_800),
+            _ => None,
+        };
+        if let Some(per) = per {
+            if num.bytes().all(|b| b.is_ascii_digit()) {
+                let n: i64 = num
+                    .parse()
+                    .map_err(|_| format!("'{s}' is not a valid relative age (try 7d, 24h, 30m)"))?;
+                return Ok(now_unix - n * per);
+            }
+        }
+    }
+    // Absolute calendar day (UTC midnight).
+    let day = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| {
+        format!("'{s}' is not a date — use YYYY-MM-DD or a relative age like 7d / 24h / 30m")
+    })?;
+    Ok(day
+        .and_hms_opt(0, 0, 0)
+        .unwrap_or_default()
+        .and_utc()
+        .timestamp())
 }
 
 /// Pure client-side re-check of the wait filters against one summary
@@ -637,8 +795,11 @@ pub fn wait_for_match(
                 query: None,
                 from: filters.from.clone(),
                 since_unix: Some(since),
+                ..Default::default()
             };
-            let summaries = backend.list_inbox(&w.account_id, &filter, 20)?;
+            let summaries = backend
+                .list_inbox(&w.account_id, &filter, 20)
+                .map_err(|e| e.to_string())?;
             let hit = summaries.iter().find(|s| {
                 summary_matches(s, filters.from.as_deref(), filters.subject.as_deref(), since)
             });
@@ -727,7 +888,7 @@ pub(crate) mod tests {
             account_id: &str,
             filter: &ListFilter,
             _limit: usize,
-        ) -> Result<Vec<EmailSummary>, String> {
+        ) -> Result<Vec<EmailSummary>, ListError> {
             let n = self.polls.fetch_add(1, Ordering::SeqCst);
             *self.last_since.lock().unwrap() = filter.since_unix;
             if n < self.visible_after_poll {
@@ -904,6 +1065,39 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn jmap_filter_emits_date_window_after_and_before() {
+        let f = ListFilter {
+            after_unix: Some(1_782_000_000),
+            before_unix: Some(1_783_000_000),
+            ..Default::default()
+        };
+        let v = jmap_filter_json("IB", &f);
+        assert!(v["after"].as_str().unwrap().ends_with('Z'));
+        assert!(v["before"].as_str().unwrap().ends_with('Z'));
+        // The wait grace and --since window collapse to the TIGHTER
+        // (larger) `after`.
+        let f = ListFilter { since_unix: Some(100), after_unix: Some(500), ..Default::default() };
+        let v = jmap_filter_json("IB", &f);
+        assert_eq!(v["after"], unix_to_iso(500));
+    }
+
+    #[test]
+    fn date_bounds_parse_absolute_and_relative() {
+        // 2026-07-08 00:00 UTC.
+        assert_eq!(parse_date_bound("2026-07-08", 0).unwrap(), 1_783_468_800);
+        // Relative ages subtract from now.
+        let now = 1_000_000i64;
+        assert_eq!(parse_date_bound("1d", now).unwrap(), now - 86_400);
+        assert_eq!(parse_date_bound("24h", now).unwrap(), now - 24 * 3600);
+        assert_eq!(parse_date_bound("30m", now).unwrap(), now - 30 * 60);
+        assert_eq!(parse_date_bound("2w", now).unwrap(), now - 2 * 604_800);
+        // Junk is a loud error, never a dropped filter.
+        for bad in ["", "yesterday", "2026/07/08", "7x", "d"] {
+            assert!(parse_date_bound(bad, now).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn summary_matching_is_case_insensitive_and_scoped_per_prd() {
         let s = summary(
             "M1",
@@ -1027,8 +1221,8 @@ pub(crate) mod tests {
     fn wait_engine_errors_fail_loud() {
         struct Broken;
         impl ReadBackend for Broken {
-            fn list_inbox(&self, _: &str, _: &ListFilter, _: usize) -> Result<Vec<EmailSummary>, String> {
-                Err("engine down".to_string())
+            fn list_inbox(&self, _: &str, _: &ListFilter, _: usize) -> Result<Vec<EmailSummary>, ListError> {
+                Err(ListError::Engine("engine down".to_string()))
             }
             fn fetch_full(&self, _: &str, _: &str) -> Result<Option<EmailFull>, String> {
                 unreachable!()

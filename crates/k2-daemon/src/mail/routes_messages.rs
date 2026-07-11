@@ -45,7 +45,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 
 use crate::cli_response::CliResponse;
-use crate::mail::messages::{self, MailBackend, ReadBackend, ReadError, WatchAddress};
+use crate::mail::messages::{self, ListError, MailBackend, ReadBackend, ReadError, WatchAddress};
 use crate::mail::secrets::SecretStore as _;
 use crate::mail::{domains, external, external_imap};
 
@@ -70,6 +70,34 @@ fn read_error_response(err: ReadError) -> CliResponse {
         ReadError::Engine(hint) => error_response("502 Bad Gateway", "engine", &hint),
     }
 }
+
+/// Map a list failure onto the wire contract: an engine/transport fault
+/// is a 502 `engine`; a mistyped `--folder`/`--junk` is a 400 `usage`
+/// that TEACHES with the folders that actually exist. Both backends
+/// classify identically (§17.5 uniform seam).
+fn list_error_response(err: ListError) -> CliResponse {
+    match err {
+        ListError::Engine(hint) => error_response("502 Bad Gateway", "engine", &hint),
+        ListError::UnknownFolder { requested, available } => {
+            let list = if available.is_empty() {
+                "(none visible)".to_string()
+            } else {
+                available.join(", ")
+            };
+            error_response(
+                "400 Bad Request",
+                "usage",
+                &format!("no folder '{requested}' here — available: {list}"),
+            )
+        }
+    }
+}
+
+/// Read-page defaults: a sane default page and a hard per-page ceiling
+/// (an agent walks beyond it with the `offset` cursor, never a giant
+/// single fetch).
+const DEFAULT_PAGE: usize = 25;
+const MAX_PAGE: usize = 200;
 
 fn ok_json(v: serde_json::Value) -> CliResponse {
     CliResponse::ok_json(v.to_string())
@@ -238,9 +266,13 @@ fn owned_message(
 
 /// Newest-first summaries for owned addresses (`k2 mail messages`).
 /// Params: `project` (required) · `address` (optional; default = all
-/// the caller's addresses) · `unread` · `limit` (default 20, max 100)
-/// · `query` (subject AND body) · `from` (From header address +
-/// display name, §11.1.8). Summaries only — no bodies ride this route.
+/// the caller's addresses) · `unread` · `limit` (default 25, max 200)
+/// · `offset` (pagination cursor; response carries `nextOffset` when a
+/// page is full) · `query` (subject AND body) · `from` (From header
+/// address + display name, §11.1.8) · `since`/`before` (date window:
+/// YYYY-MM-DD or a relative age like 7d/24h/30m) · `folder` (a mailbox
+/// other than the Inbox) / `junk` (the Junk/Spam folder). Summaries
+/// only — no bodies ride this route.
 pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
     let project = match crate::cli::need_project(params) {
         Ok(p) => p,
@@ -253,15 +285,62 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
         }
     };
     let limit: usize = match params.get("limit").map(|v| v.parse::<usize>()) {
-        None => 20,
-        Some(Ok(n)) if n >= 1 => n.min(100), // §11: max 100 — clamp, documented
+        None => DEFAULT_PAGE,
+        Some(Ok(n)) if n >= 1 => n.min(MAX_PAGE), // clamp to the per-page ceiling
         _ => {
             return error_response(
                 "400 Bad Request",
                 "usage",
-                "invalid 'limit' — a number from 1 to 100 (default 20)",
+                &format!("invalid 'limit' — a number from 1 to {MAX_PAGE} (default {DEFAULT_PAGE})"),
             )
         }
+    };
+    // Pagination cursor (§ triage): 0-based offset into the newest-first
+    // list — an agent walks a large mailbox by re-calling with the
+    // `nextOffset` we return.
+    let offset: usize = match params.get("offset").map(|v| v.parse::<usize>()) {
+        None => 0,
+        Some(Ok(n)) => n,
+        Some(Err(_)) => {
+            return error_response(
+                "400 Bad Request",
+                "usage",
+                "invalid 'offset' — a whole number (0 = first page; use the nextOffset we return)",
+            )
+        }
+    };
+    // Date window: `since`/`before` accept YYYY-MM-DD or a relative age
+    // (7d/24h/30m). These are the read filter's OWN window — distinct
+    // from the wait grace boundary.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let after_unix = match params.get("since").map(|s| messages::parse_date_bound(s, now)) {
+        None => None,
+        Some(Ok(t)) => Some(t),
+        Some(Err(hint)) => return error_response("400 Bad Request", "usage", &hint),
+    };
+    let before_unix = match params.get("before").map(|s| messages::parse_date_bound(s, now)) {
+        None => None,
+        Some(Ok(t)) => Some(t),
+        Some(Err(hint)) => return error_response("400 Bad Request", "usage", &hint),
+    };
+    // Folder selection: `--junk` convenience OR an explicit `--folder`
+    // (never both). Default = the Inbox.
+    let junk = crate::cli::bool_param(params, "junk");
+    let named = crate::cli::opt_param(params, "folder");
+    let folder = match (junk, named) {
+        (true, Some(_)) => {
+            return error_response(
+                "400 Bad Request",
+                "usage",
+                "use either --junk or --folder <name>, not both",
+            )
+        }
+        (true, None) => messages::MailFolder::Junk,
+        (false, Some(name)) => messages::MailFolder::Named(name),
+        (false, None) => messages::MailFolder::Inbox,
     };
     let (_path, project_id) = match resolve_caller(&project) {
         Ok(v) => v,
@@ -281,8 +360,16 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
         query: crate::cli::opt_param(params, "query"),
         from: crate::cli::opt_param(params, "from"),
         since_unix: None,
+        after_unix,
+        before_unix,
+        folder,
+        offset,
     };
     let mut shaped: Vec<(i64, serde_json::Value)> = Vec::new();
+    // A backend that returns a FULL page may have more behind it — the
+    // cursor's "there is a next page" signal (exact for one inbox; a
+    // safe over-estimate when the sweep merges several).
+    let mut maybe_more = false;
     for w in &watch {
         let backend = match backend_for(&w.address) {
             Ok(b) => b,
@@ -290,8 +377,11 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
         };
         let summaries = match backend.list_inbox(&w.account_id, &filter, limit) {
             Ok(s) => s,
-            Err(hint) => return read_error_response(ReadError::Engine(hint)),
+            Err(e) => return list_error_response(e),
         };
+        if summaries.len() >= limit {
+            maybe_more = true;
+        }
         for s in &summaries {
             shaped.push((
                 messages::iso_to_unix(&s.received_at),
@@ -303,7 +393,12 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
     shaped.sort_by(|a, b| b.0.cmp(&a.0));
     shaped.truncate(limit);
     let list: Vec<serde_json::Value> = shaped.into_iter().map(|(_, v)| v).collect();
-    ok_json(serde_json::json!({ "ok": true, "count": list.len(), "messages": list }))
+    let mut body = serde_json::json!({ "ok": true, "count": list.len(), "messages": list });
+    if maybe_more {
+        // The next page cursor — the CLI prints a "more:" hint from it.
+        body["nextOffset"] = serde_json::json!(offset + limit);
+    }
+    ok_json(body)
 }
 
 // ── GET /cli/mail/read ──────────────────────────────────────────────────
@@ -813,6 +908,53 @@ mod tests {
 
         cleanup_project(&project_id);
         cleanup_project(&project2);
+    }
+
+    #[test]
+    fn messages_validates_triage_flags_before_any_engine_dial() {
+        let _g = crate::mail::mail_server_test_lock();
+        clear_mail_server();
+        // Bad offset / bad dates / conflicting folder flags are all
+        // usage 400s answered BEFORE identity or engine work.
+        let resp = handle_messages(&params(&[("project", "/tmp/x"), ("offset", "abc")]));
+        assert_eq!(resp.status, "400 Bad Request");
+        assert_eq!(body_json(&resp)["error"]["code"], "usage");
+
+        for k in ["since", "before"] {
+            let resp = handle_messages(&params(&[("project", "/tmp/x"), (k, "yesteryear")]));
+            assert_eq!(resp.status, "400 Bad Request", "{k}");
+            assert_eq!(body_json(&resp)["error"]["code"], "usage");
+        }
+
+        let resp = handle_messages(&params(&[
+            ("project", "/tmp/x"),
+            ("junk", "1"),
+            ("folder", "Archive"),
+        ]));
+        assert_eq!(resp.status, "400 Bad Request");
+        assert!(body_json(&resp)["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("--junk or --folder"));
+
+        // A valid date window + folder on an addressless workspace is an
+        // empty 200 (accepted, no engine dial) — and an over-cap limit
+        // clamps rather than erroring.
+        let (name, path) = unique("triage");
+        let project_id = insert_project(&name, &path);
+        let resp = handle_messages(&params(&[
+            ("project", &path),
+            ("since", "7d"),
+            ("before", "2999-01-01"),
+            ("folder", "Junk"),
+            ("limit", "201"),
+            ("offset", "50"),
+        ]));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["count"], 0);
+        assert!(v.get("nextOffset").is_none(), "no cursor on an empty page");
+        cleanup_project(&project_id);
     }
 
     // ── read ──

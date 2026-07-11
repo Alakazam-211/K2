@@ -6238,15 +6238,20 @@ cmd_schema() {
     },
     {
       "name": "mail messages",
-      "usage": "k2 mail messages [<address>] [--unread] [--limit N] [--query <text>] [--from <substr>] [--json]",
-      "description": "Newest-first summaries of mail at your addresses: id, from, subject, age, unread marker. --query matches subject AND body; --from matches the From header (address + display name).",
+      "usage": "k2 mail messages [<address>] [--unread] [--limit N] [--offset N] [--since <date>] [--before <date>] [--folder <name>] [--junk] [--query <text>] [--from <substr>] [--json]",
+      "description": "Newest-first summaries of mail at your addresses: id, from, subject, age, unread marker. --query matches subject AND body; --from matches the From header (address + display name). --since/--before window by date; --folder/--junk read a mailbox other than the Inbox; --offset walks pages (response carries nextOffset when more remain).",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--unread", "arg": null, "description": "Only unread messages."},
-        {"name": "--limit", "arg": "N", "description": "1-100 (default 20)."},
+        {"name": "--limit", "arg": "N", "description": "1-200 (default 25)."},
+        {"name": "--offset", "arg": "N", "description": "Skip the newest N (pagination cursor; use the nextOffset the response returns)."},
+        {"name": "--since", "arg": "date", "description": "Only mail on/after <date>: YYYY-MM-DD or a relative age like 7d/24h/30m (IMAP-linked is day-granular)."},
+        {"name": "--before", "arg": "date", "description": "Only mail before <date> (same forms as --since)."},
+        {"name": "--folder", "arg": "name", "description": "Read a mailbox other than the Inbox (case-insensitive; unknown name lists the real folders)."},
+        {"name": "--junk", "arg": null, "description": "Read the Junk/Spam folder (shorthand for --folder)."},
         {"name": "--query", "arg": "text", "description": "Match subject AND body."},
         {"name": "--from", "arg": "substr", "description": "Match the From header (address + display name)."},
-        {"name": "--json", "arg": null, "description": "JSON output."}
+        {"name": "--json", "arg": null, "description": "JSON output (carries nextOffset when more remain)."}
       ]
     },
     {
@@ -11553,6 +11558,8 @@ _mail_py() {
     M_LOCAL="${M_LOCAL:-}" M_DOMAIN="${M_DOMAIN:-}" M_CLIENT_ID="${M_CLIENT_ID:-}" \
     M_ADDRESS="${M_ADDRESS:-}" M_ID="${M_ID:-}" \
     M_UNREAD="${M_UNREAD:-false}" M_LIMIT="${M_LIMIT:-}" M_QUERY="${M_QUERY:-}" \
+    M_OFFSET="${M_OFFSET:-}" M_SINCE="${M_SINCE:-}" M_BEFORE="${M_BEFORE:-}" \
+    M_FOLDER="${M_FOLDER:-}" M_JUNK="${M_JUNK:-false}" \
     M_FROM="${M_FROM:-}" M_HTML="${M_HTML:-false}" M_RAW="${M_RAW:-false}" \
     M_GET="${M_GET:-}" M_OUT="${M_OUT:-}" \
     M_TO="${M_TO:-}" M_SUBJECT="${M_SUBJECT:-}" M_TIMEOUT="${M_TIMEOUT:-}" \
@@ -11913,16 +11920,46 @@ elif verb == "messages":
         params["unread"] = "1"
     if env("M_LIMIT"):
         params["limit"] = env("M_LIMIT")
+    if env("M_OFFSET"):
+        params["offset"] = env("M_OFFSET")
+    if env("M_SINCE"):
+        params["since"] = env("M_SINCE")
+    if env("M_BEFORE"):
+        params["before"] = env("M_BEFORE")
+    if env("M_JUNK") == "true":
+        params["junk"] = "1"
+    elif env("M_FOLDER"):
+        params["folder"] = env("M_FOLDER")
     if env("M_QUERY"):
         params["query"] = env("M_QUERY")
     if env("M_FROM"):
         params["from"] = env("M_FROM")
     d = call("GET", "/cli/mail/messages", params=params)
     msgs = d.get("messages") or []
+    next_offset = d.get("nextOffset")
+    # Rebuild the flags that select a DIFFERENT set so the "more:" hint
+    # (and the empty-set line) reflect the actual query.
+    def _scope_flags():
+        parts = []
+        if env("M_ADDRESS"):
+            parts.append(env("M_ADDRESS"))
+        if env("M_JUNK") == "true":
+            parts.append("--junk")
+        elif env("M_FOLDER"):
+            parts.append("--folder %s" % env("M_FOLDER"))
+        if env("M_UNREAD") == "true":
+            parts.append("--unread")
+        for envk, flag in (("M_SINCE", "--since"), ("M_BEFORE", "--before"),
+                           ("M_QUERY", "--query"), ("M_FROM", "--from"),
+                           ("M_LIMIT", "--limit")):
+            if env(envk):
+                parts.append("%s %s" % (flag, env(envk)))
+        return parts
     if as_json:
         print(dumps(d))
     elif not msgs:
-        filtered = any(env(k) for k in ("M_QUERY", "M_FROM", "M_ADDRESS")) or env("M_UNREAD") == "true"
+        filtered = any(env(k) for k in ("M_QUERY", "M_FROM", "M_ADDRESS", "M_SINCE",
+                       "M_BEFORE", "M_FOLDER")) or env("M_UNREAD") == "true" or env("M_JUNK") == "true"
         print("No messages%s." % (" matching the filters" if filtered else ""))
     else:
         for m in msgs:
@@ -11935,6 +11972,9 @@ elif verb == "messages":
                   m.get("subject") or "(no subject)", iso_ago(m.get("date")), extras))
         print()
         print("read one: k2 mail read <id>")
+        if next_offset is not None:
+            more = _scope_flags() + ["--offset %s" % next_offset]
+            print("more:     k2 mail messages %s" % " ".join(more))
 
 elif verb == "read":
     params = {"project": ws_path, "id": env("M_ID")}
@@ -12442,12 +12482,27 @@ cmd_mail_domains() {
 cmd_mail_messages() {
     if _wants_help "$@"; then cmd_help_mail_messages; exit 0; fi
     local address="" unread=false limit="" query="" from="" as_json=false
+    local since="" before="" folder="" junk=false offset=""
+    local usage="k2 mail messages [<address>] [--unread] [--limit N] [--offset N] [--since <date>] [--before <date>] [--folder <name>] [--junk] [--query <text>] [--from <substr>] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --unread) unread=true; shift ;;
             --limit)
-                [ $# -ge 2 ] || { _mail_err "usage" "--limit requires a number (1-100)"; exit 2; }
+                [ $# -ge 2 ] || { _mail_err "usage" "--limit requires a number (1-200)"; exit 2; }
                 limit="$2"; shift 2 ;;
+            --offset)
+                [ $# -ge 2 ] || { _mail_err "usage" "--offset requires a whole number (0-based page cursor)"; exit 2; }
+                offset="$2"; shift 2 ;;
+            --since)
+                [ $# -ge 2 ] || { _mail_err "usage" "--since requires a date (YYYY-MM-DD or a relative age like 7d/24h/30m)"; exit 2; }
+                since="$2"; shift 2 ;;
+            --before)
+                [ $# -ge 2 ] || { _mail_err "usage" "--before requires a date (YYYY-MM-DD or a relative age like 7d/24h/30m)"; exit 2; }
+                before="$2"; shift 2 ;;
+            --folder)
+                [ $# -ge 2 ] || { _mail_err "usage" "--folder requires a mailbox name"; exit 2; }
+                folder="$2"; shift 2 ;;
+            --junk) junk=true; shift ;;
             --query)
                 [ $# -ge 2 ] || { _mail_err "usage" "--query requires a value (matches subject AND body)"; exit 2; }
                 query="$2"; shift 2 ;;
@@ -12456,7 +12511,7 @@ cmd_mail_messages() {
                 from="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail messages [<address>] [--unread] [--limit N] [--query <text>] [--from <substr>] [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: $usage"
                 exit 2 ;;
             *)
                 if [ -z "$address" ]; then address="$1"; else
@@ -12466,12 +12521,22 @@ cmd_mail_messages() {
                 shift ;;
         esac
     done
-    if [ -n "$limit" ] && { ! _mail_is_uint "$limit" || [ "$limit" -lt 1 ] || [ "$limit" -gt 100 ]; }; then
-        _mail_err "usage" "--limit must be a number from 1 to 100 (default 20)"
+    if [ -n "$limit" ] && { ! _mail_is_uint "$limit" || [ "$limit" -lt 1 ] || [ "$limit" -gt 200 ]; }; then
+        _mail_err "usage" "--limit must be a number from 1 to 200 (default 25)"
+        exit 2
+    fi
+    if [ -n "$offset" ] && ! _mail_is_uint "$offset"; then
+        _mail_err "usage" "--offset must be a whole number (0 = first page)"
+        exit 2
+    fi
+    if $junk && [ -n "$folder" ]; then
+        _mail_err "usage" "use either --junk or --folder <name>, not both"
         exit 2
     fi
     local M_VERB="messages" M_JSON="$as_json" M_ADDRESS="$address" \
-          M_UNREAD="$unread" M_LIMIT="$limit" M_QUERY="$query" M_FROM="$from"
+          M_UNREAD="$unread" M_LIMIT="$limit" M_QUERY="$query" M_FROM="$from" \
+          M_OFFSET="$offset" M_SINCE="$since" M_BEFORE="$before" \
+          M_FOLDER="$folder" M_JUNK="$junk"
     _mail_py
 }
 
@@ -13431,10 +13496,24 @@ ARGUMENTS
 
 FLAGS
   --unread               Only unread messages
-  --limit <n>            1-100 (default 20)
+  --limit <n>            1-200 (default 25)
+  --offset <n>           Skip the newest <n> (pagination cursor; when a page is
+                         full the output prints a ready-to-run "more:" line)
+  --since <date>         Only mail on/after <date>: YYYY-MM-DD or a relative age
+                         like 7d / 24h / 30m (IMAP-linked inboxes are day-granular)
+  --before <date>        Only mail before <date> (same date forms as --since)
+  --folder <name>        Read a mailbox OTHER than the Inbox (case-insensitive;
+                         an unknown name lists the folders that DO exist)
+  --junk                 Read the Junk/Spam folder (shorthand for --folder)
   --query <text>         Match subject AND body
   --from <substr>        Match the From header (address + display name)
-  --json                 JSON output
+  --json                 JSON output (carries "nextOffset" when more remain)
+
+EXAMPLES
+  k2 mail messages --since 7d --unread
+  k2 mail messages --junk --limit 50
+  k2 mail messages --folder "[Gmail]/All Mail" --before 2026-07-01
+  k2 mail messages --limit 50 --offset 50        # the second page
 EOF
 }
 

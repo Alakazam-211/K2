@@ -179,7 +179,7 @@ fn watch_list(
         // bound to it answers instead; anything else keeps the SAME
         // masked not_found (the failure never reveals which world the
         // address lives in).
-        return match external::owned_external_inbox(project_id, addr) {
+        return match external::can_read(project_id, addr) {
             Ok(ext) => Ok(vec![WatchAddress {
                 address: ext.email_address,
                 account_id: ext.id,
@@ -229,7 +229,7 @@ fn owned_message(
             return Err(error_response("400 Bad Request", "usage", &hint))
         }
         Err(_) => {
-            return match external::owned_external_inbox(project_id, &address) {
+            return match external::can_read(project_id, &address) {
                 Ok(ext) => Ok((ext.email_address, ext.id, email_id)),
                 Err(_) => Err(masked()),
             }

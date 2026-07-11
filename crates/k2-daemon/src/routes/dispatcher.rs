@@ -575,6 +575,10 @@ async fn handle_one_request(
             // spawn_blocking covers them.
             | "/cli/mail/external/add"
             | "/cli/mail/external/remove"
+            // S10: per-role access grants (owner-or-admin-gated via
+            // is_owner_level_mutation's /cli/mail/external/ prefix).
+            | "/cli/mail/external/grant"
+            | "/cli/mail/external/revoke"
             | "/cli/mail/draft"
             // Projects V1 P2 (prd-projects-v1 §4.1) — project-GROUP
             // mutations (NOT the legacy /cli/projects/* workspace

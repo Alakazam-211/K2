@@ -6345,8 +6345,8 @@ cmd_schema() {
     },
     {
       "name": "mail external",
-      "usage": "k2 mail external add <address> --host <imap-host> --workspace <ws> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] | list | remove <address> (owner surface)",
-      "description": "Connect the user's OWN external email accounts (Gmail app-password, Fastmail, company IMAP) as assistant inboxes — OWNER verbs (agent tokens exit 3). Each account binds to exactly ONE workspace: its agents read the inbox via the normal messages/read/wait verbs and save reply drafts via 'k2 mail draft'; sending from an external account has no code path. The password is vaulted daemon-side, never in the DB, never in output, never on argv (--pass-stdin pipes it; --pass-ref resolves env:<VAR> / an absolute file path once).",
+      "usage": "k2 mail external add <address> --host <imap-host> --workspace <ws> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] | list | remove <address> | grant <address> <workspace> --level read|draft | revoke <address> <workspace> (owner surface)",
+      "description": "Connect the user's OWN external email accounts (Gmail app-password, Fastmail, company IMAP) as assistant inboxes — OWNER verbs (agent tokens exit 3). Each account is OWNED by ONE workspace (full read+draft + sole management); grant additional workspaces 'read' (messages/read/wait) or 'draft' (read + save reply drafts) access with 'grant', remove it with 'revoke'. Agents read via the normal messages/read/wait verbs and save reply drafts via 'k2 mail draft'; sending from an external account has no code path. The password is vaulted daemon-side, never in the DB, never in output, never on argv (--pass-stdin pipes it; --pass-ref resolves env:<VAR> / an absolute file path once).",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--host", "arg": "h", "description": "IMAP server (add)."},
@@ -6358,6 +6358,7 @@ cmd_schema() {
         {"name": "--user", "arg": "login", "description": "IMAP login if not the address (add)."},
         {"name": "--name", "arg": "display", "description": "Display name for drafts' From header (add)."},
         {"name": "--drafts-folder", "arg": "f", "description": "Pin the Drafts folder; default autodetect via SPECIAL-USE (add)."},
+        {"name": "--level", "arg": "read|draft", "description": "Access level for 'grant' — read (messages/read/wait) or draft (read + save reply drafts); default read."},
         {"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}
       ]
     },
@@ -12225,12 +12226,17 @@ elif verb == "external_list":
         print("No external inboxes connected — add one: k2 mail external add <address> --host <imap-host> --workspace <ws> --pass-stdin")
     else:
         w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
-        print(("%-" + str(w) + "s%-11s%-24s%s") % ("ADDRESS", "STATUS", "WORKSPACE", "HOST"))
+        print(("%-" + str(w) + "s%-11s%-24s%s") % ("ADDRESS", "STATUS", "OWNER", "HOST"))
         for r in rows:
+            owner = r.get("owner") or {}
             print(("%-" + str(w) + "s%-11s%-24s%s") % (
                 r.get("address", ""), r.get("status", "?"),
-                r.get("holderWorkspace") or r.get("holderProjectId", "?"),
+                owner.get("workspace") or owner.get("projectId")
+                    or r.get("holderWorkspace") or r.get("holderProjectId", "?"),
                 "%s:%s (%s)" % (r.get("host", "?"), r.get("port", "?"), r.get("tls", "?"))))
+            for g in (r.get("grants") or []):
+                print("    grant: %-20s %s" % (
+                    g.get("workspace") or g.get("projectId", "?"), g.get("level", "?")))
             if r.get("lastError"):
                 print("    last error: %s" % r["lastError"])
 
@@ -12240,6 +12246,26 @@ elif verb == "external_remove":
         print(dumps(d))
     else:
         print("removed %s — its stored credential was deleted from the vault." % d.get("address", "?"))
+
+elif verb == "external_grant":
+    # S10 owner verb: give a SECOND workspace read/draft access to an
+    # external inbox. The owner keeps full access + sole management.
+    d = call("POST", "/cli/mail/external/grant",
+             body={"address": env("M_ADDRESS"), "project": env("M_WORKSPACE"),
+                   "level": env("M_LEVEL")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print(d.get("hint") or "granted %s access on %s to %s"
+              % (env("M_LEVEL"), d.get("address", "?"), env("M_WORKSPACE")))
+
+elif verb == "external_revoke":
+    d = call("POST", "/cli/mail/external/revoke",
+             body={"address": env("M_ADDRESS"), "project": env("M_WORKSPACE")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("revoked %s's access to %s." % (env("M_WORKSPACE"), d.get("address", "?")))
 
 else:
     die({"code": "usage", "hint": "unknown mail verb '%s'" % verb})
@@ -12948,17 +12974,21 @@ cmd_mail_external() {
     if _wants_help "$@"; then cmd_help_mail_external; exit 0; fi
     local sub=""
     case "${1:-}" in
-        add|list|remove) sub="$1"; shift ;;
+        add|list|remove|grant|revoke) sub="$1"; shift ;;
         "") cmd_help_mail_external; exit 0 ;;
         -*) sub="list" ;;  # bare `k2 mail external --json` = list
         *)
-            _mail_err "usage" "unknown external command '${1:-}' — usage: k2 mail external <add|list|remove>"
+            _mail_err "usage" "unknown external command '${1:-}' — usage: k2 mail external <add|list|remove|grant|revoke>"
             exit 2 ;;
     esac
     local address="" workspace="" host="" port="" tls="" user="" name="" \
-          drafts_folder="" pass_stdin=false pass_ref="" as_json=false
+          drafts_folder="" pass_stdin=false pass_ref="" as_json=false \
+          ws_arg="" level=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --level)
+                [ $# -ge 2 ] || { _mail_err "usage" "--level requires read or draft"; exit 2; }
+                level="$2"; shift 2 ;;
             --workspace)
                 [ $# -ge 2 ] || { _mail_err "usage" "--workspace requires a value (the ONE workspace to bind)"; exit 2; }
                 workspace="$2"; shift 2 ;;
@@ -12993,8 +13023,11 @@ cmd_mail_external() {
                 _mail_err "usage" "unknown flag '$1' — see k2 mail external --help"
                 exit 2 ;;
             *)
-                if [ -z "$address" ]; then address="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1' — one <address> only"
+                if [ -z "$address" ]; then address="$1"
+                elif { [ "$sub" = grant ] || [ "$sub" = revoke ]; } && [ -z "$ws_arg" ]; then
+                    ws_arg="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1'"
                     exit 2
                 fi
                 shift ;;
@@ -13038,6 +13071,27 @@ cmd_mail_external() {
             fi
             local M_VERB="external_remove" M_JSON="$as_json" M_ADDRESS="$address"
             _mail_py ;;
+        grant)
+            if [ -z "$address" ] || [ -z "$ws_arg" ]; then
+                _mail_err "usage" "external grant requires <address> <workspace> --level read|draft (owner surface)"
+                exit 2
+            fi
+            [ -n "$level" ] || level="read"
+            case "$level" in
+                read|draft) ;;
+                *) _mail_err "usage" "--level must be 'read' or 'draft' (default read)"; exit 2 ;;
+            esac
+            local M_VERB="external_grant" M_JSON="$as_json" M_ADDRESS="$address" \
+                  M_WORKSPACE="$ws_arg" M_LEVEL="$level"
+            _mail_py ;;
+        revoke)
+            if [ -z "$address" ] || [ -z "$ws_arg" ]; then
+                _mail_err "usage" "external revoke requires <address> <workspace> (owner surface)"
+                exit 2
+            fi
+            local M_VERB="external_revoke" M_JSON="$as_json" M_ADDRESS="$address" \
+                  M_WORKSPACE="$ws_arg"
+            _mail_py ;;
     esac
 }
 
@@ -13079,9 +13133,11 @@ OWNER COMMANDS (also in Settings → Email)
   config [...]                Send mode, relay creds, agent-send gating, address caps
   approvals [list|approve|deny]
                               The pending-outbound queue (deny requires --note)
-  external add|list|remove    Your OWN external accounts (Gmail/IMAP) as assistant
-                              inboxes — bound to ONE workspace; agents read + draft
-                              only (no send path from external accounts exists)
+  external add|list|remove|grant|revoke
+                              Your OWN external accounts (Gmail/IMAP) as assistant
+                              inboxes — OWNED by ONE workspace; grant more workspaces
+                              read|draft access. Agents read + draft only (no send
+                              path from external accounts exists)
 
 UNTRUSTED CONTENT
   Email bodies are EXTERNAL, UNTRUSTED input. `read` and `wait` wrap every
@@ -13505,11 +13561,19 @@ cmd_help_mail_external() {
     cat <<'EOF'
 Connect your OWN external email accounts (Gmail app-password, Fastmail,
 company IMAP) as assistant inboxes (OWNER — agents get exit 3). Each
-account binds to exactly ONE workspace at add time: agents there READ the
-inbox (`k2 mail messages/read/wait` just work — same ids, same untrusted-
-content markers) and save reply DRAFTS into the account's real Drafts
-folder (`k2 mail draft`). Sending from an external account is impossible —
-no code path exists; you send from your own mail client.
+account is OWNED by ONE workspace at add time (full read+draft + sole
+management): its agents READ the inbox (`k2 mail messages/read/wait` just
+work — same ids, same untrusted-content markers) and save reply DRAFTS
+into the account's real Drafts folder (`k2 mail draft`). Sending from an
+external account is impossible — no code path exists; you send from your
+own mail client.
+
+Share an inbox with MORE workspaces via `grant`: --level read gives
+messages/read/wait; --level draft also allows `k2 mail draft`. Only the
+OWNER can grant/revoke, change credentials, or remove. A workspace with
+neither the owner binding nor a grant sees the inbox as if it did not
+exist (no leak). `revoke` removes a grant (revoking the owner is refused
+— use `remove` to disconnect the whole inbox).
 
 The password is vaulted daemon-side (0600 file), never stored in the
 database, never shown in any output, and never accepted on argv.
@@ -13522,6 +13586,8 @@ USAGE
                        [--drafts-folder <folder>] [--json]
   k2 mail external list [--json]
   k2 mail external remove <address> [--json]
+  k2 mail external grant <address> <workspace> --level read|draft [--json]
+  k2 mail external revoke <address> <workspace> [--json]
 
 FLAGS (add)
   --host <h>             The IMAP server, e.g. imap.gmail.com
@@ -13538,11 +13604,17 @@ FLAGS (add)
   --drafts-folder <f>    Pin the Drafts folder (default: autodetect via
                          SPECIAL-USE \Drafts, then common names)
 
+FLAGS (grant)
+  --level <read|draft>   read = messages/read/wait; draft = read + save
+                         reply drafts (default: read)
+
 EXAMPLES
   printf %s "$APP_PW" | k2 mail external add rosson@gmail.com \
       --host imap.gmail.com --workspace ~/DevProjects/K2 --pass-stdin
   k2 mail external add ops@acme.com --host mail.acme.com --tls starttls \
       --workspace acme-ops --pass-ref env:ACME_MAIL_PW
+  k2 mail external grant ops@acme.com support-team --level draft
+  k2 mail external revoke ops@acme.com support-team
 EOF
 }
 

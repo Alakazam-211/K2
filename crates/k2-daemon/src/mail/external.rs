@@ -33,7 +33,7 @@ use base64::Engine as _;
 
 use crate::mail::addresses::{self, AddrError};
 use crate::mail::jmap::{AttachmentMeta, EmailFull, EmailSummary, MailAddr};
-use crate::mail::messages::{ListFilter, ReadBackend, ReadError};
+use crate::mail::messages::{ListFilter, ReadBackend};
 use crate::mail::secrets::SecretStore;
 use k2_core::db::schema::MailExternalInbox;
 use mail_parser::{MessageParser, MimeHeaders as _};
@@ -99,88 +99,14 @@ pub fn inbox_for_address(address: &str) -> Option<MailExternalInbox> {
     .ok()
 }
 
-/// Every external inbox bound to this workspace (the default read
-/// scope joins these with the workspace's minted addresses).
-pub fn inboxes_for_project(project_id: &str) -> Vec<MailExternalInbox> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let Ok(mut stmt) = conn.prepare(&format!(
-        "SELECT {EXT_COLS} FROM mail_external_inboxes \
-         WHERE owner_project_id = ?1 ORDER BY created_at, email_address"
-    )) else {
-        return Vec::new();
-    };
-    stmt.query_map(rusqlite::params![project_id], map_row)
-        .map(|r| r.filter_map(Result::ok).collect())
-        .unwrap_or_default()
-}
+// (S11: the "inboxes a workspace can read" sweep moved to
+// `crate::mail::access::readable_linked` — it also honors grants, not
+// just the owner binding.)
 
-/// The grant level (`read` | `draft`) a workspace holds on an inbox,
-/// or `None` if it has no grant row. The OWNER workspace is never a
-/// grant row — its access is the `owner_project_id` binding itself —
-/// so this returns `None` for the owner (callers check ownership
-/// separately). Read-path hot lookup (indexed on `(inbox_id)`).
-pub fn grant_level(inbox_id: &str, project_id: &str) -> Option<String> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    conn.query_row(
-        "SELECT level FROM mail_external_inbox_grants WHERE inbox_id = ?1 AND project_id = ?2",
-        rusqlite::params![inbox_id, project_id],
-        |r| r.get(0),
-    )
-    .ok()
-}
-
-/// The MASKED READ gate for an explicitly named external address
-/// (S10 generalizes S9's owner-only check): the calling workspace may
-/// READ (`messages`/`read`/`wait`) the inbox if it is the OWNER
-/// (`owner_project_id`) OR holds any grant row (`read` or `draft`).
-/// Anything else answers the same masked `not_found` a foreign minted
-/// address gets — a workspace never learns which inboxes exist outside
-/// its access (the S3 rule, preserved). Mirrors
-/// [`crate::mail::messages::owned_active_address`]'s return shape.
-pub fn can_read(project_id: &str, raw_address: &str) -> Result<MailExternalInbox, ReadError> {
-    access_gate(project_id, raw_address, false)
-}
-
-/// The MASKED DRAFT gate: the calling workspace may save reply DRAFTS
-/// (`POST /cli/mail/draft`) into the inbox if it is the OWNER OR holds
-/// a grant row with level `draft`. A `read`-only grant, or no access,
-/// answers the SAME masked `not_found` — the draft denial never leaks
-/// a different shape than a missing inbox.
-pub fn can_draft(project_id: &str, raw_address: &str) -> Result<MailExternalInbox, ReadError> {
-    access_gate(project_id, raw_address, true)
-}
-
-/// Shared normalize → resolve → mask prologue for [`can_read`] /
-/// [`can_draft`]. `require_draft` demands the `draft` level (owner
-/// always passes); the masked `not_found` return shape is identical in
-/// every deny branch (no existence leak).
-fn access_gate(
-    project_id: &str,
-    raw_address: &str,
-    require_draft: bool,
-) -> Result<MailExternalInbox, ReadError> {
-    let address = addresses::normalize_address(raw_address).map_err(|e| match e {
-        AddrError::Usage(hint) => ReadError::Usage(hint),
-        _ => ReadError::Usage(format!("'{raw_address}' is not a valid address")),
-    })?;
-    let masked = || ReadError::NotFound(format!("no address '{address}' in this workspace"));
-    let row = inbox_for_address(&address).ok_or_else(masked)?;
-    if row.owner_project_id == project_id {
-        return Ok(row); // the owner has full read+draft, no grant row.
-    }
-    let allowed = match grant_level(&row.id, project_id).as_deref() {
-        Some("draft") => true,
-        Some(_) => !require_draft, // a 'read' grant satisfies read, not draft.
-        None => false,
-    };
-    if allowed {
-        Ok(row)
-    } else {
-        Err(masked())
-    }
-}
+// (S11: the read/draft/send GATES now live in `crate::mail::access` —
+// they cover BOTH hosted addresses and linked inboxes through the ONE
+// unified `mail_inbox_grants` + `primary_level` model. This module keeps
+// only the linked-inbox PROVISIONING + IMAP effect ops.)
 
 // ── Opaque backend ids (UID space — collision-proof vs JMAP ids) ────────
 
@@ -847,12 +773,9 @@ pub fn remove_inbox(
         .map_err(|e| ExtError::Engine(format!("vault delete failed: {e}")))?;
     let db = k2_core::db::shared();
     let conn = db.lock();
-    // Cascade the S10 access grants in code (inbox_id is not a FK —
+    // Cascade the S11 access grants in code (inbox_id is not a FK —
     // the 0064 idiom): no grant row may outlive the inbox it points at.
-    let _ = conn.execute(
-        "DELETE FROM mail_external_inbox_grants WHERE inbox_id = ?1",
-        rusqlite::params![row.id],
-    );
+    crate::mail::access::cascade_grants(&conn, crate::mail::access::Source::Linked, &row.id);
     conn.execute(
         "DELETE FROM mail_external_inboxes WHERE id = ?1",
         rusqlite::params![row.id],
@@ -865,184 +788,9 @@ pub fn remove_inbox(
     }))
 }
 
-// ── S10 access grants (owner-only management surface) ───────────────────
-
-pub const LEVEL_READ: &str = "read";
-pub const LEVEL_DRAFT: &str = "draft";
-
-/// Validate a grant level word (`read` | `draft`) → the canonical
-/// string, or a teaching usage error.
-fn validate_level(level: &str) -> Result<&'static str, ExtError> {
-    match level.trim() {
-        LEVEL_READ => Ok(LEVEL_READ),
-        LEVEL_DRAFT => Ok(LEVEL_DRAFT),
-        other => Err(ExtError::Usage(format!(
-            "invalid level '{other}' — 'read' (messages/read/wait) or 'draft' (read + save reply drafts)"
-        ))),
-    }
-}
-
-/// Resolve an external inbox by address for the OWNER management
-/// surface (grant/revoke). Unknown → `not_found` with the list
-/// pointer (owner surface — NO masking, like [`remove_inbox`]).
-fn manage_inbox(raw_address: &str) -> Result<MailExternalInbox, ExtError> {
-    let address = addresses::normalize_address(raw_address).map_err(|e| match e {
-        AddrError::Usage(hint) => ExtError::Usage(hint),
-        _ => ExtError::Usage(format!("'{raw_address}' is not a valid address")),
-    })?;
-    inbox_for_address(&address).ok_or_else(|| {
-        ExtError::NotFound(format!(
-            "no external inbox '{address}' — 'k2 mail external list' shows what's connected"
-        ))
-    })
-}
-
-/// Owner-only: GRANT a workspace `read` or `draft` access to an
-/// external inbox (upsert — re-granting updates the level). The
-/// `grantee_project_id` is already resolved+validated by the route
-/// (a real registered workspace); granting the OWNER workspace is a
-/// teaching error (it already has full access). Returns the inbox row
-/// so the route can echo the binding. NEVER touches credentials.
-pub fn grant_access(
-    raw_address: &str,
-    grantee_project_id: &str,
-    level: &str,
-) -> Result<MailExternalInbox, ExtError> {
-    let level = validate_level(level)?;
-    let row = manage_inbox(raw_address)?;
-    if row.owner_project_id == grantee_project_id {
-        return Err(ExtError::Usage(
-            "that workspace is the owner — it already has full read+draft access without a grant"
-                .to_string(),
-        ));
-    }
-    let now = now_secs();
-    {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        conn.execute(
-            "INSERT INTO mail_external_inbox_grants (inbox_id, project_id, level, created_at) \
-             VALUES (?1, ?2, ?3, ?4) \
-             ON CONFLICT(inbox_id, project_id) DO UPDATE SET level = excluded.level",
-            rusqlite::params![row.id, grantee_project_id, level, now],
-        )
-        .map_err(|e| ExtError::Engine(format!("grant access: {e}")))?;
-    }
-    k2_core::log_debug!(
-        "[mail/external] granted '{level}' on {} to workspace {}",
-        row.email_address,
-        grantee_project_id
-    );
-    Ok(row)
-}
-
-/// Owner-only: REVOKE a workspace's grant on an external inbox.
-/// Idempotent — revoking a workspace that has no grant is a no-op
-/// `ok`. Revoking the OWNER is a teaching error (point at `external
-/// remove`, which tears the whole inbox down). Returns the inbox row.
-pub fn revoke_access(
-    raw_address: &str,
-    grantee_project_id: &str,
-) -> Result<MailExternalInbox, ExtError> {
-    let row = manage_inbox(raw_address)?;
-    if row.owner_project_id == grantee_project_id {
-        return Err(ExtError::Usage(format!(
-            "that workspace OWNS '{}' — you can't revoke the owner. Disconnect the whole inbox \
-             with 'k2 mail external remove {}'",
-            row.email_address, row.email_address
-        )));
-    }
-    {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        conn.execute(
-            "DELETE FROM mail_external_inbox_grants WHERE inbox_id = ?1 AND project_id = ?2",
-            rusqlite::params![row.id, grantee_project_id],
-        )
-        .map_err(|e| ExtError::Engine(format!("revoke access: {e}")))?;
-    }
-    Ok(row)
-}
-
-/// The owner table: every external inbox with its holder workspace.
-/// NEVER credentials, NEVER secret refs, NOT EVEN the username (the
-/// email address identifies the account; login details stay between
-/// the row and the vault).
-pub fn list_all_json() -> serde_json::Value {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let rows: Vec<MailExternalInbox> = conn
-        .prepare(&format!(
-            "SELECT {EXT_COLS} FROM mail_external_inboxes ORDER BY created_at, email_address"
-        ))
-        .ok()
-        .and_then(|mut stmt| {
-            stmt.query_map([], map_row)
-                .map(|r| r.filter_map(Result::ok).collect())
-                .ok()
-        })
-        .unwrap_or_default();
-    let workspace_name = |id: &str| -> Option<String> {
-        conn.query_row(
-            "SELECT name FROM projects WHERE id = ?1",
-            rusqlite::params![id],
-            |row| row.get(0),
-        )
-        .ok()
-    };
-    let list: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|r| {
-            let holder = workspace_name(&r.owner_project_id);
-            // S10: every additional workspace granted read/draft access.
-            let grants: Vec<serde_json::Value> = conn
-                .prepare(
-                    "SELECT project_id, level FROM mail_external_inbox_grants \
-                     WHERE inbox_id = ?1 ORDER BY created_at, project_id",
-                )
-                .ok()
-                .and_then(|mut stmt| {
-                    stmt.query_map(rusqlite::params![r.id], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    })
-                    .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
-                    .ok()
-                })
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(project_id, level)| {
-                    serde_json::json!({
-                        "projectId": project_id,
-                        "workspace": workspace_name(&project_id),
-                        "level": level,
-                    })
-                })
-                .collect();
-            serde_json::json!({
-                "id": r.id,
-                "address": r.email_address,
-                "displayName": r.display_name,
-                "kind": r.kind,
-                "host": r.host,
-                "port": r.port,
-                "tls": r.tls,
-                "draftsFolder": r.drafts_folder,
-                "status": r.status,
-                "lastCheckedAt": r.last_checked_at,
-                "lastError": r.last_error,
-                "holderProjectId": r.owner_project_id,
-                "holderWorkspace": holder.clone(),
-                // S10: the OWNER workspace (full read+draft + sole
-                // management) is now explicit alongside the grants; the
-                // legacy holder* fields stay for back-compat.
-                "owner": { "projectId": r.owner_project_id, "workspace": holder },
-                "grants": grants,
-                "createdAt": r.created_at,
-            })
-        })
-        .collect();
-    serde_json::json!({ "ok": true, "count": list.len(), "inboxes": list })
-}
+// (S11: GRANT / REVOKE / SET-PRIMARY / SET-LEVEL and the unified inbox
+// CATALOG live in `crate::mail::access` — one management surface over
+// hosted + linked. This module keeps only linked provisioning.)
 
 /// Stamp the row's health after an IMAP interaction (add/draft). The
 /// error text is transport/server-shaped — never a body, never a
@@ -1301,7 +1049,7 @@ pub(crate) mod tests {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = conn.execute(
-            "DELETE FROM mail_external_inbox_grants WHERE inbox_id = ?1",
+            "DELETE FROM mail_inbox_grants WHERE source = 'linked' AND inbox_id = ?1",
             rusqlite::params![id],
         );
         let _ = conn.execute(
@@ -1590,7 +1338,7 @@ a,b\r\n1,2\r\n\
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = conn.execute(
-            "DELETE FROM mail_external_inbox_grants WHERE project_id = ?1 \
+            "DELETE FROM mail_inbox_grants WHERE project_id = ?1 \
              OR inbox_id IN (SELECT id FROM mail_external_inboxes WHERE owner_project_id = ?1)",
             rusqlite::params![project_id],
         );
@@ -1639,26 +1387,38 @@ a,b\r\n1,2\r\n\
         let err = add_inbox(&ops, &vault, &project, &spec, "pw").expect_err("dup");
         assert!(matches!(err, ExtError::Exists(_)), "{err:?}");
 
-        // Ownership: the owner workspace can read AND draft, any other
-        // workspace gets the MASKED not_found on both.
-        assert!(can_read(&project, &addr).is_ok());
-        assert!(can_draft(&project, &addr).is_ok());
-        let err = can_read("some-other-project", &addr).expect_err("masked");
-        let ReadError::NotFound(hint) = err else { panic!("masked, got {err:?}") };
+        // Ownership: the PRIMARY workspace can read AND draft (S11
+        // unified gate), any other workspace gets the MASKED not_found.
+        use crate::mail::access;
+        assert!(access::can_read(&project, &addr).is_ok());
+        assert!(access::can_draft(&project, &addr).is_ok());
+        let err = access::can_read("some-other-project", &addr).expect_err("masked");
+        let crate::mail::messages::ReadError::NotFound(hint) = err
+        else {
+            panic!("masked, got {err:?}")
+        };
         assert!(hint.contains("no address"), "{hint}");
-        assert!(can_draft("some-other-project", &addr).is_err(), "no draft for foreign ws");
+        assert!(
+            access::can_draft("some-other-project", &addr).is_err(),
+            "no draft for foreign ws"
+        );
 
-        // The owner list carries the binding but never login details.
-        let all = list_all_json();
+        // The unified catalog carries the binding but never login details.
+        let all = access::catalog_json(None);
         let mine = all["inboxes"]
             .as_array()
             .unwrap()
             .iter()
             .find(|i| i["address"] == addr.as_str())
             .expect("listed");
-        assert_eq!(mine["holderProjectId"], project);
+        assert_eq!(mine["primary"]["projectId"], project);
+        assert_eq!(mine["source"], "linked");
+        assert_eq!(mine["maxLevel"], "draft", "linked can never send");
         let s = all.to_string();
-        assert!(!s.contains("app-password") && !s.contains("secretRef") && !s.contains("username"), "{s}");
+        assert!(
+            !s.contains("app-password") && !s.contains("secretRef") && !s.contains("username"),
+            "{s}"
+        );
 
         // Remove deletes row + vault entry.
         let v = remove_inbox(&vault, &addr).expect("removes");
@@ -1671,88 +1431,8 @@ a,b\r\n1,2\r\n\
         cleanup_project(&project);
     }
 
-    // ── S10 access grants ──
-
-    #[test]
-    fn grants_extend_read_and_draft_and_mask_and_cascade_on_remove() {
-        let owner = unique_project();
-        let reader = unique_project();
-        let drafter = unique_project();
-        let stranger = unique_project();
-        let addr = unique_addr("grants");
-        let row = test_inbox(&uuid::Uuid::new_v4().to_string(), &owner, &addr);
-        seed_row(&row);
-
-        // Baseline: only the owner has access; everyone else is masked.
-        assert!(can_read(&owner, &addr).is_ok());
-        assert!(can_draft(&owner, &addr).is_ok());
-        for p in [&reader, &drafter, &stranger] {
-            assert!(matches!(can_read(p, &addr), Err(ReadError::NotFound(_))), "masked read");
-            assert!(matches!(can_draft(p, &addr), Err(ReadError::NotFound(_))), "masked draft");
-        }
-
-        // A 'read' grant: read OK, draft still masked not_found.
-        grant_access(&addr, &reader, "read").expect("grant read");
-        assert!(can_read(&reader, &addr).is_ok());
-        assert!(
-            matches!(can_draft(&reader, &addr), Err(ReadError::NotFound(_))),
-            "read grant does not confer draft — masked, not a distinct error"
-        );
-
-        // A 'draft' grant confers both.
-        grant_access(&addr, &drafter, "draft").expect("grant draft");
-        assert!(can_read(&drafter, &addr).is_ok());
-        assert!(can_draft(&drafter, &addr).is_ok());
-
-        // Re-grant updates the level (upsert): reader → draft.
-        grant_access(&addr, &reader, "draft").expect("re-grant");
-        assert_eq!(grant_level(&row.id, &reader).as_deref(), Some("draft"));
-        assert!(can_draft(&reader, &addr).is_ok());
-
-        // Invalid level → usage; granting the owner → teaching usage.
-        assert!(matches!(grant_access(&addr, &reader, "admin"), Err(ExtError::Usage(_))));
-        let err = grant_access(&addr, &owner, "read").expect_err("owner grant");
-        let ExtError::Usage(hint) = err else { panic!("usage") };
-        assert!(hint.contains("owner"), "{hint}");
-
-        // Unknown inbox → not_found (owner surface, not masked).
-        assert!(matches!(
-            grant_access("ghost@nowhere.example", &reader, "read"),
-            Err(ExtError::NotFound(_))
-        ));
-
-        // list_all_json carries owner + grants, never credentials.
-        let all = list_all_json();
-        let mine = all["inboxes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|i| i["address"] == addr.as_str())
-            .expect("listed");
-        assert_eq!(mine["owner"]["projectId"], owner);
-        let grants = mine["grants"].as_array().expect("grants array");
-        assert_eq!(grants.len(), 2, "reader + drafter");
-        assert!(grants.iter().all(|g| g["level"] == "draft"));
-
-        // Revoke: idempotent, and revoking the owner teaches.
-        revoke_access(&addr, &reader).expect("revoke");
-        assert!(grant_level(&row.id, &reader).is_none());
-        assert!(matches!(can_read(&reader, &addr), Err(ReadError::NotFound(_))));
-        revoke_access(&addr, &reader).expect("revoke again is a no-op ok");
-        assert!(matches!(revoke_access(&addr, &owner), Err(ExtError::Usage(_))));
-
-        // external remove cascades the remaining grant rows.
-        let vault = FakeVault::default();
-        vault.store_exact(&vault_key(&row.id), "pw").unwrap();
-        remove_inbox(&vault, &addr).expect("remove");
-        assert!(grant_level(&row.id, &drafter).is_none(), "grants cascaded away");
-
-        cleanup_row(&row.id);
-        cleanup_project(&owner);
-        cleanup_project(&reader);
-        cleanup_project(&drafter);
-        cleanup_project(&stranger);
-    }
+    // (S11: the unified grant/level/primary/mask + cascade tests live
+    // in `crate::mail::access` — they cover hosted + linked together.)
 
     #[test]
     fn add_inbox_fails_closed_on_connect_error_empty_password_and_minted_collision() {

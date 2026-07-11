@@ -161,42 +161,38 @@ fn watch_list(
     explicit: Option<&str>,
 ) -> Result<Vec<WatchAddress>, CliResponse> {
     if let Some(addr) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
-        let local_err = match messages::owned_active_address(project_id, addr) {
-            Ok(row) => {
-                let Some(account_id) = row.stalwart_account_id else {
+        // S11: ONE read gate over hosted + linked. A workspace reads an
+        // inbox when it is the PRIMARY or holds a read+ grant; anything
+        // else answers the SAME masked not_found (no existence leak,
+        // and the failure never reveals which world the address lives
+        // in). `account_id` is the backend handle (hosted = Stalwart
+        // account; linked = the external row id).
+        return match crate::mail::access::can_read(project_id, addr) {
+            Ok(inbox) => {
+                let Some(account_id) = inbox.account_id else {
                     return Err(error_response(
                         "502 Bad Gateway",
                         "engine",
-                        &format!("address '{}' has no mailbox on the mail server", row.address),
+                        &format!("address '{}' has no mailbox on the mail server", inbox.address),
                     ));
                 };
-                return Ok(vec![WatchAddress { address: row.address, account_id }]);
+                Ok(vec![WatchAddress { address: inbox.address, account_id }])
             }
-            Err(e @ ReadError::Usage(_)) => return Err(read_error_response(e)),
-            Err(e) => e,
-        };
-        // Not a minted address of this workspace — an external inbox
-        // bound to it answers instead; anything else keeps the SAME
-        // masked not_found (the failure never reveals which world the
-        // address lives in).
-        return match external::can_read(project_id, addr) {
-            Ok(ext) => Ok(vec![WatchAddress {
-                address: ext.email_address,
-                account_id: ext.id,
-            }]),
-            Err(_) => Err(read_error_response(local_err)),
+            Err(e @ ReadError::Usage(_)) => Err(read_error_response(e)),
+            Err(e) => Err(read_error_response(e)),
         };
     }
-    let mut watch: Vec<WatchAddress> = messages::active_addresses_for_project(project_id)
+    // No explicit address: every inbox the workspace can READ — owned OR
+    // granted, across BOTH sources (S11 unified sweep).
+    let mut watch: Vec<WatchAddress> = crate::mail::access::readable_hosted(project_id)
         .into_iter()
-        .filter_map(|r| {
-            let account_id = r.stalwart_account_id?;
-            Some(WatchAddress { address: r.address, account_id })
-        })
+        .map(|(address, account_id)| WatchAddress { address, account_id })
         .collect();
-    watch.extend(external::inboxes_for_project(project_id).into_iter().map(|r| {
-        WatchAddress { address: r.email_address, account_id: r.id }
-    }));
+    watch.extend(
+        crate::mail::access::readable_linked(project_id)
+            .into_iter()
+            .map(|(address, inbox_id)| WatchAddress { address, account_id: inbox_id }),
+    );
     Ok(watch)
 }
 
@@ -223,22 +219,19 @@ fn owned_message(
             &format!("no message '{token}' in this workspace"),
         )
     };
-    let row = match messages::owned_active_address(project_id, &address) {
-        Ok(row) => row,
-        Err(ReadError::Usage(hint)) => {
-            return Err(error_response("400 Bad Request", "usage", &hint))
+    // S11 unified read gate (hosted + linked): the address in the token
+    // must be one the caller can READ. Every mismatch answers the same
+    // masked message-level not_found.
+    match crate::mail::access::can_read(project_id, &address) {
+        Ok(inbox) => {
+            let Some(account_id) = inbox.account_id else {
+                return Err(masked());
+            };
+            Ok((inbox.address, account_id, email_id))
         }
-        Err(_) => {
-            return match external::can_read(project_id, &address) {
-                Ok(ext) => Ok((ext.email_address, ext.id, email_id)),
-                Err(_) => Err(masked()),
-            }
-        }
-    };
-    let Some(account_id) = row.stalwart_account_id else {
-        return Err(masked());
-    };
-    Ok((row.address, account_id, email_id))
+        Err(ReadError::Usage(hint)) => Err(error_response("400 Bad Request", "usage", &hint)),
+        Err(_) => Err(masked()),
+    }
 }
 
 // ── GET /cli/mail/messages ──────────────────────────────────────────────

@@ -575,10 +575,12 @@ async fn handle_one_request(
             // spawn_blocking covers them.
             | "/cli/mail/external/add"
             | "/cli/mail/external/remove"
-            // S10: per-role access grants (owner-or-admin-gated via
-            // is_owner_level_mutation's /cli/mail/external/ prefix).
-            | "/cli/mail/external/grant"
-            | "/cli/mail/external/revoke"
+            // S11: the unified access-management surface (owner-or-admin
+            // via is_owner_level_mutation's /cli/mail/access/ prefix).
+            | "/cli/mail/access/grant"
+            | "/cli/mail/access/revoke"
+            | "/cli/mail/access/set-primary"
+            | "/cli/mail/access/set-level"
             | "/cli/mail/draft"
             // Projects V1 P2 (prd-projects-v1 §4.1) — project-GROUP
             // mutations (NOT the legacy /cli/projects/* workspace
@@ -4159,14 +4161,12 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
-        // K2 Mail S5 + S9 — the owner reads: the Approvals queue and
-        // the external-inbox table. Owner verbs hard-fail for
-        // agent/workspace tokens SERVER-SIDE (PRD §11.1.3 — kills the
-        // self-approval temptation; S9: agents never enumerate the
-        // user's connected accounts): token_ok +
+        // K2 Mail S5 — the owner read: the Approvals queue. Owner verbs
+        // hard-fail for agent/workspace tokens SERVER-SIDE (PRD §11.1.3
+        // — kills the self-approval temptation): token_ok +
         // token_is_owner_or_admin, then the normal GET dispatch chain
         // (SQLite-only — no engine dial, so no spawn_blocking needed).
-        p if p == "/cli/mail/approvals/list" || p == "/cli/mail/external/list" => {
+        p if p == "/cli/mail/approvals/list" => {
             let _ = stream.read(&mut buf).await;
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let r = crate::cli::CliResponse::forbidden();
@@ -4184,6 +4184,37 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
+            let resp = crate::cli::dispatch(p, &params);
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // K2 Mail S11 — the unified inbox catalog. The AGENT view
+        // (?project=<ws>) rides a plain workspace token; the OWNER view
+        // (no project — it enumerates ALL inboxes across workspaces) is
+        // owner-or-admin-only, so agents never learn what exists outside
+        // their own access. SQLite-only (no engine dial).
+        p if p == "/cli/mail/inboxes" => {
+            let _ = stream.read(&mut buf).await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            let agent_view = params
+                .get("project")
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            if !agent_view && !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"listing every inbox requires owner/admin — pass project=<workspace> for the agent view, or ask your human"}}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
             let resp = crate::cli::dispatch(p, &params);
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;

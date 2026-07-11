@@ -606,6 +606,20 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0078_mail_external_inbox_grants",
             include_str!("../../drizzle_sql/0078_mail_external_inbox_grants.sql"),
         ),
+        // 0079 (K2 Mail S11, prd-email-server-v1 §17.5): ONE access
+        // layer over BOTH provisioning sources. `owner_project_id`
+        // keeps its name but is now the PRIMARY (managing) workspace;
+        // a new `primary_level` column (hosted 'send' / linked 'draft')
+        // records the primary's own ceiling. `mail_inbox_grants`
+        // (source + inbox_id + project_id → level) replaces S10's
+        // linked-only `mail_external_inbox_grants`: existing rows are
+        // data-migrated in as source='linked', then the old table is
+        // dropped. read < draft < send; 'send' is hosted-only. Runs
+        // once by name (the ADD COLUMNs never double-apply).
+        (
+            "0079_mail_unified_grants",
+            include_str!("../../drizzle_sql/0079_mail_unified_grants.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

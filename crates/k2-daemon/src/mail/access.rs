@@ -1,0 +1,1107 @@
+//! S11 — the ONE inbox access layer over BOTH provisioning sources
+//! (PRD §17.5). Hosted addresses (`mail_addresses`, minted on a
+//! verified domain) and linked inboxes (`mail_external_inboxes`, the
+//! user's OWN IMAP account) are governed by a SINGLE model:
+//!
+//! - Each provisioning row's `owner_project_id` is the **PRIMARY**
+//!   workspace (it manages the inbox); `primary_level` is the primary's
+//!   own ceiling (hosted default 'send', linked default 'draft').
+//! - `mail_inbox_grants(source, inbox_id, project_id, level)` gives ANY
+//!   other workspace access. Levels order **read < draft < send**.
+//! - `effective_level(project, source, inbox_id)` = the primary's
+//!   `primary_level` when `project` IS the primary, else the grant row
+//!   level, else `None` (no access).
+//! - READ needs ≥ read; DRAFT needs ≥ draft; **SEND needs level=='send'
+//!   AND source=='hosted'** — a linked account can never reach send
+//!   (there is no send code path against IMAP; the ops layer refuses
+//!   granting 'send' on a linked inbox and clamps its primary_level to
+//!   'draft').
+//!
+//! MASKING (the S3 rule, preserved everywhere): a workspace with no
+//! access to an address gets the SAME `not_found` a foreign/unknown
+//! address gets — it never learns which inboxes exist outside it. The
+//! agent-facing gates ([`can_read`]/[`can_draft`]/[`can_send`]) return
+//! that masked shape in every deny branch. The owner/primary MANAGEMENT
+//! surface ([`grant_access`]/[`revoke_access`]/[`set_primary`]/
+//! [`set_level`]) is NOT masked (the primary sees its own inboxes).
+//!
+//! Send governance stays ORTHOGONAL: `can_send` only answers "may this
+//! workspace send FROM this hosted address"; the actual send still
+//! passes the existing `mail_agent_send` off/approval/on gate (S5).
+
+use crate::mail::addresses::{self, AddrError};
+use crate::mail::external;
+use crate::mail::messages::ReadError;
+use k2_core::db::schema::MailExternalInbox;
+
+// ── Levels ──────────────────────────────────────────────────────────────
+
+pub const LEVEL_READ: &str = "read";
+pub const LEVEL_DRAFT: &str = "draft";
+pub const LEVEL_SEND: &str = "send";
+
+/// read < draft < send (the derived `Ord` follows declaration order).
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Level {
+    Read,
+    Draft,
+    Send,
+}
+
+impl Level {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Level::Read => LEVEL_READ,
+            Level::Draft => LEVEL_DRAFT,
+            Level::Send => LEVEL_SEND,
+        }
+    }
+    pub fn parse(s: &str) -> Option<Level> {
+        match s.trim() {
+            LEVEL_READ => Some(Level::Read),
+            LEVEL_DRAFT => Some(Level::Draft),
+            LEVEL_SEND => Some(Level::Send),
+            _ => None,
+        }
+    }
+    /// Clamp to a source's ceiling (linked never exceeds draft).
+    pub fn clamp_to(self, source: Source) -> Level {
+        self.min(source.max_level())
+    }
+}
+
+// ── Sources ─────────────────────────────────────────────────────────────
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Source {
+    Hosted,
+    Linked,
+}
+
+impl Source {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Source::Hosted => "hosted",
+            Source::Linked => "linked",
+        }
+    }
+    /// The highest level this source can ever reach — hosted up to
+    /// send, linked capped at draft (no send code path).
+    pub fn max_level(self) -> Level {
+        match self {
+            Source::Hosted => Level::Send,
+            Source::Linked => Level::Draft,
+        }
+    }
+}
+
+// ── Management errors (owner/primary surface — NOT masked) ───────────────
+
+#[derive(Debug)]
+pub enum AccessError {
+    /// Bad input → 400 `usage`.
+    Usage(String),
+    /// Unknown inbox (owner surface — the primary sees its own) → 404.
+    NotFound(String),
+    /// Stalwart/DB said no → 502 `engine`.
+    Engine(String),
+}
+
+// ── The resolved-inbox handle the read/send paths need ──────────────────
+
+/// What an agent-facing gate resolves to: enough to build a backend and
+/// re-check server-side. `account_id` is the backend mailbox handle
+/// (hosted → the Stalwart account id; linked → the external row id).
+#[derive(Debug, Clone)]
+pub struct AccessInbox {
+    pub source: Source,
+    /// Normalized address (the seam key).
+    pub address: String,
+    /// The backend account handle; `None` for a hosted row with no
+    /// Stalwart account yet (a degraded mint — callers fail loudly).
+    pub account_id: Option<String>,
+    /// The linked row (present only for [`Source::Linked`]) — the draft
+    /// path needs it to build the IMAP backend.
+    pub linked: Option<MailExternalInbox>,
+    /// The caller's effective level on this inbox (read by tests and
+    /// available to callers that gate on the exact level).
+    #[allow(dead_code)]
+    pub your_level: Level,
+}
+
+// ── Row lookups ─────────────────────────────────────────────────────────
+
+/// A hosted ACTIVE address row (the fields the access layer needs).
+struct HostedRow {
+    id: String,
+    stalwart_account_id: Option<String>,
+    owner_project_id: String,
+    primary_level: String,
+}
+
+fn hosted_active_row(conn: &rusqlite::Connection, address: &str) -> Option<HostedRow> {
+    conn.query_row(
+        "SELECT id, stalwart_account_id, owner_project_id, primary_level \
+         FROM mail_addresses WHERE address = ?1 AND status = 'active'",
+        rusqlite::params![address],
+        |r| {
+            Ok(HostedRow {
+                id: r.get(0)?,
+                stalwart_account_id: r.get(1)?,
+                owner_project_id: r.get(2)?,
+                primary_level: r.get(3)?,
+            })
+        },
+    )
+    .ok()
+}
+
+/// The grant level a workspace holds on `(source, inbox_id)`, or `None`
+/// (a locking convenience over [`grant_level_conn`] — test-only for now;
+/// production reads go through the resolve/effective paths).
+#[cfg(test)]
+pub fn grant_level(source: Source, inbox_id: &str, project_id: &str) -> Option<Level> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    grant_level_conn(&conn, source, inbox_id, project_id)
+}
+
+fn grant_level_conn(
+    conn: &rusqlite::Connection,
+    source: Source,
+    inbox_id: &str,
+    project_id: &str,
+) -> Option<Level> {
+    conn.query_row(
+        "SELECT level FROM mail_inbox_grants \
+         WHERE source = ?1 AND inbox_id = ?2 AND project_id = ?3",
+        rusqlite::params![source.as_str(), inbox_id, project_id],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|s| Level::parse(&s))
+}
+
+/// The effective level a workspace has on an inbox: the primary's
+/// `primary_level` when it IS the primary, else its grant row, else
+/// `None`. `primary_level` is clamped to the source ceiling (defensive —
+/// a linked primary can never exceed draft).
+fn effective_level_conn(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    source: Source,
+    inbox_id: &str,
+    owner_project_id: &str,
+    primary_level: &str,
+) -> Option<Level> {
+    if project_id == owner_project_id {
+        let lvl = Level::parse(primary_level).unwrap_or(Level::Read).clamp_to(source);
+        return Some(lvl);
+    }
+    grant_level_conn(conn, source, inbox_id, project_id).map(|l| l.clamp_to(source))
+}
+
+// ── Agent-facing gates (MASKED) ─────────────────────────────────────────
+
+fn normalize_or_usage(raw_address: &str) -> Result<String, ReadError> {
+    addresses::normalize_address(raw_address).map_err(|e| match e {
+        AddrError::Usage(hint) => ReadError::Usage(hint),
+        _ => ReadError::Usage(format!("'{raw_address}' is not a valid address")),
+    })
+}
+
+/// Resolve an explicitly named address to an [`AccessInbox`], enforcing
+/// `need` (and, for send, source=='hosted' && level=='send'). Every deny
+/// branch answers the SAME masked `not_found` (no existence leak).
+fn resolve(project_id: &str, raw_address: &str, need: Level) -> Result<AccessInbox, ReadError> {
+    let address = normalize_or_usage(raw_address)?;
+    let masked = || ReadError::NotFound(format!("no address '{address}' in this workspace"));
+
+    // Linked first (its row is the §17.5 seam key); then hosted active.
+    if let Some(row) = external::inbox_for_address(&address) {
+        let source = Source::Linked;
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let primary = linked_primary_level_conn(&conn, &row.id);
+        let eff = effective_level_conn(
+            &conn,
+            project_id,
+            source,
+            &row.id,
+            &row.owner_project_id,
+            &primary,
+        )
+        .ok_or_else(masked)?;
+        drop(conn);
+        // SEND is hosted-only — a linked inbox never satisfies it.
+        if need == Level::Send || eff < need {
+            return Err(masked());
+        }
+        return Ok(AccessInbox {
+            source,
+            address,
+            account_id: Some(row.id.clone()),
+            linked: Some(row),
+            your_level: eff,
+        });
+    }
+
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Some(row) = hosted_active_row(&conn, &address) else {
+        return Err(masked());
+    };
+    let source = Source::Hosted;
+    let eff = effective_level_conn(
+        &conn,
+        project_id,
+        source,
+        &row.id,
+        &row.owner_project_id,
+        &row.primary_level,
+    )
+    .ok_or_else(masked)?;
+    drop(conn);
+    if eff < need {
+        return Err(masked());
+    }
+    if need == Level::Send && eff != Level::Send {
+        return Err(masked());
+    }
+    Ok(AccessInbox {
+        source,
+        address,
+        account_id: row.stalwart_account_id,
+        linked: None,
+        your_level: eff,
+    })
+}
+
+/// The MASKED READ gate (messages/read/wait/attachments across BOTH
+/// sources): the caller may read when its effective level ≥ read.
+pub fn can_read(project_id: &str, raw_address: &str) -> Result<AccessInbox, ReadError> {
+    resolve(project_id, raw_address, Level::Read)
+}
+
+/// The MASKED DRAFT gate: effective level ≥ draft. Used by the linked
+/// `k2 mail draft` verb (append `\Draft` into the account's Drafts
+/// folder); a read-only grant, or no access, answers the same masked
+/// `not_found`.
+pub fn can_draft(project_id: &str, raw_address: &str) -> Result<AccessInbox, ReadError> {
+    resolve(project_id, raw_address, Level::Draft)
+}
+
+/// The MASKED SEND gate: effective level == send AND source == hosted.
+/// A linked inbox, a draft/read grant, or no access all answer the same
+/// masked `not_found`. Send GOVERNANCE (off/approval/on) is layered on
+/// top by the caller — this only answers "may this workspace send FROM
+/// this hosted address".
+pub fn can_send(project_id: &str, raw_address: &str) -> Result<AccessInbox, ReadError> {
+    resolve(project_id, raw_address, Level::Send)
+}
+
+/// Every hosted ACTIVE address a workspace can READ (primary or grant) —
+/// the no-address `messages`/`wait` sweep's hosted half. Returns
+/// `(address, stalwart_account_id)` pairs (rows without a Stalwart
+/// account are skipped, mirroring the pre-S11 behavior).
+pub fn readable_hosted(project_id: &str) -> Vec<(String, String)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT a.address, a.stalwart_account_id \
+         FROM mail_addresses a \
+         WHERE a.status = 'active' AND a.stalwart_account_id IS NOT NULL AND ( \
+             a.owner_project_id = ?1 \
+             OR EXISTS (SELECT 1 FROM mail_inbox_grants g \
+                        WHERE g.source = 'hosted' AND g.inbox_id = a.id \
+                          AND g.project_id = ?1) ) \
+         ORDER BY a.created_at, a.address",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map(rusqlite::params![project_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })
+    .map(|rows| rows.filter_map(Result::ok).collect())
+    .unwrap_or_default()
+}
+
+/// Every LINKED inbox a workspace can READ (primary or grant) — the
+/// no-address sweep's linked half. Returns `(address, inbox_id)` pairs.
+pub fn readable_linked(project_id: &str) -> Vec<(String, String)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT i.email_address, i.id \
+         FROM mail_external_inboxes i \
+         WHERE i.owner_project_id = ?1 \
+            OR EXISTS (SELECT 1 FROM mail_inbox_grants g \
+                       WHERE g.source = 'linked' AND g.inbox_id = i.id \
+                         AND g.project_id = ?1) \
+         ORDER BY i.created_at, i.email_address",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map(rusqlite::params![project_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })
+    .map(|rows| rows.filter_map(Result::ok).collect())
+    .unwrap_or_default()
+}
+
+/// Every hosted ACTIVE address a workspace can SEND FROM (effective
+/// level == send — primary at 'send', or a 'send' grant). Returns
+/// `(address, stalwart_account_id)`. Linked never appears (send is
+/// hosted-only). The implicit-`from` resolver for `k2 mail send`.
+pub fn sendable_hosted(project_id: &str) -> Vec<(String, String)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT a.address, a.stalwart_account_id \
+         FROM mail_addresses a \
+         WHERE a.status = 'active' AND a.stalwart_account_id IS NOT NULL AND ( \
+             (a.owner_project_id = ?1 AND a.primary_level = 'send') \
+             OR EXISTS (SELECT 1 FROM mail_inbox_grants g \
+                        WHERE g.source = 'hosted' AND g.inbox_id = a.id \
+                          AND g.project_id = ?1 AND g.level = 'send') ) \
+         ORDER BY a.created_at, a.address",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map(rusqlite::params![project_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })
+    .map(|rows| rows.filter_map(Result::ok).collect())
+    .unwrap_or_default()
+}
+
+// ── Linked helpers ──────────────────────────────────────────────────────
+
+fn linked_primary_level_conn(conn: &rusqlite::Connection, inbox_id: &str) -> String {
+    conn.query_row(
+        "SELECT primary_level FROM mail_external_inboxes WHERE id = ?1",
+        rusqlite::params![inbox_id],
+        |r| r.get::<_, String>(0),
+    )
+    .unwrap_or_else(|_| LEVEL_DRAFT.to_string())
+}
+
+// ── Owner/primary MANAGEMENT surface (NOT masked) ───────────────────────
+
+/// A resolved management target: which provisioning row an address names.
+struct ManageTarget {
+    source: Source,
+    inbox_id: String,
+    address: String,
+    owner_project_id: String,
+    primary_level: String,
+}
+
+fn manage_error_usage(raw_address: &str) -> impl Fn(AddrError) -> AccessError + '_ {
+    move |e| match e {
+        AddrError::Usage(hint) => AccessError::Usage(hint),
+        _ => AccessError::Usage(format!("'{raw_address}' is not a valid address")),
+    }
+}
+
+/// Resolve an address to its provisioning row for MANAGEMENT (unmasked
+/// — this is the primary's own surface). Linked wins the seam key; then
+/// hosted (any status, so a retired hosted address still resolves for
+/// e.g. revoke cleanup).
+fn manage_target(raw_address: &str) -> Result<ManageTarget, AccessError> {
+    let address =
+        addresses::normalize_address(raw_address).map_err(manage_error_usage(raw_address))?;
+    if let Some(row) = external::inbox_for_address(&address) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let primary = linked_primary_level_conn(&conn, &row.id);
+        return Ok(ManageTarget {
+            source: Source::Linked,
+            inbox_id: row.id,
+            address: row.email_address,
+            owner_project_id: row.owner_project_id,
+            primary_level: primary,
+        });
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let row = conn
+        .query_row(
+            "SELECT id, address, owner_project_id, primary_level FROM mail_addresses \
+             WHERE address = ?1",
+            rusqlite::params![address],
+            |r| {
+                Ok(ManageTarget {
+                    source: Source::Hosted,
+                    inbox_id: r.get(0)?,
+                    address: r.get(1)?,
+                    owner_project_id: r.get(2)?,
+                    primary_level: r.get(3)?,
+                })
+            },
+        )
+        .ok();
+    row.ok_or_else(|| {
+        AccessError::NotFound(format!(
+            "no inbox '{address}' — 'k2 mail inboxes' shows what you manage"
+        ))
+    })
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Validate a level word against a source: any of read/draft/send, but
+/// 'send' is refused on a linked inbox (no send code path exists).
+fn validate_level_for(source: Source, level: &str) -> Result<Level, AccessError> {
+    let lvl = Level::parse(level).ok_or_else(|| {
+        AccessError::Usage(format!(
+            "invalid level '{}' — 'read' (messages/read/wait), 'draft' (read + save reply \
+             drafts), or 'send' (read + send/reply, hosted only)",
+            level.trim()
+        ))
+    })?;
+    if lvl == Level::Send && source == Source::Linked {
+        return Err(AccessError::Usage(
+            "linked accounts can't send — there is no send code path from an external \
+             account. Grant 'read' or 'draft' instead."
+                .to_string(),
+        ));
+    }
+    Ok(lvl)
+}
+
+/// GRANT `level` to a workspace on any inbox (Primary-gated at the
+/// route). Upsert. Granting the PRIMARY workspace is a teaching error
+/// (its access is the ownership binding + primary_level, not a grant).
+/// Returns the resolved address + source for the route echo.
+pub fn grant_access(
+    raw_address: &str,
+    grantee_project_id: &str,
+    level: &str,
+) -> Result<(String, Source), AccessError> {
+    let target = manage_target(raw_address)?;
+    let lvl = validate_level_for(target.source, level)?;
+    if target.owner_project_id == grantee_project_id {
+        return Err(AccessError::Usage(
+            "that workspace is the PRIMARY — it already manages this inbox at its \
+             primary level. Use 'set-level' to change the primary's own ceiling."
+                .to_string(),
+        ));
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_inbox_grants (source, inbox_id, project_id, level, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(source, inbox_id, project_id) DO UPDATE SET level = excluded.level",
+            rusqlite::params![
+                target.source.as_str(),
+                target.inbox_id,
+                grantee_project_id,
+                lvl.as_str(),
+                now_secs()
+            ],
+        )
+        .map_err(|e| AccessError::Engine(format!("grant access: {e}")))?;
+    }
+    k2_core::log_debug!(
+        "[mail/access] granted '{}' on {} ({}) to workspace {}",
+        lvl.as_str(),
+        target.address,
+        target.source.as_str(),
+        grantee_project_id
+    );
+    Ok((target.address, target.source))
+}
+
+/// REVOKE a workspace's grant on an inbox (Primary-gated). Idempotent
+/// (no grant → no-op ok). Revoking the PRIMARY teaches (transfer with
+/// `set-primary` or tear the inbox down).
+pub fn revoke_access(
+    raw_address: &str,
+    grantee_project_id: &str,
+) -> Result<String, AccessError> {
+    let target = manage_target(raw_address)?;
+    if target.owner_project_id == grantee_project_id {
+        return Err(AccessError::Usage(format!(
+            "that workspace is the PRIMARY of '{}' — you can't revoke the manager. Transfer \
+             with 'k2 mail access primary', or remove a linked inbox with 'k2 mail link remove'.",
+            target.address
+        )));
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "DELETE FROM mail_inbox_grants WHERE source = ?1 AND inbox_id = ?2 AND project_id = ?3",
+            rusqlite::params![target.source.as_str(), target.inbox_id, grantee_project_id],
+        )
+        .map_err(|e| AccessError::Engine(format!("revoke access: {e}")))?;
+    }
+    Ok(target.address)
+}
+
+/// TRANSFER the primary (managing) workspace. The OLD primary becomes a
+/// grant at its prior `primary_level` (clamped to the source ceiling);
+/// the NEW primary's grant row (if any) is removed and its
+/// `primary_level` is set to its prior grant level (else the source
+/// ceiling), clamped to the source. Primary→same-primary teaches.
+pub fn set_primary(
+    raw_address: &str,
+    new_project_id: &str,
+) -> Result<(String, Source), AccessError> {
+    let target = manage_target(raw_address)?;
+    if target.owner_project_id == new_project_id {
+        return Err(AccessError::Usage(format!(
+            "that workspace is already the primary of '{}'",
+            target.address
+        )));
+    }
+    let old_primary_level = Level::parse(&target.primary_level)
+        .unwrap_or(Level::Read)
+        .clamp_to(target.source);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    // The new primary inherits its prior grant level (if any), else the
+    // source ceiling — it is now the manager.
+    let new_primary_level = grant_level_conn(&conn, target.source, &target.inbox_id, new_project_id)
+        .unwrap_or_else(|| target.source.max_level())
+        .clamp_to(target.source);
+    let table = match target.source {
+        Source::Hosted => "mail_addresses",
+        Source::Linked => "mail_external_inboxes",
+    };
+    conn.execute(
+        &format!("UPDATE {table} SET owner_project_id = ?1, primary_level = ?2 WHERE id = ?3"),
+        rusqlite::params![new_project_id, new_primary_level.as_str(), target.inbox_id],
+    )
+    .map_err(|e| AccessError::Engine(format!("set primary: {e}")))?;
+    // The new primary is no longer a grantee.
+    conn.execute(
+        "DELETE FROM mail_inbox_grants WHERE source = ?1 AND inbox_id = ?2 AND project_id = ?3",
+        rusqlite::params![target.source.as_str(), target.inbox_id, new_project_id],
+    )
+    .map_err(|e| AccessError::Engine(format!("set primary (clear grant): {e}")))?;
+    // The old primary keeps access as a grant at its prior ceiling.
+    conn.execute(
+        "INSERT INTO mail_inbox_grants (source, inbox_id, project_id, level, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(source, inbox_id, project_id) DO UPDATE SET level = excluded.level",
+        rusqlite::params![
+            target.source.as_str(),
+            target.inbox_id,
+            target.owner_project_id,
+            old_primary_level.as_str(),
+            now_secs()
+        ],
+    )
+    .map_err(|e| AccessError::Engine(format!("set primary (demote old): {e}")))?;
+    Ok((target.address, target.source))
+}
+
+/// SET a workspace's level. When `project` IS the primary, updates the
+/// primary_level (validated vs source); otherwise upserts its grant.
+pub fn set_level(
+    raw_address: &str,
+    project_id: &str,
+    level: &str,
+) -> Result<(String, Source, bool), AccessError> {
+    let target = manage_target(raw_address)?;
+    let lvl = validate_level_for(target.source, level)?;
+    let is_primary = target.owner_project_id == project_id;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if is_primary {
+        let table = match target.source {
+            Source::Hosted => "mail_addresses",
+            Source::Linked => "mail_external_inboxes",
+        };
+        conn.execute(
+            &format!("UPDATE {table} SET primary_level = ?1 WHERE id = ?2"),
+            rusqlite::params![lvl.as_str(), target.inbox_id],
+        )
+        .map_err(|e| AccessError::Engine(format!("set primary level: {e}")))?;
+    } else {
+        conn.execute(
+            "INSERT INTO mail_inbox_grants (source, inbox_id, project_id, level, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(source, inbox_id, project_id) DO UPDATE SET level = excluded.level",
+            rusqlite::params![
+                target.source.as_str(),
+                target.inbox_id,
+                project_id,
+                lvl.as_str(),
+                now_secs()
+            ],
+        )
+        .map_err(|e| AccessError::Engine(format!("set grant level: {e}")))?;
+    }
+    Ok((target.address, target.source, is_primary))
+}
+
+/// Cascade every grant row for one inbox (on `link remove` / hosted
+/// retire) — no grant may outlive the inbox it points at.
+pub fn cascade_grants(conn: &rusqlite::Connection, source: Source, inbox_id: &str) {
+    let _ = conn.execute(
+        "DELETE FROM mail_inbox_grants WHERE source = ?1 AND inbox_id = ?2",
+        rusqlite::params![source.as_str(), inbox_id],
+    );
+}
+
+// ── The unified catalog (GET /cli/mail/inboxes) ─────────────────────────
+
+/// Resolve a project id → workspace display name (name, else path
+/// basename).
+fn workspace_name(conn: &rusqlite::Connection, project_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT name, path FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |r| {
+            let name: Option<String> = r.get(0)?;
+            let path: Option<String> = r.get(1)?;
+            Ok(name.or_else(|| {
+                path.as_deref()
+                    .and_then(|p| p.rsplit('/').next())
+                    .map(String::from)
+            }))
+        },
+    )
+    .ok()
+    .flatten()
+}
+
+/// One catalog row (pre-shaped, before the viewer filter).
+struct CatalogRow {
+    source: Source,
+    address: String,
+    inbox_id: String,
+    display_name: Option<String>,
+    status: String,
+    owner_project_id: String,
+    primary_level: String,
+    // source-specific
+    domain: Option<String>,
+    host: Option<String>,
+    tls: Option<String>,
+}
+
+fn load_catalog_rows(conn: &rusqlite::Connection) -> Vec<CatalogRow> {
+    let mut rows: Vec<CatalogRow> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT address, id, owner_project_id, primary_level, status \
+         FROM mail_addresses WHERE status = 'active' ORDER BY created_at, address",
+    ) {
+        let iter = stmt.query_map([], |r| {
+            let address: String = r.get(0)?;
+            let domain = address.split_once('@').map(|(_, d)| d.to_string());
+            Ok(CatalogRow {
+                source: Source::Hosted,
+                address,
+                inbox_id: r.get(1)?,
+                display_name: None,
+                owner_project_id: r.get(2)?,
+                primary_level: r.get(3)?,
+                status: r.get(4)?,
+                domain,
+                host: None,
+                tls: None,
+            })
+        });
+        if let Ok(iter) = iter {
+            rows.extend(iter.filter_map(Result::ok));
+        }
+    }
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT email_address, id, owner_project_id, primary_level, status, display_name, \
+                host, tls FROM mail_external_inboxes ORDER BY created_at, email_address",
+    ) {
+        let iter = stmt.query_map([], |r| {
+            Ok(CatalogRow {
+                source: Source::Linked,
+                address: r.get(0)?,
+                inbox_id: r.get(1)?,
+                owner_project_id: r.get(2)?,
+                primary_level: r.get(3)?,
+                status: r.get(4)?,
+                display_name: r.get(5)?,
+                domain: None,
+                host: r.get(6)?,
+                tls: r.get(7)?,
+            })
+        });
+        if let Ok(iter) = iter {
+            rows.extend(iter.filter_map(Result::ok));
+        }
+    }
+    rows
+}
+
+fn grants_for(conn: &rusqlite::Connection, source: Source, inbox_id: &str) -> Vec<(String, String)> {
+    conn.prepare(
+        "SELECT project_id, level FROM mail_inbox_grants \
+         WHERE source = ?1 AND inbox_id = ?2 ORDER BY created_at, project_id",
+    )
+    .ok()
+    .and_then(|mut stmt| {
+        stmt.query_map(rusqlite::params![source.as_str(), inbox_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
+        .ok()
+    })
+    .unwrap_or_default()
+}
+
+/// The unified inbox catalog. `viewer` = `Some(project_id)` for the
+/// agent view (only inboxes that workspace can access, with `yourLevel`);
+/// `None` for the owner/admin view (ALL inboxes, full primary + grants).
+pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let rows = load_catalog_rows(&conn);
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    for row in &rows {
+        let grants = grants_for(&conn, row.source, &row.inbox_id);
+        // The caller's effective level (agent view filters on it).
+        let your = viewer.and_then(|p| {
+            effective_level_conn(
+                &conn,
+                p,
+                row.source,
+                &row.inbox_id,
+                &row.owner_project_id,
+                &row.primary_level,
+            )
+        });
+        if viewer.is_some() && your.is_none() {
+            continue; // no access → invisible (masking preserved)
+        }
+        let primary_level = Level::parse(&row.primary_level)
+            .unwrap_or(Level::Read)
+            .clamp_to(row.source);
+        let grants_json: Vec<serde_json::Value> = grants
+            .iter()
+            .map(|(pid, level)| {
+                serde_json::json!({
+                    "projectId": pid,
+                    "workspace": workspace_name(&conn, pid),
+                    "level": level,
+                })
+            })
+            .collect();
+        let mut entry = serde_json::json!({
+            "address": row.address,
+            "source": row.source.as_str(),
+            "displayName": row.display_name,
+            "status": row.status,
+            "primary": {
+                "projectId": row.owner_project_id,
+                "workspace": workspace_name(&conn, &row.owner_project_id),
+                "level": primary_level.as_str(),
+            },
+            "grants": grants_json,
+            "yourLevel": your.map(|l| l.as_str()),
+            "maxLevel": row.source.max_level().as_str(),
+        });
+        // Source-specific fields.
+        if let Some(obj) = entry.as_object_mut() {
+            match row.source {
+                Source::Hosted => {
+                    obj.insert("domain".to_string(), serde_json::json!(row.domain));
+                }
+                Source::Linked => {
+                    obj.insert("host".to_string(), serde_json::json!(row.host));
+                    obj.insert("tls".to_string(), serde_json::json!(row.tls));
+                }
+            }
+        }
+        out.push(entry);
+    }
+    serde_json::json!({ "ok": true, "count": out.len(), "inboxes": out })
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Inline unit tests — the unified layer over BOTH sources, shared test
+// DB, no network (house rules).
+// ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mail::messages::ReadError;
+
+    fn unique_project() -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, format!("acc-{id}"), format!("/tmp/acc-{id}")],
+        )
+        .expect("project row");
+        id
+    }
+
+    fn unique_addr(label: &str) -> String {
+        format!("{label}-{}@acc-test.example", &uuid::Uuid::new_v4().simple().to_string()[..12])
+    }
+
+    /// Seed a hosted ACTIVE address owned by `owner` (default primary
+    /// 'send'). Returns the row id.
+    fn seed_hosted(owner: &str, address: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, \
+             owner_project_id, status, created_at, primary_level) \
+             VALUES (?1, ?2, 'dom-x', ?3, ?4, 'active', 100, 'send')",
+            rusqlite::params![id, address, format!("acct-{}", &id[..8]), owner],
+        )
+        .expect("seed hosted");
+        id
+    }
+
+    /// Seed a linked inbox owned by `owner` (default primary 'draft').
+    fn seed_linked(owner: &str, address: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, host, \
+             port, username, created_at, primary_level) \
+             VALUES (?1, ?2, ?3, 'imap.example.com', 993, ?3, 100, 'draft')",
+            rusqlite::params![id, owner, address],
+        )
+        .expect("seed linked");
+        id
+    }
+
+    fn cleanup(project_id: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute(
+            "DELETE FROM mail_inbox_grants WHERE project_id = ?1",
+            rusqlite::params![project_id],
+        );
+        let _ = conn.execute(
+            "DELETE FROM mail_inbox_grants WHERE inbox_id IN \
+             (SELECT id FROM mail_addresses WHERE owner_project_id = ?1) \
+             OR inbox_id IN (SELECT id FROM mail_external_inboxes WHERE owner_project_id = ?1)",
+            rusqlite::params![project_id],
+        );
+        let _ = conn.execute(
+            "DELETE FROM mail_addresses WHERE owner_project_id = ?1",
+            rusqlite::params![project_id],
+        );
+        let _ = conn.execute(
+            "DELETE FROM mail_external_inboxes WHERE owner_project_id = ?1",
+            rusqlite::params![project_id],
+        );
+        let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![project_id]);
+    }
+
+    #[test]
+    fn level_ordering_and_source_ceilings() {
+        assert!(Level::Read < Level::Draft && Level::Draft < Level::Send);
+        assert_eq!(Source::Hosted.max_level(), Level::Send);
+        assert_eq!(Source::Linked.max_level(), Level::Draft);
+        assert_eq!(Level::Send.clamp_to(Source::Linked), Level::Draft);
+        assert_eq!(Level::Send.clamp_to(Source::Hosted), Level::Send);
+    }
+
+    #[test]
+    fn hosted_primary_reads_drafts_and_sends_foreign_is_masked() {
+        let owner = unique_project();
+        let addr = unique_addr("hosted");
+        seed_hosted(&owner, &addr);
+
+        // Primary at 'send' clears every gate.
+        assert_eq!(can_read(&owner, &addr).unwrap().source, Source::Hosted);
+        assert!(can_draft(&owner, &addr).is_ok());
+        let send = can_send(&owner, &addr).expect("hosted primary sends");
+        assert_eq!(send.your_level, Level::Send);
+        assert!(send.account_id.is_some(), "hosted carries the Stalwart account");
+
+        // A foreign workspace is masked on ALL three (no existence leak).
+        for r in [
+            can_read("nobody", &addr).err(),
+            can_draft("nobody", &addr).err(),
+            can_send("nobody", &addr).err(),
+        ] {
+            assert!(matches!(r, Some(ReadError::NotFound(_))), "masked");
+        }
+        cleanup(&owner);
+    }
+
+    #[test]
+    fn linked_primary_cannot_send_ever() {
+        let owner = unique_project();
+        let addr = unique_addr("linked");
+        seed_linked(&owner, &addr);
+        assert!(can_read(&owner, &addr).is_ok());
+        assert!(can_draft(&owner, &addr).is_ok());
+        // Linked can never reach send — masked, like a missing address.
+        assert!(matches!(can_send(&owner, &addr), Err(ReadError::NotFound(_))));
+        cleanup(&owner);
+    }
+
+    #[test]
+    fn grants_extend_access_across_both_sources_with_masking() {
+        let owner = unique_project();
+        let reader = unique_project();
+        let sender = unique_project();
+        let hosted = unique_addr("gh");
+        let linked = unique_addr("gl");
+        seed_hosted(&owner, &hosted);
+        seed_linked(&owner, &linked);
+
+        // Baseline: only the primary; others masked.
+        assert!(matches!(can_read(&reader, &hosted), Err(ReadError::NotFound(_))));
+
+        // 'read' grant on hosted → read OK, draft still masked.
+        grant_access(&hosted, &reader, "read").expect("grant read");
+        assert!(can_read(&reader, &hosted).is_ok());
+        assert!(matches!(can_draft(&reader, &hosted), Err(ReadError::NotFound(_))));
+
+        // 'send' grant on hosted → can_send passes.
+        grant_access(&hosted, &sender, "send").expect("grant send");
+        assert!(can_send(&sender, &hosted).is_ok());
+
+        // 'send' on a LINKED inbox is refused (no send path).
+        let err = grant_access(&linked, &sender, "send").expect_err("linked send");
+        assert!(matches!(err, AccessError::Usage(_)));
+        // 'draft' on linked is fine; can_draft passes, can_send masked.
+        grant_access(&linked, &sender, "draft").expect("grant draft");
+        assert!(can_draft(&sender, &linked).is_ok());
+        assert!(matches!(can_send(&sender, &linked), Err(ReadError::NotFound(_))));
+
+        // Granting the PRIMARY teaches; unknown inbox → not_found.
+        assert!(matches!(grant_access(&hosted, &owner, "read"), Err(AccessError::Usage(_))));
+        assert!(matches!(
+            grant_access("ghost@nowhere.example", &reader, "read"),
+            Err(AccessError::NotFound(_))
+        ));
+
+        // Revoke is idempotent; revoking the primary teaches.
+        revoke_access(&hosted, &reader).expect("revoke");
+        assert!(matches!(can_read(&reader, &hosted), Err(ReadError::NotFound(_))));
+        revoke_access(&hosted, &reader).expect("idempotent");
+        assert!(matches!(revoke_access(&hosted, &owner), Err(AccessError::Usage(_))));
+
+        cleanup(&owner);
+        cleanup(&reader);
+        cleanup(&sender);
+    }
+
+    #[test]
+    fn set_level_updates_primary_ceiling_and_grants() {
+        let owner = unique_project();
+        let grantee = unique_project();
+        let hosted = unique_addr("sl");
+        seed_hosted(&owner, &hosted);
+
+        // Lower the primary's own ceiling to 'read' — it can no longer send.
+        let (_, _, is_primary) = set_level(&hosted, &owner, "read").expect("set primary level");
+        assert!(is_primary);
+        assert!(can_read(&owner, &hosted).is_ok());
+        assert!(matches!(can_send(&owner, &hosted), Err(ReadError::NotFound(_))));
+
+        // set-level on a non-primary upserts a grant.
+        let (_, _, is_primary) = set_level(&hosted, &grantee, "draft").expect("set grant level");
+        assert!(!is_primary);
+        assert!(can_draft(&grantee, &hosted).is_ok());
+        // Linked primary set to 'send' is refused.
+        let linked = unique_addr("sll");
+        seed_linked(&owner, &linked);
+        assert!(matches!(set_level(&linked, &owner, "send"), Err(AccessError::Usage(_))));
+
+        cleanup(&owner);
+        cleanup(&grantee);
+    }
+
+    #[test]
+    fn set_primary_transfers_and_demotes_the_old_primary_to_a_grant() {
+        let owner = unique_project();
+        let heir = unique_project();
+        let hosted = unique_addr("sp");
+        seed_hosted(&owner, &hosted);
+        // heir starts with a 'read' grant.
+        grant_access(&hosted, &heir, "read").expect("seed grant");
+
+        set_primary(&hosted, &heir).expect("transfer");
+        // heir now manages (its grant row is gone; it reads via primary).
+        assert!(grant_level(Source::Hosted, &manage_inbox_id(&hosted), &heir).is_none());
+        assert!(can_read(&heir, &hosted).is_ok());
+        // old owner kept access as a grant at its prior 'send' ceiling.
+        assert_eq!(
+            grant_level(Source::Hosted, &manage_inbox_id(&hosted), &owner),
+            Some(Level::Send)
+        );
+        assert!(can_send(&owner, &hosted).is_ok());
+        // same-primary transfer teaches.
+        assert!(matches!(set_primary(&hosted, &heir), Err(AccessError::Usage(_))));
+
+        cleanup(&owner);
+        cleanup(&heir);
+    }
+
+    fn manage_inbox_id(address: &str) -> String {
+        super::manage_target(address).expect("target").inbox_id
+    }
+
+    #[test]
+    fn catalog_agent_view_filters_owner_view_lists_all() {
+        let owner = unique_project();
+        let other = unique_project();
+        let stranger = unique_project();
+        let hosted = unique_addr("ch");
+        seed_hosted(&owner, &hosted);
+        grant_access(&hosted, &other, "draft").expect("grant");
+
+        // Owner view (None): the inbox is present with full primary+grants.
+        let all = catalog_json(None);
+        let row = all["inboxes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["address"] == hosted.as_str())
+            .expect("listed in owner view");
+        assert_eq!(row["source"], "hosted");
+        assert_eq!(row["maxLevel"], "send");
+        assert_eq!(row["primary"]["projectId"], owner);
+        assert!(row["yourLevel"].is_null());
+        assert_eq!(row["grants"][0]["level"], "draft");
+
+        // Agent view for `other`: sees it with yourLevel=draft.
+        let mine = catalog_json(Some(&other));
+        let row = mine["inboxes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["address"] == hosted.as_str())
+            .expect("granted workspace sees it");
+        assert_eq!(row["yourLevel"], "draft");
+
+        // Agent view for a stranger: the inbox is invisible (masked).
+        let none = catalog_json(Some(&stranger));
+        assert!(
+            !none["inboxes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["address"] == hosted.as_str()),
+            "no access → not in the catalog"
+        );
+
+        cleanup(&owner);
+        cleanup(&other);
+        cleanup(&stranger);
+    }
+}

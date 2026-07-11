@@ -6212,9 +6212,9 @@ cmd_schema() {
       ]
     },
     {
-      "name": "mail create",
-      "usage": "k2 mail create <localpart>[@<domain>] [--domain <d>] [--id <client-id>] [--json]",
-      "description": "Mint an email address on a verified domain (default: the workspace default; see 'k2 mail domains'). Capped per workspace; the cap counts ACTIVE addresses (delete frees a slot). --id is an idempotency key: retrying with the same --id returns the existing address instead of erroring. Plus-addressing (bot+tag@domain) gives unlimited tags without minting. Exit codes (whole mail family): 0 ok, 1 error, 2 bad usage or wait timeout, 3 gated/owner-only.",
+      "name": "hostmail create",
+      "usage": "k2 hostmail create <localpart>[@<domain>] [--domain <d>] [--id <client-id>] [--json]",
+      "description": "Mint a HOSTED email address on a verified domain (default: the workspace default). Capped per workspace; the cap counts ACTIVE addresses (delete frees a slot). --id is an idempotency key: retrying with the same --id returns the existing address instead of erroring. Plus-addressing (bot+tag@domain) gives unlimited tags without minting. Exit codes (whole mail family): 0 ok, 1 error, 2 bad usage or wait timeout, 3 gated/owner-only.",
       "args": [{"name": "localpart", "required": true}],
       "flags": [
         {"name": "--domain", "arg": "d", "description": "Mint on a specific verified domain."},
@@ -6223,9 +6223,9 @@ cmd_schema() {
       ]
     },
     {
-      "name": "mail addresses",
-      "usage": "k2 mail addresses [--json]",
-      "description": "Your workspace's ACTIVE addresses + cap usage (cap 0 = unlimited). 'k2 mail list' is an alias printing the identical table; incoming mail is 'k2 mail messages'.",
+      "name": "mail inboxes",
+      "usage": "k2 mail inboxes [--json]",
+      "description": "The unified inbox catalog: every inbox THIS workspace can access (hosted + linked) with your access level (read < draft < send), the source's max level (hosted: send, linked: draft), and status. Aliases: 'k2 mail addresses', 'k2 mail list'. --json: {ok,count,inboxes:[{address,source:'hosted'|'linked',displayName,status,primary:{projectId,workspace,level},grants:[{projectId,workspace,level}],yourLevel,maxLevel, hosted:domain | linked:host+tls}]}.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -6337,20 +6337,20 @@ cmd_schema() {
       ]
     },
     {
-      "name": "mail delete",
-      "usage": "k2 mail delete <address> [--json]",
-      "description": "Retire an address you own: it stops receiving and its cap slot frees IMMEDIATELY. Mailbox data is kept for the retention window, then purged (the name stays reserved meanwhile).",
+      "name": "hostmail delete",
+      "usage": "k2 hostmail delete <address> [--json]",
+      "description": "Retire a hosted address you own: it stops receiving and its cap slot frees IMMEDIATELY. Mailbox data is kept for the retention window, then purged (the name stays reserved meanwhile).",
       "args": [{"name": "address", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
-      "name": "mail external",
-      "usage": "k2 mail external add <address> --host <imap-host> --workspace <ws> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] | list | remove <address> | grant <address> <workspace> --level read|draft | revoke <address> <workspace> (owner surface)",
-      "description": "Connect the user's OWN external email accounts (Gmail app-password, Fastmail, company IMAP) as assistant inboxes — OWNER verbs (agent tokens exit 3). Each account is OWNED by ONE workspace (full read+draft + sole management); grant additional workspaces 'read' (messages/read/wait) or 'draft' (read + save reply drafts) access with 'grant', remove it with 'revoke'. Agents read via the normal messages/read/wait verbs and save reply drafts via 'k2 mail draft'; sending from an external account has no code path. The password is vaulted daemon-side, never in the DB, never in output, never on argv (--pass-stdin pipes it; --pass-ref resolves env:<VAR> / an absolute file path once).",
+      "name": "mail link",
+      "usage": "k2 mail link add <address> --host <imap-host> --workspace <ws> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] | list | remove <address>",
+      "description": "Connect the user's OWN external email accounts (Gmail app-password, Fastmail, company IMAP) as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Each links to ONE PRIMARY workspace whose agents read it (via the normal messages/read/wait verbs) and save reply drafts via 'k2 mail draft'; sending from a linked account has no code path (draft-only). Share with more workspaces via 'k2 mail access grant'. The password is vaulted daemon-side, never in the DB, never in output, never on argv (--pass-stdin pipes it; --pass-ref resolves env:<VAR> / an absolute file path once).",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--host", "arg": "h", "description": "IMAP server (add)."},
-        {"name": "--workspace", "arg": "ws", "description": "The ONE workspace to bind (add)."},
+        {"name": "--workspace", "arg": "ws", "description": "The PRIMARY workspace to bind (add)."},
         {"name": "--pass-stdin", "arg": null, "description": "Read the app-password from stdin (add)."},
         {"name": "--pass-ref", "arg": "ref", "description": "Resolve the password once from env:<VAR> / an absolute file path (add)."},
         {"name": "--port", "arg": "n", "description": "Default 993 implicit-tls / 143 starttls (add)."},
@@ -6358,14 +6358,23 @@ cmd_schema() {
         {"name": "--user", "arg": "login", "description": "IMAP login if not the address (add)."},
         {"name": "--name", "arg": "display", "description": "Display name for drafts' From header (add)."},
         {"name": "--drafts-folder", "arg": "f", "description": "Pin the Drafts folder; default autodetect via SPECIAL-USE (add)."},
-        {"name": "--level", "arg": "read|draft", "description": "Access level for 'grant' — read (messages/read/wait) or draft (read + save reply drafts); default read."},
         {"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}
       ]
     },
     {
-      "name": "mail",
-      "usage": "k2 mail <status|domain|doctor|config|approvals|external> ... (owner surface)",
-      "description": "Owner-level mail management: status (server health/version/port plan), domain add|list|show|check|remove (DNS record table + live verification), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps), approvals list|approve|deny (deny requires --note), external add|list|remove (your own external accounts as read+draft assistant inboxes). Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "name": "mail access",
+      "usage": "k2 mail access grant <address> <workspace> --level read|draft|send | revoke <address> <workspace> | primary <address> <workspace> | level <address> <workspace> --level read|draft|send",
+      "description": "The ONE access layer over BOTH hosted and linked inboxes (PRIMARY/owner surface; agents exit 3). Levels order read < draft < send; 'send' is HOSTED-ONLY (linked accounts never send). grant = upsert a workspace's access (default level read). revoke = remove a grant (idempotent; the primary can't be revoked). primary = TRANSFER the managing workspace (the old primary keeps a grant at its prior ceiling). level = set a workspace's level (the primary's own ceiling when it names the primary). See 'k2 mail inboxes' for primary + grants.",
+      "args": [{"name": "address", "required": true}, {"name": "workspace", "required": true}],
+      "flags": [
+        {"name": "--level", "arg": "read|draft|send", "description": "read (messages/read/wait), draft (+ save reply drafts / hosted needs-approval), or send (hosted read + send/reply). Send is hosted-only."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail",
+      "usage": "k2 hostmail <status|enable|disable|domain|create|delete|doctor|config|approvals> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable/disable (provision/stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -11554,6 +11563,7 @@ _mail_py() {
     M_RELAY_PORT="${M_RELAY_PORT:-}" M_RELAY_USER="${M_RELAY_USER:-}" \
     M_RELAY_PASS="${M_RELAY_PASS:-}" M_AGENT_SEND="${M_AGENT_SEND:-}" \
     M_ADDRESS_CAP="${M_ADDRESS_CAP:-}" M_WORKSPACE="${M_WORKSPACE:-}" \
+    M_LEVEL="${M_LEVEL:-}" \
     M_HOST="${M_HOST:-}" M_PORT="${M_PORT:-}" M_TLS="${M_TLS:-}" \
     M_USER="${M_USER:-}" M_NAME="${M_NAME:-}" \
     M_DRAFTS_FOLDER="${M_DRAFTS_FOLDER:-}" \
@@ -12217,29 +12227,6 @@ elif verb == "external_add":
         print("agents in that workspace can now READ this inbox and save reply drafts;")
         print("sending from it is impossible (drafts only — you send from your own mail client).")
 
-elif verb == "external_list":
-    d = call("GET", "/cli/mail/external/list")
-    rows = d.get("inboxes") or []
-    if as_json:
-        print(dumps(d))
-    elif not rows:
-        print("No external inboxes connected — add one: k2 mail external add <address> --host <imap-host> --workspace <ws> --pass-stdin")
-    else:
-        w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
-        print(("%-" + str(w) + "s%-11s%-24s%s") % ("ADDRESS", "STATUS", "OWNER", "HOST"))
-        for r in rows:
-            owner = r.get("owner") or {}
-            print(("%-" + str(w) + "s%-11s%-24s%s") % (
-                r.get("address", ""), r.get("status", "?"),
-                owner.get("workspace") or owner.get("projectId")
-                    or r.get("holderWorkspace") or r.get("holderProjectId", "?"),
-                "%s:%s (%s)" % (r.get("host", "?"), r.get("port", "?"), r.get("tls", "?"))))
-            for g in (r.get("grants") or []):
-                print("    grant: %-20s %s" % (
-                    g.get("workspace") or g.get("projectId", "?"), g.get("level", "?")))
-            if r.get("lastError"):
-                print("    last error: %s" % r["lastError"])
-
 elif verb == "external_remove":
     d = call("POST", "/cli/mail/external/remove", body={"address": env("M_ADDRESS")})
     if as_json:
@@ -12247,25 +12234,121 @@ elif verb == "external_remove":
     else:
         print("removed %s — its stored credential was deleted from the vault." % d.get("address", "?"))
 
-elif verb == "external_grant":
-    # S10 owner verb: give a SECOND workspace read/draft access to an
-    # external inbox. The owner keeps full access + sole management.
-    d = call("POST", "/cli/mail/external/grant",
+# ── S11 unified inbox surface ────────────────────────────────────────
+
+def _level_word(lvl):
+    return {"read": "read", "draft": "draft", "send": "send"}.get(lvl, lvl or "?")
+
+def print_inboxes(rows, agent_view):
+    if not rows:
+        print("No inboxes you can access — mint a hosted address (k2 mail create) "
+              "or ask your human to link/grant one." if agent_view
+              else "No inboxes yet — mint one (k2 hostmail create) or link one (k2 mail link add).")
+        return
+    w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
+    if agent_view:
+        print(("%-" + str(w) + "s%-9s%-7s%-7s%s") % ("ADDRESS", "SOURCE", "LEVEL", "MAX", "STATUS"))
+        for r in rows:
+            print(("%-" + str(w) + "s%-9s%-7s%-7s%s") % (
+                r.get("address", ""), r.get("source", "?"),
+                _level_word(r.get("yourLevel")), r.get("maxLevel", "?"), r.get("status", "?")))
+        print()
+        print("read: k2 mail messages [<address>]   send needs level 'send' on a hosted inbox")
+    else:
+        print(("%-" + str(w) + "s%-9s%-22s%s") % ("ADDRESS", "SOURCE", "PRIMARY", "GRANTS"))
+        for r in rows:
+            pri = r.get("primary") or {}
+            who = pri.get("workspace") or pri.get("projectId") or "?"
+            grants = r.get("grants") or []
+            gsum = ", ".join("%s:%s" % (g.get("workspace") or g.get("projectId", "?"),
+                                        g.get("level", "?")) for g in grants) or "-"
+            print(("%-" + str(w) + "s%-9s%-22s%s") % (
+                r.get("address", ""), r.get("source", "?"),
+                "%s (%s)" % (who, pri.get("level", "?")), gsum))
+        print()
+        print("share: k2 mail access grant <address> <workspace> --level read|draft|send")
+
+elif verb == "inboxes":
+    # Agent view: what THIS workspace can access (unified catalog).
+    d = call("GET", "/cli/mail/inboxes", params={"project": ws_path})
+    if as_json:
+        print(dumps(d))
+    else:
+        print_inboxes(d.get("inboxes") or [], agent_view=True)
+
+elif verb == "inboxes_all":
+    # Owner view: ALL inboxes across workspaces (no project param).
+    d = call("GET", "/cli/mail/inboxes")
+    if as_json:
+        print(dumps(d))
+    else:
+        print_inboxes(d.get("inboxes") or [], agent_view=False)
+
+elif verb == "link_list":
+    # The linked (external IMAP) inboxes, from the owner catalog.
+    d = call("GET", "/cli/mail/inboxes")
+    rows = [r for r in (d.get("inboxes") or []) if r.get("source") == "linked"]
+    if as_json:
+        print(dumps({"ok": True, "count": len(rows), "inboxes": rows}))
+    elif not rows:
+        print("No linked accounts — add one: k2 mail link add <address> --host <imap-host> --workspace <ws> --pass-stdin")
+    else:
+        w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
+        print(("%-" + str(w) + "s%-11s%-22s%s") % ("ADDRESS", "STATUS", "PRIMARY", "HOST"))
+        for r in rows:
+            pri = r.get("primary") or {}
+            print(("%-" + str(w) + "s%-11s%-22s%s") % (
+                r.get("address", ""), r.get("status", "?"),
+                pri.get("workspace") or pri.get("projectId") or "?",
+                "%s (%s)" % (r.get("host", "?"), r.get("tls", "?"))))
+            for g in (r.get("grants") or []):
+                print("    grant: %-20s %s" % (
+                    g.get("workspace") or g.get("projectId", "?"), g.get("level", "?")))
+
+elif verb == "access_grant":
+    d = call("POST", "/cli/mail/access/grant",
              body={"address": env("M_ADDRESS"), "project": env("M_WORKSPACE"),
                    "level": env("M_LEVEL")})
     if as_json:
         print(dumps(d))
     else:
-        print(d.get("hint") or "granted %s access on %s to %s"
+        print(d.get("hint") or "granted %s on %s to %s"
               % (env("M_LEVEL"), d.get("address", "?"), env("M_WORKSPACE")))
 
-elif verb == "external_revoke":
-    d = call("POST", "/cli/mail/external/revoke",
+elif verb == "access_revoke":
+    d = call("POST", "/cli/mail/access/revoke",
              body={"address": env("M_ADDRESS"), "project": env("M_WORKSPACE")})
     if as_json:
         print(dumps(d))
     else:
         print("revoked %s's access to %s." % (env("M_WORKSPACE"), d.get("address", "?")))
+
+elif verb == "access_primary":
+    d = call("POST", "/cli/mail/access/set-primary",
+             body={"address": env("M_ADDRESS"), "project": env("M_WORKSPACE")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print(d.get("hint") or "%s now manages %s"
+              % (env("M_WORKSPACE"), d.get("address", "?")))
+
+elif verb == "access_level":
+    d = call("POST", "/cli/mail/access/set-level",
+             body={"address": env("M_ADDRESS"), "project": env("M_WORKSPACE"),
+                   "level": env("M_LEVEL")})
+    if as_json:
+        print(dumps(d))
+    else:
+        who = "primary" if d.get("isPrimary") else env("M_WORKSPACE")
+        print("set %s level on %s to %s." % (who, d.get("address", "?"), env("M_LEVEL")))
+
+elif verb == "server_enable":
+    d = call("POST", "/cli/mail/server/enable", body={})
+    print(dumps(d) if as_json else (d.get("hint") or "mail server: enable requested."))
+
+elif verb == "server_disable":
+    d = call("POST", "/cli/mail/server/disable", body={})
+    print(dumps(d) if as_json else (d.get("hint") or "mail server disabled."))
 
 else:
     die({"code": "usage", "hint": "unknown mail verb '%s'" % verb})
@@ -12970,15 +13053,21 @@ cmd_mail_draft() {
 # server-enforced (agent tokens exit 3). The password never rides argv:
 # --pass-stdin pipes it, --pass-ref points at env:<VAR> / an absolute
 # file path (resolved once daemon-side, then vaulted).
+# Linked external IMAP accounts (S11 `k2 mail link`; internal name kept
+# for the add/list/remove provisioning). grant/revoke moved to
+# `k2 mail access`.
 cmd_mail_external() {
-    if _wants_help "$@"; then cmd_help_mail_external; exit 0; fi
+    if _wants_help "$@"; then cmd_help_mail_link; exit 0; fi
     local sub=""
     case "${1:-}" in
-        add|list|remove|grant|revoke) sub="$1"; shift ;;
-        "") cmd_help_mail_external; exit 0 ;;
-        -*) sub="list" ;;  # bare `k2 mail external --json` = list
+        add|list|remove) sub="$1"; shift ;;
+        "") cmd_help_mail_link; exit 0 ;;
+        -*) sub="list" ;;  # bare `k2 mail link --json` = list
+        grant|revoke)
+            _mail_err "usage" "per-workspace access moved — use 'k2 mail access ${1} <address> <workspace>'"
+            exit 2 ;;
         *)
-            _mail_err "usage" "unknown external command '${1:-}' — usage: k2 mail external <add|list|remove|grant|revoke>"
+            _mail_err "usage" "unknown link command '${1:-}' — usage: k2 mail link <add|list|remove>"
             exit 2 ;;
     esac
     local address="" workspace="" host="" port="" tls="" user="" name="" \
@@ -12987,7 +13076,7 @@ cmd_mail_external() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --level)
-                [ $# -ge 2 ] || { _mail_err "usage" "--level requires read or draft"; exit 2; }
+                [ $# -ge 2 ] || { _mail_err "usage" "--level requires read, draft, or send"; exit 2; }
                 level="$2"; shift 2 ;;
             --workspace)
                 [ $# -ge 2 ] || { _mail_err "usage" "--workspace requires a value (the ONE workspace to bind)"; exit 2; }
@@ -13024,8 +13113,6 @@ cmd_mail_external() {
                 exit 2 ;;
             *)
                 if [ -z "$address" ]; then address="$1"
-                elif { [ "$sub" = grant ] || [ "$sub" = revoke ]; } && [ -z "$ws_arg" ]; then
-                    ws_arg="$1"
                 else
                     _mail_err "usage" "unexpected extra argument '$1'"
                     exit 2
@@ -13033,10 +13120,11 @@ cmd_mail_external() {
                 shift ;;
         esac
     done
+    : "$ws_arg" "$level"  # (retained for arg-parser symmetry)
     case "$sub" in
         add)
             if [ -z "$address" ] || [ -z "$host" ] || [ -z "$workspace" ]; then
-                _mail_err "usage" "external add requires <address> --host <imap-host> --workspace <ws> (+ --pass-stdin | --pass-ref <ref>)"
+                _mail_err "usage" "link add requires <address> --host <imap-host> --workspace <ws> (+ --pass-stdin | --pass-ref <ref>)"
                 exit 2
             fi
             local pass=""
@@ -13049,11 +13137,11 @@ cmd_mail_external() {
                 # would show it) and never a shell history line.
                 IFS= read -r pass || true
                 if [ -z "$pass" ]; then
-                    _mail_err "usage" "--pass-stdin: no password on stdin (pipe it: printf %s \"\$PW\" | k2 mail external add …)"
+                    _mail_err "usage" "--pass-stdin: no password on stdin (pipe it: printf %s \"\$PW\" | k2 mail link add …)"
                     exit 2
                 fi
             elif [ -z "$pass_ref" ]; then
-                _mail_err "usage" "external add needs the app-password: --pass-stdin (piped) or --pass-ref env:<VAR> / /abs/path"
+                _mail_err "usage" "link add needs the app-password: --pass-stdin (piped) or --pass-ref env:<VAR> / /abs/path"
                 exit 2
             fi
             local M_VERB="external_add" M_JSON="$as_json" M_ADDRESS="$address" \
@@ -13062,82 +13150,180 @@ cmd_mail_external() {
                   M_PASS="$pass" M_PASS_REF="$pass_ref"
             _mail_py ;;
         list)
-            local M_VERB="external_list" M_JSON="$as_json"
+            local M_VERB="link_list" M_JSON="$as_json"
             _mail_py ;;
         remove)
             if [ -z "$address" ]; then
-                _mail_err "usage" "external remove requires the <address> ('k2 mail external list')"
+                _mail_err "usage" "link remove requires the <address> ('k2 mail link list')"
                 exit 2
             fi
             local M_VERB="external_remove" M_JSON="$as_json" M_ADDRESS="$address"
             _mail_py ;;
-        grant)
-            if [ -z "$address" ] || [ -z "$ws_arg" ]; then
-                _mail_err "usage" "external grant requires <address> <workspace> --level read|draft (owner surface)"
-                exit 2
-            fi
-            [ -n "$level" ] || level="read"
-            case "$level" in
-                read|draft) ;;
-                *) _mail_err "usage" "--level must be 'read' or 'draft' (default read)"; exit 2 ;;
-            esac
-            local M_VERB="external_grant" M_JSON="$as_json" M_ADDRESS="$address" \
-                  M_WORKSPACE="$ws_arg" M_LEVEL="$level"
-            _mail_py ;;
-        revoke)
-            if [ -z "$address" ] || [ -z "$ws_arg" ]; then
-                _mail_err "usage" "external revoke requires <address> <workspace> (owner surface)"
-                exit 2
-            fi
-            local M_VERB="external_revoke" M_JSON="$as_json" M_ADDRESS="$address" \
-                  M_WORKSPACE="$ws_arg"
-            _mail_py ;;
     esac
+}
+
+# ── S11 unified inbox surface: inboxes / link / access ──────────────────
+
+cmd_mail_inboxes() {
+    if _wants_help "$@"; then cmd_help_mail_inboxes; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 mail inboxes [--json]"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="inboxes" M_JSON="$as_json"
+    _mail_py
+}
+
+# `k2 mail link <add|list|remove>` — connect the user's OWN external
+# IMAP accounts as assistant inboxes (was `mail external add|…`).
+cmd_mail_link() {
+    if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_mail_link; exit 0; fi
+    cmd_mail_external "$@"
+}
+
+# `k2 mail access <grant|revoke|primary|level>` — the PRIMARY/owner
+# access surface over BOTH hosted + linked inboxes (S11).
+cmd_mail_access() {
+    if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_mail_access; exit 0; fi
+    local sub="$1"; shift
+    local verb=""
+    case "$sub" in
+        grant)   verb="access_grant" ;;
+        revoke)  verb="access_revoke" ;;
+        primary) verb="access_primary" ;;
+        level)   verb="access_level" ;;
+        *)
+            _mail_err "usage" "unknown access command '$sub' — usage: k2 mail access <grant|revoke|primary|level>"
+            exit 2 ;;
+    esac
+    local address="" workspace="" level="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --level)
+                [ $# -ge 2 ] || { _mail_err "usage" "--level requires read, draft, or send"; exit 2; }
+                level="$2"; shift 2 ;;
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — see k2 mail access --help"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"
+                elif [ -z "$workspace" ]; then workspace="$1"
+                else _mail_err "usage" "unexpected extra argument '$1'"; exit 2; fi
+                shift ;;
+        esac
+    done
+    if [ -z "$address" ] || [ -z "$workspace" ]; then
+        _mail_err "usage" "access $sub requires <address> <workspace>"
+        exit 2
+    fi
+    if [ "$verb" = "access_grant" ] || [ "$verb" = "access_level" ]; then
+        if [ -z "$level" ] && [ "$verb" = "access_grant" ]; then level="read"; fi
+        if [ -z "$level" ]; then
+            _mail_err "usage" "access $sub requires --level read|draft|send"
+            exit 2
+        fi
+        case "$level" in
+            read|draft|send) ;;
+            *) _mail_err "usage" "--level must be read, draft, or send (send is hosted-only)"; exit 2 ;;
+        esac
+    fi
+    local M_VERB="$verb" M_JSON="$as_json" M_ADDRESS="$address" \
+          M_WORKSPACE="$workspace" M_LEVEL="$level"
+    _mail_py
+}
+
+# ── k2 hostmail (server-admin family) ───────────────────────────────────
+
+cmd_hostmail() {
+    if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_hostmail; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        status)  cmd_mail_status "$@" ;;
+        enable)  cmd_hostmail_enable "$@" ;;
+        disable) cmd_hostmail_disable "$@" ;;
+        domain)  cmd_mail_domain "$@" ;;
+        create)  cmd_mail_create "$@" ;;
+        delete)  cmd_mail_delete "$@" ;;
+        doctor)  cmd_mail_doctor "$@" ;;
+        config)  cmd_mail_config "$@" ;;
+        approvals) cmd_mail_approvals "$@" ;;
+        --help|-h) cmd_help_hostmail; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|domain|create|delete|doctor|config|approvals>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_enable() {
+    if _wants_help "$@"; then cmd_help_hostmail; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *) _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail enable [--json]"; exit 2 ;;
+        esac
+    done
+    local M_VERB="server_enable" M_JSON="$as_json"
+    _mail_py
+}
+
+cmd_hostmail_disable() {
+    if _wants_help "$@"; then cmd_help_hostmail; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *) _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail disable [--json]"; exit 2 ;;
+        esac
+    done
+    local M_VERB="server_disable" M_JSON="$as_json"
+    _mail_py
 }
 
 # ── k2 mail help text ─────────────────────────────────────────────────
 
 cmd_help_mail() {
     cat <<'EOF'
-k2 mail — your agent email: mint addresses, read mail, wait for codes, send under human governance
+k2 mail — your agent email: discover inboxes, read mail, wait for codes, draft & send under human governance
 
-K2 servers can run a real email server (Linux deployments; Settings → Email).
-You mint addresses on your human's verified domains, read what arrives, block
-on `wait` for verification codes, and send/reply gated by your human.
+Hosted (K2-minted) and linked (your own external IMAP) inboxes live under ONE
+access layer — `k2 mail inboxes` shows every inbox you can use and your level.
+Server administration is a separate family: `k2 hostmail` (owner surface).
 
 USAGE
   k2 mail <command> [args] [flags]
 
-AGENT COMMANDS
-  create <local>[@<domain>]   Mint an address on a verified domain (--id = idempotent retry)
-  addresses                   Your active addresses + cap usage (alias: list)
+DISCOVER & READ
+  inboxes                     Every inbox you can use (hosted + linked) + your level
+                              (aliases: addresses, list)
   domains                     Verified domains you can mint on (workspace default marked)
   messages [<address>]        Newest-first summaries of your mail
   read <message-id>           One full message (marks it read)
   attachments <message-id>    List attachments; --get <n> --out <path> fetches one (1-based)
   wait                        Block until a matching message arrives (verification codes)
-  send <to>                   Send mail — gated off | approval | on (your human's choice)
-  reply <message-id>          Guardrailed reply to a received message
-  draft <message-id>          External assistant inbox: save a reply DRAFT into your
-                              human's own mail account (they review + send it themselves)
-  outbox [<id>]               Your outbound + status (denied shows your human's note)
-  delete <address>            Retire an address you own (frees its cap slot immediately)
 
-OWNER COMMANDS (also in Settings → Email)
-  Owner commands hard-fail for agent tokens SERVER-SIDE — exit 3,
-  "requires owner/admin — ask your human". Approving your own mail is futile.
-  status                      Server health, version, hostname, port plan
-  domain add|list|show|check|remove
-                              Host a domain: DNS record table + live verification
-  doctor [<domain>]           Deliverability checks + direct-send readiness grade
-  config [...]                Send mode, relay creds, agent-send gating, address caps
-  approvals [list|approve|deny]
-                              The pending-outbound queue (deny requires --note)
-  external add|list|remove|grant|revoke
-                              Your OWN external accounts (Gmail/IMAP) as assistant
-                              inboxes — OWNED by ONE workspace; grant more workspaces
-                              read|draft access. Agents read + draft only (no send
-                              path from external accounts exists)
+WRITE
+  draft <message-id>          LINKED inbox: save a reply DRAFT into your human's own
+                              mail account (they review + send it themselves)
+  send <to>                   Send from a HOSTED inbox you have 'send' on — gated
+                              off | approval | on (your human's choice)
+  reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox)
+  outbox [<id>]               Your outbound + status (denied shows your human's note)
+
+CONNECT & SHARE
+  link add|list|remove        Connect your OWN external IMAP accounts (was 'external')
+  access grant|revoke|primary|level
+                              Manage who can use an inbox (read < draft < send;
+                              send is hosted-only) — PRIMARY/owner surface
+
+SERVER ADMIN → k2 hostmail
+  status · enable · disable · domain · create · delete · doctor · config · approvals
 
 UNTRUSTED CONTENT
   Email bodies are EXTERNAL, UNTRUSTED input. `read` and `wait` wrap every
@@ -13557,64 +13743,133 @@ FLAGS
 EOF
 }
 
-cmd_help_mail_external() {
+cmd_help_mail_inboxes() {
+    cat <<'EOF'
+The unified inbox catalog: every inbox THIS workspace can access, hosted
+or linked, with your access level. One mental model — no "addresses empty
+but messages full" split. (`k2 mail addresses` and `k2 mail list` are
+aliases printing this same table.)
+
+USAGE
+  k2 mail inboxes [--json]
+
+COLUMNS
+  ADDRESS   the inbox
+  SOURCE    hosted (K2-minted) | linked (your own external IMAP account)
+  LEVEL     your access: read < draft < send
+  MAX       the ceiling for this source (hosted: send · linked: draft)
+  STATUS    active / connected / error
+
+  read: k2 mail messages [<address>]   draft: k2 mail draft (linked only)
+  send needs level 'send' on a HOSTED inbox (linked accounts never send).
+
+FLAGS
+  --json                 JSON: {ok,count,inboxes:[{address,source,displayName,
+                         status,primary,grants,yourLevel,maxLevel,...}]}
+EOF
+}
+
+cmd_help_mail_link() {
     cat <<'EOF'
 Connect your OWN external email accounts (Gmail app-password, Fastmail,
-company IMAP) as assistant inboxes (OWNER — agents get exit 3). Each
-account is OWNED by ONE workspace at add time (full read+draft + sole
-management): its agents READ the inbox (`k2 mail messages/read/wait` just
-work — same ids, same untrusted-content markers) and save reply DRAFTS
-into the account's real Drafts folder (`k2 mail draft`). Sending from an
-external account is impossible — no code path exists; you send from your
-own mail client.
-
-Share an inbox with MORE workspaces via `grant`: --level read gives
-messages/read/wait; --level draft also allows `k2 mail draft`. Only the
-OWNER can grant/revoke, change credentials, or remove. A workspace with
-neither the owner binding nor a grant sees the inbox as if it did not
-exist (no leak). `revoke` removes a grant (revoking the owner is refused
-— use `remove` to disconnect the whole inbox).
+company IMAP) as LINKED assistant inboxes. Each links to ONE PRIMARY
+workspace (which manages it); its agents READ the inbox (`k2 mail
+messages/read/wait` just work — same ids, same untrusted-content markers)
+and save reply DRAFTS into the account's real Drafts folder (`k2 mail
+draft`). Sending from a linked account is impossible — no code path
+exists; you send from your own mail client. Share with more workspaces
+via `k2 mail access grant … --level read|draft` (linked can't reach send).
 
 The password is vaulted daemon-side (0600 file), never stored in the
 database, never shown in any output, and never accepted on argv.
 
 USAGE
-  k2 mail external add <address> --host <imap-host> --workspace <ws>
-                       (--pass-stdin | --pass-ref <ref>)
-                       [--port <n>] [--tls implicit-tls|starttls]
-                       [--user <login>] [--name <display>]
-                       [--drafts-folder <folder>] [--json]
-  k2 mail external list [--json]
-  k2 mail external remove <address> [--json]
-  k2 mail external grant <address> <workspace> --level read|draft [--json]
-  k2 mail external revoke <address> <workspace> [--json]
+  k2 mail link add <address> --host <imap-host> --workspace <ws>
+                   (--pass-stdin | --pass-ref <ref>)
+                   [--port <n>] [--tls implicit-tls|starttls]
+                   [--user <login>] [--name <display>]
+                   [--drafts-folder <folder>] [--json]
+  k2 mail link list [--json]
+  k2 mail link remove <address> [--json]
 
 FLAGS (add)
   --host <h>             The IMAP server, e.g. imap.gmail.com
-  --workspace <ws>       The ONE workspace whose agents may read this inbox
+  --workspace <ws>       The PRIMARY workspace whose agents may read this inbox
   --pass-stdin           Read the app-password from stdin (pipe it in)
   --pass-ref <ref>       Or resolve it once from env:<VAR> / an absolute
-                         file path ON THE DAEMON'S BOX (the house
-                         secret-ref forms) — never the password on argv
+                         file path ON THE DAEMON'S BOX — never on argv
   --port <n>             Default: 993 (implicit-tls) / 143 (starttls)
-  --tls <kind>           implicit-tls (default) | starttls — always verified,
-                         plaintext IMAP does not exist here
+  --tls <kind>           implicit-tls (default) | starttls — always verified
   --user <login>         IMAP login if it differs from the address
   --name <display>       Display name used on drafts' From header
-  --drafts-folder <f>    Pin the Drafts folder (default: autodetect via
-                         SPECIAL-USE \Drafts, then common names)
-
-FLAGS (grant)
-  --level <read|draft>   read = messages/read/wait; draft = read + save
-                         reply drafts (default: read)
+  --drafts-folder <f>    Pin the Drafts folder (default: autodetect)
 
 EXAMPLES
-  printf %s "$APP_PW" | k2 mail external add rosson@gmail.com \
+  printf %s "$APP_PW" | k2 mail link add rosson@gmail.com \
       --host imap.gmail.com --workspace ~/DevProjects/K2 --pass-stdin
-  k2 mail external add ops@acme.com --host mail.acme.com --tls starttls \
+  k2 mail link add ops@acme.com --host mail.acme.com --tls starttls \
       --workspace acme-ops --pass-ref env:ACME_MAIL_PW
-  k2 mail external grant ops@acme.com support-team --level draft
-  k2 mail external revoke ops@acme.com support-team
+EOF
+}
+
+cmd_help_mail_access() {
+    cat <<'EOF'
+Manage WHO can use an inbox — one access layer over BOTH hosted and
+linked inboxes (PRIMARY/owner surface; agents get exit 3). Levels order
+read < draft < send. 'send' is HOSTED-ONLY (linked accounts never send).
+
+USAGE
+  k2 mail access grant   <address> <workspace> --level read|draft|send
+  k2 mail access revoke  <address> <workspace>
+  k2 mail access primary <address> <workspace>   (transfer who manages it)
+  k2 mail access level   <address> <workspace> --level read|draft|send
+
+NOTES
+  grant   upsert a workspace's access (default --level read).
+  revoke  remove a grant (idempotent; the primary can't be revoked —
+          transfer with 'primary' or disconnect with 'k2 mail link remove').
+  primary TRANSFER the managing workspace; the old primary keeps access as
+          a grant at its prior ceiling.
+  level   set a workspace's level (the primary's own ceiling when it names
+          the primary).
+
+  See 'k2 mail inboxes' (owner view) for primary + grants per inbox.
+
+EXAMPLES
+  k2 mail access grant ops@acme.dev support-team --level send
+  k2 mail access grant rosson@gmail.com research --level draft
+  k2 mail access primary ops@acme.dev new-owner
+EOF
+}
+
+cmd_help_hostmail() {
+    cat <<'EOF'
+k2 hostmail — run the K2 email SERVER (owner surface). Provision the
+server, host domains, mint addresses, check deliverability, and gate
+agent sending. Owner verbs hard-fail for agent tokens SERVER-SIDE
+(exit 3, "requires owner/admin — ask your human").
+
+Not installed here? That is NOT "mail broken" — `k2 mail inboxes` still
+works for LINKED accounts. Hosting is a capability; access is separate.
+
+USAGE
+  k2 hostmail <command> [args] [flags]
+
+COMMANDS
+  status                      Server health, version, hostname, port plan
+  enable                      Provision / start the mail server
+  disable                     Stop the mail server (data kept)
+  domain add|list|show|check|remove
+                              Host a domain: DNS record table + live verify
+  create <local>[@<domain>]   Mint a hosted address (bound to this workspace)
+  delete <address>            Retire a hosted address you own
+  doctor [<domain>]           Deliverability checks + direct-send grade
+  config [...]                Send mode, relay creds, agent-send gating,
+                              address caps
+  approvals [list|approve|deny]
+                              The pending-outbound queue (deny needs --note)
+
+Run 'k2 hostmail <command> --help' for details.
 EOF
 }
 
@@ -14273,10 +14528,11 @@ case "${1:-help}" in
         # Family is `mail`, deliberately NOT `inbox` (that's K2's
         # internal work queue). See `k2 mail --help`.
         case "${2:-}" in
-            create)      shift 2; cmd_mail_create "$@" ;;
-            addresses)   shift 2; cmd_mail_addresses "$@" ;;
-            # §11.1.1: `list` = alias of `addresses` (identical table).
-            list)        shift 2; cmd_mail_addresses "$@" ;;
+            # S11: the unified discovery verb (hosted + linked, with your
+            # access level). `addresses`/`list` are aliases.
+            inboxes)     shift 2; cmd_mail_inboxes "$@" ;;
+            addresses)   shift 2; cmd_mail_inboxes "$@" ;;
+            list)        shift 2; cmd_mail_inboxes "$@" ;;
             domains)     shift 2; cmd_mail_domains "$@" ;;
             messages)    shift 2; cmd_mail_messages "$@" ;;
             read)        shift 2; cmd_mail_read "$@" ;;
@@ -14284,25 +14540,32 @@ case "${1:-help}" in
             wait)        shift 2; cmd_mail_wait "$@" ;;
             send)        shift 2; cmd_mail_send "$@" ;;
             reply)       shift 2; cmd_mail_reply "$@" ;;
-            # S9: save a reply DRAFT into an external assistant
-            # inbox's real Drafts folder (agent verb; read + draft
-            # only — sending from an external account does not exist).
+            # Save a reply DRAFT into a LINKED assistant inbox's real
+            # Drafts folder (agent verb; linked accounts never send).
             draft)       shift 2; cmd_mail_draft "$@" ;;
             outbox)      shift 2; cmd_mail_outbox "$@" ;;
-            delete)      shift 2; cmd_mail_delete "$@" ;;
-            status)      shift 2; cmd_mail_status "$@" ;;
-            domain)      shift 2; cmd_mail_domain "$@" ;;
-            doctor)      shift 2; cmd_mail_doctor "$@" ;;
-            config)      shift 2; cmd_mail_config "$@" ;;
-            approvals)   shift 2; cmd_mail_approvals "$@" ;;
-            # S9: the user's OWN external accounts (owner family;
-            # deliberately `external`, never `inbox` — PRD §11).
+            # S11: the user's OWN external accounts (link add|list|remove)
+            # and the unified per-workspace access surface.
+            link)        shift 2; cmd_mail_link "$@" ;;
+            access)      shift 2; cmd_mail_access "$@" ;;
+            # Back-compat: `mail external` → `mail link`.
             external)    shift 2; cmd_mail_external "$@" ;;
+            # Owner/hosting verbs moved to `k2 hostmail` — redirect.
+            create|delete|status|domain|doctor|config|approvals)
+                _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
+                exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;
             *)
                 _mail_err "usage" "unknown command '${2:-}' — see k2 mail --help"
                 exit 2 ;;
         esac
+        ;;
+    hostmail)
+        # K2 Mail server administration (owner surface) — status, enable/
+        # disable, domains, mint addresses, doctor, config, approvals.
+        # Owner verbs hard-fail for agent tokens SERVER-SIDE (exit 3).
+        shift
+        cmd_hostmail "$@"
         ;;
     agents)
         # 0.39.0f Phase 2.1b: all `agents *` subverbs hard-deprecate.

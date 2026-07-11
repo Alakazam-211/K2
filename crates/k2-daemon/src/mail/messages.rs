@@ -32,7 +32,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use base64::Engine as _;
 
 use crate::mail::jmap::{AttachmentMeta, EmailFull, EmailSummary, StalwartClient};
-use k2_core::db::schema::MailAddress;
 
 // ── §8.1 untrusted-content markers (EXACT lines — tested verbatim) ─────
 
@@ -528,67 +527,9 @@ pub enum ReadError {
     Engine(String),
 }
 
-const ADDRESS_COLS: &str = "id, address, domain_id, stalwart_account_id, owner_project_id, \
-                            client_id, status, created_at, retired_at";
-
-fn map_address_row(r: &rusqlite::Row) -> rusqlite::Result<MailAddress> {
-    Ok(MailAddress {
-        id: r.get(0)?,
-        address: r.get(1)?,
-        domain_id: r.get(2)?,
-        stalwart_account_id: r.get(3)?,
-        owner_project_id: r.get(4)?,
-        client_id: r.get(5)?,
-        status: r.get(6)?,
-        created_at: r.get(7)?,
-        retired_at: r.get(8)?,
-    })
-}
-
-/// Every ACTIVE address the workspace owns (the default read scope).
-pub fn active_addresses_for_project(project_id: &str) -> Vec<MailAddress> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let Ok(mut stmt) = conn.prepare(&format!(
-        "SELECT {ADDRESS_COLS} FROM mail_addresses \
-         WHERE owner_project_id = ?1 AND status = 'active' ORDER BY created_at, address"
-    )) else {
-        return Vec::new();
-    };
-    stmt.query_map(rusqlite::params![project_id], map_address_row)
-        .map(|r| r.filter_map(Result::ok).collect())
-        .unwrap_or_default()
-}
-
-/// The ownership gate for an EXPLICITLY named address: normalized,
-/// must exist, must be the caller's, must be ACTIVE (retired mailboxes
-/// are retention data, not a read surface). Every failure mode beyond
-/// bad syntax answers the SAME masked not_found — a workspace never
-/// learns which addresses exist outside it (S3 rule).
-pub fn owned_active_address(project_id: &str, raw_address: &str) -> Result<MailAddress, ReadError> {
-    let address = crate::mail::addresses::normalize_address(raw_address).map_err(|e| match e {
-        crate::mail::addresses::AddrError::Usage(hint) => ReadError::Usage(hint),
-        _ => ReadError::Usage(format!("'{raw_address}' is not a valid address")),
-    })?;
-    let masked = || {
-        ReadError::NotFound(format!("no address '{address}' in this workspace"))
-    };
-    let row = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        conn.query_row(
-            &format!("SELECT {ADDRESS_COLS} FROM mail_addresses WHERE address = ?1"),
-            rusqlite::params![address],
-            map_address_row,
-        )
-        .ok()
-    };
-    let Some(row) = row else { return Err(masked()) };
-    if row.owner_project_id != project_id || row.status != "active" {
-        return Err(masked());
-    }
-    Ok(row)
-}
+// (S11: the hosted-address ownership lookups moved into the ONE access
+// layer — `crate::mail::access` resolves hosted + linked together
+// through the unified `primary_level` + `mail_inbox_grants` model.)
 
 // ── Attachment output paths (§10: the daemon writes agent-named paths) ──
 

@@ -34,6 +34,7 @@
 use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
+use crate::mail::access::{self, Source};
 use crate::mail::domains;
 use crate::mail::messages::{self, ReadError};
 use crate::mail::routes_messages::WaitSlot;
@@ -119,48 +120,71 @@ fn resolve_caller(project: &str) -> Result<(String, String), CliResponse> {
     }
 }
 
-/// The server-stamped From: an explicit address passes the S3 masked
-/// ownership gate; none → the workspace's single active address (two+
-/// is a usage error naming the fix; zero is the teaching not_found).
-/// Returns `(address, stalwart account id)`.
+/// A teaching 403 when the caller CAN see the address (reads it) but
+/// lacks SEND — it is read/draft-only for them (or a linked account,
+/// which can never send). `gated` → CLI exit 3 (ask the primary/human).
+/// If they can't even read it, we mask (no existence leak).
+fn not_sendable_response(project_id: &str, address: &str) -> CliResponse {
+    match access::can_read(project_id, address) {
+        Ok(inbox) if inbox.source == Source::Linked => send_error_response(SendError::Gated(
+            "linked accounts can't send — there is no send path from an external account. \
+             Save a reply draft with 'k2 mail draft' instead."
+                .to_string(),
+        )),
+        Ok(_) => send_error_response(SendError::Gated(
+            "this inbox is read/draft-only for your workspace — ask the primary workspace \
+             for 'send' access (k2 mail access set-level)."
+                .to_string(),
+        )),
+        Err(e) => read_error_response(e),
+    }
+}
+
+/// The server-stamped From: an explicit address must pass the S11 SEND
+/// gate (hosted + effective level 'send'); none → the workspace's
+/// single SENDABLE address (two+ is a usage error naming the fix; zero
+/// is the teaching not_found). Returns `(address, stalwart account id)`.
 fn resolve_from(
     project_id: &str,
     explicit: Option<&str>,
 ) -> Result<(String, String), CliResponse> {
-    let row = if let Some(addr) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
-        messages::owned_active_address(project_id, addr).map_err(read_error_response)?
-    } else {
-        let mut all = messages::active_addresses_for_project(project_id);
-        match all.len() {
-            0 => {
-                return Err(error_response(
-                    "404 Not Found",
-                    "not_found",
-                    "this workspace has no active mail addresses — mint one with \
-                     'k2 mail create' first",
-                ))
+    if let Some(addr) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
+        return match access::can_send(project_id, addr) {
+            Ok(inbox) => {
+                let Some(account_id) = inbox.account_id else {
+                    return Err(error_response(
+                        "502 Bad Gateway",
+                        "engine",
+                        &format!("address '{}' has no mailbox on the mail server", inbox.address),
+                    ));
+                };
+                Ok((inbox.address, account_id))
             }
-            1 => all.remove(0),
-            n => {
-                return Err(error_response(
-                    "400 Bad Request",
-                    "usage",
-                    &format!(
-                        "this workspace has {n} addresses — pass 'from' to pick the sender \
-                         (see 'k2 mail addresses')"
-                    ),
-                ))
+            Err(ReadError::Usage(hint)) => {
+                Err(error_response("400 Bad Request", "usage", &hint))
             }
-        }
-    };
-    let Some(account_id) = row.stalwart_account_id else {
-        return Err(error_response(
-            "502 Bad Gateway",
-            "engine",
-            &format!("address '{}' has no mailbox on the mail server", row.address),
-        ));
-    };
-    Ok((row.address, account_id))
+            // Masked, unless they can read it — then teach send is denied.
+            Err(_) => Err(not_sendable_response(project_id, addr)),
+        };
+    }
+    let mut all = access::sendable_hosted(project_id);
+    match all.len() {
+        0 => Err(error_response(
+            "404 Not Found",
+            "not_found",
+            "this workspace has no address it can send FROM — mint one with 'k2 mail create', \
+             or ask the primary for 'send' access (k2 mail inboxes shows yourLevel)",
+        )),
+        1 => Ok(all.remove(0)),
+        n => Err(error_response(
+            "400 Bad Request",
+            "usage",
+            &format!(
+                "this workspace can send from {n} addresses — pass 'from' to pick the sender \
+                 (see 'k2 mail inboxes')"
+            ),
+        )),
+    }
 }
 
 /// Coerce a JSON `string | [string]` field into a list.
@@ -565,15 +589,24 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             &format!("no message '{token}' in this workspace"),
         )
     };
-    let row = match messages::owned_active_address(&project_id, &address) {
-        Ok(row) => row,
+    // S11: replying IS sending — the receiving address must be one this
+    // workspace can SEND from (hosted + effective 'send'). A read/draft
+    // grant (or a linked inbox) can't reply — teaching 403 when they can
+    // at least read it, masked not_found otherwise.
+    let (from_address, account_id) = match access::can_send(&project_id, &address) {
+        Ok(inbox) => match inbox.account_id {
+            Some(account_id) => (inbox.address, account_id),
+            None => return masked(),
+        },
         Err(ReadError::Usage(hint)) => {
             return error_response("400 Bad Request", "usage", &hint)
         }
-        Err(_) => return masked(),
-    };
-    let Some(account_id) = row.stalwart_account_id else {
-        return masked();
+        Err(_) => {
+            return match access::can_read(&project_id, &address) {
+                Ok(_) => not_sendable_response(&project_id, &address),
+                Err(_) => masked(),
+            }
+        }
     };
     // The size cap fires before the engine dial (the subject the
     // reply inherits is negligible next to the 10 MB budget).
@@ -598,11 +631,11 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
     };
 
     // §8.4 guardrails: locked recipient, loop caps, DMARC gate.
-    let recipient = match send::check_reply_guardrails(&ctx, &row.address, gate) {
+    let recipient = match send::check_reply_guardrails(&ctx, &from_address, gate) {
         Ok(r) => r,
         Err(e) => return send_error_response(e),
     };
-    if let Err(e) = send::check_domain_send_mode(&FileSecretStore::default(), &row.address) {
+    if let Err(e) = send::check_domain_send_mode(&FileSecretStore::default(), &from_address) {
         return send_error_response(e);
     }
     let now = now_secs();
@@ -617,7 +650,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
     let agent_name = k2_core::workspace::display::agent_display_name(&path);
     let msg = OutboundMessage {
         from_name: Some(agent_name.clone()),
-        from: row.address.clone(),
+        from: from_address.clone(),
         to: vec![recipient],
         cc: Vec::new(),
         subject: send::reply_subject(&ctx.subject),

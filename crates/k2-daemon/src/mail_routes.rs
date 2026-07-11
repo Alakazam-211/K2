@@ -37,10 +37,12 @@
 //! | POST /cli/mail/approvals/deny     | mail/routes_send.rs     |
 //! | POST /cli/mail/external/add       | mail/routes_external.rs |
 //! | POST /cli/mail/external/remove    | mail/routes_external.rs |
-//! | POST /cli/mail/external/grant     | mail/routes_external.rs |
-//! | POST /cli/mail/external/revoke    | mail/routes_external.rs |
-//! | GET  /cli/mail/external/list      | mail/routes_external.rs |
 //! | POST /cli/mail/draft              | mail/routes_external.rs |
+//! | GET  /cli/mail/inboxes            | mail/routes_access.rs   |
+//! | POST /cli/mail/access/grant       | mail/routes_access.rs   |
+//! | POST /cli/mail/access/revoke      | mail/routes_access.rs   |
+//! | POST /cli/mail/access/set-primary | mail/routes_access.rs   |
+//! | POST /cli/mail/access/set-level   | mail/routes_access.rs   |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -85,8 +87,8 @@ use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
 use crate::mail::{
-    routes_addresses, routes_domains, routes_external, routes_messages, routes_send,
-    routes_server,
+    routes_access, routes_addresses, routes_domains, routes_external, routes_messages,
+    routes_send, routes_server,
 };
 
 /// Mail-domain GET dispatch. Returns `Some(resp)` for a handled path,
@@ -118,7 +120,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/wait" => routes_messages::handle_wait(params),
         "/cli/mail/outbox" => routes_send::handle_outbox(params),
         "/cli/mail/approvals/list" => routes_send::handle_approvals_list(params),
-        "/cli/mail/external/list" => routes_external::handle_external_list(params),
+        // S11: the unified inbox catalog (agent view via ?project=;
+        // owner view — no project — is owner-gated in the dispatcher).
+        "/cli/mail/inboxes" => routes_access::handle_inboxes(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -137,8 +141,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/approvals/deny"
         | "/cli/mail/external/add"
         | "/cli/mail/external/remove"
-        | "/cli/mail/external/grant"
-        | "/cli/mail/external/revoke"
+        | "/cli/mail/access/grant"
+        | "/cli/mail/access/revoke"
+        | "/cli/mail/access/set-primary"
+        | "/cli/mail/access/set-level"
         | "/cli/mail/draft" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
@@ -169,8 +175,10 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/mail/approvals/deny" => routes_send::handle_approvals_deny(body),
         "/cli/mail/external/add" => routes_external::handle_external_add(body),
         "/cli/mail/external/remove" => routes_external::handle_external_remove(body),
-        "/cli/mail/external/grant" => routes_external::handle_external_grant(body),
-        "/cli/mail/external/revoke" => routes_external::handle_external_revoke(body),
+        "/cli/mail/access/grant" => routes_access::handle_grant(body),
+        "/cli/mail/access/revoke" => routes_access::handle_revoke(body),
+        "/cli/mail/access/set-primary" => routes_access::handle_set_primary(body),
+        "/cli/mail/access/set-level" => routes_access::handle_set_level(body),
         "/cli/mail/draft" => routes_external::handle_draft(body),
         _ => CliResponse::not_found(),
     }
@@ -192,6 +200,9 @@ pub fn is_owner_level_mutation(path: &str) -> bool {
         // agent verb on that inbox is `draft`, which is deliberately
         // NOT in this set.
         || path.starts_with("/cli/mail/external/")
+        // S11: the PRIMARY/owner access-management surface (grant /
+        // revoke / set-primary / set-level) is owner-or-admin.
+        || path.starts_with("/cli/mail/access/")
         // The doctor RUN (POST /cli/mail/doctor) is an owner verb
         // (§11/§11.1.3); the GET on the same path is a plain read and
         // never reaches this classifier (it only sees POSTs).
@@ -229,8 +240,10 @@ mod tests {
             "/cli/mail/approvals/deny",
             "/cli/mail/external/add",
             "/cli/mail/external/remove",
-            "/cli/mail/external/grant",
-            "/cli/mail/external/revoke",
+            "/cli/mail/access/grant",
+            "/cli/mail/access/revoke",
+            "/cli/mail/access/set-primary",
+            "/cli/mail/access/set-level",
             "/cli/mail/draft",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
@@ -366,21 +379,23 @@ mod tests {
             assert_eq!(v["error"]["code"], "usage", "route={route}");
         }
 
-        // S9 — the external family is REAL: the owner list answers 200
-        // through the shim (its owner gate lives in the dispatcher
-        // clause, like approvals/list), and the mutations + draft
-        // validate their bodies (`{}` = usage 400) instead of 501-ing.
-        // Deep behavior is owned by routes_external/mail::external
-        // tests.
-        let resp = dispatch("/cli/mail/external/list", &params).expect("claimed");
+        // S9/S11 — the external + access families are REAL: the unified
+        // inbox catalog answers 200 through the shim (its owner gate for
+        // the no-project view lives in the dispatcher clause), and the
+        // mutations + draft validate their bodies (`{}` = usage 400)
+        // instead of 501-ing. Deep behavior is owned by
+        // routes_external/routes_access/mail::access tests.
+        let resp = dispatch("/cli/mail/inboxes", &params).expect("claimed");
         assert_eq!(resp.status, "200 OK", "{}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         assert_eq!(v["ok"], true);
         for route in [
             "/cli/mail/external/add",
             "/cli/mail/external/remove",
-            "/cli/mail/external/grant",
-            "/cli/mail/external/revoke",
+            "/cli/mail/access/grant",
+            "/cli/mail/access/revoke",
+            "/cli/mail/access/set-primary",
+            "/cli/mail/access/set-level",
             "/cli/mail/draft",
         ] {
             let resp = dispatch_post(route, b"{}");
@@ -425,11 +440,13 @@ mod tests {
             "/cli/mail/approvals/approve",
             "/cli/mail/approvals/deny",
             // S9: connecting an external account = owner surface.
-            // S10: granting/revoking per-role access = owner surface.
+            // S11: the access-management surface = owner surface.
             "/cli/mail/external/add",
             "/cli/mail/external/remove",
-            "/cli/mail/external/grant",
-            "/cli/mail/external/revoke",
+            "/cli/mail/access/grant",
+            "/cli/mail/access/revoke",
+            "/cli/mail/access/set-primary",
+            "/cli/mail/access/set-level",
             // The doctor RUN (POST; the GET read never reaches the
             // classifier).
             "/cli/mail/doctor",

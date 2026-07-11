@@ -98,6 +98,7 @@
 //!   [`routes_domains`], [`routes_addresses`], [`routes_messages`],
 //!   [`routes_send`], [`routes_external`] (external CRUD + draft).
 
+pub mod access;
 pub mod addresses;
 pub mod config;
 pub mod dns_verify;
@@ -108,6 +109,7 @@ pub mod external_imap;
 pub mod jmap;
 pub mod messages;
 pub mod preflight;
+pub mod routes_access;
 pub mod routes_addresses;
 pub mod routes_domains;
 pub mod routes_external;

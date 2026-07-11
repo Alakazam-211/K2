@@ -32,9 +32,8 @@
 //! existing `routes_messages` handlers via the §17.5 seam
 //! (`backend_for_address`) — one read pipeline, two backends.
 
-use std::collections::HashMap;
-
 use crate::cli_response::CliResponse;
+use crate::mail::access::{self, Source};
 use crate::mail::external::{self, ExtError};
 use crate::mail::external_imap::RealImapOps;
 use crate::mail::messages::{self, ReadError};
@@ -228,133 +227,11 @@ pub fn handle_external_remove(body: &[u8]) -> CliResponse {
     }
 }
 
-// ── POST /cli/mail/external/grant (owner) ───────────────────────────────
-
-/// `k2 mail external grant` body. `project` = the workspace to grant
-/// (path | name | UUID via resolve_workspace); `level` ∈ read|draft.
-#[derive(Debug, serde::Deserialize, Default)]
-#[serde(default, rename_all = "camelCase")]
-struct GrantBody {
-    address: String,
-    project: String,
-    level: String,
-}
-
-/// POST `/cli/mail/external/grant` — owner-level (dispatcher gates the
-/// owner-or-admin token): grant a SECOND workspace `read` or `draft`
-/// access to an external inbox (upsert). The owner keeps full access +
-/// sole management. Owner surface, so the inbox lookup is NOT masked
-/// (unknown → not_found with the list pointer); granting the owner
-/// workspace teaches (it already has full access).
-pub fn handle_external_grant(body: &[u8]) -> CliResponse {
-    let b: GrantBody = match serde_json::from_slice(body) {
-        Ok(b) => b,
-        Err(e) => {
-            return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}"))
-        }
-    };
-    if b.address.trim().is_empty() {
-        return error_response(
-            "400 Bad Request",
-            "usage",
-            "missing 'address' — the connected account to share ('k2 mail external list')",
-        );
-    }
-    if b.project.trim().is_empty() {
-        return error_response(
-            "400 Bad Request",
-            "usage",
-            "missing 'project' — the workspace to grant (name | path | UUID)",
-        );
-    }
-    // Resolve the grantee workspace to a registered project id (a bad
-    // workspace gets the shared teaching 404).
-    let (_path, grantee_id) = match resolve_caller(&b.project) {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-    match external::grant_access(&b.address, &grantee_id, &b.level) {
-        Ok(row) => ok_json(serde_json::json!({
-            "ok": true,
-            "address": row.email_address,
-            "project": b.project,
-            "projectId": grantee_id,
-            "level": b.level.trim(),
-            "hint": format!(
-                "granted '{}' access to '{}' on {} — its agents can now {} this inbox",
-                b.level.trim(),
-                b.project,
-                row.email_address,
-                if b.level.trim() == external::LEVEL_DRAFT {
-                    "read and save reply drafts for"
-                } else {
-                    "read"
-                },
-            ),
-        })),
-        Err(e) => ext_error_response(e),
-    }
-}
-
-// ── POST /cli/mail/external/revoke (owner) ──────────────────────────────
-
-#[derive(Debug, serde::Deserialize, Default)]
-#[serde(default, rename_all = "camelCase")]
-struct RevokeBody {
-    address: String,
-    project: String,
-}
-
-/// POST `/cli/mail/external/revoke` — owner-level: remove a
-/// workspace's grant on an external inbox. Idempotent (revoking a
-/// workspace with no grant is a no-op ok); revoking the OWNER teaches
-/// (point at `external remove`).
-pub fn handle_external_revoke(body: &[u8]) -> CliResponse {
-    let b: RevokeBody = match serde_json::from_slice(body) {
-        Ok(b) => b,
-        Err(e) => {
-            return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}"))
-        }
-    };
-    if b.address.trim().is_empty() {
-        return error_response(
-            "400 Bad Request",
-            "usage",
-            "missing 'address' — the connected account ('k2 mail external list')",
-        );
-    }
-    if b.project.trim().is_empty() {
-        return error_response(
-            "400 Bad Request",
-            "usage",
-            "missing 'project' — the workspace to revoke (name | path | UUID)",
-        );
-    }
-    let (_path, grantee_id) = match resolve_caller(&b.project) {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-    match external::revoke_access(&b.address, &grantee_id) {
-        Ok(row) => ok_json(serde_json::json!({
-            "ok": true,
-            "address": row.email_address,
-            "project": b.project,
-            "projectId": grantee_id,
-            "revoked": true,
-        })),
-        Err(e) => ext_error_response(e),
-    }
-}
-
-// ── GET /cli/mail/external/list (owner) ─────────────────────────────────
-
-/// GET `/cli/mail/external/list` — the owner table: every connected
-/// external inbox with its workspace binding + health. NEVER
-/// credentials or secret refs (not even the username). The owner gate
-/// lives in the dispatcher clause (S5 approvals/list precedent).
-pub fn handle_external_list(_params: &HashMap<String, String>) -> CliResponse {
-    ok_json(external::list_all_json())
-}
+// (S11: GRANT / REVOKE / SET-PRIMARY / SET-LEVEL and the unified
+// `/cli/mail/inboxes` catalog moved to `routes_access.rs` — one access
+// surface over hosted + linked. `external/grant` and `external/revoke`
+// are retired; `external/add` + `external/remove` are the LINK
+// provisioning the CLI now spells `k2 mail link add|remove`.)
 
 // ── POST /cli/mail/draft (workspace token — the agent verb) ─────────────
 
@@ -422,34 +299,45 @@ pub fn handle_draft(body: &[u8]) -> CliResponse {
             "invalid message id — use an id from 'k2 mail messages'",
         );
     };
-    let inbox = match external::can_draft(&project_id, &address) {
-        Ok(row) => row,
+    // S11 unified DRAFT gate. `k2 mail draft` is LINKED-only (it APPENDs
+    // a \Draft into the account's real Drafts folder); a hosted address
+    // is replied to with `k2 mail reply` (governed send). The masked
+    // message-level not_found covers every no-access case.
+    let teach_reply = || {
+        error_response(
+            "400 Bad Request",
+            "usage",
+            &format!(
+                "'{address}' is an address on this K2 mail server — 'k2 mail draft' is for \
+                 EXTERNAL assistant inboxes. Reply to this message with 'k2 mail reply {}'",
+                b.id
+            ),
+        )
+    };
+    let masked = || {
+        error_response(
+            "404 Not Found",
+            "not_found",
+            &format!("no message '{}' in this workspace", b.id),
+        )
+    };
+    let resolved = match access::can_draft(&project_id, &address) {
+        Ok(ai) => ai,
         Err(ReadError::Usage(hint)) => {
             return error_response("400 Bad Request", "usage", &hint)
         }
         Err(_) => {
-            // The teaching branch: a message on THIS K2 mail server is
-            // replied to with `k2 mail reply` (governed send), never
-            // drafted into someone's mailbox.
-            if messages::owned_active_address(&project_id, &address).is_ok() {
-                return error_response(
-                    "400 Bad Request",
-                    "usage",
-                    &format!(
-                        "'{address}' is an address on this K2 mail server — 'k2 mail draft' is \
-                         for EXTERNAL assistant inboxes. Reply to this message with \
-                         'k2 mail reply {}'",
-                        b.id
-                    ),
-                );
-            }
-            // Everything else: the masked message-level not_found.
-            return error_response(
-                "404 Not Found",
-                "not_found",
-                &format!("no message '{}' in this workspace", b.id),
-            );
+            // A hosted message the caller can read → teach reply; else
+            // masked (no existence leak).
+            return match access::can_read(&project_id, &address) {
+                Ok(ai) if ai.source == Source::Hosted => teach_reply(),
+                _ => masked(),
+            };
         }
+    };
+    // A hosted inbox at draft+ still can't be "drafted into" — teach reply.
+    let Some(inbox) = resolved.linked else {
+        return teach_reply();
     };
     let secrets = FileSecretStore::default();
     let password = match secrets.resolve(&external::vault_key(&inbox.id)) {
@@ -527,7 +415,7 @@ mod tests {
         // Grant rows keyed by this project (grantee) or by any inbox it
         // owns — purge both so no orphan lingers in the shared test DB.
         let _ = conn.execute(
-            "DELETE FROM mail_external_inbox_grants WHERE project_id = ?1 \
+            "DELETE FROM mail_inbox_grants WHERE project_id = ?1 \
              OR inbox_id IN (SELECT id FROM mail_external_inboxes WHERE owner_project_id = ?1)",
             rusqlite::params![project_id],
         );
@@ -657,150 +545,8 @@ mod tests {
             .contains("k2 mail external list"));
     }
 
-    // ── list ──
-
-    #[test]
-    fn list_serves_the_owner_table_without_credentials() {
-        let (name, path) = unique("list");
-        let project_id = insert_project(&name, &path);
-        let addr = format!("assistant-{}@ext.example", &project_id[..8]);
-        seed_external(&project_id, &addr);
-
-        let resp = handle_external_list(&HashMap::new());
-        assert_eq!(resp.status, "200 OK", "{}", resp.body);
-        let v = body_json(&resp);
-        assert_eq!(v["ok"], true);
-        let mine = v["inboxes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|i| i["address"] == addr.as_str())
-            .expect("row listed");
-        assert_eq!(mine["holderProjectId"], project_id);
-        assert_eq!(mine["holderWorkspace"], name);
-        assert_eq!(mine["host"], "imap.example.com");
-        // NEVER credentials, secret refs, or even the username.
-        for banned in ["username", "password", "secretRef", "ext-inbox-"] {
-            assert!(!resp.body.contains(banned), "'{banned}' leaked: {}", resp.body);
-        }
-
-        cleanup_project(&project_id);
-    }
-
-    // ── grant / revoke ──
-
-    #[test]
-    fn grant_and_revoke_validate_resolve_and_teach() {
-        // Field validation before any resolution.
-        for (route, body, needle) in [
-            ("grant", r#"{}"#, "address"),
-            ("grant", r#"{"address":"a@b.example"}"#, "project"),
-            ("revoke", r#"{}"#, "address"),
-            ("revoke", r#"{"address":"a@b.example"}"#, "project"),
-        ] {
-            let resp = if route == "grant" {
-                handle_external_grant(body.as_bytes())
-            } else {
-                handle_external_revoke(body.as_bytes())
-            };
-            assert_eq!(resp.status, "400 Bad Request", "{route} {body}");
-            assert!(
-                body_json(&resp)["error"]["hint"].as_str().unwrap().contains(needle),
-                "{route} {body}: {}",
-                resp.body
-            );
-        }
-
-        let (owner_name, owner_path) = unique("grant-owner");
-        let owner_id = insert_project(&owner_name, &owner_path);
-        let (grantee_name, grantee_path) = unique("grant-ee");
-        let grantee_id = insert_project(&grantee_name, &grantee_path);
-        let addr = format!("shared-{}@ext.example", &owner_id[..8]);
-        let inbox_id = seed_external(&owner_id, &addr);
-
-        // Unknown grantee workspace → shared 404 (before touching grants).
-        let resp = handle_external_grant(
-            serde_json::json!({ "address": addr, "project": "no-such-ws-xyz", "level": "read" })
-                .to_string()
-                .as_bytes(),
-        );
-        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
-
-        // Unknown inbox → not_found (owner surface, list pointer).
-        let resp = handle_external_grant(
-            serde_json::json!({ "address": "ghost@nowhere.example", "project": grantee_path, "level": "read" })
-                .to_string()
-                .as_bytes(),
-        );
-        assert_eq!(resp.status, "404 Not Found");
-        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("external list"));
-
-        // Invalid level → usage.
-        let resp = handle_external_grant(
-            serde_json::json!({ "address": addr, "project": grantee_path, "level": "admin" })
-                .to_string()
-                .as_bytes(),
-        );
-        assert_eq!(resp.status, "400 Bad Request");
-        assert_eq!(body_json(&resp)["error"]["code"], "usage");
-
-        // Granting the OWNER workspace → teaching usage.
-        let resp = handle_external_grant(
-            serde_json::json!({ "address": addr, "project": owner_path, "level": "read" })
-                .to_string()
-                .as_bytes(),
-        );
-        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
-        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("owner"));
-
-        // A valid grant lands and surfaces in the owner list.
-        let resp = handle_external_grant(
-            serde_json::json!({ "address": addr, "project": grantee_path, "level": "draft" })
-                .to_string()
-                .as_bytes(),
-        );
-        assert_eq!(resp.status, "200 OK", "{}", resp.body);
-        assert_eq!(body_json(&resp)["level"], "draft");
-        assert_eq!(external::grant_level(&inbox_id, &grantee_id).as_deref(), Some("draft"));
-        let list = body_json(&handle_external_list(&HashMap::new()));
-        let mine = list["inboxes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|i| i["address"] == addr.as_str())
-            .expect("listed");
-        assert_eq!(mine["grants"][0]["level"], "draft");
-        assert_eq!(mine["grants"][0]["projectId"], grantee_id);
-        assert_eq!(mine["owner"]["projectId"], owner_id);
-
-        // Revoke removes it; a second revoke is an idempotent ok.
-        let resp = handle_external_revoke(
-            serde_json::json!({ "address": addr, "project": grantee_path })
-                .to_string()
-                .as_bytes(),
-        );
-        assert_eq!(resp.status, "200 OK", "{}", resp.body);
-        assert_eq!(body_json(&resp)["revoked"], true);
-        assert!(external::grant_level(&inbox_id, &grantee_id).is_none());
-        let resp = handle_external_revoke(
-            serde_json::json!({ "address": addr, "project": grantee_path })
-                .to_string()
-                .as_bytes(),
-        );
-        assert_eq!(resp.status, "200 OK", "idempotent revoke");
-
-        // Revoking the OWNER teaches (point at external remove).
-        let resp = handle_external_revoke(
-            serde_json::json!({ "address": addr, "project": owner_path })
-                .to_string()
-                .as_bytes(),
-        );
-        assert_eq!(resp.status, "400 Bad Request");
-        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("external remove"));
-
-        cleanup_project(&owner_id);
-        cleanup_project(&grantee_id);
-    }
+    // (S11: the unified catalog + grant/revoke/set-primary/set-level
+    // tests live in `routes_access` and `mail::access`.)
 
     // ── draft ──
 

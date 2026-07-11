@@ -1,0 +1,368 @@
+//! `/cli/mail/inboxes` + `/cli/mail/access/*` — the S11 unified ACCESS
+//! surface over BOTH provisioning sources (PRD §17.5).
+//!
+//! - `GET /cli/mail/inboxes` — the unified catalog. `?project=<ws>` =
+//!   the AGENT view (only inboxes that workspace can access, each with
+//!   `yourLevel`); no `project` = the OWNER/admin view (ALL inboxes with
+//!   full primary + grants). The owner view is owner-or-admin-gated in
+//!   the dispatcher's dedicated `inboxes` clause (the agent view rides a
+//!   plain workspace token). SQLite-only — no engine dial.
+//! - `POST /cli/mail/access/grant|revoke|set-primary|set-level` — the
+//!   PRIMARY/owner MANAGEMENT surface (owner-or-admin-gated via
+//!   `is_owner_level_mutation`'s `/cli/mail/access/` prefix). These act
+//!   BY ADDRESS across hosted + linked; the ops layer resolves which
+//!   provisioning row the address names, refuses 'send' on linked, and
+//!   never touches credentials.
+//!
+//! Masking: these are the primary's own surface (unmasked not_found with
+//! a pointer). The AGENT read/draft/send gates that DO mask live in
+//! `crate::mail::access`.
+
+use std::collections::HashMap;
+
+use crate::cli_response::CliResponse;
+use crate::mail::access::{self, AccessError};
+
+fn error_response(status: &'static str, code: &str, hint: &str) -> CliResponse {
+    CliResponse {
+        status,
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": code, "hint": hint },
+        })
+        .to_string(),
+    }
+}
+
+fn access_error_response(err: AccessError) -> CliResponse {
+    match err {
+        AccessError::Usage(hint) => error_response("400 Bad Request", "usage", &hint),
+        AccessError::NotFound(hint) => error_response("404 Not Found", "not_found", &hint),
+        AccessError::Engine(hint) => error_response("502 Bad Gateway", "engine", &hint),
+    }
+}
+
+fn ok_json(v: serde_json::Value) -> CliResponse {
+    CliResponse::ok_json(v.to_string())
+}
+
+/// Resolve a workspace spec (name | path | UUID) to `project_id`.
+fn resolve_project(project: &str) -> Result<String, CliResponse> {
+    let Some(path) = crate::workspace_msg::resolve_workspace(project) else {
+        return Err(crate::workspace_routes::workspace_not_found_response(project));
+    };
+    let project_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
+    };
+    project_id.ok_or_else(|| {
+        error_response("404 Not Found", "not_found", &format!("workspace not registered: {path}"))
+    })
+}
+
+// ── GET /cli/mail/inboxes ───────────────────────────────────────────────
+
+/// The unified inbox catalog. `?project=<ws>` → agent view (only what
+/// that workspace can access, with `yourLevel`); none → owner view
+/// (ALL, full primary + grants — owner gate in the dispatcher).
+pub fn handle_inboxes(params: &HashMap<String, String>) -> CliResponse {
+    match params.get("project").map(String::as_str).map(str::trim).filter(|s| !s.is_empty()) {
+        Some(project) => {
+            let project_id = match resolve_project(project) {
+                Ok(id) => id,
+                Err(resp) => return resp,
+            };
+            ok_json(access::catalog_json(Some(&project_id)))
+        }
+        None => ok_json(access::catalog_json(None)),
+    }
+}
+
+// ── POST /cli/mail/access/grant ─────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct GrantBody {
+    address: String,
+    project: String,
+    level: String,
+}
+
+/// POST `/cli/mail/access/grant` — Primary/owner: grant a workspace
+/// read|draft|send access to any inbox (upsert). 'send' is hosted-only;
+/// granting the PRIMARY teaches.
+pub fn handle_grant(body: &[u8]) -> CliResponse {
+    let b: GrantBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.address.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox to share ('k2 mail inboxes')");
+    }
+    if b.project.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'project' — the workspace to grant (name | path | UUID)");
+    }
+    if b.level.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'level' — read | draft | send (send is hosted-only)");
+    }
+    let grantee_id = match resolve_project(&b.project) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    match access::grant_access(&b.address, &grantee_id, &b.level) {
+        Ok((address, source)) => ok_json(serde_json::json!({
+            "ok": true,
+            "address": address,
+            "source": source.as_str(),
+            "project": b.project,
+            "projectId": grantee_id,
+            "level": b.level.trim(),
+            "hint": format!(
+                "granted '{}' on {} to '{}' — see 'k2 mail inboxes'",
+                b.level.trim(), address, b.project
+            ),
+        })),
+        Err(e) => access_error_response(e),
+    }
+}
+
+// ── POST /cli/mail/access/revoke ────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct RevokeBody {
+    address: String,
+    project: String,
+}
+
+/// POST `/cli/mail/access/revoke` — Primary/owner: remove a workspace's
+/// grant (idempotent). Revoking the PRIMARY teaches (transfer/remove).
+pub fn handle_revoke(body: &[u8]) -> CliResponse {
+    let b: RevokeBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.address.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+    }
+    if b.project.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'project' — the workspace to revoke (name | path | UUID)");
+    }
+    let grantee_id = match resolve_project(&b.project) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    match access::revoke_access(&b.address, &grantee_id) {
+        Ok(address) => ok_json(serde_json::json!({
+            "ok": true,
+            "address": address,
+            "project": b.project,
+            "projectId": grantee_id,
+            "revoked": true,
+        })),
+        Err(e) => access_error_response(e),
+    }
+}
+
+// ── POST /cli/mail/access/set-primary ───────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct SetPrimaryBody {
+    address: String,
+    project: String,
+}
+
+/// POST `/cli/mail/access/set-primary` — TRANSFER the managing
+/// workspace. The old primary is demoted to a grant at its prior
+/// ceiling; the new primary's grant row (if any) is cleared.
+pub fn handle_set_primary(body: &[u8]) -> CliResponse {
+    let b: SetPrimaryBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.address.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+    }
+    if b.project.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'project' — the new primary workspace (name | path | UUID)");
+    }
+    let new_id = match resolve_project(&b.project) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    match access::set_primary(&b.address, &new_id) {
+        Ok((address, source)) => ok_json(serde_json::json!({
+            "ok": true,
+            "address": address,
+            "source": source.as_str(),
+            "project": b.project,
+            "projectId": new_id,
+            "hint": format!("'{}' now manages {}", b.project, address),
+        })),
+        Err(e) => access_error_response(e),
+    }
+}
+
+// ── POST /cli/mail/access/set-level ─────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct SetLevelBody {
+    address: String,
+    project: String,
+    level: String,
+}
+
+/// POST `/cli/mail/access/set-level` — set a workspace's level. When it
+/// is the PRIMARY, updates the primary's own ceiling; otherwise upserts
+/// its grant. 'send' is hosted-only.
+pub fn handle_set_level(body: &[u8]) -> CliResponse {
+    let b: SetLevelBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.address.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+    }
+    if b.project.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'project' — the workspace (name | path | UUID)");
+    }
+    if b.level.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'level' — read | draft | send (send is hosted-only)");
+    }
+    let project_id = match resolve_project(&b.project) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    match access::set_level(&b.address, &project_id, &b.level) {
+        Ok((address, source, is_primary)) => ok_json(serde_json::json!({
+            "ok": true,
+            "address": address,
+            "source": source.as_str(),
+            "project": b.project,
+            "projectId": project_id,
+            "level": b.level.trim(),
+            "isPrimary": is_primary,
+        })),
+        Err(e) => access_error_response(e),
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Inline unit tests — validation + resolution + masking-free management
+// surface, shared test DB, no network (house rules).
+// ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body_json(resp: &CliResponse) -> serde_json::Value {
+        serde_json::from_str(&resp.body).expect("valid JSON body")
+    }
+
+    fn unique(label: &str) -> (String, String) {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let short = &id[..12];
+        (format!("macc-{label}-{short}"), format!("/tmp/mail-access-{label}-{}-{short}", std::process::id()))
+    }
+
+    fn insert_project(name: &str, path: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, name, path],
+        )
+        .expect("insert project row");
+        id
+    }
+
+    fn seed_hosted(owner: &str, address: &str) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, \
+             owner_project_id, status, created_at, primary_level) \
+             VALUES (?1, ?2, 'dom-x', ?3, ?4, 'active', 100, 'send')",
+            rusqlite::params![id, address, format!("acct-{}", &id[..8]), owner],
+        )
+        .expect("seed hosted");
+    }
+
+    fn cleanup(project_id: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute("DELETE FROM mail_inbox_grants WHERE project_id = ?1", rusqlite::params![project_id]);
+        let _ = conn.execute("DELETE FROM mail_addresses WHERE owner_project_id = ?1", rusqlite::params![project_id]);
+        let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![project_id]);
+    }
+
+    #[test]
+    fn access_mutations_validate_before_resolution() {
+        for (h, body, needle) in [
+            ("grant", r#"{}"#, "address"),
+            ("grant", r#"{"address":"a@b.example"}"#, "project"),
+            ("grant", r#"{"address":"a@b.example","project":"x"}"#, "level"),
+            ("revoke", r#"{}"#, "address"),
+            ("set-primary", r#"{"address":"a@b.example"}"#, "project"),
+            ("set-level", r#"{"address":"a@b.example","project":"x"}"#, "level"),
+        ] {
+            let resp = match h {
+                "grant" => handle_grant(body.as_bytes()),
+                "revoke" => handle_revoke(body.as_bytes()),
+                "set-primary" => handle_set_primary(body.as_bytes()),
+                _ => handle_set_level(body.as_bytes()),
+            };
+            assert_eq!(resp.status, "400 Bad Request", "{h} {body}");
+            assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains(needle), "{h}: {}", resp.body);
+        }
+    }
+
+    #[test]
+    fn grant_resolves_workspace_and_lands_visible_in_inboxes() {
+        let (oname, opath) = unique("owner");
+        let owner_id = insert_project(&oname, &opath);
+        let (gname, gpath) = unique("grantee");
+        let grantee_id = insert_project(&gname, &gpath);
+        let addr = format!("ops-{}@acc.example", &owner_id[..8]);
+        seed_hosted(&owner_id, &addr);
+
+        // Unknown grantee workspace → shared 404.
+        let resp = handle_grant(
+            serde_json::json!({ "address": addr, "project": "no-such-ws", "level": "read" })
+                .to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+
+        // A valid send grant lands and shows in the owner catalog.
+        let resp = handle_grant(
+            serde_json::json!({ "address": addr, "project": gpath, "level": "send" })
+                .to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(body_json(&resp)["source"], "hosted");
+
+        let list = body_json(&handle_inboxes(&HashMap::new()));
+        let row = list["inboxes"].as_array().unwrap().iter()
+            .find(|i| i["address"] == addr.as_str()).expect("listed");
+        assert_eq!(row["grants"][0]["level"], "send");
+        assert_eq!(row["grants"][0]["projectId"], grantee_id);
+
+        // Agent view for the grantee shows yourLevel; owner view hides it.
+        let mut p = HashMap::new();
+        p.insert("project".to_string(), gpath.clone());
+        let mine = body_json(&handle_inboxes(&p));
+        let row = mine["inboxes"].as_array().unwrap().iter()
+            .find(|i| i["address"] == addr.as_str()).expect("granted sees it");
+        assert_eq!(row["yourLevel"], "send");
+
+        cleanup(&owner_id);
+        cleanup(&grantee_id);
+    }
+}

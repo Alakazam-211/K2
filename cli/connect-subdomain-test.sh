@@ -84,7 +84,12 @@ if [ -z "$PORT" ] || [ "$PORT" = "0" ]; then
 fi
 export K2_CONNECT_BASE="http://127.0.0.1:${PORT}"
 
-run() { HOME="$TEST_HOME" "$K2_BIN" connect subdomain "$@" 2>&1; }
+# Daemon env is EXPLICITLY cleared: the 0074 attribution stamps
+# (create/point/rm) and claim/unclaim POST to the local daemon when a
+# connection exists — this test must never mutate a real daemon's
+# attribution table, so it pins the no-daemon state (stamps degrade to
+# the warning path, claim/unclaim fail loud; both asserted below).
+run() { HOME="$TEST_HOME" K2_PORT= K2SO_PORT= K2_HOOK_TOKEN= K2SO_HOOK_TOKEN= "$K2_BIN" connect subdomain "$@" 2>&1; }
 set_resp() { printf '%s\n%s' "$1" "$2" > "$RESP_FILE"; }
 req_line() { head -1 "$REQ_FILE"; }
 req_body() { tail -n +3 "$REQ_FILE"; }
@@ -98,6 +103,12 @@ echo "$(req_body)" | grep -q '"label": "staging"' && ok "create body has label" 
 echo "$(req_body)" | grep -q '"target": "localhost:3000"' && ok "create body has target" || bad "create body target: $(req_body)"
 [ "$(req_auth)" = "AUTH:Bearer tok_test_123" ] && ok "create sends bearer token" || bad "create auth: $(req_auth)"
 echo "$out" | grep -q "staging.rosson.k2.dev" && [ $rc -eq 0 ] && ok "create prints host (rc=0)" || bad "create output: $out (rc=$rc)"
+# 0074 — with NO daemon reachable, the attribution stamp degrades to a
+# warning naming the claim remediation, and the create still exits 0.
+echo "$out" | grep -q "Warning: workspace attribution was not recorded" && \
+echo "$out" | grep -q "k2 connect subdomain claim staging" && [ $rc -eq 0 ] \
+    && ok "create stamp degrades to claim-hint warning (rc still 0)" \
+    || bad "create stamp warning: $out (rc=$rc)"
 
 # create — 403 pro_required -> FRIENDLY upsell (not a raw 403), points at
 # `k2 connect upgrade`. Server may name the gated subdomain in `detail`.
@@ -152,6 +163,27 @@ set_resp 200 '{"removed":"staging"}'
 out="$(run rm staging)"; rc=$?
 [ "$(req_line)" = "DELETE /subdomains/staging" ] && ok "rm -> DELETE /subdomains/{label}" || bad "rm method/path: $(req_line)"
 echo "$out" | grep -q "Removed staging" && [ $rc -eq 0 ] && ok "rm prints removed" || bad "rm output: $out"
+# 0074 — rm's unclaim stamp degrades to the unclaim-hint warning, rc 0.
+echo "$out" | grep -q "Warning: workspace attribution was not removed" && \
+echo "$out" | grep -q "k2 connect subdomain unclaim staging" && [ $rc -eq 0 ] \
+    && ok "rm stamp degrades to unclaim-hint warning (rc still 0)" \
+    || bad "rm stamp warning: $out (rc=$rc)"
+
+# ── claim / unclaim (0074, daemon-local — no control plane) ──────────────
+# With no daemon connection these MUST fail loud (their whole job is the
+# daemon write), and they must NOT touch the control plane (req file
+# untouched — asserted via a sentinel).
+echo "SENTINEL" > "$REQ_FILE"
+out="$(run claim staging)"; rc=$?
+echo "$out" | grep -qi "records attribution on the local K2 daemon" && [ $rc -ne 0 ] \
+    && ok "claim without daemon fails loud" || bad "claim no-daemon: $out (rc=$rc)"
+out="$(run unclaim staging)"; rc=$?
+echo "$out" | grep -qi "records attribution on the local K2 daemon" && [ $rc -ne 0 ] \
+    && ok "unclaim without daemon fails loud" || bad "unclaim no-daemon: $out (rc=$rc)"
+[ "$(req_line)" = "SENTINEL" ] && ok "claim/unclaim never call the control plane" || bad "claim hit control plane: $(req_line)"
+out="$(run claim)"; rc=$?
+echo "$out" | grep -qi "Usage: k2 connect subdomain claim" && [ $rc -ne 0 ] \
+    && ok "claim without label -> usage" || bad "claim no-label: $out (rc=$rc)"
 
 # rm — 403 primary_undeletable
 set_resp 403 '{"error":"primary_undeletable"}'

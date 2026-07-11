@@ -290,22 +290,30 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 .unwrap_or_else(|_| r#"{"running":false}"#.to_string()),
         ),
         // GET /cli/tunnel/subdomains — the daemon's cached Pro nested-
-        // subdomain routing map (URLs & Ports drawer): the primary label
-        // plus every `nested label → internal host:port` target the E2E
-        // TLS listener routes by. Read-only snapshot of
-        // `tunnel::subdomains::current()`; its push twin is the
-        // `tunnel_subdomains_changed` session-events broadcast. Empty
-        // (`{"primary":"","targets":{}}`) until the refresh loop has
-        // learned the account's map — e.g. tunnel down or E2E off.
+        // subdomain routing map (URLs drawer + K2 Connect settings): the
+        // primary label plus every nested label's `{target, projectId}` —
+        // the internal host:port the E2E TLS listener routes by overlaid
+        // with the 0074 workspace attribution. Read-only serialization of
+        // `session_events::tunnel_subdomains_snapshot()` (the SAME builder
+        // the `tunnel_subdomains_changed` push twin uses — one truth, two
+        // transports). Empty (`{"primary":"","targets":{}}`) until the
+        // refresh loop has learned the account's map — e.g. tunnel down
+        // or E2E off.
         "/cli/tunnel/subdomains" => {
-            let map = k2_core::tunnel::subdomains::current();
+            let (primary, targets) = crate::session_events::tunnel_subdomains_snapshot();
             CliResponse::ok_json(
                 serde_json::json!({
-                    "primary": &map.primary,
-                    "targets": &map.targets,
+                    "primary": primary,
+                    "targets": targets,
                 })
                 .to_string(),
             )
+        }
+        // 0074 — claim/unclaim are POST-only mutations (handled in the
+        // dispatcher's POST arms); a GET landing here gets an explicit
+        // 405, never a silent no-op (feedback_post_only_route_guards).
+        "/cli/tunnel/subdomains/claim" | "/cli/tunnel/subdomains/unclaim" => {
+            CliResponse::method_not_allowed()
         }
         "/cli/companion/presets" => match k2_core::companion::cli_routes::list_presets() {
             Ok(body) => CliResponse::ok_json(body),
@@ -1389,6 +1397,98 @@ pub fn handle_v1_ping(principal_id: &str) -> CliResponse {
     )
 }
 
+// ── 0074 — nested-subdomain workspace attribution (claim / unclaim) ────
+
+/// Resolve the `project` param (workspace PATH from the CLI's `$PROJECT`
+/// context, or a `projects.id` from the renderer) to the canonical
+/// project id. Attribution rows store the ID so they survive a folder
+/// move/rename.
+fn resolve_project_id(conn: &rusqlite::Connection, project: &str) -> Result<String, String> {
+    conn.query_row(
+        "SELECT id FROM projects WHERE path = ?1 OR id = ?1",
+        rusqlite::params![project],
+        |r| r.get(0),
+    )
+    .map_err(|_| format!("no registered workspace matches {project:?}"))
+}
+
+/// POST /cli/tunnel/subdomains/claim — attribute a nested subdomain
+/// label to the acting workspace (0074). `label` = the nested label
+/// (e.g. `staging`); `project` = the workspace path (CLI) or project id
+/// (renderer). Called by the `k2 connect subdomain create/point` stamp
+/// seams AND the explicit `k2 connect subdomain claim` adopt verb — the
+/// label need NOT be in the cached routing map yet (a freshly-created
+/// label lands there on the next refresh tick; a claim of a
+/// never-provisioned label is harmless, snapshot readers ignore it).
+/// Emits `tunnel_subdomains_changed` so both UIs converge.
+pub fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
+    let label = str_param(params, "label");
+    if label.trim().is_empty() {
+        return CliResponse::bad_request("Missing label parameter".to_string());
+    }
+    let project = match need_project(params) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let project_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let project_id = match resolve_project_id(&conn, &project) {
+            Ok(id) => id,
+            Err(e) => return CliResponse::bad_request(e),
+        };
+        if let Err(e) =
+            k2_core::db::schema::SubdomainWorkspace::claim(&conn, &label, &project_id)
+        {
+            return CliResponse::bad_request(e.to_string());
+        }
+        project_id
+    };
+    // Attribution changed while the routing map didn't — store() won't
+    // fire, so emit the broadcast from THIS seam.
+    crate::session_events::emit_tunnel_subdomains_changed();
+    CliResponse::ok_json(
+        serde_json::json!({
+            "success": true,
+            "label": label.trim().to_ascii_lowercase(),
+            "projectId": project_id,
+        })
+        .to_string(),
+    )
+}
+
+/// POST /cli/tunnel/subdomains/unclaim — drop a label's workspace
+/// attribution (0074). Called by the `k2 connect subdomain rm` stamp
+/// seam and the explicit `unclaim` verb. `removed:false` = the label
+/// wasn't attributed (reported honestly, still a 200 — the desired end
+/// state holds). Emits `tunnel_subdomains_changed` only when a row was
+/// actually removed.
+pub fn handle_subdomain_unclaim(params: &HashMap<String, String>) -> CliResponse {
+    let label = str_param(params, "label");
+    if label.trim().is_empty() {
+        return CliResponse::bad_request("Missing label parameter".to_string());
+    }
+    let removed = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match k2_core::db::schema::SubdomainWorkspace::unclaim(&conn, &label) {
+            Ok(removed) => removed,
+            Err(e) => return CliResponse::bad_request(e.to_string()),
+        }
+    };
+    if removed {
+        crate::session_events::emit_tunnel_subdomains_changed();
+    }
+    CliResponse::ok_json(
+        serde_json::json!({
+            "success": true,
+            "label": label.trim().to_ascii_lowercase(),
+            "removed": removed,
+        })
+        .to_string(),
+    )
+}
+
 /// GH#22/#23/#24 defense-in-depth: validate a `/cli/heartbeat/schedule`
 /// write before it reaches `projects`. Pre-0.40.41 CLIs misparsed
 /// `--help` (and bare subcommand words like "add"/"list"/"remove") on
@@ -1792,5 +1892,148 @@ mod api_key_route_tests {
             "body={}",
             resp.body
         );
+    }
+}
+
+#[cfg(test)]
+mod subdomain_attribution_route_tests {
+    //! 0074 — `POST /cli/tunnel/subdomains/{claim,unclaim}` handler
+    //! coverage against the shared in-memory test DB. Labels/paths are
+    //! process-unique sentinels so parallel tests sharing that DB can't
+    //! collide; each test cleans up its rows.
+    use super::*;
+
+    fn params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn make_project(suffix: &str) -> (String, String) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let path = format!("/tmp/attrib-{suffix}-{}", std::process::id());
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT OR IGNORE INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, "attrib-test", path],
+        )
+        .expect("insert project");
+        (id, path)
+    }
+
+    fn attribution_of(label: &str) -> Option<String> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::SubdomainWorkspace::map(&conn)
+            .expect("map")
+            .get(&label.trim().to_ascii_lowercase())
+            .cloned()
+    }
+
+    fn cleanup(label: &str, project_id: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = k2_core::db::schema::SubdomainWorkspace::unclaim(&conn, label);
+        let _ = conn.execute(
+            "DELETE FROM projects WHERE id = ?1",
+            rusqlite::params![project_id],
+        );
+    }
+
+    /// Claim by workspace PATH (the CLI's `$PROJECT` context) resolves to
+    /// the project ID, writes the row, and echoes both back; unclaim then
+    /// removes it and reports `removed:true` / `false` honestly.
+    #[test]
+    fn claim_by_path_then_unclaim_roundtrip() {
+        let (id, path) = make_project("roundtrip");
+        let label = format!("rt-{}", std::process::id());
+
+        let resp = handle_subdomain_claim(&params(&[("label", &label), ("project", &path)]));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["success"], serde_json::json!(true));
+        assert_eq!(v["label"], serde_json::json!(label));
+        assert_eq!(v["projectId"].as_str(), Some(id.as_str()));
+        assert_eq!(attribution_of(&label).as_deref(), Some(id.as_str()));
+
+        let resp = handle_subdomain_unclaim(&params(&[("label", &label)]));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["removed"], serde_json::json!(true));
+        assert_eq!(attribution_of(&label), None);
+
+        // Second unclaim: still 200, but honestly removed:false.
+        let resp = handle_subdomain_unclaim(&params(&[("label", &label)]));
+        assert_eq!(resp.status, "200 OK");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["removed"], serde_json::json!(false));
+
+        cleanup(&label, &id);
+    }
+
+    /// Claim also accepts the project ID directly (the renderer's
+    /// context), and a re-claim by another workspace repoints the label.
+    #[test]
+    fn claim_by_id_and_reclaim_repoints() {
+        let (id_a, _) = make_project("repoint-a");
+        let (id_b, _) = make_project("repoint-b");
+        let label = format!("rp-{}", std::process::id());
+
+        let resp = handle_subdomain_claim(&params(&[("label", &label), ("project", &id_a)]));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(attribution_of(&label).as_deref(), Some(id_a.as_str()));
+
+        let resp = handle_subdomain_claim(&params(&[("label", &label), ("project", &id_b)]));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(
+            attribution_of(&label).as_deref(),
+            Some(id_b.as_str()),
+            "re-claim must repoint to the new workspace"
+        );
+
+        cleanup(&label, &id_a);
+        cleanup(&label, &id_b);
+    }
+
+    /// Fail-loud inputs: a missing/blank label, a missing project, and an
+    /// unregistered workspace are 400s — never a silent half-write.
+    #[test]
+    fn claim_rejects_bad_inputs() {
+        let (id, path) = make_project("badinput");
+        let label = format!("bad-{}", std::process::id());
+
+        let resp = handle_subdomain_claim(&params(&[("project", &path)]));
+        assert_eq!(resp.status, "400 Bad Request", "missing label must 400");
+        let resp = handle_subdomain_claim(&params(&[("label", "  "), ("project", &path)]));
+        assert_eq!(resp.status, "400 Bad Request", "blank label must 400");
+        let resp = handle_subdomain_claim(&params(&[("label", &label)]));
+        assert_eq!(resp.status, "400 Bad Request", "missing project must 400");
+        let resp = handle_subdomain_claim(&params(&[
+            ("label", &label),
+            ("project", "/nowhere/not-registered"),
+        ]));
+        assert_eq!(resp.status, "400 Bad Request", "unknown workspace must 400");
+        assert_eq!(attribution_of(&label), None, "no row on any rejected path");
+
+        let resp = handle_subdomain_unclaim(&params(&[]));
+        assert_eq!(resp.status, "400 Bad Request", "unclaim without label must 400");
+
+        cleanup(&label, &id);
+    }
+
+    /// The GET chain 405s the POST-only claim/unclaim paths
+    /// (feedback_post_only_route_guards) while the sibling read route
+    /// stays a 200 GET.
+    #[test]
+    fn get_chain_405s_claim_and_unclaim() {
+        let p = HashMap::new();
+        for path in ["/cli/tunnel/subdomains/claim", "/cli/tunnel/subdomains/unclaim"] {
+            let resp = dispatch(path, &p).expect("route must be known to the GET chain");
+            assert_eq!(resp.status, "405 Method Not Allowed", "path={path}");
+        }
+        let resp = dispatch("/cli/tunnel/subdomains", &p).expect("read route");
+        assert_eq!(resp.status, "200 OK");
     }
 }

@@ -118,9 +118,12 @@ fi
 # cmd_daemon_install (which is defined before the router runs).
 _skip_conn_gate=0
 [ "${1:-}" = "daemon" ] && [ "${2:-}" = "install" ] && _skip_conn_gate=1
-# `k2 connect ...` (Pro-subdomain mgmt) talks ONLY to the hosted control
-# plane + reads ~/.k2/tunnel.json — never the local daemon — so it must not
-# be blocked by the no-daemon gate.
+# `k2 connect ...` (Pro-subdomain mgmt) talks to the hosted control
+# plane + reads ~/.k2/tunnel.json, so it must not be blocked by the
+# no-daemon gate. (Its 0074 attribution seams — claim/unclaim + the
+# create/point/rm stamps — DO talk to the local daemon, but check
+# PORT/TOKEN themselves: stamps degrade to a warning, claim/unclaim
+# fail loud.)
 [ "${1:-}" = "connect" ] && _skip_conn_gate=1
 # `k2 --schema` (GH#8 #4) prints a STATIC command-surface manifest — it
 # talks to nothing, so it must work even with no daemon running (its whole
@@ -4589,8 +4592,13 @@ if d.get("running"):
             local raw
             raw=$(cli_request "/cli/tunnel/subdomains")
             if [ "$as_json" = "1" ]; then printf '%s\n' "$raw"; return 0; fi
-            printf '%s' "$raw" | python3 -c '
-import json, sys
+            # Workspace-name resolution for the 0074 attribution column:
+            # one cheap projects-list call (id -> name); best-effort — on
+            # failure the table falls back to the raw project id.
+            local projects_raw
+            projects_raw=$(cli_request "/cli/companion/projects" 2>/dev/null)
+            printf '%s' "$raw" | K2_PROJECTS_JSON="$projects_raw" python3 -c '
+import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
 except Exception as e:
@@ -4598,6 +4606,13 @@ except Exception as e:
 if d.get("error"):
     err = d["error"]
     print(f"Failed to read tunnel subdomains: {err}", file=sys.stderr); sys.exit(1)
+names = {}
+try:
+    for p in json.loads(os.environ.get("K2_PROJECTS_JSON") or "[]"):
+        if isinstance(p, dict) and p.get("id"):
+            names[p["id"]] = p.get("name") or p["id"]
+except Exception:
+    pass  # best-effort — fall back to raw project ids below
 primary = (d.get("primary") or "").strip()
 targets = d.get("targets") or {}
 print("K2 Connect subdomains (daemon routing map)")
@@ -4607,13 +4622,26 @@ if not primary and not targets:
     sys.exit(0)
 rows = []
 if primary:
-    rows.append((f"{primary}.k2.dev", "daemon (primary)"))
+    rows.append((f"{primary}.k2.dev", "daemon (primary)", "-"))
 for label in sorted(targets):
     host = f"{label}.{primary}.k2.dev" if primary else label
-    rows.append((host, targets[label]))
-width = max(len(h) for h, _ in rows)
-for host, target in rows:
-    print(f"  {host:<{width}}  ->  {target}")
+    t = targets[label]
+    # 0074 shape: {"target": ..., "projectId": ...}; pre-0074 daemons
+    # sent the bare endpoint string — render both honestly.
+    if isinstance(t, dict):
+        endpoint = t.get("target") or "?"
+        pid = t.get("projectId")
+        ws = names.get(pid, pid) if pid else "-"
+    else:
+        endpoint, ws = str(t), "-"
+    rows.append((host, endpoint, ws))
+# NOTE: %-format, not nested-quote f-strings — this whole program lives
+# inside a single-quoted bash string, so a bare apostrophe would cut it.
+hw = max([len(r[0]) for r in rows] + [len("HOST")])
+tw = max([len(r[1]) for r in rows] + [len("TARGET")])
+print("  %-*s  %-*s  %s" % (hw, "HOST", tw, "TARGET", "WORKSPACE"))
+for host, endpoint, ws in rows:
+    print("  %-*s  %-*s  %s" % (hw, host, tw, endpoint, ws))
 if not targets:
     print("  (no nested subdomains configured)")
 '
@@ -4765,7 +4793,7 @@ _connect_curl() {
 _connect_usage() {
     echo "Usage: k2 connect <status|subdomain> ..." >&2
     echo "  status                                Connected subdomain + its plan" >&2
-    echo "  subdomain <create|list|point|rm> ...  Manage Pro nested subdomains" >&2
+    echo "  subdomain <create|list|point|rm|claim|unclaim> ...  Manage Pro nested subdomains + workspace attribution" >&2
     echo "  (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)" >&2
 }
 
@@ -4864,9 +4892,83 @@ if tier in ("single", "free"):
 # dashboard (https://k2.dev/dashboard). The CLI exists to MAKE/MANAGE
 # subdomains, not to manage the subscription.
 
+# 0074 — record (or drop) a nested label's WORKSPACE attribution on the
+# LOCAL daemon: POST /cli/tunnel/subdomains/{claim,unclaim} with the
+# label; cli_post_form carries this shell's $PROJECT (the acting
+# workspace) in the query string, which is exactly the attribution
+# being recorded. Echoes the response body; non-zero when the daemon
+# connection is missing/unreachable.
+_subdomain_attrib_post() {
+    local verb="$1" label="$2"
+    if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then return 1; fi
+    cli_post_form "/cli/tunnel/subdomains/${verb}" "label=$(urlencode "$label")"
+}
+
+# Best-effort attribution stamp AFTER a successful control-plane
+# create/point/rm. The control-plane mutation already landed — a failed
+# stamp must not fail the command; warn with the manual remediation
+# (`k2 connect subdomain claim/unclaim <label>`) instead. Always
+# returns 0.
+_stamp_subdomain_attrib() {
+    local verb="$1" label="$2" resp
+    if resp=$(_subdomain_attrib_post "$verb" "$label" 2>/dev/null) && \
+       printf '%s' "$resp" | python3 -c 'import json,sys; sys.exit(0 if (json.loads(sys.stdin.read() or "{}") or {}).get("success") else 1)' 2>/dev/null; then
+        return 0
+    fi
+    if [ "$verb" = "claim" ]; then
+        echo "Warning: workspace attribution was not recorded on the daemon (unreachable?)." >&2
+        echo "  Adopt it later from the owning workspace: k2 connect subdomain claim $label" >&2
+    else
+        echo "Warning: workspace attribution was not removed on the daemon (unreachable?)." >&2
+        echo "  Remove it later: k2 connect subdomain unclaim $label" >&2
+    fi
+    return 0
+}
+
 cmd_connect_subdomain() {
     local action="${1:-list}"
     shift 2>/dev/null || true
+    # 0074 — claim/unclaim adopt/release a label's workspace attribution
+    # on the LOCAL daemon only (no control-plane call, so no bearer-token
+    # gate): claim adopts a pre-existing / remote-created label for the
+    # CURRENT workspace; unclaim drops the attribution. Fail loud — this
+    # verb's whole job is the daemon write.
+    case "$action" in
+        claim|unclaim)
+            local label="${1:-}"
+            if [ -z "$label" ]; then
+                echo "Usage: k2 connect subdomain $action <label>" >&2
+                exit 1
+            fi
+            if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
+                echo "Error: '$action' records attribution on the local K2 daemon, which isn't reachable." >&2
+                echo "(Connection details: ~/.k2/heartbeat.port and ~/.k2/heartbeat.token)" >&2
+                exit 1
+            fi
+            local resp
+            resp=$(_subdomain_attrib_post "$action" "$label") || resp=""
+            printf '%s' "$resp" | ACTION="$action" LABEL="$label" python3 -c '
+import json, os, sys
+action, label = os.environ["ACTION"], os.environ["LABEL"]
+try:
+    d = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    d = {}
+if not isinstance(d, dict) or not d.get("success"):
+    err = (d.get("error") if isinstance(d, dict) else None) or "no response from the daemon"
+    print(f"Error: {err}", file=sys.stderr); sys.exit(1)
+if action == "claim":
+    # %-format, not a nested-quote f-string — this program lives inside a
+    # single-quoted bash string, so a bare apostrophe would cut it.
+    print("Claimed %s for this workspace (project %s)." % (label, d.get("projectId") or "?"))
+elif d.get("removed"):
+    print(f"Unclaimed {label} — no workspace attribution remains.")
+else:
+    print(f"{label} had no workspace attribution (nothing to remove).")
+'
+            return 0
+            ;;
+    esac
     # Token gate up front (NOT inside the pipeline below, where a subshell
     # `exit` wouldn't stop the renderer half of the pipe).
     if [ -z "$(_connect_bearer_token)" ]; then
@@ -4899,6 +5001,9 @@ print("  status:    %s" % d.get("status","?"))
 print("  cert:      %s" % d.get("cert_status","?"))
 print("  effective: %s" % d.get("effective","?"))
 '
+            # 0074 — the create succeeded (set -e would have exited
+            # otherwise): attribute the label to the acting workspace.
+            _stamp_subdomain_attrib claim "$label"
             ;;
         list)
             local self
@@ -4963,6 +5068,9 @@ print("Repointed %s -> %s" % (host, d.get("target","?")))
 print("  status:    %s" % d.get("status","?"))
 print("  effective: %s" % d.get("effective","?"))
 '
+            # 0074 — a repoint through the K2 surface records the acting
+            # workspace (re-attributes if another workspace had it).
+            _stamp_subdomain_attrib claim "$label"
             ;;
         rm|remove|delete)
             local label="${1:-}"
@@ -4974,13 +5082,18 @@ print("  effective: %s" % d.get("effective","?"))
             _connect_curl DELETE "/subdomains/$(urlencode "$label")" | _connect_subdomain_render '
 print("Removed %s" % (d.get("removed") or "(subdomain)"))
 '
+            # 0074 — the label is gone from the control plane; drop its
+            # workspace attribution row too.
+            _stamp_subdomain_attrib unclaim "$label"
             ;;
         *)
-            echo "Usage: k2 connect subdomain <create|list|point|rm> ..." >&2
-            echo "  create <label> --target <endpoint>   Claim a nested subdomain" >&2
+            echo "Usage: k2 connect subdomain <create|list|point|rm|claim|unclaim> ..." >&2
+            echo "  create  <label> --target <endpoint>  Create a nested subdomain (attributed to this workspace)" >&2
             echo "  list                                 List your subdomains" >&2
-            echo "  point  <label> --target <endpoint>   Repoint to a new endpoint" >&2
-            echo "  rm     <label>                       Remove a subdomain" >&2
+            echo "  point   <label> --target <endpoint>  Repoint to a new endpoint" >&2
+            echo "  rm      <label>                      Remove a subdomain" >&2
+            echo "  claim   <label>                      Adopt an existing label for THIS workspace (daemon-local)" >&2
+            echo "  unclaim <label>                      Drop a label's workspace attribution (daemon-local)" >&2
             exit 1
             ;;
     esac
@@ -6202,9 +6315,16 @@ cmd_schema() {
     {
       "name": "tunnel subdomains",
       "usage": "k2 tunnel subdomains [--json]",
-      "description": "Daemon-cached nested-subdomain routing map (label -> internal target). Read-only; distinct from 'k2 connect subdomain list' (control plane).",
+      "description": "Daemon-cached nested-subdomain routing map (label -> internal target + attributed workspace). Read-only; distinct from 'k2 connect subdomain list' (control plane).",
       "args": [],
-      "flags": [{"name": "--json", "arg": null, "description": "Raw JSON pass-through."}]
+      "flags": [{"name": "--json", "arg": null, "description": "Raw JSON pass-through ({primary, targets: {label: {target, projectId}}})."}]
+    },
+    {
+      "name": "connect subdomain claim",
+      "usage": "k2 connect subdomain claim <label>",
+      "description": "Adopt an existing nested subdomain label for the CURRENT workspace (daemon-local attribution; 'unclaim' drops it). create/point/rm stamp attribution automatically.",
+      "args": [{"name": "label", "required": true}],
+      "flags": []
     },
     {
       "name": "skills",
@@ -9199,14 +9319,16 @@ TUNNEL (K2 Connect — expose this daemon at https://<user>.k2.dev)
   tunnel start [--subdomain <s>]                Start the frpc tunnel
   tunnel stop                                   Stop the tunnel
   tunnel status [--json]                        Running? + public URL
-  tunnel subdomains [--json]                    Daemon-cached nested map (label -> target)
+  tunnel subdomains [--json]                    Daemon-cached nested map (label -> target + workspace)
 
 CONNECT (K2 Connect — Pro subdomains + plan; talks to the control plane)
   connect status                                Connected subdomain + its plan
   connect subdomain list                        Your subdomains + plan/status
-  connect subdomain create <label> --target <e> Claim a nested subdomain (Pro)
+  connect subdomain create <label> --target <e> Create a nested subdomain (Pro; attributed to this workspace)
   connect subdomain point <label> --target <e>  Repoint a subdomain (Pro)
   connect subdomain rm <label>                  Remove a subdomain (Pro)
+  connect subdomain claim <label>               Adopt an existing label for THIS workspace (daemon-local)
+  connect subdomain unclaim <label>             Drop a label's workspace attribution (daemon-local)
   (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)
 
 SETTINGS

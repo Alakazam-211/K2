@@ -139,17 +139,22 @@ export interface TunnelStatusChangedEvent {
 }
 
 /** APP-LEVEL — the tunnel's cached NESTED-subdomain routing map changed
- *  (URLs & Ports drawer). The daemon's refresh loop landed a map that
- *  differs from the cached one. Carries the WHOLE map (not a diff) so the
- *  consumer converges without a follow-up GET; the snapshot twin is
- *  `GET /cli/tunnel/subdomains`, which returns the identical
+ *  (URLs drawer + K2 Connect settings): the daemon's refresh loop landed
+ *  a map that differs from the cached one, OR a label's workspace
+ *  attribution changed (0074 claim/unclaim). Carries the WHOLE map (not a
+ *  diff) so the consumer converges without a follow-up GET; the snapshot
+ *  twin is `GET /cli/tunnel/subdomains`, which returns the identical
  *  `{primary, targets}` payload. `primary` may be empty when the daemon
  *  hasn't learned the tunnel's primary label. */
 export interface TunnelSubdomainsChangedEvent {
   kind: 'tunnel_subdomains_changed'
   primary: string
-  /** `nested label → internal target endpoint` (e.g. `localhost:3000`). */
-  targets: Record<string, string>
+  /** `nested label → { target, projectId }` where `target` is the internal
+   *  endpoint (e.g. `localhost:3000`) and `projectId` the attributed
+   *  workspace (null = unattributed). Pre-0074 daemons sent the bare
+   *  endpoint string — consumers run both shapes through
+   *  `normalizeTargets` (urls-ports.ts) rather than trusting the wire. */
+  targets: Record<string, { target: string; projectId: string | null } | string>
 }
 
 // NOTE (0.40.31): the WORKSPACE-SCOPED review events (`review_queue_changed`,

@@ -32,6 +32,7 @@ import type { SettingEntry } from '../searchManifest'
 import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingControls'
 import { Toggle } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
+import { TunnelUrlsPanel } from './TunnelUrlsPanel'
 import {
   signIn as accountSignIn,
   signOut as accountSignOut,
@@ -109,6 +110,7 @@ export const K2_CONNECT_MANIFEST: SettingEntry[] = [
   { id: 'k2-connect.start-stop', section: 'k2-connect', label: 'Start / Stop Tunnel', description: 'Expose this device at a public URL', keywords: ['start', 'stop', 'tunnel', 'expose', 'connect'] },
   { id: 'k2-connect.auto-start', section: 'k2-connect', label: 'Re-launch tunnel on restart', description: 'Automatically start this tunnel when the daemon restarts', keywords: ['auto', 'autostart', 'restart', 'reconnect', 'boot', 'relaunch'] },
   { id: 'k2-connect.users', section: 'k2-connect', label: 'Users / Access', description: 'People you allow to connect in to this device’s daemon', keywords: ['users', 'access', 'people', 'login', 'password', 'connect in', 'multi-user', 'allow', 'invite'] },
+  { id: 'k2-connect.urls', section: 'k2-connect', label: 'URLs', description: 'Tunnel status plus every nested subdomain URL and its workspace', keywords: ['urls', 'nested', 'subdomains', 'routing', 'targets', 'ports', 'workspace', 'attribution', 'claim'] },
   { id: 'k2-connect.federation', section: 'k2-connect', label: 'Enable federation', description: 'Allow cross-server agent communication on this server', keywords: ['federation', 'cross-server', 'peers', 'agents', 'connect', 'mesh', 'cortana'] },
   { id: 'k2-connect.allow-remote-instruct', section: 'k2-connect', label: 'Let remote users message agents', description: 'Delivery consent for remote messages: K2 Connect users via the composer, and paired federation servers', keywords: ['remote', 'instruct', 'message', 'agents', 'composer', 'consent', 'federation', 'inbound', 'connect users', 'allow'] },
 ]
@@ -1695,6 +1697,18 @@ export function K2ConnectSection(): React.JSX.Element {
             )}
             </>
             )}
+          </div>
+        </SettingsGroup>
+
+        {/* ── URLs — server-wide tunnel view (0074), directly beneath the
+            Users/Access list per the workspace-attribution design: tunnel
+            status + the FULL nested-subdomain table with its workspace
+            attribution column. The per-workspace drawer section shows
+            only the active workspace's URLs; THIS is where the whole
+            server's map (and unattributed labels) lives. ── */}
+        <SettingsGroup title="URLs">
+          <div data-settings-id="k2-connect.urls">
+            <TunnelUrlsPanel />
           </div>
         </SettingsGroup>
       </div>

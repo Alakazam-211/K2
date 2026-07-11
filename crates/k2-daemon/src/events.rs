@@ -152,18 +152,21 @@ impl AgentHookEventSink for DaemonBroadcastSink {
                     crate::session_events::SessionEvent::FeedbackChanged { reason },
                 );
             }
-            // URLs & Ports drawer — the tunnel's nested-subdomain map
-            // changed (fired from `tunnel::subdomains::store()` only when
-            // the landed map differs). The hook is a payload-free nudge;
-            // read the CANONICAL cached map back (the emit fires AFTER the
-            // store swapped it) so this broadcast can never drift from
-            // what `GET /cli/tunnel/subdomains` serves.
+            // URLs drawer / K2 Connect settings — the tunnel's nested-
+            // subdomain map changed (fired from
+            // `tunnel::subdomains::store()` only when the landed map
+            // differs). The hook is a payload-free nudge; serialize the
+            // CANONICAL snapshot back (the emit fires AFTER the store
+            // swapped it) — same builder the GET route uses, so this
+            // broadcast can never drift from what
+            // `GET /cli/tunnel/subdomains` serves (0074: incl. the
+            // per-label workspace attribution overlay).
             HookEvent::TunnelSubdomainsChanged => {
-                let map = k2_core::tunnel::subdomains::current();
+                let (primary, targets) = crate::session_events::tunnel_subdomains_snapshot();
                 let _ = crate::session_events::emit(
                     crate::session_events::SessionEvent::TunnelSubdomainsChanged {
-                        primary: map.primary.clone(),
-                        targets: map.targets.clone(),
+                        primary,
+                        targets,
                     },
                 );
             }
@@ -398,25 +401,33 @@ mod tests {
         }
     }
 
-    /// URLs & Ports — the sink mirrors the payload-free
+    /// URLs drawer / settings — the sink mirrors the payload-free
     /// `tunnel:subdomains-changed` hook onto the session-events bus as
-    /// `TunnelSubdomainsChanged` carrying the CANONICAL cached map
-    /// (primary + targets), i.e. the exact truth
-    /// `GET /cli/tunnel/subdomains` serves. Drains a real bus
-    /// subscription; a unique sentinel primary keeps parallel-test
-    /// contamination from false-positives.
+    /// `TunnelSubdomainsChanged` carrying the CANONICAL snapshot
+    /// (primary + attributed targets), i.e. the exact truth
+    /// `GET /cli/tunnel/subdomains` serves — incl. the 0074 workspace
+    /// attribution overlay. Drains a real bus subscription; a unique
+    /// sentinel primary keeps parallel-test contamination from
+    /// false-positives.
     #[test]
     fn tunnel_subdomains_hook_mirrors_canonical_map_to_session_events_bus() {
-        use crate::session_events::SessionEvent;
+        use crate::session_events::{SessionEvent, SubdomainTargetWire};
 
         // Land a sentinel map in the process-global cache (the same store
-        // chokepoint the refresh loop uses).
+        // chokepoint the refresh loop uses) + attribute one label (0074).
         let primary = format!("probe-{}", std::process::id());
+        let label = format!("staging-{}", std::process::id());
         let mut targets = std::collections::HashMap::new();
-        targets.insert("staging".to_string(), "localhost:3000".to_string());
+        targets.insert(label.clone(), "localhost:3000".to_string());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::db::schema::SubdomainWorkspace::claim(&conn, &label, "proj-mirror")
+                .expect("claim");
+        }
         k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap {
             primary: primary.clone(),
-            targets: targets.clone(),
+            targets,
         });
 
         let tx = broadcast::Sender::<WireEvent>::new(4);
@@ -429,8 +440,12 @@ mod tests {
             if let SessionEvent::TunnelSubdomainsChanged { primary: p, targets: t } = got {
                 if p == primary {
                     assert_eq!(
-                        t, targets,
-                        "mirror must carry the canonical cached targets"
+                        t.get(&label),
+                        Some(&SubdomainTargetWire {
+                            target: "localhost:3000".to_string(),
+                            project_id: Some("proj-mirror".to_string()),
+                        }),
+                        "mirror must carry the canonical attributed targets"
                     );
                     found = true;
                     break;
@@ -443,7 +458,13 @@ mod tests {
             "no session-events mirror for HookEvent::TunnelSubdomainsChanged"
         );
 
-        // Reset the global cache so we don't bleed into other tests.
+        // Reset the global cache + shared DB so we don't bleed into
+        // other tests.
         k2_core::tunnel::subdomains::store(Default::default());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = k2_core::db::schema::SubdomainWorkspace::unclaim(&conn, &label);
+        }
     }
 }

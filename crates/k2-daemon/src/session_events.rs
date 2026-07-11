@@ -268,22 +268,28 @@ pub enum SessionEvent {
         public_url: Option<String>,
     },
 
-    /// URLs & Ports drawer — the K2 Connect tunnel's cached NESTED-
-    /// subdomain routing map changed (the daemon-owned refresh loop landed
-    /// a map that differs from the cached one; see
-    /// `k2_core::tunnel::subdomains::store`). APP-LEVEL — one tunnel per
-    /// daemon, the `TunnelStatusChanged` routing class. Carries the WHOLE
-    /// map (not a diff) so the renderer converges without a follow-up GET;
-    /// the snapshot twin is `GET /cli/tunnel/subdomains`, which returns
-    /// the identical `{primary, targets}` payload.
+    /// URLs drawer / K2 Connect settings — the K2 Connect tunnel's cached
+    /// NESTED-subdomain routing map changed (the daemon-owned refresh loop
+    /// landed a map that differs from the cached one; see
+    /// `k2_core::tunnel::subdomains::store`), OR a label's WORKSPACE
+    /// attribution changed (0074 claim/unclaim — same event so both UIs
+    /// refresh from one signal). APP-LEVEL — one tunnel per daemon, the
+    /// `TunnelStatusChanged` routing class. Carries the WHOLE map (not a
+    /// diff) so the renderer converges without a follow-up GET; the
+    /// snapshot twin is `GET /cli/tunnel/subdomains`, which returns the
+    /// identical `{primary, targets}` payload
+    /// ([`tunnel_subdomains_snapshot`] builds both).
     ///
     /// Wire: `{ "kind": "tunnel_subdomains_changed", "primary": string,
-    /// "targets": { "<label>": "<host:port>", ... } }`. `primary` is the
-    /// tunnel's primary subdomain label (may be empty when unknown);
-    /// `targets` maps each nested label to its internal target endpoint.
+    /// "targets": { "<label>": { "target": "<host:port>",
+    /// "projectId": string|null }, ... } }`. `primary` is the tunnel's
+    /// primary subdomain label (may be empty when unknown); each target
+    /// carries the internal endpoint plus the attributed workspace's
+    /// `projects.id` (null = unattributed). Pre-0074 daemons sent bare
+    /// `"<host:port>"` strings — consumers normalize both shapes.
     TunnelSubdomainsChanged {
         primary: String,
-        targets: HashMap<String, String>,
+        targets: HashMap<String, SubdomainTargetWire>,
     },
 
     /// #676 — a tab title was set daemon-side. WORKSPACE-SCOPED.
@@ -460,6 +466,62 @@ pub enum SessionEvent {
     /// one of `created` | `answered` | `status-changed` | `commented`.
     /// Refetch signal only, no item payload.
     FeedbackChanged { reason: String },
+}
+
+/// One nested-subdomain target on the wire (0074): the internal endpoint
+/// the label routes to plus the attributed workspace's `projects.id`
+/// (`null` = unattributed — the label exists on the control plane but no
+/// workspace has created/claimed it through this daemon). Serialized
+/// identically inside `GET /cli/tunnel/subdomains` and the
+/// [`SessionEvent::TunnelSubdomainsChanged`] broadcast — one shape, two
+/// transports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SubdomainTargetWire {
+    /// Internal target endpoint, e.g. `localhost:3000`.
+    pub target: String,
+    /// Attributed workspace (`projects.id`), `null` when unattributed.
+    #[serde(rename = "projectId")]
+    pub project_id: Option<String>,
+}
+
+/// The canonical `{primary, targets}` payload BOTH surfaces serve: the
+/// cached control-plane routing map (`tunnel::subdomains::current()`)
+/// overlaid with the daemon-local 0074 attribution table. Building it in
+/// ONE place is what keeps `GET /cli/tunnel/subdomains` and the
+/// `tunnel_subdomains_changed` broadcast from ever drifting apart.
+/// Attribution rows for labels that are NOT in the routing map are
+/// ignored (stale claims for removed labels don't invent rows).
+pub fn tunnel_subdomains_snapshot() -> (String, HashMap<String, SubdomainTargetWire>) {
+    let map = k2_core::tunnel::subdomains::current();
+    let attribution = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::SubdomainWorkspace::map(&conn).unwrap_or_default()
+    };
+    let targets = map
+        .targets
+        .iter()
+        .map(|(label, target)| {
+            (
+                label.clone(),
+                SubdomainTargetWire {
+                    target: target.clone(),
+                    project_id: attribution.get(label).cloned(),
+                },
+            )
+        })
+        .collect();
+    (map.primary.clone(), targets)
+}
+
+/// Emit the app-level `tunnel_subdomains_changed` broadcast carrying the
+/// current canonical snapshot. Called from the claim/unclaim routes
+/// (attribution changed, map identical) — the refresh-loop path arrives
+/// via the `HookEvent::TunnelSubdomainsChanged` mirror in `events.rs`,
+/// which serializes the same snapshot.
+pub fn emit_tunnel_subdomains_changed() {
+    let (primary, targets) = tunnel_subdomains_snapshot();
+    let _ = emit(SessionEvent::TunnelSubdomainsChanged { primary, targets });
 }
 
 static SENDER: OnceLock<broadcast::Sender<SessionEvent>> = OnceLock::new();
@@ -718,24 +780,46 @@ mod tests {
         assert_keys(&json, &["kind", "running", "publicUrl"]);
     }
 
-    /// FROZEN WIRE CONTRACT (URLs & Ports drawer): the renderer codes
-    /// against EXACTLY `{ "kind": "tunnel_subdomains_changed", "primary":
-    /// string, "targets": { label: target } }` — the same shape
-    /// `GET /cli/tunnel/subdomains` returns. Pin it so a rename fails CI
-    /// loudly.
+    /// FROZEN WIRE CONTRACT (URLs drawer + K2 Connect settings): the
+    /// renderer codes against EXACTLY `{ "kind":
+    /// "tunnel_subdomains_changed", "primary": string, "targets":
+    /// { label: { "target": string, "projectId": string|null } } }` —
+    /// the same shape `GET /cli/tunnel/subdomains` returns (0074: each
+    /// target is an object carrying the workspace attribution, not the
+    /// bare endpoint string it was pre-release). Pin it so a rename
+    /// fails CI loudly.
     #[test]
     fn tunnel_subdomains_changed_frozen_contract() {
         let mut targets = HashMap::new();
-        targets.insert("staging".to_string(), "localhost:3000".to_string());
-        targets.insert("preview".to_string(), "127.0.0.1:8080".to_string());
+        targets.insert(
+            "staging".to_string(),
+            SubdomainTargetWire {
+                target: "localhost:3000".to_string(),
+                project_id: Some("proj-uuid".to_string()),
+            },
+        );
+        targets.insert(
+            "preview".to_string(),
+            SubdomainTargetWire {
+                target: "127.0.0.1:8080".to_string(),
+                project_id: None,
+            },
+        );
         let json = as_json(&SessionEvent::TunnelSubdomainsChanged {
             primary: "rosson".into(),
             targets,
         });
         assert_eq!(json["kind"], "tunnel_subdomains_changed");
         assert_eq!(json["primary"], "rosson");
-        assert_eq!(json["targets"]["staging"], "localhost:3000");
-        assert_eq!(json["targets"]["preview"], "127.0.0.1:8080");
+        assert_eq!(json["targets"]["staging"]["target"], "localhost:3000");
+        assert_eq!(json["targets"]["staging"]["projectId"], "proj-uuid");
+        assert_eq!(json["targets"]["preview"]["target"], "127.0.0.1:8080");
+        // Unattributed serializes as an EXPLICIT null, never a missing key.
+        assert!(json["targets"]["preview"]["projectId"].is_null());
+        assert!(json["targets"]["preview"]
+            .as_object()
+            .unwrap()
+            .contains_key("projectId"));
         assert_eq!(json["targets"].as_object().unwrap().len(), 2);
         assert_keys(&json, &["kind", "primary", "targets"]);
         // An empty map serializes as an empty object (present key), so the
@@ -746,6 +830,66 @@ mod tests {
         });
         assert_eq!(json2["primary"], "");
         assert!(json2["targets"].as_object().unwrap().is_empty());
+    }
+
+    /// [`tunnel_subdomains_snapshot`] is the ONE builder both the GET
+    /// route and the broadcast serialize: the cached routing map overlaid
+    /// with the 0074 attribution table. Attributed labels carry their
+    /// project id, unattributed carry None, and stale attribution rows
+    /// (labels absent from the routing map) invent nothing. Uses a
+    /// sentinel primary + labels so parallel tests sharing the
+    /// process-global caches can't false-positive.
+    #[test]
+    fn tunnel_subdomains_snapshot_overlays_attribution() {
+        let pid = std::process::id();
+        let claimed = format!("snap-claimed-{pid}");
+        let bare = format!("snap-bare-{pid}");
+        let stale = format!("snap-stale-{pid}");
+
+        let db = k2_core::db::shared();
+        {
+            let conn = db.lock();
+            k2_core::db::schema::SubdomainWorkspace::claim(&conn, &claimed, "proj-snap")
+                .expect("claim");
+            k2_core::db::schema::SubdomainWorkspace::claim(&conn, &stale, "proj-stale")
+                .expect("claim stale");
+        }
+        let mut map_targets = std::collections::HashMap::new();
+        map_targets.insert(claimed.clone(), "localhost:3000".to_string());
+        map_targets.insert(bare.clone(), "localhost:4000".to_string());
+        k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap {
+            primary: format!("snap-primary-{pid}"),
+            targets: map_targets,
+        });
+
+        let (primary, targets) = tunnel_subdomains_snapshot();
+        assert_eq!(primary, format!("snap-primary-{pid}"));
+        assert_eq!(
+            targets.get(&claimed),
+            Some(&SubdomainTargetWire {
+                target: "localhost:3000".to_string(),
+                project_id: Some("proj-snap".to_string()),
+            })
+        );
+        assert_eq!(
+            targets.get(&bare),
+            Some(&SubdomainTargetWire {
+                target: "localhost:4000".to_string(),
+                project_id: None,
+            })
+        );
+        assert!(
+            !targets.contains_key(&stale),
+            "an attribution row for a label outside the routing map must not invent a target"
+        );
+
+        // Clean up the shared in-memory DB + process-global map cache.
+        {
+            let conn = db.lock();
+            let _ = k2_core::db::schema::SubdomainWorkspace::unclaim(&conn, &claimed);
+            let _ = k2_core::db::schema::SubdomainWorkspace::unclaim(&conn, &stale);
+        }
+        k2_core::tunnel::subdomains::store(Default::default());
     }
 
     #[test]

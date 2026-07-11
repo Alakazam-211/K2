@@ -1,7 +1,14 @@
-// URLs & Ports drawer — pure derivation logic (urls-ports.ts).
+// URLs drawer + settings — pure derivation logic (urls-ports.ts).
 
 import { describe, it, expect } from 'vitest'
-import { nestedPublicUrl, sortedTargets, urlCount } from './urls-ports'
+import {
+  nestedPublicUrl,
+  normalizeTargets,
+  sortedTargets,
+  unattributedCount,
+  workspaceTargets,
+  type SubdomainTargetInfo,
+} from './urls-ports'
 
 describe('nestedPublicUrl', () => {
   it('prefixes the label onto the tunnel public host', () => {
@@ -48,32 +55,115 @@ describe('nestedPublicUrl', () => {
   })
 })
 
+describe('normalizeTargets', () => {
+  it('passes through the 0074 attributed object shape', () => {
+    expect(
+      normalizeTargets({
+        staging: { target: 'localhost:3000', projectId: 'proj-1' },
+        preview: { target: '127.0.0.1:8080', projectId: null },
+      }),
+    ).toEqual({
+      staging: { target: 'localhost:3000', projectId: 'proj-1' },
+      preview: { target: '127.0.0.1:8080', projectId: null },
+    })
+  })
+
+  it('normalizes the pre-0074 bare-string shape as unattributed', () => {
+    // An older remote daemon still broadcasts `label → "host:port"`.
+    expect(normalizeTargets({ staging: 'localhost:3000' })).toEqual({
+      staging: { target: 'localhost:3000', projectId: null },
+    })
+  })
+
+  it('handles a mixed map (older event replayed over a newer snapshot)', () => {
+    expect(
+      normalizeTargets({
+        old: 'localhost:4000',
+        attributed: { target: 'localhost:3000', projectId: 'proj-1' },
+      }),
+    ).toEqual({
+      old: { target: 'localhost:4000', projectId: null },
+      attributed: { target: 'localhost:3000', projectId: 'proj-1' },
+    })
+  })
+
+  it('drops junk entries instead of rendering broken rows', () => {
+    expect(
+      normalizeTargets({
+        blank: '',
+        noTarget: { projectId: 'proj-1' },
+        numeric: 42,
+        ok: { target: 'localhost:3000', projectId: 'proj-1' },
+      }),
+    ).toEqual({ ok: { target: 'localhost:3000', projectId: 'proj-1' } })
+  })
+
+  it('non-object wire values yield an empty map', () => {
+    expect(normalizeTargets(null)).toEqual({})
+    expect(normalizeTargets(undefined)).toEqual({})
+    expect(normalizeTargets('nope')).toEqual({})
+  })
+})
+
+const attributed: Record<string, SubdomainTargetInfo> = {
+  mine: { target: 'localhost:3000', projectId: 'proj-1' },
+  'mine-too': { target: 'localhost:3001', projectId: 'proj-1' },
+  theirs: { target: 'localhost:4000', projectId: 'proj-2' },
+  loose: { target: 'localhost:5000', projectId: null },
+}
+
+describe('workspaceTargets', () => {
+  it('keeps only the rows attributed to the given project (the drawer filter)', () => {
+    expect(Object.keys(workspaceTargets(attributed, 'proj-1')).sort()).toEqual([
+      'mine',
+      'mine-too',
+    ])
+    expect(workspaceTargets(attributed, 'proj-2')).toEqual({
+      theirs: { target: 'localhost:4000', projectId: 'proj-2' },
+    })
+  })
+
+  it('never surfaces unattributed rows in a workspace view', () => {
+    expect(workspaceTargets(attributed, 'proj-1')).not.toHaveProperty('loose')
+  })
+
+  it('empty state: a workspace with no attributed URLs gets an empty map', () => {
+    expect(workspaceTargets(attributed, 'proj-none')).toEqual({})
+  })
+
+  it('a blank projectId matches nothing (never leak server-wide rows)', () => {
+    expect(workspaceTargets(attributed, '')).toEqual({})
+  })
+})
+
+describe('unattributedCount (claim-hint counter)', () => {
+  it('counts only the projectId-null rows', () => {
+    expect(unattributedCount(attributed)).toBe(1)
+  })
+
+  it('zero when every row is attributed — no claim hint', () => {
+    expect(
+      unattributedCount({
+        a: { target: 'x', projectId: 'p1' },
+        b: { target: 'y', projectId: 'p2' },
+      }),
+    ).toBe(0)
+    expect(unattributedCount({})).toBe(0)
+  })
+})
+
 describe('sortedTargets', () => {
   it('sorts rows by label so the table never reshuffles across refreshes', () => {
     expect(
-      sortedTargets({ preview: '127.0.0.1:8080', api: 'localhost:4000', staging: 'localhost:3000' }),
-    ).toEqual([
-      ['api', 'localhost:4000'],
-      ['preview', '127.0.0.1:8080'],
-      ['staging', 'localhost:3000'],
-    ])
+      sortedTargets({
+        preview: { target: '127.0.0.1:8080', projectId: null },
+        api: { target: 'localhost:4000', projectId: 'p1' },
+        staging: { target: 'localhost:3000', projectId: null },
+      }).map(([label]) => label),
+    ).toEqual(['api', 'preview', 'staging'])
   })
 
   it('empty map yields an empty list', () => {
     expect(sortedTargets({})).toEqual([])
-  })
-})
-
-describe('urlCount', () => {
-  it('counts the running public URL plus every nested target', () => {
-    expect(urlCount(true, 'https://rosson.k2.dev', { a: 'x', b: 'y' })).toBe(3)
-  })
-
-  it('does not count the public URL when the tunnel is down', () => {
-    expect(urlCount(false, 'https://rosson.k2.dev', { a: 'x' })).toBe(1)
-  })
-
-  it('does not count a running tunnel without a predicted URL', () => {
-    expect(urlCount(true, null, {})).toBe(0)
   })
 })

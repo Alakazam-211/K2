@@ -312,6 +312,14 @@ async fn handle_one_request(
             // crate::cli::dispatch.
             | "/cli/tunnel/start"
             | "/cli/tunnel/stop"
+            // 0074 — nested-subdomain workspace attribution writes
+            // (`k2 connect subdomain claim/unclaim` + the create/point/rm
+            // stamp seams). Method-gated per-handler below
+            // (feedback_post_only_route_guards); token_ok tier — the
+            // write is workspace metadata (label → project id), not
+            // tunnel control.
+            | "/cli/tunnel/subdomains/claim"
+            | "/cli/tunnel/subdomains/unclaim"
             // K2SO #651 — supervisor-agnostic daemon restart. OWNER-ONLY
             // (restarting is the most privileged op; a connect-user session
             // token is rejected). Method-gated per-handler below
@@ -1449,6 +1457,56 @@ async fn handle_one_request(
                 Err(e) => crate::cli::CliResponse::bad_request(e),
             };
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // POST /cli/tunnel/subdomains/claim | /unclaim — 0074 nested-
+        // subdomain workspace attribution. Attribute (or drop) a nested
+        // label's `label → project_id` row; the CLI's create/point/rm
+        // seams and the explicit claim/unclaim verbs both land here.
+        //
+        // Method gate: explicit `require_post` (the top-level dispatch
+        // lets a GET through on POST-allowlisted routes; the GET chain
+        // additionally 405s these paths — feedback_post_only_route_guards).
+        //
+        // Auth: `token_ok` (owner OR connect-user session), the same tier
+        // as every other /cli data write (set-tab-title precedent). This
+        // writes workspace METADATA, not tunnel control — no exposure
+        // change, so no require_owner. No body — label + project ride the
+        // query string (short, non-secret). DB work on a blocking thread.
+        p @ ("/cli/tunnel/subdomains/claim" | "/cli/tunnel/subdomains/unclaim") => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            // Params come from the query string AND the form-encoded POST
+            // body (the CLI's cli_post_form transport), body winning on
+            // key collision — the inbox-routes convention.
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let mut params = super::http::parse_params(&path, &query);
+            for (k, v) in super::http::parse_form_body(&body_bytes) {
+                params.insert(k, v);
+            }
+            let unclaim = p.ends_with("/unclaim");
+            let result = tokio::task::spawn_blocking(move || {
+                if unclaim {
+                    crate::misc_routes::handle_subdomain_unclaim(&params)
+                } else {
+                    crate::misc_routes::handle_subdomain_claim(&params)
+                }
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli::CliResponse::bad_request(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
         // POST /cli/daemon/restart — K2SO #651, supervisor-agnostic remote

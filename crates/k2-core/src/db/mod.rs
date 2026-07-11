@@ -553,6 +553,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0073_heartbeat_session_provider",
             include_str!("../../drizzle_sql/0073_heartbeat_session_provider.sql"),
         ),
+        // 0074: workspace-attributed nested subdomains — daemon-local
+        // `label → project_id` attribution overlay for the K2 Connect
+        // nested-subdomain routing map. Written by the create/point/
+        // claim seams, removed by rm/unclaim; the routing map itself
+        // stays control-plane-owned. Additive.
+        (
+            "0074_subdomain_workspaces",
+            include_str!("../../drizzle_sql/0074_subdomain_workspaces.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1234,6 +1243,55 @@ mod tests {
             .unwrap();
         assert_eq!(applied, 1, "0073 must be registered exactly once");
         // Re-run: must not attempt the ALTER again (would error).
+        run_migrations(&conn).unwrap();
+    }
+
+    /// 0074: the `subdomain_workspaces` attribution table exists with
+    /// its two columns (`label` PK, `project_id` NOT NULL), the
+    /// migration is registered in `_migrations`, and a re-run is a
+    /// no-op (CREATE TABLE IF NOT EXISTS + the `already_applied`
+    /// guard both keep it idempotent).
+    #[test]
+    fn migration_0074_creates_subdomain_workspaces_table() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        let cols: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('subdomain_workspaces') \
+                 WHERE name IN ('label', 'project_id')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 2, "subdomain_workspaces must have label + project_id");
+        let applied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM _migrations WHERE name = '0074_subdomain_workspaces'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1, "0074 must be registered exactly once");
+        // `label` is the PK — a second claim of the same label must
+        // REPLACE, not duplicate (the claim seam relies on this).
+        conn.execute(
+            "INSERT OR REPLACE INTO subdomain_workspaces (label, project_id) VALUES ('staging', 'p1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO subdomain_workspaces (label, project_id) VALUES ('staging', 'p2')",
+            [],
+        )
+        .unwrap();
+        let (n, pid): (i64, String) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(project_id) FROM subdomain_workspaces WHERE label = 'staging'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((n, pid.as_str()), (1, "p2"), "PK upsert must repoint, not duplicate");
         run_migrations(&conn).unwrap();
     }
 

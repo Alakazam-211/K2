@@ -2901,6 +2901,58 @@ impl SchedulerMeta {
     }
 }
 
+// ── Subdomain → workspace attribution (0074) ───────────────────────────
+
+/// 0074 — which WORKSPACE a nested K2 Connect subdomain label belongs
+/// to. Daemon-local overlay on the control-plane-owned routing map
+/// (`tunnel::subdomains`): `label` (lowercase nested label, e.g.
+/// `staging`) → `projects.id`. Written by the `k2 connect subdomain
+/// create/point/claim` seams, removed by `rm`/`unclaim`. Labels are
+/// normalized lowercase to match `SubdomainMap::from_rows`; no FK on
+/// purpose — a label may predate/outlive the workspace registry, and
+/// readers treat a dangling project_id as unattributed.
+pub struct SubdomainWorkspace;
+
+impl SubdomainWorkspace {
+    /// The full `label → project_id` attribution map.
+    pub fn map(conn: &Connection) -> Result<std::collections::HashMap<String, String>> {
+        let mut stmt = conn.prepare("SELECT label, project_id FROM subdomain_workspaces")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.collect()
+    }
+
+    /// Attribute `label` to `project_id` (upsert — re-claiming an
+    /// already-attributed label repoints it, the PK guarantees one
+    /// owner per label). Errors on a blank label/project_id: an empty
+    /// attribution row is always a caller bug, never valid state.
+    pub fn claim(conn: &Connection, label: &str, project_id: &str) -> Result<()> {
+        let label = label.trim().to_ascii_lowercase();
+        let project_id = project_id.trim();
+        if label.is_empty() || project_id.is_empty() {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "subdomain claim needs a non-empty label and project_id".to_string(),
+            ));
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO subdomain_workspaces (label, project_id) VALUES (?1, ?2)",
+            params![label, project_id],
+        )?;
+        Ok(())
+    }
+
+    /// Remove `label`'s attribution. Returns whether a row was
+    /// actually deleted (false = the label wasn't attributed — callers
+    /// surface that honestly instead of pretending a delete happened).
+    pub fn unclaim(conn: &Connection, label: &str) -> Result<bool> {
+        let label = label.trim().to_ascii_lowercase();
+        let n = conn.execute(
+            "DELETE FROM subdomain_workspaces WHERE label = ?1",
+            params![label],
+        )?;
+        Ok(n > 0)
+    }
+}
+
 #[cfg(test)]
 mod unit_tests {
     //! Per-struct CRUD + invariant coverage for schema.rs. Each test
@@ -3886,6 +3938,37 @@ mod unit_tests {
         crate::db::seed_agent_presets(&conn).unwrap();
         let after = AgentPreset::list(&conn).unwrap().len();
         assert_eq!(before, after, "re-seed must not duplicate rows");
+    }
+
+    // ── SubdomainWorkspace (0074) ─────────────────────────────────
+    #[test]
+    fn subdomain_workspace_claim_repoint_unclaim_roundtrip() {
+        let conn = fresh();
+        assert!(SubdomainWorkspace::map(&conn).unwrap().is_empty());
+
+        // Claim normalizes the label lowercase (matching SubdomainMap).
+        SubdomainWorkspace::claim(&conn, " Staging ", "proj-1").unwrap();
+        let map = SubdomainWorkspace::map(&conn).unwrap();
+        assert_eq!(map.get("staging").map(String::as_str), Some("proj-1"));
+
+        // Re-claim by another workspace REPOINTS (PK upsert, one owner).
+        SubdomainWorkspace::claim(&conn, "staging", "proj-2").unwrap();
+        let map = SubdomainWorkspace::map(&conn).unwrap();
+        assert_eq!(map.len(), 1, "re-claim must not duplicate the label row");
+        assert_eq!(map.get("staging").map(String::as_str), Some("proj-2"));
+
+        // Unclaim reports whether a row actually existed.
+        assert!(SubdomainWorkspace::unclaim(&conn, "STAGING").unwrap());
+        assert!(!SubdomainWorkspace::unclaim(&conn, "staging").unwrap());
+        assert!(SubdomainWorkspace::map(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn subdomain_workspace_claim_rejects_blank_inputs() {
+        let conn = fresh();
+        assert!(SubdomainWorkspace::claim(&conn, "  ", "proj-1").is_err());
+        assert!(SubdomainWorkspace::claim(&conn, "staging", "  ").is_err());
+        assert!(SubdomainWorkspace::map(&conn).unwrap().is_empty());
     }
 }
 

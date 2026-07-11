@@ -310,18 +310,40 @@ export async function fetchDoctor(): Promise<Record<string, unknown>> {
 
 // ── External inboxes (Email Link — cross-platform, S9 §17.5) ────────────
 //
-// The user's OWN email accounts (Gmail app-password / Fastmail / IMAP),
-// each bound to exactly ONE workspace at add time so that workspace's
-// agents can READ the inbox and save reply DRAFTS into the account's
-// real Drafts folder. This is an IMAP CLIENT — nothing is installed or
-// hosted — so these routes are NOT gated on `status.supported`; they
-// work identically on Mac and Linux. Owner-gating is enforced
-// server-side (external/* are owner routes). Wire shapes read straight
-// from mail/routes_external.rs + mail/external.rs.
+// The user's OWN email accounts (Gmail app-password / Fastmail / IMAP).
+// Each connected inbox has ONE **owner** workspace (full read + draft,
+// and the only one that can manage the account) plus zero-or-more
+// **grants** — other workspaces at level `'read'` (read only) or
+// `'draft'` (read + save reply drafts). Owner + grants both read the
+// inbox and, at draft level, save reply DRAFTS into the account's real
+// Drafts folder via `k2 mail`; NOBODY can send from the account. This
+// is an IMAP CLIENT — nothing is installed or hosted — so these routes
+// are NOT gated on `status.supported`; they work identically on Mac and
+// Linux. Owner-gating (grant/revoke) is enforced server-side (403 if
+// the caller isn't the owner). Wire shapes read straight from
+// mail/routes_external.rs + mail/external.rs.
 
-/** One connected external inbox — the owner `external/list` row. NEVER
- *  carries credentials, secret refs, or even the username (the daemon
- *  omits them by construction). */
+/** The access level a granted (non-owner) workspace holds on an inbox.
+ *  `'read'` = read only; `'draft'` = read + save reply drafts. */
+export type ExternalGrantLevel = 'read' | 'draft'
+
+/** The owner workspace of a connected inbox — full read + draft, and the
+ *  only workspace allowed to manage the account or its grants. */
+export interface ExternalInboxOwner {
+  projectId: string
+  workspace: string | null
+}
+
+/** One access grant — another workspace at `read` or `draft` level. */
+export interface ExternalInboxGrant {
+  projectId: string
+  workspace: string | null
+  level: ExternalGrantLevel
+}
+
+/** One connected external inbox — the `external/list` row. NEVER carries
+ *  credentials, secret refs, or even the username (the daemon omits them
+ *  by construction). `owner` + `grants` describe who may use it. */
 export interface ExternalInbox {
   id: string
   address: string
@@ -335,13 +357,15 @@ export interface ExternalInbox {
   status: string
   lastCheckedAt: number | null
   lastError: string | null
-  holderProjectId: string
-  holderWorkspace: string | null
+  /** The one owner workspace (set at add time). */
+  owner: ExternalInboxOwner
+  /** Additional workspaces granted read / draft access. */
+  grants: ExternalInboxGrant[]
   createdAt: number
 }
 
 /** POST /cli/mail/external/add body (camelCase). `project` binds the
- *  inbox to exactly ONE workspace (name | path | UUID — the daemon
+ *  inbox to its initial OWNER workspace (name | path | UUID — the daemon
  *  resolves). `password` is the app-password, sent ONCE and vaulted
  *  server-side; it is never returned, listed, or stored client-side. */
 export interface AddExternalInboxBody {
@@ -384,6 +408,28 @@ export async function removeExternalInbox(
   address: string,
 ): Promise<{ ok: boolean; address: string; removed: boolean }> {
   return daemonCliPost('mail/external/remove', { address })
+}
+
+/** POST /cli/mail/external/grant — the OWNER grants a workspace access
+ *  to a connected inbox, or changes an existing grant's level. `project`
+ *  = the target workspace (name | path | UUID — the daemon resolves).
+ *  403 (structured `{code, hint}`) if the caller isn't the owner. */
+export async function grantExternalInbox(body: {
+  address: string
+  project: string
+  level: ExternalGrantLevel
+}): Promise<{ ok: boolean; address: string; project: string; level: ExternalGrantLevel }> {
+  return daemonCliPost('mail/external/grant', body)
+}
+
+/** POST /cli/mail/external/revoke — the OWNER removes a workspace's
+ *  grant. `project` = the granted workspace. 403 if the caller isn't the
+ *  owner; `not_found` if the workspace held no grant. */
+export async function revokeExternalInbox(body: {
+  address: string
+  project: string
+}): Promise<{ ok: boolean; address: string; project: string; revoked: boolean }> {
+  return daemonCliPost('mail/external/revoke', body)
 }
 
 // ── Sample fixture (unsupported/Mac example mode — pre-mortem #15) ──────

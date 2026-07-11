@@ -308,67 +308,133 @@ export async function fetchDoctor(): Promise<Record<string, unknown>> {
   return daemonCliGet('mail/doctor')
 }
 
-// ── External inboxes (Email Link — cross-platform, S9 §17.5) ────────────
+// ── Unified inbox access (GH #28 — one permission layer, hosted OR
+//    linked) ───────────────────────────────────────────────────────────
 //
-// The user's OWN email accounts (Gmail app-password / Fastmail / IMAP).
-// Each connected inbox has ONE **owner** workspace (full read + draft,
-// and the only one that can manage the account) plus zero-or-more
-// **grants** — other workspaces at level `'read'` (read only) or
-// `'draft'` (read + save reply drafts). Owner + grants both read the
-// inbox and, at draft level, save reply DRAFTS into the account's real
-// Drafts folder via `k2 mail`; NOBODY can send from the account. This
-// is an IMAP CLIENT — nothing is installed or hosted — so these routes
-// are NOT gated on `status.supported`; they work identically on Mac and
-// Linux. Owner-gating (grant/revoke) is enforced server-side (403 if
-// the caller isn't the owner). Wire shapes read straight from
-// mail/routes_external.rs + mail/external.rs.
+// Every inbox — whether HOSTED on your own K2 Mail server or LINKED from
+// an external IMAP account — is one row in a single catalog with the SAME
+// access model: a **Primary** workspace (manages the inbox and holds its
+// own level) plus zero-or-more **grants** (other workspaces). A level is
+// one of `read` (read only), `draft` (read + save reply drafts), or `send`
+// (read + draft + send). **`send` is selectable ONLY for hosted inboxes**
+// (`source === 'hosted'`); linked inboxes cap at `draft` and never gain
+// send — nobody sends from a linked account. Provisioning stays source-
+// specific (hosted = an agent mints on a verified domain; linked =
+// mail/link/add), but access is unified: grant / revoke / set-level /
+// set-primary (transfer) all run through /cli/mail/access/*. Access is an
+// IMAP/ownership concern — NOT gated on `status.supported`, so it works
+// identically on Mac and Linux. Primary-gating (only the Primary manages)
+// is enforced server-side (403 `not-primary`). Rows NEVER carry
+// credentials, secret refs, or the username.
 
-/** The access level a granted (non-owner) workspace holds on an inbox.
- *  `'read'` = read only; `'draft'` = read + save reply drafts. */
-export type ExternalGrantLevel = 'read' | 'draft'
+/** The access level a workspace holds on an inbox. `read` = read only;
+ *  `draft` = read + save reply drafts; `send` = read + draft + send
+ *  (hosted inboxes only — a linked inbox never reaches `send`). */
+export type InboxLevel = 'read' | 'draft' | 'send'
 
-/** The owner workspace of a connected inbox — full read + draft, and the
- *  only workspace allowed to manage the account or its grants. */
-export interface ExternalInboxOwner {
+/** How an inbox came into existence — `hosted` on your own mail server
+ *  (send-capable) or `linked` from an external IMAP account (draft-cap). */
+export type InboxSource = 'hosted' | 'linked'
+
+/** One participant on an inbox — the Primary or a grant. */
+export interface InboxParticipant {
   projectId: string
   workspace: string | null
+  level: InboxLevel
 }
 
-/** One access grant — another workspace at `read` or `draft` level. */
-export interface ExternalInboxGrant {
-  projectId: string
-  workspace: string | null
-  level: ExternalGrantLevel
-}
-
-/** One connected external inbox — the `external/list` row. NEVER carries
- *  credentials, secret refs, or even the username (the daemon omits them
- *  by construction). `owner` + `grants` describe who may use it. */
-export interface ExternalInbox {
-  id: string
+/** One inbox in the unified catalog (GET /cli/mail/inboxes). NEVER carries
+ *  credentials, secret refs, or the username. `primary` + `grants` describe
+ *  who may use it; `yourLevel` is the calling principal's effective level
+ *  (null if none); `maxLevel` is the highest level this inbox can grant
+ *  (`draft` for linked, `send` for hosted). */
+export interface Inbox {
   address: string
+  source: InboxSource
   displayName: string | null
-  kind: string
-  host: string
-  port: number
-  tls: string
-  draftsFolder: string | null
-  /** `connected` | `error` (health stamped after each IMAP touch). */
+  /** `connected` | `running` | `error` | … — health of the inbox. */
   status: string
-  lastCheckedAt: number | null
-  lastError: string | null
-  /** The one owner workspace (set at add time). */
-  owner: ExternalInboxOwner
-  /** Additional workspaces granted read / draft access. */
-  grants: ExternalInboxGrant[]
-  createdAt: number
+  /** The one workspace that manages this inbox (holds its own level). */
+  primary: InboxParticipant
+  /** Other workspaces granted access. */
+  grants: InboxParticipant[]
+  /** The calling principal's effective level, or null if none. */
+  yourLevel: InboxLevel | null
+  /** Highest grantable level — `draft` (linked) or `send` (hosted). */
+  maxLevel: 'draft' | 'send'
+  /** Hosted only — the domain the address lives on. */
+  domain?: string | null
+  /** Linked only — the IMAP host. */
+  host?: string | null
+  /** Linked only — the TLS mode. */
+  tls?: string | null
 }
 
-/** POST /cli/mail/external/add body (camelCase). `project` binds the
- *  inbox to its initial OWNER workspace (name | path | UUID — the daemon
+/** GET /cli/mail/inboxes — the unified catalog (hosted + linked). Access
+ *  is cross-platform; no `supported` gate. */
+export async function fetchInboxes(): Promise<Inbox[]> {
+  const res = await daemonCliGet<{ ok: boolean; count: number; inboxes: Inbox[] }>('mail/inboxes')
+  return Array.isArray(res?.inboxes) ? res.inboxes : []
+}
+
+/** POST /cli/mail/access/grant — the Primary grants a workspace access, or
+ *  changes an existing grant's level. `project` = target workspace (name |
+ *  path | UUID — the daemon resolves). 403 `not-primary` if the caller
+ *  isn't the Primary; a `send` level on a linked inbox is rejected with a
+ *  structured hint ("linked can't send"). */
+export async function grantInboxAccess(body: {
+  address: string
+  project: string
+  level: InboxLevel
+}): Promise<{ ok: boolean }> {
+  return daemonCliPost('mail/access/grant', body)
+}
+
+/** POST /cli/mail/access/revoke — the Primary removes a workspace's grant.
+ *  `not_found` if the workspace held no grant; 403 if not the Primary. */
+export async function revokeInboxAccess(body: {
+  address: string
+  project: string
+}): Promise<{ ok: boolean }> {
+  return daemonCliPost('mail/access/revoke', body)
+}
+
+/** POST /cli/mail/access/set-primary — transfer Primary to another
+ *  workspace (the old Primary demotes to a grant, keeping its level). 403
+ *  `not-primary` unless the caller is the current Primary. */
+export async function setInboxPrimary(body: {
+  address: string
+  project: string
+}): Promise<{ ok: boolean }> {
+  return daemonCliPost('mail/access/set-primary', body)
+}
+
+/** POST /cli/mail/access/set-level — change a workspace's level. Pass the
+ *  Primary's own project to change the Primary's level. A `send` level on a
+ *  linked inbox is rejected structured ("linked can't send"). */
+export async function setInboxLevel(body: {
+  address: string
+  project: string
+  level: InboxLevel
+}): Promise<{ ok: boolean }> {
+  return daemonCliPost('mail/access/set-level', body)
+}
+
+// ── Linked-inbox provisioning (Email Link — cross-platform, GH #28) ─────
+//
+// Connecting an external IMAP account (Gmail app-password / Fastmail /
+// IMAP). The app-password is WRITE-ONLY: sent ONCE in the add body,
+// vaulted server-side, never returned or listed. After add, the inbox
+// appears in the unified catalog (fetchInboxes, `source === 'linked'`) and
+// is managed through the shared access layer above. This is an IMAP CLIENT
+// — nothing is installed or hosted — so these routes are NOT gated on
+// `status.supported`; they work identically on Mac and Linux.
+
+/** POST /cli/mail/link/add body (camelCase). `project` binds the inbox to
+ *  its initial PRIMARY workspace (name | path | UUID — the daemon
  *  resolves). `password` is the app-password, sent ONCE and vaulted
  *  server-side; it is never returned, listed, or stored client-side. */
-export interface AddExternalInboxBody {
+export interface LinkInboxBody {
   project: string
   address: string
   host: string
@@ -383,53 +449,22 @@ export interface AddExternalInboxBody {
   password: string
 }
 
-/** GET /cli/mail/external/list — the owner table of connected inboxes.
- *  Cross-platform; no `supported` gate. */
-export async function fetchExternalInboxes(): Promise<ExternalInbox[]> {
-  const res = await daemonCliGet<{ ok: boolean; count: number; inboxes: ExternalInbox[] }>(
-    'mail/external/list',
-  )
-  return Array.isArray(res?.inboxes) ? res.inboxes : []
+/** POST /cli/mail/link/add — live-connects to verify at add time; a bad
+ *  drafts folder / login / host surfaces as a structured `{code, hint}`
+ *  error (use `mailErrorMessage`). The daemon vaults the password and
+ *  returns NO credential. */
+export async function addLinkedInbox(
+  body: LinkInboxBody,
+): Promise<{ ok: boolean; address: string; workspace?: string; draftsFolder?: string | null; hint?: string }> {
+  return daemonCliPost('mail/link/add', body)
 }
 
-/** POST /cli/mail/external/add — live-connects to verify at add time; a
- *  bad drafts folder / login / host surfaces as a structured
- *  `{code, hint}` error (use `mailErrorMessage`). The daemon vaults the
- *  password and returns NO credential. */
-export async function addExternalInbox(
-  body: AddExternalInboxBody,
-): Promise<{ ok: boolean; id: string; address: string; workspace: string; draftsFolder: string | null; hint?: string }> {
-  return daemonCliPost('mail/external/add', body)
-}
-
-/** POST /cli/mail/external/remove — deletes the row AND its vault
+/** POST /cli/mail/link/remove — deletes the linked inbox AND its vault
  *  credential. Identified by `address` (the connected account). */
-export async function removeExternalInbox(
+export async function removeLinkedInbox(
   address: string,
 ): Promise<{ ok: boolean; address: string; removed: boolean }> {
-  return daemonCliPost('mail/external/remove', { address })
-}
-
-/** POST /cli/mail/external/grant — the OWNER grants a workspace access
- *  to a connected inbox, or changes an existing grant's level. `project`
- *  = the target workspace (name | path | UUID — the daemon resolves).
- *  403 (structured `{code, hint}`) if the caller isn't the owner. */
-export async function grantExternalInbox(body: {
-  address: string
-  project: string
-  level: ExternalGrantLevel
-}): Promise<{ ok: boolean; address: string; project: string; level: ExternalGrantLevel }> {
-  return daemonCliPost('mail/external/grant', body)
-}
-
-/** POST /cli/mail/external/revoke — the OWNER removes a workspace's
- *  grant. `project` = the granted workspace. 403 if the caller isn't the
- *  owner; `not_found` if the workspace held no grant. */
-export async function revokeExternalInbox(body: {
-  address: string
-  project: string
-}): Promise<{ ok: boolean; address: string; project: string; revoked: boolean }> {
-  return daemonCliPost('mail/external/revoke', body)
+  return daemonCliPost('mail/link/remove', { address })
 }
 
 // ── Sample fixture (unsupported/Mac example mode — pre-mortem #15) ──────
@@ -581,6 +616,25 @@ export const SAMPLE_ADDRESSES: AddressRow[] = [
     id: 'addr-3', address: 'old-crawler@example.org', status: 'retired',
     createdAt: 1751410000, retiredAt: 1751600000, holderProjectId: 'example-ws-2',
     holderWorkspace: 'signup-runner',
+  },
+]
+
+// Unified-catalog example rows for the hosted addresses above (source:
+// 'hosted' → the shared access panel offers Read / Draft / Send). Keyed by
+// the same addresses as SAMPLE_ADDRESSES so the Mac example page lines up.
+export const SAMPLE_INBOXES: Inbox[] = [
+  {
+    address: 'research-bot@example.org', source: 'hosted', displayName: null,
+    status: 'running',
+    primary: { projectId: 'example-ws-1', workspace: 'research-bot', level: 'send' },
+    grants: [{ projectId: 'example-ws-2', workspace: 'signup-runner', level: 'read' }],
+    yourLevel: 'send', maxLevel: 'send', domain: 'example.org',
+  },
+  {
+    address: 'signup-runner@example.org', source: 'hosted', displayName: null,
+    status: 'running',
+    primary: { projectId: 'example-ws-2', workspace: 'signup-runner', level: 'draft' },
+    grants: [], yourLevel: 'send', maxLevel: 'send', domain: 'example.org',
   },
 ]
 

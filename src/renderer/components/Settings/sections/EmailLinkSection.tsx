@@ -1,23 +1,26 @@
-// Settings → Email Link (K2 Mail S9, prd-email-server-v1 §17.5) — the
-// CROSS-PLATFORM surface: the owner connects their OWN external email
-// accounts (Gmail app-password / Fastmail / IMAP) so a workspace's
-// agents can READ the inbox and save reply DRAFTS into the account's
-// real Drafts folder. The user reviews and sends from their own mail
-// client — K2 never sends from an external account (§17.5: drafts
-// only, no send code path).
+// Settings → Email Link (K2 Mail, prd-email-server-v1 §17.5 + GH #28) —
+// the CROSS-PLATFORM surface: the user connects their OWN external email
+// accounts (Gmail app-password / Fastmail / IMAP) so a workspace's agents
+// can READ the inbox and save reply DRAFTS into the account's real Drafts
+// folder. The user reviews and sends from their own mail client — K2 never
+// sends from a linked account (drafts only, no send code path).
 //
-// NOT LINUX-GATED (BINDING): unlike Email Hosting, this is purely an
-// IMAP client — nothing is installed or hosted — so the page NEVER
-// reads GET /cli/mail/status and NEVER keys off `supported`. It works
-// identically on Mac and Linux. Owner-gating on external/* is enforced
-// server-side; the client only disables mutating controls in viewer
-// mode.
+// Linked inboxes are managed through the SAME unified access layer as
+// hosted inboxes (GH #28): each has a **Primary** workspace plus grants,
+// via the shared <InboxAccessPanel>. Source-aware: because these are
+// linked, the panel caps access at Read + Draft and NEVER offers Send.
 //
-// CREDENTIALS HYGIENE (§17.5): the app-password is WRITE-ONLY — sent
-// ONCE in the add body, vaulted server-side, and never returned,
-// listed, or persisted client-side. The connected-inbox list omits it
-// (and even the username). This component holds it in local state only
-// while the add form is open and clears it on submit/close.
+// NOT LINUX-GATED (BINDING): unlike Email Hosting, this is purely an IMAP
+// client — nothing is installed or hosted — so the page NEVER reads GET
+// /cli/mail/status and NEVER keys off `supported`. It works identically on
+// Mac and Linux. Primary-gating on access/* is enforced server-side; the
+// client only disables mutating controls in viewer mode.
+//
+// CREDENTIALS HYGIENE (§17.5): the app-password is WRITE-ONLY — sent ONCE
+// in the add body, vaulted server-side, and never returned, listed, or
+// persisted client-side. The connected-inbox list omits it (and even the
+// username). This component holds it in local state only while the add
+// form is open and clears it on submit/close.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
@@ -26,21 +29,19 @@ import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useWindowModeStore } from '@/stores/window-mode'
 import type { SettingEntry } from '../searchManifest'
 import { SettingDropdown } from '../controls/SettingControls'
+import { InboxAccessPanel } from './InboxAccessPanel'
 import {
-  addExternalInbox,
-  fetchExternalInboxes,
-  grantExternalInbox,
+  addLinkedInbox,
+  fetchInboxes,
   mailErrorMessage,
-  removeExternalInbox,
-  revokeExternalInbox,
-  type ExternalGrantLevel,
-  type ExternalInbox,
+  removeLinkedInbox,
+  type Inbox,
 } from './email-api'
 
 export const EMAIL_LINK_MANIFEST: SettingEntry[] = [
   { id: 'email-link.inboxes', section: 'email-link', label: 'Connected Inboxes', description: 'External email accounts your workspaces can read and draft replies for', keywords: ['imap', 'gmail', 'fastmail', 'inbox', 'external', 'connect', 'email', 'account', 'app password', 'link'] },
-  { id: 'email-link.add', section: 'email-link', label: 'Connect an Inbox', description: 'Add a Gmail / Fastmail / IMAP account owned by one workspace', keywords: ['add', 'connect', 'imap', 'gmail', 'app password', 'drafts', 'external inbox', 'imap host', 'port', 'tls', 'owner', 'workspace'] },
-  { id: 'email-link.access', section: 'email-link', label: 'Inbox Access', description: 'Grant other workspaces read or read+draft access to a connected inbox', keywords: ['access', 'grant', 'revoke', 'share', 'read', 'draft', 'workspace', 'permission', 'owner', 'members'] },
+  { id: 'email-link.add', section: 'email-link', label: 'Connect an Inbox', description: 'Add a Gmail / Fastmail / IMAP account owned by one workspace', keywords: ['add', 'connect', 'imap', 'gmail', 'app password', 'drafts', 'external inbox', 'imap host', 'port', 'tls', 'primary', 'workspace'] },
+  { id: 'email-link.access', section: 'email-link', label: 'Inbox Access', description: 'Grant other workspaces read or read+draft access to a connected inbox', keywords: ['access', 'grant', 'revoke', 'share', 'read', 'draft', 'workspace', 'permission', 'primary', 'members', 'transfer'] },
 ]
 
 const TLS_IMPLICIT = 'implicit-tls'
@@ -50,16 +51,6 @@ const TLS_OPTIONS = [
   { value: TLS_IMPLICIT, label: 'Implicit TLS (993)' },
   { value: TLS_STARTTLS, label: 'STARTTLS (143)' },
 ]
-
-/** Grant-level → human label (Read-only | Read + Draft). */
-const GRANT_LEVEL_OPTIONS: { value: ExternalGrantLevel; label: string }[] = [
-  { value: 'read', label: 'Read-only' },
-  { value: 'draft', label: 'Read + Draft' },
-]
-
-function grantLevelLabel(level: string): string {
-  return GRANT_LEVEL_OPTIONS.find((o) => o.value === level)?.label ?? level
-}
 
 type Selection = { kind: 'add' } | { kind: 'inbox'; address: string }
 
@@ -73,15 +64,11 @@ function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.El
   )
 }
 
-function fmtDate(unixSecs: number | null | undefined): string {
-  if (typeof unixSecs !== 'number' || unixSecs <= 0) return '—'
-  return new Date(unixSecs * 1000).toLocaleString()
-}
-
 /** Connect-health → status-token color. */
 function statusColor(status: string): string {
   switch (status) {
     case 'connected':
+    case 'running':
       return 'var(--color-status-ok)'
     case 'error':
       return 'var(--color-status-error-soft)'
@@ -141,7 +128,7 @@ function AddInboxForm({
     setError(null)
     const portNum = Number(port)
     try {
-      const res = await addExternalInbox({
+      const res = await addLinkedInbox({
         project: project.trim(),
         address: address.trim(),
         host: host.trim(),
@@ -185,11 +172,11 @@ function AddInboxForm({
       <div className="min-w-0" data-settings-id="email-link.add">
         <h2 className="text-base font-medium text-[var(--color-text-primary)]">Connect an inbox</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
-          Connect one of your email accounts and pick the workspace that will <strong>own</strong>{' '}
-          it. K2 connects over IMAP to verify the account now; the owner manages the account and can
-          later grant other workspaces read (or read + draft) access. Agents read the inbox and save
-          reply drafts with <span className="font-mono">k2 mail</span> — you review and send from
-          your own mail client. K2 never sends from the account.
+          Connect one of your email accounts and pick the workspace that will be its{' '}
+          <strong>Primary</strong>. K2 connects over IMAP to verify the account now; the Primary
+          manages the account and can later grant other workspaces read (or read + draft) access.
+          Agents read the inbox and save reply drafts with <span className="font-mono">k2 mail</span>{' '}
+          — you review and send from your own mail client. K2 never sends from the account.
         </p>
       </div>
 
@@ -197,7 +184,7 @@ function AddInboxForm({
         <SectionTitle>Account</SectionTitle>
         <div className="grid grid-cols-2 gap-3">
           {field(
-            'Owner workspace',
+            'Primary workspace',
             <SettingDropdown
               value={project}
               placeholder="Pick a workspace…"
@@ -206,7 +193,7 @@ function AddInboxForm({
               menuAlign="left"
               className={!canMutate || busy ? 'opacity-50 pointer-events-none' : undefined}
             />,
-            'The workspace that owns the account and manages who else can use it.',
+            'The workspace that manages the account and who else can use it.',
           )}
           {field(
             'Email address',
@@ -326,179 +313,6 @@ function AddInboxForm({
   )
 }
 
-// ── Access management (owner grants read / draft to other workspaces) ─────
-
-function AccessSection({
-  inbox,
-  canMutate,
-  patchInbox,
-}: {
-  inbox: ExternalInbox
-  canMutate: boolean
-  patchInbox: (address: string, patch: (i: ExternalInbox) => ExternalInbox) => void
-}): React.JSX.Element {
-  const projects = useProjectsStore((s) => s.projects)
-  const [error, setError] = useState<string | null>(null)
-  // projectId currently in-flight (grant/revoke), or 'add' for the picker.
-  const [pending, setPending] = useState<string | null>(null)
-  const [newProject, setNewProject] = useState('')
-  const [newLevel, setNewLevel] = useState<ExternalGrantLevel>('read')
-
-  const ownerId = inbox.owner.projectId
-  const grantedIds = useMemo(() => new Set(inbox.grants.map((g) => g.projectId)), [inbox.grants])
-  const projectName = useCallback(
-    (id: string): string => projects.find((p) => p.id === id)?.name ?? id,
-    [projects],
-  )
-
-  // Grant OR change level. Optimistic upsert (order-preserving), revert on error.
-  const applyGrant = useCallback(
-    async (projectId: string, level: ExternalGrantLevel): Promise<void> => {
-      setError(null)
-      setPending(projectId)
-      const before = inbox.grants
-      patchInbox(inbox.address, (i) => {
-        const exists = i.grants.some((g) => g.projectId === projectId)
-        const grants = exists
-          ? i.grants.map((g) => (g.projectId === projectId ? { ...g, level } : g))
-          : [...i.grants, { projectId, workspace: projectName(projectId), level }]
-        return { ...i, grants }
-      })
-      try {
-        await grantExternalInbox({ address: inbox.address, project: projectId, level })
-      } catch (e) {
-        patchInbox(inbox.address, (i) => ({ ...i, grants: before }))
-        setError(mailErrorMessage(e))
-      } finally {
-        setPending(null)
-      }
-    },
-    [inbox.address, inbox.grants, patchInbox, projectName],
-  )
-
-  const doRevoke = useCallback(
-    async (projectId: string): Promise<void> => {
-      setError(null)
-      setPending(projectId)
-      const before = inbox.grants
-      patchInbox(inbox.address, (i) => ({
-        ...i,
-        grants: i.grants.filter((g) => g.projectId !== projectId),
-      }))
-      try {
-        await revokeExternalInbox({ address: inbox.address, project: projectId })
-      } catch (e) {
-        patchInbox(inbox.address, (i) => ({ ...i, grants: before }))
-        setError(mailErrorMessage(e))
-      } finally {
-        setPending(null)
-      }
-    },
-    [inbox.address, inbox.grants, patchInbox],
-  )
-
-  const doAdd = useCallback(async (): Promise<void> => {
-    if (!newProject) return
-    setPending('add')
-    await applyGrant(newProject, newLevel)
-    setNewProject('')
-    setNewLevel('read')
-  }, [newProject, newLevel, applyGrant])
-
-  // Candidates for a new grant: every workspace that isn't the owner and
-  // doesn't already hold a grant.
-  const addable = useMemo(
-    () => projects.filter((p) => p.id !== ownerId && !grantedIds.has(p.id)),
-    [projects, ownerId, grantedIds],
-  )
-  const busy = pending !== null
-  const disabledCls = !canMutate || busy ? 'opacity-50 pointer-events-none' : undefined
-
-  return (
-    <div className="space-y-2">
-      <SectionTitle>Workspace access</SectionTitle>
-      <p className="text-[10px] text-[var(--color-text-muted)]" data-settings-id="email-link.access">
-        The owner (<span className="text-[var(--color-text-secondary)]">{inbox.owner.workspace ?? '—'}</span>)
-        has full read + draft access and manages this list. Grant other workspaces{' '}
-        <strong>Read-only</strong> or <strong>Read + Draft</strong> — their agents use the inbox via{' '}
-        <span className="font-mono">k2 mail</span>. Nobody can send from the account.
-      </p>
-
-      <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-        {/* Owner row (read-only) */}
-        <div className="flex items-center gap-3 px-3 py-2">
-          <span className="text-xs text-[var(--color-text-primary)] truncate flex-1 min-w-0">
-            {inbox.owner.workspace ?? inbox.owner.projectId}
-          </span>
-          <span className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-accent)] bg-[var(--color-accent)]/15 flex-shrink-0">
-            Owner
-          </span>
-        </div>
-
-        {/* Grant rows */}
-        {inbox.grants.map((g) => (
-          <div key={g.projectId} className="flex items-center gap-2 px-3 py-2">
-            <span className="text-xs text-[var(--color-text-primary)] truncate flex-1 min-w-0">
-              {g.workspace ?? projectName(g.projectId)}
-            </span>
-            <SettingDropdown
-              value={g.level}
-              options={GRANT_LEVEL_OPTIONS}
-              onChange={(v) => void applyGrant(g.projectId, v as ExternalGrantLevel)}
-              className={`flex-shrink-0 ${disabledCls ?? ''}`}
-            />
-            <button
-              type="button"
-              disabled={!canMutate || busy}
-              onClick={() => void doRevoke(g.projectId)}
-              title="Remove this workspace's access"
-              className="px-2 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
-            >
-              {pending === g.projectId ? '…' : 'Remove'}
-            </button>
-          </div>
-        ))}
-
-        {inbox.grants.length === 0 && (
-          <div className="px-3 py-2 text-[11px] text-[var(--color-text-muted)] italic">
-            No other workspaces have access yet — only the owner can use this inbox.
-          </div>
-        )}
-      </div>
-
-      {/* Add access */}
-      <div className="flex items-center gap-2 flex-wrap pt-1">
-        <SettingDropdown
-          value={newProject}
-          placeholder={addable.length === 0 ? 'No workspaces to add' : 'Add a workspace…'}
-          options={addable.map((p) => ({ value: p.id, label: p.name }))}
-          onChange={(v) => setNewProject(v)}
-          menuAlign="left"
-          className={!canMutate || busy || addable.length === 0 ? 'opacity-50 pointer-events-none' : undefined}
-        />
-        <SettingDropdown
-          value={newLevel}
-          options={GRANT_LEVEL_OPTIONS}
-          onChange={(v) => setNewLevel(v as ExternalGrantLevel)}
-          className={disabledCls}
-        />
-        <button
-          type="button"
-          disabled={!canMutate || busy || !newProject}
-          onClick={() => void doAdd()}
-          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
-        >
-          {pending === 'add' ? 'Adding…' : 'Add access'}
-        </button>
-      </div>
-
-      {error && (
-        <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
-      )}
-    </div>
-  )
-}
-
 // ── Inbox detail ─────────────────────────────────────────────────────────
 
 function InboxDetail({
@@ -507,11 +321,11 @@ function InboxDetail({
   onRemoved,
   patchInbox,
 }: {
-  inbox: ExternalInbox
+  inbox: Inbox
   canMutate: boolean
   onRemoved: () => void
-  /** Optimistically patch this inbox's row in the parent list (grants). */
-  patchInbox: (address: string, patch: (i: ExternalInbox) => ExternalInbox) => void
+  /** Optimistically patch this inbox's row in the parent list. */
+  patchInbox: (address: string, patch: (i: Inbox) => Inbox) => void
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
 
@@ -528,7 +342,7 @@ function InboxDetail({
     if (!confirmed) return
     setBusy(true)
     try {
-      await removeExternalInbox(inbox.address)
+      await removeLinkedInbox(inbox.address)
       onRemoved()
     } catch (e) {
       useToastStore.getState().addToast(`Disconnect failed: ${mailErrorMessage(e)}`, 'error')
@@ -556,36 +370,26 @@ function InboxDetail({
           <StatusChip status={inbox.status} />
         </div>
         <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
-          Owned by{' '}
+          Primary{' '}
           <span className="text-[var(--color-text-secondary)]">
-            {inbox.owner.workspace ?? 'unknown workspace'}
+            {inbox.primary.workspace ?? 'unknown workspace'}
           </span>
-          {' · '}the owner manages the account and who can use it. Workspaces with access read it and
-          draft replies with <span className="font-mono">k2 mail</span> — nobody sends from it.
+          {' · '}the Primary manages the account and who can use it. Workspaces with access read it
+          and draft replies with <span className="font-mono">k2 mail</span> — nobody sends from it.
         </p>
       </div>
-
-      {inbox.lastError && (
-        <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2">
-          <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">
-            {inbox.lastError}
-          </p>
-        </div>
-      )}
 
       <div className="space-y-2">
         <SectionTitle>Connection</SectionTitle>
         <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-          {detailRow('Owner', inbox.owner.workspace ?? '—')}
-          {detailRow('IMAP host', <span className="font-mono">{inbox.host}:{inbox.port}</span>)}
-          {detailRow('TLS', inbox.tls)}
-          {detailRow('Drafts folder', inbox.draftsFolder ?? 'auto-detected')}
-          {detailRow('Last checked', fmtDate(inbox.lastCheckedAt))}
-          {detailRow('Connected', fmtDate(inbox.createdAt))}
+          {detailRow('Primary', inbox.primary.workspace ?? '—')}
+          {inbox.host && detailRow('IMAP host', <span className="font-mono">{inbox.host}</span>)}
+          {inbox.tls && detailRow('TLS', inbox.tls)}
+          {detailRow('Status', inbox.status)}
         </div>
       </div>
 
-      <AccessSection inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} />
+      <InboxAccessPanel inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} />
 
       <div className="space-y-2 pb-6">
         <SectionTitle>Danger zone</SectionTitle>
@@ -619,20 +423,20 @@ export function EmailLinkSection(): React.JSX.Element {
   const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
   const canMutate = !viewerReadOnly
 
-  const [inboxes, setInboxes] = useState<ExternalInbox[] | null>(null)
+  const [inboxes, setInboxes] = useState<Inbox[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [revision, setRevision] = useState(0)
   const bump = useCallback(() => setRevision((r) => r + 1), [])
   const [selection, setSelection] = useState<Selection>({ kind: 'add' })
 
-  // ── Load the connected-inbox table. Cross-platform: no status/
-  //    supported gate — just the owner list route. ────────────────────
+  // ── Load the connected-inbox table from the unified catalog, filtered
+  //    to LINKED accounts. Cross-platform: no status/supported gate. ────
   useEffect(() => {
     let cancelled = false
-    fetchExternalInboxes()
+    fetchInboxes()
       .then((r) => {
         if (cancelled) return
-        setInboxes(r)
+        setInboxes(r.filter((i) => i.source === 'linked'))
         setError(null)
       })
       .catch((e) => {
@@ -666,10 +470,10 @@ export function EmailLinkSection(): React.JSX.Element {
     [bump],
   )
 
-  // Optimistic patch of a single inbox row (grant/revoke) — mutates the
+  // Optimistic patch of a single inbox row (primary/grants) — mutates the
   // already-loaded list in place, no refetch (no fetch-in-render).
   const patchInbox = useCallback(
-    (address: string, patch: (i: ExternalInbox) => ExternalInbox): void => {
+    (address: string, patch: (i: Inbox) => Inbox): void => {
       setInboxes((prev) =>
         prev ? prev.map((i) => (i.address === address ? patch(i) : i)) : prev,
       )
@@ -711,7 +515,7 @@ export function EmailLinkSection(): React.JSX.Element {
                 const isSelected = selection.kind === 'inbox' && selection.address === i.address
                 return (
                   <button
-                    key={i.id}
+                    key={i.address}
                     type="button"
                     onClick={() => setSelection({ kind: 'inbox', address: i.address })}
                     className={`w-full flex flex-col gap-0.5 px-2 py-1.5 text-left transition-colors no-drag cursor-pointer min-w-0 ${
@@ -731,7 +535,7 @@ export function EmailLinkSection(): React.JSX.Element {
                       />
                     </div>
                     <span className="text-[10px] text-[var(--color-text-muted)] truncate">
-                      {i.owner.workspace ?? 'unknown workspace'}
+                      {i.primary.workspace ?? 'unknown workspace'}
                       {i.grants.length > 0 ? ` +${i.grants.length}` : ''}
                     </span>
                   </button>

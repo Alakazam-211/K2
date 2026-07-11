@@ -36,12 +36,14 @@ import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useWindowModeStore } from '@/stores/window-mode'
 import type { SettingEntry } from '../searchManifest'
+import { InboxAccessPanel } from './InboxAccessPanel'
 import {
   ENABLE_STEPS,
   SAMPLE_ADDRESSES,
   SAMPLE_APPROVALS,
   SAMPLE_DOMAINS,
   SAMPLE_DOMAIN_DETAILS,
+  SAMPLE_INBOXES,
   SAMPLE_PREFLIGHT,
   addDomain,
   approveOutbound,
@@ -54,6 +56,7 @@ import {
   fetchDoctor,
   fetchDomainDetail,
   fetchDomains,
+  fetchInboxes,
   fetchMailConfig,
   fetchMailStatus,
   fetchOutbox,
@@ -70,6 +73,7 @@ import {
   type DnsRecordRow,
   type DomainDetail,
   type DomainSummary,
+  type Inbox,
   type MailStatus,
   type OutboundItem,
   type PreflightReport,
@@ -404,8 +408,18 @@ function ServerPanel({
         <h2 className="text-base font-medium text-[var(--color-text-primary)]">Email server</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
           K2 installs and supervises a mail server on this deployment. Agents mint addresses on
-          your domains, read their mail, and send under your governance.
+          your domains, read their mail, and send under your governance — Send is available because
+          these inboxes live on your own server.
         </p>
+        {notInstalled && (
+          <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+            The hosted server isn&rsquo;t installed yet — that&rsquo;s optional, not broken. Reading
+            and drafting still work for any account you connect under{' '}
+            <span className="text-[var(--color-text-secondary)]">Settings → Email Link</span>;
+            enabling a server here just adds <strong>hosted</strong> inboxes on your own domains
+            (the only inboxes that can send).
+          </p>
+        )}
       </div>
 
       {/* ── Status ── */}
@@ -1070,6 +1084,8 @@ function AddressesPanel({
   onChanged: () => void
 }): React.JSX.Element {
   const [rows, setRows] = useState<AddressRow[] | null>(sample ? SAMPLE_ADDRESSES : null)
+  // The unified catalog (hosted rows only) — the access SSOT per address.
+  const [inboxes, setInboxes] = useState<Inbox[] | null>(sample ? SAMPLE_INBOXES : null)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [capNote, setCapNote] = useState<string | null>(null)
@@ -1077,6 +1093,7 @@ function AddressesPanel({
   useEffect(() => {
     if (sample) {
       setRows(SAMPLE_ADDRESSES)
+      setInboxes(SAMPLE_INBOXES)
       setCapNote(null)
       return
     }
@@ -1090,6 +1107,16 @@ function AddressesPanel({
       .catch((e) => {
         if (cancelled) return
         setError(mailErrorMessage(e))
+      })
+    // Access rows for each hosted address (Primary + grants) — the shared
+    // <InboxAccessPanel> renders per address. Best-effort; a failure just
+    // hides the access panels, it doesn't error the addresses list.
+    fetchInboxes()
+      .then((all) => {
+        if (!cancelled) setInboxes(all.filter((i) => i.source === 'hosted'))
+      })
+      .catch(() => {
+        if (!cancelled) setInboxes([])
       })
     // Cap configuration rides GET /cli/mail/config — 501 until the
     // config sub-slice lands; render the default policy instead.
@@ -1143,6 +1170,24 @@ function AddressesPanel({
     [onChanged],
   )
 
+  // Optimistic patch of one inbox's access row (primary/grants) — mutates
+  // the loaded catalog in place, no refetch (no fetch-in-render).
+  const patchInbox = useCallback(
+    (address: string, patch: (i: Inbox) => Inbox): void => {
+      setInboxes((prev) =>
+        prev ? prev.map((i) => (i.address === address ? patch(i) : i)) : prev,
+      )
+    },
+    [],
+  )
+
+  // Access row lookup, keyed by address (hosted inboxes only).
+  const inboxByAddress = useMemo(() => {
+    const m = new Map<string, Inbox>()
+    for (const i of inboxes ?? []) m.set(i.address, i)
+    return m
+  }, [inboxes])
+
   // Group by domain (the address's suffix — the owner list is flat).
   const groups = useMemo(() => {
     const byDomain = new Map<string, AddressRow[]>()
@@ -1182,42 +1227,52 @@ function AddressesPanel({
           <div key={dom} className="space-y-2">
             <SectionTitle>{dom}</SectionTitle>
             <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-              {list.map((r) => (
-                <div key={r.id} className="flex items-center gap-2 px-3 py-2 min-w-0">
-                  <div className="flex-1 min-w-0">
+              {list.map((r) => {
+                const inbox = r.status === 'active' ? inboxByAddress.get(r.address) : undefined
+                return (
+                  <div key={r.id} className="px-3 py-2 min-w-0 space-y-2">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className={`text-xs font-mono truncate ${
-                          r.status === 'retired'
-                            ? 'text-[var(--color-text-muted)] line-through'
-                            : 'text-[var(--color-text-primary)]'
-                        }`}
-                      >
-                        {r.address}
-                      </span>
-                      {r.status === 'retired' && (
-                        <span className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-text-muted)] bg-[var(--color-bg-elevated)] flex-shrink-0">
-                          Retired
-                        </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className={`text-xs font-mono truncate ${
+                              r.status === 'retired'
+                                ? 'text-[var(--color-text-muted)] line-through'
+                                : 'text-[var(--color-text-primary)]'
+                            }`}
+                          >
+                            {r.address}
+                          </span>
+                          {r.status === 'retired' && (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-text-muted)] bg-[var(--color-bg-elevated)] flex-shrink-0">
+                              Retired
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-[var(--color-text-muted)] truncate">
+                          {r.holderWorkspace ?? 'unknown workspace'} · created {fmtDate(r.createdAt)}
+                          {r.retiredAt != null ? ` · retired ${fmtDate(r.retiredAt)}` : ''}
+                        </p>
+                      </div>
+                      {r.status === 'active' && (
+                        <button
+                          type="button"
+                          disabled={!canMutate || busyId === r.id}
+                          onClick={() => void retire(r)}
+                          className="px-2 py-0.5 text-[10px] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                        >
+                          {busyId === r.id ? 'Retiring…' : 'Retire'}
+                        </button>
                       )}
                     </div>
-                    <p className="text-[10px] text-[var(--color-text-muted)] truncate">
-                      {r.holderWorkspace ?? 'unknown workspace'} · created {fmtDate(r.createdAt)}
-                      {r.retiredAt != null ? ` · retired ${fmtDate(r.retiredAt)}` : ''}
-                    </p>
+                    {inbox && (
+                      <div className="pt-1 border-t border-[var(--color-border)]">
+                        <InboxAccessPanel inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} />
+                      </div>
+                    )}
                   </div>
-                  {r.status === 'active' && (
-                    <button
-                      type="button"
-                      disabled={!canMutate || busyId === r.id}
-                      onClick={() => void retire(r)}
-                      className="px-2 py-0.5 text-[10px] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-                    >
-                      {busyId === r.id ? 'Retiring…' : 'Retire'}
-                    </button>
-                  )}
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         ))

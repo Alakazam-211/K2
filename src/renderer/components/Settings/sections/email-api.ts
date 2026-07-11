@@ -308,6 +308,84 @@ export async function fetchDoctor(): Promise<Record<string, unknown>> {
   return daemonCliGet('mail/doctor')
 }
 
+// ── External inboxes (Email Link — cross-platform, S9 §17.5) ────────────
+//
+// The user's OWN email accounts (Gmail app-password / Fastmail / IMAP),
+// each bound to exactly ONE workspace at add time so that workspace's
+// agents can READ the inbox and save reply DRAFTS into the account's
+// real Drafts folder. This is an IMAP CLIENT — nothing is installed or
+// hosted — so these routes are NOT gated on `status.supported`; they
+// work identically on Mac and Linux. Owner-gating is enforced
+// server-side (external/* are owner routes). Wire shapes read straight
+// from mail/routes_external.rs + mail/external.rs.
+
+/** One connected external inbox — the owner `external/list` row. NEVER
+ *  carries credentials, secret refs, or even the username (the daemon
+ *  omits them by construction). */
+export interface ExternalInbox {
+  id: string
+  address: string
+  displayName: string | null
+  kind: string
+  host: string
+  port: number
+  tls: string
+  draftsFolder: string | null
+  /** `connected` | `error` (health stamped after each IMAP touch). */
+  status: string
+  lastCheckedAt: number | null
+  lastError: string | null
+  holderProjectId: string
+  holderWorkspace: string | null
+  createdAt: number
+}
+
+/** POST /cli/mail/external/add body (camelCase). `project` binds the
+ *  inbox to exactly ONE workspace (name | path | UUID — the daemon
+ *  resolves). `password` is the app-password, sent ONCE and vaulted
+ *  server-side; it is never returned, listed, or stored client-side. */
+export interface AddExternalInboxBody {
+  project: string
+  address: string
+  host: string
+  port?: number
+  /** `'implicit-tls'` (993, default) | `'starttls'` (143). */
+  tls?: string
+  username?: string
+  displayName?: string
+  /** Blank = the daemon autodetects the Drafts folder at add time. */
+  draftsFolder?: string
+  /** The app-password — WRITE-ONLY. Never echoed back. */
+  password: string
+}
+
+/** GET /cli/mail/external/list — the owner table of connected inboxes.
+ *  Cross-platform; no `supported` gate. */
+export async function fetchExternalInboxes(): Promise<ExternalInbox[]> {
+  const res = await daemonCliGet<{ ok: boolean; count: number; inboxes: ExternalInbox[] }>(
+    'mail/external/list',
+  )
+  return Array.isArray(res?.inboxes) ? res.inboxes : []
+}
+
+/** POST /cli/mail/external/add — live-connects to verify at add time; a
+ *  bad drafts folder / login / host surfaces as a structured
+ *  `{code, hint}` error (use `mailErrorMessage`). The daemon vaults the
+ *  password and returns NO credential. */
+export async function addExternalInbox(
+  body: AddExternalInboxBody,
+): Promise<{ ok: boolean; id: string; address: string; workspace: string; draftsFolder: string | null; hint?: string }> {
+  return daemonCliPost('mail/external/add', body)
+}
+
+/** POST /cli/mail/external/remove — deletes the row AND its vault
+ *  credential. Identified by `address` (the connected account). */
+export async function removeExternalInbox(
+  address: string,
+): Promise<{ ok: boolean; address: string; removed: boolean }> {
+  return daemonCliPost('mail/external/remove', { address })
+}
+
 // ── Sample fixture (unsupported/Mac example mode — pre-mortem #15) ──────
 //
 // Rendered VERBATIM when `supported: false`: the page shows a real-

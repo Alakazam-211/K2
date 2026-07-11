@@ -75,12 +75,12 @@ import {
   type PreflightReport,
 } from './email-api'
 
-export const EMAIL_MANIFEST: SettingEntry[] = [
-  { id: 'email.server', section: 'email', label: 'Email Server', description: 'Enable and supervise the mail server (Linux deployments)', keywords: ['mail', 'email', 'smtp', 'stalwart', 'server', 'enable', 'preflight'] },
-  { id: 'email.domains', section: 'email', label: 'Email Domains', description: 'Add domains and verify MX / SPF / DKIM / DMARC records', keywords: ['domain', 'dns', 'mx', 'spf', 'dkim', 'dmarc', 'ptr', 'records', 'verify', 'zone'] },
-  { id: 'email.addresses', section: 'email', label: 'Email Addresses', description: 'Agent mailboxes per domain — caps, holders, retirement', keywords: ['address', 'mailbox', 'agent', 'cap', 'retire', 'mint'] },
-  { id: 'email.approvals', section: 'email', label: 'Send Approvals', description: 'Approve or deny agent outbound email', keywords: ['approval', 'approvals', 'outbox', 'send', 'deny', 'approve', 'queue', 'outbound'] },
-  { id: 'email.send-mode', section: 'email', label: 'Send Mode & Relay', description: 'Direct send or smart-host relay, per domain', keywords: ['relay', 'smtp relay', 'direct', 'send mode', 'smart host', 'receive-only'] },
+export const EMAIL_HOSTING_MANIFEST: SettingEntry[] = [
+  { id: 'email-hosting.server', section: 'email-hosting', label: 'Email Server', description: 'Enable and supervise the mail server (Linux deployments)', keywords: ['mail', 'email', 'smtp', 'stalwart', 'server', 'enable', 'preflight', 'hosting'] },
+  { id: 'email-hosting.domains', section: 'email-hosting', label: 'Email Domains', description: 'Add domains and verify MX / SPF / DKIM / DMARC records', keywords: ['domain', 'dns', 'mx', 'spf', 'dkim', 'dmarc', 'ptr', 'records', 'verify', 'zone'] },
+  { id: 'email-hosting.addresses', section: 'email-hosting', label: 'Email Addresses', description: 'Agent mailboxes per domain — caps, holders, retirement', keywords: ['address', 'mailbox', 'agent', 'cap', 'retire', 'mint'] },
+  { id: 'email-hosting.approvals', section: 'email-hosting', label: 'Send Approvals', description: 'Approve or deny agent outbound email', keywords: ['approval', 'approvals', 'outbox', 'send', 'deny', 'approve', 'queue', 'outbound'] },
+  { id: 'email-hosting.send-mode', section: 'email-hosting', label: 'Send Mode & Relay', description: 'Direct send or smart-host relay, per domain', keywords: ['relay', 'smtp relay', 'direct', 'send mode', 'smart host', 'receive-only'] },
 ]
 
 // The D3 banner — exact copy is a locked product decision.
@@ -400,7 +400,7 @@ function ServerPanel({
 
   return (
     <div className="grid gap-6 grid-cols-[minmax(0,42rem)]">
-      <div className="min-w-0" data-settings-id="email.server">
+      <div className="min-w-0" data-settings-id="email-hosting.server">
         <h2 className="text-base font-medium text-[var(--color-text-primary)]">Email server</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
           K2 installs and supervises a mail server on this deployment. Agents mint addresses on
@@ -857,7 +857,7 @@ function DomainPanel({
   return (
     <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
       {/* ── Header ── */}
-      <div className="min-w-0" data-settings-id="email.domains">
+      <div className="min-w-0" data-settings-id="email-hosting.domains">
         <div className="flex items-center gap-2 min-w-0">
           <h2 className="text-base font-medium text-[var(--color-text-primary)] truncate">
             {detail.domain}
@@ -921,7 +921,7 @@ function DomainPanel({
       </div>
 
       {/* ── Sending (send mode + relay, §8.3) ── */}
-      <div className="space-y-2" data-settings-id="email.send-mode">
+      <div className="space-y-2" data-settings-id="email-hosting.send-mode">
         <SectionTitle>Sending</SectionTitle>
         <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
           <div className="flex items-center gap-3 px-3 py-2">
@@ -1157,7 +1157,7 @@ function AddressesPanel({
 
   return (
     <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
-      <div className="min-w-0" data-settings-id="email.addresses">
+      <div className="min-w-0" data-settings-id="email-hosting.addresses">
         <h2 className="text-base font-medium text-[var(--color-text-primary)]">Addresses</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
           Agent mailboxes across every domain. Agents mint their own with{' '}
@@ -1468,7 +1468,7 @@ function ApprovalsPanel({
 
   return (
     <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
-      <div className="min-w-0" data-settings-id="email.approvals">
+      <div className="min-w-0" data-settings-id="email-hosting.approvals">
         <h2 className="text-base font-medium text-[var(--color-text-primary)]">Approvals</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
           Agent sends queued for your decision (workspaces in approval mode). Approving submits
@@ -1576,7 +1576,7 @@ function ApprovalsPanel({
 
 // ── The section root (master-detail shell) ───────────────────────────────
 
-export function EmailSection(): React.JSX.Element {
+export function EmailHostingSection(): React.JSX.Element {
   const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
 
   const [status, setStatus] = useState<MailStatus | null>(null)

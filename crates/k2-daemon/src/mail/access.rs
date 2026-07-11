@@ -12,10 +12,12 @@
 //!   `primary_level` when `project` IS the primary, else the grant row
 //!   level, else `None` (no access).
 //! - READ needs ≥ read; DRAFT needs ≥ draft; **SEND needs level=='send'
-//!   AND source=='hosted'** — a linked account can never reach send
-//!   (there is no send code path against IMAP; the ops layer refuses
-//!   granting 'send' on a linked inbox and clamps its primary_level to
-//!   'draft').
+//!   for EITHER source** (§17.5 linked-send opt-in): hosted 'send' goes
+//!   out through Stalwart submission under the `mail_agent_send`
+//!   off/approval/on governance; linked 'send' goes out through SMTP
+//!   submission from the user's own account and is UNGATED for now. A
+//!   linked primary still *defaults* to 'draft' (send is opt-in — the
+//!   owner raises the level), but its ceiling is 'send'.
 //!
 //! MASKING (the S3 rule, preserved everywhere): a workspace with no
 //! access to an address gets the SAME `not_found` a foreign/unknown
@@ -26,8 +28,10 @@
 //! [`set_level`]) is NOT masked (the primary sees its own inboxes).
 //!
 //! Send governance stays ORTHOGONAL: `can_send` only answers "may this
-//! workspace send FROM this hosted address"; the actual send still
-//! passes the existing `mail_agent_send` off/approval/on gate (S5).
+//! workspace send FROM this address" (either source). For HOSTED, the
+//! actual send still passes the `mail_agent_send` off/approval/on gate
+//! (S5); for LINKED, send is UNGATED for now (§17.5 — unified gating for
+//! linked lands with the wider email layer).
 
 use crate::mail::addresses::{self, AddrError};
 use crate::mail::external;
@@ -64,7 +68,9 @@ impl Level {
             _ => None,
         }
     }
-    /// Clamp to a source's ceiling (linked never exceeds draft).
+    /// Clamp to a source's ceiling. Both sources now ceiling at `send`,
+    /// so this is a no-op today — kept as the single defensive choke
+    /// point should a source ceiling ever drop below `send` again.
     pub fn clamp_to(self, source: Source) -> Level {
         self.min(source.max_level())
     }
@@ -85,12 +91,15 @@ impl Source {
             Source::Linked => "linked",
         }
     }
-    /// The highest level this source can ever reach — hosted up to
-    /// send, linked capped at draft (no send code path).
+    /// The highest level this source can ever reach. Both sources now
+    /// reach `send`: hosted via Stalwart submission, LINKED via SMTP
+    /// submission from the user's own account (§17.5 linked-send opt-in
+    /// — off by default: a linked primary still *defaults* to 'draft',
+    /// but its ceiling is 'send' so the owner can raise it).
     pub fn max_level(self) -> Level {
         match self {
             Source::Hosted => Level::Send,
-            Source::Linked => Level::Draft,
+            Source::Linked => Level::Send,
         }
     }
 }
@@ -184,8 +193,8 @@ fn grant_level_conn(
 
 /// The effective level a workspace has on an inbox: the primary's
 /// `primary_level` when it IS the primary, else its grant row, else
-/// `None`. `primary_level` is clamped to the source ceiling (defensive —
-/// a linked primary can never exceed draft).
+/// `None`. `primary_level` is clamped to the source ceiling (defensive
+/// — a no-op today since both ceilings are 'send').
 fn effective_level_conn(
     conn: &rusqlite::Connection,
     project_id: &str,
@@ -233,8 +242,11 @@ fn resolve(project_id: &str, raw_address: &str, need: Level) -> Result<AccessInb
         )
         .ok_or_else(masked)?;
         drop(conn);
-        // SEND is hosted-only — a linked inbox never satisfies it.
-        if need == Level::Send || eff < need {
+        // SEND is now allowed on linked (§17.5 opt-in) — the gate is the
+        // effective level alone, same as hosted. `account_id` is the
+        // external row id (the SMTP path resolves the vault key + route
+        // from the linked row it also carries).
+        if eff < need {
             return Err(masked());
         }
         return Ok(AccessInbox {
@@ -291,11 +303,12 @@ pub fn can_draft(project_id: &str, raw_address: &str) -> Result<AccessInbox, Rea
     resolve(project_id, raw_address, Level::Draft)
 }
 
-/// The MASKED SEND gate: effective level == send AND source == hosted.
-/// A linked inbox, a draft/read grant, or no access all answer the same
-/// masked `not_found`. Send GOVERNANCE (off/approval/on) is layered on
-/// top by the caller — this only answers "may this workspace send FROM
-/// this hosted address".
+/// The MASKED SEND gate: effective level == send, for EITHER source
+/// (§17.5). A draft/read grant, or no access, answers the same masked
+/// `not_found`. Send GOVERNANCE differs by source and is layered on by
+/// the caller: HOSTED passes the off/approval/on gate; LINKED is ungated
+/// (SMTP submission). This only answers "may this workspace send FROM
+/// this address" — the caller branches on `AccessInbox.source`.
 pub fn can_send(project_id: &str, raw_address: &str) -> Result<AccessInbox, ReadError> {
     resolve(project_id, raw_address, Level::Send)
 }
@@ -351,8 +364,10 @@ pub fn readable_linked(project_id: &str) -> Vec<(String, String)> {
 
 /// Every hosted ACTIVE address a workspace can SEND FROM (effective
 /// level == send — primary at 'send', or a 'send' grant). Returns
-/// `(address, stalwart_account_id)`. Linked never appears (send is
-/// hosted-only). The implicit-`from` resolver for `k2 mail send`.
+/// `(address, stalwart_account_id)`. Linked inboxes are NOT swept here —
+/// linked send requires an explicit `--from <linked-address>` (this is
+/// the implicit-`from` resolver for `k2 mail send`, and it stays
+/// hosted-only so the ambiguity story is unchanged).
 pub fn sendable_hosted(project_id: &str) -> Vec<(String, String)> {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -455,24 +470,18 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// Validate a level word against a source: any of read/draft/send, but
-/// 'send' is refused on a linked inbox (no send code path exists).
-fn validate_level_for(source: Source, level: &str) -> Result<Level, AccessError> {
-    let lvl = Level::parse(level).ok_or_else(|| {
+/// Validate a level word against a source: any of read/draft/send.
+/// 'send' is now valid on BOTH sources (hosted → Stalwart submission;
+/// linked → SMTP submission, §17.5 opt-in). `source` is retained for a
+/// future per-source ceiling but is not currently a constraint.
+fn validate_level_for(_source: Source, level: &str) -> Result<Level, AccessError> {
+    Level::parse(level).ok_or_else(|| {
         AccessError::Usage(format!(
             "invalid level '{}' — 'read' (messages/read/wait), 'draft' (read + save reply \
-             drafts), or 'send' (read + send/reply, hosted only)",
+             drafts), or 'send' (read + send/reply)",
             level.trim()
         ))
-    })?;
-    if lvl == Level::Send && source == Source::Linked {
-        return Err(AccessError::Usage(
-            "linked accounts can't send — there is no send code path from an external \
-             account. Grant 'read' or 'draft' instead."
-                .to_string(),
-        ));
-    }
-    Ok(lvl)
+    })
 }
 
 /// GRANT `level` to a workspace on any inbox (Primary-gated at the
@@ -911,8 +920,9 @@ mod tests {
     fn level_ordering_and_source_ceilings() {
         assert!(Level::Read < Level::Draft && Level::Draft < Level::Send);
         assert_eq!(Source::Hosted.max_level(), Level::Send);
-        assert_eq!(Source::Linked.max_level(), Level::Draft);
-        assert_eq!(Level::Send.clamp_to(Source::Linked), Level::Draft);
+        // §17.5: linked now ceilings at 'send' too (opt-in via SMTP).
+        assert_eq!(Source::Linked.max_level(), Level::Send);
+        assert_eq!(Level::Send.clamp_to(Source::Linked), Level::Send);
         assert_eq!(Level::Send.clamp_to(Source::Hosted), Level::Send);
     }
 
@@ -941,14 +951,20 @@ mod tests {
     }
 
     #[test]
-    fn linked_primary_cannot_send_ever() {
+    fn linked_send_is_opt_in_off_by_default_then_reachable() {
         let owner = unique_project();
         let addr = unique_addr("linked");
-        seed_linked(&owner, &addr);
+        seed_linked(&owner, &addr); // seeds primary_level 'draft'
         assert!(can_read(&owner, &addr).is_ok());
         assert!(can_draft(&owner, &addr).is_ok());
-        // Linked can never reach send — masked, like a missing address.
+        // Default linked primary is 'draft' — send is masked (opt-in off).
         assert!(matches!(can_send(&owner, &addr), Err(ReadError::NotFound(_))));
+        // Raise the primary's own ceiling to 'send' — now it can send,
+        // and the resolved inbox carries the linked row for the SMTP path.
+        set_level(&addr, &owner, "send").expect("linked primary → send");
+        let sendable = can_send(&owner, &addr).expect("linked can now send");
+        assert_eq!(sendable.source, Source::Linked);
+        assert!(sendable.linked.is_some(), "linked send carries the external row");
         cleanup(&owner);
     }
 
@@ -974,13 +990,15 @@ mod tests {
         grant_access(&hosted, &sender, "send").expect("grant send");
         assert!(can_send(&sender, &hosted).is_ok());
 
-        // 'send' on a LINKED inbox is refused (no send path).
-        let err = grant_access(&linked, &sender, "send").expect_err("linked send");
-        assert!(matches!(err, AccessError::Usage(_)));
-        // 'draft' on linked is fine; can_draft passes, can_send masked.
+        // 'draft' on linked → can_draft passes, can_send masked.
         grant_access(&linked, &sender, "draft").expect("grant draft");
         assert!(can_draft(&sender, &linked).is_ok());
         assert!(matches!(can_send(&sender, &linked), Err(ReadError::NotFound(_))));
+        // §17.5: 'send' on a LINKED inbox is now ALLOWED (SMTP path) —
+        // upgrading the grant lets that workspace send.
+        grant_access(&linked, &sender, "send").expect("linked send grant");
+        let s = can_send(&sender, &linked).expect("linked grant can send");
+        assert_eq!(s.source, Source::Linked);
 
         // Granting the PRIMARY teaches; unknown inbox → not_found.
         assert!(matches!(grant_access(&hosted, &owner, "read"), Err(AccessError::Usage(_))));
@@ -1017,10 +1035,12 @@ mod tests {
         let (_, _, is_primary) = set_level(&hosted, &grantee, "draft").expect("set grant level");
         assert!(!is_primary);
         assert!(can_draft(&grantee, &hosted).is_ok());
-        // Linked primary set to 'send' is refused.
+        // §17.5: linked primary set to 'send' is now allowed (SMTP path).
         let linked = unique_addr("sll");
         seed_linked(&owner, &linked);
-        assert!(matches!(set_level(&linked, &owner, "send"), Err(AccessError::Usage(_))));
+        let (_, src, is_primary) = set_level(&linked, &owner, "send").expect("linked → send");
+        assert!(is_primary && src == Source::Linked);
+        assert!(can_send(&owner, &linked).is_ok());
 
         cleanup(&owner);
         cleanup(&grantee);

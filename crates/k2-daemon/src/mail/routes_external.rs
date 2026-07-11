@@ -105,6 +105,11 @@ struct AddBody {
     tls: Option<String>,
     username: Option<String>,
     drafts_folder: Option<String>,
+    /// OPTIONAL SMTP submission override (§17.5 linked send). Omitted =
+    /// derive from the provider / IMAP host at send time.
+    smtp_host: Option<String>,
+    smtp_port: Option<i64>,
+    smtp_tls: Option<String>,
     /// The app-password itself (`--pass-stdin`). Never logged.
     password: Option<String>,
     /// Alternative: `env:<VAR>` or an absolute file path, resolved
@@ -154,6 +159,9 @@ pub fn handle_external_add(body: &[u8]) -> CliResponse {
         b.tls.as_deref(),
         b.username.as_deref(),
         b.drafts_folder.as_deref(),
+        b.smtp_host.as_deref(),
+        b.smtp_port,
+        b.smtp_tls.as_deref(),
     ) {
         Ok(s) => s,
         Err(e) => return ext_error_response(e),

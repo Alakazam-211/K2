@@ -27,7 +27,7 @@ The base system was built so a new provider is "a row value away." Concretely, a
 **Goal:** `k2 mail link add rosson@gmail.com --provider gmail` (and `--provider microsoft`) → device-code flow → connected inbox that behaves identically to an IMAP-linked inbox for read + draft.
 
 **Non-goals (BINDING):**
-- **No sending from external accounts. Ever.** Same rule as the base system — external inboxes are read + draft-to-Drafts only. OAuth does not change this. (Don't request `gmail.send` / `Mail.Send`.)
+- **No sending over OAuth scopes.** ~~No sending from external accounts. Ever.~~ **AMENDED 2026-07-11:** the base system now DOES support sending from a LINKED inbox — over **SMTP submission** with the account's own app-password, opt-in at the `send` access level, ungated for now (`external_smtp.rs`, `prd-email-server-v1.md` §17.5 amendment). That path is unaffected here. THIS non-goal narrows to: the **OAuth** providers still do NOT request a send scope (`gmail.send` / `Mail.Send`) in Phase 1 — an XOAUTH2-authenticated SMTP send is a later decision. OAuth inboxes stay read + draft-to-Drafts.
 - **No embedded webview for auth.** Google returns `disallowed_useragent` inside webviews; Microsoft discourages it; webviews break passkeys and the user's existing session. K2's browser pane is a WKWebView — do NOT use it for the OAuth handshake. (It stays fine for DNS-help / docs.)
 - **No client secret embedded in the app.** Device flow uses a **public client**; there is no secret to leak.
 - **Graph / Gmail REST API backend is Phase 2 (§12), optional.** Phase 1 is IMAP-XOAUTH2 for both providers — it reuses the whole existing IMAP backend.
@@ -209,7 +209,7 @@ Same device-flow auth + vault; the difference is the transport behind the seam. 
 - [ ] Same for `--provider microsoft` against an M365 account.
 - [ ] `k2 mail messages/read/wait/attachments/draft` work on the OAuth inbox with **zero** code paths specific to them outside `login()` + the oauth module.
 - [ ] Access token auto-refreshes across an expiry with no user action; MS refresh-token rotation persisted.
-- [ ] No send path exists for external inboxes; no send scope requested.
+- [ ] No OAuth **send scope** requested (`gmail.send`/`Mail.Send`) in Phase 1. (Note: the base system's SMTP linked-send path — app-password, opt-in `send` level — is separate and unaffected; see the §2 amendment.)
 - [ ] No embedded webview used; system browser only; no client secret in the repo/bundle.
 - [ ] Tokens never logged; vaulted; revoked + wiped on unlink.
 - [ ] Tests pass with mocked token endpoint + loopback IMAP mock; no real provider calls in CI.

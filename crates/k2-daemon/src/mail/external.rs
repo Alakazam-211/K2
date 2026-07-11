@@ -3,10 +3,11 @@
 //! app-password, Fastmail, company IMAP), each bound to exactly ONE
 //! workspace at add time. Agents in that workspace READ the inbox and
 //! save reply DRAFTS into the account's real Drafts folder — the user
-//! reviews and sends from their own mail client. **Sending from an
-//! external account has NO code path in V1** (drafts only, by
-//! construction: this module exposes read + APPEND-\Draft, nothing
-//! else).
+//! reviews and sends from their own mail client. Since the linked-send
+//! opt-in (§17.5) a workspace granted the 'send' level may ALSO send
+//! FROM the account over SMTP submission (the
+//! [`crate::mail::external_smtp`] path — same vaulted app-password);
+//! `k2 mail draft` (read + APPEND-\Draft) stays the draft-only default.
 //!
 //! §17.5 BINDING placement: markers, masked ownership, and never-log-
 //! bodies stay at the route/ops layer exactly as for local Stalwart —
@@ -63,7 +64,7 @@ pub enum ExtError {
 
 const EXT_COLS: &str = "id, owner_project_id, email_address, display_name, kind, host, port, \
                         tls, username, drafts_folder, status, last_checked_at, last_error, \
-                        created_at";
+                        created_at, smtp_host, smtp_port, smtp_tls";
 
 fn map_row(r: &rusqlite::Row) -> rusqlite::Result<MailExternalInbox> {
     Ok(MailExternalInbox {
@@ -81,6 +82,9 @@ fn map_row(r: &rusqlite::Row) -> rusqlite::Result<MailExternalInbox> {
         last_checked_at: r.get(11)?,
         last_error: r.get(12)?,
         created_at: r.get(13)?,
+        smtp_host: r.get(14)?,
+        smtp_port: r.get(15)?,
+        smtp_tls: r.get(16)?,
     })
 }
 
@@ -516,6 +520,75 @@ pub fn compose_draft_rfc822(
     Ok(h.into_bytes())
 }
 
+// ── Outgoing composition (LINKED SEND, §17.5) ───────────────────────────
+
+/// A fresh Message-ID for an outgoing linked send: `<uuid@from-domain>`
+/// (RFC 5322 §3.6.4). Drafts have none — the user's client assigns one —
+/// but a real SMTP submission SHOULD carry one, so we mint it here.
+pub fn new_message_id(from_address: &str) -> String {
+    let domain = from_address.split_once('@').map(|(_, d)| d).unwrap_or("localhost");
+    format!("<{}@{}>", uuid::Uuid::new_v4().simple(), domain)
+}
+
+/// `"A" <a@x>, "B" <b@y>` — a header-injection-proof address list (each
+/// mailbox goes through [`format_mailbox`], which strips CR/LF).
+fn format_addr_list(list: &[MailAddr]) -> String {
+    list.iter()
+        .map(|a| format_mailbox(a.name.as_deref(), &a.email))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Compose an outgoing RFC 822 message for a LINKED SMTP submission
+/// (`k2 mail send`/`reply` from an external inbox). Pure — the same
+/// header-injection-proof helpers as [`compose_draft_rfc822`], plus a
+/// From = the linked account, an explicit To/Cc, a real Message-ID, and
+/// OPTIONAL In-Reply-To/References (reply threading — the caller builds
+/// them with the SAME `mail::send::build_out_references` guardrail as the
+/// hosted path). `date_rfc2822`/`message_id` are injected (no clock/RNG
+/// in a pure fn). Body is base64 (ASCII wire form, no 8BITMIME needed).
+#[allow(clippy::too_many_arguments)]
+pub fn compose_outgoing_rfc822(
+    inbox: &MailExternalInbox,
+    to: &[MailAddr],
+    cc: &[MailAddr],
+    subject: &str,
+    body: &str,
+    date_rfc2822: &str,
+    message_id: &str,
+    in_reply_to: Option<&str>,
+    references: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    if to.is_empty() {
+        return Err("an outgoing message needs at least one recipient".to_string());
+    }
+    let mut h = String::new();
+    h.push_str(&format!("Date: {date_rfc2822}\r\n"));
+    h.push_str(&format!(
+        "From: {}\r\n",
+        format_mailbox(inbox.display_name.as_deref(), &inbox.email_address)
+    ));
+    h.push_str(&format!("To: {}\r\n", format_addr_list(to)));
+    if !cc.is_empty() {
+        h.push_str(&format!("Cc: {}\r\n", format_addr_list(cc)));
+    }
+    h.push_str(&format!("Subject: {}\r\n", encode_header_text(subject)));
+    h.push_str(&format!("Message-ID: {}\r\n", bracketed(message_id)));
+    if let Some(irt) = in_reply_to {
+        h.push_str(&format!("In-Reply-To: {}\r\n", bracketed(irt)));
+    }
+    if let Some(refs) = references.filter(|s| !s.trim().is_empty()) {
+        h.push_str(&format!("References: {refs}\r\n"));
+    }
+    h.push_str("MIME-Version: 1.0\r\n");
+    h.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    h.push_str("Content-Transfer-Encoding: base64\r\n");
+    h.push_str("\r\n");
+    h.push_str(&b64_body(body));
+    h.push_str("\r\n");
+    Ok(h.into_bytes())
+}
+
 // ── Add / remove / list ops ─────────────────────────────────────────────
 
 /// Validated add-time spec (everything but the password).
@@ -528,6 +601,11 @@ pub struct NewExternalInbox {
     pub tls: String,
     pub username: String,
     pub drafts_folder: Option<String>,
+    /// LINKED send (§17.5) — OPTIONAL SMTP override; `None` = derive
+    /// from the provider / IMAP host at send time.
+    pub smtp_host: Option<String>,
+    pub smtp_port: Option<u16>,
+    pub smtp_tls: Option<String>,
 }
 
 /// Validate + normalize the add-time inputs. `kind` other than `imap`
@@ -543,6 +621,9 @@ pub fn validate_new_inbox(
     tls: Option<&str>,
     username: Option<&str>,
     drafts_folder: Option<&str>,
+    smtp_host: Option<&str>,
+    smtp_port: Option<i64>,
+    smtp_tls: Option<&str>,
 ) -> Result<NewExternalInbox, ExtError> {
     let email_address = addresses::normalize_address(raw_address).map_err(|e| match e {
         AddrError::Usage(hint) => ExtError::Usage(hint),
@@ -600,6 +681,38 @@ pub fn validate_new_inbox(
         .filter(|u| !u.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| email_address.clone());
+    // OPTIONAL SMTP override (§17.5 linked send). A bare hostname like
+    // the IMAP host (no scheme/path/@); TLS is 'implicit-tls'|'starttls'
+    // (never plaintext); port 1-65535. Any of the three may be omitted —
+    // the ops layer fills the gaps by deriving from the provider.
+    let smtp_host = match smtp_host.map(str::trim).filter(|h| !h.is_empty()) {
+        None => None,
+        Some(h) => {
+            let h = h.to_ascii_lowercase();
+            if h.contains(['/', ' ', '@']) || h.contains("://") {
+                return Err(ExtError::Usage(format!(
+                    "invalid smtp-host '{h}' — a bare hostname like smtp.gmail.com (no scheme, \
+                     no path)"
+                )));
+            }
+            Some(h)
+        }
+    };
+    let smtp_tls = match smtp_tls.map(str::trim).filter(|t| !t.is_empty()) {
+        None => None,
+        Some(t) if t == TLS_IMPLICIT || t == TLS_STARTTLS => Some(t.to_string()),
+        Some(t) => {
+            return Err(ExtError::Usage(format!(
+                "invalid smtp-tls '{t}' — 'implicit-tls' (usually port 465) or 'starttls' \
+                 (usually port 587); plaintext SMTP is not a thing K2 will speak"
+            )))
+        }
+    };
+    let smtp_port = match smtp_port {
+        None => None,
+        Some(p) if (1..=65535).contains(&p) => Some(p as u16),
+        Some(p) => return Err(ExtError::Usage(format!("invalid smtp-port {p} — 1-65535"))),
+    };
     Ok(NewExternalInbox {
         email_address,
         display_name: display_name
@@ -614,6 +727,9 @@ pub fn validate_new_inbox(
             .map(str::trim)
             .filter(|d| !d.is_empty())
             .map(str::to_string),
+        smtp_host,
+        smtp_port,
+        smtp_tls,
     })
 }
 
@@ -696,6 +812,9 @@ pub fn add_inbox(
         last_checked_at: Some(now),
         last_error: None,
         created_at: now,
+        smtp_host: spec.smtp_host.clone(),
+        smtp_port: spec.smtp_port.map(|p| p as i64),
+        smtp_tls: spec.smtp_tls.clone(),
     };
     // Live connect check BEFORE anything persists: bad credentials /
     // unreachable host fail the add outright (never a half-added row
@@ -712,8 +831,9 @@ pub fn add_inbox(
         conn.execute(
             "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, \
              display_name, kind, host, port, tls, username, drafts_folder, status, \
-             last_checked_at, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'connected', ?11, ?11)",
+             last_checked_at, created_at, smtp_host, smtp_port, smtp_tls) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'connected', ?11, ?11, \
+             ?12, ?13, ?14)",
             rusqlite::params![
                 id,
                 owner_project_id,
@@ -726,6 +846,9 @@ pub fn add_inbox(
                 candidate.username,
                 candidate.drafts_folder,
                 now,
+                candidate.smtp_host,
+                candidate.smtp_port,
+                candidate.smtp_tls,
             ],
         )
     };
@@ -748,9 +871,10 @@ pub fn add_inbox(
         "workspace": owner_project_id,
         "draftsFolder": candidate.drafts_folder.as_deref().or(check.drafts_folder.as_deref()),
         "hint": format!(
-            "connected — agents in the bound workspace can read '{}' and save reply drafts; \
-             sending from it is impossible (drafts only)",
-            candidate.email_address
+            "connected — agents in the bound workspace can read '{}' and save reply drafts. \
+             Sending is OFF by default (draft-only); raise it to 'send' with \
+             'k2 mail access set-level {}' to let agents send via SMTP",
+            candidate.email_address, candidate.email_address
         ),
     }))
 }
@@ -1042,6 +1166,9 @@ pub(crate) mod tests {
             last_checked_at: None,
             last_error: None,
             created_at: 100,
+            smtp_host: None,
+            smtp_port: None,
+            smtp_tls: None,
         }
     }
 
@@ -1309,9 +1436,13 @@ a,b\r\n1,2\r\n\
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .expect("valid");
         assert_eq!(spec.email_address, "rosson.afs@xn--bcher-kva.example", "punycode domain");
+        assert!(spec.smtp_host.is_none() && spec.smtp_port.is_none() && spec.smtp_tls.is_none());
         assert_eq!(spec.host, "imap.example.com");
         assert_eq!(spec.port, 993, "implicit-tls default port");
         assert_eq!(spec.tls, TLS_IMPLICIT);
@@ -1321,6 +1452,7 @@ a,b\r\n1,2\r\n\
         // starttls default port.
         let spec = validate_new_inbox(
             "a@b.example", None, Some("imap"), "h.example", None, Some("starttls"), None, None,
+            None, None, None,
         )
         .expect("valid");
         assert_eq!((spec.port, spec.tls.as_str()), (143, TLS_STARTTLS));
@@ -1328,7 +1460,7 @@ a,b\r\n1,2\r\n\
         // V2 kinds teach, junk errors.
         for (kind, needle) in [("gmail-api", "OAuth2"), ("jmap", "OAuth2"), ("pop3", "unknown")] {
             let err = validate_new_inbox(
-                "a@b.example", None, Some(kind), "h", None, None, None, None,
+                "a@b.example", None, Some(kind), "h", None, None, None, None, None, None, None,
             )
             .expect_err(kind);
             let ExtError::Usage(hint) = err else { panic!("usage, got {err:?}") };
@@ -1336,14 +1468,19 @@ a,b\r\n1,2\r\n\
         }
         // Plaintext is not a spelling that exists.
         assert!(matches!(
-            validate_new_inbox("a@b.example", None, None, "h", None, Some("none"), None, None),
+            validate_new_inbox(
+                "a@b.example", None, None, "h", None, Some("none"), None, None, None, None, None,
+            ),
             Err(ExtError::Usage(_))
         ));
         // Host shapes.
         for bad_host in ["", "imap://x.example", "x.example/inbox", "user@host"] {
             assert!(
                 matches!(
-                    validate_new_inbox("a@b.example", None, None, bad_host, None, None, None, None),
+                    validate_new_inbox(
+                        "a@b.example", None, None, bad_host, None, None, None, None, None, None,
+                        None,
+                    ),
                     Err(ExtError::Usage(_))
                 ),
                 "host '{bad_host}' must be refused"
@@ -1352,15 +1489,41 @@ a,b\r\n1,2\r\n\
         // Port bounds.
         for bad_port in [0i64, 65536, -1] {
             assert!(matches!(
-                validate_new_inbox("a@b.example", None, None, "h", Some(bad_port), None, None, None),
+                validate_new_inbox(
+                    "a@b.example", None, None, "h", Some(bad_port), None, None, None, None, None,
+                    None,
+                ),
                 Err(ExtError::Usage(_))
             ));
         }
         // Not-an-address.
         assert!(matches!(
-            validate_new_inbox("nope", None, None, "h", None, None, None, None),
+            validate_new_inbox("nope", None, None, "h", None, None, None, None, None, None, None),
             Err(ExtError::Usage(_))
         ));
+
+        // SMTP overrides: normalized + validated, or teaching errors.
+        let spec = validate_new_inbox(
+            "a@b.example", None, None, "imap.b.example", None, None, None, None,
+            Some(" SMTP.B.Example "), Some(2525), Some("starttls"),
+        )
+        .expect("valid smtp override");
+        assert_eq!(spec.smtp_host.as_deref(), Some("smtp.b.example"));
+        assert_eq!(spec.smtp_port, Some(2525));
+        assert_eq!(spec.smtp_tls.as_deref(), Some("starttls"));
+        for (h, p, t) in [
+            (Some("smtp://x"), None, None),
+            (None, Some(0i64), None),
+            (None, Some(70000i64), None),
+            (None, None, Some("none")),
+        ] {
+            assert!(matches!(
+                validate_new_inbox(
+                    "a@b.example", None, None, "h", None, None, None, None, h, p, t,
+                ),
+                Err(ExtError::Usage(_))
+            ), "smtp override {h:?}/{p:?}/{t:?} must be refused");
+        }
     }
 
     // ── add / remove / ownership (shared test DB) ──
@@ -1405,7 +1568,7 @@ a,b\r\n1,2\r\n\
         let addr = unique_addr("add");
         let ops = FakeOps { folders: vec![("Drafts".to_string(), true)], ..Default::default() };
         let vault = FakeVault::default();
-        let spec = validate_new_inbox(&addr, Some("Rosson"), None, "imap.example.com", None, None, None, None)
+        let spec = validate_new_inbox(&addr, Some("Rosson"), None, "imap.example.com", None, None, None, None, None, None, None)
             .expect("spec");
         let v = add_inbox(&ops, &vault, &project, &spec, "app-password").expect("adds");
         assert_eq!(v["ok"], true);
@@ -1456,7 +1619,7 @@ a,b\r\n1,2\r\n\
             .expect("listed");
         assert_eq!(mine["primary"]["projectId"], project);
         assert_eq!(mine["source"], "linked");
-        assert_eq!(mine["maxLevel"], "draft", "linked can never send");
+        assert_eq!(mine["maxLevel"], "send", "linked ceiling is now 'send' (§17.5 opt-in)");
         let s = all.to_string();
         assert!(
             !s.contains("app-password") && !s.contains("secretRef") && !s.contains("username"),
@@ -1483,7 +1646,7 @@ a,b\r\n1,2\r\n\
         let addr = unique_addr("fail");
         let vault = FakeVault::default();
         let spec =
-            validate_new_inbox(&addr, None, None, "imap.example.com", None, None, None, None)
+            validate_new_inbox(&addr, None, None, "imap.example.com", None, None, None, None, None, None, None)
                 .expect("spec");
 
         // Empty password is a usage error before anything dials.
@@ -1522,7 +1685,7 @@ a,b\r\n1,2\r\n\
             )
             .expect("seed minted");
         }
-        let spec = validate_new_inbox(&minted, None, None, "h.example", None, None, None, None)
+        let spec = validate_new_inbox(&minted, None, None, "h.example", None, None, None, None, None, None, None)
             .expect("spec");
         let vault = FakeVault::default();
         let err = add_inbox(&FakeOps::default(), &vault, &project, &spec, "pw").expect_err("exists");

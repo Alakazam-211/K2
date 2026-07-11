@@ -11,8 +11,9 @@
 //!   PRIMARY/owner MANAGEMENT surface (owner-or-admin-gated via
 //!   `is_owner_level_mutation`'s `/cli/mail/access/` prefix). These act
 //!   BY ADDRESS across hosted + linked; the ops layer resolves which
-//!   provisioning row the address names, refuses 'send' on linked, and
-//!   never touches credentials.
+//!   provisioning row the address names, accepts 'send' on either source
+//!   (§17.5 — linked send is the SMTP opt-in), and never touches
+//!   credentials.
 //!
 //! Masking: these are the primary's own surface (unmasked not_found with
 //! a pointer). The AGENT read/draft/send gates that DO mask live in
@@ -91,7 +92,7 @@ struct GrantBody {
 }
 
 /// POST `/cli/mail/access/grant` — Primary/owner: grant a workspace
-/// read|draft|send access to any inbox (upsert). 'send' is hosted-only;
+/// read|draft|send access to any inbox (upsert). 'send' works on hosted (governed) and linked (SMTP, ungated);
 /// granting the PRIMARY teaches.
 pub fn handle_grant(body: &[u8]) -> CliResponse {
     let b: GrantBody = match serde_json::from_slice(body) {
@@ -105,7 +106,7 @@ pub fn handle_grant(body: &[u8]) -> CliResponse {
         return error_response("400 Bad Request", "usage", "missing 'project' — the workspace to grant (name | path | UUID)");
     }
     if b.level.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'level' — read | draft | send (send is hosted-only)");
+        return error_response("400 Bad Request", "usage", "missing 'level' — read | draft | send");
     }
     let grantee_id = match resolve_project(&b.project) {
         Ok(id) => id,
@@ -218,7 +219,7 @@ struct SetLevelBody {
 
 /// POST `/cli/mail/access/set-level` — set a workspace's level. When it
 /// is the PRIMARY, updates the primary's own ceiling; otherwise upserts
-/// its grant. 'send' is hosted-only.
+/// its grant. 'send' works on both sources (§ 17.5).
 pub fn handle_set_level(body: &[u8]) -> CliResponse {
     let b: SetLevelBody = match serde_json::from_slice(body) {
         Ok(b) => b,
@@ -231,7 +232,7 @@ pub fn handle_set_level(body: &[u8]) -> CliResponse {
         return error_response("400 Bad Request", "usage", "missing 'project' — the workspace (name | path | UUID)");
     }
     if b.level.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'level' — read | draft | send (send is hosted-only)");
+        return error_response("400 Bad Request", "usage", "missing 'level' — read | draft | send");
     }
     let project_id = match resolve_project(&b.project) {
         Ok(id) => id,

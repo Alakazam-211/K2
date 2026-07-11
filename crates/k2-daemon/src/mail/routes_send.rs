@@ -34,15 +34,19 @@
 use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
-use crate::mail::access::{self, Source};
+use crate::mail::access::{self, AccessInbox, Source};
 use crate::mail::domains;
+use crate::mail::external::{self, ExtError};
+use crate::mail::external_imap::RealImapOps;
+use crate::mail::external_smtp::{self, RealSmtpOps};
 use crate::mail::messages::{self, ReadError};
 use crate::mail::routes_messages::WaitSlot;
-use crate::mail::secrets::FileSecretStore;
+use crate::mail::secrets::{FileSecretStore, SecretStore as _};
 use crate::mail::send::{
     self, DbOutboundStore, Gate, OutboundMessage, OutboundRequest, OutboundStore, SendError,
     SendOutcome, SubmitBackend,
 };
+use k2_core::db::schema::MailExternalInbox;
 
 // ── Response helpers (the S2/S3/S4 error contract + the S5 codes) ───────
 
@@ -88,6 +92,17 @@ fn read_error_response(err: ReadError) -> CliResponse {
     }
 }
 
+/// LINKED-send ops errors → the shared {code, hint} shapes. `NotFound`
+/// stays masked (a stale source id answers like a missing message).
+fn ext_error_response(err: ExtError) -> CliResponse {
+    match err {
+        ExtError::Usage(h) => error_response("400 Bad Request", "usage", &h),
+        ExtError::NotFound(h) => error_response("404 Not Found", "not_found", &h),
+        ExtError::Exists(h) => error_response("409 Conflict", "exists", &h),
+        ExtError::Engine(h) => error_response("502 Bad Gateway", "engine", &h),
+    }
+}
+
 fn ok_json(v: serde_json::Value) -> CliResponse {
     CliResponse::ok_json(v.to_string())
 }
@@ -121,45 +136,41 @@ fn resolve_caller(project: &str) -> Result<(String, String), CliResponse> {
 }
 
 /// A teaching 403 when the caller CAN see the address (reads it) but
-/// lacks SEND — it is read/draft-only for them (or a linked account,
-/// which can never send). `gated` → CLI exit 3 (ask the primary/human).
-/// If they can't even read it, we mask (no existence leak).
+/// lacks SEND — it is read/draft-only for them. `gated` → CLI exit 3
+/// (ask the primary/human). If they can't even read it, we mask (no
+/// existence leak). Linked inboxes now CAN send once granted the 'send'
+/// level (§17.5) — the teaching points at raising the level, and adds
+/// the draft alternative for linked.
 fn not_sendable_response(project_id: &str, address: &str) -> CliResponse {
     match access::can_read(project_id, address) {
-        Ok(inbox) if inbox.source == Source::Linked => send_error_response(SendError::Gated(
-            "linked accounts can't send — there is no send path from an external account. \
-             Save a reply draft with 'k2 mail draft' instead."
-                .to_string(),
-        )),
-        Ok(_) => send_error_response(SendError::Gated(
-            "this inbox is read/draft-only for your workspace — ask the primary workspace \
-             for 'send' access (k2 mail access set-level)."
-                .to_string(),
-        )),
+        Ok(inbox) => {
+            let draft_hint = if inbox.source == Source::Linked {
+                ", or save a reply draft with 'k2 mail draft'"
+            } else {
+                ""
+            };
+            send_error_response(SendError::Gated(format!(
+                "this inbox is read/draft-only for your workspace — ask the primary workspace \
+                 for 'send' access (k2 mail access set-level){draft_hint}."
+            )))
+        }
         Err(e) => read_error_response(e),
     }
 }
 
-/// The server-stamped From: an explicit address must pass the S11 SEND
-/// gate (hosted + effective level 'send'); none → the workspace's
-/// single SENDABLE address (two+ is a usage error naming the fix; zero
-/// is the teaching not_found). Returns `(address, stalwart account id)`.
-fn resolve_from(
+/// The server-stamped From, source-aware: an explicit address must pass
+/// the S11 SEND gate (effective level 'send', EITHER source); none →
+/// the workspace's single SENDABLE HOSTED address (linked send requires
+/// an explicit `--from <linked-address>` — the implicit resolver stays
+/// hosted-only). Returns the resolved [`AccessInbox`] so the caller can
+/// branch on `source` (hosted → Stalwart+governance; linked → SMTP).
+fn resolve_from_inbox(
     project_id: &str,
     explicit: Option<&str>,
-) -> Result<(String, String), CliResponse> {
+) -> Result<AccessInbox, CliResponse> {
     if let Some(addr) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
         return match access::can_send(project_id, addr) {
-            Ok(inbox) => {
-                let Some(account_id) = inbox.account_id else {
-                    return Err(error_response(
-                        "502 Bad Gateway",
-                        "engine",
-                        &format!("address '{}' has no mailbox on the mail server", inbox.address),
-                    ));
-                };
-                Ok((inbox.address, account_id))
-            }
+            Ok(inbox) => Ok(inbox),
             Err(ReadError::Usage(hint)) => {
                 Err(error_response("400 Bad Request", "usage", &hint))
             }
@@ -167,15 +178,19 @@ fn resolve_from(
             Err(_) => Err(not_sendable_response(project_id, addr)),
         };
     }
-    let mut all = access::sendable_hosted(project_id);
+    let all = access::sendable_hosted(project_id);
     match all.len() {
         0 => Err(error_response(
             "404 Not Found",
             "not_found",
             "this workspace has no address it can send FROM — mint one with 'k2 mail create', \
-             or ask the primary for 'send' access (k2 mail inboxes shows yourLevel)",
+             ask the primary for 'send' access (k2 mail inboxes shows yourLevel), or pass \
+             'from' with a linked address you can send from",
         )),
-        1 => Ok(all.remove(0)),
+        1 => match access::can_send(project_id, &all[0].0) {
+            Ok(inbox) => Ok(inbox),
+            Err(e) => Err(read_error_response(e)),
+        },
         n => Err(error_response(
             "400 Bad Request",
             "usage",
@@ -378,6 +393,98 @@ fn dispatch_and_respond(
     }
 }
 
+// ── LINKED send (§17.5, UNGATED — SMTP submission) ──────────────────────
+
+/// Resolve a linked inbox's vaulted app-password (same key as IMAP).
+/// Missing/unreadable → 503 not_ready with the reconnect pointer (never
+/// a leaked secret).
+fn linked_password(inbox: &MailExternalInbox) -> Result<String, CliResponse> {
+    let secrets = FileSecretStore::default();
+    match secrets.resolve(&external::vault_key(&inbox.id)) {
+        Ok(Some(p)) => Ok(p),
+        Ok(None) => Err(error_response(
+            "503 Service Unavailable",
+            "not_ready",
+            &format!(
+                "credentials for '{}' are missing from the vault — your human can reconnect \
+                 it with 'k2 mail link add'",
+                inbox.email_address
+            ),
+        )),
+        Err(hint) => Err(error_response("503 Service Unavailable", "not_ready", &hint)),
+    }
+}
+
+/// UNGATED linked send over SMTP. `can_send` (effective 'send' on the
+/// linked inbox) has ALREADY passed. Linked send is deliberately NOT
+/// behind the `mail_agent_send` off/approval/on gate for now — Rosson:
+/// unified gating for linked lands with the wider email layer.
+///
+/// ⚠ FUTURE GATE HOME: a per-message linked-send governance check (and
+/// any audit row) belongs right HERE, before the SMTP submission — the
+/// hosted path's queue/audit/rate-limit machinery is intentionally NOT
+/// applied to linked yet.
+fn dispatch_linked_send(
+    inbox: MailExternalInbox,
+    to: &[String],
+    cc: &[String],
+    subject: &str,
+    body: &str,
+) -> CliResponse {
+    let password = match linked_password(&inbox) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match external_smtp::send_linked_message(&RealSmtpOps, &inbox, &password, to, cc, subject, body)
+    {
+        Ok(()) => ok_json(serde_json::json!({
+            "ok": true,
+            "status": "submitted",
+            "from": inbox.email_address,
+            "hint": format!(
+                "submitted from {} via SMTP — accepted by the provider (K2 doesn't confirm \
+                 final delivery)",
+                inbox.email_address
+            ),
+        })),
+        Err(e) => ext_error_response(e),
+    }
+}
+
+/// UNGATED linked REPLY over SMTP (same governance stance as
+/// [`dispatch_linked_send`]). Fetches the source over IMAP, threads, and
+/// submits. `source_uid_token` is the linked message's `uid:…` id.
+fn dispatch_linked_reply(
+    inbox: MailExternalInbox,
+    source_uid_token: &str,
+    body: &str,
+) -> CliResponse {
+    let password = match linked_password(&inbox) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match external_smtp::send_linked_reply(
+        &RealImapOps,
+        &RealSmtpOps,
+        &inbox,
+        &password,
+        source_uid_token,
+        body,
+    ) {
+        Ok(recipient) => ok_json(serde_json::json!({
+            "ok": true,
+            "status": "submitted",
+            "from": inbox.email_address,
+            "to": recipient,
+            "hint": format!(
+                "reply submitted from {} to {} via SMTP — accepted by the provider",
+                inbox.email_address, recipient
+            ),
+        })),
+        Err(e) => ext_error_response(e),
+    }
+}
+
 // ── POST /cli/mail/send ─────────────────────────────────────────────────
 
 /// S5: gated outbound. Body: `{project, to (string|[string]), subject,
@@ -441,29 +548,17 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         Err(resp) => return resp,
     };
 
-    // The D4 gate first — fail-closed reader (tested in mail::send).
-    let gate = match send::effective_gate(Ok(
-        k2_core::workspace::settings::mail_agent_send_for_path(&path),
-    )) {
-        Ok(g) => g,
-        Err(e) => return send_error_response(e),
+    // Resolve the sender FIRST — its SOURCE decides the whole pipeline:
+    // hosted goes through Stalwart submission + the mail_agent_send gate;
+    // LINKED goes out over SMTP and is UNGATED (§17.5). `can_send` masks
+    // any no-access case identically for both sources.
+    let from_inbox = match resolve_from_inbox(&project_id, v["from"].as_str()) {
+        Ok(i) => i,
+        Err(resp) => return resp,
     };
-    if gate == Gate::Off {
-        return send_error_response(SendError::Gated(
-            "outbound email is disabled for this workspace. Your human can enable it in \
-             Settings → Email → Sending"
-                .to_string(),
-        ));
-    }
 
-    let (from_address, account_id) =
-        match resolve_from(&project_id, v["from"].as_str()) {
-            Ok(f) => f,
-            Err(resp) => return resp,
-        };
-
-    // Always-on recipient + size caps (§8.4) — before any normalize
-    // churn on absurd lists.
+    // Always-on recipient + size caps (§8.4) — shared by both sources,
+    // before any normalize churn on absurd lists.
     if to_raw.len() + cc_raw.len() > send::MAX_RECIPIENTS {
         return error_response(
             "400 Bad Request",
@@ -483,36 +578,87 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         Ok(c) => c,
         Err(e) => return send_error_response(e),
     };
-    // The FROM domain's send mode (D1: receive-only refuses; relay
-    // validates its config at use time — fail-closed).
-    if let Err(e) = send::check_domain_send_mode(&FileSecretStore::default(), &from_address) {
-        return send_error_response(e);
-    }
-
-    let agent_name = k2_core::workspace::display::agent_display_name(&path);
-    let msg = OutboundMessage {
-        from_name: Some(agent_name.clone()),
-        from: from_address,
-        to,
-        cc,
-        subject: subject.to_string(),
-        text_body: body_text.to_string(),
-        in_reply_to: None,
-        references: None,
-    };
-    // The always-on message-size cap (§8.4) — on the composed text.
-    if msg.message_bytes() > send::MAX_MESSAGE_BYTES {
+    // The always-on message-size cap (§8.4) — on the composed text
+    // (subject + body). Shared by both sources.
+    if subject.len() + body_text.len() > send::MAX_MESSAGE_BYTES {
         return error_response(
             "400 Bad Request",
             "usage",
             &format!(
                 "message too large ({} bytes) — max {} bytes of text",
-                msg.message_bytes(),
+                subject.len() + body_text.len(),
                 send::MAX_MESSAGE_BYTES
             ),
         );
     }
-    dispatch_and_respond(&project_id, &path, &agent_name, &account_id, &msg, gate, wait_timeout)
+
+    match from_inbox.source {
+        // ── LINKED: ungated SMTP submission (§17.5) ──
+        Source::Linked => {
+            let Some(inbox) = from_inbox.linked else {
+                return error_response(
+                    "502 Bad Gateway",
+                    "engine",
+                    "linked inbox row missing from the resolved sender (unexpected)",
+                );
+            };
+            dispatch_linked_send(inbox, &to, &cc, subject, body_text)
+        }
+        // ── HOSTED: the existing governed Stalwart path ──
+        Source::Hosted => {
+            let Some(account_id) = from_inbox.account_id.clone() else {
+                return error_response(
+                    "502 Bad Gateway",
+                    "engine",
+                    &format!(
+                        "address '{}' has no mailbox on the mail server",
+                        from_inbox.address
+                    ),
+                );
+            };
+            // The D4 gate — fail-closed reader (tested in mail::send).
+            let gate = match send::effective_gate(Ok(
+                k2_core::workspace::settings::mail_agent_send_for_path(&path),
+            )) {
+                Ok(g) => g,
+                Err(e) => return send_error_response(e),
+            };
+            if gate == Gate::Off {
+                return send_error_response(SendError::Gated(
+                    "outbound email is disabled for this workspace. Your human can enable it \
+                     in Settings → Email → Sending"
+                        .to_string(),
+                ));
+            }
+            // The FROM domain's send mode (D1: receive-only refuses; relay
+            // validates its config at use time — fail-closed).
+            if let Err(e) =
+                send::check_domain_send_mode(&FileSecretStore::default(), &from_inbox.address)
+            {
+                return send_error_response(e);
+            }
+            let agent_name = k2_core::workspace::display::agent_display_name(&path);
+            let msg = OutboundMessage {
+                from_name: Some(agent_name.clone()),
+                from: from_inbox.address,
+                to,
+                cc,
+                subject: subject.to_string(),
+                text_body: body_text.to_string(),
+                in_reply_to: None,
+                references: None,
+            };
+            dispatch_and_respond(
+                &project_id,
+                &path,
+                &agent_name,
+                &account_id,
+                &msg,
+                gate,
+                wait_timeout,
+            )
+        }
+    }
 }
 
 // ── POST /cli/mail/reply ────────────────────────────────────────────────
@@ -557,24 +703,11 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
         Err(resp) => return resp,
     };
 
-    // Gate first: off refuses BEFORE any engine dial.
-    let gate = match send::effective_gate(Ok(
-        k2_core::workspace::settings::mail_agent_send_for_path(&path),
-    )) {
-        Ok(g) => g,
-        Err(e) => return send_error_response(e),
-    };
-    if gate == Gate::Off {
-        return send_error_response(SendError::Gated(
-            "outbound email is disabled for this workspace. Your human can enable it in \
-             Settings → Email → Sending"
-                .to_string(),
-        ));
-    }
-
-    // §8.4: reply only to a message received at an OWNED address — the
-    // address rides inside the opaque id (S4) and re-passes the masked
-    // ownership gate here.
+    // §8.4: reply only to a message received at an address this workspace
+    // can SEND from — the address rides inside the opaque id (S4) and
+    // re-passes the masked ownership gate here. Resolving the sender's
+    // SOURCE first decides the pipeline (hosted → governed Stalwart;
+    // LINKED → ungated SMTP, §17.5) — exactly like `handle_send`.
     let Some((address, email_id)) = messages::decode_message_id(token) else {
         return error_response(
             "400 Bad Request",
@@ -589,15 +722,8 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             &format!("no message '{token}' in this workspace"),
         )
     };
-    // S11: replying IS sending — the receiving address must be one this
-    // workspace can SEND from (hosted + effective 'send'). A read/draft
-    // grant (or a linked inbox) can't reply — teaching 403 when they can
-    // at least read it, masked not_found otherwise.
-    let (from_address, account_id) = match access::can_send(&project_id, &address) {
-        Ok(inbox) => match inbox.account_id {
-            Some(account_id) => (inbox.address, account_id),
-            None => return masked(),
-        },
+    let from_inbox = match access::can_send(&project_id, &address) {
+        Ok(inbox) => inbox,
         Err(ReadError::Usage(hint)) => {
             return error_response("400 Bad Request", "usage", &hint)
         }
@@ -618,50 +744,96 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
         );
     }
 
-    // Fetch the original's reply context (sender, threading headers,
-    // auth verdicts) from its backend.
-    let (client, _hostname) = match domains::engine_from_db() {
-        Ok(c) => c,
-        Err(hint) => return error_response("503 Service Unavailable", "not_ready", &hint),
-    };
-    let ctx = match client.email_get_reply_context(&account_id, &email_id) {
-        Ok(Some(ctx)) => ctx,
-        Ok(None) => return masked(),
-        Err(hint) => return error_response("502 Bad Gateway", "engine", &hint),
-    };
+    match from_inbox.source {
+        // ── LINKED: ungated threaded SMTP reply (§17.5) ──
+        Source::Linked => {
+            let Some(inbox) = from_inbox.linked else {
+                return error_response(
+                    "502 Bad Gateway",
+                    "engine",
+                    "linked inbox row missing from the resolved sender (unexpected)",
+                );
+            };
+            // `email_id` is the linked message's `uid:…` token (the
+            // reply threading + IMAP source-fetch happen in external_smtp).
+            dispatch_linked_reply(inbox, &email_id, body_text)
+        }
+        // ── HOSTED: the existing governed reply path ──
+        Source::Hosted => {
+            let from_address = from_inbox.address.clone();
+            let Some(account_id) = from_inbox.account_id.clone() else {
+                return masked();
+            };
+            // Gate: off refuses BEFORE any engine dial.
+            let gate = match send::effective_gate(Ok(
+                k2_core::workspace::settings::mail_agent_send_for_path(&path),
+            )) {
+                Ok(g) => g,
+                Err(e) => return send_error_response(e),
+            };
+            if gate == Gate::Off {
+                return send_error_response(SendError::Gated(
+                    "outbound email is disabled for this workspace. Your human can enable it \
+                     in Settings → Email → Sending"
+                        .to_string(),
+                ));
+            }
+            // Fetch the original's reply context (sender, threading
+            // headers, auth verdicts) from its backend.
+            let (client, _hostname) = match domains::engine_from_db() {
+                Ok(c) => c,
+                Err(hint) => return error_response("503 Service Unavailable", "not_ready", &hint),
+            };
+            let ctx = match client.email_get_reply_context(&account_id, &email_id) {
+                Ok(Some(ctx)) => ctx,
+                Ok(None) => return masked(),
+                Err(hint) => return error_response("502 Bad Gateway", "engine", &hint),
+            };
 
-    // §8.4 guardrails: locked recipient, loop caps, DMARC gate.
-    let recipient = match send::check_reply_guardrails(&ctx, &from_address, gate) {
-        Ok(r) => r,
-        Err(e) => return send_error_response(e),
-    };
-    if let Err(e) = send::check_domain_send_mode(&FileSecretStore::default(), &from_address) {
-        return send_error_response(e);
-    }
-    let now = now_secs();
-    let thread_key = format!(
-        "{project_id}/{}",
-        ctx.thread_id.clone().unwrap_or_else(|| email_id.clone())
-    );
-    if let Err(e) = send::check_and_record_thread_reply(&thread_key, now) {
-        return send_error_response(e);
-    }
+            // §8.4 guardrails: locked recipient, loop caps, DMARC gate.
+            let recipient = match send::check_reply_guardrails(&ctx, &from_address, gate) {
+                Ok(r) => r,
+                Err(e) => return send_error_response(e),
+            };
+            if let Err(e) =
+                send::check_domain_send_mode(&FileSecretStore::default(), &from_address)
+            {
+                return send_error_response(e);
+            }
+            let now = now_secs();
+            let thread_key = format!(
+                "{project_id}/{}",
+                ctx.thread_id.clone().unwrap_or_else(|| email_id.clone())
+            );
+            if let Err(e) = send::check_and_record_thread_reply(&thread_key, now) {
+                return send_error_response(e);
+            }
 
-    let agent_name = k2_core::workspace::display::agent_display_name(&path);
-    let msg = OutboundMessage {
-        from_name: Some(agent_name.clone()),
-        from: from_address.clone(),
-        to: vec![recipient],
-        cc: Vec::new(),
-        subject: send::reply_subject(&ctx.subject),
-        text_body: body_text.to_string(),
-        in_reply_to: ctx.message_id.clone(),
-        references: send::build_out_references(
-            ctx.references.as_deref(),
-            ctx.message_id.as_deref(),
-        ),
-    };
-    dispatch_and_respond(&project_id, &path, &agent_name, &account_id, &msg, gate, wait_timeout)
+            let agent_name = k2_core::workspace::display::agent_display_name(&path);
+            let msg = OutboundMessage {
+                from_name: Some(agent_name.clone()),
+                from: from_address.clone(),
+                to: vec![recipient],
+                cc: Vec::new(),
+                subject: send::reply_subject(&ctx.subject),
+                text_body: body_text.to_string(),
+                in_reply_to: ctx.message_id.clone(),
+                references: send::build_out_references(
+                    ctx.references.as_deref(),
+                    ctx.message_id.as_deref(),
+                ),
+            };
+            dispatch_and_respond(
+                &project_id,
+                &path,
+                &agent_name,
+                &account_id,
+                &msg,
+                gate,
+                wait_timeout,
+            )
+        }
+    }
 }
 
 // ── GET /cli/mail/outbox ────────────────────────────────────────────────
@@ -1502,5 +1674,78 @@ mod tests {
 
         cleanup(&project_id, None);
         cleanup(&project2, None);
+    }
+
+    // ── LINKED send (§17.5) — routing + ungated + masking ──
+
+    /// Seed a linked inbox bound to `project_id` at `primary_level`.
+    fn seed_linked(project_id: &str, address: &str, primary_level: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, host, \
+             port, username, created_at, primary_level) \
+             VALUES (?1, ?2, ?3, 'imap.example.com', 993, ?3, 100, ?4)",
+            rusqlite::params![id, project_id, address, primary_level],
+        )
+        .expect("seed linked inbox");
+        id
+    }
+
+    fn cleanup_linked(project_id: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute(
+            "DELETE FROM mail_inbox_grants WHERE inbox_id IN \
+             (SELECT id FROM mail_external_inboxes WHERE owner_project_id = ?1)",
+            rusqlite::params![project_id],
+        );
+        let _ = conn.execute(
+            "DELETE FROM mail_external_inboxes WHERE owner_project_id = ?1",
+            rusqlite::params![project_id],
+        );
+        let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![project_id]);
+    }
+
+    /// §17.5: a linked inbox at 'send' is UNGATED — gating 'off' does NOT
+    /// block it (the hosted-only D4 gate never runs on the linked path).
+    /// With no vaulted credential the send stops at 503 not_ready, having
+    /// already proven the linked branch was taken and the gate skipped.
+    #[test]
+    fn linked_send_is_ungated_and_reaches_the_smtp_stage() {
+        let (name, path) = unique("lsend");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        seed_linked(&project_id, &linked, "send");
+        // Gating OFF — a hosted send would 403 here; linked must not.
+        set_gating(&path, "off");
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "from": linked })));
+        assert_ne!(resp.status, "403 Forbidden", "linked send must not be gated: {}", resp.body);
+        // No vaulted credential → 503 not_ready (the SMTP stage was
+        // reached, gating skipped). Mirrors the S9 draft test pattern.
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "not_ready");
+        cleanup_linked(&project_id);
+    }
+
+    /// A linked inbox the workspace can only READ/DRAFT (default 'draft')
+    /// can't send — the teaching 403 points at raising the level AND at
+    /// 'k2 mail draft' (the linked-specific alternative).
+    #[test]
+    fn linked_send_without_the_send_level_teaches_draft_alternative() {
+        let (name, path) = unique("ldraft");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        seed_linked(&project_id, &linked, "draft"); // default: can't send
+        set_gating(&path, "on");
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "from": linked })));
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "gated");
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains("read/draft-only"), "{hint}");
+        assert!(hint.contains("k2 mail draft"), "linked teaches the draft alternative: {hint}");
+        cleanup_linked(&project_id);
     }
 }

@@ -422,6 +422,15 @@ needs its own opt-in/grant/read-only-default design), but V1 must not foreclose 
   imap|jmap|gmail-api…, secret refs, per-agent grants, read-only default) — analogous to how
   `mail_relay_configs.kind` anticipates provider one-clicks.
 
+**AMENDMENT (2026-07-11, linked send opt-in):** the earlier "read + save reply DRAFTS only; sending
+from a linked account has NO code path" statement is superseded. A workspace granted the **`send`**
+level on a linked inbox may now send FROM the account over **SMTP submission** (`external_smtp.rs`,
+same vaulted `ext-inbox-<id>` app-password; SMTP server derived from the provider/IMAP host with an
+optional `--smtp-host/--smtp-port/--smtp-tls` override, migration `0080_mail_external_smtp`). It is
+**off by default** (linked `primary_level` still defaults to `draft` — send is opt-in) and, for now,
+**UNGATED** (no `mail_agent_send` off/approval/on gate on the linked path — unified gating for linked
+lands with the wider email layer). `k2 mail draft` (APPEND-\Draft, review-first) stays the default.
+
 ## 18. Remaining open questions (non-blocking)
 
 1. Per-address IMAP creds for humans (V2) — decide when we surface "connect Apple Mail."

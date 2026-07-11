@@ -6292,7 +6292,7 @@ cmd_schema() {
     {
       "name": "mail send",
       "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--wait [--timeout <secs>]] [--json]",
-      "description": "Send email from an address you own (sender verified server-side). Gated per workspace: off (default) = exit 3 with guidance; approval = queued for your human (exit 0 — queueing IS success; track with 'k2 mail outbox <id>'); on = submitted immediately. Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
+      "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level (submitted immediately over SMTP, ungated for now). Linked send needs an explicit --from <linked-address>. Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
       "args": [{"name": "to", "required": false}],
       "flags": [
         {"name": "--to", "arg": "addr", "description": "Recipient (repeatable / comma-separated)."},
@@ -6310,7 +6310,7 @@ cmd_schema() {
     {
       "name": "mail reply",
       "usage": "k2 mail reply <message-id> (--body <text> | --body-file <f>) [--wait [--timeout <secs>]] [--json]",
-      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). Same send gating and --wait semantics as 'mail send'.",
+      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level it submits the reply immediately over SMTP (ungated for now). For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
       "args": [{"name": "message-id", "required": true}],
       "flags": [
         {"name": "--body", "arg": "text", "description": "The reply text."},
@@ -6323,7 +6323,7 @@ cmd_schema() {
     {
       "name": "mail draft",
       "usage": "k2 mail draft <message-id> (--body <text> | --body-file <f>) [--json]",
-      "description": "Save a reply DRAFT into your human's external assistant inbox (their own Gmail/IMAP account bound to this workspace): the draft lands in the account's real Drafts folder, threaded onto the source message — your human reviews and sends it from their own mail client. Sending from an external account is IMPOSSIBLE (drafts only, no code path). For K2-hosted messages use 'k2 mail reply' instead (a K2-hosted id errors with that pointer).",
+      "description": "Save a reply DRAFT into your human's external assistant inbox (their own Gmail/IMAP account bound to this workspace): the draft lands in the account's real Drafts folder, threaded onto the source message — your human reviews and sends it from their own mail client. This is the review-first path and works at the 'draft' level; if your workspace holds the 'send' level on the linked inbox you can instead send the reply immediately with 'k2 mail reply'. For K2-hosted messages use 'k2 mail reply' (a K2-hosted id errors with that pointer).",
       "args": [{"name": "message-id", "required": true}],
       "flags": [
         {"name": "--body", "arg": "text", "description": "The draft reply text."},
@@ -6350,8 +6350,8 @@ cmd_schema() {
     },
     {
       "name": "mail link",
-      "usage": "k2 mail link add <address> --host <imap-host> --workspace <ws> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] | list | remove <address>",
-      "description": "Connect the user's OWN external email accounts (Gmail app-password, Fastmail, company IMAP) as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Each links to ONE PRIMARY workspace whose agents read it (via the normal messages/read/wait verbs) and save reply drafts via 'k2 mail draft'; sending from a linked account has no code path (draft-only). Share with more workspaces via 'k2 mail access grant'. The password is vaulted daemon-side, never in the DB, never in output, never on argv (--pass-stdin pipes it; --pass-ref resolves env:<VAR> / an absolute file path once).",
+      "usage": "k2 mail link add <address> --host <imap-host> --workspace <ws> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | list | remove <address>",
+      "description": "Connect the user's OWN external email accounts (Gmail app-password, Fastmail, company IMAP) as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Each links to ONE PRIMARY workspace whose agents read it (via the normal messages/read/wait verbs) and save reply drafts via 'k2 mail draft'. Sending is OFF by default (draft-only); raise a workspace to the 'send' level with 'k2 mail access set-level' to let its agents send FROM the account over SMTP (same app-password; the SMTP server is derived from the provider, or pin it with --smtp-host/--smtp-port/--smtp-tls). Share with more workspaces via 'k2 mail access grant'. The password is vaulted daemon-side, never in the DB, never in output, never on argv (--pass-stdin pipes it; --pass-ref resolves env:<VAR> / an absolute file path once).",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--host", "arg": "h", "description": "IMAP server (add)."},
@@ -6363,6 +6363,9 @@ cmd_schema() {
         {"name": "--user", "arg": "login", "description": "IMAP login if not the address (add)."},
         {"name": "--name", "arg": "display", "description": "Display name for drafts' From header (add)."},
         {"name": "--drafts-folder", "arg": "f", "description": "Pin the Drafts folder; default autodetect via SPECIAL-USE (add)."},
+        {"name": "--smtp-host", "arg": "h", "description": "Pin the SMTP submission server for linked send; default derived from the provider / IMAP host (add)."},
+        {"name": "--smtp-port", "arg": "n", "description": "SMTP port; default 465 implicit-tls / 587 starttls (add)."},
+        {"name": "--smtp-tls", "arg": "kind", "description": "implicit-tls | starttls for SMTP; always certificate-verified (add)."},
         {"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}
       ]
     },
@@ -12281,10 +12284,12 @@ elif verb == "external_add":
     body = {"project": env("M_WORKSPACE"), "address": env("M_ADDRESS"),
             "host": env("M_HOST")}
     for envk, key in (("M_PORT", "port"), ("M_TLS", "tls"), ("M_USER", "username"),
-                      ("M_NAME", "displayName"), ("M_DRAFTS_FOLDER", "draftsFolder")):
+                      ("M_NAME", "displayName"), ("M_DRAFTS_FOLDER", "draftsFolder"),
+                      ("M_SMTP_HOST", "smtpHost"), ("M_SMTP_PORT", "smtpPort"),
+                      ("M_SMTP_TLS", "smtpTls")):
         v = env(envk)
         if v != "":
-            body[key] = int(v) if key == "port" else v
+            body[key] = int(v) if key in ("port", "smtpPort") else v
     if env("M_PASS"):
         body["password"] = env("M_PASS")
     elif env("M_PASS_REF"):
@@ -13139,7 +13144,7 @@ cmd_mail_external() {
     esac
     local address="" workspace="" host="" port="" tls="" user="" name="" \
           drafts_folder="" pass_stdin=false pass_ref="" as_json=false \
-          ws_arg="" level=""
+          ws_arg="" level="" smtp_host="" smtp_port="" smtp_tls=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --level)
@@ -13170,6 +13175,19 @@ cmd_mail_external() {
             --drafts-folder)
                 [ $# -ge 2 ] || { _mail_err "usage" "--drafts-folder requires a folder name"; exit 2; }
                 drafts_folder="$2"; shift 2 ;;
+            --smtp-host)
+                [ $# -ge 2 ] || { _mail_err "usage" "--smtp-host requires a value (e.g. smtp.gmail.com)"; exit 2; }
+                smtp_host="$2"; shift 2 ;;
+            --smtp-port)
+                [ $# -ge 2 ] || { _mail_err "usage" "--smtp-port requires a number"; exit 2; }
+                if ! _mail_is_uint "$2"; then
+                    _mail_err "usage" "--smtp-port must be a number (default: 465 implicit-tls / 587 starttls)"
+                    exit 2
+                fi
+                smtp_port="$2"; shift 2 ;;
+            --smtp-tls)
+                [ $# -ge 2 ] || { _mail_err "usage" "--smtp-tls requires implicit-tls or starttls"; exit 2; }
+                smtp_tls="$2"; shift 2 ;;
             --pass-stdin) pass_stdin=true; shift ;;
             --pass-ref)
                 [ $# -ge 2 ] || { _mail_err "usage" "--pass-ref requires env:<VAR> or an absolute file path"; exit 2; }
@@ -13214,6 +13232,7 @@ cmd_mail_external() {
             local M_VERB="external_add" M_JSON="$as_json" M_ADDRESS="$address" \
                   M_WORKSPACE="$workspace" M_HOST="$host" M_PORT="$port" M_TLS="$tls" \
                   M_USER="$user" M_NAME="$name" M_DRAFTS_FOLDER="$drafts_folder" \
+                  M_SMTP_HOST="$smtp_host" M_SMTP_PORT="$smtp_port" M_SMTP_TLS="$smtp_tls" \
                   M_PASS="$pass" M_PASS_REF="$pass_ref"
             _mail_py ;;
         list)
@@ -13857,9 +13876,12 @@ company IMAP) as LINKED assistant inboxes. Each links to ONE PRIMARY
 workspace (which manages it); its agents READ the inbox (`k2 mail
 messages/read/wait` just work — same ids, same untrusted-content markers)
 and save reply DRAFTS into the account's real Drafts folder (`k2 mail
-draft`). Sending from a linked account is impossible — no code path
-exists; you send from your own mail client. Share with more workspaces
-via `k2 mail access grant … --level read|draft` (linked can't reach send).
+draft`). Sending is OFF by default (draft-only); raise a workspace to the
+'send' level (`k2 mail access set-level … send`) to let its agents send
+FROM the account over SMTP submission (same vaulted app-password; the
+SMTP server is derived from the provider, or pin it with --smtp-*).
+Share with more workspaces via `k2 mail access grant … --level
+read|draft|send`.
 
 The password is vaulted daemon-side (0600 file), never stored in the
 database, never shown in any output, and never accepted on argv.
@@ -13869,7 +13891,9 @@ USAGE
                    (--pass-stdin | --pass-ref <ref>)
                    [--port <n>] [--tls implicit-tls|starttls]
                    [--user <login>] [--name <display>]
-                   [--drafts-folder <folder>] [--json]
+                   [--drafts-folder <folder>]
+                   [--smtp-host <h>] [--smtp-port <n>]
+                   [--smtp-tls implicit-tls|starttls] [--json]
   k2 mail link list [--json]
   k2 mail link remove <address> [--json]
 
@@ -13884,6 +13908,10 @@ FLAGS (add)
   --user <login>         IMAP login if it differs from the address
   --name <display>       Display name used on drafts' From header
   --drafts-folder <f>    Pin the Drafts folder (default: autodetect)
+  --smtp-host <h>        Pin the SMTP submission server for linked send
+                         (default: derived, e.g. smtp.gmail.com)
+  --smtp-port <n>        SMTP port (default: 465 implicit-tls / 587 starttls)
+  --smtp-tls <kind>      implicit-tls | starttls for SMTP — always verified
 
 EXAMPLES
   printf %s "$APP_PW" | k2 mail link add rosson@gmail.com \
@@ -13897,7 +13925,9 @@ cmd_help_mail_access() {
     cat <<'EOF'
 Manage WHO can use an inbox — one access layer over BOTH hosted and
 linked inboxes (PRIMARY/owner surface; agents get exit 3). Levels order
-read < draft < send. 'send' is HOSTED-ONLY (linked accounts never send).
+read < draft < send. 'send' works on BOTH sources: HOSTED sends through
+the K2 server under your send-gating governance; LINKED sends FROM the
+user's own account over SMTP (ungated for now — grant it deliberately).
 
 USAGE
   k2 mail access grant   <address> <workspace> --level read|draft|send

@@ -106,6 +106,7 @@ pub mod doctor;
 pub mod domains;
 pub mod external;
 pub mod external_imap;
+pub mod external_smtp;
 pub mod jmap;
 pub mod messages;
 pub mod preflight;

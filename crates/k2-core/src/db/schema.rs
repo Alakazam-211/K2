@@ -3126,6 +3126,13 @@ pub struct MailExternalInbox {
     pub last_checked_at: Option<i64>,
     pub last_error: Option<String>,
     pub created_at: i64,
+    /// LINKED send (§17.5) — the SMTP submission server. `None` on all
+    /// three = derive from the provider / IMAP host at send time; a
+    /// value pins the override. Auth reuses the vaulted IMAP
+    /// app-password. TLS is never optional (`implicit-tls`|`starttls`).
+    pub smtp_host: Option<String>,
+    pub smtp_port: Option<i64>,
+    pub smtp_tls: Option<String>,
 }
 
 #[cfg(test)]

@@ -620,6 +620,16 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0079_mail_unified_grants",
             include_str!("../../drizzle_sql/0079_mail_unified_grants.sql"),
         ),
+        // 0080 (K2 Mail — linked send, prd-email-server-v1 §17.5): the
+        // OPT-IN SMTP send path for LINKED external inboxes. Nullable
+        // `smtp_host` / `smtp_port` / `smtp_tls` override columns on
+        // `mail_external_inboxes` — NULL = derive the submission server
+        // from the provider / IMAP host at send time; a value pins it.
+        // Auth reuses the vaulted `ext-inbox-<id>` app-password. Additive.
+        (
+            "0080_mail_external_smtp",
+            include_str!("../../drizzle_sql/0080_mail_external_smtp.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

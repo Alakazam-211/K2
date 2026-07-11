@@ -167,6 +167,22 @@ imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rust
 imap-proto = "0.16"
 mail-parser = { version = "0.11", default-features = false, features = ["full_encoding"] }
 
+# K2 Mail — LINKED inbox SEND (prd-email-server-v1 §17.5): a blocking SMTP
+# submission client for the user's OWN external accounts (same
+# app-password as the IMAP read/draft path). `lettre` is the maintained
+# Rust SMTP line; rustls-tls ONLY — certificate verification is ALWAYS on
+# (no code path relaxes it; native-tls stays out of the tree, matching the
+# imap client above). Every SMTP effect is wrapped behind
+# `mail::external_smtp::SmtpOps`, so unit tests use a scripted loopback
+# mock on an ephemeral high port — never a real mail host.
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "rustls-tls",
+    "builder",
+    "hostname",
+    "pool",
+] }
+
 # Sandbox P2b worker — Linux-only deps for the host jail. Both are OPTIONAL and
 # pulled in ONLY by the `sandbox-microvm` feature (via `dep:`), so a default or
 # macOS build never compiles them. `nix` gives us the namespace / mount /

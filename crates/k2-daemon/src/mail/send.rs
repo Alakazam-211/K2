@@ -151,11 +151,6 @@ impl OutboundMessage {
     pub fn all_recipients(&self) -> Vec<String> {
         self.to.iter().chain(self.cc.iter()).cloned().collect()
     }
-
-    /// The §8.4 size denominator: message text (subject + body) bytes.
-    pub fn message_bytes(&self) -> usize {
-        self.subject.len() + self.text_body.len()
-    }
 }
 
 /// Pure builder: the RFC 8621 Email object for `Email/set create`
@@ -1528,7 +1523,6 @@ mod tests {
         assert_eq!(v["header:In-Reply-To:asText"], "<orig@github.com>");
         assert_eq!(v["header:References:asText"], "<r1@x> <orig@github.com>");
         assert_eq!(m.all_recipients().len(), 2);
-        assert_eq!(m.message_bytes(), "Weekly digest".len() + "All green.".len());
     }
 
     // ── reply guardrails ──

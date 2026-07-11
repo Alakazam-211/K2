@@ -11822,6 +11822,41 @@ def send_outcome(d, waiting, timeout_secs):
     # never "delivered").
     print("%s %s" % (d.get("id", ""), d.get("hint") or d.get("status", "")))
 
+# ── S11 unified inbox helpers (MUST be defined before the verb chain —
+#    a `def` cannot sit between `elif` branches). ──────────────────────
+def _level_word(lvl):
+    return {"read": "read", "draft": "draft", "send": "send"}.get(lvl, lvl or "?")
+
+def print_inboxes(rows, agent_view):
+    if not rows:
+        print("No inboxes you can access — mint a hosted address (k2 mail create) "
+              "or ask your human to link/grant one." if agent_view
+              else "No inboxes yet — mint one (k2 hostmail create) or link one (k2 mail link add).")
+        return
+    w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
+    if agent_view:
+        print(("%-" + str(w) + "s%-9s%-7s%-7s%s") % ("ADDRESS", "SOURCE", "LEVEL", "MAX", "STATUS"))
+        for r in rows:
+            print(("%-" + str(w) + "s%-9s%-7s%-7s%s") % (
+                r.get("address", ""), r.get("source", "?"),
+                _level_word(r.get("yourLevel")), r.get("maxLevel", "?"), r.get("status", "?")))
+        print()
+        print("read: k2 mail messages [<address>]   send needs level 'send' on a hosted inbox")
+    else:
+        print(("%-" + str(w) + "s%-9s%-22s%s") % ("ADDRESS", "SOURCE", "PRIMARY", "GRANTS"))
+        for r in rows:
+            pri = r.get("primary") or {}
+            who = pri.get("workspace") or pri.get("projectId") or "?"
+            grants = r.get("grants") or []
+            gsum = ", ".join("%s:%s" % (g.get("workspace") or g.get("projectId", "?"),
+                                        g.get("level", "?")) for g in grants) or "-"
+            print(("%-" + str(w) + "s%-9s%-22s%s") % (
+                r.get("address", ""), r.get("source", "?"),
+                "%s (%s)" % (who, pri.get("level", "?")), gsum))
+        print()
+        print("share: k2 mail access grant <address> <workspace> --level read|draft|send")
+
+
 # ── Verb dispatch ───────────────────────────────────────────────────
 
 if verb == "create":
@@ -12234,40 +12269,7 @@ elif verb == "external_remove":
     else:
         print("removed %s — its stored credential was deleted from the vault." % d.get("address", "?"))
 
-# ── S11 unified inbox surface ────────────────────────────────────────
-
-def _level_word(lvl):
-    return {"read": "read", "draft": "draft", "send": "send"}.get(lvl, lvl or "?")
-
-def print_inboxes(rows, agent_view):
-    if not rows:
-        print("No inboxes you can access — mint a hosted address (k2 mail create) "
-              "or ask your human to link/grant one." if agent_view
-              else "No inboxes yet — mint one (k2 hostmail create) or link one (k2 mail link add).")
-        return
-    w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
-    if agent_view:
-        print(("%-" + str(w) + "s%-9s%-7s%-7s%s") % ("ADDRESS", "SOURCE", "LEVEL", "MAX", "STATUS"))
-        for r in rows:
-            print(("%-" + str(w) + "s%-9s%-7s%-7s%s") % (
-                r.get("address", ""), r.get("source", "?"),
-                _level_word(r.get("yourLevel")), r.get("maxLevel", "?"), r.get("status", "?")))
-        print()
-        print("read: k2 mail messages [<address>]   send needs level 'send' on a hosted inbox")
-    else:
-        print(("%-" + str(w) + "s%-9s%-22s%s") % ("ADDRESS", "SOURCE", "PRIMARY", "GRANTS"))
-        for r in rows:
-            pri = r.get("primary") or {}
-            who = pri.get("workspace") or pri.get("projectId") or "?"
-            grants = r.get("grants") or []
-            gsum = ", ".join("%s:%s" % (g.get("workspace") or g.get("projectId", "?"),
-                                        g.get("level", "?")) for g in grants) or "-"
-            print(("%-" + str(w) + "s%-9s%-22s%s") % (
-                r.get("address", ""), r.get("source", "?"),
-                "%s (%s)" % (who, pri.get("level", "?")), gsum))
-        print()
-        print("share: k2 mail access grant <address> <workspace> --level read|draft|send")
-
+# ── S11 unified inbox surface (helpers hoisted above the verb chain) ──
 elif verb == "inboxes":
     # Agent view: what THIS workspace can access (unified catalog).
     d = call("GET", "/cli/mail/inboxes", params={"project": ws_path})

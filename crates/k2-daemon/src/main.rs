@@ -1716,9 +1716,12 @@ fn run_workspace_legacy_migrations_sweep() {
 /// `.k2so/heartbeats/<sched>/`. DB rows are already pointed at the
 /// workspace-level path, so this aligns disk with DB.
 ///
-/// Idempotent — workspaces with no orphaned files are no-ops. A
-/// workspace where the destination already exists keeps the
-/// existing file and leaves the orphan in place (user resolves).
+/// Idempotent — workspaces with no orphaned files are no-ops. GH#27:
+/// when the destination already exists the orphan is no longer left in
+/// place forever — the workspace-level file stays authoritative and the
+/// orphan dir is preserved as `<name>.orphaned` (renamed aside, never
+/// deleted; diverging contents log a loud warning). Already-archived
+/// `*.orphaned` dirs are skipped so re-boots are no-ops.
 fn migrate_orphaned_agent_heartbeats() {
     let projects = {
         let db = k2_core::db::shared();
@@ -1755,12 +1758,41 @@ fn migrate_orphaned_agent_heartbeats() {
                 continue;
             }
             let sched_name = entry.file_name();
+            // GH#27: skip dirs a previous boot already archived aside.
+            if sched_name.to_string_lossy().ends_with(".orphaned") {
+                continue;
+            }
             let from = orphan_root.join(&sched_name);
             let to = workspace_hb_root.join(&sched_name);
             if to.exists() {
-                log_debug!(
-                    "[daemon/unification] orphaned heartbeat dir at {from:?} \
-                     left in place (workspace-level dir already exists at {to:?})"
+                // GH#27: the workspace-level dir wins. If it is missing
+                // its WAKEUP.md, adopt the orphan's copy (user data,
+                // never dropped); then rename the orphan aside as
+                // `<name>.orphaned` (or plain-remove it when empty).
+                let canonical_wakeup = to.join("WAKEUP.md");
+                let orphan_wakeup = from.join("WAKEUP.md");
+                if !canonical_wakeup.exists() && orphan_wakeup.exists() {
+                    match fs::rename(&orphan_wakeup, &canonical_wakeup) {
+                        Ok(_) => {
+                            log_debug!(
+                                "[daemon/unification] adopted orphan WAKEUP.md {orphan_wakeup:?} \
+                                 → {canonical_wakeup:?} (workspace-level dir existed without one)"
+                            );
+                            moved += 1;
+                        }
+                        Err(e) => log_debug!(
+                            "[daemon/unification] WARN: adopt orphan WAKEUP.md \
+                             {orphan_wakeup:?} → {canonical_wakeup:?}: {e}"
+                        ),
+                    }
+                }
+                if fs::remove_dir(&from).is_ok() {
+                    // Orphan was empty (or emptied by the adopt above).
+                    continue;
+                }
+                k2_core::workspace::migrations::archive_agent_tree_orphan(
+                    &from,
+                    &canonical_wakeup,
                 );
                 continue;
             }

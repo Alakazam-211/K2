@@ -45,6 +45,11 @@ pub fn k2so_heartbeat_add(
     spec_json: String,
 ) -> Result<serde_json::Value, String> {
     AgentHeartbeat::validate_name(&name).map_err(|e| e.to_string())?;
+    // GH#27: server-side spec validation. The CLI validates too, but
+    // stale CLIs exist — same defense-in-depth as the rest of the add
+    // gate. Rejects garbage weekdays/months/days-of-month HERE instead
+    // of storing a row that later evaluates `schedule_invalid`.
+    validate_spec_json(&frequency, &spec_json)?;
     let db = crate::db::shared();
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
@@ -119,7 +124,7 @@ pub fn k2so_heartbeat_add(
         &workspace_relative,
         true,
     )
-    .map_err(|e| format!("Failed to insert heartbeat: {}", e))?;
+    .map_err(|e| friendly_heartbeat_insert_error(&name, &e.to_string()))?;
 
     // Drop the DB lock before the cron-install path runs — it shells
     // out to launchctl which can be slow on first install.
@@ -144,6 +149,20 @@ pub fn k2so_heartbeat_add(
         "wakeupPath": workspace_relative,
         "wakeupAbs": wakeup_file.to_string_lossy(),
     }))
+}
+
+/// GH#27 — translate the raw sqlite error from a heartbeat insert into
+/// a human-readable message. A duplicate name violates the
+/// `(project_id, name)` UNIQUE constraint on `workspace_heartbeats`;
+/// pre-fix the CLI printed the raw
+/// `UNIQUE constraint failed: workspace_heartbeats.project_id,
+/// workspace_heartbeats.name` SQL error verbatim.
+fn friendly_heartbeat_insert_error(name: &str, raw: &str) -> String {
+    if raw.contains("UNIQUE constraint failed") && raw.contains("workspace_heartbeats") {
+        format!("a heartbeat named '{}' already exists in this workspace", name)
+    } else {
+        format!("Failed to insert heartbeat: {}", raw)
+    }
 }
 
 /// List active (non-archived) heartbeat rows for a workspace,
@@ -403,6 +422,89 @@ pub fn k2so_heartbeat_set_session(
     }
 }
 
+/// GH#27 — server-side schedule-spec validation shared by the add and
+/// edit paths (`/cli/heartbeat/add`, `/cli/heartbeat/edit`). The CLI
+/// validates the same fields client-side, but stale CLIs exist; without
+/// this gate a `--weekly --days foobar` row is stored verbatim and only
+/// surfaces as `schedule_invalid` at the next tick.
+///
+/// Checks (tolerant of unknown fields/frequencies — only the fields the
+/// cron translator consumes are policed):
+/// - weekly `days` entries ∈ mon|tue|wed|thu|fri|sat|sun (case-insensitive)
+/// - yearly `months` entries ∈ jan..dec (case-insensitive)
+/// - monthly/yearly `days_of_month` (and singular `day_of_month`) ∈ 1–31
+///
+/// An empty spec is accepted unchanged (legacy rows / frequency-only
+/// edits); a non-empty spec that isn't valid JSON is rejected loudly.
+pub fn validate_spec_json(frequency: &str, spec_json: &str) -> Result<(), String> {
+    if spec_json.trim().is_empty() {
+        return Ok(());
+    }
+    let v: serde_json::Value = serde_json::from_str(spec_json)
+        .map_err(|e| format!("schedule spec is not valid JSON: {e}"))?;
+
+    const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    const MONTHS: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun",
+        "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+
+    if frequency == "weekly" {
+        if let Some(arr) = v.get("days").and_then(|d| d.as_array()) {
+            for entry in arr {
+                let ok = entry
+                    .as_str()
+                    .map(|s| WEEKDAYS.contains(&s.to_ascii_lowercase().as_str()))
+                    .unwrap_or(false);
+                if !ok {
+                    return Err(format!(
+                        "invalid weekly day {} — expected one of mon|tue|wed|thu|fri|sat|sun",
+                        entry
+                    ));
+                }
+            }
+        }
+    }
+    if frequency == "yearly" {
+        if let Some(arr) = v.get("months").and_then(|d| d.as_array()) {
+            for entry in arr {
+                let ok = entry
+                    .as_str()
+                    .map(|s| MONTHS.contains(&s.to_ascii_lowercase().as_str()))
+                    .unwrap_or(false);
+                if !ok {
+                    return Err(format!(
+                        "invalid yearly month {} — expected one of jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec",
+                        entry
+                    ));
+                }
+            }
+        }
+    }
+    if frequency == "monthly" || frequency == "yearly" {
+        if let Some(arr) = v.get("days_of_month").and_then(|d| d.as_array()) {
+            for entry in arr {
+                let ok = entry
+                    .as_i64()
+                    .map(|d| (1..=31).contains(&d))
+                    .unwrap_or(false);
+                if !ok {
+                    return Err(format!(
+                        "invalid day of month {} — expected an integer 1-31",
+                        entry
+                    ));
+                }
+            }
+        }
+        if let Some(d) = v.get("day_of_month").and_then(|d| d.as_i64()) {
+            if !(1..=31).contains(&d) {
+                return Err(format!("invalid day of month {d} — expected an integer 1-31"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Replace a heartbeat row's `frequency` + `spec_json` in place. Used
 /// when the user edits the schedule via the Settings UI.
 pub fn k2so_heartbeat_edit(
@@ -411,6 +513,8 @@ pub fn k2so_heartbeat_edit(
     frequency: String,
     spec_json: String,
 ) -> Result<(), String> {
+    // GH#27: same server-side spec gate as the add path.
+    validate_spec_json(&frequency, &spec_json)?;
     let db = crate::db::shared();
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
@@ -1091,5 +1195,101 @@ mod tests {
             .unwrap();
         assert_eq!(hb.last_session_id, None);
         assert_eq!(hb.session_provider, None, "self-heal must clear session_provider");
+    }
+
+    // ── GH#27: duplicate-name error mapping ──────────────────────────
+
+    /// The mapping must fire on the REAL sqlite error a duplicate
+    /// (project_id, name) insert produces — not just a hand-written
+    /// string — so the test performs the double insert itself.
+    #[test]
+    fn duplicate_heartbeat_insert_error_is_human_readable() {
+        let path = format!("/fixture/hb-dup-name-{}", uuid::Uuid::new_v4());
+        let project_id = seed_project_and_heartbeat(&path); // seeds hb named "hb"
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let raw = AgentHeartbeat::insert(
+            &conn,
+            &uuid::Uuid::new_v4().to_string(),
+            &project_id,
+            "hb", // duplicate name in the same workspace
+            "daily",
+            "{}",
+            ".k2/heartbeats/hb/WAKEUP.md",
+            true,
+        )
+        .expect_err("duplicate (project_id, name) must violate UNIQUE")
+        .to_string();
+        assert!(
+            raw.contains("UNIQUE constraint failed"),
+            "precondition: raw sqlite error shape changed? raw={raw}"
+        );
+        assert_eq!(
+            friendly_heartbeat_insert_error("hb", &raw),
+            "a heartbeat named 'hb' already exists in this workspace",
+        );
+        // Non-duplicate errors keep the raw detail.
+        let other = friendly_heartbeat_insert_error("hb", "database is locked");
+        assert_eq!(other, "Failed to insert heartbeat: database is locked");
+    }
+
+    // ── GH#27: server-side schedule-spec validation ──────────────────
+
+    #[test]
+    fn validate_spec_rejects_bad_weekly_days() {
+        let err = validate_spec_json("weekly", r#"{"time":"09:00","days":["foobar"]}"#)
+            .expect_err("garbage weekday must be rejected");
+        assert!(err.contains("invalid weekly day"), "err={err}");
+        assert!(err.contains("mon|tue|wed|thu|fri|sat|sun"), "err={err}");
+        // Non-string entries are equally invalid.
+        assert!(validate_spec_json("weekly", r#"{"days":[3]}"#).is_err());
+    }
+
+    #[test]
+    fn validate_spec_accepts_valid_weekly_days_case_insensitive() {
+        validate_spec_json("weekly", r#"{"time":"09:00","days":["mon","WED","Fri"]}"#)
+            .expect("valid weekdays in any case must pass");
+    }
+
+    #[test]
+    fn validate_spec_rejects_bad_yearly_months() {
+        let err = validate_spec_json(
+            "yearly",
+            r#"{"time":"09:00","months":["janx"],"days_of_month":[1]}"#,
+        )
+        .expect_err("garbage month must be rejected");
+        assert!(err.contains("invalid yearly month"), "err={err}");
+        validate_spec_json("yearly", r#"{"months":["JAN","dec"],"days_of_month":[1]}"#)
+            .expect("valid months in any case must pass");
+    }
+
+    #[test]
+    fn validate_spec_rejects_out_of_range_days_of_month() {
+        for freq in ["monthly", "yearly"] {
+            assert!(
+                validate_spec_json(freq, r#"{"days_of_month":[0]}"#).is_err(),
+                "{freq}: day 0 must be rejected"
+            );
+            assert!(
+                validate_spec_json(freq, r#"{"days_of_month":[32]}"#).is_err(),
+                "{freq}: day 32 must be rejected"
+            );
+            validate_spec_json(freq, r#"{"days_of_month":[1,15,31]}"#)
+                .expect("in-range days must pass");
+        }
+        // Singular legacy shape is policed too.
+        assert!(validate_spec_json("monthly", r#"{"day_of_month":42}"#).is_err());
+        validate_spec_json("monthly", r#"{"day_of_month":15}"#).unwrap();
+    }
+
+    #[test]
+    fn validate_spec_tolerates_empty_spec_and_unknown_frequencies() {
+        // Legacy rows / frequency-only edits send an empty spec.
+        validate_spec_json("weekly", "").unwrap();
+        validate_spec_json("daily", "{}").unwrap();
+        // Unknown frequencies aren't this gate's business.
+        validate_spec_json("hourly", r#"{"every_seconds":3600}"#).unwrap();
+        // But non-empty garbage that isn't JSON fails loudly.
+        assert!(validate_spec_json("weekly", "not-json").is_err());
     }
 }

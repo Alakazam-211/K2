@@ -196,6 +196,112 @@ mod gap_route_tests {
     }
 }
 
+#[cfg(test)]
+mod fire_disabled_gate_tests {
+    //! GH#27 — `/cli/heartbeat/fire` refuses a manual fire on a
+    //! DISABLED (enabled=0, non-archived) heartbeat unless `force=1`.
+    //! The `Err(..)` return surfaces through `CliResponse::bad_request`
+    //! as exactly `{"error":"heartbeat '<name>' is disabled — enable it
+    //! or pass --force"}` — the CLI contract a parallel agent codes
+    //! against. Archived rows keep the `skipped_archived` shape.
+
+    use super::*;
+    use k2_core::db::schema::AgentHeartbeat;
+
+    /// Seed a unique project + one heartbeat row. Returns project_path.
+    fn seed(label: &str, enabled: bool, archived: bool) -> String {
+        k2_core::db::init_for_tests();
+        let path = std::env::temp_dir()
+            .join(format!(
+                "k2-gh27-fire-{label}-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let project_id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, 'gh27-fire', ?2)",
+            rusqlite::params![project_id, path],
+        )
+        .unwrap();
+        AgentHeartbeat::insert(
+            &conn,
+            &uuid::Uuid::new_v4().to_string(),
+            &project_id,
+            "hb",
+            "daily",
+            "{}",
+            ".k2/heartbeats/hb/WAKEUP.md",
+            enabled,
+        )
+        .unwrap();
+        if archived {
+            AgentHeartbeat::archive(&conn, &project_id, "hb").unwrap();
+        }
+        path
+    }
+
+    fn params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn fire_refuses_disabled_heartbeat_without_force() {
+        let path = seed("disabled", false, false);
+        let err = dispatch_get("/cli/heartbeat/fire", &path, &params(&[("name", "hb")]))
+            .expect_err("disabled heartbeat must refuse a manual fire");
+        // Exact wire contract — bad_request wraps this verbatim into
+        // {"error": "..."}.
+        assert_eq!(err, "heartbeat 'hb' is disabled — enable it or pass --force");
+    }
+
+    #[test]
+    fn fire_force_1_bypasses_the_disabled_gate() {
+        let path = seed("forced", false, false);
+        let result = dispatch_get(
+            "/cli/heartbeat/fire",
+            &path,
+            &params(&[("name", "hb"), ("force", "1")]),
+        );
+        // force=1 reaches smart_launch. This scratch workspace has no
+        // scheduleable agent, so the launch itself reports that — the
+        // point is the disabled refusal is gone.
+        let body = result.expect("force=1 must not be refused by the disabled gate");
+        assert!(
+            !body.contains("is disabled"),
+            "force=1 must bypass the disabled refusal, got: {body}"
+        );
+    }
+
+    #[test]
+    fn fire_archived_row_keeps_skipped_archived_shape() {
+        // Archived + disabled: the archive check (in smart_launch) owns
+        // this case — NOT the disabled refusal.
+        let path = seed("archived", false, true);
+        let body = dispatch_get("/cli/heartbeat/fire", &path, &params(&[("name", "hb")]))
+            .expect("archived rows return the existing skipped_archived JSON, not a 400");
+        assert!(
+            body.contains("skipped_archived"),
+            "archived behavior must be unchanged, got: {body}"
+        );
+    }
+
+    #[test]
+    fn fire_enabled_row_is_unaffected_by_the_gate() {
+        let path = seed("enabled", true, false);
+        let result =
+            dispatch_get("/cli/heartbeat/fire", &path, &params(&[("name", "hb")]));
+        let body = result.expect("enabled heartbeat must pass the gate without force");
+        assert!(!body.contains("is disabled"), "got: {body}");
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // GET: heartbeat CRUD / fires / active-session
 // ──────────────────────────────────────────────────────────────────────
@@ -256,7 +362,38 @@ pub fn dispatch_get(
             // CLI, the Tauri Launch button, and the cron tick all share
             // one canonical path. `fire` kept as an alias since the
             // existing CLI verb predates `launch`.
+            //
+            // GH#27: a DISABLED (enabled=0, non-archived) heartbeat
+            // refuses a manual fire unless `force=1` is passed — the
+            // CLI's `--force` flag. Archived rows are untouched by this
+            // gate; they keep the existing `skipped_archived` response
+            // from smart_launch. The scheduler tick never reaches this
+            // route (it iterates `list_enabled` directly), so this gate
+            // only affects manual fires.
             let name = params.get("name").cloned().unwrap_or_default();
+            let force = params
+                .get("force")
+                .map(|v| v == "1" || v == "true")
+                .unwrap_or(false);
+            if !force && !name.is_empty() {
+                let disabled = {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path)
+                        .and_then(|pid| {
+                            k2_core::db::schema::AgentHeartbeat::get_by_name(&conn, &pid, &name)
+                                .ok()
+                                .flatten()
+                        })
+                        .map(|hb| !hb.enabled && hb.archived_at.is_none())
+                        .unwrap_or(false)
+                };
+                if disabled {
+                    return Err(format!(
+                        "heartbeat '{name}' is disabled — enable it or pass --force"
+                    ));
+                }
+            }
             Ok(crate::heartbeat_launch::smart_launch(project_path, &name).to_string())
         }
         "/cli/heartbeat/remove" => {

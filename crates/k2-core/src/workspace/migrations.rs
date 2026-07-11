@@ -21,6 +21,7 @@ use crate::heartbeats::control::ensure_agent_wakeup;
 use crate::heartbeats::k2so_heartbeat_add;
 use crate::workspace::agent_identity::{
     agent_dir, agent_type_for, agents_dir, find_primary_agent, resolve_project_id,
+    workspace_agent_path, workspace_heartbeats_dir,
 };
 use crate::workspace::wake_prompts::workspace_wakeup_path;
 
@@ -106,11 +107,93 @@ pub fn archive_orphan_top_tier_agents(project_path: &str) -> Vec<String> {
     archived
 }
 
-/// Detect and repair heartbeats whose `wakeup_path` points at the wrong
-/// agent — typically caused by the pre-0.32.1 migration picking an
-/// orphan agent directory from a prior agent-mode swap. Called on
-/// startup after `promote_legacy_heartbeat`. Idempotent: no-op when
-/// all rows already point at the correct agent.
+/// GH#27 — archive a legacy agent-tree heartbeat folder by renaming it
+/// to `<name>.orphaned` in place (same parent dir). WAKEUP.md files are
+/// USER DATA — the orphan is never deleted, only renamed aside so the
+/// canonical workspace-level tree is the single live source of truth.
+///
+/// Idempotent: when the `.orphaned` archive name is already taken the
+/// orphan is left as-is (logged). When both the canonical WAKEUP.md and
+/// the orphan's WAKEUP.md exist with DIFFERENT contents, a loud warning
+/// names both paths — the canonical file stays authoritative and the
+/// diverging copy is preserved under the `.orphaned` name for the user
+/// to reconcile. Returns true when the rename happened.
+pub fn archive_agent_tree_orphan(orphan_dir: &Path, canonical_wakeup: &Path) -> bool {
+    let Some(name) = orphan_dir.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let orphan_wakeup = orphan_dir.join("WAKEUP.md");
+    if canonical_wakeup.exists() && orphan_wakeup.exists() {
+        let canon = fs::read_to_string(canonical_wakeup).unwrap_or_default();
+        let orphan = fs::read_to_string(&orphan_wakeup).unwrap_or_default();
+        if canon != orphan {
+            log_debug!(
+                "[heartbeat-repair] WARNING: WAKEUP.md contents DIVERGE — canonical {} kept authoritative; legacy agent-tree copy preserved at {}.orphaned (was {}) — reconcile manually",
+                canonical_wakeup.display(),
+                name,
+                orphan_wakeup.display(),
+            );
+        }
+    }
+    let archived = orphan_dir.with_file_name(format!("{name}.orphaned"));
+    if archived.exists() {
+        log_debug!(
+            "[heartbeat-repair] orphan {} left in place — archive target {} already exists",
+            orphan_dir.display(),
+            archived.display(),
+        );
+        return false;
+    }
+    match fs::rename(orphan_dir, &archived) {
+        Ok(()) => {
+            log_debug!(
+                "[heartbeat-repair] archived legacy agent-tree heartbeat dir {} → {}",
+                orphan_dir.display(),
+                archived.display(),
+            );
+            true
+        }
+        Err(e) => {
+            log_debug!(
+                "[heartbeat-repair] WARN: archive {} → {}: {e}",
+                orphan_dir.display(),
+                archived.display(),
+            );
+            false
+        }
+    }
+}
+
+/// GH#27 Theme A — canonical-path repair for heartbeat rows.
+///
+/// The canonical home for every heartbeat is the WORKSPACE-level
+/// `<dot>/heartbeats/<name>/WAKEUP.md` (a workspace IS the agent; `.k2/`
+/// is the agent root). The agent tree `<dot>/agent/heartbeats/<name>/`
+/// is legacy residue from the 0.37.0 window where the scaffolder
+/// anchored on `agent_dir()`.
+///
+/// The pre-GH#27 version of this repair anchored its "correct" target on
+/// `agent_dir(...)/heartbeats/<name>` — which post-unification RESOLVES
+/// TO the legacy agent tree — and compared rows against a stale
+/// `.k2so/agents/<name>/heartbeats/` prefix that never matches modern
+/// rows. Net effect: every boot it INVERTED healthy canonical rows back
+/// to `.k2/agent/heartbeats/...` and re-copied content into the dead
+/// tree (bug report GH#27, log line `[heartbeat-repair] ... →
+/// .k2/agent/heartbeats/... (source=existing path)`).
+///
+/// Invariants enforced per row (idempotent — a clean second boot does
+/// nothing and logs nothing):
+///   1. If the canonical WAKEUP.md exists, the row points there; a row
+///      is NEVER re-pointed at the agent tree.
+///   2. If ONLY the agent tree has the folder, it is MOVED to the
+///      canonical path (user data relocated, never deleted).
+///   3. If BOTH exist, canonical stays authoritative for the row and
+///      the agent-tree folder is preserved as `<name>.orphaned` in
+///      place; diverging contents log a loud warning naming both paths.
+///   4. If NEITHER exists, content is salvaged from the legacy
+///      agent-root WAKEUP.md or the row's current path (pre-0.32.1
+///      semantics preserved), else a placeholder is scaffolded — always
+///      at the canonical path.
 pub fn repair_mismigrated_heartbeats(project_path: &str) {
     let db = crate::db::shared();
     let conn = db.lock();
@@ -119,108 +202,149 @@ pub fn repair_mismigrated_heartbeats(project_path: &str) {
     if rows.is_empty() {
         return;
     }
-    let Some(correct_agent) = find_primary_agent(project_path) else { return };
 
-    let expected_prefix = format!(".k2so/agents/{}/heartbeats/", correct_agent);
-    let legacy_wakeup = agent_dir(project_path, &correct_agent).join("WAKEUP.md");
+    let canonical_root = workspace_heartbeats_dir(project_path);
+    let agent_root = workspace_agent_path(project_path);
+    let agent_tree_root = agent_root.join("heartbeats");
+    // Legacy agent-ROOT wakeup (`<dot>/agent/WAKEUP.md`) — pre-0.32.1
+    // residue that may still hold the user's real content.
+    let legacy_root_wakeup = agent_root.join("WAKEUP.md");
+
     for hb in rows {
-        let wrong_abs = std::path::Path::new(project_path).join(&hb.wakeup_path);
-        let correct_dir = agent_dir(project_path, &correct_agent)
-            .join("heartbeats")
-            .join(&hb.name);
-        let correct_wakeup = correct_dir.join("WAKEUP.md");
+        let canonical_dir = canonical_root.join(&hb.name);
+        let canonical_wakeup = canonical_dir.join("WAKEUP.md");
+        let orphan_dir = agent_tree_root.join(&hb.name);
+        let orphan_wakeup = orphan_dir.join("WAKEUP.md");
 
-        let row_is_correct = hb.wakeup_path.starts_with(&expected_prefix);
-
-        // Read legacy agent-root wakeup (if any) and detect whether it's
-        // just a freshly-scaffolded default template. Template marker is
-        // `<!-- DEFAULT TEMPLATE` (from wakeup_templates/*.md). When the
-        // legacy is a template, DON'T use it as a content source — the
-        // row's current wakeup_path has the real edits.
-        let legacy_content = fs::read_to_string(&legacy_wakeup).ok();
-        let legacy_is_template = legacy_content
-            .as_deref()
-            .map(|s| s.contains("<!-- DEFAULT TEMPLATE"))
-            .unwrap_or(false);
-        let legacy_present = legacy_content
-            .as_deref()
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false)
-            && !legacy_is_template;
-
-        // Nothing to do when the row is correct AND no real legacy
-        // agent-root wakeup.md is left behind.
-        if row_is_correct && !legacy_present {
-            // Clean up a stray template scaffold if present — it'll
-            // just trick the repair into work on future runs.
-            if legacy_is_template {
-                let _ = fs::remove_file(&legacy_wakeup);
-            }
-            continue;
-        }
-
-        if fs::create_dir_all(&correct_dir).is_err() {
-            continue;
-        }
-
-        // Source priority:
-        //   1. Legacy agent-root wakeup.md — the user's REAL content,
-        //      whether the row is currently pointing at the wrong agent
-        //      or was already pointed at the correct agent but a broken
-        //      pre-0.32.1 run left the user's real file behind at the
-        //      agent root without copying it into heartbeats/<name>/.
-        //   2. The row's current wakeup_path if it has non-empty content
-        //      (e.g. the user had already edited the wrong-agent folder).
-        //   3. Scaffold a placeholder if neither source exists.
-        let source = if legacy_present {
-            Some(legacy_wakeup.clone())
-        } else if wrong_abs.exists()
-            && fs::read_to_string(&wrong_abs).map(|s| !s.trim().is_empty()).unwrap_or(false)
-        {
-            Some(wrong_abs.clone())
-        } else {
-            None
-        };
-
-        if let Some(src) = source {
-            if let Ok(content) = fs::read_to_string(&src) {
-                if fs::write(&correct_wakeup, content).is_ok() {
-                    // Clean up the legacy agent-root file if we just
-                    // used it. Avoids dual-source-of-truth on next run.
-                    if src == legacy_wakeup {
-                        let _ = fs::remove_file(&legacy_wakeup);
-                    }
-                }
-            }
-        } else if !correct_wakeup.exists() {
-            let template = format!(
-                "---\ndescription: Heartbeat migrated by 0.32.1 repair (content was missing pre-repair)\n---\n\n\
-                # Wake procedure: {}\n\n\
-                This heartbeat's wakeup file was lost during the 0.32.0 migration.\n\
-                Edit this file with the instructions this heartbeat should run.\n",
-                hb.name
-            );
-            log_if_err(
-                "heartbeat-repair synth-wakeup",
-                &correct_wakeup,
-                atomic_write_str(&correct_wakeup, &template),
-            );
-        }
-
-        let new_relative = correct_wakeup
+        let canonical_rel = canonical_wakeup
             .strip_prefix(project_path)
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| correct_wakeup.to_string_lossy().to_string());
-        if !row_is_correct {
-            let _ = AgentHeartbeat::update_wakeup_path(&conn, &project_id, &hb.name, &new_relative);
+            .unwrap_or_else(|_| canonical_wakeup.to_string_lossy().to_string());
+        let row_is_canonical = hb.wakeup_path == canonical_rel;
+
+        // Idempotency fast path: row already canonical, file present,
+        // no legacy agent-tree twin → nothing to do, nothing to log.
+        if row_is_canonical && canonical_wakeup.exists() && !orphan_dir.exists() {
+            continue;
         }
-        log_debug!(
-            "[heartbeat-repair] {} wakeup_path {} → {} (source={})",
-            hb.name,
-            hb.wakeup_path,
-            new_relative,
-            if legacy_present { "legacy agent-root" } else { "existing path" }
-        );
+
+        if canonical_wakeup.exists() {
+            // Invariants 1 + 3: canonical wins. Archive a lingering
+            // agent-tree twin aside (contents preserved, never merged
+            // over the canonical file, never deleted).
+            if orphan_dir.exists() {
+                archive_agent_tree_orphan(&orphan_dir, &canonical_wakeup);
+            }
+        } else if orphan_wakeup.exists() {
+            // Invariant 2: ONLY the agent tree has it — move the whole
+            // folder to the canonical home.
+            if fs::create_dir_all(&canonical_root).is_err() {
+                continue;
+            }
+            let moved = if canonical_dir.exists() {
+                // Canonical dir exists but is missing its WAKEUP.md —
+                // adopt the orphan's file, then clean up the leftover
+                // dir (rename-aside if it still has other content).
+                let file_moved = fs::rename(&orphan_wakeup, &canonical_wakeup).is_ok();
+                if file_moved && fs::remove_dir(&orphan_dir).is_err() {
+                    archive_agent_tree_orphan(&orphan_dir, &canonical_wakeup);
+                }
+                file_moved
+            } else {
+                fs::rename(&orphan_dir, &canonical_dir).is_ok()
+            };
+            if !moved {
+                log_debug!(
+                    "[heartbeat-repair] WARN: failed to move legacy agent-tree dir {} → {}; row left untouched this boot",
+                    orphan_dir.display(),
+                    canonical_dir.display(),
+                );
+                continue; // never point a row at a file we failed to place
+            }
+            log_debug!(
+                "[heartbeat-repair] {} moved legacy agent-tree dir {} → {}",
+                hb.name,
+                orphan_dir.display(),
+                canonical_dir.display(),
+            );
+        } else {
+            // Invariant 4: NEITHER tree has the file — salvage content.
+            // Template marker is `<!-- DEFAULT TEMPLATE` (from
+            // wakeup_templates/*.md); a template is never a content
+            // source — it would shadow the row's real edits.
+            let legacy_content = fs::read_to_string(&legacy_root_wakeup).ok();
+            let legacy_is_template = legacy_content
+                .as_deref()
+                .map(|s| s.contains("<!-- DEFAULT TEMPLATE"))
+                .unwrap_or(false);
+            let legacy_present = legacy_content
+                .as_deref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+                && !legacy_is_template;
+
+            if row_is_canonical && !legacy_present {
+                // Clean up a stray template scaffold if present — it'll
+                // just trick the repair into work on future runs.
+                if legacy_is_template {
+                    let _ = fs::remove_file(&legacy_root_wakeup);
+                }
+                continue;
+            }
+            if fs::create_dir_all(&canonical_dir).is_err() {
+                continue;
+            }
+            // Source priority: legacy agent-root WAKEUP.md (the user's
+            // real pre-0.32.1 content) → the row's current path if it
+            // has non-empty content → scaffold a placeholder.
+            let current_abs = Path::new(project_path).join(&hb.wakeup_path);
+            let source = if legacy_present {
+                Some(legacy_root_wakeup.clone())
+            } else if current_abs.exists()
+                && fs::read_to_string(&current_abs)
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+            {
+                Some(current_abs.clone())
+            } else {
+                None
+            };
+            if let Some(src) = source {
+                if let Ok(content) = fs::read_to_string(&src) {
+                    if fs::write(&canonical_wakeup, content).is_ok() {
+                        // Clean up the legacy agent-root file if we just
+                        // used it — avoids dual-source-of-truth next run.
+                        if src == legacy_root_wakeup {
+                            let _ = fs::remove_file(&legacy_root_wakeup);
+                        }
+                    }
+                }
+            } else if !canonical_wakeup.exists() {
+                let template = format!(
+                    "---\ndescription: Heartbeat migrated by repair (content was missing pre-repair)\n---\n\n\
+                    # Wake procedure: {}\n\n\
+                    This heartbeat's wakeup file was missing when the boot repair ran.\n\
+                    Edit this file with the instructions this heartbeat should run.\n",
+                    hb.name
+                );
+                log_if_err(
+                    "heartbeat-repair synth-wakeup",
+                    &canonical_wakeup,
+                    atomic_write_str(&canonical_wakeup, &template),
+                );
+            }
+        }
+
+        if !row_is_canonical {
+            let _ =
+                AgentHeartbeat::update_wakeup_path(&conn, &project_id, &hb.name, &canonical_rel);
+            log_debug!(
+                "[heartbeat-repair] {} wakeup_path {} → {} (canonical)",
+                hb.name,
+                hb.wakeup_path,
+                canonical_rel,
+            );
+        }
     }
 }
 
@@ -270,11 +394,12 @@ pub fn promote_legacy_heartbeat(project_path: &str) {
 
     let Some(agent_name) = find_primary_agent(project_path) else { return };
 
-    // Move legacy wakeup.md into heartbeats/default/ so the rest of the
-    // system has a single lookup pattern.
-    let default_dir = agent_dir(project_path, &agent_name)
-        .join("heartbeats")
-        .join("default");
+    // Move legacy wakeup.md into the CANONICAL workspace-level
+    // heartbeats/default/ so the rest of the system has a single lookup
+    // pattern. (GH#27: pre-fix this anchored on `agent_dir()`, which
+    // post-unification resolves to the legacy `.k2/agent/` tree — a
+    // boot path must never create rows pointing there.)
+    let default_dir = workspace_heartbeats_dir(project_path).join("default");
     if fs::create_dir_all(&default_dir).is_err() {
         return;
     }
@@ -524,8 +649,12 @@ pub fn migrate_or_scaffold_lead_heartbeat(project_path: &str) {
         spec,
     ) {
         Ok(_) => {
-            let wake_path = agent_dir(project_path, &primary_agent)
-                .join("heartbeats")
+            // GH#27: write the wake body to the SAME canonical
+            // workspace-level path `k2so_heartbeat_add` just scaffolded
+            // (and pointed the row at) — pre-fix this wrote into the
+            // legacy `.k2/agent/heartbeats/` tree, so the content never
+            // reached the file the row fires from.
+            let wake_path = workspace_heartbeats_dir(project_path)
                 .join("triage")
                 .join("WAKEUP.md");
             log_if_err(
@@ -1932,3 +2061,268 @@ mod migration_safety_tests {
 
 
 
+#[cfg(test)]
+mod heartbeat_canonical_repair_tests {
+    //! GH#27 Theme A — boot-time repair must converge every heartbeat
+    //! row + folder on the CANONICAL `.k2/heartbeats/<name>/WAKEUP.md`
+    //! and never resurrect the legacy `.k2/agent/heartbeats/` tree.
+    //! WAKEUP.md files are USER DATA: every branch below asserts content
+    //! survival, and the whole flow must be a no-op on a second run.
+
+    use super::*;
+    use crate::db::schema::AgentHeartbeat;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    /// Scratch workspace with a modern `.k2/` dot-dir + registered
+    /// project row in the shared test DB. Unique per test.
+    fn scratch_ws(label: &str) -> (PathBuf, String, String) {
+        crate::db::init_for_tests();
+        let dir = std::env::temp_dir().join(format!(
+            "k2-gh27-repair-{label}-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(dir.join(".k2")).unwrap();
+        let path_str = dir.to_string_lossy().into_owned();
+        let project_id = Uuid::new_v4().to_string();
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, 'gh27-repair', ?2)",
+                rusqlite::params![project_id, path_str],
+            )
+            .unwrap();
+        }
+        (dir, path_str, project_id)
+    }
+
+    fn insert_hb(project_id: &str, name: &str, wakeup_rel: &str) {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        AgentHeartbeat::insert(
+            &conn,
+            &Uuid::new_v4().to_string(),
+            project_id,
+            name,
+            "daily",
+            "{}",
+            wakeup_rel,
+            true,
+        )
+        .unwrap();
+    }
+
+    fn row_wakeup_path(project_id: &str, name: &str) -> String {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        AgentHeartbeat::get_by_name(&conn, project_id, name)
+            .unwrap()
+            .expect("heartbeat row exists")
+            .wakeup_path
+    }
+
+    fn write(path: &Path, body: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+
+    /// Rule 2: ONLY the agent tree has the folder → the whole folder is
+    /// MOVED to `.k2/heartbeats/<name>/` and the row is re-pointed.
+    #[test]
+    fn agent_only_tree_is_moved_to_canonical_and_row_repointed() {
+        let (dir, path, pid) = scratch_ws("agent-only");
+        let orphan_wakeup = dir.join(".k2/agent/heartbeats/hb-a/WAKEUP.md");
+        write(&orphan_wakeup, "AGENT-TREE USER CONTENT");
+        // A sibling file rides along to prove the MOVE takes the folder.
+        write(&dir.join(".k2/agent/heartbeats/hb-a/notes.md"), "sibling");
+        insert_hb(&pid, "hb-a", ".k2/agent/heartbeats/hb-a/WAKEUP.md");
+
+        repair_mismigrated_heartbeats(&path);
+
+        let canonical = dir.join(".k2/heartbeats/hb-a/WAKEUP.md");
+        assert_eq!(
+            fs::read_to_string(&canonical).unwrap(),
+            "AGENT-TREE USER CONTENT",
+            "content must survive the move byte-for-byte"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join(".k2/heartbeats/hb-a/notes.md")).unwrap(),
+            "sibling",
+            "the whole folder moves, not just WAKEUP.md"
+        );
+        assert!(
+            !dir.join(".k2/agent/heartbeats/hb-a").exists(),
+            "legacy agent-tree dir must be gone after the move"
+        );
+        assert_eq!(row_wakeup_path(&pid, "hb-a"), ".k2/heartbeats/hb-a/WAKEUP.md");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Rule 3: BOTH trees exist with DIVERGING content → canonical wins
+    /// the row, canonical content is untouched, and the diverging
+    /// agent-tree copy is preserved (not deleted) as `<name>.orphaned`.
+    #[test]
+    fn both_exist_divergent_canonical_wins_and_orphan_archived_with_content() {
+        let (dir, path, pid) = scratch_ws("divergent");
+        write(&dir.join(".k2/heartbeats/hb-b/WAKEUP.md"), "CANONICAL EDITS");
+        write(
+            &dir.join(".k2/agent/heartbeats/hb-b/WAKEUP.md"),
+            "DIVERGED LEGACY EDITS",
+        );
+        // Row pinned at the DEAD tree — the exact Cortana bug shape.
+        insert_hb(&pid, "hb-b", ".k2/agent/heartbeats/hb-b/WAKEUP.md");
+
+        repair_mismigrated_heartbeats(&path);
+
+        assert_eq!(row_wakeup_path(&pid, "hb-b"), ".k2/heartbeats/hb-b/WAKEUP.md");
+        assert_eq!(
+            fs::read_to_string(dir.join(".k2/heartbeats/hb-b/WAKEUP.md")).unwrap(),
+            "CANONICAL EDITS",
+            "canonical file stays authoritative — never overwritten by the orphan"
+        );
+        assert!(
+            !dir.join(".k2/agent/heartbeats/hb-b").exists(),
+            "live-looking legacy dir must not remain"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join(".k2/agent/heartbeats/hb-b.orphaned/WAKEUP.md"))
+                .unwrap(),
+            "DIVERGED LEGACY EDITS",
+            "diverging orphan content is USER DATA and must be preserved under .orphaned"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// THE INVERSION REGRESSION (GH#27 smoking gun): a healthy row
+    /// already pointing at canonical must stay there — pre-fix the
+    /// repair re-pointed it to `.k2/agent/heartbeats/` every boot. A
+    /// lingering agent-tree twin is archived aside.
+    #[test]
+    fn canonical_row_is_never_repointed_to_agent_tree() {
+        let (dir, path, pid) = scratch_ws("no-invert");
+        write(&dir.join(".k2/heartbeats/hb-c/WAKEUP.md"), "CANON");
+        write(&dir.join(".k2/agent/heartbeats/hb-c/WAKEUP.md"), "CANON");
+        insert_hb(&pid, "hb-c", ".k2/heartbeats/hb-c/WAKEUP.md");
+
+        repair_mismigrated_heartbeats(&path);
+
+        assert_eq!(
+            row_wakeup_path(&pid, "hb-c"),
+            ".k2/heartbeats/hb-c/WAKEUP.md",
+            "repair must NEVER re-point a canonical row at .k2/agent/heartbeats/"
+        );
+        assert!(dir.join(".k2/agent/heartbeats/hb-c.orphaned").exists());
+        assert!(!dir.join(".k2/agent/heartbeats/hb-c").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Already-canonical with no legacy residue: repair touches nothing.
+    #[test]
+    fn already_canonical_workspace_is_untouched() {
+        let (dir, path, pid) = scratch_ws("clean");
+        write(&dir.join(".k2/heartbeats/hb-d/WAKEUP.md"), "STABLE");
+        insert_hb(&pid, "hb-d", ".k2/heartbeats/hb-d/WAKEUP.md");
+
+        repair_mismigrated_heartbeats(&path);
+
+        assert_eq!(row_wakeup_path(&pid, "hb-d"), ".k2/heartbeats/hb-d/WAKEUP.md");
+        assert_eq!(
+            fs::read_to_string(dir.join(".k2/heartbeats/hb-d/WAKEUP.md")).unwrap(),
+            "STABLE"
+        );
+        assert!(
+            !dir.join(".k2/agent").exists(),
+            "repair must not scaffold any .k2/agent/ tree on a clean workspace"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Rule 4 (idempotency): a second boot after any repair is a
+    /// complete no-op — nothing re-pointed, nothing re-archived, no
+    /// `.orphaned.orphaned` towers.
+    #[test]
+    fn second_run_is_a_noop() {
+        let (dir, path, pid) = scratch_ws("idempotent");
+        // Divergent both-exist case — the busiest branch.
+        write(&dir.join(".k2/heartbeats/hb-e/WAKEUP.md"), "CANON");
+        write(&dir.join(".k2/agent/heartbeats/hb-e/WAKEUP.md"), "LEGACY");
+        insert_hb(&pid, "hb-e", ".k2/agent/heartbeats/hb-e/WAKEUP.md");
+        // Agent-only case rides along.
+        write(&dir.join(".k2/agent/heartbeats/hb-f/WAKEUP.md"), "MOVE ME");
+        insert_hb(&pid, "hb-f", ".k2/agent/heartbeats/hb-f/WAKEUP.md");
+
+        repair_mismigrated_heartbeats(&path);
+        let snapshot = |p: &Path| -> Vec<String> {
+            let mut all: Vec<String> = walk(p);
+            all.sort();
+            all
+        };
+        fn walk(p: &Path) -> Vec<String> {
+            let mut out = vec![];
+            if let Ok(entries) = fs::read_dir(p) {
+                for e in entries.flatten() {
+                    let path = e.path();
+                    out.push(path.to_string_lossy().into_owned());
+                    if path.is_dir() {
+                        out.extend(walk(&path));
+                    }
+                }
+            }
+            out
+        }
+        let tree_after_first = snapshot(&dir);
+        let rows_after_first = (
+            row_wakeup_path(&pid, "hb-e"),
+            row_wakeup_path(&pid, "hb-f"),
+        );
+
+        repair_mismigrated_heartbeats(&path);
+
+        assert_eq!(snapshot(&dir), tree_after_first, "second run must not touch the tree");
+        assert_eq!(
+            (row_wakeup_path(&pid, "hb-e"), row_wakeup_path(&pid, "hb-f")),
+            rows_after_first,
+            "second run must not touch the rows"
+        );
+        assert_eq!(rows_after_first.0, ".k2/heartbeats/hb-e/WAKEUP.md");
+        assert_eq!(rows_after_first.1, ".k2/heartbeats/hb-f/WAKEUP.md");
+        assert!(
+            !dir.join(".k2/agent/heartbeats/hb-e.orphaned.orphaned").exists(),
+            "no archive-of-archive towers"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `archive_agent_tree_orphan` alone: when the archive name is
+    /// already taken, the orphan stays put (idempotent, nothing lost).
+    #[test]
+    fn archive_orphan_leaves_dir_when_target_taken() {
+        let base = std::env::temp_dir().join(format!(
+            "k2-gh27-archive-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let orphan = base.join("hb-x");
+        write(&orphan.join("WAKEUP.md"), "SECOND ORPHAN");
+        write(&base.join("hb-x.orphaned/WAKEUP.md"), "FIRST ORPHAN");
+        let canonical = base.join("canonical-WAKEUP.md");
+        write(&canonical, "CANON");
+
+        let archived = archive_agent_tree_orphan(&orphan, &canonical);
+
+        assert!(!archived, "occupied archive target must refuse the rename");
+        assert_eq!(
+            fs::read_to_string(orphan.join("WAKEUP.md")).unwrap(),
+            "SECOND ORPHAN",
+            "refused orphan stays in place, content intact"
+        );
+        assert_eq!(
+            fs::read_to_string(base.join("hb-x.orphaned/WAKEUP.md")).unwrap(),
+            "FIRST ORPHAN",
+            "existing archive is never clobbered"
+        );
+        fs::remove_dir_all(&base).ok();
+    }
+}

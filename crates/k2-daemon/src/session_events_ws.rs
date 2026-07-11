@@ -309,11 +309,14 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         // app-level consumers filter by `kind`.
         //   - LlmStatusChanged    — one model host per daemon.
         //   - TunnelStatusChanged — one tunnel per daemon.
+        //   - TunnelSubdomainsChanged — same: the nested-subdomain map
+        //     belongs to the daemon's ONE tunnel, not any workspace.
         //   - AgentStatusChanged  — keyed by paneId (terminal id), not a
         //     workspace path; the renderer correlates by paneId (same as
         //     the existing `agent:lifecycle` consumer).
         SessionEvent::LlmStatusChanged { .. }
         | SessionEvent::TunnelStatusChanged { .. }
+        | SessionEvent::TunnelSubdomainsChanged { .. }
         | SessionEvent::AgentStatusChanged { .. } => return true,
 
         // 0.39.45 (GH #18/#26) APP-LEVEL — the registered project set
@@ -458,6 +461,12 @@ mod tests {
             running: true,
             public_url: None,
         };
+        // URLs & Ports — the nested-subdomain map is the daemon's one
+        // tunnel's, same routing class as TunnelStatusChanged.
+        let tunnel_subs = SessionEvent::TunnelSubdomainsChanged {
+            primary: "rosson".into(),
+            targets: std::collections::HashMap::new(),
+        };
         let agent = SessionEvent::AgentStatusChanged {
             pane_id: "t".into(),
             tab_id: "tab".into(),
@@ -478,7 +487,7 @@ mod tests {
         let feedback = SessionEvent::FeedbackChanged {
             reason: "created".into(),
         };
-        for ev in [&llm, &tunnel, &agent, &presence, &open_url, &project_groups, &feedback] {
+        for ev in [&llm, &tunnel, &tunnel_subs, &agent, &presence, &open_url, &project_groups, &feedback] {
             assert!(event_matches_workspace(ev, "/x/foo"));
             assert!(event_matches_workspace(ev, "/totally/unrelated"));
             assert!(event_matches_workspace(ev, ""));

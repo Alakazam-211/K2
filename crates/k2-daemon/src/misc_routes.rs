@@ -289,6 +289,24 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             serde_json::to_string(&k2_core::tunnel::tunnel_status())
                 .unwrap_or_else(|_| r#"{"running":false}"#.to_string()),
         ),
+        // GET /cli/tunnel/subdomains — the daemon's cached Pro nested-
+        // subdomain routing map (URLs & Ports drawer): the primary label
+        // plus every `nested label → internal host:port` target the E2E
+        // TLS listener routes by. Read-only snapshot of
+        // `tunnel::subdomains::current()`; its push twin is the
+        // `tunnel_subdomains_changed` session-events broadcast. Empty
+        // (`{"primary":"","targets":{}}`) until the refresh loop has
+        // learned the account's map — e.g. tunnel down or E2E off.
+        "/cli/tunnel/subdomains" => {
+            let map = k2_core::tunnel::subdomains::current();
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "primary": &map.primary,
+                    "targets": &map.targets,
+                })
+                .to_string(),
+            )
+        }
         "/cli/companion/presets" => match k2_core::companion::cli_routes::list_presets() {
             Ok(body) => CliResponse::ok_json(body),
             Err(e) => CliResponse::bad_request(e),

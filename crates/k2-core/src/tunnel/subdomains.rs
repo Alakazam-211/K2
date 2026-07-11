@@ -211,8 +211,31 @@ pub fn current() -> Arc<SubdomainMap> {
 /// Hot-swap the cached map. Called by the refresh loop after a successful
 /// fetch; a concurrent [`current`] reader keeps serving the old map until the
 /// store lands, so there's no listener churn.
+///
+/// **Change broadcast (URLs & Ports drawer):** when the landed map DIFFERS
+/// from the previously-cached one, fire
+/// [`HookEvent::TunnelSubdomainsChanged`](crate::agent_hooks::HookEvent) so
+/// the daemon can mirror a `tunnel_subdomains_changed` frame onto its
+/// session-events bus. Doing the compare HERE (the single store chokepoint)
+/// means every caller — the connector's refresh loop today, anything else
+/// tomorrow — gets change detection for free, and an UNCHANGED refresh tick
+/// (the steady state, every lease interval) emits nothing.
 pub fn store(map: SubdomainMap) {
+    if swap_and_changed(map) {
+        crate::agent_hooks::emit(
+            crate::agent_hooks::HookEvent::TunnelSubdomainsChanged,
+            serde_json::Value::Null,
+        );
+    }
+}
+
+/// Swap the cache to `map`; report whether the newly-stored map differs
+/// from what was cached before. Split from [`store`] so the compare logic
+/// is testable without touching the process-global hook sink.
+fn swap_and_changed(map: SubdomainMap) -> bool {
+    let changed = **cache().load() != map;
     cache().store(Arc::new(map));
+    changed
 }
 
 // ── Control-plane fetch (the daemon's "learn the map" call) ───────────────
@@ -517,13 +540,26 @@ mod tests {
     fn global_cache_defaults_empty_and_stores() {
         // Default cache routes everything to the daemon (no nested targets).
         // NOTE: process-global; this test only asserts the store/load round
-        // trip with a sentinel it sets itself.
+        // trip with a sentinel it sets itself. Keep it the ONLY test that
+        // touches the global cache so the change-detection asserts below
+        // can't race a parallel store.
         let map = SubdomainMap::from_rows("rosson", vec![row("staging", Some("localhost:3000"), false)]);
-        store(map.clone());
+        // Landing a DIFFERENT map reports changed (→ store() broadcasts)…
+        assert!(
+            swap_and_changed(map.clone()),
+            "sentinel map must differ from the previously-cached map"
+        );
+        // …and re-landing the IDENTICAL map does not — the steady-state
+        // refresh tick (same map every lease interval) must stay silent.
+        assert!(
+            !swap_and_changed(map.clone()),
+            "re-storing an identical map must NOT report a change"
+        );
         let loaded = current();
         assert_eq!(loaded.route_for_host("staging.rosson.k2.dev"), Route::Internal("localhost:3000".to_string()));
-        // Reset to empty so we don't bleed into other tests in this binary.
-        store(SubdomainMap::default());
+        // Reset to empty so we don't bleed into other tests in this binary
+        // (the reset itself is a change — the map goes sentinel → empty).
+        assert!(swap_and_changed(SubdomainMap::default()));
         assert_eq!(current().route_for_host("staging.rosson.k2.dev"), Route::Daemon);
     }
 }

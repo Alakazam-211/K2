@@ -13,6 +13,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { showContextMenu } from '@/lib/context-menu'
 import WorktreeDialog from '@/components/Sidebar/WorktreeDialog'
 import { HeartbeatsPanel } from '@/components/HeartbeatsPanel/HeartbeatsPanel'
+import { UrlsPortsSection } from './UrlsPortsSection'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -290,6 +291,11 @@ export default function WorkspacePanel(): React.JSX.Element {
 
       {/* ── Connected Agents (incoming) ── */}
       <ConnectedAgentsSection projectId={activeProject.id} />
+
+      {/* ── URLs & Ports ── (collapsible; K2 Connect tunnel surface +
+          nested subdomain map, live via tunnel_status_changed /
+          tunnel_subdomains_changed) */}
+      <UrlsPortsSection projectId={activeProject.id} />
 
       {/* ── Worktrees ── (collapsible; chevron toggles, count badge
           and new-worktree button stay clickable via stopPropagation) */}

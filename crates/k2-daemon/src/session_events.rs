@@ -268,6 +268,24 @@ pub enum SessionEvent {
         public_url: Option<String>,
     },
 
+    /// URLs & Ports drawer — the K2 Connect tunnel's cached NESTED-
+    /// subdomain routing map changed (the daemon-owned refresh loop landed
+    /// a map that differs from the cached one; see
+    /// `k2_core::tunnel::subdomains::store`). APP-LEVEL — one tunnel per
+    /// daemon, the `TunnelStatusChanged` routing class. Carries the WHOLE
+    /// map (not a diff) so the renderer converges without a follow-up GET;
+    /// the snapshot twin is `GET /cli/tunnel/subdomains`, which returns
+    /// the identical `{primary, targets}` payload.
+    ///
+    /// Wire: `{ "kind": "tunnel_subdomains_changed", "primary": string,
+    /// "targets": { "<label>": "<host:port>", ... } }`. `primary` is the
+    /// tunnel's primary subdomain label (may be empty when unknown);
+    /// `targets` maps each nested label to its internal target endpoint.
+    TunnelSubdomainsChanged {
+        primary: String,
+        targets: HashMap<String, String>,
+    },
+
     /// #676 — a tab title was set daemon-side. WORKSPACE-SCOPED.
     /// Push counterpart to the new `POST /cli/workspace/set-tab-title`
     /// route + the daemon-canonical `tab_titles` store. Replaces the
@@ -698,6 +716,36 @@ mod tests {
         assert_eq!(json["running"], true);
         assert_eq!(json["publicUrl"], "https://rosson.k2.dev");
         assert_keys(&json, &["kind", "running", "publicUrl"]);
+    }
+
+    /// FROZEN WIRE CONTRACT (URLs & Ports drawer): the renderer codes
+    /// against EXACTLY `{ "kind": "tunnel_subdomains_changed", "primary":
+    /// string, "targets": { label: target } }` — the same shape
+    /// `GET /cli/tunnel/subdomains` returns. Pin it so a rename fails CI
+    /// loudly.
+    #[test]
+    fn tunnel_subdomains_changed_frozen_contract() {
+        let mut targets = HashMap::new();
+        targets.insert("staging".to_string(), "localhost:3000".to_string());
+        targets.insert("preview".to_string(), "127.0.0.1:8080".to_string());
+        let json = as_json(&SessionEvent::TunnelSubdomainsChanged {
+            primary: "rosson".into(),
+            targets,
+        });
+        assert_eq!(json["kind"], "tunnel_subdomains_changed");
+        assert_eq!(json["primary"], "rosson");
+        assert_eq!(json["targets"]["staging"], "localhost:3000");
+        assert_eq!(json["targets"]["preview"], "127.0.0.1:8080");
+        assert_eq!(json["targets"].as_object().unwrap().len(), 2);
+        assert_keys(&json, &["kind", "primary", "targets"]);
+        // An empty map serializes as an empty object (present key), so the
+        // renderer's "no nested URLs" empty state never sees `undefined`.
+        let json2 = as_json(&SessionEvent::TunnelSubdomainsChanged {
+            primary: String::new(),
+            targets: HashMap::new(),
+        });
+        assert_eq!(json2["primary"], "");
+        assert!(json2["targets"].as_object().unwrap().is_empty());
     }
 
     #[test]

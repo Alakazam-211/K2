@@ -4513,6 +4513,9 @@ cli_post() {
 # https://<user>.k2.dev by running an frpc client that dials the hosted
 # K2 Connect server. Routes:
 #   POST /cli/tunnel/start[?subdomain=<s>]   GET /cli/tunnel/status   POST /cli/tunnel/stop
+#   GET /cli/tunnel/subdomains — the daemon's cached nested-subdomain
+#   routing map (label -> internal target); read-only, distinct from
+#   `k2 connect subdomain list` which asks the CONTROL PLANE directly.
 cmd_tunnel() {
     local sub="${1:-status}"
     shift || true
@@ -4580,8 +4583,43 @@ if d.get("running"):
         print(f"  Server:     {sa}")
 '
             ;;
+        subdomains)
+            local as_json=0
+            [ "${1:-}" = "--json" ] && as_json=1
+            local raw
+            raw=$(cli_request "/cli/tunnel/subdomains")
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$raw"; return 0; fi
+            printf '%s' "$raw" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f"Failed to parse tunnel subdomains: {e}", file=sys.stderr); sys.exit(1)
+if d.get("error"):
+    err = d["error"]
+    print(f"Failed to read tunnel subdomains: {err}", file=sys.stderr); sys.exit(1)
+primary = (d.get("primary") or "").strip()
+targets = d.get("targets") or {}
+print("K2 Connect subdomains (daemon routing map)")
+if not primary and not targets:
+    print("  (empty — the daemon has not learned a routing map yet;")
+    print("   requires the tunnel running with E2E on)")
+    sys.exit(0)
+rows = []
+if primary:
+    rows.append((f"{primary}.k2.dev", "daemon (primary)"))
+for label in sorted(targets):
+    host = f"{label}.{primary}.k2.dev" if primary else label
+    rows.append((host, targets[label]))
+width = max(len(h) for h, _ in rows)
+for host, target in rows:
+    print(f"  {host:<{width}}  ->  {target}")
+if not targets:
+    print("  (no nested subdomains configured)")
+'
+            ;;
         *)
-            echo "Usage: k2 tunnel <start [--subdomain <s>]|stop|status [--json]>" >&2
+            echo "Usage: k2 tunnel <start [--subdomain <s>]|stop|status [--json]|subdomains [--json]>" >&2
             exit 1
             ;;
     esac
@@ -6160,6 +6198,13 @@ cmd_schema() {
       "description": "K2 Connect tunnel — expose this daemon at https://<user>.k2.dev.",
       "args": [],
       "flags": []
+    },
+    {
+      "name": "tunnel subdomains",
+      "usage": "k2 tunnel subdomains [--json]",
+      "description": "Daemon-cached nested-subdomain routing map (label -> internal target). Read-only; distinct from 'k2 connect subdomain list' (control plane).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw JSON pass-through."}]
     },
     {
       "name": "skills",
@@ -9154,6 +9199,7 @@ TUNNEL (K2 Connect — expose this daemon at https://<user>.k2.dev)
   tunnel start [--subdomain <s>]                Start the frpc tunnel
   tunnel stop                                   Stop the tunnel
   tunnel status [--json]                        Running? + public URL
+  tunnel subdomains [--json]                    Daemon-cached nested map (label -> target)
 
 CONNECT (K2 Connect — Pro subdomains + plan; talks to the control plane)
   connect status                                Connected subdomain + its plan

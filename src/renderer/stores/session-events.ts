@@ -138,6 +138,20 @@ export interface TunnelStatusChangedEvent {
   publicUrl: string | null
 }
 
+/** APP-LEVEL — the tunnel's cached NESTED-subdomain routing map changed
+ *  (URLs & Ports drawer). The daemon's refresh loop landed a map that
+ *  differs from the cached one. Carries the WHOLE map (not a diff) so the
+ *  consumer converges without a follow-up GET; the snapshot twin is
+ *  `GET /cli/tunnel/subdomains`, which returns the identical
+ *  `{primary, targets}` payload. `primary` may be empty when the daemon
+ *  hasn't learned the tunnel's primary label. */
+export interface TunnelSubdomainsChangedEvent {
+  kind: 'tunnel_subdomains_changed'
+  primary: string
+  /** `nested label → internal target endpoint` (e.g. `localhost:3000`). */
+  targets: Record<string, string>
+}
+
 // NOTE (0.40.31): the WORKSPACE-SCOPED review events (`review_queue_changed`,
 // `review_changed`) are still broadcast by the daemon (the `k2 review` system
 // lives on), but this app no longer consumes them — the Review Queue modal +
@@ -300,6 +314,7 @@ export type SessionEventMessage =
   | AgentStatusChangedEvent
   | SessionActivityChangedEvent
   | TunnelStatusChangedEvent
+  | TunnelSubdomainsChangedEvent
   | TabTitleChangedEvent
   | TabOrderChangedEvent
   | HeartbeatStateChangedEvent
@@ -586,6 +601,9 @@ export async function refreshActiveSnapshot(): Promise<void> {
 type LlmStatusHandler = (e: LlmStatusChangedEvent) => void
 type AgentStatusHandler = (e: AgentStatusChangedEvent) => void
 type TunnelStatusHandler = (e: TunnelStatusChangedEvent) => void
+// URLs & Ports drawer — the nested-subdomain map (whole-map replace, the
+// ActiveChanged convention). `UrlsPortsSection.tsx` is the consumer.
+type TunnelSubdomainsHandler = (e: TunnelSubdomainsChangedEvent) => void
 type AppHelloHandler = () => void
 // #688 — app-level session add/remove. The per-workspace
 // `subscribeToWorkspaceSessionEvents` only sees its OWN cwd; the
@@ -627,6 +645,7 @@ const _llmStatusHandlers = new Set<LlmStatusHandler>()
 const _projectsChangedHandlers = new Set<ProjectsChangedHandler>()
 const _agentStatusHandlers = new Set<AgentStatusHandler>()
 const _tunnelStatusHandlers = new Set<TunnelStatusHandler>()
+const _tunnelSubdomainsHandlers = new Set<TunnelSubdomainsHandler>()
 const _appHelloHandlers = new Set<AppHelloHandler>()
 const _appSessionAddedHandlers = new Set<SessionAddedHandler>()
 const _appSessionRemovedHandlers = new Set<SessionRemovedHandler>()
@@ -669,6 +688,14 @@ export function onAgentStatusChanged(fn: AgentStatusHandler): UnsubscribeFn {
 export function onTunnelStatusChanged(fn: TunnelStatusHandler): UnsubscribeFn {
   _tunnelStatusHandlers.add(fn)
   return () => void _tunnelStatusHandlers.delete(fn)
+}
+
+/** Subscribe to APP-LEVEL `tunnel_subdomains_changed` (URLs & Ports
+ *  drawer — the tunnel's nested-subdomain routing map). The event carries
+ *  the whole map; replace, don't patch. Returns an unsubscribe fn. */
+export function onTunnelSubdomainsChanged(fn: TunnelSubdomainsHandler): UnsubscribeFn {
+  _tunnelSubdomainsHandlers.add(fn)
+  return () => void _tunnelSubdomainsHandlers.delete(fn)
 }
 
 /** Fires on every app-level WS (re)connect — use it to re-snapshot truth
@@ -758,6 +785,9 @@ function dispatchAppEvent(msg: SessionEventMessage): void {
       break
     case 'tunnel_status_changed':
       for (const h of _tunnelStatusHandlers) h(msg)
+      break
+    case 'tunnel_subdomains_changed':
+      for (const h of _tunnelSubdomainsHandlers) h(msg)
       break
     case 'session_added':
       for (const h of _appSessionAddedHandlers) h(msg)

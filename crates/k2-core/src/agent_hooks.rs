@@ -123,6 +123,15 @@ pub enum HookEvent {
     /// list liveness (the structural sibling of `sync:projects`; an
     /// implementation addition beyond the ledger's four, PRD §4.2).
     ProjectGroupsChanged,
+    /// URLs & Ports drawer — the K2 Connect tunnel's cached nested-
+    /// subdomain routing map CHANGED (fired from
+    /// `tunnel::subdomains::store()` only when the freshly-fetched map
+    /// differs from the cached one). Payload-free refetch nudge: the
+    /// daemon's sink reads the canonical map back from
+    /// `tunnel::subdomains::current()` when mirroring onto the
+    /// session-events bus, so the broadcast can never drift from what
+    /// `GET /cli/tunnel/subdomains` serves.
+    TunnelSubdomainsChanged,
 }
 
 impl HookEvent {
@@ -150,6 +159,7 @@ impl HookEvent {
             Self::ProjectGroupPocChanged => "project-group:poc-changed",
             Self::ProjectGroupLayoutChanged => "project-group:layout-changed",
             Self::ProjectGroupsChanged => "project-group:groups-changed",
+            Self::TunnelSubdomainsChanged => "tunnel:subdomains-changed",
         }
     }
 }
@@ -523,6 +533,11 @@ mod tests {
         assert_eq!(
             HookEvent::ProjectGroupsChanged.event_name(),
             "project-group:groups-changed"
+        );
+        // URLs & Ports — the tunnel nested-subdomain map change nudge.
+        assert_eq!(
+            HookEvent::TunnelSubdomainsChanged.event_name(),
+            "tunnel:subdomains-changed"
         );
     }
 

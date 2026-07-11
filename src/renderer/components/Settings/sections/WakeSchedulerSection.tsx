@@ -6,6 +6,13 @@ import { useToastStore } from '@/stores/toast'
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 import type { SettingEntry } from '../searchManifest'
 import { WakeupEditor, type HeartbeatRow } from './HeartbeatsSection'
+import { HeartbeatSessionPicker, openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
+import {
+  applyDeliveryTarget,
+  deriveDeliveryTarget,
+  setHeartbeatSession,
+  type HeartbeatDeliveryTarget,
+} from '@/lib/heartbeat-delivery'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
   {
@@ -122,6 +129,11 @@ interface SystemHeartbeatRow {
   enabled: boolean
   lastFired: string | null
   useWorkspaceSession: boolean
+  // Delivery drop-down — the heartbeat's saved/trained session (see
+  // HeartbeatRow + `lib/heartbeat-delivery.ts`; older daemons omit
+  // `sessionProvider`).
+  lastSessionId: string | null
+  sessionProvider?: string | null
   // Reliability overhaul — failure/error visibility (see HeartbeatRow).
   consecutiveFailures: number
   disabledReason: string | null
@@ -361,25 +373,20 @@ export function WakeSchedulerSection(): React.JSX.Element {
     [toast],
   )
 
-  const handleToggleUseWorkspaceSession = useCallback(
-    async (row: SystemHeartbeatRow, next: boolean) => {
+  // Delivery drop-down (replaces the pinned-chat checkbox) — persist
+  // where this heartbeat's wakeup goes. Optimistic like
+  // handleToggleEnabled: flip locally, revert on daemon rejection.
+  const handleSetDelivery = useCallback(
+    async (row: SystemHeartbeatRow, next: HeartbeatDeliveryTarget) => {
       setHeartbeats((rows) =>
-        rows.map((r) =>
-          r.id === row.id ? { ...r, useWorkspaceSession: next } : r,
-        ),
+        rows.map((r) => (r.id === row.id ? applyDeliveryTarget(r, next) : r)),
       )
       try {
-        await daemonCliGet('heartbeat/set-use-workspace-session', {
-          project: row.projectPath,
-          name: row.name,
-          enabled: next,
-        })
+        await setHeartbeatSession(row.projectPath, row.name, next)
       } catch (err) {
-        toast(`Pinned-chat toggle failed: ${String(err)}`, 'error')
+        toast(`Wakeup delivery change failed for ${row.projectName}/${row.name}: ${String(err)}`, 'error')
         setHeartbeats((rows) =>
-          rows.map((r) =>
-            r.id === row.id ? { ...r, useWorkspaceSession: !next } : r,
-          ),
+          rows.map((r) => (r.id === row.id ? row : r)),
         )
       }
     },
@@ -439,6 +446,8 @@ export function WakeSchedulerSection(): React.JSX.Element {
       lastFired: editingHeartbeat.lastFired,
       createdAt: 0,
       useWorkspaceSession: editingHeartbeat.useWorkspaceSession,
+      lastSessionId: editingHeartbeat.lastSessionId,
+      sessionProvider: editingHeartbeat.sessionProvider,
       consecutiveFailures: editingHeartbeat.consecutiveFailures,
       nextRetryAt: null,
       disabledReason: editingHeartbeat.disabledReason,
@@ -458,6 +467,8 @@ export function WakeSchedulerSection(): React.JSX.Element {
         lastFired: r.lastFired,
         createdAt: 0,
         useWorkspaceSession: r.useWorkspaceSession,
+        lastSessionId: r.lastSessionId,
+        sessionProvider: r.sessionProvider,
         consecutiveFailures: r.consecutiveFailures,
         nextRetryAt: null,
         disabledReason: r.disabledReason,
@@ -652,9 +663,9 @@ export function WakeSchedulerSection(): React.JSX.Element {
         </div>
         <p className="text-[10px] text-[var(--color-text-muted)] mb-3 leading-relaxed">
           Every active heartbeat across every workspace. Toggle to
-          enable/disable, check the box to route this heartbeat&apos;s
-          wake into the workspace&apos;s pinned chat tab instead of its
-          own session, and click <span className="text-[var(--color-text-secondary)]">Edit Wakeup</span> to
+          enable/disable, pick where each heartbeat&apos;s wake is
+          delivered (the workspace&apos;s pinned chat, its own session,
+          or a saved session), and click <span className="text-[var(--color-text-secondary)]">Edit Wakeup</span> to
           open the prompt template in your default editor.
         </p>
         {heartbeats.length === 0 && !heartbeatsLoading && (
@@ -689,46 +700,35 @@ export function WakeSchedulerSection(): React.JSX.Element {
                   </div>
                 )}
               </div>
-              {/* Pinned-chat checkbox — themed to match the rest of
-                  settings (the native input's blue square didn't fit
-                  the dark + accent palette). Native input is the source
-                  of truth; the visible square is a sibling that flips
-                  state via the `peer-checked` Tailwind variant. */}
-              <label
-                className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)] no-drag cursor-pointer select-none flex-shrink-0"
-                title="Deliver this heartbeat's wakeup into the workspace's pinned chat session instead of its own"
-              >
-                <input
-                  type="checkbox"
-                  checked={row.useWorkspaceSession}
-                  onChange={(e) => handleToggleUseWorkspaceSession(row, e.target.checked)}
-                  className="peer sr-only"
+              {/* Delivery drop-down (replaces the pinned-chat checkbox)
+                  — pinned chat / own session / a trained saved session
+                  — plus an open-target button that jumps to the
+                  heartbeat's chat (drawer-row-click flow). */}
+              <div className="flex items-center gap-0.5 flex-shrink-0">
+                <HeartbeatSessionPicker
+                  projectPath={row.projectPath}
+                  projectId={row.projectId}
+                  value={deriveDeliveryTarget(row)}
+                  onSelect={(next) => { void handleSetDelivery(row, next) }}
                 />
-                <span
-                  aria-hidden="true"
-                  className="
-                    w-3 h-3 flex items-center justify-center border transition-colors
-                    border-[var(--color-border)] bg-[var(--color-bg-elevated)]
-                    peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)]
-                    peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]
-                  "
+                <button
+                  type="button"
+                  onClick={() => { void openHeartbeatTarget(row.projectPath, row.name, deriveDeliveryTarget(row).mode) }}
+                  title={
+                    deriveDeliveryTarget(row).mode === 'pinned'
+                      ? 'Open the workspace’s pinned chat tab'
+                      : 'Open this heartbeat’s chat session'
+                  }
+                  aria-label="Open this heartbeat's wakeup destination"
+                  className="inline-flex items-center justify-center h-4 w-4 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer flex-shrink-0"
                 >
-                  {row.useWorkspaceSession && (
-                    <svg
-                      viewBox="0 0 12 12"
-                      className="w-2.5 h-2.5"
-                      fill="none"
-                      stroke="var(--color-on-accent)"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                    </svg>
-                  )}
-                </span>
-                Pinned&nbsp;chat
-              </label>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M15 3h6v6" />
+                    <path d="M10 14L21 3" />
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  </svg>
+                </button>
+              </div>
               {/* Edit-wakeup */}
               <button
                 type="button"

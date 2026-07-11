@@ -8,6 +8,13 @@ import { AIFileEditor } from '@/components/AIFileEditor/AIFileEditor'
 import { FileViewerPane, type FileViewerHandle } from '@/components/FileViewerPane/FileViewerPane'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { SettingDropdown } from '../controls/SettingControls'
+import { HeartbeatSessionPicker, openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
+import {
+  applyDeliveryTarget,
+  deriveDeliveryTarget,
+  setHeartbeatSession,
+  type HeartbeatDeliveryTarget,
+} from '@/lib/heartbeat-delivery'
 
 // ── Types mirroring the backend agent_heartbeats table ────────────────
 
@@ -25,8 +32,15 @@ export interface HeartbeatRow {
   // into the workspace's pinned chat session via
   // `workspace_msg::deliver_live` instead of the heartbeat's own saved
   // session. The heartbeat's own last_session_id stays in the DB
-  // untouched; un-checking restores legacy targeting.
+  // untouched; switching away restores legacy targeting.
   useWorkspaceSession: boolean
+  // Delivery drop-down (replaces the pinned-chat checkbox) — the
+  // heartbeat's saved session. `lastSessionId` is stamped by fires AND
+  // by an explicit "deliver into this saved session" pick;
+  // `sessionProvider` is only stamped by the explicit pick (older
+  // daemons omit the key). See `lib/heartbeat-delivery.ts`.
+  lastSessionId: string | null
+  sessionProvider?: string | null
   // Reliability overhaul (migration 0062) — failure/error visibility.
   consecutiveFailures: number
   nextRetryAt: string | null
@@ -915,18 +929,22 @@ export function HeartbeatsPanel({
     void emit('sync:projects').catch(() => {})
   }
 
-  // 0.37.8 — per-heartbeat opt-in to deliver WAKEUP.md into the
-  // workspace's pinned chat session via `workspace_msg::deliver_live`.
-  // When on, the heartbeat's own saved session stays in the DB but is
-  // no longer targeted on new fires.
-  const handleToggleUseWorkspaceSession = async (row: HeartbeatRow): Promise<void> => {
+  // Delivery drop-down (replaces the 0.37.8 pinned-chat checkbox) —
+  // persist where this heartbeat's wakeup goes. Optimistic: the row's
+  // local state flips immediately and reverts on daemon rejection.
+  const handleSetDelivery = async (row: HeartbeatRow, next: HeartbeatDeliveryTarget): Promise<void> => {
     if (!project) return
-    await daemonCliGet('heartbeat/set-use-workspace-session', {
-      project: project.path,
-      name: row.name,
-      enabled: !row.useWorkspaceSession,
-    })
-    await refresh()
+    setRows((rs) => rs.map((r) => (r.id === row.id ? applyDeliveryTarget(r, next) : r)))
+    try {
+      await setHeartbeatSession(project.path, row.name, next)
+    } catch (e) {
+      setRows((rs) => rs.map((r) => (r.id === row.id ? row : r)))
+      toast.addToast(
+        `Failed to change wakeup delivery: ${e instanceof Error ? e.message : String(e)}`,
+        'error',
+        4000,
+      )
+    }
   }
 
   const startRename = (row: HeartbeatRow): void => {
@@ -1078,37 +1096,35 @@ export function HeartbeatsPanel({
                       {heartbeatErrorBadge(r)}
                     </span>
                   )}
-                  {/* 0.37.8 — per-heartbeat pinned-chat delivery opt-in.
-                      Toggling routes future fires through
-                      workspace_msg::deliver_live so the prompt lands in
-                      the workspace's pinned chat session instead of the
-                      heartbeat's own saved session. */}
-                  <button
-                    onClick={() => { void handleToggleUseWorkspaceSession(r) }}
-                    className="flex items-center gap-1 mt-0.5 text-[9px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors no-drag cursor-pointer"
-                    title={
-                      r.useWorkspaceSession
-                        ? 'Wakeup is delivered into the workspace’s pinned chat session.'
-                        : 'Wakeup goes to this heartbeat’s own saved session.'
-                    }
-                  >
-                    <span
-                      role="checkbox"
-                      aria-checked={r.useWorkspaceSession}
-                      className={`w-2.5 h-2.5 border flex items-center justify-center flex-shrink-0 ${
-                        r.useWorkspaceSession
-                          ? 'bg-[var(--color-accent)] border-[var(--color-accent)]'
-                          : 'border-[var(--color-border)]'
-                      }`}
+                  {/* Delivery drop-down (replaces the 0.37.8 checkbox) —
+                      pinned chat / own session / a trained saved
+                      session — plus an open-target button that jumps to
+                      the heartbeat's chat (drawer-row-click flow). */}
+                  <div className="flex items-center gap-0.5 mt-0.5 min-w-0">
+                    <HeartbeatSessionPicker
+                      projectPath={project.path}
+                      projectId={r.projectId}
+                      value={deriveDeliveryTarget(r)}
+                      onSelect={(next) => { void handleSetDelivery(r, next) }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => { void openHeartbeatTarget(project.path, r.name, deriveDeliveryTarget(r).mode) }}
+                      title={
+                        deriveDeliveryTarget(r).mode === 'pinned'
+                          ? 'Open the workspace’s pinned chat tab'
+                          : 'Open this heartbeat’s chat session'
+                      }
+                      aria-label="Open this heartbeat's wakeup destination"
+                      className="inline-flex items-center justify-center h-4 w-4 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer flex-shrink-0"
                     >
-                      {r.useWorkspaceSession && (
-                        <svg className="w-1.5 h-1.5 text-[var(--color-on-accent)]" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M1.5 4l1.5 1.5L6.5 2" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      )}
-                    </span>
-                    Send into pinned chat
-                  </button>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M15 3h6v6" />
+                        <path d="M10 14L21 3" />
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Col 2 — schedule (click to edit) */}

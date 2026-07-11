@@ -293,6 +293,38 @@ pub fn k2so_heartbeat_set_use_workspace_session(
     )
 }
 
+/// Heartbeat delivery drop-down — set where this heartbeat's wakeup
+/// goes. Thin facade over the daemon HTTP route
+/// `/cli/heartbeat/set-session` (daemon owns the write), mirroring
+/// `workspace_session_set_session_id`. Supersedes the
+/// `set_use_workspace_session` checkbox toggle on the Settings tiles.
+///
+/// `mode` is `pinned` (the workspace's pinned chat), `auto` (own
+/// session, new on next fire), or `session` (an explicit saved
+/// session — `session_id` + `provider` ride along, mode=session only).
+#[tauri::command]
+pub fn k2so_heartbeat_set_session(
+    project_path: String,
+    name: String,
+    mode: String,
+    session_id: Option<String>,
+    provider: Option<String>,
+) -> Result<String, String> {
+    let client = crate::daemon_client::DaemonClient::try_connect()?;
+    let mut params: Vec<(&str, &str)> = vec![
+        ("project", &project_path),
+        ("name", &name),
+        ("mode", &mode),
+    ];
+    if let Some(sid) = session_id.as_deref() {
+        params.push(("session_id", sid));
+    }
+    if let Some(prov) = provider.as_deref() {
+        params.push(("provider", prov));
+    }
+    client.cli_get("/cli/heartbeat/set-session", &params)
+}
+
 #[tauri::command]
 pub fn k2so_heartbeat_edit(
     project_path: String,

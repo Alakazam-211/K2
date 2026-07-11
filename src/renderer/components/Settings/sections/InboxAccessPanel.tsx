@@ -5,12 +5,14 @@
 // and an **Add access** row. It drives the unified /cli/mail/access/* routes:
 // set-level, set-primary (transfer), grant, revoke.
 //
-// SOURCE-AWARE (BINDING): the Send level is offered ONLY for hosted inboxes
-// (`source === 'hosted'`). Linked inboxes cap at Read + Draft and NEVER show
-// Send — nobody sends from a linked account. Updates are optimistic (patch
-// the parent's inbox row, revert on error); the daemon's structured
-// `{code, hint}` errors (403 not-primary, not_found, "linked can't send")
-// surface inline. This panel NEVER shows credentials.
+// LEVEL-AWARE (BINDING): the Send level is offered whenever the inbox's
+// `maxLevel === 'send'` — true for hosted inboxes AND, as of the linked-send
+// contract, for linked inboxes too (sending from a linked inbox goes out as
+// your real external account, ungated for now). Driving off `maxLevel` keeps
+// this correct for both sources and future-proof. Updates are optimistic
+// (patch the parent's inbox row, revert on error); the daemon's structured
+// `{code, hint}` errors (403 not-primary, not_found) surface inline. This
+// panel NEVER shows credentials.
 
 import React, { useCallback, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
@@ -23,7 +25,6 @@ import {
   setInboxPrimary,
   type Inbox,
   type InboxLevel,
-  type InboxSource,
 } from './email-api'
 
 const LEVEL_LABEL: Record<InboxLevel, string> = {
@@ -32,14 +33,15 @@ const LEVEL_LABEL: Record<InboxLevel, string> = {
   send: 'Read + Draft + Send',
 }
 
-/** Level options for a dropdown — Read / Draft always; Send ONLY when the
- *  inbox is hosted (linked never offers Send). */
-function levelOptions(source: InboxSource): { value: InboxLevel; label: string }[] {
+/** Level options for a dropdown — Read / Draft always; Send whenever the
+ *  inbox's `maxLevel` permits it (hosted always; linked now that linked-send
+ *  is allowed). Driving off `maxLevel` keeps this correct for both sources. */
+function levelOptions(maxLevel: Inbox['maxLevel']): { value: InboxLevel; label: string }[] {
   const opts: { value: InboxLevel; label: string }[] = [
     { value: 'read', label: LEVEL_LABEL.read },
     { value: 'draft', label: LEVEL_LABEL.draft },
   ]
-  if (source === 'hosted') opts.push({ value: 'send', label: LEVEL_LABEL.send })
+  if (maxLevel === 'send') opts.push({ value: 'send', label: LEVEL_LABEL.send })
   return opts
 }
 
@@ -69,7 +71,8 @@ export function InboxAccessPanel({
   const [newProject, setNewProject] = useState('')
   const [newLevel, setNewLevel] = useState<InboxLevel>('read')
 
-  const options = useMemo(() => levelOptions(inbox.source), [inbox.source])
+  const options = useMemo(() => levelOptions(inbox.maxLevel), [inbox.maxLevel])
+  const canSend = inbox.maxLevel === 'send'
   const primaryId = inbox.primary.projectId
   const grantedIds = useMemo(() => new Set(inbox.grants.map((g) => g.projectId)), [inbox.grants])
   const projectName = useCallback(
@@ -212,15 +215,15 @@ export function InboxAccessPanel({
       <SectionTitle>Workspace access</SectionTitle>
       <p className="text-[10px] text-[var(--color-text-muted)]">
         The <strong>Primary</strong> workspace manages this inbox and its access list. Grant other
-        workspaces <strong>Read-only</strong>{inbox.source === 'hosted' ? ', ' : ' or '}
+        workspaces <strong>Read-only</strong>{canSend ? ', ' : ' or '}
         <strong>Read + Draft</strong>
-        {inbox.source === 'hosted' ? (
+        {canSend && (
           <>
-            {' '}or <strong>Read + Draft + Send</strong> — Send is available because this inbox is
-            hosted on your own server.
+            {' '}or <strong>Read + Send</strong> — granting Send lets that workspace's agents send
+            email as this account
+            {inbox.source === 'linked' ? ' (from your real external account)' : ''}. Sending is
+            immediate for now — there is no approval step yet.
           </>
-        ) : (
-          <> — this inbox is linked, so nobody can send from it (drafts only).</>
         )}{' '}
         Agents use the inbox via <span className="font-mono">k2 mail</span>.
       </p>

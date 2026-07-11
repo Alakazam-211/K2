@@ -316,9 +316,10 @@ export async function fetchDoctor(): Promise<Record<string, unknown>> {
 // access model: a **Primary** workspace (manages the inbox and holds its
 // own level) plus zero-or-more **grants** (other workspaces). A level is
 // one of `read` (read only), `draft` (read + save reply drafts), or `send`
-// (read + draft + send). **`send` is selectable ONLY for hosted inboxes**
-// (`source === 'hosted'`); linked inboxes cap at `draft` and never gain
-// send — nobody sends from a linked account. Provisioning stays source-
+// (read + draft + send). **`send` is selectable whenever the inbox reports
+// `maxLevel === 'send'`** — hosted inboxes always, and (as of the linked-
+// send contract) linked inboxes too. A linked inbox sends out as your real
+// external account, ungated for now. Provisioning stays source-
 // specific (hosted = an agent mints on a verified domain; linked =
 // mail/link/add), but access is unified: grant / revoke / set-level /
 // set-primary (transfer) all run through /cli/mail/access/*. Access is an
@@ -329,11 +330,13 @@ export async function fetchDoctor(): Promise<Record<string, unknown>> {
 
 /** The access level a workspace holds on an inbox. `read` = read only;
  *  `draft` = read + save reply drafts; `send` = read + draft + send
- *  (hosted inboxes only — a linked inbox never reaches `send`). */
+ *  (offered whenever the inbox's `maxLevel === 'send'` — hosted always,
+ *  linked too as of the linked-send contract). */
 export type InboxLevel = 'read' | 'draft' | 'send'
 
-/** How an inbox came into existence — `hosted` on your own mail server
- *  (send-capable) or `linked` from an external IMAP account (draft-cap). */
+/** How an inbox came into existence — `hosted` on your own mail server or
+ *  `linked` from an external IMAP account. Both can be send-capable (see
+ *  `maxLevel`); a linked inbox sends out as your real external account. */
 export type InboxSource = 'hosted' | 'linked'
 
 /** One participant on an inbox — the Primary or a grant. */
@@ -347,7 +350,7 @@ export interface InboxParticipant {
  *  credentials, secret refs, or the username. `primary` + `grants` describe
  *  who may use it; `yourLevel` is the calling principal's effective level
  *  (null if none); `maxLevel` is the highest level this inbox can grant
- *  (`draft` for linked, `send` for hosted). */
+ *  (`send` for hosted and, as of the linked-send contract, linked too). */
 export interface Inbox {
   address: string
   source: InboxSource
@@ -360,7 +363,8 @@ export interface Inbox {
   grants: InboxParticipant[]
   /** The calling principal's effective level, or null if none. */
   yourLevel: InboxLevel | null
-  /** Highest grantable level — `draft` (linked) or `send` (hosted). */
+  /** Highest grantable level — `send` for hosted and (as of the linked-send
+   *  contract) linked too; `draft` only where send is unavailable. */
   maxLevel: 'draft' | 'send'
   /** Hosted only — the domain the address lives on. */
   domain?: string | null
@@ -380,8 +384,8 @@ export async function fetchInboxes(): Promise<Inbox[]> {
 /** POST /cli/mail/access/grant — the Primary grants a workspace access, or
  *  changes an existing grant's level. `project` = target workspace (name |
  *  path | UUID — the daemon resolves). 403 `not-primary` if the caller
- *  isn't the Primary; a `send` level on a linked inbox is rejected with a
- *  structured hint ("linked can't send"). */
+ *  isn't the Primary. `send` is allowed on both hosted and linked inboxes
+ *  (subject to the inbox's `maxLevel`). */
 export async function grantInboxAccess(body: {
   address: string
   project: string
@@ -410,8 +414,8 @@ export async function setInboxPrimary(body: {
 }
 
 /** POST /cli/mail/access/set-level — change a workspace's level. Pass the
- *  Primary's own project to change the Primary's level. A `send` level on a
- *  linked inbox is rejected structured ("linked can't send"). */
+ *  Primary's own project to change the Primary's level. `send` is allowed on
+ *  both hosted and linked inboxes (subject to the inbox's `maxLevel`). */
 export async function setInboxLevel(body: {
   address: string
   project: string

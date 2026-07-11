@@ -20,7 +20,7 @@
 //!    releases (sha256-verified); K2 never redistributes the binary.
 //! 3. **K2-relevant state lives in K2's DB.** Agent↔address ownership,
 //!    approvals, caps, doctor history → the `mail_*` tables (migration
-//!    0072). Stalwart holds only what a mail server holds: domains,
+//!    0075). Stalwart holds only what a mail server holds: domains,
 //!    accounts, messages, DKIM keys. Never mirror Stalwart state we
 //!    don't need; never store K2 governance state in Stalwart.
 //! 4. **The mgmt API endpoint is DISCOVERED, never hardcoded.** Read

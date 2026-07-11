@@ -203,6 +203,7 @@ function AddInboxForm({
               placeholder="Pick a workspace…"
               options={projects.map((p) => ({ value: p.id, label: p.name }))}
               onChange={(v) => setProject(v)}
+              menuAlign="left"
               className={!canMutate || busy ? 'opacity-50 pointer-events-none' : undefined}
             />,
             'The workspace that owns the account and manages who else can use it.',
@@ -472,6 +473,7 @@ function AccessSection({
           placeholder={addable.length === 0 ? 'No workspaces to add' : 'Add a workspace…'}
           options={addable.map((p) => ({ value: p.id, label: p.name }))}
           onChange={(v) => setNewProject(v)}
+          menuAlign="left"
           className={!canMutate || busy || addable.length === 0 ? 'opacity-50 pointer-events-none' : undefined}
         />
         <SettingDropdown

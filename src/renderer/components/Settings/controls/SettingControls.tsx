@@ -57,11 +57,20 @@ export function SettingDropdown({
   onChange,
   className,
   placeholder,
+  menuAlign = 'right',
 }: {
   value: string
   options: { value: string; label: string; disabled?: boolean }[]
   onChange: (value: string) => void | Promise<void>
   className?: string
+  /**
+   * Which edge the open menu is anchored to. Default `'right'` (the menu
+   * grows leftward as it widens) matches every existing call site. Pass
+   * `'left'` for a trigger sitting at the LEFT edge of a container, so a
+   * wide menu opens rightward into the open space instead of extending
+   * left past the container and getting clipped.
+   */
+  menuAlign?: 'left' | 'right'
   /**
    * When provided, a `value` that matches no option shows this placeholder
    * (muted) INSTEAD of silently falling back to `options[0]`. Without it the
@@ -107,7 +116,7 @@ export function SettingDropdown({
       </button>
 
       {isOpen && (
-        <div className="absolute top-full right-0 z-50 mt-0.5 min-w-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto">
+        <div className={`absolute top-full ${menuAlign === 'left' ? 'left-0' : 'right-0'} z-50 mt-0.5 min-w-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto`}>
           {options.map((option) => {
             const isActive = option.value === value
             const isDisabled = option.disabled === true

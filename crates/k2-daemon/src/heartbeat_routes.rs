@@ -306,6 +306,33 @@ mod fire_disabled_gate_tests {
 // GET: heartbeat CRUD / fires / active-session
 // ──────────────────────────────────────────────────────────────────────
 
+/// Heartbeat-drawer live-update fix — wrap a CRUD arm's result: on
+/// success, broadcast `heartbeat_roster_changed` so every subscribed
+/// client (sidebar drawer, Settings) re-fetches its heartbeat list.
+/// Errors pass through untouched (nothing changed, nothing to announce).
+/// Fire/launch and the read routes must NOT come through here — live
+/// (PTY) flips already broadcast via `emit_heartbeat_live`, and reads
+/// don't mutate the roster.
+fn with_roster_broadcast(
+    project_path: &str,
+    result: Result<String, String>,
+) -> Result<String, String> {
+    if result.is_ok() {
+        // Resolve the project_id the same way the active-session emit
+        // does. A miss shouldn't happen right after a successful
+        // mutation; if it does, emit with an empty projectId anyway —
+        // the WS path filter still routes the nudge on workspacePath.
+        let project_id = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path)
+                .unwrap_or_default()
+        };
+        crate::session_events::emit_heartbeat_roster_changed(project_path, &project_id);
+    }
+    result
+}
+
 /// Dispatch an authenticated `/cli/heartbeat/*` request to the matching
 /// core function. Returns the JSON response body on success or an error
 /// message the caller turns into a 400.
@@ -330,8 +357,11 @@ pub fn dispatch_get(
             if name.is_empty() || frequency.is_empty() {
                 return Err("Missing 'name' or 'frequency' parameter".to_string());
             }
-            hb::k2so_heartbeat_add(project_path.to_string(), name, frequency, spec_json)
-                .map(|v| v.to_string())
+            with_roster_broadcast(
+                project_path,
+                hb::k2so_heartbeat_add(project_path.to_string(), name, frequency, spec_json)
+                    .map(|v| v.to_string()),
+            )
         }
         "/cli/heartbeat/list" => hb::k2so_heartbeat_list(project_path.to_string())
             .map(|rows| serde_json::to_string(&rows).unwrap_or_default()),
@@ -344,16 +374,22 @@ pub fn dispatch_get(
             if name.is_empty() {
                 return Err("Missing 'name' parameter".to_string());
             }
-            hb::k2so_heartbeat_archive(project_path.to_string(), name)
-                .map(|_| r#"{"success":true}"#.to_string())
+            with_roster_broadcast(
+                project_path,
+                hb::k2so_heartbeat_archive(project_path.to_string(), name)
+                    .map(|_| r#"{"success":true}"#.to_string()),
+            )
         }
         "/cli/heartbeat/unarchive" => {
             let name = params.get("name").cloned().unwrap_or_default();
             if name.is_empty() {
                 return Err("Missing 'name' parameter".to_string());
             }
-            hb::k2so_heartbeat_unarchive(project_path.to_string(), name)
-                .map(|_| r#"{"success":true}"#.to_string())
+            with_roster_broadcast(
+                project_path,
+                hb::k2so_heartbeat_unarchive(project_path.to_string(), name)
+                    .map(|_| r#"{"success":true}"#.to_string()),
+            )
         }
         "/cli/heartbeat/fire" | "/cli/heartbeat/launch" => {
             // Manual single-heartbeat launch — does NOT consult schedule
@@ -401,8 +437,11 @@ pub fn dispatch_get(
             if name.is_empty() {
                 return Err("Missing 'name' parameter".to_string());
             }
-            hb::k2so_heartbeat_remove(project_path.to_string(), name)
-                .map(|_| r#"{"success":true}"#.to_string())
+            with_roster_broadcast(
+                project_path,
+                hb::k2so_heartbeat_remove(project_path.to_string(), name)
+                    .map(|_| r#"{"success":true}"#.to_string()),
+            )
         }
         "/cli/heartbeat/enable" => {
             let name = params.get("name").cloned().unwrap_or_default();
@@ -413,8 +452,11 @@ pub fn dispatch_get(
             if name.is_empty() {
                 return Err("Missing 'name' parameter".to_string());
             }
-            hb::k2so_heartbeat_set_enabled(project_path.to_string(), name, enabled)
-                .map(|_| r#"{"success":true}"#.to_string())
+            with_roster_broadcast(
+                project_path,
+                hb::k2so_heartbeat_set_enabled(project_path.to_string(), name, enabled)
+                    .map(|_| r#"{"success":true}"#.to_string()),
+            )
         }
         "/cli/heartbeat/set-use-workspace-session" => {
             // 0.37.8 — flip the per-heartbeat opt-in to deliver
@@ -428,12 +470,15 @@ pub fn dispatch_get(
             if name.is_empty() {
                 return Err("Missing 'name' parameter".to_string());
             }
-            hb::k2so_heartbeat_set_use_workspace_session(
-                project_path.to_string(),
-                name,
-                enabled,
+            with_roster_broadcast(
+                project_path,
+                hb::k2so_heartbeat_set_use_workspace_session(
+                    project_path.to_string(),
+                    name,
+                    enabled,
+                )
+                .map(|_| r#"{"success":true}"#.to_string()),
             )
-            .map(|_| r#"{"success":true}"#.to_string())
         }
         "/cli/heartbeat/set-session" => {
             // 0073 — user-selectable delivery session. Modes:
@@ -456,14 +501,17 @@ pub fn dispatch_get(
             if name.is_empty() || mode.is_empty() {
                 return Err("Missing 'name' or 'mode' parameter".to_string());
             }
-            hb::k2so_heartbeat_set_session(
-                project_path.to_string(),
-                name,
-                mode,
-                session_id,
-                provider,
+            with_roster_broadcast(
+                project_path,
+                hb::k2so_heartbeat_set_session(
+                    project_path.to_string(),
+                    name,
+                    mode,
+                    session_id,
+                    provider,
+                )
+                .map(|v| v.to_string()),
             )
-            .map(|v| v.to_string())
         }
         "/cli/heartbeat/edit" => {
             let name = params.get("name").cloned().unwrap_or_default();
@@ -472,8 +520,11 @@ pub fn dispatch_get(
             if name.is_empty() || frequency.is_empty() {
                 return Err("Missing 'name' or 'frequency' parameter".to_string());
             }
-            hb::k2so_heartbeat_edit(project_path.to_string(), name, frequency, spec_json)
-                .map(|_| r#"{"success":true}"#.to_string())
+            with_roster_broadcast(
+                project_path,
+                hb::k2so_heartbeat_edit(project_path.to_string(), name, frequency, spec_json)
+                    .map(|_| r#"{"success":true}"#.to_string()),
+            )
         }
         "/cli/heartbeat/rename" => {
             let old_name = params.get("from").cloned().unwrap_or_default();
@@ -481,8 +532,11 @@ pub fn dispatch_get(
             if old_name.is_empty() || new_name.is_empty() {
                 return Err("Missing 'from' or 'to' parameter".to_string());
             }
-            hb::k2so_heartbeat_rename(project_path.to_string(), old_name, new_name)
-                .map(|_| r#"{"success":true}"#.to_string())
+            with_roster_broadcast(
+                project_path,
+                hb::k2so_heartbeat_rename(project_path.to_string(), old_name, new_name)
+                    .map(|_| r#"{"success":true}"#.to_string()),
+            )
         }
         "/cli/heartbeat/status" => {
             // Last N fires for a specific schedule name.

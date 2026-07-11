@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { serverSupports } from '@/lib/server-capabilities'
+import { subscribeToWorkspaceTabEvents } from '@/stores/session-events'
 import { useToastStore } from '@/stores/toast'
 import type { SettingEntry } from '../searchManifest'
 import { AIFileEditor } from '@/components/AIFileEditor/AIFileEditor'
@@ -869,9 +871,19 @@ export function HeartbeatsPanel({
     }
   }, [project.path])
 
+  // Initial load + live roster updates: the daemon broadcasts
+  // `heartbeat_roster_changed` after every successful CRUD mutation from
+  // ANY source (CLI, the sidebar drawer, another window), so this list
+  // converges without reopening Settings. Against an older daemon
+  // without the broadcast we keep load-on-mount only (this panel's own
+  // mutations already call refresh() directly).
   useEffect(() => {
-    refresh()
-  }, [refresh])
+    void refresh()
+    if (!serverSupports('daemon-broadcasts')) return
+    return subscribeToWorkspaceTabEvents(project.path, {
+      onHeartbeatRosterChanged: () => void refresh(),
+    })
+  }, [refresh, project.path])
 
   const handleAdd = async (name: string, spec: ScheduleSpec): Promise<void> => {
     if (!project) return

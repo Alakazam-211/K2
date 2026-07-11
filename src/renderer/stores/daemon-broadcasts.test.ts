@@ -870,4 +870,99 @@ describe('heartbeat-sessions — heartbeat-live cutover (#677.1)', () => {
     useHeartbeatSessionsStore.getState().applyHeartbeatLive('projH', 'other-hb', true)
     expect(useHeartbeatSessionsStore.getState().active[0].state).toBe('scheduled')
   })
+
+  // ── heartbeat_roster_changed (heartbeat-drawer live-update fix) ────────
+
+  it('roster event for the loaded project triggers ONE debounced refresh (burst coalesces)', async () => {
+    vi.useFakeTimers()
+    const mod = await import('./heartbeat-sessions')
+    const { useHeartbeatSessionsStore, subscribeHeartbeatLive, unsubscribeHeartbeatLive } = mod
+    seedRow(useHeartbeatSessionsStore)
+    const originalRefresh = useHeartbeatSessionsStore.getState().refresh
+    const refreshSpy = vi.fn(async () => undefined)
+    useHeartbeatSessionsStore.setState({ refresh: refreshSpy } as never)
+
+    try {
+      subscribeHeartbeatLive('/ws/h')
+      expect(ev.reg.tabSubs.length).toBe(1)
+
+      // A CLI batch: three mutations arrive back-to-back.
+      for (let i = 0; i < 3; i++) {
+        ev.reg.tabSubs[0].handlers.onHeartbeatRosterChanged({
+          kind: 'heartbeat_roster_changed',
+          workspacePath: '/ws/h',
+          projectId: 'projH',
+        })
+      }
+      // Trailing debounce — nothing fires synchronously.
+      expect(refreshSpy).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(250)
+      expect(refreshSpy).toHaveBeenCalledTimes(1)
+      expect(refreshSpy).toHaveBeenCalledWith('/ws/h')
+    } finally {
+      unsubscribeHeartbeatLive()
+      useHeartbeatSessionsStore.setState({ refresh: originalRefresh } as never)
+    }
+  })
+
+  it('applyRosterChanged no-ops when the loaded rows prove a different project', async () => {
+    vi.useFakeTimers()
+    const mod = await import('./heartbeat-sessions')
+    const { useHeartbeatSessionsStore } = mod
+    seedRow(useHeartbeatSessionsStore) // loaded rows carry projectId 'projH'
+    const originalRefresh = useHeartbeatSessionsStore.getState().refresh
+    const refreshSpy = vi.fn(async () => undefined)
+    useHeartbeatSessionsStore.setState({ refresh: refreshSpy } as never)
+
+    try {
+      useHeartbeatSessionsStore.getState().applyRosterChanged('projOTHER')
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(refreshSpy).not.toHaveBeenCalled()
+    } finally {
+      useHeartbeatSessionsStore.setState({ refresh: originalRefresh } as never)
+    }
+  })
+
+  it('applyRosterChanged refreshes on an EMPTY loaded list (first-ever add is the point)', async () => {
+    vi.useFakeTimers()
+    const mod = await import('./heartbeat-sessions')
+    const { useHeartbeatSessionsStore } = mod
+    // Loaded workspace with zero rows — no projectId to disprove a match.
+    useHeartbeatSessionsStore.setState({
+      active: [],
+      archived: [],
+      loadedFor: '/ws/h',
+    } as never)
+    const originalRefresh = useHeartbeatSessionsStore.getState().refresh
+    const refreshSpy = vi.fn(async () => undefined)
+    useHeartbeatSessionsStore.setState({ refresh: refreshSpy } as never)
+
+    try {
+      useHeartbeatSessionsStore.getState().applyRosterChanged('projH')
+      await vi.advanceTimersByTimeAsync(250)
+      expect(refreshSpy).toHaveBeenCalledTimes(1)
+      expect(refreshSpy).toHaveBeenCalledWith('/ws/h')
+    } finally {
+      useHeartbeatSessionsStore.setState({ refresh: originalRefresh } as never)
+    }
+  })
+
+  it('applyRosterChanged no-ops when no workspace is loaded', async () => {
+    vi.useFakeTimers()
+    const mod = await import('./heartbeat-sessions')
+    const { useHeartbeatSessionsStore } = mod
+    useHeartbeatSessionsStore.setState({ active: [], archived: [], loadedFor: null } as never)
+    const originalRefresh = useHeartbeatSessionsStore.getState().refresh
+    const refreshSpy = vi.fn(async () => undefined)
+    useHeartbeatSessionsStore.setState({ refresh: refreshSpy } as never)
+
+    try {
+      useHeartbeatSessionsStore.getState().applyRosterChanged('projH')
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(refreshSpy).not.toHaveBeenCalled()
+    } finally {
+      useHeartbeatSessionsStore.setState({ refresh: originalRefresh } as never)
+    }
+  })
 })

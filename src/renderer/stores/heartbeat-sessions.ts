@@ -4,6 +4,7 @@ import { terminalListRunning } from '@/lib/terminal-daemon'
 import { serverSupports } from '@/lib/server-capabilities'
 import {
   subscribeToWorkspaceTabEvents,
+  type HeartbeatRosterChangedEvent,
   type HeartbeatStateChangedEvent,
   type UnsubscribeFn,
 } from '@/stores/session-events'
@@ -81,6 +82,15 @@ interface HeartbeatSessionsState {
    *  idle state (resumable/scheduled) from the row. Matches on
    *  (projectId, heartbeat name). No-op when the row isn't loaded. */
   applyHeartbeatLive: (projectId: string, agent: string, live: boolean) => void
+  /** Heartbeat-drawer live-update fix — apply a daemon
+   *  `heartbeat_roster_changed` broadcast (a CRUD mutation from ANY
+   *  source: CLI, Settings, another window). The event carries no row
+   *  data by design, so this re-fetches the loaded list via `refresh()`
+   *  (trailing-debounced 250ms — a CLI batch emits one event per
+   *  mutation and should coalesce into a single re-fetch). No-op when no
+   *  workspace is loaded or when the loaded rows prove a different
+   *  project. */
+  applyRosterChanged: (projectId: string) => void
 }
 
 /** Idle (non-live) display state for a heartbeat row: resumable when it
@@ -96,6 +106,15 @@ interface RunningAgentInfo {
   cwd: string
   command: string | null
 }
+
+/** Heartbeat-drawer live-update fix — trailing debounce for roster
+ *  refreshes. The store has no existing coalescing pattern, so this local
+ *  timer is the mechanism: a burst of CRUD mutations (a CLI script emits
+ *  one `heartbeat_roster_changed` per call) collapses into a single list
+ *  re-fetch, 250ms after the last event — long enough to swallow a burst,
+ *  short enough to still feel live. */
+const ROSTER_REFRESH_DEBOUNCE_MS = 250
+let rosterRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
  * Map a heartbeat row to its display state by joining against running PTY
@@ -231,6 +250,37 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
       return changed ? { active } : {}
     })
   },
+
+  applyRosterChanged: (projectId: string): void => {
+    const { loadedFor, active, archived } = get()
+    if (!loadedFor) return
+    // The tab-events socket is already filtered to the subscribed
+    // workspace path, so projectId is a secondary guard: skip only when
+    // the loaded rows PROVE the event belongs to a different project. An
+    // empty list can't prove anything — and the first-ever add is exactly
+    // the case this event exists for — so it falls through to the refresh.
+    const knownProjectId =
+      active[0]?.row.projectId ?? archived[0]?.row.projectId ?? null
+    if (projectId && knownProjectId && knownProjectId !== projectId) return
+
+    const fire = (): void => {
+      rosterRefreshTimer = null
+      const state = get()
+      // Re-read at fire time — a workspace switch/close mid-debounce
+      // must refresh the CURRENT workspace (or nothing at all).
+      if (!state.loadedFor) return
+      if (state.loading) {
+        // refresh() silently drops overlapping calls; re-arm so the
+        // nudge isn't lost behind an in-flight refresh (`loading` always
+        // clears — both the success and error paths reset it).
+        rosterRefreshTimer = setTimeout(fire, ROSTER_REFRESH_DEBOUNCE_MS)
+        return
+      }
+      void state.refresh(state.loadedFor)
+    }
+    if (rosterRefreshTimer !== null) clearTimeout(rosterRefreshTimer)
+    rosterRefreshTimer = setTimeout(fire, ROSTER_REFRESH_DEBOUNCE_MS)
+  },
 }))
 
 // 0.39.39 (#677.1) — push-primary heartbeat live-dot. The per-renderer
@@ -273,6 +323,11 @@ export function subscribeHeartbeatLive(projectPath: string | null): void {
       useHeartbeatSessionsStore
         .getState()
         .applyHeartbeatLive(e.project, e.agent, e.live)
+    },
+    onHeartbeatRosterChanged: (e: HeartbeatRosterChangedEvent) => {
+      // CRUD nudge (add/remove/archive/…) from any mutation source —
+      // re-fetch the roster. Debounced inside the store.
+      useHeartbeatSessionsStore.getState().applyRosterChanged(e.projectId)
     },
     // Re-snapshot on (re)connect to backfill liveness missed during a drop.
     onHello: () => {

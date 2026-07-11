@@ -356,6 +356,7 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         SessionEvent::TabTitleChanged { workspace_path: cwd, .. } => cwd,
         SessionEvent::TabOrderChanged { workspace_path: cwd, .. } => cwd,
         SessionEvent::HeartbeatStateChanged { workspace_path: cwd, .. } => cwd,
+        SessionEvent::HeartbeatRosterChanged { workspace_path: cwd, .. } => cwd,
     };
     let trimmed = workspace_path.trim_end_matches('/');
     let prefix_with_slash = if trimmed.is_empty() {
@@ -512,7 +513,11 @@ mod tests {
             agent: "a".into(),
             live: true,
         };
-        for ev in [&review, &queue, &title, &order, &hb] {
+        let hb_roster = SessionEvent::HeartbeatRosterChanged {
+            workspace_path: "/x/foo".into(),
+            project_id: "p".into(),
+        };
+        for ev in [&review, &queue, &title, &order, &hb, &hb_roster] {
             // Matches its own workspace + descendants.
             assert!(event_matches_workspace(ev, "/x/foo"));
             assert!(event_matches_workspace(ev, "/x"));

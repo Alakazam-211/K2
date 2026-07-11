@@ -191,6 +191,22 @@ export interface HeartbeatStateChangedEvent {
   live: boolean
 }
 
+/** WORKSPACE-SCOPED — a project's heartbeat ROSTER mutated (a row was
+ *  added / removed / archived / unarchived / enabled / disabled / edited /
+ *  renamed / delivery re-targeted) — heartbeat-drawer live-update fix.
+ *  Deliberately payload-free beyond addressing (the ProjectsChanged
+ *  convention): consumers re-fetch the canonical list rather than patching
+ *  from a diff, which stays honest for any mutation source (CLI, Settings,
+ *  another window). Live (PTY) flips are NOT roster changes — those ride
+ *  `heartbeat_state_changed`. `projectId` may be empty when the daemon
+ *  couldn't resolve it at the emit site; consumers then rely on the
+ *  socket's `?path=` filter alone. */
+export interface HeartbeatRosterChangedEvent {
+  kind: 'heartbeat_roster_changed'
+  workspacePath: string
+  projectId: string
+}
+
 /** APP-LEVEL — the registered project set changed (a project was added,
  *  removed, or re-registered) — 0.39.45, GH #18/#26. Payload-free by
  *  design: consumers re-fetch the canonical list (`fetchProjects`)
@@ -287,6 +303,7 @@ export type SessionEventMessage =
   | TabTitleChangedEvent
   | TabOrderChangedEvent
   | HeartbeatStateChangedEvent
+  | HeartbeatRosterChangedEvent
   | ProjectsChangedEvent
   | PresenceChangedEvent
   | OpenUrlEvent
@@ -446,6 +463,7 @@ export function subscribeToWorkspaceSessionEvents(
         case 'tab_title_changed':
         case 'tab_order_changed':
         case 'heartbeat_state_changed':
+        case 'heartbeat_roster_changed':
           // 0.39.39 (#676/#677) — these workspace-scoped broadcasts share the
           // `/cli/sessions/events` channel but are OWNED by
           // `subscribeToWorkspaceTabEvents` (it adopts the reorder / applies the
@@ -934,8 +952,9 @@ export function subscribeToActiveState(): UnsubscribeFn {
 
 // ── Workspace-scoped tab / heartbeat subscription (#676/#677) ──────────────
 //
-// The Wave B WORKSPACE-SCOPED tab-title / tab-order / heartbeat-live events
-// (`tab_title_changed`, `tab_order_changed`, `heartbeat_state_changed`) are
+// The Wave B WORKSPACE-SCOPED tab-title / tab-order / heartbeat events
+// (`tab_title_changed`, `tab_order_changed`, `heartbeat_state_changed`,
+// `heartbeat_roster_changed`) are
 // forwarded only to subscribers whose `?path=` matches the carried
 // `workspacePath` (cwd-prefix rule), EXCEPT heartbeat events whose spawn
 // path didn't resolve a `workspacePath` (empty string) — those are
@@ -955,6 +974,9 @@ export interface WorkspaceTabHandlers {
   onTabOrderChanged?: (event: TabOrderChangedEvent) => void
   /** A heartbeat session's live (PTY-attached) state flipped. */
   onHeartbeatStateChanged?: (event: HeartbeatStateChangedEvent) => void
+  /** The project's heartbeat roster mutated (CRUD from any source) —
+   *  re-fetch the list; the event carries no row data by design. */
+  onHeartbeatRosterChanged?: (event: HeartbeatRosterChangedEvent) => void
   /** Fires after each successful (re)connect — re-snapshot here. */
   onHello?: (event: HelloEvent) => void
 }
@@ -1044,6 +1066,9 @@ export function subscribeToWorkspaceTabEvents(
           break
         case 'heartbeat_state_changed':
           handlers.onHeartbeatStateChanged?.(msg)
+          break
+        case 'heartbeat_roster_changed':
+          handlers.onHeartbeatRosterChanged?.(msg)
           break
         default:
           // session_added/removed/renamed + app-level + review events

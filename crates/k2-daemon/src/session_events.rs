@@ -155,8 +155,9 @@ pub enum SessionEvent {
     //   - WORKSPACE-SCOPED (forwarded only when the carried path matches
     //     the subscriber's `?path=` via the cwd-prefix rule):
     //     `ReviewQueueChanged`, `ReviewChanged`, `TabTitleChanged`,
-    //     `TabOrderChanged`, `HeartbeatStateChanged` — each carries a
-    //     `workspacePath` used by the prefix filter.
+    //     `TabOrderChanged`, `HeartbeatStateChanged`,
+    //     `HeartbeatRosterChanged` — each carries a `workspacePath` used
+    //     by the prefix filter.
 
     /// #675.1 — local LLM (AI Workspace Assistant) model status changed.
     /// APP-LEVEL. Replaces the renderer's `/cli/llm/status` poll
@@ -330,6 +331,29 @@ pub enum SessionEvent {
         project: String,
         agent: String,
         live: bool,
+    },
+
+    /// Heartbeat-drawer live-update fix — a project's heartbeat ROSTER
+    /// mutated (a row was added / removed / archived / unarchived /
+    /// enabled / disabled / edited / renamed / delivery re-targeted).
+    /// WORKSPACE-SCOPED. Emitted after every SUCCESSFUL heartbeat CRUD
+    /// mutation in `heartbeat_routes::dispatch_get` so a list rendered in
+    /// another client (sidebar drawer, Settings) converges without a
+    /// revisit. Deliberately carries NO row data (the ProjectsChanged
+    /// convention): it's a "re-fetch your list" nudge that stays honest
+    /// for any mutation source. Live (PTY) flips are NOT roster changes —
+    /// those keep riding [`SessionEvent::HeartbeatStateChanged`].
+    ///
+    /// Wire: `{ "kind": "heartbeat_roster_changed", "workspacePath":
+    /// string, "projectId": string }`. `workspacePath` is the project
+    /// path used by the prefix filter; `projectId` may be empty when the
+    /// emit site couldn't resolve it (consumers then rely on the path
+    /// filter alone).
+    HeartbeatRosterChanged {
+        #[serde(rename = "workspacePath")]
+        workspace_path: String,
+        #[serde(rename = "projectId")]
+        project_id: String,
     },
 
     /// 0.39.45 (GH #18/#26) — the registered project set changed (a
@@ -522,6 +546,19 @@ pub fn emit_heartbeat_live(workspace_path: &str, project_id: &str, agent: &str, 
     });
 }
 
+/// Heartbeat-drawer live-update fix — best-effort broadcast that a
+/// project's heartbeat roster mutated (a CRUD change, NOT a live flip).
+/// Call right after the mutation SUCCEEDS; consumers re-fetch the
+/// canonical list. The broadcast `let _ =`-swallows the no-subscribers
+/// case. `project_id` may be empty when the caller couldn't resolve it —
+/// the WS path filter still routes the nudge on `workspace_path`.
+pub fn emit_heartbeat_roster_changed(workspace_path: &str, project_id: &str) {
+    let _ = emit(SessionEvent::HeartbeatRosterChanged {
+        workspace_path: workspace_path.to_string(),
+        project_id: project_id.to_string(),
+    });
+}
+
 /// Extract `tab-<paneGroupId>` from a `v2_session_map` agent_name.
 /// Returns `None` for non-tab-shaped keys (pinned chat = bare UUID,
 /// heartbeats = bare workspace key, legacy `<pid>:<agent>` shapes).
@@ -711,6 +748,22 @@ mod tests {
         assert_eq!(json["agent"], "nightly");
         assert_eq!(json["live"], true);
         assert_keys(&json, &["kind", "workspacePath", "project", "agent", "live"]);
+    }
+
+    /// FROZEN WIRE CONTRACT (heartbeat-drawer live-update fix): the
+    /// renderer codes against EXACTLY `{ "kind":
+    /// "heartbeat_roster_changed", "workspacePath": string, "projectId":
+    /// string }`. Pin the serialized shape so any rename fails CI loudly.
+    #[test]
+    fn heartbeat_roster_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::HeartbeatRosterChanged {
+            workspace_path: "/x/foo".into(),
+            project_id: "proj-uuid".into(),
+        });
+        assert_eq!(json["kind"], "heartbeat_roster_changed");
+        assert_eq!(json["workspacePath"], "/x/foo");
+        assert_eq!(json["projectId"], "proj-uuid");
+        assert_keys(&json, &["kind", "workspacePath", "projectId"]);
     }
 
     /// Observability (Phase B) no-divergence guard: a single `emit` of an

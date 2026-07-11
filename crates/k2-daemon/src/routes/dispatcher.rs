@@ -320,6 +320,12 @@ async fn handle_one_request(
             // tunnel control.
             | "/cli/tunnel/subdomains/claim"
             | "/cli/tunnel/subdomains/unclaim"
+            // Publish-mutation realtime nudge — on-demand control-plane
+            // re-pull of the subdomain map (same fetch as the periodic
+            // poll). Method-gated per-handler below
+            // (feedback_post_only_route_guards); token_ok tier — it only
+            // refreshes a cache the daemon already maintains on a timer.
+            | "/cli/tunnel/subdomains/refresh"
             // K2SO #651 — supervisor-agnostic daemon restart. OWNER-ONLY
             // (restarting is the most privileged op; a connect-user session
             // token is rejected). Method-gated per-handler below
@@ -1506,6 +1512,45 @@ async fn handle_one_request(
             })
             .await
             .unwrap_or_else(|e| crate::cli::CliResponse::bad_request(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
+        // POST /cli/tunnel/subdomains/refresh — publish-mutation realtime
+        // nudge: re-pull the subdomain map from the control plane NOW (the
+        // same fetch as the connector's periodic poll) so a just-created/
+        // repointed/removed URL shows up in the UIs without waiting for the
+        // next poll tick. The CLI calls this best-effort right after every
+        // successful control-plane create/point/rm. The landed map goes
+        // through `store()` → change-detect → `tunnel_subdomains_changed`
+        // broadcast automatically; the handler emits nothing itself.
+        //
+        // Method gate: explicit `require_post` (feedback_post_only_route_
+        // guards; the GET chain additionally 405s this path). Auth:
+        // `token_ok` — same tier as claim/unclaim; this only refreshes a
+        // cache the daemon already maintains on a timer, not tunnel control.
+        // No params. Blocking control-plane HTTP on a worker thread.
+        "/cli/tunnel/subdomains/refresh" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result =
+                tokio::task::spawn_blocking(crate::misc_routes::handle_subdomain_refresh)
+                    .await
+                    .unwrap_or_else(|e| {
+                        crate::cli::CliResponse::bad_request(format!("worker join: {e}"))
+                    });
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }

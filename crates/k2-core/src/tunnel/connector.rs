@@ -634,7 +634,7 @@ fn spawn_subdomain_refresh(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
                     break;
                 }
                 match super::subdomains::refresh_once(&primary, &token) {
-                    Ok(n) => crate::log_debug!(
+                    Ok((n, _changed)) => crate::log_debug!(
                         "[tunnel/subdomains] refreshed {n} nested target(s) for {primary}"
                     ),
                     Err(e) => crate::log_debug!(

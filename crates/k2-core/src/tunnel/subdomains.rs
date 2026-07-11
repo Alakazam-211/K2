@@ -220,13 +220,19 @@ pub fn current() -> Arc<SubdomainMap> {
 /// means every caller — the connector's refresh loop today, anything else
 /// tomorrow — gets change detection for free, and an UNCHANGED refresh tick
 /// (the steady state, every lease interval) emits nothing.
-pub fn store(map: SubdomainMap) {
-    if swap_and_changed(map) {
+///
+/// Returns whether the landed map differed from the previous cache (i.e.
+/// whether the broadcast fired) — the on-demand refresh route reports this
+/// to its caller. Statement-position callers may ignore it.
+pub fn store(map: SubdomainMap) -> bool {
+    let changed = swap_and_changed(map);
+    if changed {
         crate::agent_hooks::emit(
             crate::agent_hooks::HookEvent::TunnelSubdomainsChanged,
             serde_json::Value::Null,
         );
     }
+    changed
 }
 
 /// Swap the cache to `map`; report whether the newly-stored map differs
@@ -274,14 +280,28 @@ pub fn fetch_map(primary: &str, token: &str) -> Result<SubdomainMap, String> {
     Ok(SubdomainMap::from_rows(primary, parsed.subdomains))
 }
 
-/// Refresh the global cache once from the control plane. Returns the number
-/// of nested targets now cached on success. A failure is returned (caller
-/// logs + retries); the previous cache is left intact.
-pub fn refresh_once(primary: &str, token: &str) -> Result<usize, String> {
+/// Serializes concurrent [`refresh_once`] callers — the connector's periodic
+/// loop and the on-demand `/cli/tunnel/subdomains/refresh` route (plus the
+/// claim/unclaim nudges) may overlap; back-to-back identical fetches are
+/// harmless but pointless, and serializing keeps store ordering sane.
+fn refresh_lock() -> &'static std::sync::Mutex<()> {
+    use std::sync::{Mutex, OnceLock};
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Refresh the global cache once from the control plane. Returns
+/// `(nested_targets_cached, changed)` on success — `changed` is whether the
+/// landed map differed from the previous cache (i.e. whether [`store`]
+/// broadcast `TunnelSubdomainsChanged`). A failure is returned (caller logs +
+/// retries); the previous cache is left intact. Concurrent callers are
+/// serialized on an in-process lock.
+pub fn refresh_once(primary: &str, token: &str) -> Result<(usize, bool), String> {
+    let _g = refresh_lock().lock().unwrap_or_else(|p| p.into_inner());
     let map = fetch_map(primary, token)?;
     let n = map.targets.len();
-    store(map);
-    Ok(n)
+    let changed = store(map);
+    Ok((n, changed))
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -540,9 +560,11 @@ mod tests {
     fn global_cache_defaults_empty_and_stores() {
         // Default cache routes everything to the daemon (no nested targets).
         // NOTE: process-global; this test only asserts the store/load round
-        // trip with a sentinel it sets itself. Keep it the ONLY test that
-        // touches the global cache so the change-detection asserts below
-        // can't race a parallel store.
+        // trip with a sentinel it sets itself. Every test that touches the
+        // global cache (this one + `refresh_once_reports_changed`) serializes
+        // on HOME_LOCK so the change-detection asserts can't race a parallel
+        // store, and each resets the cache to default before returning.
+        let _g = crate::themes::HOME_LOCK.lock();
         let map = SubdomainMap::from_rows("rosson", vec![row("staging", Some("localhost:3000"), false)]);
         // Landing a DIFFERENT map reports changed (→ store() broadcasts)…
         assert!(
@@ -561,5 +583,60 @@ mod tests {
         // (the reset itself is a change — the map goes sentinel → empty).
         assert!(swap_and_changed(SubdomainMap::default()));
         assert_eq!(current().route_for_host("staging.rosson.k2.dev"), Route::Daemon);
+    }
+
+    /// `refresh_once` = fetch + store + report: the first landing of a map
+    /// with a nested target is CHANGED (the broadcast path fires); an
+    /// identical re-fetch (the steady state, and the on-demand route hit
+    /// right after a periodic tick) reports UNCHANGED. This is the seam the
+    /// `/cli/tunnel/subdomains/refresh` route returns to its caller.
+    #[test]
+    fn refresh_once_reports_changed_then_unchanged() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mock");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            // Serve the SAME body to two sequential fetches.
+            for _ in 0..2 {
+                let Ok((mut sock, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf);
+                let body = r#"{"subdomains":[{"label":"refr","target":"localhost:4100","primary":false}]}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+
+        // HOME_LOCK serializes both the env-var override and the global
+        // cache against the other cache-touching test.
+        let _g = crate::themes::HOME_LOCK.lock();
+        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
+        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+
+        // Known baseline: empty cache (result intentionally ignored — the
+        // prior state is whatever the last test left; we only need EMPTY now).
+        let _ = swap_and_changed(SubdomainMap::default());
+
+        let first = refresh_once("rosson", "tok_refresh");
+        let second = refresh_once("rosson", "tok_refresh");
+
+        match prev {
+            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
+            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
+        }
+
+        assert_eq!(first.expect("first refresh must succeed"), (1, true), "empty → 1 target is a change");
+        assert_eq!(second.expect("second refresh must succeed"), (1, false), "identical re-fetch must be unchanged");
+        assert_eq!(
+            current().route_for_host("refr.rosson.k2.dev"),
+            Route::Internal("localhost:4100".to_string())
+        );
+        // Reset so we don't bleed into other tests in this binary.
+        let _ = swap_and_changed(SubdomainMap::default());
     }
 }

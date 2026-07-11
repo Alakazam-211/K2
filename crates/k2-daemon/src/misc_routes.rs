@@ -309,12 +309,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 .to_string(),
             )
         }
-        // 0074 — claim/unclaim are POST-only mutations (handled in the
-        // dispatcher's POST arms); a GET landing here gets an explicit
+        // 0074 — claim/unclaim/refresh are POST-only mutations (handled in
+        // the dispatcher's POST arms); a GET landing here gets an explicit
         // 405, never a silent no-op (feedback_post_only_route_guards).
-        "/cli/tunnel/subdomains/claim" | "/cli/tunnel/subdomains/unclaim" => {
-            CliResponse::method_not_allowed()
-        }
+        "/cli/tunnel/subdomains/claim"
+        | "/cli/tunnel/subdomains/unclaim"
+        | "/cli/tunnel/subdomains/refresh" => CliResponse::method_not_allowed(),
         "/cli/companion/presets" => match k2_core::companion::cli_routes::list_presets() {
             Ok(body) => CliResponse::ok_json(body),
             Err(e) => CliResponse::bad_request(e),
@@ -1447,6 +1447,12 @@ pub fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
     // Attribution changed while the routing map didn't — store() won't
     // fire, so emit the broadcast from THIS seam.
     crate::session_events::emit_tunnel_subdomains_changed();
+    // A claim often follows a control-plane CREATE the cached map hasn't
+    // seen yet (the snapshot ignores attributed-but-unmapped labels) —
+    // nudge an immediate map re-pull so the new URL shows up without
+    // waiting for the periodic poll. Best-effort: attribution + its emit
+    // already landed above.
+    nudge_subdomain_map_refresh();
     CliResponse::ok_json(
         serde_json::json!({
             "success": true,
@@ -1479,6 +1485,11 @@ pub fn handle_subdomain_unclaim(params: &HashMap<String, String>) -> CliResponse
     if removed {
         crate::session_events::emit_tunnel_subdomains_changed();
     }
+    // The unclaim stamp follows a control-plane DELETE (`rm`) — nudge an
+    // immediate map re-pull so the removed URL disappears without waiting
+    // for the periodic poll. Best-effort; unconditional (even removed:false
+    // — the control-plane row may be gone while no attribution existed).
+    nudge_subdomain_map_refresh();
     CliResponse::ok_json(
         serde_json::json!({
             "success": true,
@@ -1487,6 +1498,78 @@ pub fn handle_subdomain_unclaim(params: &HashMap<String, String>) -> CliResponse
         })
         .to_string(),
     )
+}
+
+/// POST /cli/tunnel/subdomains/refresh — pull the subdomain map from the
+/// control plane NOW instead of waiting for the connector's periodic poll.
+/// Called (best-effort) by the CLI right after a successful control-plane
+/// `create`/`point`/`rm`, and by the claim/unclaim nudges, so freshly
+/// published URLs appear in the UIs in realtime. Runs the SAME fetch the
+/// periodic loop uses ([`k2_core::tunnel::subdomains::refresh_once`]); the
+/// fetched map lands via `store()`, whose change-detect broadcasts
+/// `tunnel_subdomains_changed` automatically — nothing is emitted here.
+/// `changed:false` = the map was already current (e.g. a poll just ran).
+pub fn handle_subdomain_refresh() -> CliResponse {
+    let cfg = match k2_core::tunnel::config::load() {
+        Ok(c) => c,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    // Mirror the connector loop's gate: primary label + bearer token come
+    // from the tunnel config; without both there is nothing to fetch.
+    let primary = cfg.subdomain.trim().to_string();
+    let token = cfg.token.trim().to_string();
+    if primary.is_empty() || token.is_empty() {
+        return CliResponse::bad_request("tunnel not configured");
+    }
+    match k2_core::tunnel::subdomains::refresh_once(&primary, &token) {
+        Ok((_, changed)) => CliResponse::ok_json(
+            serde_json::json!({ "success": true, "changed": changed }).to_string(),
+        ),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// Best-effort subdomain-map refresh after an attribution write. Never
+/// fails the caller (the attribution + its emit already landed); a miss
+/// just means the map converges on the next periodic poll. Runs on a
+/// detached thread so a slow control plane can't stall the claim/unclaim
+/// response (the broadcast fires from `store()` whenever the fetch lands).
+fn nudge_subdomain_map_refresh() {
+    // Test seam: count the nudge instead of touching the tunnel config or
+    // the live network (no network in unit tests — push_routes precedent).
+    #[cfg(test)]
+    {
+        test_refresh_nudges::bump();
+    }
+    #[cfg(not(test))]
+    {
+        std::thread::spawn(|| {
+            let resp = handle_subdomain_refresh();
+            if resp.status != "200 OK" {
+                k2_core::log_debug!(
+                    "[tunnel/subdomains] post-attribution refresh nudge skipped/failed \
+                     (map converges on the next poll): {}",
+                    resp.body
+                );
+            }
+        });
+    }
+}
+
+/// Test-only nudge counter for [`nudge_subdomain_map_refresh`].
+#[cfg(test)]
+pub(crate) mod test_refresh_nudges {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    pub(crate) fn bump() {
+        COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn count() -> usize {
+        COUNT.load(Ordering::SeqCst)
+    }
 }
 
 /// GH#22/#23/#24 defense-in-depth: validate a `/cli/heartbeat/schedule`
@@ -2023,17 +2106,74 @@ mod subdomain_attribution_route_tests {
         cleanup(&label, &id);
     }
 
-    /// The GET chain 405s the POST-only claim/unclaim paths
+    /// The GET chain 405s the POST-only claim/unclaim/refresh paths
     /// (feedback_post_only_route_guards) while the sibling read route
     /// stays a 200 GET.
     #[test]
-    fn get_chain_405s_claim_and_unclaim() {
+    fn get_chain_405s_claim_unclaim_and_refresh() {
         let p = HashMap::new();
-        for path in ["/cli/tunnel/subdomains/claim", "/cli/tunnel/subdomains/unclaim"] {
+        for path in [
+            "/cli/tunnel/subdomains/claim",
+            "/cli/tunnel/subdomains/unclaim",
+            "/cli/tunnel/subdomains/refresh",
+        ] {
             let resp = dispatch(path, &p).expect("route must be known to the GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "path={path}");
         }
         let resp = dispatch("/cli/tunnel/subdomains", &p).expect("read route");
         assert_eq!(resp.status, "200 OK");
+    }
+
+    /// Refresh with no tunnel configured (blank subdomain/token under a
+    /// sandboxed `$HOME`) is an explicit 400 — never a silent no-op and
+    /// never a control-plane call. Covers both the missing-file default
+    /// config and a saved-but-blank config.
+    #[test]
+    fn refresh_without_tunnel_config_is_400() {
+        crate::test_support::with_temp_home(|| {
+            let resp = handle_subdomain_refresh();
+            assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["error"], serde_json::json!("tunnel not configured"));
+
+            // A config with a subdomain but NO token is still unconfigured.
+            let cfg = k2_core::tunnel::TunnelConfig {
+                subdomain: "rosson".to_string(),
+                ..Default::default()
+            };
+            k2_core::tunnel::config::save(&cfg).expect("save sandboxed config");
+            let resp = handle_subdomain_refresh();
+            assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["error"], serde_json::json!("tunnel not configured"));
+        });
+    }
+
+    /// Successful claim and unclaim both fire the best-effort map-refresh
+    /// nudge (the cfg(test) seam counts instead of touching the network);
+    /// a rejected claim (bad input) fires nothing.
+    #[test]
+    fn claim_and_unclaim_nudge_a_map_refresh() {
+        let (id, path) = make_project("nudge");
+        let label = format!("ndg-{}", std::process::id());
+
+        let before = test_refresh_nudges::count();
+        let resp = handle_subdomain_claim(&params(&[("label", &label), ("project", &path)]));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let after_claim = test_refresh_nudges::count();
+        assert!(after_claim > before, "claim must nudge a refresh");
+
+        let resp = handle_subdomain_unclaim(&params(&[("label", &label)]));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert!(
+            test_refresh_nudges::count() > after_claim,
+            "unclaim must nudge a refresh"
+        );
+
+        // (No exact-equality "rejected input doesn't nudge" assert here:
+        // the counter is process-global and other tests bump it in
+        // parallel. The nudge sits strictly AFTER every early 400 return
+        // in the handlers — see `claim_rejects_bad_inputs` for the 400s.)
+        cleanup(&label, &id);
     }
 }

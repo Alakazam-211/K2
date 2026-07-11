@@ -4929,6 +4929,21 @@ _stamp_subdomain_attrib() {
     return 0
 }
 
+# Best-effort realtime nudge AFTER a successful control-plane
+# create/point/rm (and its attribution stamp): ask the LOCAL daemon to
+# re-pull the subdomain map from the control plane NOW, so the
+# new/changed URL appears in the UIs immediately instead of on the next
+# periodic poll. The daemon runs the same fetch its poll loop uses and
+# broadcasts tunnel_subdomains_changed only when the map actually
+# changed. A miss (daemon unreachable / tunnel unconfigured) must not
+# fail the command — the control-plane op already succeeded and the map
+# converges on the next poll. Silent + always returns 0.
+_nudge_subdomain_refresh() {
+    if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then return 0; fi
+    cli_post_form "/cli/tunnel/subdomains/refresh" >/dev/null 2>&1 || true
+    return 0
+}
+
 cmd_publish_subdomain() {
     local action="${1:-list}"
     shift 2>/dev/null || true
@@ -5006,8 +5021,11 @@ print("  cert:      %s" % d.get("cert_status","?"))
 print("  effective: %s" % d.get("effective","?"))
 '
             # 0074 — the create succeeded (set -e would have exited
-            # otherwise): attribute the label to the acting workspace.
+            # otherwise): attribute the label to the acting workspace,
+            # then nudge the daemon's map refresh so the URL is live in
+            # the UIs immediately.
             _stamp_subdomain_attrib claim "$label"
+            _nudge_subdomain_refresh
             ;;
         list)
             local self
@@ -5073,8 +5091,10 @@ print("  status:    %s" % d.get("status","?"))
 print("  effective: %s" % d.get("effective","?"))
 '
             # 0074 — a repoint through the K2 surface records the acting
-            # workspace (re-attributes if another workspace had it).
+            # workspace (re-attributes if another workspace had it), then
+            # nudges the map refresh so the new target shows immediately.
             _stamp_subdomain_attrib claim "$label"
+            _nudge_subdomain_refresh
             ;;
         rm|remove|delete)
             local label="${1:-}"
@@ -5087,8 +5107,10 @@ print("  effective: %s" % d.get("effective","?"))
 print("Removed %s" % (d.get("removed") or "(subdomain)"))
 '
             # 0074 — the label is gone from the control plane; drop its
-            # workspace attribution row too.
+            # workspace attribution row too, then nudge the map refresh
+            # so the removed URL disappears from the UIs immediately.
             _stamp_subdomain_attrib unclaim "$label"
+            _nudge_subdomain_refresh
             ;;
         *)
             echo "Usage: k2 publish subdomain <create|list|point|rm|claim|unclaim> ..." >&2

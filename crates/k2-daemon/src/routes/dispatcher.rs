@@ -575,6 +575,9 @@ async fn handle_one_request(
             // spawn_blocking covers them.
             | "/cli/mail/external/add"
             | "/cli/mail/external/remove"
+            // `link/*` = the Settings UI's aliases for external add/remove.
+            | "/cli/mail/link/add"
+            | "/cli/mail/link/remove"
             // S11: the unified access-management surface (owner-or-admin
             // via is_owner_level_mutation's /cli/mail/access/ prefix).
             | "/cli/mail/access/grant"

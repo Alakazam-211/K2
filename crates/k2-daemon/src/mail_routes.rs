@@ -151,6 +151,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/approvals/deny"
         | "/cli/mail/external/add"
         | "/cli/mail/external/remove"
+        // `link/*` = the Settings UI's names for the same link-provisioning
+        // handlers (the CLI verb is `k2 mail link`); aliased below.
+        | "/cli/mail/link/add"
+        | "/cli/mail/link/remove"
         | "/cli/mail/access/grant"
         | "/cli/mail/access/revoke"
         | "/cli/mail/access/set-primary"
@@ -192,6 +196,11 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/mail/approvals/deny" => routes_send::handle_approvals_deny(body),
         "/cli/mail/external/add" => routes_external::handle_external_add(body),
         "/cli/mail/external/remove" => routes_external::handle_external_remove(body),
+        // `link/*` aliases — the Settings → Email Link UI POSTs these names
+        // for the same link-provisioning handlers the `k2 mail link` CLI uses
+        // via `external/*`. Same handlers, no behavior difference.
+        "/cli/mail/link/add" => routes_external::handle_external_add(body),
+        "/cli/mail/link/remove" => routes_external::handle_external_remove(body),
         "/cli/mail/access/grant" => routes_access::handle_grant(body),
         "/cli/mail/access/revoke" => routes_access::handle_revoke(body),
         "/cli/mail/access/set-primary" => routes_access::handle_set_primary(body),

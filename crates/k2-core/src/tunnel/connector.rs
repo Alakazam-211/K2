@@ -20,12 +20,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use super::config::{self, TunnelConfig, SUBDOMAIN_HOST};
-use super::render::render_frpc_toml;
+use super::config::{self, RelayEndpoint, TunnelConfig, SUBDOMAIN_HOST};
+use super::failover::{RelaySelector, RelaySwitch};
+use super::render::render_frpc_toml_for_relay;
 
 /// Where to find the `frpc` binary.
 #[derive(Debug, Clone)]
@@ -133,6 +134,18 @@ pub fn frpc_log_path() -> PathBuf {
         .join(".k2")
         .join("frpc.log")
 }
+
+/// A child that stayed up at least this long counts as a SUCCESSFUL
+/// relay connection for failover accounting: frpc exits fast on a failed
+/// login / unreachable frps (`loginFailExit` defaults true), so a
+/// quick death means "this relay isn't answering" while a long run means
+/// the dial worked (even if the process later died for another reason).
+const HEALTHY_UPTIME: Duration = Duration::from_secs(30);
+
+/// Poll cadence while waiting on the child in multi-relay mode (the
+/// single-relay path keeps the original blocking `wait()`). Matches the
+/// 1 s slice the lease/subdomain loops use to observe `stop()` promptly.
+const SUPERVISE_POLL: Duration = Duration::from_secs(1);
 
 /// Live connector state — the supervised child + the desired-state flag.
 struct ConnectorState {
@@ -259,9 +272,11 @@ pub fn start(
 
     // Resolve frpc + render config to disk (0600). `e2e` selects the proxy
     // type (https vs http) and was used above to pick `resolved_local_port`.
+    // Always dial the PREFERRED relay first (index 0 of the fallback list);
+    // for a legacy single-endpoint config that IS `server_addr`/`server_port`,
+    // so the rendered TOML is byte-identical to the pre-failover path.
     let frpc = resolve_frpc(bin)?;
-    let toml = render_frpc_toml(&cfg, resolved_local_port, e2e);
-    write_config_file(&toml)?;
+    write_relay_config(&cfg, &cfg.relay_list()[0], resolved_local_port, e2e)?;
 
     // Reap any STRAY frpc bound to our config before spawning a fresh one.
     // This is the load-bearing self-heal for the multi-frpc failure mode:
@@ -278,10 +293,19 @@ pub fn start(
     // (guard returned early otherwise), so every match is genuinely stale.
     reap_stray_frpc(&frpc_config_path());
 
-    // Spawn + supervise.
+    // Spawn + supervise. The supervisor gets the config + render inputs so
+    // it can rotate relays (re-render frpc.toml, respawn) on repeated
+    // failure — see `spawn_supervised`.
     let child = Arc::new(Mutex::new(None));
     let running = Arc::new(AtomicBool::new(true));
-    spawn_supervised(frpc, child.clone(), running.clone())?;
+    spawn_supervised(
+        frpc,
+        child.clone(),
+        running.clone(),
+        &cfg,
+        resolved_local_port,
+        e2e,
+    )?;
 
     // K2SO #674: while the tunnel is up, the DAEMON renews the subdomain
     // lease on its own timer so it never lapses with the Settings panel
@@ -404,12 +428,98 @@ fn restrict_mode(p: &Path) {
 #[cfg(not(unix))]
 fn restrict_mode(_p: &Path) {}
 
+/// Render frpc.toml dialing `relay` and write it into place. The relays
+/// are peers (one shared frps token, one wildcard cert), so only
+/// `serverAddr`/`serverPort` differ between renders — token, subdomain,
+/// and proxy name are untouched by construction
+/// (see [`render_frpc_toml_for_relay`]).
+fn write_relay_config(
+    cfg: &TunnelConfig,
+    relay: &RelayEndpoint,
+    local_port: u16,
+    e2e: bool,
+) -> Result<(), String> {
+    write_config_file(&render_frpc_toml_for_relay(cfg, relay, local_port, e2e))
+}
+
+/// How one supervised child run ended (multi-relay failover accounting).
+enum ChildOutcome {
+    /// The child exited on its own (or `wait` errored); exit code for the
+    /// restart log line.
+    Exited(Option<i32>),
+    /// WE killed the child deliberately to fail back to the preferred
+    /// relay after a stable run on a fallback — respawn immediately, no
+    /// failure counted, no backoff.
+    FailBack(RelaySwitch),
+}
+
+/// Wait for the current child to end.
+///
+/// * Single relay ([`RelaySelector::is_solo`]) — plain blocking
+///   `wait()`, byte-identical to the pre-failover supervisor: no polling,
+///   no fail-back to evaluate, no behavior change.
+/// * Multi-relay — poll `try_wait` on [`SUPERVISE_POLL`] so we can (a)
+///   feed healthy uptime into the selector while the child lives (the
+///   fail-back streak) and (b) observe `stop()` and kill the child we're
+///   holding (it was TAKEN from the slot, so `stop()` can't reach it).
+fn wait_for_exit(
+    child: &mut Child,
+    running: &AtomicBool,
+    selector: &mut RelaySelector,
+    spawned_at: Instant,
+) -> ChildOutcome {
+    if selector.is_solo() {
+        return ChildOutcome::Exited(child.wait().ok().and_then(|s| s.code()));
+    }
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return ChildOutcome::Exited(status.code()),
+            Ok(None) => {} // still running
+            Err(e) => {
+                crate::log_debug!("[tunnel] wait on frpc child failed: {e}");
+                return ChildOutcome::Exited(None);
+            }
+        }
+        if !running.load(Ordering::SeqCst) {
+            // Stop requested while the child lives: we hold the handle,
+            // so the kill is ours to do. The caller returns right after.
+            let _ = child.kill();
+            let _ = child.wait();
+            return ChildOutcome::Exited(None);
+        }
+        // A child alive past HEALTHY_UPTIME is a working relay: reset the
+        // failure counter and extend the fail-back streak. The selector
+        // says when the streak has earned a return to the primary.
+        if spawned_at.elapsed() >= HEALTHY_UPTIME {
+            if let Some(sw) = selector.on_success(Instant::now()) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return ChildOutcome::FailBack(sw);
+            }
+        }
+        std::thread::sleep(SUPERVISE_POLL);
+    }
+}
+
 /// Spawn the frpc child once and start the supervisor thread that
 /// captures output and restarts on unexpected exit with backoff.
+///
+/// **Multi-relay failover** (`cfg.relay_list().len() > 1`): the supervisor
+/// classifies each child death by uptime — under [`HEALTHY_UPTIME`] counts
+/// as a relay failure, over it as a success — and feeds a [`RelaySelector`].
+/// When the selector rotates (3 consecutive failures → next relay,
+/// wrapping; or a stable run on a fallback → back to the primary), the
+/// supervisor re-renders `frpc.toml` for the new relay before respawning
+/// and resets the backoff. With a single relay the selector never switches
+/// and the wait path is the original blocking `wait()` — behavior is
+/// byte-identical to the pre-failover supervisor.
 fn spawn_supervised(
     frpc: PathBuf,
     child_slot: Arc<Mutex<Option<Child>>>,
     running: Arc<AtomicBool>,
+    cfg: &TunnelConfig,
+    resolved_local_port: u16,
+    e2e: bool,
 ) -> Result<(), String> {
     // First spawn happens synchronously so `start()` fails loud if the
     // very first launch can't even exec.
@@ -417,11 +527,14 @@ fn spawn_supervised(
     *child_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(first);
 
     let frpc_thread = frpc.clone();
+    let cfg_thread = cfg.clone();
     std::thread::Builder::new()
         .name("k2so-frpc-supervisor".to_string())
         .spawn(move || {
-            let mut backoff = Duration::from_millis(500);
+            let initial_backoff = Duration::from_millis(500);
             let max_backoff = Duration::from_secs(30);
+            let mut backoff = initial_backoff;
+            let mut selector = RelaySelector::new(cfg_thread.relay_list());
             loop {
                 // Take the current child to wait on it.
                 let mut child = match child_slot
@@ -448,18 +561,84 @@ fn spawn_supervised(
                     }
                 };
 
-                let status = child.wait();
+                let spawned_at = Instant::now();
+                let outcome = wait_for_exit(&mut child, &running, &mut selector, spawned_at);
                 if !running.load(Ordering::SeqCst) {
                     // Stop requested — do not restart.
                     return;
                 }
-                crate::log_debug!(
-                    "[tunnel] frpc exited ({:?}); restarting in {:?}",
-                    status.ok().and_then(|s| s.code()),
-                    backoff
-                );
-                std::thread::sleep(backoff);
-                backoff = (backoff * 2).min(max_backoff);
+                match outcome {
+                    ChildOutcome::FailBack(sw) => {
+                        // Deliberate switch back to the preferred relay:
+                        // re-render, reset backoff, respawn immediately
+                        // (no failure happened, so no penalty sleep).
+                        crate::log_debug!(
+                            "[tunnel] relay fail-back: {} -> {} (stable on fallback; retrying primary)",
+                            sw.from,
+                            sw.to
+                        );
+                        if let Err(e) = write_relay_config(
+                            &cfg_thread,
+                            selector.current(),
+                            resolved_local_port,
+                            e2e,
+                        ) {
+                            crate::log_debug!(
+                                "[tunnel] WARN: rewrite frpc.toml for {} failed: {e}",
+                                selector.current()
+                            );
+                        }
+                        backoff = initial_backoff;
+                    }
+                    ChildOutcome::Exited(code) => {
+                        // Classify the run for the selector: a quick death
+                        // is a failed dial on the current relay, a long run
+                        // was a working connection (resets the counter, and
+                        // on a fallback may complete the fail-back streak).
+                        let switch = if spawned_at.elapsed() >= HEALTHY_UPTIME {
+                            selector.on_success(Instant::now())
+                        } else {
+                            selector.on_failure()
+                        };
+                        if let Some(sw) = switch {
+                            if sw.is_failback() {
+                                crate::log_debug!(
+                                    "[tunnel] relay fail-back: {} -> {} (stable on fallback; retrying primary)",
+                                    sw.from,
+                                    sw.to
+                                );
+                            } else {
+                                crate::log_debug!(
+                                    "[tunnel] relay failover: {} -> {} after {} failures",
+                                    sw.from,
+                                    sw.to,
+                                    sw.after_failures
+                                );
+                            }
+                            if let Err(e) = write_relay_config(
+                                &cfg_thread,
+                                selector.current(),
+                                resolved_local_port,
+                                e2e,
+                            ) {
+                                crate::log_debug!(
+                                    "[tunnel] WARN: rewrite frpc.toml for {} failed: {e}",
+                                    selector.current()
+                                );
+                            }
+                            // Fresh target — dial it promptly instead of
+                            // inheriting the dead relay's grown backoff.
+                            backoff = initial_backoff;
+                        }
+                        crate::log_debug!(
+                            "[tunnel] frpc exited ({:?}); restarting in {:?}",
+                            code,
+                            backoff
+                        );
+                        std::thread::sleep(backoff);
+                        backoff = (backoff * 2).min(max_backoff);
+                    }
+                }
                 if !running.load(Ordering::SeqCst) {
                     return;
                 }
@@ -929,6 +1108,96 @@ mod tests {
         });
     }
 
+    /// Multi-relay failover, end to end through the REAL supervise loop:
+    /// a two-relay config whose "frpc" (/bin/true) exits instantly — i.e.
+    /// every dial to the primary "fails" fast — must, after 3 consecutive
+    /// failures, rewrite frpc.toml to dial the SECOND relay. Everything
+    /// else in the rendered config (token, subdomain, proxy name) must be
+    /// untouched by the rotation.
+    #[test]
+    fn supervisor_rotates_to_second_relay_after_three_fast_failures() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                relays: vec![
+                    RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
+                    RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 },
+                ],
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false, // skip the HTTPS-listener path in this unit context
+                ..Default::default()
+            })
+            .expect("seed two-relay config");
+
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect("start with two relays");
+            assert!(st.running);
+
+            // The first render must dial the PRIMARY relay.
+            let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+            assert!(
+                toml.contains("serverAddr = \"10.0.0.1\""),
+                "must dial the primary first\n{toml}"
+            );
+
+            // /bin/true exits immediately → each supervised run is a fast
+            // failure. With SUPERVISE_POLL=1s and backoffs 0.5s/1s, the 3rd
+            // failure (and the rewrite to relay #2) lands within a few
+            // seconds; poll generously so slow CI can't flake this.
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let rotated = loop {
+                let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+                if toml.contains("serverAddr = \"10.0.0.2\"") {
+                    break toml;
+                }
+                if Instant::now() >= deadline {
+                    panic!(
+                        "supervisor never rotated to the second relay; frpc.toml:\n{toml}"
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            };
+
+            // Only the server endpoint rotates — token/subdomain/proxy name
+            // are byte-identical (the relays are peers).
+            assert!(rotated.contains("token = \"tok\""), "{rotated}");
+            assert!(rotated.contains("subdomain = \"rosson\""), "{rotated}");
+            assert!(rotated.contains("name = \"k2so-rosson\""), "{rotated}");
+
+            stop().expect("stop");
+            assert!(!status().running);
+        });
+    }
+
+    /// Single-relay config through the SAME start path: the rendered TOML
+    /// must dial the legacy `server_addr`/`server_port` pair (relay_list()
+    /// folds it in), and no rotation can ever occur — there is nowhere to
+    /// rotate to. Guards the "byte-identical when one relay" contract at
+    /// the connector level.
+    #[test]
+    fn single_relay_start_renders_legacy_endpoint_unchanged() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                server_addr: "9.9.9.9".to_string(),
+                server_port: 7009,
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed legacy config");
+
+            let _ = start(None, 57839, &FrpcBinary::Explicit(true_bin()));
+            let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+            assert!(
+                toml.contains("serverAddr = \"9.9.9.9\""),
+                "legacy endpoint must render unchanged\n{toml}"
+            );
+            assert!(toml.contains("serverPort = 7009"), "{toml}");
+            let _ = stop();
+        });
+    }
+
     #[test]
     fn status_is_stopped_before_any_start() {
         with_temp_home(|| {
@@ -959,7 +1228,10 @@ mod tests {
             local_port: Some(57839),
             ..Default::default()
         };
-        println!("{}", render_frpc_toml(&cfg, 57839, false));
+        println!(
+            "{}",
+            super::super::render::render_frpc_toml(&cfg, 57839, false)
+        );
     }
 
     /// REAL-PROCESS, REAL-NETWORK test — gated `#[ignore]` so `cargo

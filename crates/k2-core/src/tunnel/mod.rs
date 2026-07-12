@@ -199,7 +199,10 @@ pub fn tunnel_status() -> TunnelStatus {
 pub fn render_config(local_port: u16) -> Result<String, String> {
     let cfg = config::load()?;
     let e2e = config::e2e_enabled(&cfg);
-    Ok(render::render_frpc_toml(&cfg, local_port, e2e))
+    // Dial the preferred relay (index 0), exactly as `start_tunnel` does —
+    // for a legacy single-endpoint config this IS server_addr/server_port.
+    let relays = cfg.relay_list();
+    Ok(render::render_frpc_toml_for_relay(&cfg, &relays[0], local_port, e2e))
 }
 
 #[cfg(test)]

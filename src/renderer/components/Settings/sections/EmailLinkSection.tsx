@@ -312,13 +312,15 @@ function OauthConnect({
         </button>
         <button
           type="button"
-          disabled={!canStart}
-          onClick={() => void start('microsoft')}
-          title={canMutate ? 'Get a device code to approve in any browser' : 'Not available in viewer mode'}
-          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          disabled
+          title="Microsoft (Outlook / 365) linking is coming soon"
+          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
         >
-          {busy === 'microsoft' ? 'Starting…' : 'Connect Microsoft (Outlook / 365)'}
+          Connect Microsoft (Outlook / 365)
         </button>
+        <span className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)] border border-[var(--color-border)] flex-shrink-0">
+          Coming soon
+        </span>
       </div>
 
       {/* ── Live flow / result card ── */}

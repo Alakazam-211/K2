@@ -257,8 +257,9 @@ struct DraftBody {
 /// --body <t>`): compose a reply to a message in the workspace's
 /// EXTERNAL inbox and APPEND it, `\Draft`-flagged, into the account's
 /// real Drafts folder. The user sees it in their own mail client,
-/// edits, and sends themself — K2 never sends from an external
-/// account (there is no code path). A K2-hosted source message gets
+/// edits, and sends themself. This DRAFT route never sends — sending
+/// FROM a linked account is the separate 'send'-level path
+/// (`external_smtp`). A K2-hosted source message gets
 /// the teaching error pointing at `k2 mail reply`; a foreign inbox
 /// gets the masked `not_found`. Runs in the dispatcher's
 /// `spawn_blocking` (dials the user's mail host).
@@ -356,8 +357,8 @@ pub fn handle_draft(body: &[u8]) -> CliResponse {
             "address": inbox.email_address,
             "folder": folder,
             "hint": format!(
-                "draft saved to '{folder}' in {} — your human reviews and sends it from \
-                 their own mail client (K2 cannot send from external accounts)",
+                "draft saved to '{folder}' in {} — your human can review and send it from \
+                 their own mail client",
                 inbox.email_address
             ),
         }))
@@ -367,8 +368,9 @@ pub fn handle_draft(body: &[u8]) -> CliResponse {
     // createReply+PATCH-body — its Bearer token is minted inside
     // `RealGraphHttp`, so there is NO vault password to resolve. Every
     // other linked row is IMAP (Gmail XOAUTH2 or app-password) and APPENDs
-    // a `\Draft` with `external::save_reply_draft`. Both are draft-only —
-    // no send path exists in either backend.
+    // a `\Draft` with `external::save_reply_draft`. This is the DRAFT route
+    // only — sending is the separate 'send'-level path (external_smtp for
+    // IMAP; Graph send is not yet built).
     match messages::backend_for_address(&inbox.email_address) {
         MailBackend::Graph => {
             let http = std::sync::Arc::new(graph::RealGraphHttp::new(inbox.id.clone()));

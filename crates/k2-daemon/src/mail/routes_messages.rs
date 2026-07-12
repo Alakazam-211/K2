@@ -48,7 +48,6 @@ use crate::cli_response::CliResponse;
 use crate::mail::messages::{
     self, ListError, MailBackend, MailFolder, ManageBackend, ReadBackend, ReadError, WatchAddress,
 };
-use crate::mail::secrets::SecretStore as _;
 use crate::mail::{access, domains, external, external_imap, graph};
 
 // ── Response helpers (the S2/S3 error contract) ─────────────────────────
@@ -141,6 +140,48 @@ fn resolve_caller(project: &str) -> Result<(String, String), CliResponse> {
     }
 }
 
+/// Resolve the app-password for a LINKED inbox from the vault, mapping
+/// the two failure shapes onto detail-free 503 `not_ready`s. An
+/// OAuth-IMAP row (Gmail XOAUTH2) needs no app-password here — `login()`
+/// mints the access token itself and IGNORES this param — so it resolves
+/// to an empty string. The vault's own `Err` text can carry a filesystem
+/// path / keychain detail, so it is NEVER forwarded to the caller (M3):
+/// the read-failure case reuses the same generic reconnect guidance as
+/// the missing-credential case. The one seam both `backend_for` and
+/// `manage_backend_for` share.
+fn resolve_linked_password(
+    secrets: &dyn crate::mail::secrets::SecretStore,
+    row: &k2_core::db::schema::MailExternalInbox,
+    address: &str,
+) -> Result<String, CliResponse> {
+    let is_oauth = matches!(
+        external::read_oauth_fields(&row.id),
+        Ok(f) if f.auth_kind == external::AUTH_OAUTH
+    );
+    if is_oauth {
+        return Ok(String::new());
+    }
+    match secrets.resolve(&external::vault_key(&row.id)) {
+        Ok(Some(p)) => Ok(p),
+        Ok(None) => Err(error_response(
+            "503 Service Unavailable",
+            "not_ready",
+            &format!(
+                "credentials for '{address}' are missing from the vault — your \
+                 human can reconnect it with 'k2 mail link add'"
+            ),
+        )),
+        Err(_) => Err(error_response(
+            "503 Service Unavailable",
+            "not_ready",
+            &format!(
+                "credentials for '{address}' could not be read from the vault — \
+                 your human can reconnect it with 'k2 mail link add'"
+            ),
+        )),
+    }
+}
+
 /// §17.5: resolve one address's backend and construct it — the ONLY
 /// place a backend is instantiated. `LocalStalwart` → the production
 /// JMAP client from the `mail_server` row (503 `not_ready` when
@@ -167,34 +208,7 @@ fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
                 ));
             };
             let secrets = crate::mail::secrets::FileSecretStore::default();
-            // For an OAuth-IMAP row (Gmail XOAUTH2) `login()` mints the
-            // access token itself and IGNORES this param, so there is no
-            // app-password to require; a `password` row must still have its
-            // vaulted credential (503 → re-link).
-            let is_oauth = matches!(
-                external::read_oauth_fields(&row.id),
-                Ok(f) if f.auth_kind == external::AUTH_OAUTH
-            );
-            let password = if is_oauth {
-                String::new()
-            } else {
-                match secrets.resolve(&external::vault_key(&row.id)) {
-                    Ok(Some(p)) => p,
-                    Ok(None) => {
-                        return Err(error_response(
-                            "503 Service Unavailable",
-                            "not_ready",
-                            &format!(
-                                "credentials for '{address}' are missing from the vault — your \
-                                 human can reconnect it with 'k2 mail link add'"
-                            ),
-                        ))
-                    }
-                    Err(hint) => {
-                        return Err(error_response("503 Service Unavailable", "not_ready", &hint))
-                    }
-                }
-            };
+            let password = resolve_linked_password(&secrets, &row, address)?;
             Ok(Box::new(external::ExternalImapBackend::new(
                 row,
                 password,
@@ -862,34 +876,7 @@ fn manage_backend_for(address: &str) -> Result<Box<dyn ManageBackend>, CliRespon
                 ));
             };
             let secrets = crate::mail::secrets::FileSecretStore::default();
-            // For an OAuth-IMAP row (Gmail XOAUTH2) `login()` mints the
-            // access token itself and IGNORES this param, so there is no
-            // app-password to require; a `password` row must still have its
-            // vaulted credential (503 → re-link).
-            let is_oauth = matches!(
-                external::read_oauth_fields(&row.id),
-                Ok(f) if f.auth_kind == external::AUTH_OAUTH
-            );
-            let password = if is_oauth {
-                String::new()
-            } else {
-                match secrets.resolve(&external::vault_key(&row.id)) {
-                    Ok(Some(p)) => p,
-                    Ok(None) => {
-                        return Err(error_response(
-                            "503 Service Unavailable",
-                            "not_ready",
-                            &format!(
-                                "credentials for '{address}' are missing from the vault — your \
-                                 human can reconnect it with 'k2 mail link add'"
-                            ),
-                        ))
-                    }
-                    Err(hint) => {
-                        return Err(error_response("503 Service Unavailable", "not_ready", &hint))
-                    }
-                }
-            };
+            let password = resolve_linked_password(&secrets, &row, address)?;
             Ok(Box::new(external::ExternalImapBackend::new(
                 row,
                 password,
@@ -1758,5 +1745,97 @@ mod tests {
         assert_eq!(resp.status, "400 Bad Request");
 
         cleanup_project(&project_id);
+    }
+
+    // ── M3: the vault seam never echoes a raw backend error ──
+
+    /// A scripted vault whose `resolve` returns whatever shape the test
+    /// wants — the point is to drive the `Err` arm deterministically.
+    struct ScriptedVault(Result<Option<String>, String>);
+    impl crate::mail::secrets::SecretStore for ScriptedVault {
+        fn store(&self, _kind: &str, _secret: &str) -> Result<String, String> {
+            unreachable!("linked inboxes use store_exact")
+        }
+        fn resolve(&self, _sref: &str) -> Result<Option<String>, String> {
+            self.0.clone()
+        }
+        fn delete(&self, _sref: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn seed_linked_inbox(project_id: &str, address: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, \
+             display_name, kind, host, port, tls, username, drafts_folder, status, created_at) \
+             VALUES (?1, ?2, ?3, NULL, 'imap', 'imap.example.com', 993, 'implicit-tls', \
+             ?3, NULL, 'connected', 100)",
+            rusqlite::params![id, project_id, address],
+        )
+        .expect("seed linked inbox");
+        id
+    }
+
+    #[test]
+    fn linked_password_resolution_never_leaks_the_raw_vault_error() {
+        let (name, path) = unique("vaultm3");
+        let project_id = insert_project(&name, &path);
+        let address = format!("mine@{name}.example");
+        let row_id = seed_linked_inbox(&project_id, &address);
+        let row = external::inbox_for_address(&address).expect("row");
+
+        // A raw vault error carrying a filesystem path / keychain detail
+        // must NOT reach the caller's hint (M3).
+        let raw_leak = format!(
+            "keychain read denied: /Users/rosson/Library/Keychains/login.keychain-db \
+             (item mailext_{row_id})"
+        );
+        let resp = resolve_linked_password(
+            &ScriptedVault(Err(raw_leak.clone())),
+            &row,
+            &address,
+        )
+        .expect_err("vault error → 503");
+        assert_eq!(resp.status, "503 Service Unavailable");
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "not_ready");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(!hint.contains("keychain"), "raw error leaked: {hint}");
+        assert!(!hint.contains("/Users/"), "path leaked: {hint}");
+        assert!(!hint.contains(&row_id), "row id leaked: {hint}");
+        assert!(hint.contains("reconnect"), "generic reconnect guidance: {hint}");
+
+        // A missing credential (Ok(None)) still teaches the same generic
+        // reconnect story, and a present one flows through unchanged.
+        let missing = resolve_linked_password(&ScriptedVault(Ok(None)), &row, &address)
+            .expect_err("missing → 503");
+        assert_eq!(missing.status, "503 Service Unavailable");
+        assert!(body_json(&missing)["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("reconnect"));
+        let Ok(pw) = resolve_linked_password(
+            &ScriptedVault(Ok(Some("app-pw".to_string()))),
+            &row,
+            &address,
+        ) else {
+            panic!("a present credential should resolve to the password");
+        };
+        assert_eq!(pw, "app-pw");
+
+        cleanup_linked_inbox(&row_id);
+        cleanup_project(&project_id);
+    }
+
+    fn cleanup_linked_inbox(id: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute(
+            "DELETE FROM mail_external_inboxes WHERE id = ?1",
+            rusqlite::params![id],
+        );
     }
 }

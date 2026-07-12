@@ -6351,7 +6351,7 @@ cmd_schema() {
     {
       "name": "mail link",
       "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft) --workspace <ws> | list | remove <address>",
-      "description": "Connect the user's OWN external email accounts as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Two add paths: (1) generic IMAP with an app-password (Gmail app-password, Fastmail, company IMAP), or (2) OAuth with --provider gmail|microsoft (NO password): Gmail links over IMAP-XOAUTH2 via the system browser + a 127.0.0.1 loopback (do it ON the daemon's machine; a remote daemon returns a 'link on the daemon's box' teaching error), Microsoft over the Microsoft Graph API via a device code you enter in any browser. The OAuth flow runs SERVER-SIDE (the daemon polls/exchanges); codes and tokens NEVER reach the CLI and are vaulted daemon-side. Each inbox binds to ONE PRIMARY workspace whose agents read it (via messages/read/wait) and save reply drafts via 'k2 mail draft'. Sending is OFF (draft-only); OAuth inboxes have no send scope in Phase 1. Share with more workspaces via 'k2 mail access grant'. The password/tokens are vaulted daemon-side, never in the DB, never in output, never on argv.",
+      "description": "Connect the user's OWN external email accounts as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Two add paths: (1) generic IMAP with an app-password (Gmail app-password, Fastmail, company IMAP), or (2) OAuth with --provider gmail|microsoft (NO password): Gmail links over IMAP-XOAUTH2 via the system browser + a 127.0.0.1 loopback (do it ON the daemon's machine; a remote daemon returns a 'link on the daemon's box' teaching error), Microsoft over the Microsoft Graph API via a device code you enter in any browser. The OAuth flow runs SERVER-SIDE (the daemon polls/exchanges); codes and tokens NEVER reach the CLI and are vaulted daemon-side. Each inbox binds to ONE PRIMARY workspace whose agents read it (via messages/read/wait) and save reply drafts via 'k2 mail draft'. Drafting is always on; sending is OFF by default — raise a workspace to level 'send' to let its agents send via SMTP (app-password and Gmail-OAuth inboxes send over SMTP; Microsoft-OAuth is draft-only until Graph send lands). Share with more workspaces via 'k2 mail access grant'. The password/tokens are vaulted daemon-side, never in the DB, never in output, never on argv.",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--provider", "arg": "p", "description": "OAuth link: gmail (IMAP-XOAUTH2, system-browser loopback) | microsoft (Graph, device code). No --host/password; the daemon runs the flow and the CLI long-polls to connected (add)."},
@@ -11902,7 +11902,7 @@ def print_inboxes(rows, agent_view):
                 r.get("address", ""), r.get("source", "?"),
                 _level_word(r.get("yourLevel")), r.get("maxLevel", "?"), r.get("status", "?")))
         print()
-        print("read: k2 mail messages [<address>]   send needs level 'send' on a hosted inbox")
+        print("read: k2 mail messages [<address>]   send needs level 'send' (hosted, or a linked inbox with SMTP)")
         print("MAX is the CEILING, not a promise — sending also needs a send transport configured.")
     else:
         print(("%-" + str(w) + "s%-9s%-22s%s") % ("ADDRESS", "SOURCE", "PRIMARY", "GRANTS"))
@@ -13278,9 +13278,9 @@ cmd_mail_approvals() {
 }
 
 # S9 (PRD §17.5): save a reply DRAFT into an external assistant
-# inbox's real Drafts folder. Agent verb — read + draft is ALL an
-# agent can do with an external account; the human reviews and sends
-# from their own mail client.
+# inbox's real Drafts folder. Agent verb — drafting is always on so the
+# human can review + send from their own client; agents can also send
+# directly once a workspace is raised to the 'send' level (SMTP).
 cmd_mail_draft() {
     if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
     local id="" body="" body_file="" as_json=false
@@ -13799,8 +13799,8 @@ DISCOVER & READ
 WRITE
   draft <message-id>          LINKED inbox: save a reply DRAFT into your human's own
                               mail account (they review + send it themselves)
-  send <to>                   Send from a HOSTED inbox you have 'send' on — gated
-                              off | approval | on (your human's choice)
+  send <to>                   Send from an inbox you have 'send' on — hosted OR a linked
+                              inbox over SMTP — gated off | approval | on (human's choice)
   reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox)
   outbox [<id>]               Your outbound + status (denied shows your human's note)
 
@@ -14233,10 +14233,12 @@ to this workspace). The draft lands in the account's REAL Drafts folder,
 threaded onto the source message — your human sees it in their own mail
 client, reviews, edits, and sends it themselves.
 
-You can NEVER send from an external account: no verb, flag, or approval
-does it — drafts only, by design. `k2 mail send`/`reply` govern K2-hosted
-addresses instead; using `draft` on a K2-hosted message id errors with a
-pointer to `k2 mail reply`.
+`draft` only DRAFTS — it never sends. Sending FROM a linked account is a
+separate, opt-in capability: once your human raises this workspace to the
+`send` level, `k2 mail send`/`reply` submit over SMTP (app-password and
+Gmail-OAuth inboxes; Microsoft-OAuth stays draft-only until Graph send
+lands). Using `draft` on a K2-hosted message id errors with a pointer to
+`k2 mail reply`.
 
 USAGE
   k2 mail draft <message-id> (--body <text> | --body-file <f>) [--json]
@@ -14266,13 +14268,13 @@ COLUMNS
   ADDRESS   the inbox
   SOURCE    hosted (K2-minted) | linked (your own external IMAP account)
   LEVEL     your access: read < draft < send
-  MAX       the ceiling for this source (hosted: send · linked: draft) —
+  MAX       the ceiling for this source (send for both hosted and linked) —
             a CEILING, not a promise: effective send also needs a send
             transport configured on the inbox
   STATUS    active / connected / error
 
   read: k2 mail messages [<address>]   draft: k2 mail draft (linked only)
-  send needs level 'send' on a HOSTED inbox (linked accounts never send).
+  send needs level 'send' (hosted, or a linked inbox with SMTP configured).
 
 FLAGS
   --json                 JSON: {ok,count,inboxes:[{address,source,displayName,
@@ -15128,7 +15130,7 @@ case "${1:-help}" in
             delete)      shift 2; cmd_mail_delete "$@" ;;
             folder)      shift 2; cmd_mail_folder "$@" ;;
             # Save a reply DRAFT into a LINKED assistant inbox's real
-            # Drafts folder (agent verb; linked accounts never send).
+            # Drafts folder (agent verb; sending is a separate 'send'-level verb).
             draft)       shift 2; cmd_mail_draft "$@" ;;
             outbox)      shift 2; cmd_mail_outbox "$@" ;;
             # S11: the user's OWN external accounts (link add|list|remove)

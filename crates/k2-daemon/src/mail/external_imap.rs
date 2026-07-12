@@ -493,6 +493,12 @@ impl ImapOps for RealImapOps {
         let mut session = login(inbox, password)?;
         let drafts_folder = resolve_drafts_folder(&mut session, inbox)?;
         let _ = session.logout();
+        // A clean IMAP connect + login is inbox-health news: clear any
+        // stale `error`/`last_error` so a previously-failed inbox that now
+        // authenticates shows `connected`. Best-effort — a status-write
+        // failure must never fail the check. (On the ADD path the row is
+        // not yet persisted, so this UPDATE is a harmless no-op.)
+        external::record_check(&inbox.id, Ok(()));
         Ok(ConnectCheck { drafts_folder })
     }
 

@@ -164,7 +164,14 @@ fn complete_with_tokens(
             LinkStatus::Connected,
             Some(format!(
                 "connected {address} — agents in the bound workspace can read it and save reply \
-                 drafts (OAuth inboxes are read + draft; no send scope in Phase 1)"
+                 drafts. {}",
+                if provider == OauthProvider::Gmail {
+                    "Drafting is always on; raise it to 'send' with 'k2 mail access set-level' \
+                     to let agents also send via SMTP (XOAUTH2)."
+                } else {
+                    "Drafting is always on; sending from Microsoft inboxes is not yet available \
+                     (draft-only until Graph send lands)."
+                }
             )),
         ),
         Err(e) => set_terminal(link_id, LinkStatus::Error, Some(ext_error_hint(e))),

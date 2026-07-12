@@ -62,9 +62,15 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// and corrects the linked-send story — drafting is always available,
 /// sending needs a human-granted `send` level, and OAuth inboxes stay
 /// draft-only in Phase 1.
-pub const SKILL_VERSION_MANAGER: u32 = 6;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 6;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 6;
+///
+/// Manager / K2SO-agent / custom-agent bumped to 7 in 0.40.42 (SMTP
+/// XOAUTH2 landed): a Gmail-OAuth inbox now sends over SMTP at the
+/// `send` level just like an app-password inbox — only Microsoft-OAuth
+/// stays draft-only (until Graph send lands). The assistant-inbox note
+/// corrects the "OAuth inboxes are draft-only" claim accordingly.
+pub const SKILL_VERSION_MANAGER: u32 = 7;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 7;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 7;
 pub const SKILL_VERSION_TEMPLATE: u32 = 2;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;

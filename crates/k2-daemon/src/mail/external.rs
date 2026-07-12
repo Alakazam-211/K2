@@ -362,14 +362,25 @@ impl ReadBackend for ExternalImapBackend {
         limit: usize,
     ) -> Result<Vec<EmailSummary>, ListError> {
         self.check_handle(account_id)?;
-        self.ops.list_inbox(&self.inbox, &self.password, filter, limit)
+        let out = self.ops.list_inbox(&self.inbox, &self.password, filter, limit)?;
+        // A successful LIST is a genuine backend round-trip (connect +
+        // login + SELECT/SEARCH all succeeded) — clear any stale `error`
+        // health so `k2 mail inboxes` reflects reality. Best-effort: a
+        // failed status write must never fail the read.
+        record_check(&self.inbox.id, Ok(()));
+        Ok(out)
     }
 
     fn fetch_full(&self, account_id: &str, email_id: &str) -> Result<Option<EmailFull>, String> {
         self.check_handle(account_id)?;
         let Some(raw) = self.ops.fetch_raw(&self.inbox, &self.password, email_id)? else {
+            // Ok(None) = message not there / stale UID (masked not-found) —
+            // NOT proof of a healthy round-trip, so leave health untouched.
             return Ok(None);
         };
+        // A real message came back — genuine successful round-trip; clear
+        // any stale error state (best-effort).
+        record_check(&self.inbox.id, Ok(()));
         full_from_raw(email_id, &raw).map(Some)
     }
 
@@ -1160,7 +1171,14 @@ pub fn add_oauth_inbox(
         "kind": kind,
         "hint": format!(
             "connected — agents in the bound workspace can read '{email_address}' and save \
-             reply drafts. OAuth inboxes are read + draft (no send scope in Phase 1)."
+             reply drafts. {}",
+            if provider == crate::mail::oauth::OauthProvider::Gmail {
+                "Drafting is always on; raise it to 'send' with 'k2 mail access set-level' to \
+                 let agents also send via SMTP (XOAUTH2)."
+            } else {
+                "Drafting is always on; sending from Microsoft inboxes is not yet available \
+                 (draft-only until Graph send lands)."
+            }
         ),
     }))
 }
@@ -2184,6 +2202,63 @@ a,b\r\n1,2\r\n\
         assert_eq!(backend.fetch_blob("XB1", "uid:7:42", "m.eml", "message/rfc822").unwrap(), RAW_FIXTURE.to_vec());
         assert_eq!(backend.fetch_blob("XB1", "uid:7:42#1", "q2.csv", "text/csv").unwrap(), b"a,b\r\n1,2".to_vec());
         assert!(backend.fetch_blob("XB1", "garbage", "x", "y").is_err());
+    }
+
+    #[test]
+    fn a_successful_read_clears_a_stale_error_but_a_failure_re_records_it() {
+        let project = unique_project();
+        let addr = unique_addr("heal");
+        let row = test_inbox(&uuid::Uuid::new_v4().to_string(), &project, &addr);
+        seed_row(&row);
+        // Pre-seed the row into the errored state a prior (pre-fix) failure
+        // would have left behind.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE mail_external_inboxes SET status = 'error', \
+                 last_error = 'login: authentication failed' WHERE id = ?1",
+                rusqlite::params![row.id],
+            )
+            .expect("seed error state");
+        }
+        let pre = inbox_for_address(&addr).expect("row");
+        assert_eq!(pre.status, "error");
+        assert!(pre.last_error.is_some());
+
+        // A successful LIST (genuine backend round-trip) clears it.
+        let mut ops = FakeOps::default();
+        ops.raw_by_token.insert("uid:7:42".to_string(), raw_email());
+        let backend =
+            ExternalImapBackend::new(row.clone(), "pw".to_string(), std::sync::Arc::new(ops));
+        let summaries = backend
+            .list_inbox(&row.id, &ListFilter::default(), 20)
+            .expect("list ok");
+        assert_eq!(summaries.len(), 1);
+
+        let healed = inbox_for_address(&addr).expect("row");
+        assert_eq!(healed.status, "connected", "success cleared status");
+        assert!(healed.last_error.is_none(), "success cleared last_error");
+        assert!(healed.last_checked_at.is_some());
+
+        // A genuine transport failure still records the error (asymmetry
+        // preserved — success clears, failure marks).
+        record_check(&row.id, Err("login: authentication failed"));
+        let failed = inbox_for_address(&addr).expect("row");
+        assert_eq!(failed.status, "error");
+        assert_eq!(failed.last_error.as_deref(), Some("login: authentication failed"));
+
+        // A masked not-found read (Ok(None)) leaves health untouched — it
+        // is not proof of a healthy round-trip.
+        assert!(
+            backend.fetch_full(&row.id, "uid:7:9999").expect("ok").is_none(),
+            "unknown uid reads as None"
+        );
+        let after_miss = inbox_for_address(&addr).expect("row");
+        assert_eq!(after_miss.status, "error", "not-found did not clear");
+
+        cleanup_row(&row.id);
+        cleanup_project(&project);
     }
 
     #[test]

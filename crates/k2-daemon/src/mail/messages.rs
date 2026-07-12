@@ -49,7 +49,8 @@ pub fn wrap_untrusted(body: &str) -> String {
 
 /// Which backend serves an address. S9 filled the seam's first
 /// external variant: an address with a `mail_external_inboxes` row is
-/// served by the user's OWN IMAP account (read + draft only — PRD
+/// served by the user's OWN IMAP account (read + draft, and — once a
+/// workspace is raised to the 'send' level — SMTP submission; PRD
 /// §17.5); everything else is a K2-minted local Stalwart address.
 /// Future kinds (`ExternalJmap`, `GmailApi`) are new variants here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

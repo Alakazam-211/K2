@@ -230,7 +230,8 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'project-groups' ||
           activeSection === 'k2-connect' ||
           activeSection === 'connections' ||
-          activeSection === 'email-hosting'
+          activeSection === 'email-hosting' ||
+          activeSection === 'email-link'
             ? 'overflow-hidden p-0'
             : activeSection === 'dictation-lab'
               ? 'overflow-hidden p-6'

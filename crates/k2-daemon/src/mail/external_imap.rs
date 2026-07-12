@@ -151,6 +151,7 @@ fn oauth_login(inbox: &MailExternalInbox, auth: &external::OauthFields) -> Resul
         auth.token_expires_at,
         now,
         None,
+        None,
         &http,
     )
     .map_err(|e| format!("oauth token for inbox {}: {e}", inbox.id))?;
@@ -1208,6 +1209,7 @@ mod tests {
             OauthProvider::Gmail,
             Some(3_600),
             10_000,
+            None,
             None,
             &http,
         )

@@ -113,12 +113,14 @@ fn provider_configs_match_prd_9() {
 }
 
 #[test]
-fn no_client_secret_field_exists() {
-    // Compile-time guarantee: ProviderConfig carries only public data.
-    // (If a `client_secret` field were added, this doc-lock reminds the
-    // author it violates the public-client rule.)
+fn client_secret_config_is_google_only() {
+    // Google Desktop clients REQUIRE a token-endpoint secret; Microsoft
+    // device-code is a true public client → no secret, ever.
     let g = OauthProvider::Gmail.config();
+    assert_eq!(g.client_secret_placeholder, Some("REPLACE_ME-google-client-secret"));
     assert!(g.client_id_placeholder.contains("REPLACE_ME"));
+    let m = OauthProvider::Microsoft.config();
+    assert_eq!(m.client_secret_placeholder, None, "Microsoft is a public client");
 }
 
 #[test]
@@ -133,6 +135,44 @@ fn client_id_override_seam() {
         client_id(OauthProvider::Gmail, Some("   ")),
         OauthProvider::Gmail.config().client_id_placeholder
     );
+}
+
+#[test]
+fn client_secret_override_seam() {
+    // Override wins over the placeholder (BYO / enterprise seam).
+    assert_eq!(
+        client_secret(OauthProvider::Gmail, Some("my-byo-secret")),
+        Some("my-byo-secret")
+    );
+    // No override → Google's placeholder secret.
+    assert_eq!(
+        client_secret(OauthProvider::Gmail, None),
+        OauthProvider::Gmail.config().client_secret_placeholder
+    );
+    // Blank override falls back to the placeholder (mirrors client_id).
+    assert_eq!(
+        client_secret(OauthProvider::Gmail, Some("   ")),
+        OauthProvider::Gmail.config().client_secret_placeholder
+    );
+    // Microsoft has no secret even with a blank/None override.
+    assert_eq!(client_secret(OauthProvider::Microsoft, None), None);
+    // But an explicit override still applies if a caller forces one.
+    assert_eq!(client_secret(OauthProvider::Microsoft, Some("x")), Some("x"));
+}
+
+#[test]
+fn provider_config_debug_redacts_client_secret() {
+    // The Debug impl must never surface the secret placeholder value.
+    let dbg = format!("{:?}", OauthProvider::Gmail.config());
+    assert!(
+        !dbg.contains("REPLACE_ME-google-client-secret"),
+        "ProviderConfig Debug leaked the client_secret: {dbg}"
+    );
+    assert!(dbg.contains("<redacted>"), "secret should show as <redacted>: {dbg}");
+    // Microsoft's None secret prints as None (no leakage, no redaction tag
+    // needed since there is no secret).
+    let m = format!("{:?}", OauthProvider::Microsoft.config());
+    assert!(m.contains("client_secret_placeholder: None"), "{m}");
 }
 
 #[test]
@@ -217,6 +257,25 @@ fn device_poll_all_states() {
 }
 
 #[test]
+fn device_forms_never_carry_client_secret() {
+    // Microsoft device-code is a true public client: neither device_start
+    // nor device_poll may put a client_secret on the wire.
+    let http = MockHttp::new();
+    http.push(
+        200,
+        r#"{"device_code":"DC","user_code":"WXYZ","verification_uri":"https://x","expires_in":900,"interval":5}"#,
+    );
+    http.push(
+        200,
+        r#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"token_type":"Bearer"}"#,
+    );
+    device_start(OauthProvider::Microsoft, None, &http).expect("start");
+    device_poll(OauthProvider::Microsoft, "DC", None, &http).expect("poll");
+    assert_eq!(http.field(0, "client_secret"), None, "device_start carried a secret");
+    assert_eq!(http.field(1, "client_secret"), None, "device_poll carried a secret");
+}
+
+#[test]
 fn device_poll_unknown_error_is_hard_error() {
     let http = MockHttp::new();
     http.push(400, r#"{"error":"invalid_client","error_description":"bad app"}"#);
@@ -257,6 +316,7 @@ fn loopback_exchange_request_and_tokens() {
         "auth-code-xyz",
         "http://127.0.0.1:53017/cb",
         None,
+        None,
         &http,
     )
     .expect("exchange");
@@ -265,6 +325,57 @@ fn loopback_exchange_request_and_tokens() {
     assert_eq!(http.field(0, "grant_type").as_deref(), Some("authorization_code"));
     assert_eq!(http.field(0, "code").as_deref(), Some("auth-code-xyz"));
     assert_eq!(http.field(0, "redirect_uri").as_deref(), Some("http://127.0.0.1:53017/cb"));
+    // Google Desktop client → the exchange form MUST include client_secret
+    // (resolved to the provider placeholder here).
+    assert_eq!(
+        http.field(0, "client_secret").as_deref(),
+        OauthProvider::Gmail.config().client_secret_placeholder,
+        "Gmail loopback exchange must carry the resolved client_secret"
+    );
+}
+
+#[test]
+fn loopback_exchange_gmail_includes_secret_override_wins() {
+    let http = MockHttp::new();
+    http.push(
+        200,
+        r#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"token_type":"Bearer"}"#,
+    );
+    loopback_exchange(
+        OauthProvider::Gmail,
+        "code",
+        "http://127.0.0.1:1/cb",
+        None,
+        Some("byo-secret-123"),
+        &http,
+    )
+    .expect("exchange");
+    // An override secret wins over the placeholder on the wire.
+    assert_eq!(http.field(0, "client_secret").as_deref(), Some("byo-secret-123"));
+}
+
+#[test]
+fn loopback_exchange_microsoft_omits_secret() {
+    // Microsoft is a public client: even via the loopback exchange path
+    // its form must carry NO client_secret (byte-for-byte unchanged).
+    let http = MockHttp::new();
+    http.push(
+        200,
+        r#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"token_type":"Bearer"}"#,
+    );
+    loopback_exchange(
+        OauthProvider::Microsoft,
+        "code",
+        "http://127.0.0.1:1/cb",
+        None,
+        None,
+        &http,
+    )
+    .expect("exchange");
+    assert_eq!(http.field(0, "client_secret"), None, "MS exchange must carry no secret");
+    // The form is exactly the four public-client fields.
+    let keys: Vec<String> = http.request(0).1.into_iter().map(|(k, _)| k).collect();
+    assert_eq!(keys, vec!["client_id", "code", "redirect_uri", "grant_type"]);
 }
 
 #[test]
@@ -290,20 +401,28 @@ fn refresh_microsoft_rotates_refresh_token() {
         200,
         r#"{"access_token":"AT-new","refresh_token":"RT-new","expires_in":3600,"token_type":"Bearer"}"#,
     );
-    let t = refresh(OauthProvider::Microsoft, "RT-old", None, &http).expect("refresh");
+    let t = refresh(OauthProvider::Microsoft, "RT-old", None, None, &http).expect("refresh");
     assert_eq!(t.access_token, "AT-new");
     assert_eq!(t.refresh_token.as_deref(), Some("RT-new"), "MS rotates → new RT present");
     assert_eq!(http.field(0, "grant_type").as_deref(), Some("refresh_token"));
     assert_eq!(http.field(0, "refresh_token").as_deref(), Some("RT-old"));
+    // Microsoft is a public client → NO client_secret on its refresh form.
+    assert_eq!(http.field(0, "client_secret"), None, "MS refresh must carry no secret");
 }
 
 #[test]
 fn refresh_google_omits_refresh_token() {
     let http = MockHttp::new();
     http.push(200, r#"{"access_token":"AT-g","expires_in":3600,"token_type":"Bearer"}"#);
-    let t = refresh(OauthProvider::Gmail, "RT-keep", None, &http).expect("refresh");
+    let t = refresh(OauthProvider::Gmail, "RT-keep", None, None, &http).expect("refresh");
     assert_eq!(t.access_token, "AT-g");
     assert_eq!(t.refresh_token, None, "Google omits RT on refresh (keep the old one)");
+    // Google Desktop clients MUST send client_secret on refresh too.
+    assert_eq!(
+        http.field(0, "client_secret").as_deref(),
+        OauthProvider::Gmail.config().client_secret_placeholder,
+        "Gmail refresh must carry the resolved client_secret"
+    );
 }
 
 // ── Vault round-trip ─────────────────────────────────────────────────────
@@ -362,6 +481,7 @@ fn access_token_for_reuses_when_fresh() {
         Some(5_000),
         1_000,
         None,
+        None,
         &http,
     )
     .expect("access");
@@ -387,6 +507,7 @@ fn access_token_for_refreshes_within_60s_window() {
         OauthProvider::Microsoft,
         Some(1_030),
         1_000,
+        None,
         None,
         &http,
     )
@@ -414,6 +535,7 @@ fn access_token_for_google_keeps_refresh_token_on_refresh() {
         None, // unknown expiry → force refresh
         1_000,
         None,
+        None,
         &http,
     )
     .expect("access");
@@ -438,6 +560,7 @@ fn access_token_for_without_refresh_token_fails_loud() {
         OauthProvider::Gmail,
         None,
         1_000,
+        None,
         None,
         &http,
     )
@@ -514,7 +637,7 @@ fn parse_error_on_token_body_drops_the_body() {
     // sentinel. The resulting error must NOT echo it.
     let http = MockHttp::new();
     http.push(200, &format!("garbage {SENTINEL} not-json"));
-    let err = refresh(OauthProvider::Gmail, "RT", None, &http).unwrap_err();
+    let err = refresh(OauthProvider::Gmail, "RT", None, None, &http).unwrap_err();
     let shown = format!("{err} / {err:?}");
     assert!(!shown.contains(SENTINEL), "error leaked the response body: {shown}");
     assert!(matches!(err, OauthError::Parse(_)));

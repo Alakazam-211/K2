@@ -294,7 +294,10 @@ fn run_loopback_flow(
         );
         return;
     }
-    match oauth::loopback_exchange(provider, &code, redirect_uri, None, http) {
+    // `None` client_secret override → the provider's placeholder resolves
+    // (Google's Desktop secret; Microsoft omits it). Same seam as
+    // `client_id_override`, currently `None`.
+    match oauth::loopback_exchange(provider, &code, redirect_uri, None, None, http) {
         Ok(tokens) => {
             complete_with_tokens(secrets, provider, link_id, owner_project_id, address, &tokens, now_fn())
         }

@@ -20,10 +20,17 @@
 //! canned mock token endpoint — mirrors the `ImapOps`/JMAP fake pattern.
 //! Production uses [`ReqwestHttp`] (blocking reqwest, form-urlencoded).
 //!
-//! **No client secret anywhere.** Device / loopback are PUBLIC-client
-//! flows; only a `client_id` is configured (a placeholder const now —
-//! Rosson registers the real Google/Azure apps, prd §15 Q1 — with a
-//! BYO-`client_id` override seam for enterprises).
+//! **Client secret: Google only, and it is NOT confidential.** Microsoft
+//! device-code is a TRUE public client — no secret, ever. But Google
+//! "Desktop app" clients REQUIRE a `client_secret` at the token endpoint
+//! (auth-code exchange AND refresh) or Google returns `invalid_client`.
+//! That secret ships inside installed apps, so it is not confidential and
+//! may be carried as config — but it is handled EXACTLY like a token:
+//! vault/config only, NEVER a DB column, NEVER logged, redacted in
+//! `Debug`. Only a `client_id` (+ optional Google `client_secret`) is
+//! configured — placeholder consts now; Rosson registers the real
+//! Google/Azure apps, prd §15 Q1 — with BYO override seams for
+//! enterprises.
 //!
 //! **Tokens are vaulted, never a column, never logged.** They live in
 //! the daemon vault under `ext-inbox-<row-id>-oauth` (JSON). [`Tokens`]
@@ -88,10 +95,12 @@ pub enum FlowKind {
 }
 
 /// Static per-provider OAuth endpoints + scope (prd §9). Endpoints are
-/// public knowledge; NO secret lives here. `auth_url` powers the
-/// loopback flow, `device_auth_url` the device flow — a provider that
-/// lacks one for the requested flow yields an [`OauthError::Config`].
-#[derive(Debug)]
+/// public knowledge. The only sensitive-ish field is Google's
+/// `client_secret_placeholder` (a Desktop-client secret — not truly
+/// confidential, but handled like a token): the manual `Debug` impl
+/// below REDACTS it so it can never reach a log line. `auth_url` powers
+/// the loopback flow, `device_auth_url` the device flow — a provider
+/// that lacks one for the requested flow yields an [`OauthError::Config`].
 pub struct ProviderConfig {
     /// The vendor's stable spelling (must match `OauthProvider::as_str`).
     pub name: &'static str,
@@ -116,6 +125,37 @@ pub struct ProviderConfig {
     /// registered Google/Azure client ids (prd §15 Q1). A per-call
     /// override (BYO client_id, enterprise) wins over this.
     pub client_id_placeholder: &'static str,
+    /// The token-endpoint client secret placeholder, when the provider
+    /// requires one. `Some` for Google (Desktop clients MUST send a
+    /// `client_secret` on the auth-code exchange AND refresh or Google
+    /// returns `invalid_client`); `None` for Microsoft (a true public
+    /// client — its forms carry NO secret, ever). Not truly confidential
+    /// (it ships in installed apps) but handled like a token: vault/config
+    /// only, never a DB column, never logged, REDACTED in `Debug`. A
+    /// per-call override wins over this.
+    pub client_secret_placeholder: Option<&'static str>,
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("name", &self.name)
+            .field("auth_url", &self.auth_url)
+            .field("device_auth_url", &self.device_auth_url)
+            .field("token_url", &self.token_url)
+            .field("revoke_url", &self.revoke_url)
+            .field("scope", &self.scope)
+            .field("extra_auth_params", &self.extra_auth_params)
+            .field("default_flow", &self.default_flow)
+            .field("client_id_placeholder", &self.client_id_placeholder)
+            // A client secret NEVER reaches a log line — redact but keep
+            // the Some/None shape so config debugging still works.
+            .field(
+                "client_secret_placeholder",
+                &self.client_secret_placeholder.map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 /// Google / Gmail / Google Workspace (prd §9). Loopback is the default;
@@ -133,6 +173,10 @@ pub static GMAIL: ProviderConfig = ProviderConfig {
     default_flow: FlowKind::Loopback,
     // Real value: a Google Cloud "TV and Limited Input" / Desktop client.
     client_id_placeholder: "REPLACE_ME.apps.googleusercontent.com",
+    // Google Desktop clients REQUIRE a client_secret at the token endpoint
+    // (exchange + refresh). Rosson swaps this for the registered client's
+    // secret; not confidential (ships in the installed app) but redacted.
+    client_secret_placeholder: Some("REPLACE_ME-google-client-secret"),
 };
 
 /// Microsoft 365 / Exchange Online (prd §9). Device-code is the default
@@ -154,15 +198,34 @@ pub static MICROSOFT: ProviderConfig = ProviderConfig {
     // Real value: an Azure AD app registration (public client, "allow
     // public client flows" = yes).
     client_id_placeholder: "REPLACE_ME-microsoft-client-id",
+    // Microsoft device-code is a TRUE public client — NO client_secret on
+    // any of its forms, ever.
+    client_secret_placeholder: None,
 };
 
 /// Resolve the effective client_id: a caller-supplied override (BYO /
-/// enterprise seam) wins, else the provider's placeholder const. NO
-/// client secret is ever involved (public-client flows).
+/// enterprise seam) wins, else the provider's placeholder const.
 pub fn client_id<'a>(provider: OauthProvider, override_id: Option<&'a str>) -> &'a str {
     match override_id.map(str::trim).filter(|s| !s.is_empty()) {
         Some(id) => id,
         None => provider.config().client_id_placeholder,
+    }
+}
+
+/// Resolve the effective client_secret, mirroring [`client_id`]: a
+/// caller-supplied override wins, else the provider's placeholder const.
+/// `None` means "this provider sends NO client_secret" (Microsoft, a true
+/// public client) — callers MUST omit the field from the token form when
+/// this is `None` so Microsoft's request stays byte-for-byte secret-free.
+/// Google returns `Some(secret)` (Desktop clients require it at the token
+/// endpoint). The result is never logged (it is a token-grade value).
+pub fn client_secret<'a>(
+    provider: OauthProvider,
+    override_secret: Option<&'a str>,
+) -> Option<&'a str> {
+    match override_secret.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(secret) => Some(secret),
+        None => provider.config().client_secret_placeholder,
     }
 }
 
@@ -597,19 +660,24 @@ pub fn loopback_exchange(
     code: &str,
     redirect_uri: &str,
     client_id_override: Option<&str>,
+    client_secret_override: Option<&str>,
     http: &dyn HttpClient,
 ) -> Result<Tokens, OauthError> {
     let cfg = provider.config();
     let cid = client_id(provider, client_id_override);
-    let resp = http.post_form(
-        cfg.token_url,
-        &[
-            ("client_id", cid),
-            ("code", code),
-            ("redirect_uri", redirect_uri),
-            ("grant_type", "authorization_code"),
-        ],
-    )?;
+    let mut form: Vec<(&str, &str)> = vec![
+        ("client_id", cid),
+        ("code", code),
+        ("redirect_uri", redirect_uri),
+        ("grant_type", "authorization_code"),
+    ];
+    // Google Desktop clients require a `client_secret` here or the token
+    // endpoint answers `invalid_client`. Microsoft resolves to `None` →
+    // the field is OMITTED, keeping its public-client form unchanged.
+    if let Some(secret) = client_secret(provider, client_secret_override) {
+        form.push(("client_secret", secret));
+    }
+    let resp = http.post_form(cfg.token_url, &form)?;
     tokens_or_error(&resp)
 }
 
@@ -639,18 +707,23 @@ pub fn refresh(
     provider: OauthProvider,
     refresh_token: &str,
     client_id_override: Option<&str>,
+    client_secret_override: Option<&str>,
     http: &dyn HttpClient,
 ) -> Result<Tokens, OauthError> {
     let cfg = provider.config();
     let cid = client_id(provider, client_id_override);
-    let resp = http.post_form(
-        cfg.token_url,
-        &[
-            ("client_id", cid),
-            ("refresh_token", refresh_token),
-            ("grant_type", "refresh_token"),
-        ],
-    )?;
+    let mut form: Vec<(&str, &str)> = vec![
+        ("client_id", cid),
+        ("refresh_token", refresh_token),
+        ("grant_type", "refresh_token"),
+    ];
+    // Google requires the `client_secret` on refresh too (same
+    // `invalid_client` failure without it). Microsoft → `None` → OMITTED,
+    // so its refresh form is unchanged.
+    if let Some(secret) = client_secret(provider, client_secret_override) {
+        form.push(("client_secret", secret));
+    }
+    let resp = http.post_form(cfg.token_url, &form)?;
     tokens_or_error(&resp)
 }
 
@@ -765,6 +838,7 @@ pub fn access_token_for(
     token_expires_at: Option<i64>,
     now: i64,
     client_id_override: Option<&str>,
+    client_secret_override: Option<&str>,
     http: &dyn HttpClient,
 ) -> Result<FreshAccess, OauthError> {
     const SKEW: i64 = 60; // refresh 60s early (prd §10 clock margin)
@@ -788,7 +862,13 @@ pub fn access_token_for(
             "inbox {row_id} has no refresh_token — it must be re-linked"
         ))
     })?;
-    let fresh = refresh(provider, &refresh_token, client_id_override, http)?;
+    let fresh = refresh(
+        provider,
+        &refresh_token,
+        client_id_override,
+        client_secret_override,
+        http,
+    )?;
 
     // Google KEEPS the refresh_token (omits it on refresh); Microsoft
     // ROTATES it (returns a new one). Persist the newest either way.

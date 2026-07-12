@@ -19,6 +19,11 @@
 //!      UTF-8 inside a quoted string (RFC 6855 servers accept it;
 //!      strict RFC 3501 servers may error — the route surfaces that
 //!      error verbatim rather than silently dropping the filter).
+//!   3. S11 management ops ([`manage_on_session`]) — move/archive/delete
+//!      use RFC 6851 `UID MOVE`; a server WITHOUT the MOVE extension
+//!      errors loudly (NO COPY+EXPUNGE fallback, so K2 NEVER expunges —
+//!      DELETE is always a move to Trash). Archive/Trash SPECIAL-USE
+//!      detection shares the UTF-7 / SPECIAL-USE-variance caveats of #1.
 //!
 //! Session hygiene: one short-lived connection per operation (connect
 //! → LOGIN → work → LOGOUT). External inboxes are polled at human
@@ -28,10 +33,10 @@
 //! credentials, never message bodies (pre-mortem #16).
 
 use crate::mail::external::{
-    self, ConnectCheck, ImapOps, RawEmail, TLS_IMPLICIT, TLS_STARTTLS,
+    self, ConnectCheck, ImapOps, ManageOp, RawEmail, TLS_IMPLICIT, TLS_STARTTLS,
 };
 use crate::mail::jmap::{EmailSummary, MailAddr};
-use crate::mail::messages::{ListError, ListFilter, MailFolder};
+use crate::mail::messages::{ListError, ListFilter, MailFolder, ManageOutcome};
 use imap::types::{Flag, Name};
 use imap::{ClientBuilder, ConnectionMode, TlsKind};
 use imap_proto::types::NameAttribute;
@@ -423,6 +428,174 @@ impl ImapOps for RealImapOps {
         let result = append_draft_to(&mut session, folder, rfc822);
         let _ = session.logout();
         result
+    }
+
+    fn manage(
+        &self,
+        inbox: &MailExternalInbox,
+        password: &str,
+        op: &ManageOp,
+    ) -> Result<ManageOutcome, ListError> {
+        let mut session = login(inbox, password).map_err(ListError::Engine)?;
+        let result = manage_on_session(&mut session, op);
+        let _ = session.logout();
+        result
+    }
+}
+
+// ── ⚠ LIVE-BOX #3: S11 management ops (MOVE / STORE / CREATE / RENAME) ───
+//
+// DELETE is ALWAYS a MOVE to Trash (never an EXPUNGE) — there is no
+// permanent-deletion code path here. Move/archive/delete use RFC 6851
+// `UID MOVE`; a server WITHOUT the MOVE extension surfaces the server's
+// error verbatim (we deliberately do NOT fall back to COPY + STORE
+// \Deleted + EXPUNGE, so K2 can never expunge a message). Archive/Trash
+// resolution reuses the `pick_archive_folder`/`pick_trash_folder`
+// SPECIAL-USE patterns (same UTF-7 / SPECIAL-USE-variance caveats as
+// [`survey_folders`]). All message ops SELECT INBOX and verify
+// UIDVALIDITY first (a rebuilt mailbox → a loud "no longer in the inbox"
+// error, never the wrong message).
+
+/// LIST "" * → the folder NAMES (for Move-Named / rename / list).
+fn manage_list_names(session: &mut ImapSession) -> Result<Vec<String>, ListError> {
+    let names = session.list(Some(""), Some("*")).map_err(|e| ListError::Engine(imap_err("LIST", e)))?;
+    Ok(names.iter().map(|n: &Name| n.name().to_string()).collect())
+}
+
+/// LIST "" * → `(name, has <attr> special-use)` for a chosen SPECIAL-USE
+/// attribute (feeds the pure Junk/Archive/Trash pickers).
+fn manage_survey_special(
+    session: &mut ImapSession,
+    matches: impl Fn(&NameAttribute) -> bool,
+) -> Result<Vec<(String, bool)>, ListError> {
+    let names = session.list(Some(""), Some("*")).map_err(|e| ListError::Engine(imap_err("LIST", e)))?;
+    Ok(names
+        .iter()
+        .map(|n: &Name| {
+            let special = n.attributes().iter().any(&matches);
+            (n.name().to_string(), special)
+        })
+        .collect())
+}
+
+/// SELECT INBOX, verify the token's UIDVALIDITY, return the UID. A
+/// malformed token or a rebuilt mailbox is a loud error — never a MOVE
+/// of the WRONG message.
+fn select_inbox_for_uid(session: &mut ImapSession, uid_token: &str) -> Result<u32, ListError> {
+    let Some((want_validity, uid)) = external::parse_uid_token(uid_token) else {
+        return Err(ListError::Engine(format!("malformed message token '{uid_token}'")));
+    };
+    let mailbox = session.select("INBOX").map_err(|e| ListError::Engine(imap_err("SELECT INBOX", e)))?;
+    if mailbox.uid_validity.unwrap_or(0) != want_validity {
+        return Err(ListError::Engine(
+            "this message is no longer in the inbox (the mailbox was rebuilt) — re-list with \
+             'k2 mail messages'"
+                .to_string(),
+        ));
+    }
+    Ok(uid)
+}
+
+/// UID STORE +/-FLAGS for one flag (`\Seen` / `\Flagged`).
+fn store_flag(session: &mut ImapSession, uid: u32, flag: &str, on: bool) -> Result<(), ListError> {
+    let op = if on { "+FLAGS" } else { "-FLAGS" };
+    session
+        .uid_store(uid.to_string(), format!("{op} ({flag})"))
+        .map(|_| ())
+        .map_err(|e| ListError::Engine(imap_err("STORE", e)))
+}
+
+/// Resolve a Move destination folder name (Inbox/Junk/Named) against the
+/// live LIST. A mistyped Named/Junk is [`ListError::UnknownFolder`].
+fn resolve_move_dest(session: &mut ImapSession, dest: &MailFolder) -> Result<String, ListError> {
+    match dest {
+        MailFolder::Inbox => Ok("INBOX".to_string()),
+        MailFolder::Junk => {
+            let folders = manage_survey_special(session, |a| matches!(a, NameAttribute::Junk))?;
+            external::pick_junk_folder(&folders).ok_or_else(|| ListError::UnknownFolder {
+                requested: "junk".to_string(),
+                available: folders.into_iter().map(|(n, _)| n).collect(),
+            })
+        }
+        MailFolder::Named(want) => {
+            let names = manage_list_names(session)?;
+            names
+                .iter()
+                .find(|n| n.eq_ignore_ascii_case(want))
+                .cloned()
+                .ok_or_else(|| ListError::UnknownFolder { requested: want.clone(), available: names })
+        }
+    }
+}
+
+/// The single management dispatch on an open session.
+fn manage_on_session(session: &mut ImapSession, op: &ManageOp) -> Result<ManageOutcome, ListError> {
+    match op {
+        ManageOp::FolderList => Ok(ManageOutcome {
+            folders: manage_list_names(session)?,
+            ..Default::default()
+        }),
+        ManageOp::FolderCreate { name } => {
+            session.create(name).map_err(|e| ListError::Engine(imap_err("CREATE", e)))?;
+            Ok(ManageOutcome::default())
+        }
+        ManageOp::FolderRename { from, to } => {
+            let names = manage_list_names(session)?;
+            let real = names.iter().find(|n| n.eq_ignore_ascii_case(from)).cloned().ok_or_else(
+                || ListError::UnknownFolder { requested: from.to_string(), available: names.clone() },
+            )?;
+            session
+                .rename(&real, to)
+                .map_err(|e| ListError::Engine(imap_err("RENAME", e)))?;
+            Ok(ManageOutcome::default())
+        }
+        ManageOp::Flags { uid_token, read, flagged } => {
+            let uid = select_inbox_for_uid(session, uid_token)?;
+            if let Some(r) = read {
+                store_flag(session, uid, "\\Seen", *r)?;
+            }
+            if let Some(f) = flagged {
+                store_flag(session, uid, "\\Flagged", *f)?;
+            }
+            Ok(ManageOutcome::default())
+        }
+        ManageOp::Move { uid_token, dest } => {
+            let folder = resolve_move_dest(session, dest)?;
+            let uid = select_inbox_for_uid(session, uid_token)?;
+            session
+                .uid_mv(uid.to_string(), &folder)
+                .map_err(|e| ListError::Engine(imap_err("UID MOVE", e)))?;
+            Ok(ManageOutcome { folder: Some(folder), ..Default::default() })
+        }
+        ManageOp::Archive { uid_token } => {
+            let folders = manage_survey_special(session, |a| matches!(a, NameAttribute::Archive))?;
+            let folder = external::pick_archive_folder(&folders).ok_or_else(|| {
+                ListError::UnknownFolder {
+                    requested: "archive".to_string(),
+                    available: folders.into_iter().map(|(n, _)| n).collect(),
+                }
+            })?;
+            let uid = select_inbox_for_uid(session, uid_token)?;
+            session
+                .uid_mv(uid.to_string(), &folder)
+                .map_err(|e| ListError::Engine(imap_err("UID MOVE", e)))?;
+            Ok(ManageOutcome { folder: Some(folder), ..Default::default() })
+        }
+        ManageOp::Trash { uid_token } => {
+            // DELETE = move to Trash. NEVER an EXPUNGE.
+            let folders = manage_survey_special(session, |a| matches!(a, NameAttribute::Trash))?;
+            let folder = external::pick_trash_folder(&folders).ok_or_else(|| {
+                ListError::UnknownFolder {
+                    requested: "trash".to_string(),
+                    available: folders.into_iter().map(|(n, _)| n).collect(),
+                }
+            })?;
+            let uid = select_inbox_for_uid(session, uid_token)?;
+            session
+                .uid_mv(uid.to_string(), &folder)
+                .map_err(|e| ListError::Engine(imap_err("UID MOVE", e)))?;
+            Ok(ManageOutcome { folder: Some(folder), ..Default::default() })
+        }
     }
 }
 

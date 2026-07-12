@@ -34,7 +34,9 @@ use base64::Engine as _;
 
 use crate::mail::addresses::{self, AddrError};
 use crate::mail::jmap::{AttachmentMeta, EmailFull, EmailSummary, MailAddr};
-use crate::mail::messages::{ListError, ListFilter, ReadBackend};
+use crate::mail::messages::{
+    ListError, ListFilter, MailFolder, ManageBackend, ManageOutcome, ReadBackend,
+};
 use crate::mail::secrets::SecretStore;
 use k2_core::db::schema::MailExternalInbox;
 use mail_parser::{MessageParser, MimeHeaders as _};
@@ -229,6 +231,38 @@ pub trait ImapOps: Send + Sync {
         folder: &str,
         rfc822: &[u8],
     ) -> Result<(), String>;
+    /// S11 management/delete op (move/flag/archive/delete/folders). The
+    /// destination folder is resolved server-side (Move: the named/junk
+    /// folder; Archive/Trash: the SPECIAL-USE pick). DELETE routes here
+    /// as [`ManageOp::Trash`] — a MOVE to Trash, NEVER an EXPUNGE.
+    fn manage(
+        &self,
+        inbox: &MailExternalInbox,
+        password: &str,
+        op: &ManageOp,
+    ) -> Result<ManageOutcome, ListError>;
+}
+
+/// One S11 management op against a linked IMAP account (the ops-layer
+/// seam so routes + `ExternalImapBackend` unit-test with fakes). Every
+/// message op keys the message by its `uid:<validity>:<uid>` token.
+#[derive(Debug, Clone)]
+pub enum ManageOp<'a> {
+    /// Move a message to a destination folder (Inbox/Junk/Named).
+    Move { uid_token: &'a str, dest: MailFolder },
+    /// Move a message to the Archive folder (SPECIAL-USE `\Archive`).
+    Archive { uid_token: &'a str },
+    /// DELETE = move a message to Trash (SPECIAL-USE `\Trash`). NEVER an
+    /// EXPUNGE.
+    Trash { uid_token: &'a str },
+    /// Set/clear `\Seen` (read) and/or `\Flagged` (flagged).
+    Flags { uid_token: &'a str, read: Option<bool>, flagged: Option<bool> },
+    /// CREATE a folder.
+    FolderCreate { name: &'a str },
+    /// RENAME a folder (`from` must exist).
+    FolderRename { from: &'a str, to: &'a str },
+    /// LIST folder names.
+    FolderList,
 }
 
 // ── ReadBackend adapter (the §17.5 seam's external variant) ─────────────
@@ -303,6 +337,70 @@ impl ReadBackend for ExternalImapBackend {
             None => Ok(raw.raw),
             Some(n) => attachment_bytes(&raw.raw, n),
         }
+    }
+}
+
+/// [`ManageBackend`] over the same linked IMAP inbox: the S11 move /
+/// flag / archive / delete-to-Trash / folder ops flow through the
+/// injected [`ImapOps::manage`] seam, so every effect unit-tests with a
+/// fake. DELETE is a MOVE to Trash — this impl exposes no expunge path.
+impl ManageBackend for ExternalImapBackend {
+    fn move_message(
+        &self,
+        account_id: &str,
+        email_id: &str,
+        dest: &MailFolder,
+    ) -> Result<ManageOutcome, ListError> {
+        self.check_handle(account_id)?;
+        self.ops
+            .manage(&self.inbox, &self.password, &ManageOp::Move { uid_token: email_id, dest: dest.clone() })
+    }
+    fn archive_message(&self, account_id: &str, email_id: &str) -> Result<ManageOutcome, ListError> {
+        self.check_handle(account_id)?;
+        self.ops
+            .manage(&self.inbox, &self.password, &ManageOp::Archive { uid_token: email_id })
+    }
+    fn trash_message(&self, account_id: &str, email_id: &str) -> Result<ManageOutcome, ListError> {
+        self.check_handle(account_id)?;
+        self.ops
+            .manage(&self.inbox, &self.password, &ManageOp::Trash { uid_token: email_id })
+    }
+    fn set_flags(
+        &self,
+        account_id: &str,
+        email_id: &str,
+        read: Option<bool>,
+        flagged: Option<bool>,
+    ) -> Result<(), String> {
+        self.check_handle(account_id)?;
+        self.ops
+            .manage(
+                &self.inbox,
+                &self.password,
+                &ManageOp::Flags { uid_token: email_id, read, flagged },
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    fn folder_create(&self, account_id: &str, name: &str) -> Result<(), String> {
+        self.check_handle(account_id)?;
+        self.ops
+            .manage(&self.inbox, &self.password, &ManageOp::FolderCreate { name })
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    fn folder_rename(&self, account_id: &str, from: &str, to: &str) -> Result<(), ListError> {
+        self.check_handle(account_id)?;
+        self.ops
+            .manage(&self.inbox, &self.password, &ManageOp::FolderRename { from, to })
+            .map(|_| ())
+    }
+    fn folder_list(&self, account_id: &str) -> Result<Vec<String>, String> {
+        self.check_handle(account_id)?;
+        self.ops
+            .manage(&self.inbox, &self.password, &ManageOp::FolderList)
+            .map(|o| o.folders)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -1042,6 +1140,40 @@ pub fn pick_junk_folder(folders: &[(String, bool)]) -> Option<String> {
     None
 }
 
+/// Pure Archive-folder pick over a LIST survey (the `archive` verb): a
+/// `\Archive` SPECIAL-USE attribute wins; otherwise the common names,
+/// case-insensitively. `folders` = `(name, has_archive_special_use)` —
+/// same shape as [`pick_junk_folder`].
+pub fn pick_archive_folder(folders: &[(String, bool)]) -> Option<String> {
+    if let Some((name, _)) = folders.iter().find(|(_, special)| *special) {
+        return Some(name.clone());
+    }
+    const COMMON: [&str; 4] = ["Archive", "Archives", "[Gmail]/All Mail", "INBOX.Archive"];
+    for want in COMMON {
+        if let Some((name, _)) = folders.iter().find(|(name, _)| name.eq_ignore_ascii_case(want)) {
+            return Some(name.clone());
+        }
+    }
+    None
+}
+
+/// Pure Trash-folder pick over a LIST survey (delete = MOVE to Trash,
+/// never EXPUNGE): a `\Trash` SPECIAL-USE attribute wins; otherwise the
+/// common names, case-insensitively. `folders` =
+/// `(name, has_trash_special_use)`.
+pub fn pick_trash_folder(folders: &[(String, bool)]) -> Option<String> {
+    if let Some((name, _)) = folders.iter().find(|(_, special)| *special) {
+        return Some(name.clone());
+    }
+    const COMMON: [&str; 5] = ["Trash", "Deleted", "Deleted Items", "[Gmail]/Trash", "INBOX.Trash"];
+    for want in COMMON {
+        if let Some((name, _)) = folders.iter().find(|(name, _)| name.eq_ignore_ascii_case(want)) {
+            return Some(name.clone());
+        }
+    }
+    None
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests — fakes + fixtures, no network (house rules).
 // ──────────────────────────────────────────────────────────────────────
@@ -1062,6 +1194,9 @@ pub(crate) mod tests {
         pub raw_by_token: std::collections::HashMap<String, RawEmail>,
         pub appended: Mutex<Vec<(String, Vec<u8>)>>,
         pub marked: Mutex<Vec<String>>,
+        /// S11: records the management ops performed (verb + args) so
+        /// tests assert the exact effect without any network.
+        pub managed: Mutex<Vec<String>>,
     }
 
     impl ImapOps for FakeOps {
@@ -1117,6 +1252,83 @@ pub(crate) mod tests {
                 .unwrap()
                 .push((folder.to_string(), rfc822.to_vec()));
             Ok(())
+        }
+        fn manage(
+            &self,
+            _inbox: &MailExternalInbox,
+            _password: &str,
+            op: &ManageOp,
+        ) -> Result<ManageOutcome, ListError> {
+            // Resolve a Named/Inbox/Junk destination against the fake
+            // folder survey (case-insensitive by name; Junk/Archive/Trash
+            // via the pure pickers).
+            let named = |want: &str| -> Result<String, ListError> {
+                if want.eq_ignore_ascii_case("inbox") {
+                    return Ok("INBOX".to_string());
+                }
+                self.folders
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(want))
+                    .map(|(n, _)| n.clone())
+                    .ok_or_else(|| ListError::UnknownFolder {
+                        requested: want.to_string(),
+                        available: self.folders.iter().map(|(n, _)| n.clone()).collect(),
+                    })
+            };
+            let mut rec = self.managed.lock().unwrap();
+            match op {
+                ManageOp::Move { uid_token, dest } => {
+                    let folder = match dest {
+                        MailFolder::Inbox => "INBOX".to_string(),
+                        MailFolder::Junk => pick_junk_folder(&self.folders).ok_or_else(|| {
+                            ListError::UnknownFolder {
+                                requested: "junk".to_string(),
+                                available: self.folders.iter().map(|(n, _)| n.clone()).collect(),
+                            }
+                        })?,
+                        MailFolder::Named(n) => named(n)?,
+                    };
+                    rec.push(format!("move {uid_token} -> {folder}"));
+                    Ok(ManageOutcome { folder: Some(folder), ..Default::default() })
+                }
+                ManageOp::Archive { uid_token } => {
+                    let folder = pick_archive_folder(&self.folders).ok_or_else(|| {
+                        ListError::UnknownFolder {
+                            requested: "archive".to_string(),
+                            available: self.folders.iter().map(|(n, _)| n.clone()).collect(),
+                        }
+                    })?;
+                    rec.push(format!("archive {uid_token} -> {folder}"));
+                    Ok(ManageOutcome { folder: Some(folder), ..Default::default() })
+                }
+                ManageOp::Trash { uid_token } => {
+                    let folder = pick_trash_folder(&self.folders).ok_or_else(|| {
+                        ListError::UnknownFolder {
+                            requested: "trash".to_string(),
+                            available: self.folders.iter().map(|(n, _)| n.clone()).collect(),
+                        }
+                    })?;
+                    rec.push(format!("trash {uid_token} -> {folder}"));
+                    Ok(ManageOutcome { folder: Some(folder), ..Default::default() })
+                }
+                ManageOp::Flags { uid_token, read, flagged } => {
+                    rec.push(format!("flags {uid_token} read={read:?} flagged={flagged:?}"));
+                    Ok(ManageOutcome::default())
+                }
+                ManageOp::FolderCreate { name } => {
+                    rec.push(format!("create {name}"));
+                    Ok(ManageOutcome::default())
+                }
+                ManageOp::FolderRename { from, to } => {
+                    named(from)?;
+                    rec.push(format!("rename {from} -> {to}"));
+                    Ok(ManageOutcome::default())
+                }
+                ManageOp::FolderList => Ok(ManageOutcome {
+                    folders: self.folders.iter().map(|(n, _)| n.clone()).collect(),
+                    ..Default::default()
+                }),
+            }
         }
     }
 
@@ -1780,5 +1992,49 @@ a,b\r\n1,2\r\n\
         assert_eq!(backend.fetch_blob("XB1", "uid:7:42", "m.eml", "message/rfc822").unwrap(), RAW_FIXTURE.to_vec());
         assert_eq!(backend.fetch_blob("XB1", "uid:7:42#1", "q2.csv", "text/csv").unwrap(), b"a,b\r\n1,2".to_vec());
         assert!(backend.fetch_blob("XB1", "garbage", "x", "y").is_err());
+    }
+
+    #[test]
+    fn external_manage_backend_moves_archives_trashes_flags_and_folders() {
+        let fake = std::sync::Arc::new(FakeOps {
+            folders: vec![
+                ("INBOX".to_string(), false),
+                ("Archive".to_string(), false),
+                ("Trash".to_string(), false),
+                ("Receipts".to_string(), false),
+            ],
+            ..Default::default()
+        });
+        let inbox = test_inbox("XM1", "pX", "rosson@example.com");
+        let backend = ExternalImapBackend::new(inbox.clone(), "pw".to_string(), fake.clone());
+        let tok = encode_uid_token(5, 42);
+
+        // Move to a named folder → the resolved folder rides back.
+        let out = backend
+            .move_message(&inbox.id, &tok, &MailFolder::Named("Receipts".to_string()))
+            .expect("move");
+        assert_eq!(out.folder.as_deref(), Some("Receipts"));
+        // Archive / delete-to-Trash resolve via the pure pickers.
+        assert_eq!(backend.archive_message(&inbox.id, &tok).unwrap().folder.as_deref(), Some("Archive"));
+        assert_eq!(backend.trash_message(&inbox.id, &tok).unwrap().folder.as_deref(), Some("Trash"));
+        // Flags + folder ops.
+        backend.set_flags(&inbox.id, &tok, Some(true), Some(false)).expect("flags");
+        backend.folder_create(&inbox.id, "New").expect("create");
+        assert!(backend.folder_list(&inbox.id).unwrap().contains(&"Archive".to_string()));
+        backend.folder_rename(&inbox.id, "Receipts", "Bills").expect("rename");
+
+        // An unknown move destination teaches (UnknownFolder), and a
+        // foreign account handle is refused (defense in depth).
+        let err = backend
+            .move_message(&inbox.id, &tok, &MailFolder::Named("Nope".to_string()))
+            .expect_err("unknown");
+        assert!(matches!(err, ListError::UnknownFolder { .. }));
+        assert!(backend.archive_message("someone-else", &tok).is_err());
+
+        // The fake recorded the exact ops (no network anywhere).
+        let rec = fake.managed.lock().unwrap();
+        assert!(rec.iter().any(|r| r.starts_with("move")), "{rec:?}");
+        assert!(rec.iter().any(|r| r.starts_with("trash")), "{rec:?}");
+        assert!(rec.iter().any(|r| r.starts_with("rename")), "{rec:?}");
     }
 }

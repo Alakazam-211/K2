@@ -45,9 +45,11 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 
 use crate::cli_response::CliResponse;
-use crate::mail::messages::{self, ListError, MailBackend, ReadBackend, ReadError, WatchAddress};
+use crate::mail::messages::{
+    self, ListError, MailBackend, MailFolder, ManageBackend, ReadBackend, ReadError, WatchAddress,
+};
 use crate::mail::secrets::SecretStore as _;
-use crate::mail::{domains, external, external_imap};
+use crate::mail::{access, domains, external, external_imap};
 
 // ── Response helpers (the S2/S3 error contract) ─────────────────────────
 
@@ -762,6 +764,419 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+// ── S11 MANAGEMENT + DELETE (move / flag / archive / delete / folders) ──
+//
+// These are workspace-token POSTs (agent verbs, like `draft`), gated by
+// the ORTHOGONAL can_manage / can_delete caps (0081) — INDEPENDENT of the
+// read/draft/send level. Every deny masks the SAME `not_found` a foreign
+// address gets. DELETE is ALWAYS a MOVE to Trash — never an EXPUNGE.
+
+/// §17.5 seam for MANAGEMENT: the same backends as reads, but exposing
+/// the [`ManageBackend`] surface. `LocalStalwart` → the JMAP manage
+/// backend; `ExternalImap` → the linked IMAP inbox + its vault
+/// credential (mirrors [`backend_for`]).
+fn manage_backend_for(address: &str) -> Result<Box<dyn ManageBackend>, CliResponse> {
+    match messages::backend_for_address(address) {
+        MailBackend::LocalStalwart => {
+            let (client, _hostname) = domains::engine_from_db().map_err(|hint| {
+                error_response("503 Service Unavailable", "not_ready", &hint)
+            })?;
+            Ok(Box::new(messages::StalwartManageBackend::new(client)))
+        }
+        MailBackend::ExternalImap => {
+            let Some(row) = external::inbox_for_address(address) else {
+                return Err(error_response(
+                    "404 Not Found",
+                    "not_found",
+                    &format!("no address '{address}' in this workspace"),
+                ));
+            };
+            let secrets = crate::mail::secrets::FileSecretStore::default();
+            let password = match secrets.resolve(&external::vault_key(&row.id)) {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    return Err(error_response(
+                        "503 Service Unavailable",
+                        "not_ready",
+                        &format!(
+                            "credentials for '{address}' are missing from the vault — your \
+                             human can reconnect it with 'k2 mail external add'"
+                        ),
+                    ))
+                }
+                Err(hint) => {
+                    return Err(error_response("503 Service Unavailable", "not_ready", &hint))
+                }
+            };
+            Ok(Box::new(external::ExternalImapBackend::new(
+                row,
+                password,
+                std::sync::Arc::new(external_imap::RealImapOps),
+            )))
+        }
+    }
+}
+
+/// Decode + MANAGE/DELETE-gate a message id → `(address, account_id,
+/// email_id)`. `need_delete` picks the `can_delete` gate (whose
+/// manage-but-no-delete deny is a TEACHING usage error, not masked —
+/// the workspace already sees the inbox); otherwise `can_manage`. Every
+/// other deny answers the masked message-level not_found.
+fn managed_message(
+    project_id: &str,
+    token: &str,
+    need_delete: bool,
+) -> Result<(String, String, String), CliResponse> {
+    let Some((address, email_id)) = messages::decode_message_id(token) else {
+        return Err(error_response(
+            "400 Bad Request",
+            "usage",
+            "invalid message id — use an id from 'k2 mail messages'",
+        ));
+    };
+    let masked = || {
+        error_response(
+            "404 Not Found",
+            "not_found",
+            &format!("no message '{token}' in this workspace"),
+        )
+    };
+    let gate = if need_delete {
+        access::can_delete(project_id, &address)
+    } else {
+        access::can_manage(project_id, &address)
+    };
+    match gate {
+        Ok(inbox) => {
+            let Some(account_id) = inbox.account_id else {
+                return Err(masked());
+            };
+            Ok((inbox.address, account_id, email_id))
+        }
+        // can_delete's manage-but-no-delete teaching error surfaces as a
+        // usage 400 (the caller can already see the inbox — nothing leaks).
+        Err(ReadError::Usage(hint)) => Err(error_response("400 Bad Request", "usage", &hint)),
+        Err(_) => Err(masked()),
+    }
+}
+
+/// MANAGE-gate an inbox by ADDRESS (folder ops) → `(address,
+/// account_id)`. Deny → masked not_found; malformed address → usage.
+fn managed_inbox(project_id: &str, raw_address: &str) -> Result<(String, String), CliResponse> {
+    match access::can_manage(project_id, raw_address) {
+        Ok(inbox) => {
+            let Some(account_id) = inbox.account_id else {
+                return Err(error_response(
+                    "502 Bad Gateway",
+                    "engine",
+                    &format!("address '{}' has no mailbox on the mail server", inbox.address),
+                ));
+            };
+            Ok((inbox.address, account_id))
+        }
+        Err(ReadError::Usage(hint)) => Err(error_response("400 Bad Request", "usage", &hint)),
+        Err(_) => Err(error_response(
+            "404 Not Found",
+            "not_found",
+            &format!("no address '{raw_address}' in this workspace"),
+        )),
+    }
+}
+
+/// A destination folder string → [`MailFolder`] (Inbox/Junk/Named).
+fn parse_dest_folder(name: &str) -> MailFolder {
+    let t = name.trim();
+    if t.eq_ignore_ascii_case("inbox") {
+        MailFolder::Inbox
+    } else if t.eq_ignore_ascii_case("junk") || t.eq_ignore_ascii_case("spam") {
+        MailFolder::Junk
+    } else {
+        MailFolder::Named(t.to_string())
+    }
+}
+
+fn need_project_body(project: &str) -> Result<(String, String), CliResponse> {
+    if project.trim().is_empty() {
+        return Err(error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'project' (workspace name | path | UUID)",
+        ));
+    }
+    resolve_caller(project)
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct MoveBody {
+    project: String,
+    id: String,
+    folder: String,
+}
+
+/// POST `/cli/mail/move` — move a message to a folder (can_manage).
+pub fn handle_move(body: &[u8]) -> CliResponse {
+    let b: MoveBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.id.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'id' — a message id from 'k2 mail messages'");
+    }
+    if b.folder.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'folder' — the destination folder name");
+    }
+    let (_path, project_id) = match need_project_body(&b.project) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let (address, account_id, email_id) = match managed_message(&project_id, &b.id, false) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let backend = match manage_backend_for(&address) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
+    match backend.move_message(&account_id, &email_id, &parse_dest_folder(&b.folder)) {
+        Ok(o) => ok_json(serde_json::json!({ "ok": true, "id": b.id, "folder": o.folder })),
+        Err(e) => list_error_response(e),
+    }
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct FlagBody {
+    project: String,
+    id: String,
+    read: Option<bool>,
+    flagged: Option<bool>,
+}
+
+/// POST `/cli/mail/flag` — set/clear \Seen (read) / \Flagged
+/// (flagged) on a message (can_manage). At least one of read/flagged.
+pub fn handle_flag(body: &[u8]) -> CliResponse {
+    let b: FlagBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.id.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'id' — a message id from 'k2 mail messages'");
+    }
+    if b.read.is_none() && b.flagged.is_none() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "nothing to change — pass at least one of read (--read/--unread) or flagged (--star/--unstar)",
+        );
+    }
+    let (_path, project_id) = match need_project_body(&b.project) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let (address, account_id, email_id) = match managed_message(&project_id, &b.id, false) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let backend = match manage_backend_for(&address) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
+    match backend.set_flags(&account_id, &email_id, b.read, b.flagged) {
+        Ok(()) => ok_json(serde_json::json!({
+            "ok": true, "id": b.id, "read": b.read, "flagged": b.flagged,
+        })),
+        Err(hint) => read_error_response(ReadError::Engine(hint)),
+    }
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct IdBody {
+    project: String,
+    id: String,
+}
+
+/// POST `/cli/mail/archive` — move a message to the Archive folder
+/// (can_manage).
+pub fn handle_archive(body: &[u8]) -> CliResponse {
+    let b: IdBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.id.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'id' — a message id from 'k2 mail messages'");
+    }
+    let (_path, project_id) = match need_project_body(&b.project) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let (address, account_id, email_id) = match managed_message(&project_id, &b.id, false) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let backend = match manage_backend_for(&address) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
+    match backend.archive_message(&account_id, &email_id) {
+        Ok(o) => ok_json(serde_json::json!({ "ok": true, "id": b.id, "folder": o.folder })),
+        Err(e) => list_error_response(e),
+    }
+}
+
+/// POST `/cli/mail/delete` — DELETE a message = move it to Trash
+/// (can_delete; NEVER a permanent expunge).
+pub fn handle_delete(body: &[u8]) -> CliResponse {
+    let b: IdBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.id.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'id' — a message id from 'k2 mail messages'");
+    }
+    let (_path, project_id) = match need_project_body(&b.project) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let (address, account_id, email_id) = match managed_message(&project_id, &b.id, true) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let backend = match manage_backend_for(&address) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
+    match backend.trash_message(&account_id, &email_id) {
+        Ok(o) => ok_json(serde_json::json!({
+            "ok": true, "id": b.id, "folder": o.folder, "trashed": true,
+        })),
+        Err(e) => list_error_response(e),
+    }
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct FolderCreateBody {
+    project: String,
+    address: String,
+    name: String,
+}
+
+/// POST `/cli/mail/folder/create` — create a folder in an inbox
+/// (can_manage).
+pub fn handle_folder_create(body: &[u8]) -> CliResponse {
+    let b: FolderCreateBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.address.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+    }
+    if b.name.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'name' — the folder to create");
+    }
+    let (_path, project_id) = match need_project_body(&b.project) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let (address, account_id) = match managed_inbox(&project_id, &b.address) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let backend = match manage_backend_for(&address) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
+    match backend.folder_create(&account_id, b.name.trim()) {
+        Ok(()) => ok_json(serde_json::json!({
+            "ok": true, "address": address, "folder": b.name.trim(), "created": true,
+        })),
+        Err(hint) => read_error_response(ReadError::Engine(hint)),
+    }
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct FolderRenameBody {
+    project: String,
+    address: String,
+    from: String,
+    to: String,
+}
+
+/// POST `/cli/mail/folder/rename` — rename a folder (can_manage).
+pub fn handle_folder_rename(body: &[u8]) -> CliResponse {
+    let b: FolderRenameBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.address.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+    }
+    if b.from.trim().is_empty() || b.to.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "rename needs 'from' and 'to' folder names");
+    }
+    let (_path, project_id) = match need_project_body(&b.project) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let (address, account_id) = match managed_inbox(&project_id, &b.address) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let backend = match manage_backend_for(&address) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
+    match backend.folder_rename(&account_id, b.from.trim(), b.to.trim()) {
+        Ok(()) => ok_json(serde_json::json!({
+            "ok": true, "address": address, "from": b.from.trim(), "to": b.to.trim(), "renamed": true,
+        })),
+        Err(e) => list_error_response(e),
+    }
+}
+
+/// GET `/cli/mail/folder/list?project=&address=` — list an inbox's
+/// folders (can_manage).
+pub fn handle_folder_list(params: &HashMap<String, String>) -> CliResponse {
+    let project = match crate::cli::need_project(params) {
+        Ok(p) => p,
+        Err(_) => {
+            return error_response(
+                "400 Bad Request",
+                "usage",
+                "missing 'project' (workspace name | path | UUID)",
+            )
+        }
+    };
+    let Some(address) = params.get("address").map(String::as_str).filter(|s| !s.is_empty()) else {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'address' — the inbox to list folders for ('k2 mail inboxes')",
+        );
+    };
+    let (_path, project_id) = match resolve_caller(&project) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let (address, account_id) = match managed_inbox(&project_id, address) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let backend = match manage_backend_for(&address) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
+    match backend.folder_list(&account_id) {
+        Ok(folders) => ok_json(serde_json::json!({
+            "ok": true, "address": address, "count": folders.len(), "folders": folders,
+        })),
+        Err(hint) => read_error_response(ReadError::Engine(hint)),
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests — validation + gating + masking + the no-server
 // 503, no network (house rules); deep read/wait behavior lives in
@@ -1123,5 +1538,80 @@ mod tests {
 
         cleanup_project(&project_id);
         cleanup_project(&project2);
+    }
+
+    // ── management + delete gating (0081) ──
+
+    #[test]
+    fn manage_verbs_validate_gate_on_caps_and_mask() {
+        let _g = crate::mail::mail_server_test_lock();
+        clear_mail_server();
+
+        // move: missing id / missing folder → usage.
+        let resp = handle_move(br#"{"project":"/tmp/x"}"#);
+        assert_eq!(resp.status, "400 Bad Request");
+        assert_eq!(body_json(&resp)["error"]["code"], "usage");
+
+        let (name, path) = unique("mmanage");
+        let project_id = insert_project(&name, &path);
+        let mine = format!("mine@{name}.example");
+        seed_address(&project_id, &mine, "active", Some("acc-1"));
+        let token = messages::encode_message_id(&mine, "M1");
+
+        // move without a folder → usage.
+        let resp = handle_move(
+            serde_json::json!({ "project": path, "id": token }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "400 Bad Request");
+
+        // Owned address but NO manage cap (default OFF) → masked
+        // not_found, BEFORE any engine dial.
+        let resp = handle_move(
+            serde_json::json!({ "project": path, "id": token, "folder": "Archive" })
+                .to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "not_found");
+        // delete with no manage at all → masked (never leaks existence).
+        let resp = handle_delete(
+            serde_json::json!({ "project": path, "id": token }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "404 Not Found");
+
+        // Grant manage (no delete): move now passes the gate → 503 (no
+        // server); delete TEACHES (manage but no delete → usage 400).
+        crate::mail::access::set_manage(&mine, &project_id, true, false).expect("manage on");
+        let resp = handle_move(
+            serde_json::json!({ "project": path, "id": token, "folder": "Archive" })
+                .to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+        let resp = handle_delete(
+            serde_json::json!({ "project": path, "id": token }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "usage");
+
+        // Enable delete → the delete gate passes → 503 (no server).
+        crate::mail::access::set_manage(&mine, &project_id, true, true).expect("delete on");
+        let resp = handle_delete(
+            serde_json::json!({ "project": path, "id": token }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+
+        // flag needs at least one of read/flagged.
+        let resp = handle_flag(
+            serde_json::json!({ "project": path, "id": token }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "400 Bad Request");
+
+        // folder/list on the managed inbox reaches the engine → 503.
+        let resp = handle_folder_list(&params(&[("project", &path), ("address", &mine)]));
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+        // folder/list missing address → usage.
+        let resp = handle_folder_list(&params(&[("project", &path)]));
+        assert_eq!(resp.status, "400 Bad Request");
+
+        cleanup_project(&project_id);
     }
 }

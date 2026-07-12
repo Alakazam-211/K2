@@ -203,6 +203,188 @@ impl ReadBackend for StalwartReadBackend {
     }
 }
 
+// ── S11 management/delete backend (move/flag/archive/delete/folders) ────
+
+/// The outcome of a management/delete op: `folder` = the resolved
+/// destination folder name (move/archive/delete); `folders` = the
+/// folder-list result. Empty for flag/folder-create/folder-rename.
+#[derive(Debug, Default, Clone)]
+pub struct ManageOutcome {
+    pub folder: Option<String>,
+    pub folders: Vec<String>,
+}
+
+/// What S11 inbox MANAGEMENT needs from any mail backend (hosted JMAP or
+/// linked IMAP), behind the SAME `backend_for_address` seam as reads.
+///
+/// DELETE is ALWAYS a MOVE to Trash — there is deliberately NO
+/// permanent-deletion method here (no EXPUNGE, no `Email/set destroy`).
+/// `email_id` is the backend id inside the opaque message token; the
+/// route has already gated `can_manage`/`can_delete`.
+pub trait ManageBackend {
+    /// Move a message to a destination folder (Inbox/Junk/Named).
+    fn move_message(
+        &self,
+        account_id: &str,
+        email_id: &str,
+        dest: &MailFolder,
+    ) -> Result<ManageOutcome, ListError>;
+    /// Move a message to the Archive folder (SPECIAL-USE `\Archive` /
+    /// JMAP role `archive` / common names).
+    fn archive_message(&self, account_id: &str, email_id: &str) -> Result<ManageOutcome, ListError>;
+    /// DELETE = move a message to Trash (SPECIAL-USE `\Trash` / JMAP role
+    /// `trash` / common names). NEVER a permanent expunge/destroy.
+    fn trash_message(&self, account_id: &str, email_id: &str) -> Result<ManageOutcome, ListError>;
+    /// Set/clear `\Seen` (read) and/or `\Flagged` (flagged). `None` =
+    /// leave that flag unchanged.
+    fn set_flags(
+        &self,
+        account_id: &str,
+        email_id: &str,
+        read: Option<bool>,
+        flagged: Option<bool>,
+    ) -> Result<(), String>;
+    /// Create a folder.
+    fn folder_create(&self, account_id: &str, name: &str) -> Result<(), String>;
+    /// Rename a folder (`from` must exist).
+    fn folder_rename(&self, account_id: &str, from: &str, to: &str) -> Result<(), ListError>;
+    /// List folder names (for `k2 mail folder list`).
+    fn folder_list(&self, account_id: &str) -> Result<Vec<String>, String>;
+}
+
+/// The hosted (local Stalwart / JMAP) management backend. Reuses the
+/// S1-minted client; every op is standard RFC 8621 `Email/set` /
+/// `Mailbox/set` (same stability class as the reads).
+pub struct StalwartManageBackend {
+    client: StalwartClient,
+}
+
+impl StalwartManageBackend {
+    pub fn new(client: StalwartClient) -> Self {
+        Self { client }
+    }
+
+    /// Resolve a move DESTINATION to a mailbox `(id, name)`. Inbox is the
+    /// role lookup; Junk matches role `junk`; Named matches name OR role
+    /// (case-insensitive). A miss is [`ListError::UnknownFolder`].
+    fn resolve_dest(
+        &self,
+        account_id: &str,
+        folder: &MailFolder,
+    ) -> Result<(String, String), ListError> {
+        if matches!(folder, MailFolder::Inbox) {
+            let id = self.client.mailbox_inbox_id(account_id).map_err(ListError::Engine)?;
+            return Ok((id, "INBOX".to_string()));
+        }
+        let boxes = self.client.mailbox_list(account_id).map_err(ListError::Engine)?;
+        let names = || boxes.iter().map(|m| m.name.clone()).collect::<Vec<_>>();
+        match folder {
+            MailFolder::Inbox => unreachable!(),
+            MailFolder::Junk => boxes
+                .iter()
+                .find(|m| m.role.as_deref() == Some("junk"))
+                .map(|m| (m.id.clone(), m.name.clone()))
+                .ok_or_else(|| ListError::UnknownFolder {
+                    requested: "junk".to_string(),
+                    available: names(),
+                }),
+            MailFolder::Named(want) => boxes
+                .iter()
+                .find(|m| {
+                    m.name.eq_ignore_ascii_case(want)
+                        || m.role.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(want))
+                })
+                .map(|m| (m.id.clone(), m.name.clone()))
+                .ok_or_else(|| ListError::UnknownFolder {
+                    requested: want.clone(),
+                    available: names(),
+                }),
+        }
+    }
+
+    /// Resolve a special-role folder (archive/trash) to `(id, name)`:
+    /// the RFC 8621 `role` first, else a common-name match.
+    fn resolve_role(
+        &self,
+        account_id: &str,
+        role: &str,
+        common: &[&str],
+    ) -> Result<(String, String), ListError> {
+        let boxes = self.client.mailbox_list(account_id).map_err(ListError::Engine)?;
+        if let Some(m) = boxes.iter().find(|m| m.role.as_deref() == Some(role)) {
+            return Ok((m.id.clone(), m.name.clone()));
+        }
+        for want in common {
+            if let Some(m) = boxes.iter().find(|m| m.name.eq_ignore_ascii_case(want)) {
+                return Ok((m.id.clone(), m.name.clone()));
+            }
+        }
+        Err(ListError::UnknownFolder {
+            requested: role.to_string(),
+            available: boxes.iter().map(|m| m.name.clone()).collect(),
+        })
+    }
+}
+
+impl ManageBackend for StalwartManageBackend {
+    fn move_message(
+        &self,
+        account_id: &str,
+        email_id: &str,
+        dest: &MailFolder,
+    ) -> Result<ManageOutcome, ListError> {
+        let (id, name) = self.resolve_dest(account_id, dest)?;
+        self.client.email_move(account_id, email_id, &id).map_err(ListError::Engine)?;
+        Ok(ManageOutcome { folder: Some(name), ..Default::default() })
+    }
+    fn archive_message(&self, account_id: &str, email_id: &str) -> Result<ManageOutcome, ListError> {
+        let (id, name) =
+            self.resolve_role(account_id, "archive", &["Archive", "Archives"])?;
+        self.client.email_move(account_id, email_id, &id).map_err(ListError::Engine)?;
+        Ok(ManageOutcome { folder: Some(name), ..Default::default() })
+    }
+    fn trash_message(&self, account_id: &str, email_id: &str) -> Result<ManageOutcome, ListError> {
+        // DELETE = move to Trash. NEVER a destroy/expunge.
+        let (id, name) =
+            self.resolve_role(account_id, "trash", &["Trash", "Deleted", "Deleted Items"])?;
+        self.client.email_move(account_id, email_id, &id).map_err(ListError::Engine)?;
+        Ok(ManageOutcome { folder: Some(name), ..Default::default() })
+    }
+    fn set_flags(
+        &self,
+        account_id: &str,
+        email_id: &str,
+        read: Option<bool>,
+        flagged: Option<bool>,
+    ) -> Result<(), String> {
+        if let Some(r) = read {
+            self.client.email_set_keyword(account_id, email_id, "$seen", r)?;
+        }
+        if let Some(f) = flagged {
+            self.client.email_set_keyword(account_id, email_id, "$flagged", f)?;
+        }
+        Ok(())
+    }
+    fn folder_create(&self, account_id: &str, name: &str) -> Result<(), String> {
+        self.client.mailbox_create(account_id, name).map(|_| ())
+    }
+    fn folder_rename(&self, account_id: &str, from: &str, to: &str) -> Result<(), ListError> {
+        let boxes = self.client.mailbox_list(account_id).map_err(ListError::Engine)?;
+        let id = boxes
+            .iter()
+            .find(|m| m.name.eq_ignore_ascii_case(from))
+            .map(|m| m.id.clone())
+            .ok_or_else(|| ListError::UnknownFolder {
+                requested: from.to_string(),
+                available: boxes.iter().map(|m| m.name.clone()).collect(),
+            })?;
+        self.client.mailbox_rename(account_id, &id, to).map_err(ListError::Engine)
+    }
+    fn folder_list(&self, account_id: &str) -> Result<Vec<String>, String> {
+        Ok(self.client.mailbox_list(account_id)?.into_iter().map(|m| m.name).collect())
+    }
+}
+
 // ── Query filters (route semantics → RFC 8621 wire shape) ──────────────
 
 /// Which mailbox a read targets. Default = the Inbox (every existing

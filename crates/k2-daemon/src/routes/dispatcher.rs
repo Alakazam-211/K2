@@ -581,6 +581,19 @@ async fn handle_one_request(
             | "/cli/mail/access/revoke"
             | "/cli/mail/access/set-primary"
             | "/cli/mail/access/set-level"
+            // 0081 inbox management + delete: the owner set-manage cap
+            // route (owner-or-admin via the /cli/mail/access/ prefix) +
+            // the workspace-token action verbs (move/flag/archive/delete/
+            // folder create+rename — can_manage/can_delete gated in the
+            // handlers; delete is always move-to-Trash, never expunge).
+            // They rows dial Stalwart/IMAP → the POST arm's spawn_blocking.
+            | "/cli/mail/access/set-manage"
+            | "/cli/mail/move"
+            | "/cli/mail/flag"
+            | "/cli/mail/archive"
+            | "/cli/mail/delete"
+            | "/cli/mail/folder/create"
+            | "/cli/mail/folder/rename"
             | "/cli/mail/draft"
             // Projects V1 P2 (prd-projects-v1 §4.1) — project-GROUP
             // mutations (NOT the legacy /cli/projects/* workspace

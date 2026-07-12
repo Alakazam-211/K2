@@ -630,6 +630,18 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0080_mail_external_smtp",
             include_str!("../../drizzle_sql/0080_mail_external_smtp.sql"),
         ),
+        // 0081 (K2 Mail — inbox management + delete, prd-email-server-v1
+        // §17.5): two per-workspace booleans ORTHOGONAL to `level` —
+        // `can_manage` (move/folders/flags/archive) + `can_delete`
+        // (delete = MOVE to Trash, never EXPUNGE; requires can_manage).
+        // On `mail_inbox_grants` for grantees, and `primary_can_manage`
+        // / `primary_can_delete` on BOTH `mail_addresses` and
+        // `mail_external_inboxes` for the primary's own caps. Default
+        // OFF everywhere (opt-in). Additive ADD COLUMNs, run once by name.
+        (
+            "0081_mail_manage_caps",
+            include_str!("../../drizzle_sql/0081_mail_manage_caps.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

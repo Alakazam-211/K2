@@ -6371,13 +6371,58 @@ cmd_schema() {
     },
     {
       "name": "mail access",
-      "usage": "k2 mail access grant <address> <workspace> --level read|draft|send | revoke <address> <workspace> | primary <address> <workspace> | level <address> <workspace> --level read|draft|send",
-      "description": "The ONE access layer over BOTH hosted and linked inboxes (PRIMARY/owner surface; agents exit 3). Levels order read < draft < send; 'send' is HOSTED-ONLY (linked accounts never send). grant = upsert a workspace's access (default level read). revoke = remove a grant (idempotent; the primary can't be revoked). primary = TRANSFER the managing workspace (the old primary keeps a grant at its prior ceiling). level = set a workspace's level (the primary's own ceiling when it names the primary). See 'k2 mail inboxes' for primary + grants.",
+      "usage": "k2 mail access grant <address> <workspace> --level read|draft|send | revoke <address> <workspace> | primary <address> <workspace> | level <address> <workspace> --level read|draft|send | manage <address> <workspace> [--on|--off] [--delete|--no-delete]",
+      "description": "The ONE access layer over BOTH hosted and linked inboxes (PRIMARY/owner surface; agents exit 3). Levels order read < draft < send; 'send' works on BOTH sources (hosted via the server, linked via SMTP). grant = upsert a workspace's access (default level read). revoke = remove a grant (idempotent; the primary can't be revoked). primary = TRANSFER the managing workspace. level = set a workspace's level. manage = set the MANAGEMENT caps, ORTHOGONAL to level: --on/--off toggles canManage (move/flag/archive/folders); --delete/--no-delete toggles canDelete (delete = move to Trash, never erase; REQUIRES manage). Defaults for manage: --on --no-delete; --off also clears delete. See 'k2 mail inboxes' for primary + grants (with canManage/canDelete).",
       "args": [{"name": "address", "required": true}, {"name": "workspace", "required": true}],
       "flags": [
-        {"name": "--level", "arg": "read|draft|send", "description": "read (messages/read/wait), draft (+ save reply drafts / hosted needs-approval), or send (hosted read + send/reply). Send is hosted-only."},
+        {"name": "--level", "arg": "read|draft|send", "description": "read (messages/read/wait), draft (+ save reply drafts / hosted needs-approval), or send (hosted read + send/reply; linked over SMTP). grant/level only."},
+        {"name": "--on", "arg": null, "description": "manage: enable canManage (default for the manage subcommand)."},
+        {"name": "--off", "arg": null, "description": "manage: clear canManage (also clears canDelete)."},
+        {"name": "--delete", "arg": null, "description": "manage: enable canDelete (needs manage on; delete = move to Trash)."},
+        {"name": "--no-delete", "arg": null, "description": "manage: clear canDelete (default for the manage subcommand)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
+    },
+    {
+      "name": "mail move",
+      "usage": "k2 mail move <message-id> <folder> [--json]",
+      "description": "Move a message to a folder (needs canManage on the inbox; ORTHOGONAL to your read/draft/send level — your human grants it with 'k2 mail access manage'). <folder> resolves case-insensitively; the specials 'inbox' and 'junk' are recognized. Without canManage you get the same masked not_found a foreign message gets. Works on hosted (JMAP) and linked (IMAP) inboxes.",
+      "args": [{"name": "message-id", "required": true}, {"name": "folder", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output ({ok,id,folder})."}]
+    },
+    {
+      "name": "mail flag",
+      "usage": "k2 mail flag <message-id> [--read|--unread] [--star|--unstar] [--json]",
+      "description": "Mark a message read/unread (\\Seen) and/or flagged/unflagged (\\Flagged). Needs canManage. Pass at least one of --read/--unread or --star/--unstar.",
+      "args": [{"name": "message-id", "required": true}],
+      "flags": [
+        {"name": "--read", "arg": null, "description": "Mark read (set \\Seen)."},
+        {"name": "--unread", "arg": null, "description": "Mark unread (clear \\Seen)."},
+        {"name": "--star", "arg": null, "description": "Flag the message (set \\Flagged); alias --flag."},
+        {"name": "--unstar", "arg": null, "description": "Unflag the message (clear \\Flagged); alias --unflag."},
+        {"name": "--json", "arg": null, "description": "JSON output ({ok,id,read,flagged})."}
+      ]
+    },
+    {
+      "name": "mail archive",
+      "usage": "k2 mail archive <message-id> [--json]",
+      "description": "Move a message to the Archive folder (SPECIAL-USE \\Archive / role archive / common names). Needs canManage.",
+      "args": [{"name": "message-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output ({ok,id,folder})."}]
+    },
+    {
+      "name": "mail delete",
+      "usage": "k2 mail delete <message-id> [--json]",
+      "description": "DELETE a message = MOVE it to Trash (SPECIAL-USE \\Trash / role trash / common names) — it is NEVER permanently erased (no EXPUNGE). Needs canDelete (which requires canManage); without it you get a teaching error. Note: the address-retire verb moved to 'k2 hostmail delete'.",
+      "args": [{"name": "message-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output ({ok,id,folder,trashed})."}]
+    },
+    {
+      "name": "mail folder",
+      "usage": "k2 mail folder list <address> | create <address> <name> | rename <address> <from> <to> [--json]",
+      "description": "Folder management on an inbox (needs canManage). list = the inbox's folder names; create = a new folder; rename = rename an existing folder. Works on hosted (JMAP Mailbox/set) and linked (IMAP CREATE/RENAME) inboxes.",
+      "args": [{"name": "address", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "hostmail",
@@ -11574,6 +11619,9 @@ _mail_py() {
     M_RELAY_PASS="${M_RELAY_PASS:-}" M_AGENT_SEND="${M_AGENT_SEND:-}" \
     M_ADDRESS_CAP="${M_ADDRESS_CAP:-}" M_WORKSPACE="${M_WORKSPACE:-}" \
     M_LEVEL="${M_LEVEL:-}" \
+    M_READ="${M_READ:-}" M_FLAGGED="${M_FLAGGED:-}" \
+    M_MANAGE="${M_MANAGE:-}" M_DELETE="${M_DELETE:-}" \
+    M_FOLDER_FROM="${M_FOLDER_FROM:-}" M_FOLDER_TO="${M_FOLDER_TO:-}" \
     M_HOST="${M_HOST:-}" M_PORT="${M_PORT:-}" M_TLS="${M_TLS:-}" \
     M_USER="${M_USER:-}" M_NAME="${M_NAME:-}" \
     M_DRAFTS_FOLDER="${M_DRAFTS_FOLDER:-}" \
@@ -12389,6 +12437,93 @@ elif verb == "access_level":
         who = "primary" if d.get("isPrimary") else env("M_WORKSPACE")
         print("set %s level on %s to %s." % (who, d.get("address", "?"), env("M_LEVEL")))
 
+# ── 0081 inbox management + delete (move / flag / archive / delete /
+#    folders + the access manage caps). DELETE is always MOVE-to-Trash. ──
+elif verb == "move":
+    d = call("POST", "/cli/mail/move",
+             body={"project": ws_path, "id": env("M_ID"), "folder": env("M_FOLDER")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("moved %s -> %s" % (d.get("id", ""), d.get("folder") or env("M_FOLDER")))
+
+elif verb == "flag":
+    body = {"project": ws_path, "id": env("M_ID")}
+    if env("M_READ") != "":
+        body["read"] = (env("M_READ") == "true")
+    if env("M_FLAGGED") != "":
+        body["flagged"] = (env("M_FLAGGED") == "true")
+    d = call("POST", "/cli/mail/flag", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        parts = []
+        if "read" in body:
+            parts.append("read" if body["read"] else "unread")
+        if "flagged" in body:
+            parts.append("flagged" if body["flagged"] else "unflagged")
+        print("%s: %s" % (d.get("id", ""), ", ".join(parts) or "no change"))
+
+elif verb == "archive":
+    d = call("POST", "/cli/mail/archive", body={"project": ws_path, "id": env("M_ID")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("archived %s -> %s" % (d.get("id", ""), d.get("folder") or "Archive"))
+
+elif verb == "delete":
+    # DELETE = move to Trash (never erased); needs the delete cap.
+    d = call("POST", "/cli/mail/delete", body={"project": ws_path, "id": env("M_ID")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("deleted %s -> %s (moved to Trash, not erased)"
+              % (d.get("id", ""), d.get("folder") or "Trash"))
+
+elif verb == "folder_list":
+    d = call("GET", "/cli/mail/folder/list",
+             params={"project": ws_path, "address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        folders = d.get("folders") or []
+        if not folders:
+            print("No folders.")
+        else:
+            for f in folders:
+                print(f)
+
+elif verb == "folder_create":
+    d = call("POST", "/cli/mail/folder/create",
+             body={"project": ws_path, "address": env("M_ADDRESS"), "name": env("M_NAME")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("created folder '%s' in %s" % (d.get("folder") or env("M_NAME"), d.get("address", "")))
+
+elif verb == "folder_rename":
+    d = call("POST", "/cli/mail/folder/rename",
+             body={"project": ws_path, "address": env("M_ADDRESS"),
+                   "from": env("M_FOLDER_FROM"), "to": env("M_FOLDER_TO")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("renamed '%s' -> '%s' in %s"
+              % (d.get("from", ""), d.get("to", ""), d.get("address", "")))
+
+elif verb == "access_manage":
+    d = call("POST", "/cli/mail/access/set-manage",
+             body={"address": env("M_ADDRESS"), "project": env("M_WORKSPACE"),
+                   "canManage": env("M_MANAGE") == "true",
+                   "canDelete": env("M_DELETE") == "true"})
+    if as_json:
+        print(dumps(d))
+    else:
+        who = "primary" if d.get("isPrimary") else env("M_WORKSPACE")
+        caps = ["manage" if d.get("canManage") else "no-manage",
+                "delete" if d.get("canDelete") else "no-delete"]
+        print("set %s caps on %s: %s" % (who, d.get("address", ""), ", ".join(caps)))
+
 elif verb == "server_enable":
     d = call("POST", "/cli/mail/server/enable", body={})
     print(dumps(d) if as_json else (d.get("hint") or "mail server: enable requested."))
@@ -13120,6 +13255,134 @@ cmd_mail_draft() {
     _mail_py
 }
 
+# ── 0081 inbox MANAGEMENT + DELETE (agent verbs; gated by the
+#    per-workspace canManage/canDelete caps, orthogonal to level). DELETE
+#    is ALWAYS a move to Trash — never a permanent erase. ────────────────
+
+# `k2 mail move <message-id> <folder>` — move a message to a folder.
+cmd_mail_move() {
+    if _wants_help "$@"; then cmd_help_mail_manage; exit 0; fi
+    local id="" folder="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*) _mail_err "usage" "unknown flag '$1' — usage: k2 mail move <message-id> <folder> [--json]"; exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"
+                elif [ -z "$folder" ]; then folder="$1"
+                else _mail_err "usage" "unexpected extra argument '$1'"; exit 2; fi
+                shift ;;
+        esac
+    done
+    [ -n "$id" ] || { _mail_err "usage" "move requires <message-id> <folder>"; exit 2; }
+    [ -n "$folder" ] || { _mail_err "usage" "move requires a destination <folder> (see 'k2 mail folder list <address>')"; exit 2; }
+    local M_VERB="move" M_JSON="$as_json" M_ID="$id" M_FOLDER="$folder"
+    _mail_py
+}
+
+# `k2 mail flag <message-id> [--read|--unread] [--star|--unstar]`.
+cmd_mail_flag() {
+    if _wants_help "$@"; then cmd_help_mail_manage; exit 0; fi
+    local id="" read_v="" flagged_v="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --read) read_v="true"; shift ;;
+            --unread) read_v="false"; shift ;;
+            --star|--flag) flagged_v="true"; shift ;;
+            --unstar|--unflag) flagged_v="false"; shift ;;
+            --json) as_json=true; shift ;;
+            -*) _mail_err "usage" "unknown flag '$1' — usage: k2 mail flag <message-id> [--read|--unread] [--star|--unstar] [--json]"; exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"
+                else _mail_err "usage" "unexpected extra argument '$1' — one <message-id> only"; exit 2; fi
+                shift ;;
+        esac
+    done
+    [ -n "$id" ] || { _mail_err "usage" "flag requires a <message-id>"; exit 2; }
+    if [ -z "$read_v" ] && [ -z "$flagged_v" ]; then
+        _mail_err "usage" "flag needs at least one of --read/--unread or --star/--unstar"
+        exit 2
+    fi
+    local M_VERB="flag" M_JSON="$as_json" M_ID="$id" M_READ="$read_v" M_FLAGGED="$flagged_v"
+    _mail_py
+}
+
+# `k2 mail archive <message-id>` — move to the Archive folder.
+cmd_mail_archive() {
+    if _wants_help "$@"; then cmd_help_mail_manage; exit 0; fi
+    local id="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*) _mail_err "usage" "unknown flag '$1' — usage: k2 mail archive <message-id> [--json]"; exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"
+                else _mail_err "usage" "unexpected extra argument '$1' — one <message-id> only"; exit 2; fi
+                shift ;;
+        esac
+    done
+    [ -n "$id" ] || { _mail_err "usage" "archive requires a <message-id>"; exit 2; }
+    local M_VERB="archive" M_JSON="$as_json" M_ID="$id"
+    _mail_py
+}
+
+# `k2 mail delete <message-id>` — DELETE = move to Trash (never erased);
+# needs the delete cap (a teaching error otherwise).
+cmd_mail_delete() {
+    if _wants_help "$@"; then cmd_help_mail_manage; exit 0; fi
+    local id="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*) _mail_err "usage" "unknown flag '$1' — usage: k2 mail delete <message-id> [--json]"; exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"
+                else _mail_err "usage" "unexpected extra argument '$1' — one <message-id> only"; exit 2; fi
+                shift ;;
+        esac
+    done
+    [ -n "$id" ] || { _mail_err "usage" "delete requires a <message-id> (it moves the message to Trash, never erases it)"; exit 2; }
+    local M_VERB="delete" M_JSON="$as_json" M_ID="$id"
+    _mail_py
+}
+
+# `k2 mail folder <list|create|rename> <address> …` — folder management.
+cmd_mail_folder() {
+    if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_mail_manage; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        list|create|rename) ;;
+        *) _mail_err "usage" "unknown folder command '$sub' — usage: k2 mail folder <list|create|rename> <address> …"; exit 2 ;;
+    esac
+    local p1="" p2="" p3="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*) _mail_err "usage" "unknown flag '$1' — see k2 mail folder --help"; exit 2 ;;
+            *)
+                if [ -z "$p1" ]; then p1="$1"
+                elif [ -z "$p2" ]; then p2="$1"
+                elif [ -z "$p3" ]; then p3="$1"
+                else _mail_err "usage" "unexpected extra argument '$1'"; exit 2; fi
+                shift ;;
+        esac
+    done
+    case "$sub" in
+        list)
+            [ -n "$p1" ] || { _mail_err "usage" "folder list requires <address> ('k2 mail inboxes')"; exit 2; }
+            local M_VERB="folder_list" M_JSON="$as_json" M_ADDRESS="$p1"
+            _mail_py ;;
+        create)
+            { [ -n "$p1" ] && [ -n "$p2" ]; } || { _mail_err "usage" "folder create requires <address> <name>"; exit 2; }
+            local M_VERB="folder_create" M_JSON="$as_json" M_ADDRESS="$p1" M_NAME="$p2"
+            _mail_py ;;
+        rename)
+            { [ -n "$p1" ] && [ -n "$p2" ] && [ -n "$p3" ]; } || { _mail_err "usage" "folder rename requires <address> <from> <to>"; exit 2; }
+            local M_VERB="folder_rename" M_JSON="$as_json" M_ADDRESS="$p1" M_FOLDER_FROM="$p2" M_FOLDER_TO="$p3"
+            _mail_py ;;
+    esac
+}
+
 # S9 (PRD §17.5): the user's OWN external accounts (Gmail, Fastmail,
 # company IMAP), each bound to exactly ONE workspace. OWNER family —
 # server-enforced (agent tokens exit 3). The password never rides argv:
@@ -13283,16 +13546,21 @@ cmd_mail_access() {
         revoke)  verb="access_revoke" ;;
         primary) verb="access_primary" ;;
         level)   verb="access_level" ;;
+        manage)  verb="access_manage" ;;
         *)
-            _mail_err "usage" "unknown access command '$sub' — usage: k2 mail access <grant|revoke|primary|level>"
+            _mail_err "usage" "unknown access command '$sub' — usage: k2 mail access <grant|revoke|primary|level|manage>"
             exit 2 ;;
     esac
-    local address="" workspace="" level="" as_json=false
+    local address="" workspace="" level="" as_json=false manage_v="" delete_v=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --level)
                 [ $# -ge 2 ] || { _mail_err "usage" "--level requires read, draft, or send"; exit 2; }
                 level="$2"; shift 2 ;;
+            --on)         manage_v="true"; shift ;;
+            --off)        manage_v="false"; shift ;;
+            --delete)     delete_v="true"; shift ;;
+            --no-delete)  delete_v="false"; shift ;;
             --json) as_json=true; shift ;;
             -*)
                 _mail_err "usage" "unknown flag '$1' — see k2 mail access --help"
@@ -13308,6 +13576,11 @@ cmd_mail_access() {
         _mail_err "usage" "access $sub requires <address> <workspace>"
         exit 2
     fi
+    # The on/off/delete flags belong to `manage` only.
+    if [ "$verb" != "access_manage" ] && { [ -n "$manage_v" ] || [ -n "$delete_v" ]; }; then
+        _mail_err "usage" "--on/--off/--delete/--no-delete only apply to 'k2 mail access manage'"
+        exit 2
+    fi
     if [ "$verb" = "access_grant" ] || [ "$verb" = "access_level" ]; then
         if [ -z "$level" ] && [ "$verb" = "access_grant" ]; then level="read"; fi
         if [ -z "$level" ]; then
@@ -13318,6 +13591,21 @@ cmd_mail_access() {
             read|draft|send) ;;
             *) _mail_err "usage" "--level must be read, draft, or send (send is hosted-only)"; exit 2 ;;
         esac
+    fi
+    if [ "$verb" = "access_manage" ]; then
+        # Default: enable manage; delete stays off unless asked. Clearing
+        # manage (--off) also clears delete (the daemon enforces the same).
+        [ -n "$manage_v" ] || manage_v="true"
+        [ -n "$delete_v" ] || delete_v="false"
+        if [ "$manage_v" = "false" ]; then delete_v="false"; fi
+        if [ "$delete_v" = "true" ] && [ "$manage_v" = "false" ]; then
+            _mail_err "usage" "delete requires manage — use --on --delete (a workspace can't delete what it can't manage)"
+            exit 2
+        fi
+        local M_VERB="$verb" M_JSON="$as_json" M_ADDRESS="$address" \
+              M_WORKSPACE="$workspace" M_MANAGE="$manage_v" M_DELETE="$delete_v"
+        _mail_py
+        return
     fi
     local M_VERB="$verb" M_JSON="$as_json" M_ADDRESS="$address" \
           M_WORKSPACE="$workspace" M_LEVEL="$level"
@@ -13402,11 +13690,18 @@ WRITE
   reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox)
   outbox [<id>]               Your outbound + status (denied shows your human's note)
 
+ORGANIZE (needs canManage; delete needs canDelete — 'k2 mail manage --help')
+  move <message-id> <folder>  Move a message to a folder
+  flag <message-id>           Mark read/unread (--read/--unread), flag/unflag (--star/--unstar)
+  archive <message-id>        Move to the Archive folder
+  delete <message-id>         Move to Trash (never erased; needs canDelete)
+  folder list|create|rename   Folder management on an inbox
+
 CONNECT & SHARE
   link add|list|remove        Connect your OWN external IMAP accounts (was 'external')
-  access grant|revoke|primary|level
-                              Manage who can use an inbox (read < draft < send;
-                              send is hosted-only) — PRIMARY/owner surface
+  access grant|revoke|primary|level|manage
+                              Manage who can use an inbox (read < draft < send) and
+                              the canManage/canDelete caps — PRIMARY/owner surface
 
 SERVER ADMIN → k2 hostmail
   status · enable · disable · domain · create · delete · doctor · config · approvals
@@ -13934,6 +14229,7 @@ USAGE
   k2 mail access revoke  <address> <workspace>
   k2 mail access primary <address> <workspace>   (transfer who manages it)
   k2 mail access level   <address> <workspace> --level read|draft|send
+  k2 mail access manage  <address> <workspace> [--on|--off] [--delete|--no-delete]
 
 NOTES
   grant   upsert a workspace's access (default --level read).
@@ -13943,13 +14239,54 @@ NOTES
           a grant at its prior ceiling.
   level   set a workspace's level (the primary's own ceiling when it names
           the primary).
+  manage  set the MANAGEMENT caps (ORTHOGONAL to level): --on/--off toggles
+          canManage (move/flag/archive/folders); --delete/--no-delete toggles
+          canDelete (delete = move to Trash, never erase). Delete REQUIRES
+          manage; --off also clears delete. Defaults: --on, --no-delete.
 
-  See 'k2 mail inboxes' (owner view) for primary + grants per inbox.
+  See 'k2 mail inboxes' (owner view) for primary + grants (with canManage /
+  canDelete) per inbox.
 
 EXAMPLES
   k2 mail access grant ops@acme.dev support-team --level send
   k2 mail access grant rosson@gmail.com research --level draft
   k2 mail access primary ops@acme.dev new-owner
+  k2 mail access manage ops@acme.dev support-team --on            (manage, no delete)
+  k2 mail access manage ops@acme.dev support-team --on --delete   (manage + delete)
+  k2 mail access manage ops@acme.dev support-team --off           (revoke both caps)
+EOF
+}
+
+cmd_help_mail_manage() {
+    cat <<'EOF'
+Manage messages IN an inbox — organize, flag, archive, and delete. These
+are AGENT verbs, gated by the per-workspace canManage / canDelete caps
+(ORTHOGONAL to your read/draft/send level; your human grants them with
+'k2 mail access manage'). DELETE is ALWAYS a MOVE to Trash — a message is
+never permanently erased.
+
+USAGE
+  k2 mail move <message-id> <folder>            Move a message to a folder
+  k2 mail flag <message-id> [--read|--unread] [--star|--unstar]
+                                                Mark read/unread, flag/unflag
+  k2 mail archive <message-id>                  Move to the Archive folder
+  k2 mail delete <message-id>                   Move to Trash (needs canDelete)
+  k2 mail folder list   <address>               List an inbox's folders
+  k2 mail folder create <address> <name>        Create a folder
+  k2 mail folder rename <address> <from> <to>   Rename a folder
+
+NOTES
+  All of these need canManage on the inbox (delete additionally needs
+  canDelete). Without it you get the SAME "no message/address here" a
+  foreign inbox gets — ask your human for 'k2 mail access manage'.
+  <folder> resolves case-insensitively (special: inbox, junk). Add --json
+  to any verb for machine output.
+
+EXAMPLES
+  k2 mail move m_ab12  Archive
+  k2 mail flag m_ab12 --read --star
+  k2 mail delete m_ab12
+  k2 mail folder create rosson@gmail.com "Receipts"
 EOF
 }
 
@@ -14651,6 +14988,13 @@ case "${1:-help}" in
             wait)        shift 2; cmd_mail_wait "$@" ;;
             send)        shift 2; cmd_mail_send "$@" ;;
             reply)       shift 2; cmd_mail_reply "$@" ;;
+            # 0081 inbox management + delete (agent verbs; canManage /
+            # canDelete gated). delete = move to Trash, never an erase.
+            move)        shift 2; cmd_mail_move "$@" ;;
+            flag)        shift 2; cmd_mail_flag "$@" ;;
+            archive)     shift 2; cmd_mail_archive "$@" ;;
+            delete)      shift 2; cmd_mail_delete "$@" ;;
+            folder)      shift 2; cmd_mail_folder "$@" ;;
             # Save a reply DRAFT into a LINKED assistant inbox's real
             # Drafts folder (agent verb; linked accounts never send).
             draft)       shift 2; cmd_mail_draft "$@" ;;
@@ -14662,7 +15006,9 @@ case "${1:-help}" in
             # Back-compat: `mail external` → `mail link`.
             external)    shift 2; cmd_mail_external "$@" ;;
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.
-            create|delete|status|domain|doctor|config|approvals)
+            # (`delete` is now the message move-to-Trash verb above; the
+            # address-retire verb is `k2 hostmail delete`.)
+            create|status|domain|doctor|config|approvals)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

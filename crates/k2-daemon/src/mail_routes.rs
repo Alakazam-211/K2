@@ -43,6 +43,14 @@
 //! | POST /cli/mail/access/revoke      | mail/routes_access.rs   |
 //! | POST /cli/mail/access/set-primary | mail/routes_access.rs   |
 //! | POST /cli/mail/access/set-level   | mail/routes_access.rs   |
+//! | POST /cli/mail/access/set-manage  | mail/routes_access.rs   |
+//! | POST /cli/mail/move               | mail/routes_messages.rs |
+//! | POST /cli/mail/flag               | mail/routes_messages.rs |
+//! | POST /cli/mail/archive            | mail/routes_messages.rs |
+//! | POST /cli/mail/delete             | mail/routes_messages.rs |
+//! | POST /cli/mail/folder/create      | mail/routes_messages.rs |
+//! | POST /cli/mail/folder/rename      | mail/routes_messages.rs |
+//! | GET  /cli/mail/folder/list        | mail/routes_messages.rs |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -123,6 +131,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // S11: the unified inbox catalog (agent view via ?project=;
         // owner view — no project — is owner-gated in the dispatcher).
         "/cli/mail/inboxes" => routes_access::handle_inboxes(params),
+        // 0081: list an inbox's folders (can_manage; workspace token).
+        "/cli/mail/folder/list" => routes_messages::handle_folder_list(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -145,6 +155,13 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/access/revoke"
         | "/cli/mail/access/set-primary"
         | "/cli/mail/access/set-level"
+        | "/cli/mail/access/set-manage"
+        | "/cli/mail/move"
+        | "/cli/mail/flag"
+        | "/cli/mail/archive"
+        | "/cli/mail/delete"
+        | "/cli/mail/folder/create"
+        | "/cli/mail/folder/rename"
         | "/cli/mail/draft" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
@@ -179,6 +196,15 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/mail/access/revoke" => routes_access::handle_revoke(body),
         "/cli/mail/access/set-primary" => routes_access::handle_set_primary(body),
         "/cli/mail/access/set-level" => routes_access::handle_set_level(body),
+        "/cli/mail/access/set-manage" => routes_access::handle_set_manage(body),
+        // 0081 management/delete action verbs (workspace token; can_manage
+        // / can_delete gated in the handlers, NOT owner-level).
+        "/cli/mail/move" => routes_messages::handle_move(body),
+        "/cli/mail/flag" => routes_messages::handle_flag(body),
+        "/cli/mail/archive" => routes_messages::handle_archive(body),
+        "/cli/mail/delete" => routes_messages::handle_delete(body),
+        "/cli/mail/folder/create" => routes_messages::handle_folder_create(body),
+        "/cli/mail/folder/rename" => routes_messages::handle_folder_rename(body),
         "/cli/mail/draft" => routes_external::handle_draft(body),
         _ => CliResponse::not_found(),
     }
@@ -244,6 +270,13 @@ mod tests {
             "/cli/mail/access/revoke",
             "/cli/mail/access/set-primary",
             "/cli/mail/access/set-level",
+            "/cli/mail/access/set-manage",
+            "/cli/mail/move",
+            "/cli/mail/flag",
+            "/cli/mail/archive",
+            "/cli/mail/delete",
+            "/cli/mail/folder/create",
+            "/cli/mail/folder/rename",
             "/cli/mail/draft",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
@@ -396,6 +429,13 @@ mod tests {
             "/cli/mail/access/revoke",
             "/cli/mail/access/set-primary",
             "/cli/mail/access/set-level",
+            "/cli/mail/access/set-manage",
+            "/cli/mail/move",
+            "/cli/mail/flag",
+            "/cli/mail/archive",
+            "/cli/mail/delete",
+            "/cli/mail/folder/create",
+            "/cli/mail/folder/rename",
             "/cli/mail/draft",
         ] {
             let resp = dispatch_post(route, b"{}");
@@ -403,6 +443,11 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
             assert_eq!(v["error"]["code"], "usage", "route={route}");
         }
+        // 0081: folder/list is a GET; missing project = usage 400.
+        let resp = dispatch("/cli/mail/folder/list", &params).expect("claimed");
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "usage");
     }
 
     /// The S1-real server mutations answer through their handlers (no
@@ -447,6 +492,8 @@ mod tests {
             "/cli/mail/access/revoke",
             "/cli/mail/access/set-primary",
             "/cli/mail/access/set-level",
+            // 0081: setting the manage/delete caps is owner surface.
+            "/cli/mail/access/set-manage",
             // The doctor RUN (POST; the GET read never reaches the
             // classifier).
             "/cli/mail/doctor",
@@ -461,6 +508,14 @@ mod tests {
             // S9: drafting into the bound external inbox is the AGENT
             // verb — workspace token, ownership-masked handler-side.
             "/cli/mail/draft",
+            // 0081: the management/delete action verbs are AGENT verbs
+            // (workspace token; can_manage/can_delete gated in-handler).
+            "/cli/mail/move",
+            "/cli/mail/flag",
+            "/cli/mail/archive",
+            "/cli/mail/delete",
+            "/cli/mail/folder/create",
+            "/cli/mail/folder/rename",
         ] {
             assert!(!is_owner_level_mutation(agent_path), "{agent_path}");
         }

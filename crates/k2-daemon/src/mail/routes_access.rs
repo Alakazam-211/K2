@@ -252,6 +252,52 @@ pub fn handle_set_level(body: &[u8]) -> CliResponse {
     }
 }
 
+// ── POST /cli/mail/access/set-manage ────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct SetManageBody {
+    address: String,
+    project: String,
+    can_manage: bool,
+    can_delete: bool,
+}
+
+/// POST `/cli/mail/access/set-manage` — set a workspace's MANAGEMENT +
+/// DELETE caps (0081; ORTHOGONAL to level). `canDelete` REQUIRES
+/// `canManage` (a usage error otherwise; the ops layer also normalizes
+/// clearing manage → clearing delete). When it names the PRIMARY, the
+/// primary's own caps change; otherwise the workspace's grant caps.
+pub fn handle_set_manage(body: &[u8]) -> CliResponse {
+    let b: SetManageBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
+    };
+    if b.address.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+    }
+    if b.project.trim().is_empty() {
+        return error_response("400 Bad Request", "usage", "missing 'project' — the workspace (name | path | UUID)");
+    }
+    let project_id = match resolve_project(&b.project) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    match access::set_manage(&b.address, &project_id, b.can_manage, b.can_delete) {
+        Ok((address, source, is_primary)) => ok_json(serde_json::json!({
+            "ok": true,
+            "address": address,
+            "source": source.as_str(),
+            "project": b.project,
+            "projectId": project_id,
+            "canManage": b.can_manage,
+            "canDelete": b.can_delete && b.can_manage,
+            "isPrimary": is_primary,
+        })),
+        Err(e) => access_error_response(e),
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests — validation + resolution + masking-free management
 // surface, shared test DB, no network (house rules).
@@ -365,5 +411,43 @@ mod tests {
 
         cleanup(&owner_id);
         cleanup(&grantee_id);
+    }
+
+    #[test]
+    fn set_manage_validates_delete_requires_manage_and_lands_in_catalog() {
+        // Missing fields validate before resolution.
+        for (body, needle) in [(r#"{}"#, "address"), (r#"{"address":"a@b.example"}"#, "project")] {
+            let resp = handle_set_manage(body.as_bytes());
+            assert_eq!(resp.status, "400 Bad Request", "{body}");
+            assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains(needle));
+        }
+
+        let (oname, opath) = unique("mowner");
+        let owner_id = insert_project(&oname, &opath);
+        let addr = format!("mng-{}@acc.example", &owner_id[..8]);
+        seed_hosted(&owner_id, &addr);
+
+        // canDelete without canManage → usage (delete requires manage).
+        let resp = handle_set_manage(
+            serde_json::json!({ "address": addr, "project": opath, "canManage": false, "canDelete": true })
+                .to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().to_lowercase().contains("delete requires manage"));
+
+        // Valid primary caps land in the owner catalog.
+        let resp = handle_set_manage(
+            serde_json::json!({ "address": addr, "project": opath, "canManage": true, "canDelete": true })
+                .to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(body_json(&resp)["isPrimary"], true);
+        let list = body_json(&handle_inboxes(&HashMap::new()));
+        let row = list["inboxes"].as_array().unwrap().iter()
+            .find(|i| i["address"] == addr.as_str()).expect("listed");
+        assert_eq!(row["primary"]["canManage"], true);
+        assert_eq!(row["primary"]["canDelete"], true);
+
+        cleanup(&owner_id);
     }
 }

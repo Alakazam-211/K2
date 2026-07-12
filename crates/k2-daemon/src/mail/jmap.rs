@@ -973,6 +973,84 @@ impl StalwartClient {
         parse_email_set_updated(email_id, &args)
     }
 
+    /// S11 (manage) — MOVE one message to `mailbox_id`: an `Email/set`
+    /// update REPLACING `mailboxIds` with the single destination
+    /// (`{mailbox_id: true}`). Standard RFC 8621 §4.1.1 — the same
+    /// stability class as [`Self::email_mark_seen`]. Archive and delete
+    /// (move-to-Trash) both route through here after resolving the
+    /// Archive/Trash mailbox by role; there is NO destroy code path.
+    pub fn email_move(
+        &self,
+        account_id: &str,
+        email_id: &str,
+        mailbox_id: &str,
+    ) -> Result<(), String> {
+        let args = self.mail_call(
+            account_id,
+            "Email/set",
+            serde_json::json!({
+                "update": { email_id: { "mailboxIds": { mailbox_id: true } } }
+            }),
+        )?;
+        parse_email_set_updated(email_id, &args)
+    }
+
+    /// S11 (manage) — set/clear ONE keyword on a message (`$seen` for
+    /// read/unread, `$flagged` for flag/unflag). `on=true` patches the
+    /// keyword to `true`; `on=false` patches it to `null` (RFC 8621
+    /// keyword removal). `Email/set` keyword patch, same stability class
+    /// as [`Self::email_mark_seen`].
+    pub fn email_set_keyword(
+        &self,
+        account_id: &str,
+        email_id: &str,
+        keyword: &str,
+        on: bool,
+    ) -> Result<(), String> {
+        let value = if on {
+            serde_json::json!(true)
+        } else {
+            serde_json::Value::Null
+        };
+        let mut patch = serde_json::Map::new();
+        patch.insert(format!("keywords/{keyword}"), value);
+        let mut update = serde_json::Map::new();
+        update.insert(email_id.to_string(), serde_json::Value::Object(patch));
+        let args = self.mail_call(
+            account_id,
+            "Email/set",
+            serde_json::json!({ "update": update }),
+        )?;
+        parse_email_set_updated(email_id, &args)
+    }
+
+    /// S11 (manage) — create a folder (`Mailbox/set create {name}`,
+    /// RFC 8621 §2.5). Returns the server-set mailbox id. A top-level
+    /// folder (no `parentId`).
+    pub fn mailbox_create(&self, account_id: &str, name: &str) -> Result<String, String> {
+        let args = self.mail_call(
+            account_id,
+            "Mailbox/set",
+            serde_json::json!({ "create": { CREATE_TAG: { "name": name } } }),
+        )?;
+        parse_set_created_id("Mailbox/set", &args)
+    }
+
+    /// S11 (manage) — rename a folder (`Mailbox/set update {id:{name}}`).
+    pub fn mailbox_rename(
+        &self,
+        account_id: &str,
+        mailbox_id: &str,
+        new_name: &str,
+    ) -> Result<(), String> {
+        let args = self.mail_call(
+            account_id,
+            "Mailbox/set",
+            serde_json::json!({ "update": { mailbox_id: { "name": new_name } } }),
+        )?;
+        parse_set_updated("Mailbox/set", mailbox_id, &args)
+    }
+
     /// S4 — download one blob (attachment bytes, or the raw RFC 822
     /// message via its `blobId`) through the session document's
     /// `downloadUrl` template (RFC 8620 §2 — discovered, never

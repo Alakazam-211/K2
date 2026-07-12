@@ -146,11 +146,16 @@ struct HostedRow {
     stalwart_account_id: Option<String>,
     owner_project_id: String,
     primary_level: String,
+    /// The PRIMARY's own management/delete caps (0081) — read only for
+    /// the manage/delete gates; the read/draft/send path ignores them.
+    primary_can_manage: bool,
+    primary_can_delete: bool,
 }
 
 fn hosted_active_row(conn: &rusqlite::Connection, address: &str) -> Option<HostedRow> {
     conn.query_row(
-        "SELECT id, stalwart_account_id, owner_project_id, primary_level \
+        "SELECT id, stalwart_account_id, owner_project_id, primary_level, \
+                primary_can_manage, primary_can_delete \
          FROM mail_addresses WHERE address = ?1 AND status = 'active'",
         rusqlite::params![address],
         |r| {
@@ -159,6 +164,8 @@ fn hosted_active_row(conn: &rusqlite::Connection, address: &str) -> Option<Hoste
                 stalwart_account_id: r.get(1)?,
                 owner_project_id: r.get(2)?,
                 primary_level: r.get(3)?,
+                primary_can_manage: r.get::<_, i64>(4)? != 0,
+                primary_can_delete: r.get::<_, i64>(5)? != 0,
             })
         },
     )
@@ -208,6 +215,55 @@ fn effective_level_conn(
         return Some(lvl);
     }
     grant_level_conn(conn, source, inbox_id, project_id).map(|l| l.clamp_to(source))
+}
+
+// ── Management/delete caps (0081 — ORTHOGONAL to level) ─────────────────
+
+/// The `(can_manage, can_delete)` a grant row holds on `(source,
+/// inbox_id, project_id)`, or `None` when there is no grant row.
+fn grant_caps_conn(
+    conn: &rusqlite::Connection,
+    source: Source,
+    inbox_id: &str,
+    project_id: &str,
+) -> Option<(bool, bool)> {
+    conn.query_row(
+        "SELECT can_manage, can_delete FROM mail_inbox_grants \
+         WHERE source = ?1 AND inbox_id = ?2 AND project_id = ?3",
+        rusqlite::params![source.as_str(), inbox_id, project_id],
+        |r| Ok((r.get::<_, i64>(0)? != 0, r.get::<_, i64>(1)? != 0)),
+    )
+    .ok()
+}
+
+/// The effective `(can_manage, can_delete)` a workspace has on an inbox:
+/// the primary's own caps when it IS the primary, else its grant row's
+/// caps, else `None` (no access at all — masked). INDEPENDENT of level.
+fn manage_caps_conn(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    source: Source,
+    inbox_id: &str,
+    owner_project_id: &str,
+    primary_can_manage: bool,
+    primary_can_delete: bool,
+) -> Option<(bool, bool)> {
+    if project_id == owner_project_id {
+        return Some((primary_can_manage, primary_can_delete));
+    }
+    grant_caps_conn(conn, source, inbox_id, project_id)
+}
+
+/// The primary's `(can_manage, can_delete)` on a LINKED inbox (a locking
+/// convenience over the raw column read, mirroring
+/// [`linked_primary_level_conn`]).
+fn linked_primary_caps_conn(conn: &rusqlite::Connection, inbox_id: &str) -> (bool, bool) {
+    conn.query_row(
+        "SELECT primary_can_manage, primary_can_delete FROM mail_external_inboxes WHERE id = ?1",
+        rusqlite::params![inbox_id],
+        |r| Ok((r.get::<_, i64>(0)? != 0, r.get::<_, i64>(1)? != 0)),
+    )
+    .unwrap_or((false, false))
 }
 
 // ── Agent-facing gates (MASKED) ─────────────────────────────────────────
@@ -311,6 +367,124 @@ pub fn can_draft(project_id: &str, raw_address: &str) -> Result<AccessInbox, Rea
 /// this address" — the caller branches on `AccessInbox.source`.
 pub fn can_send(project_id: &str, raw_address: &str) -> Result<AccessInbox, ReadError> {
     resolve(project_id, raw_address, Level::Send)
+}
+
+// ── Management/delete gates (0081 — ORTHOGONAL to the read/draft/send
+//    level; MASKED, same shape as the read gate) ────────────────────────
+
+/// Resolve `raw_address` to its inbox AND the caller's
+/// `(can_manage, can_delete)` caps. A workspace with NO access at all
+/// (not primary, no grant row) answers the SAME masked `not_found` the
+/// read gate uses (no existence leak). `your_level` is the caller's
+/// effective level (caps are independent of it — a read-only workspace
+/// may still be granted manage).
+fn resolve_caps(
+    project_id: &str,
+    raw_address: &str,
+) -> Result<(AccessInbox, bool, bool), ReadError> {
+    let address = normalize_or_usage(raw_address)?;
+    let masked = || ReadError::NotFound(format!("no address '{address}' in this workspace"));
+    // Linked first (its row is the §17.5 seam key); then hosted active.
+    if let Some(row) = external::inbox_for_address(&address) {
+        let source = Source::Linked;
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let (pcm, pcd) = linked_primary_caps_conn(&conn, &row.id);
+        let (cm, cd) =
+            manage_caps_conn(&conn, project_id, source, &row.id, &row.owner_project_id, pcm, pcd)
+                .ok_or_else(masked)?;
+        let primary = linked_primary_level_conn(&conn, &row.id);
+        let eff = effective_level_conn(
+            &conn,
+            project_id,
+            source,
+            &row.id,
+            &row.owner_project_id,
+            &primary,
+        )
+        .unwrap_or(Level::Read);
+        drop(conn);
+        let inbox = AccessInbox {
+            source,
+            address,
+            account_id: Some(row.id.clone()),
+            linked: Some(row),
+            your_level: eff,
+        };
+        return Ok((inbox, cm, cd));
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Some(row) = hosted_active_row(&conn, &address) else {
+        return Err(masked());
+    };
+    let source = Source::Hosted;
+    let (cm, cd) = manage_caps_conn(
+        &conn,
+        project_id,
+        source,
+        &row.id,
+        &row.owner_project_id,
+        row.primary_can_manage,
+        row.primary_can_delete,
+    )
+    .ok_or_else(masked)?;
+    let eff = effective_level_conn(
+        &conn,
+        project_id,
+        source,
+        &row.id,
+        &row.owner_project_id,
+        &row.primary_level,
+    )
+    .unwrap_or(Level::Read);
+    drop(conn);
+    let inbox = AccessInbox {
+        source,
+        address,
+        account_id: row.stalwart_account_id,
+        linked: None,
+        your_level: eff,
+    };
+    Ok((inbox, cm, cd))
+}
+
+/// The MASKED MANAGEMENT gate (move / flag / archive / folder ops): the
+/// caller may manage when it holds `can_manage` (primary's own col, or a
+/// grant's col). Every deny — no access, OR access without manage —
+/// answers the same masked `not_found` (no existence leak).
+pub fn can_manage(project_id: &str, raw_address: &str) -> Result<AccessInbox, ReadError> {
+    let (inbox, cm, _cd) = resolve_caps(project_id, raw_address)?;
+    if !cm {
+        return Err(ReadError::NotFound(format!(
+            "no address '{}' in this workspace",
+            inbox.address
+        )));
+    }
+    Ok(inbox)
+}
+
+/// The MASKED DELETE gate (delete = MOVE to Trash, never EXPUNGE):
+/// requires `can_delete` (which the set path guarantees implies
+/// `can_manage`). A workspace with NO manage access is masked
+/// (`not_found`, no leak); one that CAN manage but lacks delete gets a
+/// TEACHING usage error (it already sees the inbox, so nothing leaks).
+pub fn can_delete(project_id: &str, raw_address: &str) -> Result<AccessInbox, ReadError> {
+    let (inbox, cm, cd) = resolve_caps(project_id, raw_address)?;
+    if !cm {
+        return Err(ReadError::NotFound(format!(
+            "no address '{}' in this workspace",
+            inbox.address
+        )));
+    }
+    if !cd {
+        return Err(ReadError::Usage(format!(
+            "deleting from '{}' needs the delete capability — ask your human to enable it \
+             ('k2 mail access manage {} <workspace> --delete')",
+            inbox.address, inbox.address
+        )));
+    }
+    Ok(inbox)
 }
 
 /// Every hosted ACTIVE address a workspace can READ (primary or grant) —
@@ -654,6 +828,69 @@ pub fn set_level(
     Ok((target.address, target.source, is_primary))
 }
 
+/// SET a workspace's management/delete caps (0081; Primary-gated at the
+/// route). `can_delete` REQUIRES `can_manage` — passing delete=true with
+/// manage=false is a teaching usage error; clearing manage clears delete
+/// (belt: normalized here even if the caller slips). When `project` IS
+/// the primary, updates the primary's own cols; otherwise upserts its
+/// grant row (a new grant defaults to level 'read' so a manage-only
+/// workspace can still see the inbox — caps are orthogonal to, but never
+/// below, read visibility). Returns `(address, source, is_primary)`.
+pub fn set_manage(
+    raw_address: &str,
+    project_id: &str,
+    can_manage: bool,
+    can_delete: bool,
+) -> Result<(String, Source, bool), AccessError> {
+    if can_delete && !can_manage {
+        return Err(AccessError::Usage(
+            "delete requires manage — enable delete only with manage on (a workspace can't \
+             delete what it can't manage)"
+                .to_string(),
+        ));
+    }
+    // Clearing manage clears delete (defensive normalization).
+    let can_delete = can_delete && can_manage;
+    let target = manage_target(raw_address)?;
+    let is_primary = target.owner_project_id == project_id;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if is_primary {
+        let table = match target.source {
+            Source::Hosted => "mail_addresses",
+            Source::Linked => "mail_external_inboxes",
+        };
+        conn.execute(
+            &format!(
+                "UPDATE {table} SET primary_can_manage = ?1, primary_can_delete = ?2 WHERE id = ?3"
+            ),
+            rusqlite::params![can_manage as i64, can_delete as i64, target.inbox_id],
+        )
+        .map_err(|e| AccessError::Engine(format!("set primary manage caps: {e}")))?;
+    } else {
+        // Upsert the grant: a NEW row lands at level 'read' (manage
+        // implies at least read visibility); an existing row keeps its
+        // level and only the caps change.
+        conn.execute(
+            "INSERT INTO mail_inbox_grants \
+             (source, inbox_id, project_id, level, can_manage, can_delete, created_at) \
+             VALUES (?1, ?2, ?3, 'read', ?4, ?5, ?6) \
+             ON CONFLICT(source, inbox_id, project_id) \
+             DO UPDATE SET can_manage = excluded.can_manage, can_delete = excluded.can_delete",
+            rusqlite::params![
+                target.source.as_str(),
+                target.inbox_id,
+                project_id,
+                can_manage as i64,
+                can_delete as i64,
+                now_secs()
+            ],
+        )
+        .map_err(|e| AccessError::Engine(format!("set grant manage caps: {e}")))?;
+    }
+    Ok((target.address, target.source, is_primary))
+}
+
 /// Cascade every grant row for one inbox (on `link remove` / hosted
 /// retire) — no grant may outlive the inbox it points at.
 pub fn cascade_grants(conn: &rusqlite::Connection, source: Source, inbox_id: &str) {
@@ -694,6 +931,9 @@ struct CatalogRow {
     status: String,
     owner_project_id: String,
     primary_level: String,
+    // 0081 management/delete caps (the PRIMARY's own).
+    primary_can_manage: bool,
+    primary_can_delete: bool,
     // source-specific
     domain: Option<String>,
     host: Option<String>,
@@ -703,7 +943,8 @@ struct CatalogRow {
 fn load_catalog_rows(conn: &rusqlite::Connection) -> Vec<CatalogRow> {
     let mut rows: Vec<CatalogRow> = Vec::new();
     if let Ok(mut stmt) = conn.prepare(
-        "SELECT address, id, owner_project_id, primary_level, status \
+        "SELECT address, id, owner_project_id, primary_level, status, \
+                primary_can_manage, primary_can_delete \
          FROM mail_addresses WHERE status = 'active' ORDER BY created_at, address",
     ) {
         let iter = stmt.query_map([], |r| {
@@ -717,6 +958,8 @@ fn load_catalog_rows(conn: &rusqlite::Connection) -> Vec<CatalogRow> {
                 owner_project_id: r.get(2)?,
                 primary_level: r.get(3)?,
                 status: r.get(4)?,
+                primary_can_manage: r.get::<_, i64>(5)? != 0,
+                primary_can_delete: r.get::<_, i64>(6)? != 0,
                 domain,
                 host: None,
                 tls: None,
@@ -728,7 +971,8 @@ fn load_catalog_rows(conn: &rusqlite::Connection) -> Vec<CatalogRow> {
     }
     if let Ok(mut stmt) = conn.prepare(
         "SELECT email_address, id, owner_project_id, primary_level, status, display_name, \
-                host, tls FROM mail_external_inboxes ORDER BY created_at, email_address",
+                host, tls, primary_can_manage, primary_can_delete \
+         FROM mail_external_inboxes ORDER BY created_at, email_address",
     ) {
         let iter = stmt.query_map([], |r| {
             Ok(CatalogRow {
@@ -742,6 +986,8 @@ fn load_catalog_rows(conn: &rusqlite::Connection) -> Vec<CatalogRow> {
                 domain: None,
                 host: r.get(6)?,
                 tls: r.get(7)?,
+                primary_can_manage: r.get::<_, i64>(8)? != 0,
+                primary_can_delete: r.get::<_, i64>(9)? != 0,
             })
         });
         if let Ok(iter) = iter {
@@ -751,15 +997,29 @@ fn load_catalog_rows(conn: &rusqlite::Connection) -> Vec<CatalogRow> {
     rows
 }
 
-fn grants_for(conn: &rusqlite::Connection, source: Source, inbox_id: &str) -> Vec<(String, String)> {
+/// One grant row for the catalog: `(project_id, level, can_manage,
+/// can_delete)`.
+struct GrantRow {
+    project_id: String,
+    level: String,
+    can_manage: bool,
+    can_delete: bool,
+}
+
+fn grants_for(conn: &rusqlite::Connection, source: Source, inbox_id: &str) -> Vec<GrantRow> {
     conn.prepare(
-        "SELECT project_id, level FROM mail_inbox_grants \
+        "SELECT project_id, level, can_manage, can_delete FROM mail_inbox_grants \
          WHERE source = ?1 AND inbox_id = ?2 ORDER BY created_at, project_id",
     )
     .ok()
     .and_then(|mut stmt| {
         stmt.query_map(rusqlite::params![source.as_str(), inbox_id], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            Ok(GrantRow {
+                project_id: r.get::<_, String>(0)?,
+                level: r.get::<_, String>(1)?,
+                can_manage: r.get::<_, i64>(2)? != 0,
+                can_delete: r.get::<_, i64>(3)? != 0,
+            })
         })
         .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
         .ok()
@@ -796,11 +1056,13 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
             .clamp_to(row.source);
         let grants_json: Vec<serde_json::Value> = grants
             .iter()
-            .map(|(pid, level)| {
+            .map(|g| {
                 serde_json::json!({
-                    "projectId": pid,
-                    "workspace": workspace_name(&conn, pid),
-                    "level": level,
+                    "projectId": g.project_id,
+                    "workspace": workspace_name(&conn, &g.project_id),
+                    "level": g.level,
+                    "canManage": g.can_manage,
+                    "canDelete": g.can_delete,
                 })
             })
             .collect();
@@ -813,6 +1075,8 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
                 "projectId": row.owner_project_id,
                 "workspace": workspace_name(&conn, &row.owner_project_id),
                 "level": primary_level.as_str(),
+                "canManage": row.primary_can_manage,
+                "canDelete": row.primary_can_delete,
             },
             "grants": grants_json,
             "yourLevel": your.map(|l| l.as_str()),
@@ -1074,6 +1338,97 @@ mod tests {
 
     fn manage_inbox_id(address: &str) -> String {
         super::manage_target(address).expect("target").inbox_id
+    }
+
+    #[test]
+    fn manage_and_delete_caps_gate_and_mask() {
+        let owner = unique_project();
+        let helper = unique_project();
+        let stranger = unique_project();
+        let addr = unique_addr("mng");
+        seed_hosted(&owner, &addr); // primary_level 'send'; caps default OFF
+
+        // Caps default OFF (opt-in): even the primary is masked until granted.
+        assert!(matches!(can_manage(&owner, &addr), Err(ReadError::NotFound(_))));
+        assert!(matches!(can_delete(&owner, &addr), Err(ReadError::NotFound(_))));
+
+        // Enable manage on the primary → manage OK; delete still TEACHES
+        // (usage — the caller already sees the inbox, so nothing leaks).
+        set_manage(&addr, &owner, true, false).expect("primary manage on");
+        assert!(can_manage(&owner, &addr).is_ok());
+        assert!(matches!(can_delete(&owner, &addr), Err(ReadError::Usage(_))));
+
+        // Enable delete → delete OK.
+        set_manage(&addr, &owner, true, true).expect("primary delete on");
+        assert!(can_delete(&owner, &addr).is_ok());
+
+        // canDelete REQUIRES canManage (delete=true, manage=false → usage).
+        assert!(matches!(set_manage(&addr, &owner, false, true), Err(AccessError::Usage(_))));
+
+        // Clearing manage clears delete (and masks both again).
+        set_manage(&addr, &owner, false, false).expect("primary manage off");
+        assert!(matches!(can_manage(&owner, &addr), Err(ReadError::NotFound(_))));
+        assert!(matches!(can_delete(&owner, &addr), Err(ReadError::NotFound(_))));
+
+        // A grantee gets manage via an UPSERTED read grant (caps are
+        // orthogonal to, but never below, read visibility).
+        set_manage(&addr, &helper, true, false).expect("grant manage");
+        assert!(can_manage(&helper, &addr).is_ok());
+        assert!(can_read(&helper, &addr).is_ok());
+        assert_eq!(grant_level(Source::Hosted, &manage_inbox_id(&addr), &helper), Some(Level::Read));
+        // Manage but not delete → delete teaches (usage), not masked.
+        assert!(matches!(can_delete(&helper, &addr), Err(ReadError::Usage(_))));
+
+        // A stranger with NO access is masked on both (no existence leak).
+        assert!(matches!(can_manage(&stranger, &addr), Err(ReadError::NotFound(_))));
+        assert!(matches!(can_delete(&stranger, &addr), Err(ReadError::NotFound(_))));
+
+        cleanup(&owner);
+        cleanup(&helper);
+        cleanup(&stranger);
+    }
+
+    #[test]
+    fn linked_manage_caps_resolve_the_external_row() {
+        let owner = unique_project();
+        let addr = unique_addr("lmng");
+        seed_linked(&owner, &addr);
+        set_manage(&addr, &owner, true, true).expect("linked primary caps");
+        let inbox = can_delete(&owner, &addr).expect("linked delete ok");
+        assert_eq!(inbox.source, Source::Linked);
+        assert!(inbox.linked.is_some(), "linked manage carries the external row");
+        cleanup(&owner);
+    }
+
+    #[test]
+    fn catalog_exposes_manage_and_delete_caps() {
+        let owner = unique_project();
+        let grantee = unique_project();
+        let addr = unique_addr("mcap");
+        seed_hosted(&owner, &addr);
+        set_manage(&addr, &owner, true, true).expect("primary caps");
+        set_manage(&addr, &grantee, true, false).expect("grant caps");
+
+        let all = catalog_json(None);
+        let row = all["inboxes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["address"] == addr.as_str())
+            .expect("listed");
+        assert_eq!(row["primary"]["canManage"], true);
+        assert_eq!(row["primary"]["canDelete"], true);
+        let g = row["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["projectId"] == grantee)
+            .expect("grant listed");
+        assert_eq!(g["canManage"], true);
+        assert_eq!(g["canDelete"], false);
+
+        cleanup(&owner);
+        cleanup(&grantee);
     }
 
     #[test]

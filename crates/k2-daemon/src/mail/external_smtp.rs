@@ -47,6 +47,8 @@ use crate::mail::secrets::{FileSecretStore, SecretStore};
 use k2_core::db::schema::MailExternalInbox;
 
 use lettre::address::Envelope;
+use lettre::message::header::ContentType;
+use lettre::message::{Attachment, Mailbox, Message, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use lettre::transport::smtp::{SmtpTransport, SmtpTransportBuilder};
 use lettre::{Address, Transport};
@@ -340,6 +342,106 @@ fn as_mailaddrs(emails: &[String]) -> Vec<MailAddr> {
     emails.iter().map(|e| MailAddr { name: None, email: e.clone() }).collect()
 }
 
+// ── Attachments (LINKED send/reply) ─────────────────────────────────────
+
+/// One outbound attachment the daemon read from the sender workspace
+/// (`k2 mail send --attach <path>`). The route resolves the path
+/// workspace-relative + enforces the count/size caps BEFORE building
+/// this; `content_type` is already derived (fallback
+/// `application/octet-stream`). The raw bytes are NEVER logged or shown
+/// in Debug (pre-mortem #16 — mirrors the SmtpAuth redaction).
+pub struct OutAttachment {
+    pub filename: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for OutAttachment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutAttachment")
+            .field("filename", &self.filename)
+            .field("content_type", &self.content_type)
+            .field("bytes", &format_args!("<{} bytes redacted>", self.bytes.len()))
+            .finish()
+    }
+}
+
+/// Ensure a Message-ID / In-Reply-To value carries its angle brackets
+/// (the manual single-part composer wraps with `bracketed`; lettre's
+/// header types store the value verbatim, so we bracket before handing
+/// it over — no double-bracketing).
+fn ensure_brackets(id: &str) -> String {
+    let t = id.trim();
+    if t.starts_with('<') && t.ends_with('>') {
+        t.to_string()
+    } else {
+        format!("<{t}>")
+    }
+}
+
+fn mailbox_of(name: Option<&str>, email: &str) -> Result<Mailbox, String> {
+    let addr: Address = email.parse().map_err(|e| smtp_err("message address", e))?;
+    Ok(Mailbox::new(name.map(|s| s.to_string()), addr))
+}
+
+/// Compose an outgoing RFC 822 **multipart/mixed** message for a LINKED
+/// SMTP submission that carries attachments (the zero-attachment path
+/// stays on the byte-for-byte-unchanged single-part
+/// [`external::compose_outgoing_rfc822`]). Built with lettre's message
+/// builder: the text body is the first `SinglePart`, then one
+/// [`Attachment`] part per file (Content-Disposition: attachment,
+/// filename = the basename, Content-Type parsed from the derived type —
+/// lettre base64-transfer-encodes the raw bytes). `date`/`message_id`
+/// are injected (no clock/RNG in a pure fn). Header-injection safety
+/// rides lettre's `Mailbox`/`Address` parsing (CR/LF are rejected).
+#[allow(clippy::too_many_arguments)]
+fn compose_outgoing_multipart(
+    inbox: &MailExternalInbox,
+    to: &[MailAddr],
+    cc: &[MailAddr],
+    subject: &str,
+    body: &str,
+    date: std::time::SystemTime,
+    message_id: &str,
+    in_reply_to: Option<&str>,
+    references: Option<&str>,
+    attachments: &[OutAttachment],
+) -> Result<Vec<u8>, String> {
+    if to.is_empty() {
+        return Err("an outgoing message needs at least one recipient".to_string());
+    }
+    if attachments.is_empty() {
+        return Err("compose_outgoing_multipart called with no attachments".to_string());
+    }
+    let mut builder = Message::builder()
+        .from(mailbox_of(inbox.display_name.as_deref(), &inbox.email_address)?)
+        .date(date)
+        .subject(subject)
+        .message_id(Some(ensure_brackets(message_id)));
+    for a in to {
+        builder = builder.to(mailbox_of(a.name.as_deref(), &a.email)?);
+    }
+    for a in cc {
+        builder = builder.cc(mailbox_of(a.name.as_deref(), &a.email)?);
+    }
+    if let Some(irt) = in_reply_to.filter(|s| !s.trim().is_empty()) {
+        builder = builder.in_reply_to(ensure_brackets(irt));
+    }
+    if let Some(refs) = references.filter(|s| !s.trim().is_empty()) {
+        builder = builder.references(refs.to_string());
+    }
+    // multipart/mixed: the text body first, then one attachment part each.
+    let mut mp = MultiPart::mixed().singlepart(SinglePart::plain(body.to_string()));
+    for a in attachments {
+        let ct = ContentType::parse(&a.content_type).unwrap_or_else(|_| {
+            ContentType::parse("application/octet-stream").expect("octet-stream is a valid type")
+        });
+        mp = mp.singlepart(Attachment::new(a.filename.clone()).body(a.bytes.clone(), ct));
+    }
+    let msg = builder.multipart(mp).map_err(|e| smtp_err("compose multipart", e))?;
+    Ok(msg.formatted())
+}
+
 /// Send a FRESH message FROM a linked inbox (`k2 mail send` on a linked
 /// address). Recipients arrive already normalized + capped from the
 /// route. Composes the RFC 822 (From = the linked account, a real
@@ -353,6 +455,7 @@ pub fn send_linked_message(
     cc: &[String],
     subject: &str,
     body: &str,
+    attachments: &[OutAttachment],
 ) -> Result<LinkedReceipt, ExtError> {
     let route = derive_smtp_route(inbox).map_err(ExtError::Engine)?;
     // Password vs OAuth-XOAUTH2 (issue #31.1) — a stale/rejected token is
@@ -366,12 +469,38 @@ pub fn send_linked_message(
     };
     let to_addrs = as_mailaddrs(to);
     let cc_addrs = as_mailaddrs(cc);
-    let date = chrono::Utc::now().to_rfc2822();
+    let now = chrono::Utc::now();
     let mid = external::new_message_id(&inbox.email_address);
-    let rfc822 = external::compose_outgoing_rfc822(
-        inbox, &to_addrs, &cc_addrs, subject, body, &date, &mid, None, None,
-    )
-    .map_err(ExtError::Engine)?;
+    // Zero attachments = the unchanged single-part body; attachments =
+    // a lettre multipart/mixed (never force multipart when there are none).
+    let rfc822 = if attachments.is_empty() {
+        external::compose_outgoing_rfc822(
+            inbox,
+            &to_addrs,
+            &cc_addrs,
+            subject,
+            body,
+            &now.to_rfc2822(),
+            &mid,
+            None,
+            None,
+        )
+        .map_err(ExtError::Engine)?
+    } else {
+        compose_outgoing_multipart(
+            inbox,
+            &to_addrs,
+            &cc_addrs,
+            subject,
+            body,
+            now.into(),
+            &mid,
+            None,
+            None,
+            attachments,
+        )
+        .map_err(ExtError::Engine)?
+    };
     let recipients: Vec<String> = to.iter().chain(cc.iter()).cloned().collect();
     let result = smtp.submit(&route, &inbox.username, &auth, &inbox.email_address, &recipients, &rfc822);
     external::record_check(&inbox.id, result.as_ref().map(|_| ()).map_err(|e| e.as_str()));
@@ -393,6 +522,7 @@ pub fn send_linked_reply(
     password: &str,
     source_uid_token: &str,
     body: &str,
+    attachments: &[OutAttachment],
 ) -> Result<LinkedReceipt, ExtError> {
     let route = derive_smtp_route(inbox).map_err(ExtError::Engine)?;
     let src_raw = imap
@@ -425,20 +555,39 @@ pub fn send_linked_reply(
         src.message_id.as_deref(),
     );
     let to_addr = MailAddr { name: reply_to.name.clone(), email: recipient.clone() };
-    let date = chrono::Utc::now().to_rfc2822();
+    let now = chrono::Utc::now();
     let mid = external::new_message_id(&inbox.email_address);
-    let rfc822 = external::compose_outgoing_rfc822(
-        inbox,
-        std::slice::from_ref(&to_addr),
-        &[],
-        &subject,
-        body,
-        &date,
-        &mid,
-        src.message_id.as_deref(),
-        references.as_deref(),
-    )
-    .map_err(ExtError::Engine)?;
+    let to_slice = std::slice::from_ref(&to_addr);
+    // Zero attachments = the unchanged single-part reply; attachments =
+    // a lettre multipart/mixed carrying the SAME threading headers.
+    let rfc822 = if attachments.is_empty() {
+        external::compose_outgoing_rfc822(
+            inbox,
+            to_slice,
+            &[],
+            &subject,
+            body,
+            &now.to_rfc2822(),
+            &mid,
+            src.message_id.as_deref(),
+            references.as_deref(),
+        )
+        .map_err(ExtError::Engine)?
+    } else {
+        compose_outgoing_multipart(
+            inbox,
+            to_slice,
+            &[],
+            &subject,
+            body,
+            now.into(),
+            &mid,
+            src.message_id.as_deref(),
+            references.as_deref(),
+            attachments,
+        )
+        .map_err(ExtError::Engine)?
+    };
     // Password vs OAuth-XOAUTH2 (issue #31.1), same as the fresh-send path.
     let auth = match smtp_auth_for(inbox, password) {
         Ok(a) => a,
@@ -807,5 +956,128 @@ mod tests {
             .expect_err("microsoft must be refused on SMTP");
         assert!(err.contains("Graph"), "must point at Graph: {err}");
         assert!(!err.contains("Bearer") && !err.contains("AT-"), "no token in the error: {err}");
+    }
+
+    // ── attachments: the lettre multipart/mixed composer ───────────────────
+
+    fn att(filename: &str, content_type: &str, bytes: &[u8]) -> OutAttachment {
+        OutAttachment {
+            filename: filename.to_string(),
+            content_type: content_type.to_string(),
+            bytes: bytes.to_vec(),
+        }
+    }
+
+    /// A send with ONE attachment composes a multipart/mixed whose parts
+    /// include the text body AND an attachment part with the right
+    /// filename, content-type, and (base64-encoded) bytes.
+    #[test]
+    fn compose_multipart_has_body_and_attachment_part() {
+        let inbox = inbox_with("imap.example.com", None, None, None);
+        // Binary bytes (high bits / NUL) force lettre's base64 transfer
+        // encoding — proving raw bytes survive intact, not just clean ASCII.
+        let bytes: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0xFF, 0x10];
+        let rfc822 = compose_outgoing_multipart(
+            &inbox,
+            &[MailAddr { name: Some("Pat".into()), email: "pat@dest.example".into() }],
+            &[],
+            "With a file",
+            "the body text",
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+            "<mid-att@example.com>",
+            None,
+            None,
+            &[att("report.pdf", "application/pdf", bytes)],
+        )
+        .expect("compose multipart");
+        let msg = String::from_utf8_lossy(&rfc822);
+
+        // The envelope is a multipart/mixed wrapper.
+        assert!(msg.contains("multipart/mixed"), "{msg}");
+        // The text body part survives.
+        assert!(msg.contains("text/plain"), "{msg}");
+        assert!(msg.contains("the body text"), "{msg}");
+        // The attachment part: filename, content-type, disposition.
+        assert!(msg.contains("application/pdf"), "{msg}");
+        assert!(
+            msg.contains("Content-Disposition: attachment") && msg.contains("report.pdf"),
+            "attachment disposition + filename: {msg}"
+        );
+        // The binary bytes ride as base64 (lettre's transfer encoding).
+        assert!(msg.contains("Content-Transfer-Encoding: base64"), "{msg}");
+        let want_b64 = B64.encode(bytes);
+        assert!(msg.contains(&want_b64), "attachment bytes base64 missing: {msg}");
+        // The headers still stamp our Message-ID + From/To.
+        assert!(msg.contains("Message-ID: <mid-att@example.com>"), "{msg}");
+        assert!(msg.contains("pat@dest.example"), "{msg}");
+    }
+
+    /// Multiple attachments each become their own part; a reply-style
+    /// compose carries the In-Reply-To/References threading headers.
+    #[test]
+    fn compose_multipart_reply_threads_and_carries_multiple_attachments() {
+        let inbox = inbox_with("imap.example.com", None, None, None);
+        let a1: &[u8] = &[0x01, 0x02, 0xFE, 0xFF];
+        let a2: &[u8] = &[0x00, 0x80, 0x81, 0x7F];
+        let rfc822 = compose_outgoing_multipart(
+            &inbox,
+            &[MailAddr { name: None, email: "boss@dest.example".into() }],
+            &[],
+            "Re: hello",
+            "replying with files",
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+            "<reply-mid@example.com>",
+            Some("orig@sender.example"),
+            Some("<a@x> <b@y>"),
+            &[att("a.dat", "application/octet-stream", a1), att("b.bin", "application/octet-stream", a2)],
+        )
+        .expect("compose reply multipart");
+        let msg = String::from_utf8_lossy(&rfc822);
+
+        assert!(msg.contains("In-Reply-To: <orig@sender.example>"), "{msg}");
+        assert!(msg.contains("References: <a@x> <b@y>"), "{msg}");
+        assert!(msg.contains("a.dat") && msg.contains("b.bin"), "both filenames: {msg}");
+        assert!(msg.contains(&B64.encode(a1)) && msg.contains(&B64.encode(a2)), "both bodies: {msg}");
+        // An unknown content-type still parses (fallback never panics).
+        assert!(msg.contains("application/octet-stream"), "{msg}");
+    }
+
+    /// The composed multipart survives an end-to-end SMTP DATA round-trip
+    /// over the loopback mock (the attachment's base64 arrives intact).
+    #[test]
+    fn multipart_message_rides_the_smtp_data_intact() {
+        let (port, handle) = spawn_smtp_mock();
+        let inbox = inbox_with("imap.example.com", None, None, None);
+        let bytes: &[u8] = &[0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0xFF];
+        let rfc822 = compose_outgoing_multipart(
+            &inbox,
+            &[MailAddr { name: None, email: "pat@dest.example".into() }],
+            &[],
+            "wire test",
+            "body over wire",
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+            "<wire-mid@example.com>",
+            None,
+            None,
+            &[att("doc.bin", "application/octet-stream", bytes)],
+        )
+        .expect("compose");
+        submit_plaintext(
+            "127.0.0.1",
+            port,
+            "rosson@example.com",
+            &SmtpAuth::Password("app-password".to_string()),
+            "rosson@example.com",
+            &["pat@dest.example".to_string()],
+            &rfc822,
+        )
+        .expect("submit multipart over loopback");
+
+        let (seen, data) = handle.join().expect("mock thread");
+        assert!(seen.iter().any(|l| l.starts_with("DATA")), "{seen:?}");
+        let body = String::from_utf8_lossy(&data);
+        assert!(body.contains("multipart/mixed"), "{body}");
+        assert!(body.contains("doc.bin"), "{body}");
+        assert!(body.contains(&B64.encode(bytes)), "attachment base64 lost over the wire: {body}");
     }
 }

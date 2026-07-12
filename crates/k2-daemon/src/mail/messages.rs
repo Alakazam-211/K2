@@ -923,6 +923,60 @@ pub fn resolve_out_path(ws_root: &str, out: &str) -> Result<PathBuf, String> {
     Ok(parent.join(file_name))
 }
 
+/// Why a workspace-relative READ path was refused. The route maps
+/// `Usage` → 400 `usage` (absolute / traversal / escapes the root) and
+/// `NotFound` → 404 `not_found` (no such file) — a workspace never
+/// learns what exists outside it (§10, same masking stance as `--out`).
+#[derive(Debug)]
+pub enum InPathError {
+    Usage(String),
+    NotFound(String),
+}
+
+/// Resolve an agent-supplied READ path (an attachment to SEND) against
+/// the calling workspace's root — the read-side mirror of
+/// [`resolve_out_path`]. SECURITY (§10): absolute paths and any `..`
+/// traversal are refused; the FILE itself is canonicalized (so a symlink
+/// pointing outside the root dies here) and must still sit under the
+/// canonical root. The daemon only READS the bytes — never executes or
+/// opens them. A missing file is a distinct `NotFound` so the route can
+/// name it without leaking anything outside the workspace.
+pub fn resolve_in_path(ws_root: &str, path: &str) -> Result<PathBuf, InPathError> {
+    let raw = path.trim();
+    if raw.is_empty() {
+        return Err(InPathError::Usage("empty attachment path".to_string()));
+    }
+    let rel = Path::new(raw);
+    if rel.is_absolute() {
+        return Err(InPathError::Usage(format!(
+            "attachment path must be inside the workspace (relative), got absolute: {raw}"
+        )));
+    }
+    if rel
+        .components()
+        .any(|c| matches!(c, Component::ParentDir | Component::Prefix(_) | Component::RootDir))
+    {
+        return Err(InPathError::Usage(format!(
+            "attachment path must not contain '..' components: {raw}"
+        )));
+    }
+    let root = Path::new(ws_root)
+        .canonicalize()
+        .map_err(|e| InPathError::Usage(format!("workspace root unavailable: {e}")))?;
+    let target = root.join(rel);
+    // Canonicalize the FILE — a missing file is NotFound; a symlink that
+    // escapes the root is caught by the `starts_with` check below.
+    let canonical = target
+        .canonicalize()
+        .map_err(|_| InPathError::NotFound(raw.to_string()))?;
+    if !canonical.starts_with(&root) {
+        return Err(InPathError::Usage(format!(
+            "attachment path escapes the workspace: {raw}"
+        )));
+    }
+    Ok(canonical)
+}
+
 // ── The wait loop (§8.2 — injected clock + poller, no real sleeps) ──────
 
 /// The §8.2 poll cadence inside the held request.
@@ -1476,6 +1530,58 @@ pub(crate) mod tests {
             std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
             let err = resolve_out_path(&root_s, "link/evil.bin").expect_err("must refuse");
             assert!(err.contains("escapes"), "{err}");
+            let _ = std::fs::remove_dir_all(&outside);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn in_paths_read_inside_the_workspace_and_refuse_escapes() {
+        let root = std::env::temp_dir().join(format!(
+            "mail-in-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("a.txt"), b"hello").unwrap();
+        std::fs::write(root.join("docs/b.bin"), b"nested").unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        // Plain + nested existing files resolve under the canonical root.
+        let p = resolve_in_path(&root_s, "a.txt").expect("plain");
+        assert!(p.starts_with(root.canonicalize().unwrap()));
+        let p = resolve_in_path(&root_s, "docs/b.bin").expect("nested");
+        assert!(p.ends_with("docs/b.bin"));
+
+        // A missing file is NotFound (distinct from a policy refusal).
+        assert!(matches!(
+            resolve_in_path(&root_s, "nope.txt"),
+            Err(InPathError::NotFound(_))
+        ));
+        // Absolute / traversal / empty are Usage refusals.
+        assert!(matches!(resolve_in_path(&root_s, "/etc/passwd"), Err(InPathError::Usage(_))));
+        assert!(matches!(resolve_in_path(&root_s, "../outside.txt"), Err(InPathError::Usage(_))));
+        assert!(matches!(
+            resolve_in_path(&root_s, "docs/../../outside.txt"),
+            Err(InPathError::Usage(_))
+        ));
+        assert!(matches!(resolve_in_path(&root_s, "  "), Err(InPathError::Usage(_))));
+
+        // Symlink escape: the file canonicalizes OUTSIDE the root → refused.
+        #[cfg(unix)]
+        {
+            let outside = std::env::temp_dir().join(format!(
+                "mail-in-escape-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&outside).unwrap();
+            std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+            std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("link.txt")).unwrap();
+            assert!(matches!(
+                resolve_in_path(&root_s, "link.txt"),
+                Err(InPathError::Usage(_))
+            ));
             let _ = std::fs::remove_dir_all(&outside);
         }
         let _ = std::fs::remove_dir_all(&root);

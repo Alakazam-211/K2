@@ -6291,8 +6291,8 @@ cmd_schema() {
     },
     {
       "name": "mail send",
-      "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--wait [--timeout <secs>]] [--json]",
-      "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level (submitted immediately over SMTP, ungated for now). Linked send needs an explicit --from <linked-address>. Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
+      "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
+      "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level (submitted immediately over SMTP, ungated for now). Linked send needs an explicit --from <linked-address>. Attachments (--attach) are supported on LINKED sends only (not hosted yet). Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
       "args": [{"name": "to", "required": false}],
       "flags": [
         {"name": "--to", "arg": "addr", "description": "Recipient (repeatable / comma-separated)."},
@@ -6301,7 +6301,7 @@ cmd_schema() {
         {"name": "--body-file", "arg": "f", "description": "Read the body from a file."},
         {"name": "--cc", "arg": "addr", "description": "Cc (repeatable / comma-separated)."},
         {"name": "--from", "arg": "owned-addr", "description": "Which of your addresses sends (needed with several)."},
-        {"name": "--attach", "arg": "file", "description": "Not supported by the server yet — fails with guidance."},
+        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). LINKED inboxes only. Max 10 files, 25MB each / 25MB total."},
         {"name": "--wait", "arg": null, "description": "Block until DECIDED: approved-and-submitted or denied (approval mode) / accepted-for-delivery (on mode). Exit 2 on timeout — the message is still queued; check the outbox."},
         {"name": "--timeout", "arg": "secs", "description": "With --wait: 1-900 (default 300)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -6309,12 +6309,13 @@ cmd_schema() {
     },
     {
       "name": "mail reply",
-      "usage": "k2 mail reply <message-id> (--body <text> | --body-file <f>) [--wait [--timeout <secs>]] [--json]",
-      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level it submits the reply immediately over SMTP (ungated for now). For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
+      "usage": "k2 mail reply <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--wait [--timeout <secs>]] [--json]",
+      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level it submits the reply immediately over SMTP (ungated for now). Attachments (--attach) are supported on LINKED replies only (not hosted yet). For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
       "args": [{"name": "message-id", "required": true}],
       "flags": [
         {"name": "--body", "arg": "text", "description": "The reply text."},
         {"name": "--body-file", "arg": "f", "description": "Read the reply from a file."},
+        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). LINKED inboxes only. Max 10 files, 25MB each / 25MB total."},
         {"name": "--wait", "arg": null, "description": "Block until decided (exit 2 on timeout, still queued)."},
         {"name": "--timeout", "arg": "secs", "description": "With --wait: 1-900 (default 300)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -12107,9 +12108,9 @@ elif verb == "send":
         body["from"] = env("M_FROM")
     attach = env_lines("M_ATTACH")
     if attach:
-        # Not supported daemon-side in V1 — passed through so the
-        # server's structured teaching error reaches the caller.
-        body["attach"] = attach
+        # Workspace-relative file PATHS — the daemon reads the bytes
+        # (CLI stays dumb: no file I/O, no base64 over the wire).
+        body["attachments"] = attach
     waiting = env("M_WAIT") == "true"
     t = wait_timeout_secs()
     if waiting:
@@ -12121,6 +12122,10 @@ elif verb == "send":
 
 elif verb == "reply":
     body = {"project": ws_path, "id": env("M_ID"), "body": env("M_BODY")}
+    attach = env_lines("M_ATTACH")
+    if attach:
+        # Workspace-relative file PATHS — the daemon reads the bytes.
+        body["attachments"] = attach
     waiting = env("M_WAIT") == "true"
     t = wait_timeout_secs()
     if waiting:
@@ -12893,7 +12898,7 @@ cmd_mail_send() {
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--from <owned-addr>] [--wait [--timeout <s>]] [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--from <owned-addr>] [--attach <path>] [--wait [--timeout <s>]] [--json]"
                 exit 2 ;;
             *)
                 to="${to}${to:+$'\n'}$1"; shift ;;
@@ -12940,7 +12945,7 @@ cmd_mail_send() {
 
 cmd_mail_reply() {
     if _wants_help "$@"; then cmd_help_mail_reply; exit 0; fi
-    local id="" body="" body_file="" wait=false timeout="" as_json=false
+    local id="" body="" body_file="" attach="" wait=false timeout="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --body)
@@ -12949,13 +12954,16 @@ cmd_mail_reply() {
             --body-file)
                 [ $# -ge 2 ] || { _mail_err "usage" "--body-file requires a file path"; exit 2; }
                 body_file="$2"; shift 2 ;;
+            --attach)
+                [ $# -ge 2 ] || { _mail_err "usage" "--attach requires a file path"; exit 2; }
+                attach="${attach}${attach:+$'\n'}$2"; shift 2 ;;
             --wait) wait=true; shift ;;
             --timeout)
                 [ $# -ge 2 ] || { _mail_err "usage" "--timeout requires a value in seconds (1-900)"; exit 2; }
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail reply <message-id> (--body <text> | --body-file <f>) [--wait [--timeout <s>]] [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail reply <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--wait [--timeout <s>]] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
@@ -12995,7 +13003,7 @@ cmd_mail_reply() {
         _mail_check_timeout "$timeout"
     fi
     local M_VERB="reply" M_JSON="$as_json" M_ID="$id" M_BODY="$body" \
-          M_WAIT="$wait" M_TIMEOUT="$timeout"
+          M_ATTACH="$attach" M_WAIT="$wait" M_TIMEOUT="$timeout"
     _mail_py
 }
 
@@ -14040,7 +14048,10 @@ ARGUMENTS / FLAGS
   --from <owned-addr>    Which of YOUR addresses sends (needed when you own
                          several). The sender is verified server-side — you
                          can only ever send as an address you own.
-  --attach <file>        Not supported by the server yet — fails with guidance
+  --attach <path>        Workspace-relative path to a file to attach
+                         (repeatable). The DAEMON reads the file — you pass a
+                         path, not bytes. LINKED inboxes only (not hosted K2
+                         mailboxes yet). Max 10 files, 25MB each / 25MB total.
   --wait                 Block until the message is DECIDED:
                          approved-and-submitted or denied (approval mode) /
                          accepted-for-delivery (on mode). Exit 2 on timeout —
@@ -14081,6 +14092,9 @@ USAGE
 
 FLAGS
   --body <text>          The reply text (or --body-file <f>)
+  --attach <path>        Workspace-relative path to a file to attach
+                         (repeatable). The DAEMON reads the file. LINKED
+                         inboxes only. Max 10 files, 25MB each / 25MB total.
   --wait                 Block until decided — same clause as `send --wait`:
                          exit 2 on timeout, message still queued.
   --timeout <secs>       With --wait: 1-900 (default 300)

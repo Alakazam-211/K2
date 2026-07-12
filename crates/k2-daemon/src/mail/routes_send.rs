@@ -434,6 +434,188 @@ fn linked_password(inbox: &MailExternalInbox) -> Result<String, CliResponse> {
 /// any audit row) belongs right HERE, before the SMTP submission — the
 /// hosted path's queue/audit/rate-limit machinery is intentionally NOT
 /// applied to linked yet.
+// ── Attachments (§17.5 send/reply): daemon reads workspace-relative ─────
+
+/// Max attachments per message, and the per-file / total size caps
+/// (enforced daemon-side after resolving each path; the CLI mirrors the
+/// count/path shape but does NO file I/O — the daemon owns the bytes).
+const MAX_ATTACHMENTS: usize = 10;
+const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_ATTACHMENTS_TOTAL_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Parse the `attachments` array (workspace-relative path STRINGS — the
+/// CLI sends paths, never bytes). Enforces the count cap and the
+/// non-empty-string shape BEFORE any file is touched. Absent/null → none.
+fn parse_attachment_specs(v: &serde_json::Value) -> Result<Vec<String>, CliResponse> {
+    let raw = match v.get("attachments") {
+        None | Some(serde_json::Value::Null) => return Ok(Vec::new()),
+        Some(serde_json::Value::Array(a)) => a,
+        Some(_) => {
+            return Err(error_response(
+                "400 Bad Request",
+                "usage",
+                "'attachments' must be an array of workspace-relative file paths",
+            ))
+        }
+    };
+    if raw.len() > MAX_ATTACHMENTS {
+        return Err(error_response(
+            "400 Bad Request",
+            "usage",
+            &format!("too many attachments ({}) — max {}", raw.len(), MAX_ATTACHMENTS),
+        ));
+    }
+    let mut out = Vec::with_capacity(raw.len());
+    for item in raw {
+        let Some(p) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            return Err(error_response(
+                "400 Bad Request",
+                "usage",
+                "each attachment must be a non-empty workspace-relative file path",
+            ));
+        };
+        out.push(p.to_string());
+    }
+    Ok(out)
+}
+
+/// A content-type from the filename extension (fallback
+/// `application/octet-stream`). Small deliberate table — the transfer is
+/// base64 either way, so an unknown type just rides as a generic blob.
+fn content_type_for(filename: &str) -> String {
+    let ext = std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let ct = match ext.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "txt" | "log" => "text/plain; charset=utf-8",
+        "md" => "text/markdown; charset=utf-8",
+        "csv" => "text/csv; charset=utf-8",
+        "html" | "htm" => "text/html; charset=utf-8",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "ics" => "text/calendar; charset=utf-8",
+        "zip" => "application/zip",
+        "gz" | "tgz" => "application/gzip",
+        "doc" => "application/msword",
+        "docx" => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        _ => "application/octet-stream",
+    };
+    ct.to_string()
+}
+
+/// Resolve each spec workspace-relative (the read-side mirror of the
+/// `--out` guard — rejects absolute/`..`/symlink escapes), enforce the
+/// per-file + total size caps (checking metadata BEFORE reading the
+/// bytes), and read them into [`external_smtp::OutAttachment`]s. The
+/// filename is the basename; the content-type is derived from it. Bytes
+/// are never logged. Any resolve/read/cap failure names the path and
+/// aborts the whole send (nothing is submitted).
+fn read_workspace_attachments(
+    ws_root: &str,
+    specs: &[String],
+) -> Result<Vec<external_smtp::OutAttachment>, CliResponse> {
+    let mut out = Vec::with_capacity(specs.len());
+    let mut total: u64 = 0;
+    for spec in specs {
+        let path = match messages::resolve_in_path(ws_root, spec) {
+            Ok(p) => p,
+            Err(messages::InPathError::Usage(hint)) => {
+                return Err(error_response("400 Bad Request", "usage", &hint))
+            }
+            Err(messages::InPathError::NotFound(p)) => {
+                return Err(error_response(
+                    "404 Not Found",
+                    "not_found",
+                    &format!("attachment file not found in this workspace: {p}"),
+                ))
+            }
+        };
+        let meta = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                return Err(error_response(
+                    "400 Bad Request",
+                    "usage",
+                    &format!("cannot read attachment '{spec}': {e}"),
+                ))
+            }
+        };
+        if !meta.is_file() {
+            return Err(error_response(
+                "400 Bad Request",
+                "usage",
+                &format!("attachment '{spec}' is not a regular file"),
+            ));
+        }
+        let size = meta.len();
+        if size > MAX_ATTACHMENT_BYTES {
+            return Err(error_response(
+                "400 Bad Request",
+                "usage",
+                &format!(
+                    "attachment '{spec}' is too large ({size} bytes) — max {} bytes per file",
+                    MAX_ATTACHMENT_BYTES
+                ),
+            ));
+        }
+        total = total.saturating_add(size);
+        if total > MAX_ATTACHMENTS_TOTAL_BYTES {
+            return Err(error_response(
+                "400 Bad Request",
+                "usage",
+                &format!(
+                    "attachments total too large ({total} bytes) — max {} bytes across all files",
+                    MAX_ATTACHMENTS_TOTAL_BYTES
+                ),
+            ));
+        }
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                return Err(error_response(
+                    "400 Bad Request",
+                    "usage",
+                    &format!("cannot read attachment '{spec}': {e}"),
+                ))
+            }
+        };
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "attachment".to_string());
+        let content_type = content_type_for(&filename);
+        out.push(external_smtp::OutAttachment { filename, content_type, bytes });
+    }
+    Ok(out)
+}
+
+/// The stable refusal when a HOSTED (K2 mailbox) send carries
+/// attachments — the linked SMTP path is fully built, the hosted JMAP
+/// blob-upload path is a documented follow-up (§17.5).
+fn hosted_attachments_unsupported() -> CliResponse {
+    error_response(
+        "400 Bad Request",
+        "usage",
+        "attachments aren't supported yet when sending from a hosted K2 mailbox — send from a \
+         linked inbox (see 'k2 mail access'), or include a link in the body",
+    )
+}
+
 fn dispatch_linked_send(
     project_id: &str,
     agent_name: &str,
@@ -442,13 +624,22 @@ fn dispatch_linked_send(
     cc: &[String],
     subject: &str,
     body: &str,
+    attachments: &[external_smtp::OutAttachment],
 ) -> CliResponse {
     let password = match linked_password(&inbox) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    match external_smtp::send_linked_message(&RealSmtpOps, &inbox, &password, to, cc, subject, body)
-    {
+    match external_smtp::send_linked_message(
+        &RealSmtpOps,
+        &inbox,
+        &password,
+        to,
+        cc,
+        subject,
+        body,
+        attachments,
+    ) {
         Ok(receipt) => {
             record_linked_outbox(project_id, agent_name, &inbox.email_address, &receipt, body);
             ok_json(serde_json::json!({
@@ -505,6 +696,7 @@ fn dispatch_linked_reply(
     inbox: MailExternalInbox,
     source_uid_token: &str,
     body: &str,
+    attachments: &[external_smtp::OutAttachment],
 ) -> CliResponse {
     let password = match linked_password(&inbox) {
         Ok(p) => p,
@@ -517,6 +709,7 @@ fn dispatch_linked_reply(
         &password,
         source_uid_token,
         body,
+        attachments,
     ) {
         Ok(receipt) => {
             record_linked_outbox(project_id, agent_name, &inbox.email_address, &receipt, body);
@@ -557,15 +750,6 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
             "missing 'project' (workspace name | path | UUID)",
         );
     };
-    // V1 daemon surface: no attachments on send yet — refuse loudly
-    // rather than silently dropping them.
-    if v.get("attach").is_some() || v.get("attachments").is_some() {
-        return error_response(
-            "400 Bad Request",
-            "usage",
-            "attachments are not supported on 'k2 mail send' yet — include a link instead",
-        );
-    }
     let to_raw = match string_list(&v["to"], "to") {
         Ok(l) if !l.is_empty() => l,
         Ok(_) => {
@@ -593,6 +777,12 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     };
     let wait_timeout = match wait_params(&v) {
         Ok(w) => w,
+        Err(resp) => return resp,
+    };
+    // Attachment PATHS (the daemon reads them workspace-relative below):
+    // parse + count-cap now, before any engine/identity work.
+    let attach_specs = match parse_attachment_specs(&v) {
+        Ok(s) => s,
         Err(resp) => return resp,
     };
     let (path, project_id) = match resolve_caller(project) {
@@ -654,11 +844,30 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                     "linked inbox row missing from the resolved sender (unexpected)",
                 );
             };
+            // Read the attachment files from THIS workspace (caps enforced).
+            let attachments = match read_workspace_attachments(&path, &attach_specs) {
+                Ok(a) => a,
+                Err(resp) => return resp,
+            };
             let agent_name = k2_core::workspace::display::agent_display_name(&path);
-            dispatch_linked_send(&project_id, &agent_name, inbox, &to, &cc, subject, body_text)
+            dispatch_linked_send(
+                &project_id,
+                &agent_name,
+                inbox,
+                &to,
+                &cc,
+                subject,
+                body_text,
+                &attachments,
+            )
         }
         // ── HOSTED: the existing governed Stalwart path ──
         Source::Hosted => {
+            // Hosted attachments are a documented follow-up (JMAP blob
+            // upload) — refuse cleanly rather than silently drop them.
+            if !attach_specs.is_empty() {
+                return hosted_attachments_unsupported();
+            }
             let Some(account_id) = from_inbox.account_id.clone() else {
                 return error_response(
                     "502 Bad Gateway",
@@ -751,6 +960,12 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
         Ok(w) => w,
         Err(resp) => return resp,
     };
+    // Attachment PATHS (read workspace-relative below): parse + count-cap
+    // now, before any identity/engine work.
+    let attach_specs = match parse_attachment_specs(&v) {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
     let (path, project_id) = match resolve_caller(project) {
         Ok(p) => p,
         Err(resp) => return resp,
@@ -809,11 +1024,27 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             };
             // `email_id` is the linked message's `uid:…` token (the
             // reply threading + IMAP source-fetch happen in external_smtp).
+            let attachments = match read_workspace_attachments(&path, &attach_specs) {
+                Ok(a) => a,
+                Err(resp) => return resp,
+            };
             let agent_name = k2_core::workspace::display::agent_display_name(&path);
-            dispatch_linked_reply(&project_id, &agent_name, inbox, &email_id, body_text)
+            dispatch_linked_reply(
+                &project_id,
+                &agent_name,
+                inbox,
+                &email_id,
+                body_text,
+                &attachments,
+            )
         }
         // ── HOSTED: the existing governed reply path ──
         Source::Hosted => {
+            // Hosted attachments are a documented follow-up (JMAP blob
+            // upload) — refuse cleanly rather than silently drop them.
+            if !attach_specs.is_empty() {
+                return hosted_attachments_unsupported();
+            }
             let from_address = from_inbox.address.clone();
             let Some(account_id) = from_inbox.account_id.clone() else {
                 return masked();
@@ -1156,6 +1387,71 @@ mod tests {
         serde_json::from_str(&resp.body).expect("valid JSON body")
     }
 
+    // ── attachment reading (workspace-relative, caps) ──
+
+    #[test]
+    fn read_workspace_attachments_reads_files_and_derives_name_and_type() {
+        let root = std::env::temp_dir().join(format!(
+            "mail-att-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("out")).unwrap();
+        std::fs::write(root.join("report.pdf"), b"PDF-CONTENT").unwrap();
+        std::fs::write(root.join("out/notes.txt"), b"hi").unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let atts = match read_workspace_attachments(
+            &root_s,
+            &["report.pdf".to_string(), "out/notes.txt".to_string()],
+        ) {
+            Ok(a) => a,
+            Err(resp) => panic!("expected both files to read: {}", resp.body),
+        };
+        assert_eq!(atts.len(), 2);
+        assert_eq!(atts[0].filename, "report.pdf");
+        assert_eq!(atts[0].content_type, "application/pdf");
+        assert_eq!(atts[0].bytes, b"PDF-CONTENT");
+        assert_eq!(atts[1].filename, "notes.txt");
+        assert!(atts[1].content_type.starts_with("text/plain"));
+
+        // A missing file → 404 not_found naming the path, nothing read.
+        let resp = read_workspace_attachments(&root_s, &["ghost.bin".to_string()])
+            .err()
+            .expect("missing file must be rejected");
+        assert_eq!(resp.status, "404 Not Found");
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("ghost.bin"));
+
+        // A traversal path → 400 usage.
+        let resp = read_workspace_attachments(&root_s, &["../escape.bin".to_string()])
+            .err()
+            .expect("traversal must be rejected");
+        assert_eq!(resp.status, "400 Bad Request");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_workspace_attachments_rejects_oversize_files() {
+        let root = std::env::temp_dir().join(format!(
+            "mail-att-big-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        // One byte over the per-file cap — rejected via metadata, no read.
+        let big = vec![0u8; (MAX_ATTACHMENT_BYTES + 1) as usize];
+        std::fs::write(root.join("huge.bin"), &big).unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let resp = read_workspace_attachments(&root_s, &["huge.bin".to_string()])
+            .err()
+            .expect("oversize must be rejected");
+        assert_eq!(resp.status, "400 Bad Request");
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("too large"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Short names double as DOMAIN labels (`bot@<name>.example`).
     fn unique(label: &str) -> (String, String) {
         let id = uuid::Uuid::new_v4().simple().to_string();
@@ -1287,9 +1583,19 @@ mod tests {
                 "to",
             ),
             (
+                // `attachments` must be an array of path strings (shape
+                // validated before any identity work).
                 serde_json::json!({ "project": "/tmp/x", "to": "a@b.c", "subject": "s",
-                                    "body": "b", "attach": ["f.pdf"] }),
-                "attachments are not supported",
+                                    "body": "b", "attachments": "f.pdf" }),
+                "must be an array",
+            ),
+            (
+                // The count cap (≤10) fires before identity work too.
+                serde_json::json!({ "project": "/tmp/x", "to": "a@b.c", "subject": "s",
+                                    "body": "b",
+                                    "attachments": (0..11).map(|i| format!("f{i}.pdf"))
+                                        .collect::<Vec<_>>() }),
+                "too many attachments",
             ),
             (
                 serde_json::json!({ "project": "/tmp/x", "to": "a@b.c", "subject": "s",

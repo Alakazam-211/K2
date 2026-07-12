@@ -399,6 +399,16 @@ fn dispatch_and_respond(
 /// Missing/unreadable → 503 not_ready with the reconnect pointer (never
 /// a leaked secret).
 fn linked_password(inbox: &MailExternalInbox) -> Result<String, CliResponse> {
+    // For an OAuth-IMAP row (Gmail XOAUTH2) the backend mints the access
+    // token itself and IGNORES this param, so there is no app-password to
+    // require; a `password` row must still have its vaulted credential.
+    let is_oauth = matches!(
+        external::read_oauth_fields(&inbox.id),
+        Ok(f) if f.auth_kind == external::AUTH_OAUTH
+    );
+    if is_oauth {
+        return Ok(String::new());
+    }
     let secrets = FileSecretStore::default();
     match secrets.resolve(&external::vault_key(&inbox.id)) {
         Ok(Some(p)) => Ok(p),
@@ -1746,6 +1756,89 @@ mod tests {
         let hint = v["error"]["hint"].as_str().unwrap();
         assert!(hint.contains("read/draft-only"), "{hint}");
         assert!(hint.contains("k2 mail draft"), "linked teaches the draft alternative: {hint}");
+        cleanup_linked(&project_id);
+    }
+
+    /// Seed a linked inbox whose credential is an OAuth token (Gmail
+    /// XOAUTH2) — `auth_kind='oauth'`, `provider='gmail'` — matching the
+    /// shape `external::add_oauth_inbox` writes. No app-password is ever
+    /// vaulted for such a row (the credential is the token blob).
+    fn seed_linked_oauth(project_id: &str, address: &str, primary_level: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, host, \
+             port, username, created_at, primary_level, auth_kind, provider) \
+             VALUES (?1, ?2, ?3, 'imap.gmail.com', 993, ?3, 100, ?4, 'oauth', 'gmail')",
+            rusqlite::params![id, project_id, address, primary_level],
+        )
+        .expect("seed oauth linked inbox");
+        id
+    }
+
+    /// REGRESSION (the seam the original tests missed): an OAuth-linked
+    /// inbox has its token vaulted under the `-oauth` key and NO
+    /// app-password. `linked_password` MUST NOT 503 on the absent
+    /// app-password — it recognises `auth_kind='oauth'` and returns an
+    /// empty password (the SMTP/IMAP backend mints the token itself).
+    #[test]
+    fn linked_password_skips_app_password_resolve_for_oauth_rows() {
+        let (name, path) = unique("oauthpw");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@gmail.com", &project_id[..8]);
+        let id = seed_linked_oauth(&project_id, &linked, "send");
+
+        // Present: the OAuth token bundle (the real credential). Absent:
+        // any app-password under `vault_key(id)`.
+        let secrets = FileSecretStore::default();
+        let tokens = crate::mail::oauth::Tokens {
+            access_token: "ya29.test-access".to_string(),
+            refresh_token: Some("1//test-refresh".to_string()),
+            scope: Some("https://mail.google.com/".to_string()),
+            token_type: "Bearer".to_string(),
+            expires_in: 3600,
+        };
+        crate::mail::oauth::store_tokens(&secrets, &id, &tokens, 1_000)
+            .expect("vault oauth tokens");
+
+        let inbox = external::inbox_for_address(&linked).expect("row loads");
+        // No app-password vaulted → a `password` row would 503 here; the
+        // oauth row must instead PROCEED with an empty password.
+        match linked_password(&inbox) {
+            Ok(pw) => assert!(pw.is_empty(), "oauth row yields empty password, got {} bytes", pw.len()),
+            Err(resp) => panic!(
+                "oauth row wrongly 503'd on a missing app-password: {} {}",
+                resp.status, resp.body
+            ),
+        }
+
+        // Clean up the vaulted token (shared secrets file).
+        let _ = secrets.delete(&crate::mail::oauth::oauth_vault_key(&id));
+        cleanup_linked(&project_id);
+    }
+
+    /// Counterpart: a NON-oauth (app-password) row with NO vaulted
+    /// credential still 503s not_ready — the fix narrows the skip to
+    /// oauth rows only, it does not silence the real missing-credential
+    /// case.
+    #[test]
+    fn linked_password_still_503s_for_password_rows_missing_the_vault_entry() {
+        let (name, path) = unique("pwmiss");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        seed_linked(&project_id, &linked, "send"); // default auth_kind (not oauth)
+
+        let inbox = external::inbox_for_address(&linked).expect("row loads");
+        match linked_password(&inbox) {
+            Ok(pw) => panic!("password row with no vault entry must 503, got Ok({pw:?})"),
+            Err(resp) => {
+                assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+                assert_eq!(body_json(&resp)["error"]["code"], "not_ready");
+                let hint = body_json(&resp)["error"]["hint"].as_str().unwrap().to_string();
+                assert!(hint.contains("k2 mail link add"), "corrected verb in hint: {hint}");
+            }
+        }
         cleanup_linked(&project_id);
     }
 }

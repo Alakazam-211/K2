@@ -154,20 +154,32 @@ fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
                 ));
             };
             let secrets = crate::mail::secrets::FileSecretStore::default();
-            let password = match secrets.resolve(&external::vault_key(&row.id)) {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    return Err(error_response(
-                        "503 Service Unavailable",
-                        "not_ready",
-                        &format!(
-                            "credentials for '{address}' are missing from the vault — your \
-                             human can reconnect it with 'k2 mail external add'"
-                        ),
-                    ))
-                }
-                Err(hint) => {
-                    return Err(error_response("503 Service Unavailable", "not_ready", &hint))
+            // For an OAuth-IMAP row (Gmail XOAUTH2) `login()` mints the
+            // access token itself and IGNORES this param, so there is no
+            // app-password to require; a `password` row must still have its
+            // vaulted credential (503 → re-link).
+            let is_oauth = matches!(
+                external::read_oauth_fields(&row.id),
+                Ok(f) if f.auth_kind == external::AUTH_OAUTH
+            );
+            let password = if is_oauth {
+                String::new()
+            } else {
+                match secrets.resolve(&external::vault_key(&row.id)) {
+                    Ok(Some(p)) => p,
+                    Ok(None) => {
+                        return Err(error_response(
+                            "503 Service Unavailable",
+                            "not_ready",
+                            &format!(
+                                "credentials for '{address}' are missing from the vault — your \
+                                 human can reconnect it with 'k2 mail link add'"
+                            ),
+                        ))
+                    }
+                    Err(hint) => {
+                        return Err(error_response("503 Service Unavailable", "not_ready", &hint))
+                    }
                 }
             };
             Ok(Box::new(external::ExternalImapBackend::new(
@@ -806,20 +818,32 @@ fn manage_backend_for(address: &str) -> Result<Box<dyn ManageBackend>, CliRespon
                 ));
             };
             let secrets = crate::mail::secrets::FileSecretStore::default();
-            let password = match secrets.resolve(&external::vault_key(&row.id)) {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    return Err(error_response(
-                        "503 Service Unavailable",
-                        "not_ready",
-                        &format!(
-                            "credentials for '{address}' are missing from the vault — your \
-                             human can reconnect it with 'k2 mail external add'"
-                        ),
-                    ))
-                }
-                Err(hint) => {
-                    return Err(error_response("503 Service Unavailable", "not_ready", &hint))
+            // For an OAuth-IMAP row (Gmail XOAUTH2) `login()` mints the
+            // access token itself and IGNORES this param, so there is no
+            // app-password to require; a `password` row must still have its
+            // vaulted credential (503 → re-link).
+            let is_oauth = matches!(
+                external::read_oauth_fields(&row.id),
+                Ok(f) if f.auth_kind == external::AUTH_OAUTH
+            );
+            let password = if is_oauth {
+                String::new()
+            } else {
+                match secrets.resolve(&external::vault_key(&row.id)) {
+                    Ok(Some(p)) => p,
+                    Ok(None) => {
+                        return Err(error_response(
+                            "503 Service Unavailable",
+                            "not_ready",
+                            &format!(
+                                "credentials for '{address}' are missing from the vault — your \
+                                 human can reconnect it with 'k2 mail link add'"
+                            ),
+                        ))
+                    }
+                    Err(hint) => {
+                        return Err(error_response("503 Service Unavailable", "not_ready", &hint))
+                    }
                 }
             };
             Ok(Box::new(external::ExternalImapBackend::new(

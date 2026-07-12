@@ -492,6 +492,62 @@ export async function removeLinkedInbox(
   return daemonCliPost('mail/link/remove', { address })
 }
 
+// ── OAuth-linked inboxes (O4 — Gmail / Microsoft, no app-password) ──────
+//
+// Provider-owned OAuth linking. Instead of a typed app-password, the daemon
+// runs the provider's device/loopback consent flow and vaults the resulting
+// refresh token server-side — the UI NEVER sees an access/refresh token or
+// an auth code, only the human-facing `userCode` / `verificationUrl` and the
+// terminal `state`. Two shapes come back from `start` (discriminated on
+// `flow`):
+//   • Microsoft → DEVICE flow: show the code + URL, the user approves in any
+//     browser, we poll `status`.
+//   • Gmail → LOOPBACK flow: the daemon opened the SYSTEM browser server-side
+//     (so this only works when the daemon is local). We poll `status`.
+// A Gmail link attempted against a REMOTE/headless daemon can't open a
+// browser and comes back HTTP 409 `remote_unsupported` — a thrown error the
+// caller special-cases via `mailErrorInfo` (a teaching case, not a crash).
+
+/** POST /cli/mail/link/oauth/start result — discriminated on `flow`. Codes/
+ *  tokens are NEVER present beyond `userCode`/`verificationUrl`. */
+export type OauthStartResult =
+  | {
+      /** Microsoft device flow: show `userCode` at `verificationUrl`. */
+      flow: 'device'
+      linkId: string
+      userCode: string
+      verificationUrl: string
+      /** Seconds until the device code expires (poll bound). */
+      expiresIn: number
+    }
+  | {
+      /** Gmail loopback flow: the daemon opened the local system browser. */
+      flow: 'loopback'
+      linkId: string
+      hint?: string
+    }
+
+/** POST /cli/mail/link/oauth/start — kicks off the provider consent flow.
+ *  Owner/Primary-gated (403 if not permitted). Gmail on a remote/headless
+ *  daemon throws HTTP 409 `remote_unsupported` (inspect via `mailErrorInfo`;
+ *  render the teaching message, not a poll card). No token is ever returned. */
+export async function linkOauthStart(args: {
+  address: string
+  provider: 'gmail' | 'microsoft'
+  workspace: string
+}): Promise<OauthStartResult> {
+  return daemonCliPost('mail/link/oauth/start', args)
+}
+
+/** GET /cli/mail/link/oauth/status?linkId=… — long-poll the consent flow.
+ *  Owner-gated. `connected` carries the discovered `address`; failure states
+ *  may carry a `hint`. Never returns tokens or codes. */
+export async function linkOauthStatus(
+  linkId: string,
+): Promise<{ state: 'pending' | 'connected' | 'denied' | 'expired' | 'error'; address?: string; hint?: string }> {
+  return daemonCliGet('mail/link/oauth/status', { linkId })
+}
+
 // ── Sample fixture (unsupported/Mac example mode — pre-mortem #15) ──────
 //
 // Rendered VERBATIM when `supported: false`: the page shows a real-

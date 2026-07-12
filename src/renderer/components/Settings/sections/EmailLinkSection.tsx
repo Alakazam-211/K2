@@ -22,7 +22,8 @@
 // username). This component holds it in local state only while the add
 // form is open and clears it on submit/close.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { useProjectsStore } from '@/stores/projects'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -33,6 +34,9 @@ import { InboxAccessPanel } from './InboxAccessPanel'
 import {
   addLinkedInbox,
   fetchInboxes,
+  linkOauthStart,
+  linkOauthStatus,
+  mailErrorInfo,
   mailErrorMessage,
   removeLinkedInbox,
   type Inbox,
@@ -41,6 +45,7 @@ import {
 export const EMAIL_LINK_MANIFEST: SettingEntry[] = [
   { id: 'email-link.inboxes', section: 'email-link', label: 'Connected Inboxes', description: 'External email accounts your workspaces can read and draft replies for', keywords: ['imap', 'gmail', 'fastmail', 'inbox', 'external', 'connect', 'email', 'account', 'app password', 'link'] },
   { id: 'email-link.add', section: 'email-link', label: 'Connect an Inbox', description: 'Add a Gmail / Fastmail / IMAP account owned by one workspace', keywords: ['add', 'connect', 'imap', 'gmail', 'app password', 'drafts', 'external inbox', 'imap host', 'port', 'tls', 'primary', 'workspace'] },
+  { id: 'email-link.oauth', section: 'email-link', label: 'Connect with Google or Microsoft', description: 'Link Gmail or Microsoft (Outlook / 365) via OAuth — no app-password', keywords: ['oauth', 'google', 'gmail', 'microsoft', 'outlook', '365', 'office', 'device code', 'sign in', 'connect', 'link', 'consent'] },
   { id: 'email-link.access', section: 'email-link', label: 'Inbox Access', description: 'Grant other workspaces read or read+draft access to a connected inbox', keywords: ['access', 'grant', 'revoke', 'share', 'read', 'draft', 'workspace', 'permission', 'primary', 'members', 'transfer'] },
 ]
 
@@ -87,6 +92,326 @@ function StatusChip({ status }: { status: string }): React.JSX.Element {
     >
       {label}
     </span>
+  )
+}
+
+/** Copy-to-clipboard with a transient "Copied" flash (mirrors the Email
+ *  Hosting page's CopyButton). */
+function CopyButton({ text, title }: { text: string; title?: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      title={title ?? 'Copy code'}
+      onClick={() => {
+        void navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1200)
+          })
+          .catch(() => {
+            useToastStore.getState().addToast('Copy failed', 'error')
+          })
+      }}
+      className="px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] border border-[var(--color-border)] transition-colors cursor-pointer flex-shrink-0"
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  )
+}
+
+// ── OAuth connect (Gmail / Microsoft — no app-password, O4 flows) ─────────
+//
+// The provider-owned path: no host/port/password to type. `start` returns a
+// DEVICE flow (Microsoft — show a code + verification URL, poll) or a
+// LOOPBACK flow (Gmail — the daemon opened the local browser, poll). Gmail
+// against a remote daemon 409s `remote_unsupported` — a teaching card, not a
+// poll. Tokens/codes are NEVER rendered (only `userCode`/`verificationUrl`
+// and the terminal `state`/`address`/`hint` ever come back).
+
+const OAUTH_POLL_MS = 3000
+const OAUTH_MAX_MS = 10 * 60 * 1000 // hard bound if the provider gives none
+
+type OauthProvider = 'gmail' | 'microsoft'
+
+type OauthFlow =
+  | { kind: 'device'; provider: 'microsoft'; linkId: string; userCode: string; verificationUrl: string; deadlineMs: number }
+  | { kind: 'loopback'; provider: 'gmail'; linkId: string; hint?: string; deadlineMs: number }
+
+type OauthResult =
+  | { kind: 'connected'; address?: string }
+  | { kind: 'failed'; state: 'denied' | 'expired' | 'error'; hint?: string }
+  | { kind: 'remote_unsupported'; message: string }
+  | { kind: 'error'; message: string }
+
+function OauthConnect({
+  canMutate,
+  onConnected,
+}: {
+  canMutate: boolean
+  /** Refresh the connected-inbox list + select the new inbox (dismisses the card). */
+  onConnected: (address: string) => void
+}): React.JSX.Element {
+  const projects = useProjectsStore((s) => s.projects)
+
+  const [project, setProject] = useState('')
+  const [address, setAddress] = useState('')
+  const [busy, setBusy] = useState<OauthProvider | null>(null)
+  const [flow, setFlow] = useState<OauthFlow | null>(null)
+  const [result, setResult] = useState<OauthResult | null>(null)
+
+  const canStart = canMutate && busy === null && project.trim().length > 0 && address.trim().length > 0
+
+  const start = useCallback(
+    async (provider: OauthProvider): Promise<void> => {
+      if (!canStart) return
+      setBusy(provider)
+      setFlow(null)
+      setResult(null)
+      try {
+        const res = await linkOauthStart({
+          address: address.trim(),
+          provider,
+          workspace: project.trim(),
+        })
+        if (res.flow === 'device') {
+          const bound = Number.isFinite(res.expiresIn) && res.expiresIn > 0 ? res.expiresIn * 1000 : OAUTH_MAX_MS
+          setFlow({
+            kind: 'device',
+            provider: 'microsoft',
+            linkId: res.linkId,
+            userCode: res.userCode,
+            verificationUrl: res.verificationUrl,
+            deadlineMs: Date.now() + Math.min(bound, OAUTH_MAX_MS),
+          })
+        } else {
+          setFlow({
+            kind: 'loopback',
+            provider: 'gmail',
+            linkId: res.linkId,
+            hint: res.hint,
+            deadlineMs: Date.now() + OAUTH_MAX_MS,
+          })
+        }
+      } catch (e) {
+        // Gmail on a remote/headless daemon → HTTP 409 remote_unsupported:
+        // the daemon's browser opener can't spawn here. Teach, don't poll.
+        const info = mailErrorInfo(e)
+        if (info.code === 'remote_unsupported') {
+          setResult({
+            kind: 'remote_unsupported',
+            message:
+              info.hint ??
+              'Gmail must be linked on the machine running this K2 daemon. You’re connected to a remote daemon, so the browser can’t open here.',
+          })
+        } else {
+          setResult({ kind: 'error', message: mailErrorMessage(e) })
+        }
+      } finally {
+        setBusy(null)
+      }
+    },
+    [canStart, address, project],
+  )
+
+  // ── Poll link/oauth/status every 3s while a flow is live. Bounded by the
+  //    provider's expiry (or 10 min). Terminal states clear the flow, which
+  //    tears down the interval via cleanup — no leaked timers. ────────────
+  const onConnectedRef = useRef(onConnected)
+  onConnectedRef.current = onConnected
+  useEffect(() => {
+    if (!flow) return
+    let cancelled = false
+    const tick = async (): Promise<void> => {
+      if (cancelled) return
+      if (Date.now() > flow.deadlineMs) {
+        setResult({ kind: 'failed', state: 'expired' })
+        setFlow(null)
+        return
+      }
+      try {
+        const s = await linkOauthStatus(flow.linkId)
+        if (cancelled) return
+        if (s.state === 'connected') {
+          setResult({ kind: 'connected', address: s.address })
+          setFlow(null)
+          onConnectedRef.current(s.address ?? address.trim())
+        } else if (s.state === 'denied' || s.state === 'expired' || s.state === 'error') {
+          setResult({ kind: 'failed', state: s.state, hint: s.hint })
+          setFlow(null)
+        }
+        // 'pending' → keep polling.
+      } catch (e) {
+        if (cancelled) return
+        setResult({ kind: 'error', message: mailErrorMessage(e) })
+        setFlow(null)
+      }
+    }
+    const id = window.setInterval(() => void tick(), OAUTH_POLL_MS)
+    void tick() // fire immediately so the user isn't waiting 3s for the first read
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [flow, address])
+
+  const reset = useCallback((): void => {
+    setFlow(null)
+    setResult(null)
+  }, [])
+
+  const inputCls =
+    'px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
+
+  const disabledField = busy !== null || flow !== null
+
+  return (
+    <div className="space-y-3" data-settings-id="email-link.oauth">
+      <SectionTitle>Connect with Google or Microsoft</SectionTitle>
+      <p className="text-[11px] text-[var(--color-text-muted)]">
+        No app-password needed — approve access in your provider and K2 stores the connection in the
+        daemon vault. Pick the <strong>Primary</strong> workspace and enter the account&rsquo;s email
+        so K2 can label the pending link.
+      </p>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="flex flex-col gap-0.5 min-w-0">
+          <span className="text-[10px] text-[var(--color-text-secondary)]">Primary workspace</span>
+          <SettingDropdown
+            value={project}
+            placeholder="Pick a workspace…"
+            options={projects.map((p) => ({ value: p.id, label: p.name }))}
+            onChange={(v) => setProject(v)}
+            menuAlign="left"
+            className={disabledField || !canMutate ? 'opacity-50 pointer-events-none' : undefined}
+          />
+        </label>
+        <label className="flex flex-col gap-0.5 min-w-0">
+          <span className="text-[10px] text-[var(--color-text-secondary)]">Email address</span>
+          <input
+            type="email"
+            value={address}
+            disabled={!canMutate || disabledField}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="you@gmail.com / you@outlook.com"
+            className={inputCls}
+          />
+        </label>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          type="button"
+          disabled={!canStart}
+          onClick={() => void start('gmail')}
+          title={canMutate ? 'Open Google consent on this machine' : 'Not available in viewer mode'}
+          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+        >
+          {busy === 'gmail' ? 'Starting…' : 'Connect Gmail'}
+        </button>
+        <button
+          type="button"
+          disabled={!canStart}
+          onClick={() => void start('microsoft')}
+          title={canMutate ? 'Get a device code to approve in any browser' : 'Not available in viewer mode'}
+          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+        >
+          {busy === 'microsoft' ? 'Starting…' : 'Connect Microsoft (Outlook / 365)'}
+        </button>
+      </div>
+
+      {/* ── Live flow / result card ── */}
+      {flow?.kind === 'device' && (
+        <div className="border border-[var(--color-border)] px-3 py-3 space-y-2">
+          <p className="text-[11px] text-[var(--color-text-secondary)]">
+            Go to{' '}
+            <button
+              type="button"
+              onClick={() => void openUrl(flow.verificationUrl)}
+              className="font-mono text-[var(--color-accent)] hover:underline cursor-pointer"
+            >
+              {flow.verificationUrl}
+            </button>{' '}
+            and enter this code:
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="px-2 py-1 text-sm font-mono tracking-widest bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] select-all">
+              {flow.userCode}
+            </span>
+            <CopyButton text={flow.userCode} title="Copy code" />
+            <button
+              type="button"
+              onClick={() => void openUrl(flow.verificationUrl)}
+              className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
+            >
+              Open page
+            </button>
+          </div>
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            Waiting for approval… this card updates automatically.
+          </p>
+        </div>
+      )}
+
+      {flow?.kind === 'loopback' && (
+        <div className="border border-[var(--color-border)] px-3 py-3 space-y-1">
+          <p className="text-[11px] text-[var(--color-text-secondary)]">
+            A browser window opened on this machine — approve access there.
+          </p>
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            {flow.hint ?? 'Waiting for approval… this card updates automatically.'}
+          </p>
+        </div>
+      )}
+
+      {result?.kind === 'connected' && (
+        <div className="border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)] px-3 py-2 flex items-center gap-2">
+          <p className="text-[11px] text-[var(--color-status-ok)]">
+            Connected{result.address ? <span className="font-mono"> {result.address}</span> : ''}.
+          </p>
+        </div>
+      )}
+
+      {result?.kind === 'failed' && (
+        <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 space-y-2">
+          <p className="text-[11px] text-[var(--color-status-error-soft)]">
+            {result.state === 'denied'
+              ? 'Access was denied.'
+              : result.state === 'expired'
+                ? 'The request expired before it was approved.'
+                : 'Something went wrong linking the account.'}
+            {result.hint ? ` ${result.hint}` : ''}
+          </p>
+          <button
+            type="button"
+            onClick={reset}
+            className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
+      {result?.kind === 'remote_unsupported' && (
+        <div className="border border-[color-mix(in_srgb,var(--color-status-warn)_30%,transparent)] px-3 py-2">
+          <p className="text-[11px] text-[var(--color-text-secondary)]">{result.message}</p>
+        </div>
+      )}
+
+      {result?.kind === 'error' && (
+        <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 space-y-2">
+          <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{result.message}</p>
+          <button
+            type="button"
+            onClick={reset}
+            className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -180,8 +505,10 @@ function AddInboxForm({
         </p>
       </div>
 
-      <div className="space-y-3">
-        <SectionTitle>Account</SectionTitle>
+      <OauthConnect canMutate={canMutate} onConnected={onAdded} />
+
+      <div className="border-t border-[var(--color-border)] pt-4 space-y-3">
+        <SectionTitle>Or connect manually over IMAP (app-password)</SectionTitle>
         <div className="grid grid-cols-2 gap-3">
           {field(
             'Primary workspace',

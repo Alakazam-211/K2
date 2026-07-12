@@ -32,6 +32,15 @@ over its lifecycle.
   it takes effect immediately, no restart, and the `K2_API=1` environment
   variable still works as a force-on for headless deployments.
 
+- **Fixed: remote updates on Linux now actually install.** On some Linux
+  deployments, "Download & install" would verify and stage the new
+  version, restart — and come back running the *old* one, with no error.
+  (The helper process that swapped the binary was being killed by systemd
+  before it could do its job.) The daemon now installs the update itself
+  before restarting, so it works on any Linux box regardless of how its
+  service was set up — and if an update ever fails to boot, it rolls back
+  to the previous version automatically.
+
 ## 0.40.42 — K2 gets email
 
 The big one: agents can now run and use **real email**. Three pieces, tied together by one CLI.

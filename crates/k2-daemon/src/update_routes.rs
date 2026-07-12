@@ -1039,16 +1039,19 @@ pub fn handle_apply(
 /// The armed-update marker. Written BEFORE the binary is swapped, read by
 /// the next daemon at boot ([`verify_pending_update`]), deleted once the
 /// new version confirms itself. Its presence means "a swap is in flight".
+#[cfg(target_os = "linux")]
 fn pending_update_path() -> PathBuf {
     k2_home().join("update").join("pending.json")
 }
 
+#[cfg(target_os = "linux")]
 fn k2_home() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/"))
         .join(".k2")
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct PendingUpdate {
     job_id: String,
@@ -1061,6 +1064,7 @@ struct PendingUpdate {
     boots: u32,
 }
 
+#[cfg(target_os = "linux")]
 fn write_pending_update(plan: &ApplyPlan) -> std::io::Result<()> {
     let path = pending_update_path();
     if let Some(dir) = path.parent() {
@@ -1080,6 +1084,7 @@ fn write_pending_update(plan: &ApplyPlan) -> std::io::Result<()> {
     std::fs::rename(tmp, path)
 }
 
+#[cfg(target_os = "linux")]
 fn clear_pending_update() -> std::io::Result<()> {
     match std::fs::remove_file(pending_update_path()) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1094,6 +1099,7 @@ fn clear_pending_update() -> std::io::Result<()> {
 /// file for the supervisor's next spawn. The temp copy is written INTO THE
 /// TARGET'S OWN DIRECTORY so the rename is same-filesystem (the staging dir
 /// may live on a different mount).
+#[cfg(target_os = "linux")]
 fn swap_in_place(plan: &ApplyPlan) -> std::io::Result<()> {
     let dir = plan
         .running_path
@@ -1127,6 +1133,7 @@ fn swap_in_place(plan: &ApplyPlan) -> std::io::Result<()> {
 ///
 /// Returns `true` if it restored a backup (caller should exit so the
 /// supervisor respawns the old binary).
+#[cfg(target_os = "linux")]
 pub fn verify_pending_update(running_version: &str) -> bool {
     const MAX_BOOTS: u32 = 3;
 

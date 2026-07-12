@@ -33,13 +33,19 @@ import { SettingDropdown } from '../controls/SettingControls'
 import { InboxAccessPanel } from './InboxAccessPanel'
 import {
   addLinkedInbox,
+  clearOauthClient,
   fetchInboxes,
+  fetchOauthConfig,
   linkOauthStart,
   linkOauthStatus,
   mailErrorInfo,
   mailErrorMessage,
   removeLinkedInbox,
+  setOauthClient,
   type Inbox,
+  type OauthClientProvider,
+  type OauthConfig,
+  type OauthProviderConfig,
 } from './email-api'
 
 export const EMAIL_LINK_MANIFEST: SettingEntry[] = [
@@ -47,6 +53,7 @@ export const EMAIL_LINK_MANIFEST: SettingEntry[] = [
   { id: 'email-link.add', section: 'email-link', label: 'Connect an Inbox', description: 'Add a Gmail / Fastmail / IMAP account owned by one workspace', keywords: ['add', 'connect', 'imap', 'gmail', 'app password', 'drafts', 'external inbox', 'imap host', 'port', 'tls', 'primary', 'workspace'] },
   { id: 'email-link.oauth', section: 'email-link', label: 'Connect with Google or Microsoft', description: 'Link Gmail or Microsoft (Outlook / 365) via OAuth — no app-password', keywords: ['oauth', 'google', 'gmail', 'microsoft', 'outlook', '365', 'office', 'device code', 'sign in', 'connect', 'link', 'consent'] },
   { id: 'email-link.access', section: 'email-link', label: 'Inbox Access', description: 'Grant other workspaces read or read+draft access to a connected inbox', keywords: ['access', 'grant', 'revoke', 'share', 'read', 'draft', 'workspace', 'permission', 'primary', 'members', 'transfer'] },
+  { id: 'email-link.oauth-apps', section: 'email-link', label: 'OAuth apps (advanced)', description: 'Bring your own Google / Microsoft OAuth app so K2 uses your quota and consent screen', keywords: ['oauth', 'client id', 'client secret', 'google', 'gmail', 'microsoft', 'app', 'bring your own', 'byo', 'quota', 'consent screen', 'verification', 'advanced', 'override'] },
 ]
 
 const TLS_IMPLICIT = 'implicit-tls'
@@ -417,6 +424,276 @@ function OauthConnect({
   )
 }
 
+// ── OAuth apps (advanced) — bring-your-own OAuth client override ─────────
+//
+// Owner-only. Overrides K2's built-in default OAuth client with the owner's
+// OWN registered Google/Microsoft app, per provider, so the O4 consent flow
+// (OauthConnect, above) runs against THEIR quota, verification, and consent
+// screen. Gmail takes a client id + secret; Microsoft is a public client
+// (PKCE) and takes a client id ONLY.
+//
+// SECRET HYGIENE (mirrors the app-password): the client secret is WRITE-ONLY.
+// The GET never returns it — `secretSet` only reports whether one is vaulted.
+// The secret field is NEVER prefilled; when a secret is already set we show a
+// masked placeholder and only send `clientSecret` if the owner types a new
+// one. The non-secret client id IS prefilled from the config.
+
+function OauthClientRow({
+  provider,
+  label,
+  hasSecret,
+  cfg,
+  canMutate,
+  onChanged,
+}: {
+  provider: OauthClientProvider
+  label: string
+  /** Gmail = true (client id + secret); Microsoft = false (public, id only). */
+  hasSecret: boolean
+  cfg: OauthProviderConfig
+  canMutate: boolean
+  /** Refetch the config after a successful save/reset to refresh status. */
+  onChanged: () => void
+}): React.JSX.Element {
+  const isCustom = cfg.source === 'custom'
+
+  const [clientId, setClientId] = useState(cfg.clientId ?? '')
+  // WRITE-ONLY: never seeded from the server; only holds a freshly typed value.
+  const [clientSecret, setClientSecret] = useState('')
+  const [busy, setBusy] = useState<null | 'save' | 'reset'>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // Re-seed the (non-secret) client id when the server config changes — e.g.
+  // after another save or a reset-to-default. The secret is left untouched.
+  useEffect(() => {
+    setClientId(cfg.clientId ?? '')
+    setClientSecret('')
+    setError(null)
+  }, [cfg.source, cfg.clientId, cfg.secretSet])
+
+  const canSave = canMutate && busy === null && clientId.trim().length > 0
+
+  const save = useCallback(async (): Promise<void> => {
+    if (!canSave) return
+    setBusy('save')
+    setError(null)
+    try {
+      await setOauthClient({
+        provider,
+        clientId: clientId.trim(),
+        // Only send the secret when the owner typed a new one; blank KEEPS the
+        // vaulted secret (Gmail) and is irrelevant for Microsoft (public).
+        clientSecret: hasSecret && clientSecret.length > 0 ? clientSecret : undefined,
+      })
+      // Drop the secret from memory the instant it's sent.
+      setClientSecret('')
+      useToastStore.getState().addToast(`${label} OAuth app saved`, 'success')
+      onChanged()
+    } catch (e) {
+      setError(mailErrorMessage(e))
+    } finally {
+      setBusy(null)
+    }
+  }, [canSave, provider, clientId, clientSecret, hasSecret, label, onChanged])
+
+  const reset = useCallback(async (): Promise<void> => {
+    if (!canMutate || busy !== null) return
+    setBusy('reset')
+    setError(null)
+    try {
+      await clearOauthClient(provider)
+      setClientSecret('')
+      useToastStore.getState().addToast(`${label} reverted to K2's default`, 'success')
+      onChanged()
+    } catch (e) {
+      setError(mailErrorMessage(e))
+    } finally {
+      setBusy(null)
+    }
+  }, [canMutate, busy, provider, label, onChanged])
+
+  const inputCls =
+    'px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
+
+  return (
+    <div className="border border-[var(--color-border)] px-3 py-3 space-y-3">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-xs font-medium text-[var(--color-text-primary)] flex-1 min-w-0 truncate">
+          {label}
+        </span>
+        <span
+          className="text-[9px] font-semibold px-1.5 py-0.5 flex-shrink-0 uppercase tracking-wide"
+          style={{
+            color: isCustom ? 'var(--color-accent)' : 'var(--color-text-muted)',
+            backgroundColor: isCustom
+              ? 'color-mix(in srgb, var(--color-accent) 14%, transparent)'
+              : 'color-mix(in srgb, var(--color-text-muted) 12%, transparent)',
+          }}
+        >
+          {isCustom ? 'Using your own app' : "Using K2's default"}
+        </span>
+      </div>
+
+      <label className="flex flex-col gap-0.5 min-w-0">
+        <span className="text-[10px] text-[var(--color-text-secondary)]">Client ID</span>
+        <input
+          type="text"
+          value={clientId}
+          disabled={!canMutate || busy !== null}
+          autoComplete="off"
+          onChange={(e) => setClientId(e.target.value)}
+          placeholder={provider === 'gmail' ? '…apps.googleusercontent.com' : 'Application (client) ID'}
+          className={`w-full ${inputCls}`}
+        />
+      </label>
+
+      {hasSecret && (
+        <label className="flex flex-col gap-0.5 min-w-0">
+          <span className="text-[10px] text-[var(--color-text-secondary)]">Client secret</span>
+          <input
+            type="password"
+            value={clientSecret}
+            disabled={!canMutate || busy !== null}
+            autoComplete="new-password"
+            onChange={(e) => setClientSecret(e.target.value)}
+            placeholder={cfg.secretSet ? '••••••••  (set — leave blank to keep)' : 'Client secret'}
+            className={`w-full ${inputCls}`}
+          />
+          <span className="text-[9px] text-[var(--color-text-muted)]">
+            Write-only — stored in the daemon vault and never shown again.
+          </span>
+        </label>
+      )}
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          type="button"
+          disabled={!canSave}
+          onClick={() => void save()}
+          title={canMutate ? `Use your own ${label} OAuth app` : 'Not available in viewer mode'}
+          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+        >
+          {busy === 'save' ? 'Saving…' : 'Save'}
+        </button>
+        {isCustom && (
+          <button
+            type="button"
+            disabled={!canMutate || busy !== null}
+            onClick={() => void reset()}
+            title={canMutate ? "Revert to K2's built-in OAuth client" : 'Not available in viewer mode'}
+            className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          >
+            {busy === 'reset' ? 'Resetting…' : 'Reset to default'}
+          </button>
+        )}
+        {error && (
+          <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function OauthAppsSection({ canMutate }: { canMutate: boolean }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [config, setConfig] = useState<OauthConfig | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [revision, setRevision] = useState(0)
+  const bump = useCallback(() => setRevision((r) => r + 1), [])
+
+  // Lazy-load: only hit the daemon once the section is expanded (and on
+  // refetch after a save/reset). Collapsed = network-silent.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    fetchOauthConfig()
+      .then((c) => {
+        if (cancelled) return
+        setConfig(c)
+        setError(null)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setConfig(null)
+        setError(mailErrorMessage(e))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, revision])
+
+  return (
+    <div className="border-t border-[var(--color-border)] pt-4" data-settings-id="email-link.oauth-apps">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 text-left no-drag cursor-pointer group"
+      >
+        <svg
+          className={`w-3 h-3 text-[var(--color-text-muted)] transition-transform ${open ? 'rotate-90' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+        <SectionTitle>OAuth apps (advanced)</SectionTitle>
+      </button>
+
+      {open && (
+        <div className="mt-3 space-y-3">
+          <p className="text-[11px] text-[var(--color-text-muted)]">
+            Bring your own Google/Microsoft OAuth app so K2 uses your quota, verification, and consent
+            screen instead of the built-in default. You register the app in Google/Microsoft; paste the
+            client ID (and, for Google, the secret) here.
+          </p>
+
+          {!canMutate && (
+            <p className="text-[10px] text-[var(--color-text-muted)] italic">
+              Only the owner can change OAuth apps — this is read-only in viewer mode.
+            </p>
+          )}
+
+          {error ? (
+            <div className="space-y-2">
+              <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
+              <button
+                type="button"
+                onClick={bump}
+                className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer no-drag"
+              >
+                Retry
+              </button>
+            </div>
+          ) : config === null ? (
+            <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+          ) : (
+            <div className="space-y-3">
+              <OauthClientRow
+                provider="gmail"
+                label="Google (Gmail)"
+                hasSecret
+                cfg={config.providers.gmail}
+                canMutate={canMutate}
+                onChanged={bump}
+              />
+              <OauthClientRow
+                provider="microsoft"
+                label="Microsoft (Outlook / 365)"
+                hasSecret={false}
+                cfg={config.providers.microsoft}
+                canMutate={canMutate}
+                onChanged={bump}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Add-inbox form ───────────────────────────────────────────────────────
 
 function AddInboxForm({
@@ -508,6 +785,8 @@ function AddInboxForm({
       </div>
 
       <OauthConnect canMutate={canMutate} onConnected={onAdded} />
+
+      <OauthAppsSection canMutate={canMutate} />
 
       <div className="border-t border-[var(--color-border)] pt-4 space-y-3">
         <SectionTitle>Or connect manually over IMAP (app-password)</SectionTitle>

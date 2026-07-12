@@ -548,6 +548,70 @@ export async function linkOauthStatus(
   return daemonCliGet('mail/link/oauth/status', { linkId })
 }
 
+// ── Bring-your-own OAuth client (BYO-OAuth — per-provider app override) ──
+//
+// An owner can override K2's built-in default OAuth client with their OWN
+// registered Google/Microsoft app, so the provider consent flow (O4, above)
+// runs against THEIR quota, verification, and consent screen instead of the
+// shared default. Per provider:
+//   • Gmail (web/installed client) → clientId + clientSecret.
+//   • Microsoft (public client, PKCE) → clientId only, NEVER a secret.
+// The client SECRET is WRITE-ONLY, exactly like the app-password: it is sent
+// ONCE on set, vaulted server-side, and NEVER returned by the GET (`secretSet`
+// only reports whether one is stored). The non-secret clientId IS returned so
+// the field can prefill. `source` is `'default'` (built-in) or `'custom'`
+// (the owner's app is in effect).
+
+/** One provider's OAuth-client config. The secret value is NEVER present —
+ *  `secretSet` only reports whether a custom secret is vaulted. */
+export interface OauthProviderConfig {
+  /** `'default'` = K2's built-in client; `'custom'` = the owner's own app. */
+  source: 'default' | 'custom'
+  /** The non-secret client ID (present when `source === 'custom'`). */
+  clientId?: string
+  /** Whether a client secret is vaulted (Gmail only; Microsoft is public). */
+  secretSet: boolean
+}
+
+/** GET /cli/mail/oauth-config — per-provider BYO-OAuth client state. The
+ *  client secret is NEVER returned (only `secretSet`). */
+export interface OauthConfig {
+  providers: {
+    gmail: OauthProviderConfig
+    microsoft: OauthProviderConfig
+  }
+}
+
+export type OauthClientProvider = 'gmail' | 'microsoft'
+
+/** GET /cli/mail/oauth-config — the per-provider client override state. */
+export async function fetchOauthConfig(): Promise<OauthConfig> {
+  return daemonCliGet<OauthConfig>('mail/oauth-config')
+}
+
+/** POST /cli/mail/oauth-config/set — set a provider's own OAuth app.
+ *  `clientSecret` is WRITE-ONLY and Gmail-only (Microsoft is a public
+ *  client); omit it to KEEP an already-vaulted secret. It is never echoed
+ *  back by the GET. */
+// TODO(byo-oauth integration): assumes the daemon exposes `/set` and
+// `/clear` SUBPATHS. If the built routes instead take a single
+// `mail/oauth-config` POST with a `verb: 'set' | 'clear'` field, switch the
+// two calls below to `daemonCliPost('mail/oauth-config', { verb: 'set', ...args })`
+// / `{ verb: 'clear', provider }` and drop the subpaths.
+export async function setOauthClient(args: {
+  provider: OauthClientProvider
+  clientId: string
+  clientSecret?: string
+}): Promise<void> {
+  await daemonCliPost('mail/oauth-config/set', args)
+}
+
+/** POST /cli/mail/oauth-config/clear — revert a provider to K2's built-in
+ *  default client (deletes the vaulted custom client id + secret). */
+export async function clearOauthClient(provider: OauthClientProvider): Promise<void> {
+  await daemonCliPost('mail/oauth-config/clear', { provider })
+}
+
 // ── Sample fixture (unsupported/Mac example mode — pre-mortem #15) ──────
 //
 // Rendered VERBATIM when `supported: false`: the page shows a real-

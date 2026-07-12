@@ -18,12 +18,18 @@ set -euo pipefail
 PORT="${K2_PORT:-${K2SO_PORT:-}}"
 TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
 
-# #58 Phase-1 close — capture the per-cell SCOPED token NOW, before the
-# disk-owner inversion (below, ~:100) clobbers $TOKEN with the daemon owner
-# token. The scoped token is what the per-cell UDS arm authenticates with
-# (Bearer); the owner token rides the TCP fallback arm. Empty outside a
-# scoped cell (the UDS arm is then skipped — see cli_send).
+# #58 Phase-1 close — capture the per-cell SCOPED token NOW, before any
+# Open-tool disk-owner inversion (see _cli_apply_auth_for_verb) can clobber
+# $TOKEN with the daemon owner token. The scoped token is what the per-cell
+# UDS arm authenticates with (Bearer). For ID/locked tools we MUST keep this
+# passport and never re-source ~/.k2/heartbeat.token (owner) — that COMPAT-58
+# inversion is the agent elevation hole for ID verbs. Empty outside a scoped
+# cell (the UDS arm is then skipped — see cli_send).
 SCOPED_TOKEN="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
+# Disk owner credential (if present). Used only for Open-tool TCP ergonomics
+# and external (non-cell) terminals — never for ID/locked tools when a
+# scoped session marker ($K2_HOOK_SOCK) is present.
+DISK_OWNER_TOKEN=""
 
 # Daemon home: ~/.k2 post-0.40 (the migration leaves ~/.k2so as a compat
 # symlink, so either resolves to the same files — prefer the new name,
@@ -82,33 +88,121 @@ if [ -d "$PROJECT/.k2" ] && [ ! -d "$PROJECT/.k2so" ]; then
     unset _k2so_pending
 fi
 
-# Auto-discover connection from the daemon home if not in a K2 terminal
-if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
-    K2SO_HOME="$K2_HOME"
-    if [ -f "${K2SO_HOME}/heartbeat.port" ] && [ -f "${K2SO_HOME}/heartbeat.token" ]; then
-        PORT="${PORT:-$(cat "${K2SO_HOME}/heartbeat.port" 2>/dev/null)}"
-        TOKEN="${TOKEN:-$(cat "${K2SO_HOME}/heartbeat.token" 2>/dev/null)}"
-    fi
+# Auto-discover connection from the daemon home if not in a K2 terminal.
+# Always capture DISK_OWNER_TOKEN when readable so Open tools can still do
+# the COMPAT-58 TCP inversion; never *apply* that inversion here — ID/locked
+# tools must not inherit the owner credential just because $K2_HOOK_SOCK is set.
+if [ -f "${K2_HOME}/heartbeat.port" ]; then
+    PORT="${PORT:-$(cat "${K2_HOME}/heartbeat.port" 2>/dev/null)}"
+fi
+if [ -r "${K2_HOME}/heartbeat.token" ]; then
+    DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+fi
+if [ -z "$TOKEN" ] && [ -n "$DISK_OWNER_TOKEN" ]; then
+    TOKEN="$DISK_OWNER_TOKEN"
 fi
 
-# COMPAT-58 (#58 Phase 1) — scoped-session disk-token INVERSION.
+# ── CLI Tools identity policy (mirrors crates/k2-core cli_tool_policy) ──
+# Static catalog defaults for the bash CLI (daemon overrides live in
+# Settings → CLI Tools; locked tools cannot be Open). Pure helpers below
+# are unit-testable via the BEGIN/END markers (see tests/cli/).
+# BEGIN_CLI_TOOL_POLICY
+
+# Map a top-level `k2 <verb>` to a catalog tool id (empty = ungoverned).
+_cli_tool_id_for_verb() {
+    case "${1:-}" in
+        help|--help|-h|glossary|help-deprecated|help-internal|help-advanced) echo "help" ;;
+        --schema|schema) echo "schema" ;;
+        whats-new|whatsnew) echo "whats-new" ;;
+        checkin|done|status) echo "checkin" ;;
+        activity|feed) echo "activity" ;;
+        read) echo "read" ;;
+        skills) echo "skills" ;;
+        msg|talk) echo "msg" ;;
+        inbox) echo "inbox" ;;
+        respond) echo "respond" ;;
+        connections|reserve|release|roster|who) echo "connections" ;;
+        heartbeat) echo "heartbeat" ;;
+        mail|hostmail) echo "mail" ;;
+        dns) echo "dns" ;;
+        publish|connect) echo "publish" ;;
+        sessions|terminal) echo "sessions-spawn" ;;
+        fs) echo "fs" ;;
+        daemon) echo "daemon-admin" ;;
+        users) echo "users-admin" ;;
+        api-key) echo "api-key" ;;
+        settings) echo "settings" ;;
+        browser) echo "browser-open" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Default identity mode for a tool id: open | id.
+# Locked production tools are always id (cannot be Open in the catalog).
+_cli_tool_default_mode() {
+    case "${1:-}" in
+        help|schema|whats-new|checkin|activity|read|skills|tools-policy|"") echo "open" ;;
+        msg|inbox|respond|awareness|connections|heartbeat) echo "id" ;;
+        mail|dns|publish|sessions-spawn|fs|daemon-admin|users-admin|api-key) echo "id" ;;
+        browser-open|settings) echo "id" ;;
+        *) echo "open" ;;
+    esac
+}
+
+# True when the tool is a locked production floor (cannot be set Open).
+_cli_tool_is_locked() {
+    case "${1:-}" in
+        mail|dns|publish|sessions-spawn|fs|daemon-admin|users-admin|api-key) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Teaching error when an ID/locked verb has no session passport in-cell.
+_cli_require_session_passport() {
+    local tool_id="${1:-unknown}"
+    echo "Error: tool '${tool_id}' requires session ID (passport)." >&2
+    echo "Run from a K2 agent session that carries session identity, or ask the owner" >&2
+    echo "to set this tool to Open in Settings → CLI Tools (if the platform allows)." >&2
+    echo "Locked production tools cannot be set Open." >&2
+    exit 3
+}
+
+# COMPAT-58 disk-token inversion — CONDITIONAL on tool mode.
 # When K2_HOOK_SCOPED is on, the daemon injects a per-cell SCOPED token behind
-# $K2_HOOK_TOKEN and the per-cell socket behind $K2_HOOK_SOCK. That scoped
-# token is accepted ONLY on the per-cell UDS / the /hook/complete dual-accept
-# arm — it 403s on the owner-only loopback-TCP /cli/* routes this CLI uses for
-# msg/reply/inbox/review. So whenever $K2_HOOK_SOCK is present (the scoped-
-# session marker), we must NOT send the scoped env token over TCP: re-source
-# the DISK OWNER token (heartbeat.token) for the TCP arm instead. This is the
-# load-bearing non-stranding condition — a flag-OFF daemon rollback (UDS no
-# longer served) then leaves these verbs working over TCP with the owner
-# token rather than stranded on a worthless scoped credential. notify.sh
-# (which DOES use the UDS for /hook/complete) keeps the scoped token via its
-# own Bearer arm. The UDS arm itself remains the scoped token.
-if [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ]; then
-    if [ -r "${K2_HOME}/heartbeat.token" ]; then
-        TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+# $K2_HOOK_TOKEN and the per-cell socket behind $K2_HOOK_SOCK.
+#
+#   Open tools  — re-source DISK OWNER for the TCP arm (migration ergonomics;
+#                 scoped credentials still 403 on many owner-only TCP routes).
+#   ID / locked — MUST NOT re-source ~/.k2/heartbeat.token. Keep SCOPED_TOKEN
+#                 only; prefer per-cell UDS. No passport → exit 3.
+#
+# Outside a scoped cell (no $K2_HOOK_SOCK), disk owner discovery above is the
+# human/external-terminal path and remains valid Owner proof for ID tools.
+_cli_apply_auth_for_verb() {
+    local verb="${1:-}"
+    local tool_id mode
+    tool_id="$(_cli_tool_id_for_verb "$verb")"
+    mode="$(_cli_tool_default_mode "$tool_id")"
+    local hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+
+    if [ "$mode" = "id" ]; then
+        if [ -n "$hook_sock" ]; then
+            # In-cell / scoped-session marker: never elevate to disk owner.
+            if [ -z "$SCOPED_TOKEN" ]; then
+                _cli_require_session_passport "${tool_id:-$verb}"
+            fi
+            TOKEN="$SCOPED_TOKEN"
+        fi
+        # No hook sock → TOKEN already owner (external) or env; Owner OK for ID.
+    else
+        # Open / ungoverned: keep COMPAT-58 inversion for TCP ergonomics.
+        if [ -n "$hook_sock" ] && [ -n "${DISK_OWNER_TOKEN:-}" ]; then
+            TOKEN="$DISK_OWNER_TOKEN"
+        fi
     fi
-fi
+}
+
+# END_CLI_TOOL_POLICY
 
 # DAEMON_INSTALL_EARLY_BYPASS — `k2 daemon install` provisions the
 # standalone daemon on a FRESH headless box where no daemon is running
@@ -266,10 +360,11 @@ _uds_eligible() {
 # When a per-cell scoped socket is present AND the endpoint is UDS-eligible,
 # try the matching `<tcp_fn>_uds` arm; on success (rc==0, non-empty, and NOT
 # the daemon's "route not served on cell socket" 404 sentinel) print + return.
-# Otherwise fall through to the TCP arm `<tcp_fn>` (owner token via the
-# disk-inversion) — so a flag-OFF / rolled-back daemon, a transport failure,
-# or an unserved route NEVER strands the verb. The UDS arm uses $SCOPED_TOKEN,
-# the TCP arm uses $TOKEN (the disk owner token).
+# Otherwise fall through to the TCP arm `<tcp_fn>`.
+#   UDS arm  → $SCOPED_TOKEN (Bearer)
+#   TCP arm  → $TOKEN, which _cli_apply_auth_for_verb already chose:
+#              Open tools may be disk-owner (COMPAT-58); ID/locked tools are
+#              SCOPED_TOKEN only (never the owner inversion).
 cli_send() {
     local fn="$1" endpoint="$2"; shift 2
     local sock; sock="$(_hook_sock)"
@@ -15239,6 +15334,10 @@ cmd_preset_remove() {
 }
 
 # ── Router ───────────────────────────────────────────────────────────
+# Select TCP credential by catalog mode BEFORE any verb handler runs.
+# ID/locked tools in a scoped cell keep SCOPED_TOKEN; Open tools may
+# invert to DISK_OWNER_TOKEN (COMPAT-58). See _cli_apply_auth_for_verb.
+_cli_apply_auth_for_verb "${1:-help}"
 
 case "${1:-help}" in
     fed)

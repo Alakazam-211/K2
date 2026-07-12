@@ -55,9 +55,16 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// S8): skills now teach the `k2 mail` surface — minting, reading with
 /// the untrusted-content markers, the `wait` loop pattern, and send
 /// governance (off | approval | on; queued IS success).
-pub const SKILL_VERSION_MANAGER: u32 = 5;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 5;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 5;
+///
+/// Manager / K2SO-agent / custom-agent bumped to 6 in 0.40.42 (K2 Mail
+/// OAuth, O6): the assistant-inbox note now covers OAuth-linked Gmail /
+/// Microsoft accounts (human-only setup; the agent never runs the flow)
+/// and corrects the linked-send story — drafting is always available,
+/// sending needs a human-granted `send` level, and OAuth inboxes stay
+/// draft-only in Phase 1.
+pub const SKILL_VERSION_MANAGER: u32 = 6;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 6;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 6;
 pub const SKILL_VERSION_TEMPLATE: u32 = 2;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;

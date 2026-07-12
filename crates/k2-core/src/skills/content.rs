@@ -430,8 +430,8 @@ k2 mail delete <address>                        # retire an address you own (fre
 - One `wait` call blocks at most 900 s — for longer, LOOP the call on exit code 2 (timeout).
 - Sending is OFF by default — that is your human's decision: request access with `k2 feedback ask`, never retry-loop. In approval mode `queued for approval (out_…)` + exit 0 IS success; track it with `k2 mail outbox`, or `--wait` to block until decided (exit 2 = timed out but STILL queued).
 - `submitted` means accepted-for-delivery — never claim an email was "delivered".
-- Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `external`) are server-enforced: agent tokens exit 3 — approving your own mail is futile; ask your human.
-- Assistant inboxes: your human can connect their OWN external account (Gmail/IMAP) to this workspace — its messages then appear in `messages`/`read`/`wait` like any other. You can only READ it and `draft` replies: drafts land in the account's real Drafts folder for your human to review and send from their own mail client. Sending from an external account is impossible in V1 (no verb does it — don't look for one).
+- Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
+- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other, and you `draft` replies into the account's real Drafts folder for your human to review and send. Drafting is always available; sending from a linked account requires your human to grant the `send` level (and OAuth-linked Gmail/Microsoft inboxes are draft-only for now) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
 
 ### Discover peers + connections
 ```
@@ -585,8 +585,8 @@ k2 mail delete <address>                        # retire an address you own (fre
 - One `wait` call blocks at most 900 s — for longer, LOOP the call on exit code 2 (timeout).
 - Sending is OFF by default — that is your human's decision: request access with `k2 feedback ask`, never retry-loop. In approval mode `queued for approval (out_…)` + exit 0 IS success; track it with `k2 mail outbox`, or `--wait` to block until decided (exit 2 = timed out but STILL queued).
 - `submitted` means accepted-for-delivery — never claim an email was "delivered".
-- Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `external`) are server-enforced: agent tokens exit 3 — approving your own mail is futile; ask your human.
-- Assistant inboxes: your human can connect their OWN external account (Gmail/IMAP) to this workspace — its messages then appear in `messages`/`read`/`wait` like any other. You can only READ it and `draft` replies: drafts land in the account's real Drafts folder for your human to review and send from their own mail client. Sending from an external account is impossible in V1 (no verb does it — don't look for one).
+- Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
+- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other, and you `draft` replies into the account's real Drafts folder for your human to review and send. Drafting is always available; sending from a linked account requires your human to grant the `send` level (and OAuth-linked Gmail/Microsoft inboxes are draft-only for now) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
 
 ## Discover peers
 
@@ -794,8 +794,8 @@ k2 mail delete <address>                        # retire an address you own (fre
 - One `wait` call blocks at most 900 s — for longer, LOOP the call on exit code 2 (timeout).
 - Sending is OFF by default — that is your human's decision: request access with `k2 feedback ask`, never retry-loop. In approval mode `queued for approval (out_…)` + exit 0 IS success; track it with `k2 mail outbox`, or `--wait` to block until decided (exit 2 = timed out but STILL queued).
 - `submitted` means accepted-for-delivery — never claim an email was "delivered".
-- Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `external`) are server-enforced: agent tokens exit 3 — approving your own mail is futile; ask your human.
-- Assistant inboxes: your human can connect their OWN external account (Gmail/IMAP) to this workspace — its messages then appear in `messages`/`read`/`wait` like any other. You can only READ it and `draft` replies: drafts land in the account's real Drafts folder for your human to review and send from their own mail client. Sending from an external account is impossible in V1 (no verb does it — don't look for one).
+- Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
+- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other, and you `draft` replies into the account's real Drafts folder for your human to review and send. Drafting is always available; sending from a linked account requires your human to grant the `send` level (and OAuth-linked Gmail/Microsoft inboxes are draft-only for now) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
 
 ## Activity feed + reviews
 

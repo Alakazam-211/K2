@@ -435,6 +435,8 @@ fn linked_password(inbox: &MailExternalInbox) -> Result<String, CliResponse> {
 /// hosted path's queue/audit/rate-limit machinery is intentionally NOT
 /// applied to linked yet.
 fn dispatch_linked_send(
+    project_id: &str,
+    agent_name: &str,
     inbox: MailExternalInbox,
     to: &[String],
     cc: &[String],
@@ -447,17 +449,50 @@ fn dispatch_linked_send(
     };
     match external_smtp::send_linked_message(&RealSmtpOps, &inbox, &password, to, cc, subject, body)
     {
-        Ok(()) => ok_json(serde_json::json!({
-            "ok": true,
-            "status": "submitted",
-            "from": inbox.email_address,
-            "hint": format!(
-                "submitted from {} via SMTP — accepted by the provider (K2 doesn't confirm \
-                 final delivery)",
-                inbox.email_address
-            ),
-        })),
+        Ok(receipt) => {
+            record_linked_outbox(project_id, agent_name, &inbox.email_address, &receipt, body);
+            ok_json(serde_json::json!({
+                "ok": true,
+                "status": "submitted",
+                "from": inbox.email_address,
+                "hint": format!(
+                    "submitted from {} via SMTP — accepted by the provider (K2 doesn't confirm \
+                     final delivery); see it in 'k2 mail outbox'",
+                    inbox.email_address
+                ),
+            }))
+        }
         Err(e) => ext_error_response(e),
+    }
+}
+
+/// #31.5: record a SUCCESSFUL linked SMTP submission in the outbox so the
+/// agent has a "what did I just send" trail (`k2 mail outbox`). The mail
+/// is already gone by the time we get here — a failed audit write is
+/// logged, NEVER fatal (never turns a real send into a reported failure).
+/// The row lands `submitted` (accepted-for-delivery — never "delivered").
+fn record_linked_outbox(
+    project_id: &str,
+    agent_name: &str,
+    from: &str,
+    receipt: &external_smtp::LinkedReceipt,
+    body: &str,
+) {
+    let msg = OutboundMessage {
+        from_name: Some(agent_name.to_string()),
+        from: from.to_string(),
+        to: receipt.to.clone(),
+        cc: receipt.cc.clone(),
+        subject: receipt.subject.clone(),
+        text_body: body.to_string(),
+        in_reply_to: None,
+        references: None,
+    };
+    let store = DbOutboundStore::default();
+    if let Err(e) = send::record_linked_submitted(&store, project_id, agent_name, &msg, now_secs()) {
+        k2_core::log_debug!(
+            "[mail/send] linked outbox audit write failed (the send itself succeeded): {e}"
+        );
     }
 }
 
@@ -465,6 +500,8 @@ fn dispatch_linked_send(
 /// [`dispatch_linked_send`]). Fetches the source over IMAP, threads, and
 /// submits. `source_uid_token` is the linked message's `uid:…` id.
 fn dispatch_linked_reply(
+    project_id: &str,
+    agent_name: &str,
     inbox: MailExternalInbox,
     source_uid_token: &str,
     body: &str,
@@ -481,16 +518,21 @@ fn dispatch_linked_reply(
         source_uid_token,
         body,
     ) {
-        Ok(recipient) => ok_json(serde_json::json!({
-            "ok": true,
-            "status": "submitted",
-            "from": inbox.email_address,
-            "to": recipient,
-            "hint": format!(
-                "reply submitted from {} to {} via SMTP — accepted by the provider",
-                inbox.email_address, recipient
-            ),
-        })),
+        Ok(receipt) => {
+            record_linked_outbox(project_id, agent_name, &inbox.email_address, &receipt, body);
+            let recipient = receipt.to.first().cloned().unwrap_or_default();
+            ok_json(serde_json::json!({
+                "ok": true,
+                "status": "submitted",
+                "from": inbox.email_address,
+                "to": recipient,
+                "hint": format!(
+                    "reply submitted from {} to {} via SMTP — accepted by the provider; see it \
+                     in 'k2 mail outbox'",
+                    inbox.email_address, recipient
+                ),
+            }))
+        }
         Err(e) => ext_error_response(e),
     }
 }
@@ -612,7 +654,8 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                     "linked inbox row missing from the resolved sender (unexpected)",
                 );
             };
-            dispatch_linked_send(inbox, &to, &cc, subject, body_text)
+            let agent_name = k2_core::workspace::display::agent_display_name(&path);
+            dispatch_linked_send(&project_id, &agent_name, inbox, &to, &cc, subject, body_text)
         }
         // ── HOSTED: the existing governed Stalwart path ──
         Source::Hosted => {
@@ -766,7 +809,8 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             };
             // `email_id` is the linked message's `uid:…` token (the
             // reply threading + IMAP source-fetch happen in external_smtp).
-            dispatch_linked_reply(inbox, &email_id, body_text)
+            let agent_name = k2_core::workspace::display::agent_display_name(&path);
+            dispatch_linked_reply(&project_id, &agent_name, inbox, &email_id, body_text)
         }
         // ── HOSTED: the existing governed reply path ──
         Source::Hosted => {
@@ -1365,6 +1409,50 @@ mod tests {
         assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("rejected"));
 
         cleanup(&project_id, Some(&domain));
+    }
+
+    /// #31.5: a SUCCESSFUL linked SMTP send records an outbox row (no
+    /// network — we call the recorder the linked success path calls, then
+    /// read it back through the real outbox handler). The row shows as
+    /// `submitted` (never "delivered") with `sent_at` stamped.
+    #[test]
+    fn linked_send_records_a_submitted_outbox_row() {
+        let (name, path) = unique("linked");
+        let project_id = insert_project(&name, &path);
+        assert_eq!(outbound_count(&project_id), 0);
+
+        let store = DbOutboundStore::default();
+        let msg = OutboundMessage {
+            from_name: Some("Agent".to_string()),
+            from: "me@gmail.com".to_string(),
+            to: vec!["pat@dest.example".to_string()],
+            cc: Vec::new(),
+            subject: "Hi via linked".to_string(),
+            text_body: "the linked body".to_string(),
+            in_reply_to: None,
+            references: None,
+        };
+        let id = send::record_linked_submitted(&store, &project_id, "Agent", &msg, now_secs())
+            .expect("record linked send");
+        assert!(id.starts_with("out_"), "{id}");
+        assert_eq!(outbound_count(&project_id), 1, "one audit row after a linked send");
+
+        // The agent sees it via `k2 mail outbox <id>` — submitted, to the
+        // recipient, with a stamped sent_at, never "delivered".
+        let resp = handle_outbox(&params(&[("project", &path), ("id", &id)]));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["outbound"]["status"], "submitted");
+        assert_ne!(v["outbound"]["status"], "delivered");
+        assert_eq!(v["outbound"]["to"][0], "pat@dest.example");
+        assert_eq!(v["outbound"]["subject"], "Hi via linked");
+        assert!(
+            v["outbound"]["sentAt"].as_i64().is_some(),
+            "sent_at is stamped: {}",
+            resp.body
+        );
+
+        cleanup(&project_id, None);
     }
 
     /// Approving with NO mail server: the row flips approved → failed

@@ -459,6 +459,36 @@ impl OutboundStore for DbOutboundStore {
     }
 }
 
+/// Record a SUCCESSFUL linked-SMTP submission in the outbox (issue
+/// #31.5). Unlike hosted sends, linked send is ungated and goes out
+/// immediately — so the row is born via the same `approved → sent`
+/// lifecycle a hosted send ends on, leaving it `sent` (wire:
+/// `submitted` — accepted-for-delivery, NEVER "delivered", pre-mortem
+/// #9) with `sent_at`/`updated_at` stamped exactly like a hosted row.
+/// `decided_by` is `None` (no human decision — it's ungated). Returns
+/// the new `out_…` id. The caller treats a failure as non-fatal: the
+/// mail already left, this is only the audit trail.
+pub fn record_linked_submitted(
+    store: &dyn OutboundStore,
+    owner_project_id: &str,
+    agent_name: &str,
+    message: &OutboundMessage,
+    now: i64,
+) -> Result<String, String> {
+    let id = store.insert(&NewOutbound {
+        owner_project_id,
+        agent_name,
+        message,
+        status: "approved",
+        decided_by: None,
+        now,
+    })?;
+    // Stamp it accepted-for-delivery. A failed transition leaves a
+    // truthful `approved` row rather than losing the trail entirely.
+    store.transition(&id, "approved", "sent", None, None, now)?;
+    Ok(id)
+}
+
 // ── Row loaders for the read routes (shared DB, route-shaped) ───────────
 
 /// The caller's outbound rows, newest first.

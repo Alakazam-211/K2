@@ -18,7 +18,7 @@
 //! diff-stable, and reviewable against frp's documented schema. All
 //! string values are emitted with basic TOML escaping.
 
-use super::config::TunnelConfig;
+use super::config::{RelayEndpoint, TunnelConfig};
 
 /// Render the frpc TOML for `cfg`. `local_port` is resolved by the
 /// caller (the connector fills in the live daemon port when the config
@@ -85,6 +85,26 @@ pub fn render_frpc_toml(cfg: &TunnelConfig, local_port: u16, e2e: bool) -> Strin
     }
 
     out
+}
+
+/// Render the frpc TOML for `cfg` dialing a SPECIFIC relay of the
+/// fallback list (multi-relay failover). The relays are peers behind one
+/// frps auth token and one wildcard cert, so **only `serverAddr` /
+/// `serverPort` differ** between them — token, subdomain, proxy name,
+/// type, and localPort are byte-identical to [`render_frpc_toml`] for the
+/// same `cfg`. For a legacy single-endpoint config,
+/// `relay_list()[0]` IS the stored `server_addr`/`server_port`, so this
+/// renders byte-identical output to the pre-failover path.
+pub fn render_frpc_toml_for_relay(
+    cfg: &TunnelConfig,
+    relay: &RelayEndpoint,
+    local_port: u16,
+    e2e: bool,
+) -> String {
+    let mut c = cfg.clone();
+    c.server_addr = relay.host.clone();
+    c.server_port = relay.port;
+    render_frpc_toml(&c, local_port, e2e)
 }
 
 /// Minimal TOML basic-string escaping. frp config values (host, token,
@@ -217,6 +237,51 @@ mod tests {
         assert!(on.contains("subdomain = \"rosson\""), "{on}");
         assert!(on.contains("localPort = 57839"), "{on}");
         assert!(on.contains("name = \"k2so-rosson\""), "{on}");
+    }
+
+    #[test]
+    fn relay_render_swaps_only_server_addr_and_port() {
+        // Failover invariant: rotating relays changes serverAddr/serverPort
+        // and NOTHING else — same token, same subdomain, same proxy name.
+        let cfg = sample();
+        let relay = RelayEndpoint { host: "5.6.7.8".to_string(), port: 7001 };
+        let rotated = render_frpc_toml_for_relay(&cfg, &relay, 57839, false);
+        assert!(
+            rotated.contains("serverAddr = \"5.6.7.8\""),
+            "must dial the given relay\n{rotated}"
+        );
+        assert!(rotated.contains("serverPort = 7001"), "{rotated}");
+
+        // Every non-server line is byte-identical to the plain render.
+        let baseline = render_frpc_toml(&cfg, 57839, false);
+        let strip = |s: &str| {
+            s.lines()
+                .filter(|l| !l.starts_with("serverAddr") && !l.starts_with("serverPort"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(
+            strip(&rotated),
+            strip(&baseline),
+            "only serverAddr/serverPort may differ between relays"
+        );
+    }
+
+    #[test]
+    fn relay_render_of_legacy_primary_is_byte_identical_to_plain_render() {
+        // Single-relay (legacy) configs go through the relay-aware path in
+        // the connector now — the output must be EXACTLY what the old path
+        // produced.
+        let cfg = sample();
+        let primary = cfg.relay_list()[0].clone();
+        assert_eq!(
+            render_frpc_toml_for_relay(&cfg, &primary, 57839, false),
+            render_frpc_toml(&cfg, 57839, false),
+        );
+        assert_eq!(
+            render_frpc_toml_for_relay(&cfg, &primary, 57839, true),
+            render_frpc_toml(&cfg, 57839, true),
+        );
     }
 
     #[test]

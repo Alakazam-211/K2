@@ -218,6 +218,20 @@ async fn async_main() {
         Ok(outcome) => k2_core::log_debug!("[daemon/boot] home migration: {outcome:?}"),
         Err(e) => eprintln!("[daemon/boot] home migration FAILED: {e} — continuing on legacy layout"),
     }
+
+    // 0.40.43 — LINUX SELF-UPDATE: the boot half of the in-process binary
+    // swap (see update_routes::verify_pending_update). Runs EARLY, before
+    // any risky init, so a new binary that crash-loops still counts its
+    // attempts and gets rolled back to the known-good backup. On the happy
+    // path it just confirms the new version and clears the marker.
+    #[cfg(target_os = "linux")]
+    if crate::update_routes::verify_pending_update(env!("CARGO_PKG_VERSION")) {
+        eprintln!(
+            "[daemon/boot] update failed to take — restored the previous binary; \
+             exiting so the supervisor restarts it"
+        );
+        std::process::exit(0);
+    }
     // Sync the persisted federation master switch into the process so a daemon
     // that boots with it already ON has the /cli/federation/* surface live
     // immediately (the K2 Connect toggle persists it; env-var force-on still

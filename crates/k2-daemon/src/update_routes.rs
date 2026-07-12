@@ -965,7 +965,7 @@ pub fn handle_apply(
     };
 
     // ── LIVE PATH (e2e-smoke-test-pending) ─────────────────────────────
-    // 1. Back up the running binary so the helper can roll back.
+    // 1. Back up the running binary so we can roll back.
     if let Err(e) = std::fs::create_dir_all(plan.backup_path.parent().unwrap_or(Path::new("/"))) {
         return CliResponse::internal_error(format!("create backup dir: {e}"));
     }
@@ -974,14 +974,47 @@ pub fn handle_apply(
     }
     set_phase(&plan.job_id, Phase::Applying);
 
-    // 2. Spawn the DETACHED swap/rollback helper. It outlives the daemon:
-    //    it waits for the daemon to exit, renames the staged binary onto
-    //    the running path (same volume = atomic), lets the supervisor
-    //    relaunch it, health-checks /boot-status, and rolls back on
-    //    failure. See `spawn_swap_helper` for the contract.
+    // 2. Put the new binary in place.
+    //
+    // LINUX (systemd): the detached-helper pattern CANNOT work. systemd's
+    // default `KillMode=control-group` kills every process in the service's
+    // cgroup the moment the unit restarts — `setsid()` escapes the process
+    // group but NOT the cgroup, so the helper is killed before it can `mv`
+    // the staged binary, the supervisor restarts the SAME OLD binary, and
+    // the update silently no-ops (the user sees "nothing happened"; found
+    // on a live box, 0.40.42 → this fix). So on Linux we swap IN-PROCESS,
+    // right here, BEFORE the shutdown: `rename()` over a running executable
+    // is legal (the running image keeps its old inode; the path now points
+    // at the new binary), and the supervisor's respawn picks up the new one.
+    // No helper, no cgroup, no unit-file change — works on boxes exactly as
+    // they are already deployed.
+    //
+    // MACOS (launchd + the Tauri app): the helper genuinely is reparented to
+    // init and survives, and it owns the health-check/rollback. Leave the
+    // proven path alone.
+    #[cfg(target_os = "linux")]
+    {
+        // Arm the boot-time verifier BEFORE swapping: the next daemon to
+        // start reads this and either confirms the new version or restores
+        // the backup after repeated failed boots (crash-loop rollback —
+        // the safety net the helper used to provide).
+        if let Err(e) = write_pending_update(&plan) {
+            return CliResponse::internal_error(format!("arm update verifier: {e}"));
+        }
+        if let Err(e) = swap_in_place(&plan) {
+            let _ = clear_pending_update();
+            set_phase(&plan.job_id, Phase::Staged);
+            return CliResponse::internal_error(format!("swap binary: {e}"));
+        }
+        k2_core::log_debug!(
+            "[daemon] P3 update/apply — swapped {} in place (linux, pre-exit)",
+            plan.running_path.display()
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
     if let Err(e) = spawn_swap_helper(&plan) {
-        // Couldn't even launch the helper — restore nothing changed yet,
-        // just report. The binary on disk is still the old one.
+        // Couldn't even launch the helper — nothing changed yet, just
+        // report. The binary on disk is still the old one.
         return CliResponse::internal_error(format!("spawn swap helper: {e}"));
     }
 
@@ -999,7 +1032,158 @@ pub fn handle_apply(
     )
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Linux in-process swap + boot-time verification (no helper process)
+// ─────────────────────────────────────────────────────────────────────
+
+/// The armed-update marker. Written BEFORE the binary is swapped, read by
+/// the next daemon at boot ([`verify_pending_update`]), deleted once the
+/// new version confirms itself. Its presence means "a swap is in flight".
+fn pending_update_path() -> PathBuf {
+    k2_home().join("update").join("pending.json")
+}
+
+fn k2_home() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/"))
+        .join(".k2")
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct PendingUpdate {
+    job_id: String,
+    target_version: String,
+    running_path: PathBuf,
+    backup_path: PathBuf,
+    /// Boots observed since the swap. Incremented by the STARTING daemon
+    /// before it does anything risky, so a binary that crash-loops still
+    /// counts its attempts and gets rolled back.
+    boots: u32,
+}
+
+fn write_pending_update(plan: &ApplyPlan) -> std::io::Result<()> {
+    let path = pending_update_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let pending = PendingUpdate {
+        job_id: plan.job_id.clone(),
+        target_version: plan.target_version.clone(),
+        running_path: plan.running_path.clone(),
+        backup_path: plan.backup_path.clone(),
+        boots: 0,
+    };
+    let json = serde_json::to_vec_pretty(&pending)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(tmp, path)
+}
+
+fn clear_pending_update() -> std::io::Result<()> {
+    match std::fs::remove_file(pending_update_path()) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        r => r,
+    }
+}
+
+/// Replace the running binary with the staged one, atomically.
+///
+/// `rename(2)` over a live executable is legal on Linux — the running
+/// process keeps the old inode open, while the path resolves to the new
+/// file for the supervisor's next spawn. The temp copy is written INTO THE
+/// TARGET'S OWN DIRECTORY so the rename is same-filesystem (the staging dir
+/// may live on a different mount).
+fn swap_in_place(plan: &ApplyPlan) -> std::io::Result<()> {
+    let dir = plan
+        .running_path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("running binary has no parent dir"))?;
+    let tmp = dir.join(format!(".k2-daemon.new.{}", std::process::id()));
+
+    std::fs::copy(&plan.staged_path, &tmp)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+    }
+    // Atomic: after this the path points at the new binary. A failure here
+    // leaves the OLD binary intact (the caller reports and stays staged).
+    if let Err(e) = std::fs::rename(&tmp, &plan.running_path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Boot-time half of the Linux update path. Called EARLY in daemon startup
+/// (before any risky init) so that a new binary which crash-loops still
+/// increments its attempt count and eventually gets rolled back.
+///
+/// * new version matches the target  → success: clear the marker.
+/// * still the old version after `MAX_BOOTS` → the swap didn't take (or the
+///   new binary can't run): restore the backup so the supervisor's next
+///   restart brings the KNOWN-GOOD binary back.
+///
+/// Returns `true` if it restored a backup (caller should exit so the
+/// supervisor respawns the old binary).
+pub fn verify_pending_update(running_version: &str) -> bool {
+    const MAX_BOOTS: u32 = 3;
+
+    let path = pending_update_path();
+    let Ok(raw) = std::fs::read(&path) else {
+        return false; // no update in flight — the overwhelmingly common case
+    };
+    let Ok(mut pending) = serde_json::from_slice::<PendingUpdate>(&raw) else {
+        let _ = clear_pending_update();
+        return false;
+    };
+
+    if running_version == pending.target_version {
+        k2_core::log_debug!(
+            "[daemon] update verified: now running {} — clearing pending marker",
+            running_version
+        );
+        let _ = clear_pending_update();
+        set_phase(&pending.job_id, Phase::Done);
+        return false;
+    }
+
+    pending.boots += 1;
+    if pending.boots < MAX_BOOTS {
+        k2_core::log_debug!(
+            "[daemon] pending update to {} not yet active (running {}, boot {}/{})",
+            pending.target_version,
+            running_version,
+            pending.boots,
+            MAX_BOOTS
+        );
+        if let Ok(json) = serde_json::to_vec_pretty(&pending) {
+            let _ = std::fs::write(&path, json);
+        }
+        return false;
+    }
+
+    // Out of attempts: put the known-good binary back.
+    k2_core::log_debug!(
+        "[daemon] update to {} FAILED after {} boots — restoring backup {}",
+        pending.target_version,
+        pending.boots,
+        pending.backup_path.display()
+    );
+    let restored = pending.backup_path.exists()
+        && std::fs::copy(&pending.backup_path, &pending.running_path).is_ok();
+    let _ = clear_pending_update();
+    set_phase(&pending.job_id, Phase::Failed);
+    restored
+}
+
 /// Spawn the DETACHED swap/rollback helper process.
+///
+/// NOT COMPILED ON LINUX: there the daemon swaps in-process before exiting
+/// (see `swap_in_place`) because systemd's cgroup kill would reap this
+/// helper before it could run.
+#[cfg(not(target_os = "linux"))]
 ///
 /// e2e-SMOKE-TEST-PENDING — this is only reached on the LIVE path (never
 /// in tests, which take the `shutdown_tx == None` seam in [`handle_apply`]).
@@ -1060,6 +1244,7 @@ fn spawn_swap_helper(plan: &ApplyPlan) -> std::io::Result<()> {
 /// Render the detached swap/rollback shell helper for `plan`. Factored out
 /// (pure string-building) so its shape is inspectable in a unit test
 /// without spawning anything.
+#[cfg(not(target_os = "linux"))]
 fn render_swap_helper_script(plan: &ApplyPlan) -> String {
     let pid = std::process::id();
     let staged = plan.staged_path.display();
@@ -1117,6 +1302,7 @@ exit 0
 /// for the helper's health-check. Defaults to a placeholder the helper
 /// tolerates if unreadable (the health-check just won't match → rollback,
 /// which is the safe direction).
+#[cfg(not(target_os = "linux"))]
 fn daemon_port_hint() -> String {
     dirs::home_dir()
         .map(|h| h.join(".k2").join("daemon.port"))
@@ -1873,8 +2059,134 @@ mod tests {
         assert!(resp.status.starts_with("400"), "status={}", resp.status);
     }
 
-    // ── swap helper script shape (no spawn) ─────────────────────────
+    /// A unique scratch dir under the system temp dir. std-only (the crate
+    /// carries no `tempfile` dev-dep); removed by the returned guard.
+    #[cfg(target_os = "linux")]
+    struct Scratch(PathBuf);
+    #[cfg(target_os = "linux")]
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let p = std::env::temp_dir().join(format!(
+                "k2-update-test-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).expect("scratch dir");
+            Self(p)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    #[cfg(target_os = "linux")]
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
+    // ── LINUX in-process swap (0.40.43) ──────────────────────────────
+    // The helper-process design is unusable under systemd (cgroup kill
+    // reaps it before it can `mv`), so Linux swaps in-process pre-exit.
+    // These prove the two halves: the swap itself, and the boot-time
+    // verifier that rolls a crash-looping binary back.
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn swap_in_place_replaces_the_running_binary_atomically() {
+        let dir = Scratch::new("swap");
+        let running = dir.path().join("k2-daemon");
+        let staged = dir.path().join("staged-k2-daemon");
+        std::fs::write(&running, b"OLD").expect("seed running");
+        std::fs::write(&staged, b"NEW").expect("seed staged");
+
+        let plan = ApplyPlan {
+            job_id: "j1".into(),
+            target_version: "9.9.9".into(),
+            staged_path: staged,
+            running_path: running.clone(),
+            backup_path: dir.path().join("backup"),
+        };
+        swap_in_place(&plan).expect("swap must succeed");
+
+        assert_eq!(std::fs::read(&running).unwrap(), b"NEW", "path now serves the new binary");
+        // Executable bit survives the swap — systemd must be able to exec it.
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&running).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "swapped binary must stay executable");
+        // No temp litter left in the target dir.
+        let strays: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".k2-daemon.new"))
+            .collect();
+        assert!(strays.is_empty(), "swap must not leave temp files behind");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn boot_verifier_clears_marker_when_the_new_version_is_live() {
+        let _guard = clear_jobs_for_test();
+        let home = Scratch::new("boot");
+        std::env::set_var("HOME", home.path());
+
+        let plan = ApplyPlan {
+            job_id: "j2".into(),
+            target_version: "0.41.0".into(),
+            staged_path: home.path().join("staged"),
+            running_path: home.path().join("k2-daemon"),
+            backup_path: home.path().join("backup"),
+        };
+        write_pending_update(&plan).expect("arm");
+        assert!(pending_update_path().exists(), "marker armed");
+
+        // The daemon that boots IS the target version → success.
+        let restored = verify_pending_update("0.41.0");
+        assert!(!restored, "a successful update never restores a backup");
+        assert!(!pending_update_path().exists(), "marker cleared on success");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn boot_verifier_restores_backup_after_repeated_failed_boots() {
+        let _guard = clear_jobs_for_test();
+        let home = Scratch::new("boot");
+        std::env::set_var("HOME", home.path());
+
+        let running = home.path().join("k2-daemon");
+        let backup = home.path().join("backup");
+        std::fs::write(&running, b"NEW-BROKEN").expect("seed running");
+        std::fs::write(&backup, b"OLD-GOOD").expect("seed backup");
+
+        let plan = ApplyPlan {
+            job_id: "j3".into(),
+            target_version: "0.41.0".into(),
+            staged_path: home.path().join("staged"),
+            running_path: running.clone(),
+            backup_path: backup,
+        };
+        write_pending_update(&plan).expect("arm");
+
+        // The swapped-in binary never reaches its target version (it's the
+        // OLD one booting, or the new one is broken). Attempts accrue…
+        assert!(!verify_pending_update("0.40.43"), "boot 1: still trying");
+        assert!(!verify_pending_update("0.40.43"), "boot 2: still trying");
+        // …until the verifier gives up and puts the known-good binary back.
+        let restored = verify_pending_update("0.40.43");
+        assert!(restored, "boot 3 must roll back");
+        assert_eq!(
+            std::fs::read(&running).unwrap(),
+            b"OLD-GOOD",
+            "the known-good binary is restored"
+        );
+        assert!(!pending_update_path().exists(), "marker cleared after rollback");
+    }
+
+    // ── swap helper script shape (no spawn) ─────────────────────────
+    // Non-Linux only: on Linux the helper doesn't exist (in-process swap).
+
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn swap_helper_script_has_expected_shape() {
         let plan = ApplyPlan {

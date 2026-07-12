@@ -95,6 +95,19 @@ fn list_error_response(err: ListError) -> CliResponse {
     }
 }
 
+/// #31.4: fold a per-inbox failure into a compact `{address, code,
+/// hint}` entry for the all-inbox sweep. `code`/`hint` are lifted from
+/// the SAME error body a single-address call would return, so nothing
+/// new is exposed — and every address that reaches this loop is one the
+/// caller can already read, so naming it leaks no existence (masking is
+/// enforced upstream in `watch_list`, never here).
+fn inbox_error_json(address: &str, resp: &CliResponse) -> serde_json::Value {
+    let parsed: serde_json::Value = serde_json::from_str(&resp.body).unwrap_or_default();
+    let code = parsed["error"]["code"].as_str().unwrap_or("engine");
+    let hint = parsed["error"]["hint"].as_str().unwrap_or("");
+    serde_json::json!({ "address": address, "code": code, "hint": hint })
+}
+
 /// Read-page defaults: a sane default page and a hard per-page ceiling
 /// (an agent walks beyond it with the `offset` cursor, never a giant
 /// single fetch).
@@ -374,6 +387,14 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // Did the caller name ONE explicit address? That path surfaces an
+    // error directly; the all-inbox sweep (no address) degrades per
+    // inbox instead (#31.4).
+    let explicit_address = params
+        .get("address")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .is_some();
     let watch = match watch_list(&project_id, params.get("address").map(String::as_str)) {
         Ok(w) => w,
         Err(resp) => return resp,
@@ -398,14 +419,31 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
     // cursor's "there is a next page" signal (exact for one inbox; a
     // safe over-estimate when the sweep merges several).
     let mut maybe_more = false;
+    // #31.4: the all-inbox sweep DEGRADES per inbox — one inbox's engine
+    // fault, credential expiry, or auth blip must not sink the whole read.
+    // A single EXPLICIT address still surfaces its error directly (the
+    // `explicit_address` early-returns below preserve S3 behavior).
+    let mut inbox_errors: Vec<serde_json::Value> = Vec::new();
     for w in &watch {
         let backend = match backend_for(&w.address) {
             Ok(b) => b,
-            Err(resp) => return resp,
+            Err(resp) => {
+                if explicit_address {
+                    return resp;
+                }
+                inbox_errors.push(inbox_error_json(&w.address, &resp));
+                continue;
+            }
         };
         let summaries = match backend.list_inbox(&w.account_id, &filter, limit) {
             Ok(s) => s,
-            Err(e) => return list_error_response(e),
+            Err(e) => {
+                if explicit_address {
+                    return list_error_response(e);
+                }
+                inbox_errors.push(inbox_error_json(&w.address, &list_error_response(e)));
+                continue;
+            }
         };
         if summaries.len() >= limit {
             maybe_more = true;
@@ -425,6 +463,12 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
     if maybe_more {
         // The next page cursor — the CLI prints a "more:" hint from it.
         body["nextOffset"] = serde_json::json!(offset + limit);
+    }
+    if !inbox_errors.is_empty() {
+        // Partial success: the healthy inboxes' messages rode above; the
+        // ones that failed are named here (address + code + hint) so the
+        // caller can act without the whole call 5xx-ing.
+        body["inboxErrors"] = serde_json::json!(inbox_errors);
     }
     ok_json(body)
 }
@@ -1375,6 +1419,55 @@ mod tests {
 
         cleanup_project(&project_id);
         cleanup_project(&project2);
+    }
+
+    /// #31.4: the ALL-INBOX sweep degrades per inbox — one inbox erroring
+    /// (here: no mail server, so its backend is 503 not_ready) returns a
+    /// 200 with that inbox named in `inboxErrors`, NOT a 5xx that sinks
+    /// the whole call. An EXPLICIT single address still surfaces the same
+    /// error directly (single-address path unchanged).
+    #[test]
+    fn all_inbox_sweep_degrades_per_inbox_instead_of_hard_failing() {
+        let _g = crate::mail::mail_server_test_lock();
+        clear_mail_server();
+        let (name, path) = unique("sweep");
+        let project_id = insert_project(&name, &path);
+
+        // Two owned ACTIVE hosted addresses. With no mail server up, each
+        // one's backend is a 503 not_ready.
+        let addr_a = format!("a@{name}.example");
+        let addr_b = format!("b@{name}.example");
+        seed_address(&project_id, &addr_a, "active", Some("acc-a"));
+        seed_address(&project_id, &addr_b, "active", Some("acc-b"));
+
+        // Single EXPLICIT address → the 503 surfaces DIRECTLY (the S3
+        // single-address contract is preserved, no partial shape).
+        let resp = handle_messages(&params(&[("project", &path), ("address", &addr_a)]));
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "not_ready");
+        assert!(v.get("inboxErrors").is_none(), "single-address path never partial: {v}");
+
+        // All-inbox sweep → 200 (NEVER 5xx). Both inboxes land in
+        // inboxErrors with address + code + hint; the messages array is
+        // still present (empty here). One bad inbox never aborts the call.
+        let resp = handle_messages(&params(&[("project", &path)]));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["count"], 0);
+        assert!(v["messages"].is_array(), "healthy-path shape preserved: {v}");
+        let errs = v["inboxErrors"].as_array().expect("inboxErrors array present");
+        assert_eq!(errs.len(), 2, "both failing inboxes reported: {v}");
+        let mut seen: Vec<&str> = errs.iter().map(|e| e["address"].as_str().unwrap()).collect();
+        seen.sort();
+        assert_eq!(seen, vec![addr_a.as_str(), addr_b.as_str()], "{v}");
+        for e in errs {
+            assert_eq!(e["code"], "not_ready", "{e}");
+            assert!(!e["hint"].as_str().unwrap().is_empty(), "hint carries the reason: {e}");
+        }
+
+        cleanup_project(&project_id);
     }
 
     #[test]

@@ -1244,6 +1244,108 @@ mod tests {
         assert!(err.contains("unsupported tls kind"), "{err}");
     }
 
+    /// #31.6: archiving a Gmail message resolves to the provider's
+    /// `[Gmail]/All Mail` (vs `Archive` / `INBOX.Archive` elsewhere), and
+    /// that resolved destination rides back in `ManageOutcome.folder` so
+    /// the CLI success line can say `archived → [Gmail]/All Mail`.
+    /// Scripted over the loopback mock: LIST → SELECT INBOX → UID MOVE,
+    /// never an EXPUNGE. No real Gmail, no network.
+    #[test]
+    fn archive_resolves_and_returns_gmail_all_mail_destination() {
+        let (port, handle) = spawn_gmail_manage_mock();
+        let mut session = plaintext_session(port, "app-password").expect("login");
+        let tok = external::encode_uid_token(777, 42);
+        let out = manage_on_session(&mut session, &ManageOp::Archive { uid_token: &tok })
+            .expect("archive");
+        assert_eq!(
+            out.folder.as_deref(),
+            Some("[Gmail]/All Mail"),
+            "Gmail archive lands in All Mail and that destination is surfaced",
+        );
+        session.logout().expect("LOGOUT");
+        let seen = handle.join().expect("mock thread");
+        // Archive was a MOVE to All Mail — never an EXPUNGE.
+        assert!(
+            seen.iter().any(|l| {
+                let u = l.to_ascii_uppercase();
+                u.contains("UID MOVE") && l.contains("[Gmail]/All Mail")
+            }),
+            "{seen:?}",
+        );
+        assert!(
+            !seen.iter().any(|l| l.to_ascii_uppercase().contains("EXPUNGE")),
+            "{seen:?}",
+        );
+    }
+
+    /// A Gmail-shaped scripted IMAP: LIST advertises `[Gmail]/All Mail`
+    /// (SPECIAL-USE `\All`, NOT `\Archive` — the pick falls to the common
+    /// name), SELECT INBOX pins UIDVALIDITY 777, UID MOVE completes.
+    /// Returns the command lines it saw.
+    fn spawn_gmail_manage_mock() -> (u16, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .expect("read timeout");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut w = stream;
+            let mut seen: Vec<String> = Vec::new();
+            w.write_all(b"* OK mock Gmail IMAP4rev1 ready\r\n").unwrap();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let line = line.trim_end().to_string();
+                seen.push(line.clone());
+                let tag = line.split_whitespace().next().unwrap_or("*").to_string();
+                let verb = line.split_whitespace().nth(1).unwrap_or("").to_ascii_uppercase();
+                match verb.as_str() {
+                    "LOGIN" => {
+                        w.write_all(format!("{tag} OK LOGIN done\r\n").as_bytes()).unwrap();
+                    }
+                    "LIST" => {
+                        w.write_all(
+                            b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n\
+                              * LIST (\\HasNoChildren \\All) \"/\" \"[Gmail]/All Mail\"\r\n\
+                              * LIST (\\HasNoChildren \\Trash) \"/\" \"[Gmail]/Trash\"\r\n",
+                        )
+                        .unwrap();
+                        w.write_all(format!("{tag} OK LIST done\r\n").as_bytes()).unwrap();
+                    }
+                    "SELECT" => {
+                        w.write_all(
+                            b"* 3 EXISTS\r\n\
+                              * 0 RECENT\r\n\
+                              * OK [UIDVALIDITY 777] UIDs valid\r\n\
+                              * OK [UIDNEXT 99] Predicted next UID\r\n",
+                        )
+                        .unwrap();
+                        w.write_all(
+                            format!("{tag} OK [READ-WRITE] SELECT done\r\n").as_bytes(),
+                        )
+                        .unwrap();
+                    }
+                    "UID" => {
+                        // `... UID MOVE <uid> "<folder>"` → completed.
+                        w.write_all(format!("{tag} OK MOVE completed\r\n").as_bytes()).unwrap();
+                    }
+                    "LOGOUT" => {
+                        w.write_all(b"* BYE mock done\r\n").unwrap();
+                        w.write_all(format!("{tag} OK LOGOUT done\r\n").as_bytes()).unwrap();
+                        break;
+                    }
+                    other => panic!("gmail mock got unexpected command '{other}': {line}"),
+                }
+            }
+            seen
+        });
+        (port, handle)
+    }
+
     // ── O2: SASL XOAUTH2 (no real network, no real Gmail) ───────────────
 
     use base64::engine::general_purpose::STANDARD as B64;

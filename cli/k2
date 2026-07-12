@@ -6225,7 +6225,7 @@ cmd_schema() {
     {
       "name": "mail inboxes",
       "usage": "k2 mail inboxes [--json]",
-      "description": "The unified inbox catalog: every inbox THIS workspace can access (hosted + linked) with your access level (read < draft < send), the source's max level (hosted: send, linked: draft), and status. Aliases: 'k2 mail addresses', 'k2 mail list'. --json: {ok,count,inboxes:[{address,source:'hosted'|'linked',displayName,status,primary:{projectId,workspace,level},grants:[{projectId,workspace,level}],yourLevel,maxLevel, hosted:domain | linked:host+tls}]}.",
+      "description": "The unified inbox catalog: every inbox THIS workspace can access (hosted + linked) with your access level (read < draft < send), the source's max level (hosted: send, linked: draft — a CEILING, not a promise: effective send also needs a send transport configured), and status. Aliases: 'k2 mail addresses', 'k2 mail list'. --json: {ok,count,inboxes:[{address,source:'hosted'|'linked',displayName,status,primary:{projectId,workspace,level},grants:[{projectId,workspace,level}],yourLevel,maxLevel, hosted:domain | linked:host+tls}]}.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -11903,6 +11903,7 @@ def print_inboxes(rows, agent_view):
                 _level_word(r.get("yourLevel")), r.get("maxLevel", "?"), r.get("status", "?")))
         print()
         print("read: k2 mail messages [<address>]   send needs level 'send' on a hosted inbox")
+        print("MAX is the CEILING, not a promise — sending also needs a send transport configured.")
     else:
         print(("%-" + str(w) + "s%-9s%-22s%s") % ("ADDRESS", "SOURCE", "PRIMARY", "GRANTS"))
         for r in rows:
@@ -11991,6 +11992,10 @@ elif verb == "messages":
     d = call("GET", "/cli/mail/messages", params=params)
     msgs = d.get("messages") or []
     next_offset = d.get("nextOffset")
+    # #31.4: the all-inbox sweep degrades per inbox — some may have
+    # errored while the healthy ones' messages still came back. Show a
+    # compact count (never the raw hint, which could carry host detail).
+    inbox_errors = d.get("inboxErrors") or []
     # Rebuild the flags that select a DIFFERENT set so the "more:" hint
     # (and the empty-set line) reflect the actual query.
     def _scope_flags():
@@ -12029,6 +12034,9 @@ elif verb == "messages":
         if next_offset is not None:
             more = _scope_flags() + ["--offset %s" % next_offset]
             print("more:     k2 mail messages %s" % " ".join(more))
+    if not as_json and inbox_errors:
+        print("note:     %d inbox(es) had errors and were skipped — read one directly "
+              "(k2 mail messages <address>) to see why." % len(inbox_errors))
 
 elif verb == "read":
     params = {"project": ws_path, "id": env("M_ID")}
@@ -12533,7 +12541,7 @@ elif verb == "archive":
     if as_json:
         print(dumps(d))
     else:
-        print("archived %s -> %s" % (d.get("id", ""), d.get("folder") or "Archive"))
+        print("archived %s → %s" % (d.get("id", ""), d.get("folder") or "Archive"))
 
 elif verb == "delete":
     # DELETE = move to Trash (never erased); needs the delete cap.
@@ -13543,7 +13551,7 @@ cmd_mail_external() {
                 pass_ref="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — see k2 mail external --help"
+                _mail_err "usage" "unknown flag '$1' — see k2 mail link --help"
                 exit 2 ;;
             *)
                 if [ -z "$address" ]; then address="$1"
@@ -14220,7 +14228,7 @@ EOF
 cmd_help_mail_draft() {
     cat <<'EOF'
 Save a reply DRAFT into your human's external assistant inbox (their own
-Gmail/Fastmail/IMAP account, connected via `k2 mail external add` and bound
+Gmail/Fastmail/IMAP account, connected via `k2 mail link add` and bound
 to this workspace). The draft lands in the account's REAL Drafts folder,
 threaded onto the source message — your human sees it in their own mail
 client, reviews, edits, and sends it themselves.
@@ -14258,7 +14266,9 @@ COLUMNS
   ADDRESS   the inbox
   SOURCE    hosted (K2-minted) | linked (your own external IMAP account)
   LEVEL     your access: read < draft < send
-  MAX       the ceiling for this source (hosted: send · linked: draft)
+  MAX       the ceiling for this source (hosted: send · linked: draft) —
+            a CEILING, not a promise: effective send also needs a send
+            transport configured on the inbox
   STATUS    active / connected / error
 
   read: k2 mail messages [<address>]   draft: k2 mail draft (linked only)

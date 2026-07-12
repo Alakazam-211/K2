@@ -12141,7 +12141,10 @@ elif verb == "outbox":
             for r in rows:
                 print_outbound_row(r)
 
-elif verb == "delete":
+elif verb == "address_delete":
+    # Retire a HOSTED address (k2 hostmail delete, and k2 mail delete when
+    # the argument is an address). Distinct verb from the message-Trash
+    # "delete" below so the two never collide in this if/elif chain.
     d = call("POST", "/cli/mail/address/delete",
              body={"project": ws_path, "address": env("M_ADDRESS")})
     if as_json:
@@ -13020,14 +13023,17 @@ cmd_mail_outbox() {
     _mail_py
 }
 
-cmd_mail_delete() {
-    if _wants_help "$@"; then cmd_help_mail_delete; exit 0; fi
+# `k2 hostmail delete <address>` — retire a HOSTED address (frees its cap
+# slot). Distinct from `k2 mail delete <message-id>` (move to Trash); the
+# verb is `address_delete` so the two never collide in `_mail_py`.
+cmd_hostmail_delete() {
+    if _wants_help "$@"; then cmd_help_hostmail; exit 0; fi
     local address="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail delete <address> [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail delete <address> [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$address" ]; then address="$1"; else
@@ -13041,7 +13047,7 @@ cmd_mail_delete() {
         _mail_err "usage" "delete requires the full <address> to retire (see 'k2 mail addresses')"
         exit 2
     fi
-    local M_VERB="delete" M_JSON="$as_json" M_ADDRESS="$address"
+    local M_VERB="address_delete" M_JSON="$as_json" M_ADDRESS="$address"
     _mail_py
 }
 
@@ -13387,24 +13393,40 @@ cmd_mail_archive() {
     _mail_py
 }
 
-# `k2 mail delete <message-id>` — DELETE = move to Trash (never erased);
-# needs the delete cap (a teaching error otherwise).
+# `k2 mail delete <message-id|address>` — one verb, two forms, chosen by
+# the ARGUMENT SHAPE (detection, not a breaking rename):
+#   • a message id (opaque `m_…` token, base64url — never contains '@')
+#     → MOVE the message to Trash (never erased; needs the delete cap).
+#   • a hosted address (always contains '@') → RETIRE the address, exactly
+#     as `k2 hostmail delete` does (back-compat; frees the cap slot).
+#   • anything else → a usage error naming BOTH forms.
 cmd_mail_delete() {
     if _wants_help "$@"; then cmd_help_mail_manage; exit 0; fi
-    local id="" as_json=false
+    local arg="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
-            -*) _mail_err "usage" "unknown flag '$1' — usage: k2 mail delete <message-id> [--json]"; exit 2 ;;
+            -*) _mail_err "usage" "unknown flag '$1' — usage: k2 mail delete <message-id|address> [--json]"; exit 2 ;;
             *)
-                if [ -z "$id" ]; then id="$1"
-                else _mail_err "usage" "unexpected extra argument '$1' — one <message-id> only"; exit 2; fi
+                if [ -z "$arg" ]; then arg="$1"
+                else _mail_err "usage" "unexpected extra argument '$1' — one <message-id|address> only"; exit 2; fi
                 shift ;;
         esac
     done
-    [ -n "$id" ] || { _mail_err "usage" "delete requires a <message-id> (it moves the message to Trash, never erases it)"; exit 2; }
-    local M_VERB="delete" M_JSON="$as_json" M_ID="$id"
-    _mail_py
+    [ -n "$arg" ] || { _mail_err "usage" "delete requires a <message-id> (moves the message to Trash, never erases it) or an <address> (retires the hosted address)"; exit 2; }
+    case "$arg" in
+        *@*)
+            # Address form → retire the hosted address (same as hostmail).
+            local M_VERB="address_delete" M_JSON="$as_json" M_ADDRESS="$arg"
+            _mail_py ;;
+        m_*)
+            # Message-id form → move that message to Trash (never erased).
+            local M_VERB="delete" M_JSON="$as_json" M_ID="$arg"
+            _mail_py ;;
+        *)
+            _mail_err "usage" "'$arg' is neither a message id ('m_…', from 'k2 mail messages') nor an address ('name@domain') — nothing deleted"
+            exit 2 ;;
+    esac
 }
 
 # `k2 mail folder <list|create|rename> <address> …` — folder management.
@@ -13707,7 +13729,7 @@ cmd_hostmail() {
         disable) cmd_hostmail_disable "$@" ;;
         domain)  cmd_mail_domain "$@" ;;
         create)  cmd_mail_create "$@" ;;
-        delete)  cmd_mail_delete "$@" ;;
+        delete)  cmd_hostmail_delete "$@" ;;
         doctor)  cmd_mail_doctor "$@" ;;
         config)  cmd_mail_config "$@" ;;
         approvals) cmd_mail_approvals "$@" ;;

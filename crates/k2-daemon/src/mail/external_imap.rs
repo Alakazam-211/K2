@@ -707,6 +707,49 @@ fn resolve_move_dest(session: &mut ImapSession, dest: &MailFolder) -> Result<Str
     }
 }
 
+/// Decide the mailbox name to hand to CREATE so a BARE name lands in the
+/// server's PERSONAL namespace. Dovecot-style servers root user folders
+/// under `INBOX<delim>` (e.g. `INBOX.Work`) and reject a bare `Work`;
+/// Gmail (`[Gmail]/…`) and root-namespace servers take it as-is. We only
+/// prepend `INBOX<delim>` when the LISTed hierarchy actually shows an
+/// INBOX-rooted namespace AND the caller has not already supplied a path.
+/// Pure (no I/O) so it is unit-testable off the LIST result alone.
+fn namespaced_folder_name(names: &[String], delimiter: Option<&str>, want: &str) -> String {
+    let Some(delim) = delimiter.filter(|d| !d.is_empty()) else {
+        return want.to_string();
+    };
+    // Caller already gave a hierarchy path (nested or prefixed) — respect it.
+    if want.contains(delim) {
+        return want.to_string();
+    }
+    let prefix = format!("INBOX{delim}");
+    // INBOX-rooted server: at least one existing folder lives under it.
+    let inbox_rooted = names.iter().any(|n| n.starts_with(&prefix));
+    if inbox_rooted {
+        format!("{prefix}{want}")
+    } else {
+        want.to_string()
+    }
+}
+
+/// Extract a namespace prefix a server SUGGESTS in a CREATE error, e.g.
+/// `… nonexistent namespace (Mailbox name should probably be prefixed
+/// with: INBOX.)` → `INBOX.`. `None` when the error carries no such hint.
+fn suggested_create_prefix(err: &str) -> Option<String> {
+    let lower = err.to_ascii_lowercase();
+    let at = lower.find("prefixed with:")?;
+    let tail = err[at + "prefixed with:".len()..].trim_start();
+    let prefix: String = tail
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != ')' && *c != '"' && *c != '\'')
+        .collect();
+    if prefix.is_empty() {
+        None
+    } else {
+        Some(prefix)
+    }
+}
+
 /// The single management dispatch on an open session.
 fn manage_on_session(session: &mut ImapSession, op: &ManageOp) -> Result<ManageOutcome, ListError> {
     match op {
@@ -715,8 +758,36 @@ fn manage_on_session(session: &mut ImapSession, op: &ManageOp) -> Result<ManageO
             ..Default::default()
         }),
         ManageOp::FolderCreate { name } => {
-            session.create(name).map_err(|e| ListError::Engine(imap_err("CREATE", e)))?;
-            Ok(ManageOutcome::default())
+            // Derive the server's hierarchy from LIST so a BARE folder name
+            // lands in the personal namespace. Dovecot-style servers root
+            // user folders at `INBOX.<x>` and reject a bare `Work` with a
+            // "nonexistent namespace" error; Gmail (`[Gmail]/…`) and
+            // root-namespace servers take the bare name. Detect, don't assume.
+            let listed = session
+                .list(Some(""), Some("*"))
+                .map_err(|e| ListError::Engine(imap_err("LIST", e)))?;
+            let delimiter = listed.iter().find_map(|n| n.delimiter()).map(str::to_string);
+            let folder_names: Vec<String> = listed.iter().map(|n| n.name().to_string()).collect();
+            let target = namespaced_folder_name(&folder_names, delimiter.as_deref(), name);
+            match session.create(&target) {
+                Ok(()) => Ok(ManageOutcome::default()),
+                Err(e) => {
+                    // The server may itself SUGGEST the prefix in its error
+                    // ("… prefixed with: INBOX."). Retry ONCE with it — but
+                    // only if it differs from what we already tried.
+                    let msg = imap_err("CREATE", e);
+                    if let Some(prefix) = suggested_create_prefix(&msg) {
+                        let retried = format!("{prefix}{name}");
+                        if retried != target {
+                            session
+                                .create(&retried)
+                                .map_err(|e2| ListError::Engine(imap_err("CREATE", e2)))?;
+                            return Ok(ManageOutcome::default());
+                        }
+                    }
+                    Err(ListError::Engine(msg))
+                }
+            }
         }
         ManageOp::FolderRename { from, to } => {
             let names = manage_list_names(session)?;
@@ -970,6 +1041,161 @@ mod tests {
             1,
             "{seen:?}"
         );
+    }
+
+    // ── folder-create namespace prefix (#31.3) ──
+
+    #[test]
+    fn namespaced_folder_name_prefixes_only_inbox_rooted_servers() {
+        // Dovecot: user folders live under `INBOX.` → prefix a bare name.
+        let dovecot = vec!["INBOX".to_string(), "INBOX.Archive".to_string()];
+        assert_eq!(
+            namespaced_folder_name(&dovecot, Some("."), "Work"),
+            "INBOX.Work"
+        );
+        // …but respect a path the caller already prefixed / nested.
+        assert_eq!(
+            namespaced_folder_name(&dovecot, Some("."), "INBOX.Work"),
+            "INBOX.Work"
+        );
+        // Gmail: `[Gmail]/…`, delimiter '/', NOT INBOX-rooted → leave bare.
+        let gmail = vec![
+            "INBOX".to_string(),
+            "[Gmail]/Sent Mail".to_string(),
+            "[Gmail]/Trash".to_string(),
+        ];
+        assert_eq!(namespaced_folder_name(&gmail, Some("/"), "Work"), "Work");
+        // Root-namespace server (flat, no INBOX.-rooted siblings) → bare.
+        let flat = vec!["INBOX".to_string(), "Archive".to_string()];
+        assert_eq!(namespaced_folder_name(&flat, Some("."), "Work"), "Work");
+        // No delimiter reported → never guess.
+        assert_eq!(namespaced_folder_name(&dovecot, None, "Work"), "Work");
+    }
+
+    #[test]
+    fn suggested_create_prefix_reads_the_servers_hint() {
+        let err = "CREATE failed: Client tried to access nonexistent namespace. \
+                   (Mailbox name should probably be prefixed with: INBOX.)";
+        assert_eq!(suggested_create_prefix(err).as_deref(), Some("INBOX."));
+        // No hint → nothing to retry with.
+        assert_eq!(suggested_create_prefix("CREATE failed: over quota"), None);
+    }
+
+    /// A scripted mock for folder-create: greets, LOGIN, answers LIST with
+    /// a fixed body, and either accepts CREATE or rejects a BARE name once
+    /// (with the server's namespace hint) so the retry path is exercised.
+    fn spawn_folder_mock(
+        list_body: &'static [u8],
+        reject: Option<(&'static str, &'static str)>,
+    ) -> (u16, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .expect("read timeout");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut w = stream;
+            let mut seen: Vec<String> = Vec::new();
+            w.write_all(b"* OK mock IMAP4rev1 ready\r\n").unwrap();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let line = line.trim_end().to_string();
+                seen.push(line.clone());
+                let tag = line.split_whitespace().next().unwrap_or("*").to_string();
+                let verb = line.split_whitespace().nth(1).unwrap_or("").to_ascii_uppercase();
+                match verb.as_str() {
+                    "LOGIN" => {
+                        w.write_all(format!("{tag} OK LOGIN done\r\n").as_bytes()).unwrap();
+                    }
+                    "LIST" => {
+                        w.write_all(list_body).unwrap();
+                        w.write_all(format!("{tag} OK LIST done\r\n").as_bytes()).unwrap();
+                    }
+                    "CREATE" => {
+                        let bare_fails = reject
+                            .map(|(bad, _)| line.contains(bad) && !line.contains("INBOX."))
+                            .unwrap_or(false);
+                        if bare_fails {
+                            let hint = reject.unwrap().1;
+                            w.write_all(format!("{tag} NO {hint}\r\n").as_bytes()).unwrap();
+                        } else {
+                            w.write_all(format!("{tag} OK CREATE done\r\n").as_bytes()).unwrap();
+                        }
+                    }
+                    "LOGOUT" => {
+                        w.write_all(b"* BYE mock done\r\n").unwrap();
+                        w.write_all(format!("{tag} OK LOGOUT done\r\n").as_bytes()).unwrap();
+                        break;
+                    }
+                    other => panic!("mock got unexpected command '{other}': {line}"),
+                }
+            }
+            seen
+        });
+        (port, handle)
+    }
+
+    /// Dovecot-style: LIST shows `INBOX.` children → a bare `Work` is
+    /// auto-prefixed to `INBOX.Work` before CREATE (no error round-trip).
+    #[test]
+    fn folder_create_auto_prefixes_from_inbox_rooted_list() {
+        let (port, handle) = spawn_folder_mock(
+            b"* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n\
+              * LIST (\\HasNoChildren) \".\" \"INBOX.Archive\"\r\n",
+            None,
+        );
+        let mut session = plaintext_session(port, "app-password").expect("login");
+        manage_on_session(&mut session, &ManageOp::FolderCreate { name: "Work" }).expect("create");
+        session.logout().ok();
+        let seen = handle.join().expect("mock thread");
+        let create = seen.iter().find(|l| l.contains("CREATE")).expect("a CREATE was sent");
+        assert!(create.contains("INBOX.Work"), "auto-prefixed: {create}");
+    }
+
+    /// Empty account (LIST reveals only INBOX, so auto-detect can't fire):
+    /// the bare CREATE is rejected with the server's hint, and we RETRY
+    /// with the suggested `INBOX.` prefix.
+    #[test]
+    fn folder_create_retries_on_server_namespace_hint() {
+        let (port, handle) = spawn_folder_mock(
+            b"* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n",
+            Some((
+                "Work",
+                "[CANNOT] Client tried to access nonexistent namespace. \
+                 (Mailbox name should probably be prefixed with: INBOX.)",
+            )),
+        );
+        let mut session = plaintext_session(port, "app-password").expect("login");
+        manage_on_session(&mut session, &ManageOp::FolderCreate { name: "Work" }).expect("create");
+        session.logout().ok();
+        let seen = handle.join().expect("mock thread");
+        let creates: Vec<&String> = seen.iter().filter(|l| l.contains("CREATE")).collect();
+        assert_eq!(creates.len(), 2, "bare then prefixed: {creates:?}");
+        assert!(creates[0].contains("Work") && !creates[0].contains("INBOX."), "{:?}", creates[0]);
+        assert!(creates[1].contains("INBOX.Work"), "retry prefixed: {:?}", creates[1]);
+    }
+
+    /// Gmail-style (`[Gmail]/…`, '/' delimiter, NOT INBOX-rooted): a bare
+    /// name is NOT prefixed — we never blindly prepend `INBOX.`.
+    #[test]
+    fn folder_create_leaves_gmail_style_names_bare() {
+        let (port, handle) = spawn_folder_mock(
+            b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n\
+              * LIST (\\HasChildren \\Noselect) \"/\" \"[Gmail]\"\r\n\
+              * LIST (\\HasNoChildren \\Sent) \"/\" \"[Gmail]/Sent Mail\"\r\n",
+            None,
+        );
+        let mut session = plaintext_session(port, "app-password").expect("login");
+        manage_on_session(&mut session, &ManageOp::FolderCreate { name: "Work" }).expect("create");
+        session.logout().ok();
+        let seen = handle.join().expect("mock thread");
+        let create = seen.iter().find(|l| l.contains("CREATE")).expect("a CREATE was sent");
+        assert!(create.contains("Work") && !create.contains("INBOX"), "left bare: {create}");
     }
 
     /// Wrong credentials fail loudly with the SERVER's text and no

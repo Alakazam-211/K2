@@ -158,6 +158,12 @@ struct ConnectorState {
     /// Desired state: `true` = should be running (supervisor restarts on
     /// exit); `false` = stop requested (supervisor must not restart).
     running: Arc<AtomicBool>,
+    /// The relay the supervisor is CURRENTLY homed to — index 0 of the
+    /// fallback list at start, republished by the supervise loop on every
+    /// failover/fail-back so `status()` reports the LIVE relay rather than
+    /// the configured primary. A single-relay config never rotates, so
+    /// this stays the legacy endpoint and status is unchanged.
+    current_relay: Arc<Mutex<RelayEndpoint>>,
 }
 
 static STATE: OnceLock<Mutex<Option<ConnectorState>>> = OnceLock::new();
@@ -299,10 +305,15 @@ pub fn start(
     // failure — see `spawn_supervised`.
     let child = Arc::new(Mutex::new(None));
     let running = Arc::new(AtomicBool::new(true));
+    // The live-relay slot starts at the preferred relay (index 0 — what
+    // was just rendered above); the supervise loop republishes it on every
+    // rotation so status() always names the relay actually being dialed.
+    let current_relay = Arc::new(Mutex::new(cfg.relay_list()[0].clone()));
     spawn_supervised(
         frpc,
         child.clone(),
         running.clone(),
+        current_relay.clone(),
         &cfg,
         resolved_local_port,
         e2e,
@@ -327,6 +338,7 @@ pub fn start(
         resolved_local_port,
         child,
         running,
+        current_relay,
     };
     let status = status_from(&st);
     *guard = Some(st);
@@ -367,12 +379,22 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
     } else {
         Some(format!("https://{sub}.{SUBDOMAIN_HOST}"))
     };
+    // Report the LIVE relay (the supervise loop republishes the slot on
+    // every failover/fail-back), not the configured primary. For a legacy
+    // single-endpoint config the slot IS server_addr — never rotated — so
+    // the reported value is byte-identical to the pre-failover status.
+    let server_addr = st
+        .current_relay
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .host
+        .clone();
     TunnelStatus {
         running: st.running.load(Ordering::SeqCst),
         public_url,
         subdomain: (!sub.is_empty()).then(|| sub.to_string()),
         local_port: Some(st.resolved_local_port),
-        server_addr: Some(st.cfg.server_addr.clone()),
+        server_addr: Some(server_addr),
         frpc_installed: resolve_frpc(&FrpcBinary::Auto).is_ok(),
     }
 }
@@ -590,10 +612,11 @@ fn wait_for_exit(
 /// as a relay failure, over it as a success — and feeds a [`RelaySelector`].
 /// When the selector rotates (3 consecutive failures → next relay,
 /// wrapping; or a stable run on a fallback → back to the primary), the
-/// supervisor re-renders `frpc.toml` for the new relay before respawning
-/// and resets the backoff. With a single relay the selector never switches
-/// and the wait path is the original blocking `wait()` — behavior is
-/// byte-identical to the pre-failover supervisor.
+/// supervisor re-renders `frpc.toml` for the new relay before respawning,
+/// resets the backoff, and republishes `current_relay` so `status()`
+/// reports the relay actually being dialed. With a single relay the
+/// selector never switches and the wait path is the original blocking
+/// `wait()` — behavior is byte-identical to the pre-failover supervisor.
 ///
 /// **Mid-session relay death** (multi-relay only): exits alone can't see a
 /// relay that dies AFTER a successful login — frpc never exits then, it
@@ -607,6 +630,7 @@ fn spawn_supervised(
     frpc: PathBuf,
     child_slot: Arc<Mutex<Option<Child>>>,
     running: Arc<AtomicBool>,
+    current_relay: Arc<Mutex<RelayEndpoint>>,
     cfg: &TunnelConfig,
     resolved_local_port: u16,
     e2e: bool,
@@ -633,6 +657,13 @@ fn spawn_supervised(
             let max_backoff = Duration::from_secs(30);
             let mut backoff = initial_backoff;
             let mut selector = RelaySelector::new(cfg_thread.relay_list());
+            // Republish the selector's current relay into the shared slot
+            // status() reads — called after every rotation decision so the
+            // reported endpoint tracks the selector (the render source of
+            // truth) even across a failed frpc.toml rewrite.
+            let publish_relay = |relay: &RelayEndpoint| {
+                *current_relay.lock().unwrap_or_else(|p| p.into_inner()) = relay.clone();
+            };
             loop {
                 // Take the current child to wait on it.
                 let mut child = match child_slot
@@ -693,6 +724,7 @@ fn spawn_supervised(
                                 selector.current()
                             );
                         }
+                        publish_relay(selector.current());
                         backoff = initial_backoff;
                     }
                     ChildOutcome::Exited(code) => {
@@ -731,6 +763,7 @@ fn spawn_supervised(
                                     selector.current()
                                 );
                             }
+                            publish_relay(selector.current());
                             // Fresh target — dial it promptly instead of
                             // inheriting the dead relay's grown backoff.
                             backoff = initial_backoff;
@@ -772,6 +805,7 @@ fn spawn_supervised(
                                     selector.current()
                                 );
                             }
+                            publish_relay(selector.current());
                             // Fresh target — dial it promptly instead of
                             // inheriting the dead relay's grown backoff.
                             backoff = initial_backoff;
@@ -1451,7 +1485,139 @@ mod tests {
                 "legacy endpoint must render unchanged\n{toml}"
             );
             assert!(toml.contains("serverPort = 7009"), "{toml}");
+            // Status keeps reporting the legacy endpoint too — the live-
+            // relay slot never rotates on a solo config, so the reported
+            // server_addr is byte-identical to the pre-failover status.
+            assert_eq!(
+                status().server_addr.as_deref(),
+                Some("9.9.9.9"),
+                "single-relay status must report the configured endpoint"
+            );
             let _ = stop();
+        });
+    }
+
+    /// TunnelStatus reports the LIVE relay, not the configured primary:
+    /// through the REAL supervise loop, a two-relay config whose "frpc"
+    /// (/bin/true) fails fast must — after the 3-failure rotation — flip
+    /// `status().server_addr` to the SECOND relay's host, while the rest
+    /// of the status (URL, subdomain) is untouched by the rotation.
+    #[test]
+    fn status_reports_live_relay_after_failover_rotation() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                relays: vec![
+                    RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
+                    RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 },
+                ],
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false, // skip the HTTPS-listener path in this unit context
+                ..Default::default()
+            })
+            .expect("seed two-relay config");
+
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect("start with two relays");
+            assert!(st.running);
+            // Before any rotation the status homes to the PRIMARY.
+            assert_eq!(
+                st.server_addr.as_deref(),
+                Some("10.0.0.1"),
+                "fresh start must report the preferred relay"
+            );
+
+            // /bin/true exits immediately → 3 fast failures rotate to the
+            // second relay within a few seconds (see the frpc.toml twin of
+            // this test); poll generously so slow CI can't flake this.
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                let now = status();
+                if now.server_addr.as_deref() == Some("10.0.0.2") {
+                    // Only the relay changed — the public identity of the
+                    // tunnel is untouched by a rotation.
+                    assert!(now.running, "rotation must not read as a stop");
+                    assert_eq!(now.public_url.as_deref(), Some("https://rosson.k2.dev"));
+                    assert_eq!(now.subdomain.as_deref(), Some("rosson"));
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    panic!(
+                        "status never reported the rotated relay; still {:?}",
+                        now.server_addr
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+
+            stop().expect("stop");
+            assert!(!status().running);
+        });
+    }
+
+    /// Setting `relays` through the UPDATE path (`set_config`) must not
+    /// disturb a currently-connected tunnel — exactly like server_addr,
+    /// it's persist-only, picked up by the NEXT start. Guards the "no new
+    /// restart semantic" contract end to end: running tunnel keeps its
+    /// endpoint + rendered frpc.toml; a stop/start dials the new primary.
+    #[test]
+    fn set_relays_while_running_applies_only_on_next_start() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                server_addr: "9.9.9.9".to_string(),
+                server_port: 7009,
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed legacy config");
+
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect("start on legacy endpoint");
+            assert!(st.running);
+
+            // Mutate the relay list through the same surface the daemon's
+            // POST /cli/tunnel/config uses, while the tunnel is up.
+            super::super::set_config(super::super::TunnelConfigUpdate {
+                relays: Some(vec![
+                    RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
+                    RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 },
+                ]),
+                ..Default::default()
+            })
+            .expect("set relays while running");
+
+            // The RUNNING tunnel is undisturbed: still up, still homed to
+            // the endpoint it started on, rendered config untouched.
+            let now = status();
+            assert!(now.running, "set_config must not stop a running tunnel");
+            assert_eq!(
+                now.server_addr.as_deref(),
+                Some("9.9.9.9"),
+                "live tunnel must keep its endpoint until the next start"
+            );
+            let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+            assert!(
+                toml.contains("serverAddr = \"9.9.9.9\""),
+                "set_config must not re-render the live frpc.toml\n{toml}"
+            );
+
+            // The NEXT start picks the new list up: dials the new primary.
+            stop().expect("stop");
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect("restart with relays");
+            assert_eq!(
+                st.server_addr.as_deref(),
+                Some("10.0.0.1"),
+                "restart must home to the new preferred relay"
+            );
+            let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+            assert!(
+                toml.contains("serverAddr = \"10.0.0.1\""),
+                "restart must render the new preferred relay\n{toml}"
+            );
+            stop().expect("stop");
         });
     }
 

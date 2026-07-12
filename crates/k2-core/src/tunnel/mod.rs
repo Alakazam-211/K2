@@ -67,6 +67,13 @@ pub use watchdog::{frpc_line_signals_disconnect, frpc_line_signals_recovery, Dis
 pub struct TunnelConfigView {
     pub server_addr: String,
     pub server_port: u16,
+    /// Ordered relay fallback list as STORED (index 0 = preferred). Hosts
+    /// and ports only — nothing secret — so the redacted view carries it
+    /// verbatim. Empty (every legacy single-endpoint config) is omitted
+    /// from the JSON, mirroring the on-disk shape, so a pre-failover
+    /// client sees a byte-identical view.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub relays: Vec<RelayEndpoint>,
     pub subdomain: String,
     pub token_set: bool,
     pub public_url: Option<String>,
@@ -90,6 +97,7 @@ impl From<&TunnelConfig> for TunnelConfigView {
         Self {
             server_addr: c.server_addr.clone(),
             server_port: c.server_port,
+            relays: c.relays.clone(),
             subdomain: c.subdomain.clone(),
             token_set: !c.token.trim().is_empty(),
             public_url: c.public_url(),
@@ -108,6 +116,15 @@ impl From<&TunnelConfig> for TunnelConfigView {
 pub struct TunnelConfigUpdate {
     pub server_addr: Option<String>,
     pub server_port: Option<u16>,
+    /// Ordered relay fallback list (multi-relay edge resilience). Absent →
+    /// the stored list is untouched, so a legacy client that never sends
+    /// the field changes NOTHING. Present replaces the list wholesale; an
+    /// explicit empty list is the "clear" verb — back to the legacy single
+    /// `server_addr`/`server_port` endpoint (via `relay_list()`). Like
+    /// every other field here this only PERSISTS config: a currently-
+    /// connected tunnel is not disturbed, the new list applies when the
+    /// tunnel next (re)starts.
+    pub relays: Option<Vec<RelayEndpoint>>,
     pub subdomain: Option<String>,
     pub token: Option<String>,
     pub auto_start: Option<bool>,
@@ -142,6 +159,14 @@ pub fn set_config(upd: TunnelConfigUpdate) -> Result<TunnelConfigView, String> {
             if p > 0 {
                 c.server_port = p;
             }
+        }
+        // Relay fallback list. Absent → untouched (legacy clients never
+        // send it). Present replaces wholesale; an explicit `[]` clears the
+        // list, reverting to the legacy single-endpoint pair. Persist-only:
+        // a running tunnel keeps the relays it started with until the next
+        // (re)start reads the config — exactly like server_addr above.
+        if let Some(r) = upd.relays {
+            c.relays = r;
         }
         if let Some(s) = upd.subdomain {
             c.subdomain = s.trim().to_string();
@@ -210,6 +235,145 @@ pub fn render_config(local_port: u16) -> Result<String, String> {
     // for a legacy single-endpoint config this IS server_addr/server_port.
     let relays = cfg.relay_list();
     Ok(render::render_frpc_toml_for_relay(&cfg, &relays[0], local_port, e2e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_support::with_temp_home;
+
+    fn ep(host: &str, port: u16) -> RelayEndpoint {
+        RelayEndpoint {
+            host: host.to_string(),
+            port,
+        }
+    }
+
+    #[test]
+    fn update_json_without_relays_field_deserializes_to_none() {
+        // The legacy-compat contract at the wire: a pre-failover client
+        // POSTing its usual body must parse with relays = None, which
+        // set_config maps to "change NOTHING" about the stored list.
+        let upd: TunnelConfigUpdate =
+            serde_json::from_str(r#"{"subdomain":"rosson","token":"tok"}"#)
+                .expect("parse legacy update body");
+        assert!(upd.relays.is_none(), "absent relays must deserialize None");
+    }
+
+    #[test]
+    fn update_json_with_relays_parses_ordered_with_port_default() {
+        // The new wire shape mirrors tunnel.json: ordered array, index 0 =
+        // primary, a host-only entry gets the default frps port.
+        let upd: TunnelConfigUpdate = serde_json::from_str(
+            r#"{"relays":[{"host":"10.0.0.1","port":7001},{"host":"10.0.0.2"}]}"#,
+        )
+        .expect("parse relays update body");
+        assert_eq!(
+            upd.relays,
+            Some(vec![
+                ep("10.0.0.1", 7001),
+                ep("10.0.0.2", config::DEFAULT_SERVER_PORT),
+            ]),
+            "relays must parse in order with the port defaulting"
+        );
+    }
+
+    #[test]
+    fn set_config_with_relays_persists_and_view_round_trips() {
+        with_temp_home(|| {
+            let list = vec![ep("10.0.0.1", 7000), ep("10.0.0.2", 7000)];
+            let view = set_config(TunnelConfigUpdate {
+                relays: Some(list.clone()),
+                subdomain: Some("rosson".to_string()),
+                token: Some("tok".to_string()),
+                ..Default::default()
+            })
+            .expect("set_config with relays");
+            assert_eq!(view.relays, list, "view must echo the new list back");
+            // ...and the list must actually be ON DISK for the next start.
+            let stored = config::load().expect("load");
+            assert_eq!(stored.relays, list, "relays must persist via the update path");
+            assert_eq!(stored.relay_list(), list, "list is authoritative when non-empty");
+        });
+    }
+
+    #[test]
+    fn set_config_without_relays_leaves_stored_list_untouched() {
+        with_temp_home(|| {
+            // Seed a multi-relay config, then apply a relays-LESS update
+            // (what every legacy client sends). The stored list must
+            // survive — absent field changes NOTHING.
+            let list = vec![ep("10.0.0.1", 7000), ep("10.0.0.2", 7000)];
+            config::save(&TunnelConfig {
+                relays: list.clone(),
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                ..Default::default()
+            })
+            .expect("seed multi-relay config");
+            let view = set_config(TunnelConfigUpdate {
+                subdomain: Some("rosson2".to_string()),
+                ..Default::default()
+            })
+            .expect("relays-less update");
+            assert_eq!(view.subdomain, "rosson2", "the update itself applied");
+            assert_eq!(
+                config::load().expect("load").relays,
+                list,
+                "absent relays field must not touch the stored list"
+            );
+        });
+    }
+
+    #[test]
+    fn set_config_empty_relays_clears_back_to_legacy_endpoint() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                server_addr: "9.9.9.9".to_string(),
+                server_port: 7009,
+                relays: vec![ep("10.0.0.1", 7000), ep("10.0.0.2", 7000)],
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                ..Default::default()
+            })
+            .expect("seed multi-relay config");
+            // The explicit "clear" verb: `relays: []` empties the list, so
+            // relay_list() folds back to the legacy single-endpoint pair.
+            set_config(TunnelConfigUpdate {
+                relays: Some(Vec::new()),
+                ..Default::default()
+            })
+            .expect("clear relays");
+            let stored = config::load().expect("load");
+            assert!(stored.relays.is_empty(), "explicit [] must clear the list");
+            assert_eq!(
+                stored.relay_list(),
+                vec![ep("9.9.9.9", 7009)],
+                "cleared config must fold back to the legacy endpoint"
+            );
+        });
+    }
+
+    #[test]
+    fn legacy_view_json_omits_relays_key() {
+        with_temp_home(|| {
+            // A legacy (relays-empty) config's redacted view must serialize
+            // WITHOUT a relays key — a pre-failover client sees the exact
+            // JSON shape it always did.
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                ..Default::default()
+            })
+            .expect("seed legacy config");
+            let view = get_config_view().expect("view");
+            let json = serde_json::to_string(&view).expect("serialize view");
+            assert!(
+                !json.contains("relays"),
+                "empty relay list must be skipped in the view JSON\n{json}"
+            );
+        });
+    }
 }
 
 #[cfg(test)]

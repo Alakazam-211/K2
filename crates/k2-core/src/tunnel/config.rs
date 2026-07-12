@@ -22,7 +22,14 @@
 //! `local_port` defaults to the running daemon's port at start time when
 //! the caller doesn't pin one, so a fresh config only ever needs a token
 //! (and optionally a subdomain).
+//!
+//! **Multi-relay failover:** an optional ordered `relays` array
+//! (`[{"host": "...", "port": 7000}, ...]`) supersedes the single
+//! `server_addr`/`server_port` pair when present — index 0 is the
+//! preferred relay, the rest are fallbacks. Absent (every pre-failover
+//! file) the legacy pair IS the list; see [`TunnelConfig::relay_list`].
 
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -39,6 +46,26 @@ pub const DEFAULT_SERVER_PORT: u16 = 7000;
 /// The hosted subdomain zone. Every user lands under `<sub>.k2.dev`.
 pub const SUBDOMAIN_HOST: &str = "k2.dev";
 
+/// One frps relay endpoint (host + frpc dial-in port) in the ordered
+/// fallback list. The edge relays are PEERS — they share one frps auth
+/// token and one wildcard cert — so **only the address differs** between
+/// them; token/subdomain/proxy-name never change on a relay switch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayEndpoint {
+    /// frps host (IP or DNS name, no port).
+    pub host: String,
+    /// frps `bindPort`. Defaults to [`DEFAULT_SERVER_PORT`] so a relay
+    /// entry can be written as `{"host": "..."}` alone.
+    #[serde(default = "default_server_port")]
+    pub port: u16,
+}
+
+impl fmt::Display for RelayEndpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
+    }
+}
+
 /// Connector configuration. Mirrors the contract the deployed
 /// control-plane server expects: a bearer `token` (validated → user),
 /// a requested `subdomain` (the server canonicalizes it to `{user}`),
@@ -52,6 +79,20 @@ pub struct TunnelConfig {
     /// frps `bindPort`. Defaults to [`DEFAULT_SERVER_PORT`].
     #[serde(default = "default_server_port")]
     pub server_port: u16,
+
+    /// Ordered relay fallback list (edge resilience). When non-empty this
+    /// is AUTHORITATIVE: index 0 is the preferred/primary relay, later
+    /// entries are fallbacks the connector rotates through on repeated
+    /// dial failure (and fails back from when the primary recovers).
+    ///
+    /// **Backward compatible:** an existing single-endpoint `tunnel.json`
+    /// simply omits this field — it deserializes to an empty list, and
+    /// [`relay_list`](TunnelConfig::relay_list) folds the legacy
+    /// `server_addr`/`server_port` pair into a one-element list. Empty is
+    /// also skipped on serialize so a legacy config re-saved by the daemon
+    /// keeps its old on-disk shape byte-for-byte.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relays: Vec<RelayEndpoint>,
 
     /// K2SO bearer token. Carried in the frpc login `metadatas.token`;
     /// the control plane resolves it to the owning user. **Secret** —
@@ -179,6 +220,7 @@ impl Default for TunnelConfig {
         Self {
             server_addr: default_server_host(),
             server_port: default_server_port(),
+            relays: Vec::new(),
             token: String::new(),
             subdomain: String::new(),
             local_port: None,
@@ -199,6 +241,23 @@ impl TunnelConfig {
     /// primary namespace".)
     pub fn is_connectable(&self) -> bool {
         !self.token.trim().is_empty() && !self.server_addr.trim().is_empty()
+    }
+
+    /// The effective ordered relay list — ALWAYS at least one entry.
+    ///
+    /// * `relays` non-empty → that list verbatim (index 0 = primary).
+    /// * `relays` empty (every pre-failover `tunnel.json`) → the legacy
+    ///   single `server_addr`/`server_port` pair as a one-element list,
+    ///   so single-relay behaviour is byte-identical to before.
+    pub fn relay_list(&self) -> Vec<RelayEndpoint> {
+        if self.relays.is_empty() {
+            vec![RelayEndpoint {
+                host: self.server_addr.clone(),
+                port: self.server_port,
+            }]
+        } else {
+            self.relays.clone()
+        }
     }
 
     /// The public URL this config will resolve to *as requested* —
@@ -347,6 +406,10 @@ mod tests {
             let cfg = TunnelConfig {
                 server_addr: "1.2.3.4".to_string(),
                 server_port: 7001,
+                relays: vec![
+                    RelayEndpoint { host: "1.2.3.4".to_string(), port: 7001 },
+                    RelayEndpoint { host: "5.6.7.8".to_string(), port: 7000 },
+                ],
                 token: "tok_secret".to_string(),
                 subdomain: "rosson".to_string(),
                 local_port: Some(57839),
@@ -458,6 +521,98 @@ mod tests {
             Some(p) => std::env::set_var("K2_E2E", p),
             None => std::env::remove_var("K2_E2E"),
         }
+    }
+
+    #[test]
+    fn legacy_single_endpoint_json_reads_as_one_element_relay_list() {
+        // A pre-failover tunnel.json (no `relays` key) must deserialize
+        // UNCHANGED — and the effective relay list must be exactly the
+        // legacy server_addr/server_port pair.
+        let cfg: TunnelConfig = serde_json::from_str(
+            r#"{"server_addr":"1.2.3.4","server_port":7001,"token":"tok","subdomain":"rosson"}"#,
+        )
+        .expect("parse legacy single-endpoint config");
+        assert!(cfg.relays.is_empty(), "absent relays field must stay empty");
+        assert_eq!(
+            cfg.relay_list(),
+            vec![RelayEndpoint { host: "1.2.3.4".to_string(), port: 7001 }],
+            "legacy config must fold into a one-element relay list"
+        );
+    }
+
+    #[test]
+    fn relays_array_json_parses_ordered_and_port_defaults() {
+        // The new shape: an ordered `relays` array. Order is load-bearing
+        // (index 0 = primary) and a host-only entry gets the default port.
+        let cfg: TunnelConfig = serde_json::from_str(
+            r#"{
+                "token": "tok",
+                "subdomain": "rosson",
+                "relays": [
+                    {"host": "10.0.0.1", "port": 7001},
+                    {"host": "10.0.0.2"}
+                ]
+            }"#,
+        )
+        .expect("parse multi-relay config");
+        assert_eq!(
+            cfg.relay_list(),
+            vec![
+                RelayEndpoint { host: "10.0.0.1".to_string(), port: 7001 },
+                RelayEndpoint { host: "10.0.0.2".to_string(), port: DEFAULT_SERVER_PORT },
+            ],
+            "relays must parse in order with the port defaulting"
+        );
+    }
+
+    #[test]
+    fn default_config_relay_list_is_the_deployed_box() {
+        assert_eq!(
+            TunnelConfig::default().relay_list(),
+            vec![RelayEndpoint {
+                host: DEFAULT_SERVER_HOST.to_string(),
+                port: DEFAULT_SERVER_PORT,
+            }]
+        );
+    }
+
+    #[test]
+    fn legacy_config_resave_does_not_grow_a_relays_key() {
+        // A legacy (relays-empty) config re-saved by the daemon must keep
+        // its old on-disk shape — no `"relays": []` noise appearing in a
+        // file the user/provisioner may diff or hand-edit.
+        with_temp_home(|| {
+            save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                ..Default::default()
+            })
+            .expect("save legacy-shaped config");
+            let raw = std::fs::read_to_string(config_path()).expect("read tunnel.json");
+            assert!(
+                !raw.contains("relays"),
+                "empty relay list must be skipped on serialize\n{raw}"
+            );
+        });
+    }
+
+    #[test]
+    fn multi_relay_config_round_trips() {
+        with_temp_home(|| {
+            let cfg = TunnelConfig {
+                relays: vec![
+                    RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
+                    RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 },
+                ],
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                ..Default::default()
+            };
+            save(&cfg).expect("save");
+            let back = load().expect("load");
+            assert_eq!(back, cfg, "multi-relay config must round-trip");
+            assert_eq!(back.relay_list().len(), 2);
+        });
     }
 
     #[test]

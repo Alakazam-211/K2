@@ -24,6 +24,15 @@
 //!      errors loudly (NO COPY+EXPUNGE fallback, so K2 NEVER expunges —
 //!      DELETE is always a move to Trash). Archive/Trash SPECIAL-USE
 //!      detection shares the UTF-7 / SPECIAL-USE-variance caveats of #1.
+//!   4. O2 Gmail [`xoauth2_authenticate`] — SASL `XOAUTH2` login for
+//!      `auth_kind='oauth'` rows. Google does NOT report a rejected
+//!      token as a normal `NO`: it sends a base64-JSON error blob on a
+//!      `+` continuation, expects an empty response, THEN sends the
+//!      tagged `NO`. This one function isolates the AUTHENTICATE
+//!      conversation AND that error classification, mapping a
+//!      token-rejection to a clear "re-link needed" so a stale token
+//!      never reads as "connected". The token / SASL string is NEVER
+//!      logged or placed in any error.
 //!
 //! Session hygiene: one short-lived connection per operation (connect
 //! → LOGIN → work → LOGOUT). External inboxes are polled at human
@@ -37,6 +46,8 @@ use crate::mail::external::{
 };
 use crate::mail::jmap::{EmailSummary, MailAddr};
 use crate::mail::messages::{ListError, ListFilter, MailFolder, ManageOutcome};
+use crate::mail::oauth::{self, OauthProvider, ReqwestHttp};
+use crate::mail::secrets::FileSecretStore;
 use imap::types::{Flag, Name};
 use imap::{ClientBuilder, ConnectionMode, TlsKind};
 use imap_proto::types::NameAttribute;
@@ -82,13 +93,180 @@ fn connect_plaintext_for_test(
         .map_err(|e| imap_err("connect", e))
 }
 
+/// The SINGLE auth point for every read/draft/manage op. Two branches
+/// (O2): an `auth_kind='oauth'` row authenticates with SASL XOAUTH2
+/// against a freshly-minted access token; every other row keeps the
+/// EXACT app-password `LOGIN` path, byte-for-byte unchanged. The oauth
+/// columns live off the [`MailExternalInbox`] struct, so one raw-SQL
+/// read decides the branch.
 fn login(inbox: &MailExternalInbox, password: &str) -> Result<ImapSession, String> {
+    let auth = external::read_oauth_fields(&inbox.id)?;
+    if auth.auth_kind == external::AUTH_OAUTH {
+        return oauth_login(inbox, &auth);
+    }
     let client = connect(inbox)?;
     // The error path carries the SERVER's text (never the password —
     // imap's ValidateError exposes only an offending char).
     client
         .login(&inbox.username, password)
         .map_err(|(e, _client)| imap_err("login", e))
+}
+
+/// The OAuth (Gmail XOAUTH2) login branch. Mint/refresh a fresh access
+/// token via the O1 engine, persist the (possibly refreshed) expiry back
+/// to the row, then authenticate with SASL XOAUTH2. Only Gmail rides the
+/// IMAP transport — Microsoft is Graph-only (O3), so a `microsoft`/other
+/// provider here is a loud config error, never a silent password
+/// fallthrough. The token is fetched fresh EVERY login (the O1 engine
+/// reuses it when still valid) and NEVER logged.
+fn oauth_login(inbox: &MailExternalInbox, auth: &external::OauthFields) -> Result<ImapSession, String> {
+    let provider_str = auth.provider.as_deref().unwrap_or("");
+    let provider = OauthProvider::from_str(provider_str).ok_or_else(|| {
+        format!(
+            "inbox {} is oauth but its provider '{provider_str}' is not recognized \
+             — re-link this inbox",
+            inbox.id
+        )
+    })?;
+    if provider != OauthProvider::Gmail {
+        // Microsoft (and any future non-IMAP vendor) does NOT use this
+        // transport — Graph is a peer backend (O3). Fail loud rather
+        // than attempt an IMAP login the vendor won't honor.
+        return Err(format!(
+            "provider '{provider_str}' does not use IMAP — Microsoft mail is served over \
+             Graph, not this XOAUTH2 path"
+        ));
+    }
+
+    // O1 engine: fresh access token (refreshing within the 60s skew),
+    // via the production vault + HTTP client. `now` is injected into the
+    // engine; here it is the wall clock.
+    let secrets = FileSecretStore::default();
+    let http = ReqwestHttp::default();
+    let now = chrono::Utc::now().timestamp();
+    let fresh = oauth::access_token_for(
+        &secrets,
+        &inbox.id,
+        provider,
+        auth.token_expires_at,
+        now,
+        None,
+        &http,
+    )
+    .map_err(|e| format!("oauth token for inbox {}: {e}", inbox.id))?;
+
+    // Persist the new expiry so the NEXT login reuses the token instead
+    // of refreshing again (the refresh already re-vaulted the bundle).
+    if fresh.refreshed {
+        external::persist_token_expiry(&inbox.id, fresh.token_expires_at);
+    }
+
+    let client = connect(inbox)?;
+    xoauth2_authenticate(client, &inbox.username, &fresh.access_token)
+}
+
+// ── ⚠ LIVE-BOX #4: SASL XOAUTH2 auth + Google continuation-error class ──
+
+/// The exact SASL XOAUTH2 initial-response STRING (pre-base64):
+/// `user=<user>\x01auth=Bearer <token>\x01\x01` (`\x01` = ^A, `0x01`).
+/// The `imap` crate base64-encodes the [`imap::Authenticator::process`]
+/// return, so this raw string is what the encoder receives — matching
+/// `base64("user=" + user + ^A + "auth=Bearer " + token + ^A + ^A)`
+/// (prd §5a). NEVER logged.
+fn sasl_xoauth2_init(username: &str, access_token: &str) -> String {
+    format!("user={username}\x01auth=Bearer {access_token}\x01\x01")
+}
+
+/// A stateful SASL XOAUTH2 authenticator. The `imap` crate calls
+/// [`process`](imap::Authenticator::process) once per server `+`
+/// continuation with the base64-DECODED challenge and base64-encodes the
+/// return. XOAUTH2 has exactly one client message — the init string — so
+/// the FIRST call yields it. Google's twist (⚠ LIVE-BOX): on a REJECTED
+/// token it does not answer `NO`; it sends the error as a base64-JSON
+/// blob on a SECOND `+` continuation and expects an empty response
+/// before the tagged `NO`. Any call after the first captures that blob
+/// (no token in it) for classification and answers empty.
+struct XOAuth2Authenticator {
+    init: String,
+    sent_init: std::cell::Cell<bool>,
+    error_challenge: std::cell::RefCell<Option<Vec<u8>>>,
+}
+
+impl XOAuth2Authenticator {
+    fn new(username: &str, access_token: &str) -> Self {
+        Self {
+            init: sasl_xoauth2_init(username, access_token),
+            sent_init: std::cell::Cell::new(false),
+            error_challenge: std::cell::RefCell::new(None),
+        }
+    }
+}
+
+impl imap::Authenticator for XOAuth2Authenticator {
+    type Response = Vec<u8>;
+    fn process(&self, challenge: &[u8]) -> Vec<u8> {
+        if !self.sent_init.get() {
+            self.sent_init.set(true);
+            self.init.clone().into_bytes()
+        } else {
+            // A continuation AFTER the init = Google's XOAUTH2 error blob
+            // (base64-JSON, e.g. {"status":"400",...} — carries no
+            // token). Capture it, answer empty; the server then sends the
+            // tagged NO which the crate surfaces as an error.
+            *self.error_challenge.borrow_mut() = Some(challenge.to_vec());
+            Vec::new()
+        }
+    }
+}
+
+/// Authenticate an already-connected client with SASL XOAUTH2 and
+/// classify Google's continuation-error surface. On a token rejection
+/// (the error blob captured above) return a clear RE-LINK message so a
+/// stale/revoked token surfaces as an error, never as "connected". The
+/// access token and SASL string never appear in the returned error.
+fn xoauth2_authenticate(
+    client: imap::Client<imap::Connection>,
+    username: &str,
+    access_token: &str,
+) -> Result<ImapSession, String> {
+    let auth = XOAuth2Authenticator::new(username, access_token);
+    match client.authenticate("XOAUTH2", &auth) {
+        Ok(session) => Ok(session),
+        Err((e, _client)) => {
+            if let Some(blob) = auth.error_challenge.borrow().as_ref() {
+                Err(xoauth2_rejection_message(blob))
+            } else {
+                // No error blob → a transport/protocol failure, not a
+                // token rejection. Surface the server/transport text
+                // (never a token — the imap error carries neither the
+                // SASL string nor the token).
+                Err(imap_err("XOAUTH2", e))
+            }
+        }
+    }
+}
+
+/// Turn Google's base64-JSON XOAUTH2 error blob (already base64-DECODED
+/// by the imap crate) into a re-link instruction. The blob carries a
+/// `status` (e.g. `"400"`) but NO token; we surface only the status for
+/// diagnostics and a fixed re-link hint.
+fn xoauth2_rejection_message(blob: &[u8]) -> String {
+    let status = std::str::from_utf8(blob)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| {
+            v.get("status")
+                .and_then(|s| s.as_str().map(str::to_string).or_else(|| s.as_i64().map(|n| n.to_string())))
+        });
+    match status {
+        Some(code) => format!(
+            "Gmail rejected the OAuth access token (XOAUTH2 status {code}) — the inbox must be \
+             re-linked (the token likely expired or was revoked)"
+        ),
+        None => "Gmail rejected the OAuth access token — the inbox must be re-linked (the token \
+             likely expired or was revoked)"
+            .to_string(),
+    }
 }
 
 // ── ⚠ LIVE-BOX #1: folder survey (SPECIAL-USE via plain LIST) ───────────
@@ -622,6 +800,7 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
+    use std::sync::Mutex;
 
     // ── pure builders ──
 
@@ -836,5 +1015,209 @@ mod tests {
         inbox.tls = "plaintext".to_string();
         let err = connect(&inbox).expect_err("refused");
         assert!(err.contains("unsupported tls kind"), "{err}");
+    }
+
+    // ── O2: SASL XOAUTH2 (no real network, no real Gmail) ───────────────
+
+    use base64::engine::general_purpose::STANDARD as B64;
+    use base64::Engine as _;
+
+    const TEST_ACCESS_TOKEN: &str = "ya29.SENTINEL-ACCESS-TOKEN-do-not-leak";
+
+    /// The SASL init string is byte-exact per prd §5a:
+    /// `user=<user>^Aauth=Bearer <token>^A^A`.
+    #[test]
+    fn sasl_xoauth2_init_is_byte_exact() {
+        let s = sasl_xoauth2_init("me@gmail.com", "TOK");
+        assert_eq!(s, "user=me@gmail.com\x01auth=Bearer TOK\x01\x01");
+        // Exactly three 0x01 bytes, in the right places; no trailing junk.
+        assert_eq!(s.bytes().filter(|b| *b == 0x01).count(), 3);
+        assert!(s.starts_with("user=me@gmail.com\u{1}auth=Bearer "));
+        assert!(s.ends_with("\u{1}\u{1}"));
+    }
+
+    /// A scripted IMAP server speaking the XOAUTH2 AUTHENTICATE
+    /// conversation. Captures the base64-DECODED SASL response for the
+    /// test to assert. `reject=true` replays Google's error surface: the
+    /// rejection rides a base64-JSON blob on a `+` continuation, NOT a
+    /// plain `NO`.
+    fn spawn_xoauth2_mock(reject: bool) -> (u16, std::thread::JoinHandle<Vec<u8>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .expect("read timeout");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut w = stream;
+            let mut captured_sasl: Vec<u8> = Vec::new();
+            w.write_all(b"* OK mock IMAP4rev1 ready\r\n").unwrap();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let trimmed = line.trim_end().to_string();
+                let mut parts = trimmed.split_whitespace();
+                let tag = parts.next().unwrap_or("*").to_string();
+                let verb = parts.next().unwrap_or("").to_ascii_uppercase();
+                match verb.as_str() {
+                    "AUTHENTICATE" => {
+                        assert_eq!(parts.next(), Some("XOAUTH2"), "wrong mechanism: {trimmed}");
+                        // Empty challenge (regex `^\+ (.*)\r\n` → "").
+                        w.write_all(b"+ \r\n").unwrap();
+                        // The base64(SASL) response line.
+                        let mut resp = String::new();
+                        reader.read_line(&mut resp).expect("sasl line");
+                        captured_sasl = B64.decode(resp.trim_end()).expect("base64 sasl");
+                        if reject {
+                            // Google's rejected-token surface: base64-JSON
+                            // on a continuation, then the tagged NO.
+                            let blob = br#"{"status":"400","schemes":"Bearer","scope":"https://mail.google.com/"}"#;
+                            w.write_all(format!("+ {}\r\n", B64.encode(blob)).as_bytes()).unwrap();
+                            // The client answers empty; consume it.
+                            let mut empty = String::new();
+                            reader.read_line(&mut empty).expect("empty response");
+                            w.write_all(
+                                format!("{tag} NO [AUTHENTICATIONFAILED] invalid credentials\r\n")
+                                    .as_bytes(),
+                            )
+                            .unwrap();
+                        } else {
+                            w.write_all(format!("{tag} OK authenticated\r\n").as_bytes()).unwrap();
+                        }
+                        break;
+                    }
+                    other => panic!("mock got unexpected command '{other}': {trimmed}"),
+                }
+            }
+            captured_sasl
+        });
+        (port, handle)
+    }
+
+    /// The success path: `xoauth2_authenticate` speaks XOAUTH2 and the
+    /// server sees EXACTLY the byte-exact SASL string with our token.
+    #[test]
+    fn xoauth2_authenticate_sends_exact_sasl_and_succeeds() {
+        let (port, handle) = spawn_xoauth2_mock(false);
+        let client = connect_plaintext_for_test("127.0.0.1", port).expect("connect");
+        let session = xoauth2_authenticate(client, "rosson@gmail.com", TEST_ACCESS_TOKEN)
+            .expect("XOAUTH2 login");
+        drop(session);
+        let sasl = handle.join().expect("mock thread");
+        assert_eq!(
+            sasl,
+            format!("user=rosson@gmail.com\x01auth=Bearer {TEST_ACCESS_TOKEN}\x01\x01").into_bytes(),
+            "the server must see the byte-exact XOAUTH2 SASL string"
+        );
+    }
+
+    /// The rejection path: Google's base64-JSON error on a continuation
+    /// (NOT a `NO`) maps to a clear re-link message — and the access
+    /// token NEVER appears in that error.
+    #[test]
+    fn xoauth2_authenticate_classifies_token_rejection_without_leaking_token() {
+        let (port, handle) = spawn_xoauth2_mock(true);
+        let client = connect_plaintext_for_test("127.0.0.1", port).expect("connect");
+        let err = xoauth2_authenticate(client, "rosson@gmail.com", TEST_ACCESS_TOKEN)
+            .expect_err("token must be rejected");
+        assert!(err.contains("re-linked"), "must instruct a re-link: {err}");
+        assert!(err.contains("400"), "surfaces the XOAUTH2 status: {err}");
+        assert!(
+            !err.contains(TEST_ACCESS_TOKEN) && !err.contains("Bearer"),
+            "the token/SASL must never ride the error: {err}"
+        );
+        // The server still saw the byte-exact SASL (auth was attempted).
+        let sasl = handle.join().expect("mock thread");
+        assert_eq!(
+            sasl,
+            format!("user=rosson@gmail.com\x01auth=Bearer {TEST_ACCESS_TOKEN}\x01\x01").into_bytes()
+        );
+    }
+
+    // ── O2: the token fetch/refresh → SASL wiring (O1 mock HTTP) ─────────
+
+    /// In-memory vault fake (no filesystem).
+    #[derive(Default)]
+    struct MemStore {
+        map: Mutex<std::collections::HashMap<String, String>>,
+    }
+    impl crate::mail::secrets::SecretStore for MemStore {
+        fn store(&self, kind: &str, secret: &str) -> Result<String, String> {
+            let key = format!("mem_{kind}_{}", self.map.lock().unwrap().len());
+            self.map.lock().unwrap().insert(key.clone(), secret.to_string());
+            Ok(key)
+        }
+        fn resolve(&self, sref: &str) -> Result<Option<String>, String> {
+            Ok(self.map.lock().unwrap().get(sref).cloned())
+        }
+        fn delete(&self, sref: &str) -> Result<(), String> {
+            self.map.lock().unwrap().remove(sref);
+            Ok(())
+        }
+        fn store_exact(&self, key: &str, secret: &str) -> Result<(), String> {
+            self.map.lock().unwrap().insert(key.to_string(), secret.to_string());
+            Ok(())
+        }
+    }
+
+    /// One-shot HTTP fake returning a canned refresh reply (no network).
+    struct OneShotHttp {
+        body: String,
+        calls: Mutex<usize>,
+    }
+    impl oauth::HttpClient for OneShotHttp {
+        fn post_form(
+            &self,
+            _url: &str,
+            _form: &[(&str, &str)],
+        ) -> Result<oauth::HttpResponse, oauth::OauthError> {
+            *self.calls.lock().unwrap() += 1;
+            Ok(oauth::HttpResponse { status: 200, body: self.body.clone() })
+        }
+    }
+
+    /// Drive the O1 engine's refresh path through a mock token endpoint,
+    /// then feed the REFRESHED access token into the SASL builder — the
+    /// end-to-end shape `oauth_login` uses, minus DB + real network. The
+    /// refreshed token (not the stale one) lands in the SASL string.
+    #[test]
+    fn refresh_then_sasl_uses_the_fresh_token() {
+        let store = MemStore::default();
+        // Seed a stale bundle (expiry in the past → force a refresh).
+        let seed = oauth::Tokens {
+            access_token: "STALE-access".into(),
+            refresh_token: Some("RT-1".into()),
+            scope: Some("https://mail.google.com/".into()),
+            token_type: "Bearer".into(),
+            expires_in: 3600,
+        };
+        oauth::store_tokens(&store, "rowA", &seed, 0).expect("seed");
+
+        let http = OneShotHttp {
+            body: r#"{"access_token":"FRESH-access","expires_in":3600,"token_type":"Bearer"}"#
+                .into(),
+            calls: Mutex::new(0),
+        };
+        // now=10_000, stored expiry(=3600) is long past → refresh.
+        let fresh = oauth::access_token_for(
+            &store,
+            "rowA",
+            OauthProvider::Gmail,
+            Some(3_600),
+            10_000,
+            None,
+            &http,
+        )
+        .expect("access token");
+        assert!(fresh.refreshed, "expiry in the past must refresh");
+        assert_eq!(fresh.access_token, "FRESH-access");
+        assert_eq!(*http.calls.lock().unwrap(), 1, "exactly one refresh call");
+
+        let sasl = sasl_xoauth2_init("rosson@gmail.com", &fresh.access_token);
+        assert_eq!(sasl, "user=rosson@gmail.com\x01auth=Bearer FRESH-access\x01\x01");
+        assert!(!sasl.contains("STALE-access"), "the stale token must not ride the SASL");
     }
 }

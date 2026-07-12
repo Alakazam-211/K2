@@ -163,6 +163,65 @@ pub fn vault_key(row_id: &str) -> String {
     format!("ext-inbox-{row_id}")
 }
 
+// ── O1/O2 OAuth row columns (read via raw SQL, NOT on the struct) ───────
+//
+// The 0082 migration added `auth_kind`/`provider`/`token_expires_at` to
+// `mail_external_inboxes`, but they are DELIBERATELY off the
+// [`MailExternalInbox`] struct (O1's row-access decision) so the whole
+// app-password read/draft/manage surface is byte-for-byte unchanged.
+// The XOAUTH2 login branch (O2, `external_imap`) reads them here.
+
+/// `auth_kind` for the OAuth token path (Gmail XOAUTH2 here; Microsoft
+/// Graph in O3). The default / app-password spelling is `'password'`
+/// (the 0082 CHECK bounds the column to those two).
+pub const AUTH_OAUTH: &str = "oauth";
+
+/// The O1 OAuth columns for ONE row (off-struct — raw SQL). `provider`
+/// is the [`crate::mail::oauth::OauthProvider`] DB spelling;
+/// `token_expires_at` is the only non-secret token bit (so refresh is
+/// decidable WITHOUT unvaulting).
+#[derive(Debug, Clone)]
+pub struct OauthFields {
+    pub auth_kind: String,
+    pub provider: Option<String>,
+    pub token_expires_at: Option<i64>,
+}
+
+/// Read the 0082 auth columns for a row. A missing row (or a schema
+/// without the columns) is a LOUD error — an oauth inbox must never be
+/// silently mistaken for a password inbox.
+pub fn read_oauth_fields(row_id: &str) -> Result<OauthFields, String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT auth_kind, provider, token_expires_at \
+         FROM mail_external_inboxes WHERE id = ?1",
+        rusqlite::params![row_id],
+        |r| {
+            Ok(OauthFields {
+                auth_kind: r.get(0)?,
+                provider: r.get(1)?,
+                token_expires_at: r.get(2)?,
+            })
+        },
+    )
+    .map_err(|e| format!("read auth fields for inbox {row_id}: {e}"))
+}
+
+/// Persist a REFRESHED absolute `token_expires_at` back to the row (O2:
+/// after [`crate::mail::oauth::access_token_for`] refreshed, so the next
+/// login reuses the token instead of re-refreshing). Best-effort: a
+/// failed write only costs one extra refresh next time — never a token,
+/// never a secret.
+pub fn persist_token_expiry(row_id: &str, token_expires_at: i64) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let _ = conn.execute(
+        "UPDATE mail_external_inboxes SET token_expires_at = ?2 WHERE id = ?1",
+        rusqlite::params![row_id, token_expires_at],
+    );
+}
+
 // ── The IMAP effect seam (production: external_imap::RealImapOps) ───────
 
 /// What the add-time connect check learned.

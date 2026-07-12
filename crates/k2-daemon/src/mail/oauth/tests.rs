@@ -117,9 +117,17 @@ fn provider_configs_match_prd_9() {
 fn client_secret_config_is_google_only() {
     // Google Desktop clients REQUIRE a token-endpoint secret; Microsoft
     // device-code is a true public client → no secret, ever.
+    // Env-agnostic: the id/secret are build-time injected (option_env), so
+    // assert the STRUCTURE (Gmail carries a secret slot + a non-empty id;
+    // Microsoft carries none) rather than the exact REPLACE_ME fallback,
+    // which only holds in a build without the injection env vars.
     let g = OauthProvider::Gmail.config();
-    assert_eq!(g.client_secret_placeholder, Some("REPLACE_ME-google-client-secret"));
-    assert!(g.client_id_placeholder.contains("REPLACE_ME"));
+    assert!(g.client_secret_placeholder.is_some(), "Gmail requires a client_secret");
+    assert!(
+        !g.client_secret_placeholder.unwrap().is_empty(),
+        "Gmail client_secret is non-empty"
+    );
+    assert!(!g.client_id_placeholder.is_empty(), "Gmail client_id is non-empty");
     let m = OauthProvider::Microsoft.config();
     assert_eq!(m.client_secret_placeholder, None, "Microsoft is a public client");
 }

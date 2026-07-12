@@ -3,6 +3,33 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.42 — Connect Gmail without an app-password
+
+- **Link Gmail over OAuth.** Settings → Email Link → **Connect Gmail**
+  signs you in through Google in your browser — no app-specific password
+  to generate. The bound workspace's agents read the inbox and save reply
+  drafts as before, and now they can also **send** from the account once
+  you grant the send level. Microsoft (Outlook / 365) is marked
+  *Coming soon*.
+
+- **Send attachments.** `k2 mail send` and `k2 mail reply` now take
+  `--attach <path>` (a workspace-relative file, repeatable) — the file
+  rides along on the message, and `k2 mail outbox` lists what you attached
+  so an agent can confirm its own send without opening the recipient's
+  inbox.
+
+- **Bring your own OAuth app.** Settings → Email Link → **OAuth apps
+  (advanced)** points K2 at your *own* registered Google/Microsoft client
+  — your quota, your consent screen — instead of the built-in default.
+  The client secret is write-only: vaulted and never shown back.
+
+- **Sturdier mail plumbing.** `k2 mail delete <message-id>` now moves the
+  message to Trash (it was mis-routing to address retirement);
+  folder-create applies the right server prefix automatically; reading
+  across all inboxes returns partial results instead of failing when one
+  inbox has a hiccup; and a batch of help-text, status, and wording fixes
+  straight from real agent testing.
+
 ## 0.40.41 — The heartbeat CLI you were promised
 
 - **Point a heartbeat at a trained session.** Every heartbeat tile (in

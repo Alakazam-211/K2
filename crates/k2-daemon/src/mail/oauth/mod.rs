@@ -167,6 +167,27 @@ impl std::fmt::Debug for ProviderConfig {
 /// the IMAP scope `https://mail.google.com/` is coarse by necessity
 /// (there is no read-only IMAP scope). `access_type=offline` +
 /// `prompt=consent` force a refresh_token on the loopback grant.
+// Build-time credential injection (prd §15 Q1 / release hygiene). The
+// real Alakazam client id/secret are injected at BUILD time via env vars
+// (`K2_GMAIL_CLIENT_ID` / `K2_GMAIL_CLIENT_SECRET` / `K2_MICROSOFT_CLIENT_ID`)
+// so the PUBLIC source only ever carries the `REPLACE_ME` fallback — no
+// secret is committed. A dev/CI build without the env vars falls back to
+// the placeholder (which the resolver treats as unconfigured). The secret
+// is still handled like a token everywhere downstream (vault/config only,
+// never a DB column, never logged, redacted in `Debug`).
+const GMAIL_CLIENT_ID: &str = match option_env!("K2_GMAIL_CLIENT_ID") {
+    Some(v) => v,
+    None => "REPLACE_ME.apps.googleusercontent.com",
+};
+const GMAIL_CLIENT_SECRET: &str = match option_env!("K2_GMAIL_CLIENT_SECRET") {
+    Some(v) => v,
+    None => "REPLACE_ME-google-client-secret",
+};
+const MICROSOFT_CLIENT_ID: &str = match option_env!("K2_MICROSOFT_CLIENT_ID") {
+    Some(v) => v,
+    None => "REPLACE_ME-microsoft-client-id",
+};
+
 pub static GMAIL: ProviderConfig = ProviderConfig {
     name: "gmail",
     auth_url: Some("https://accounts.google.com/o/oauth2/v2/auth"),
@@ -176,12 +197,12 @@ pub static GMAIL: ProviderConfig = ProviderConfig {
     scope: "https://mail.google.com/",
     extra_auth_params: &[("access_type", "offline"), ("prompt", "consent")],
     default_flow: FlowKind::Loopback,
-    // Real value: a Google Cloud "TV and Limited Input" / Desktop client.
-    client_id_placeholder: "REPLACE_ME.apps.googleusercontent.com",
+    // Injected at build time (env `K2_GMAIL_CLIENT_ID`); `REPLACE_ME` fallback.
+    client_id_placeholder: GMAIL_CLIENT_ID,
     // Google Desktop clients REQUIRE a client_secret at the token endpoint
-    // (exchange + refresh). Rosson swaps this for the registered client's
-    // secret; not confidential (ships in the installed app) but redacted.
-    client_secret_placeholder: Some("REPLACE_ME-google-client-secret"),
+    // (exchange + refresh). Injected at build time (env `K2_GMAIL_CLIENT_SECRET`);
+    // not confidential (ships in the installed app) but handled like a token.
+    client_secret_placeholder: Some(GMAIL_CLIENT_SECRET),
 };
 
 /// Microsoft 365 / Exchange Online (prd §9). Device-code is the default
@@ -200,9 +221,10 @@ pub static MICROSOFT: ProviderConfig = ProviderConfig {
     scope: "https://graph.microsoft.com/Mail.ReadWrite offline_access",
     extra_auth_params: &[],
     default_flow: FlowKind::DeviceCode,
-    // Real value: an Azure AD app registration (public client, "allow
-    // public client flows" = yes).
-    client_id_placeholder: "REPLACE_ME-microsoft-client-id",
+    // Injected at build time (env `K2_MICROSOFT_CLIENT_ID`); `REPLACE_ME`
+    // fallback. Azure AD app registration (public client, "allow public
+    // client flows" = yes).
+    client_id_placeholder: MICROSOFT_CLIENT_ID,
     // Microsoft device-code is a TRUE public client — NO client_secret on
     // any of its forms, ever.
     client_secret_placeholder: None,

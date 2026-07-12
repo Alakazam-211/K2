@@ -100,6 +100,8 @@ mod cell_egress;
 // P4-H6: per-session worker-uid allocator (see lib.rs).
 mod cell_uid_pool;
 mod session_token;
+// Wave 0: caller-asserted workspace must never be identity (mail/DNS grants).
+mod caller_workspace;
 // P3b (sandbox / K2-as-a-server): stream tokens + POST /v1/sandboxes + policy.
 mod stream_token;
 // P4-H4: per-principal + global concurrent-cell cap (429); /v1/sandboxes only.

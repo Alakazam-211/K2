@@ -160,35 +160,10 @@ mod unix_impl {
     /// take the raw body, not this param map, so they are NOT pinned here —
     /// review-checklist is dropped from the scoped allowlist in P1; awareness
     /// re-stamps `from` via `restamp_awareness_from`.)
+    /// Identity stamp — shared with HTTP mail/DNS via
+    /// [`crate::caller_workspace::stamp_principal`].
     pub(crate) fn stamp_principal(params: &mut HashMap<String, String>, principal: &HookPrincipal) {
-        params.insert("from".to_string(), principal.agent_address.clone());
-        params.insert("project_id".to_string(), principal.workspace_uuid.clone());
-
-        match resolve_principal_path(principal) {
-            Some(path) => {
-                params.insert("project".to_string(), path.clone());
-                params.insert("project_path".to_string(), path);
-            }
-            None => {
-                // Fail closed: never let a body-supplied operand survive an
-                // unresolvable principal.
-                params.remove("project");
-                params.remove("project_path");
-            }
-        }
-    }
-
-    /// Resolve the principal's workspace UUID → on-disk path (the agent's own
-    /// workspace), so the own-workspace verbs (inbox reads/writes) route
-    /// correctly over the UDS without the body carrying a forgeable path.
-    /// `None` when the uuid is empty or unknown (e.g. test fixtures) — the
-    /// downstream handler then reports its normal "Missing project".
-    fn resolve_principal_path(principal: &HookPrincipal) -> Option<String> {
-        let uuid = principal.workspace_uuid.trim();
-        if uuid.is_empty() {
-            return None;
-        }
-        crate::workspace_msg::resolve_workspace(uuid)
+        crate::caller_workspace::stamp_principal(params, principal);
     }
 
     /// Re-stamp an awareness `AgentSignal` JSON body so `from.workspace` +
@@ -493,7 +468,19 @@ mod unix_impl {
         // them on the blocking pool exactly like the TCP dispatcher does.
         let (status, ctype, out): (String, &'static str, String) =
             tokio::task::spawn_blocking(move || {
-                dispatch_cell_verb(&method_owned, &path_owned, &params, &body, &principal, &sid_for_dispatch)
+                // Wave 0: install principal for body-based identity resolution
+                // (mail/DNS POST handlers read JSON `project`, not the stamped
+                // params map). Cleared when the closure returns.
+                crate::caller_workspace::with_request_principal(Some(principal.clone()), || {
+                    dispatch_cell_verb(
+                        &method_owned,
+                        &path_owned,
+                        &params,
+                        &body,
+                        &principal,
+                        &sid_for_dispatch,
+                    )
+                })
             })
                 .await
                 .unwrap_or_else(|e| {
@@ -585,6 +572,11 @@ mod unix_impl {
             // exactly as the TCP path does.
             p if p.starts_with("/cli/inbox/") && is_post => {
                 from_cli(crate::inbox_routes::dispatch_post(p, params))
+            }
+            // Wave 0: agent mail verbs (identity forced from principal above +
+            // with_request_principal). Owner mail surfaces are not agent verbs.
+            p if p.starts_with("/cli/mail/") && is_post => {
+                from_cli(crate::mail_routes::dispatch_post(p, body))
             }
             p if crate::session_token::is_agent_verb(p) && !is_post => {
                 from_cli(crate::cli::dispatch(p, params))

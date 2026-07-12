@@ -437,6 +437,18 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/daemon/",
         "/cli/sessions/v2/", // PTY spawn/close = RCE-adjacent
         "/cli/terminal/",
+        // Wave 0: mail owner/admin surfaces stay off the scoped allowlist
+        // (server lifecycle, domains, config, approvals, external link,
+        // access management, doctor probes). Agent mail verbs are admitted
+        // via ALLOW_PREFIXES `/cli/mail/` below.
+        "/cli/mail/server/",
+        "/cli/mail/domain/",
+        "/cli/mail/config/",
+        "/cli/mail/approvals/",
+        "/cli/mail/external/",
+        "/cli/mail/link/",
+        "/cli/mail/access/",
+        "/cli/mail/doctor",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;
@@ -469,6 +481,11 @@ pub fn is_agent_verb(path: &str) -> bool {
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
+        // Wave 0: agent mail verbs (messages/read/send/draft/inboxes/…).
+        // Owner surfaces are DENY_PREFIXES above. Identity is forced from
+        // HookPrincipal via stamp_principal + resolve_caller_workspace —
+        // client project= is never self-identity for these paths.
+        "/cli/mail/",
         // Sandbox P1 (Finding-1 follow-on): `/cli/review-checklist/` was
         // DROPPED from the scoped allowlist. Its handlers take the raw `body`
         // (not the params map) and so are NOT reached by the principal-pin in
@@ -1067,6 +1084,27 @@ mod tests {
         assert!(is_agent_verb("/cli/workspace/msg"));
         assert!(is_agent_verb("/cli/inbox/respond"));
         assert!(is_agent_verb("/cli/awareness/publish"));
+        // Wave 0: agent mail verbs (owner mail surfaces stay denied).
+        assert!(is_agent_verb("/cli/mail/messages"));
+        assert!(is_agent_verb("/cli/mail/inboxes"));
+        assert!(is_agent_verb("/cli/mail/send"));
+        assert!(is_agent_verb("/cli/mail/draft"));
+    }
+
+    #[test]
+    fn is_agent_verb_denies_mail_owner_surfaces() {
+        for p in [
+            "/cli/mail/server/enable",
+            "/cli/mail/domain/add",
+            "/cli/mail/config/set",
+            "/cli/mail/approvals/list",
+            "/cli/mail/external/add",
+            "/cli/mail/link/oauth/start",
+            "/cli/mail/access/grant",
+            "/cli/mail/doctor",
+        ] {
+            assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
+        }
     }
 
     #[test]

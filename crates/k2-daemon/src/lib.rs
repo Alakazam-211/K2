@@ -98,6 +98,8 @@ pub mod cell_egress;
 // spawn path (linux + sandbox-microvm + K2_SANDBOX); inert otherwise.
 pub mod cell_uid_pool;
 pub mod session_token;
+// Wave 0: caller-asserted workspace must never be identity (mail/DNS grants).
+pub mod caller_workspace;
 // P3b (sandbox / K2-as-a-server): per-session stream tokens + the public
 // `POST /v1/sandboxes` route + policy-resolver. Behind K2_SANDBOX_API (OFF).
 pub mod stream_token;

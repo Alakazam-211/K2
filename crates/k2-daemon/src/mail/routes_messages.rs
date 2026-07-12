@@ -122,22 +122,8 @@ fn ok_json(v: serde_json::Value) -> CliResponse {
 /// (mirrors routes_addresses; identity from the resolved workspace,
 /// never from raw params).
 fn resolve_caller(project: &str) -> Result<(String, String), CliResponse> {
-    let Some(path) = crate::workspace_msg::resolve_workspace(project) else {
-        return Err(crate::workspace_routes::workspace_not_found_response(project));
-    };
-    let project_id = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
-    };
-    match project_id {
-        Some(id) => Ok((path, id)),
-        None => Err(error_response(
-            "404 Not Found",
-            "not_found",
-            &format!("workspace not registered: {path}"),
-        )),
-    }
+    // Wave 0: prefers scoped principal over client project= claim.
+    crate::mail::identity::resolve_caller(project)
 }
 
 /// Resolve the app-password for a LINKED inbox from the vault, mapping
@@ -329,14 +315,21 @@ fn owned_message(
 /// other than the Inbox) / `junk` (the Junk/Spam folder). Summaries
 /// only — no bodies ride this route.
 pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
-    let project = match crate::cli::need_project(params) {
-        Ok(p) => p,
-        Err(_) => {
-            return error_response(
-                "400 Bad Request",
-                "usage",
-                "missing 'project' (workspace name | path | UUID)",
-            )
+    // Wave 0: principal-or-claim identity (stamped scoped principal wins
+    // over client project= / K2_PROJECT_PATH).
+    let (_path, project_id) = match crate::mail::identity::resolve_caller_params(params) {
+        Ok(v) => v,
+        Err(resp) => {
+            if crate::caller_workspace::principal_from_params(params).is_none()
+                && crate::cli::need_project(params).is_err()
+            {
+                return error_response(
+                    "400 Bad Request",
+                    "usage",
+                    "missing 'project' (workspace name | path | UUID)",
+                );
+            }
+            return resp;
         }
     };
     let limit: usize = match params.get("limit").map(|v| v.parse::<usize>()) {
@@ -396,10 +389,6 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
         (true, None) => messages::MailFolder::Junk,
         (false, Some(name)) => messages::MailFolder::Named(name),
         (false, None) => messages::MailFolder::Inbox,
-    };
-    let (_path, project_id) = match resolve_caller(&project) {
-        Ok(v) => v,
-        Err(resp) => return resp,
     };
     // Did the caller name ONE explicit address? That path surfaces an
     // error directly; the all-inbox sweep (no address) degrades per

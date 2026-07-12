@@ -101,6 +101,7 @@
 pub mod access;
 pub mod addresses;
 pub mod config;
+pub mod identity;
 pub mod dns_verify;
 pub mod doctor;
 pub mod domains;

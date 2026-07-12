@@ -117,22 +117,8 @@ fn now_secs() -> i64 {
 /// Server-side identity: caller's workspace → `(path, project_id)`
 /// (mirrors routes_messages — never trusted from raw params).
 fn resolve_caller(project: &str) -> Result<(String, String), CliResponse> {
-    let Some(path) = crate::workspace_msg::resolve_workspace(project) else {
-        return Err(crate::workspace_routes::workspace_not_found_response(project));
-    };
-    let project_id = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
-    };
-    match project_id {
-        Some(id) => Ok((path, id)),
-        None => Err(error_response(
-            "404 Not Found",
-            "not_found",
-            &format!("workspace not registered: {path}"),
-        )),
-    }
+    // Wave 0: prefers scoped principal over client project= claim.
+    crate::mail::identity::resolve_caller(project)
 }
 
 /// A teaching 403 when the caller CAN see the address (reads it) but

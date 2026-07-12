@@ -3395,7 +3395,9 @@ async fn handle_one_request(
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            let (auth_ok, scoped_principal) =
+                mail_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -3422,7 +3424,9 @@ async fn handle_one_request(
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                crate::mail_routes::dispatch_post(&p_owned, &body_bytes)
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::mail_routes::dispatch_post(&p_owned, &body_bytes)
+                })
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -4465,15 +4469,22 @@ async fn handle_one_request(
         p if p.starts_with("/cli/mail/") =>
         {
             let _ = stream.read(&mut buf).await;
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            let (auth_ok, scoped_principal) =
+                mail_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
                 let r = crate::cli::CliResponse::forbidden();
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
-            let params = super::http::parse_params(&path, &query);
+            let mut params = super::http::parse_params(&path, &query);
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {
-                crate::cli::dispatch(&p_owned, &params)
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
             })
             .await
             .unwrap_or_else(|e| {
@@ -4669,6 +4680,30 @@ fn dispatch_connect_gap_post(path: &str, body: &[u8]) -> crate::cli::CliResponse
 }
 
 // ─────────────────────────────────────────────────────────────────────
+
+/// Wave 0 — mail auth: owner/connect-user via token_ok, OR scoped hook principal.
+fn mail_auth(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+    owner_token: &str,
+) -> (bool, Option<crate::session_token::HookPrincipal>) {
+    if super::http::token_ok(query, owner_token) {
+        return (true, None);
+    }
+    let presented = bearer
+        .filter(|s| !s.is_empty())
+        .or_else(|| super::http::extract_token(query))
+        .unwrap_or("");
+    if presented.is_empty() {
+        return (false, None);
+    }
+    match crate::session_token::require_hook(presented, path) {
+        Some(v) => (true, Some(v.principal)),
+        None => (false, None),
+    }
+}
+
 // Inline unit tests — dispatch sub-helpers
 // ─────────────────────────────────────────────────────────────────────
 

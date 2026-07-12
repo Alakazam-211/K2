@@ -75,22 +75,8 @@ fn ok_json(v: serde_json::Value) -> CliResponse {
 /// Resolve the caller's workspace to `(path, project_id)` — the
 /// server-side identity step shared by create/delete/list.
 fn resolve_caller(project: &str) -> Result<(String, String), CliResponse> {
-    let Some(path) = crate::workspace_msg::resolve_workspace(project) else {
-        return Err(crate::workspace_routes::workspace_not_found_response(project));
-    };
-    let project_id = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
-    };
-    match project_id {
-        Some(id) => Ok((path, id)),
-        None => Err(error_response(
-            "404 Not Found",
-            "not_found",
-            &format!("workspace not registered: {path}"),
-        )),
-    }
+    // Wave 0: prefers scoped principal over client project= claim.
+    crate::mail::identity::resolve_caller(project)
 }
 
 // ── POST handlers ───────────────────────────────────────────────────────

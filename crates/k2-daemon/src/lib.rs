@@ -63,6 +63,10 @@ pub mod llm_routes;
 // RUNTIME (supervisor::mail_supported); compiles + tests everywhere.
 pub mod mail;
 pub mod mail_routes;
+// DNS K1 — control-plane proxy + principal-bound `/cli/dns/*` routes
+// (local capability envelope + tunnel-token proxy to k2-dev-web).
+pub mod dns;
+pub mod dns_routes;
 pub mod misc_routes;
 pub mod ops_routes;
 pub mod ops_stream_ws;

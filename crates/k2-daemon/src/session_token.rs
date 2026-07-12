@@ -449,6 +449,11 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/mail/link/",
         "/cli/mail/access/",
         "/cli/mail/doctor",
+        // DNS K1: zone lifecycle is owner/dashboard-only. Agent DNS verbs
+        // (access/zones list/records CRUD/verify) ride ALLOW_PREFIXES
+        // `/cli/dns/` below; these exact owner surfaces stay denied.
+        "/cli/dns/zones/create",
+        "/cli/dns/zones/delete",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;
@@ -486,6 +491,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         // HookPrincipal via stamp_principal + resolve_caller_workspace —
         // client project= is never self-identity for these paths.
         "/cli/mail/",
+        // DNS K1: agent DNS verbs (access/zones list/records/verify).
+        // Zone create/delete are DENY_PREFIXES above. Identity is forced
+        // from HookPrincipal; handlers also gate on dns_manage_allowed_for_path.
+        "/cli/dns/",
         // Sandbox P1 (Finding-1 follow-on): `/cli/review-checklist/` was
         // DROPPED from the scoped allowlist. Its handlers take the raw `body`
         // (not the params map) and so are NOT reached by the principal-pin in
@@ -1089,6 +1098,13 @@ mod tests {
         assert!(is_agent_verb("/cli/mail/inboxes"));
         assert!(is_agent_verb("/cli/mail/send"));
         assert!(is_agent_verb("/cli/mail/draft"));
+        // DNS K1: agent DNS prefixes.
+        assert!(is_agent_verb("/cli/dns/access"));
+        assert!(is_agent_verb("/cli/dns/zones"));
+        assert!(is_agent_verb("/cli/dns/records"));
+        assert!(is_agent_verb("/cli/dns/records/add"));
+        assert!(is_agent_verb("/cli/dns/records/remove"));
+        assert!(is_agent_verb("/cli/dns/verify"));
     }
 
     #[test]
@@ -1105,6 +1121,22 @@ mod tests {
         ] {
             assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
         }
+    }
+
+    #[test]
+    fn is_agent_verb_allows_dns_prefixes_and_denies_zone_lifecycle() {
+        assert!(is_agent_verb("/cli/dns/access"));
+        assert!(is_agent_verb("/cli/dns/zones"));
+        assert!(is_agent_verb("/cli/dns/records/add"));
+        // Zone create/delete are owner-only (DENY before ALLOW_PREFIXES).
+        assert!(
+            !is_agent_verb("/cli/dns/zones/create"),
+            "scoped token must NOT create zones"
+        );
+        assert!(
+            !is_agent_verb("/cli/dns/zones/delete"),
+            "scoped token must NOT delete zones"
+        );
     }
 
     #[test]

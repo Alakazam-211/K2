@@ -578,6 +578,10 @@ mod unix_impl {
             p if p.starts_with("/cli/mail/") && is_post => {
                 from_cli(crate::mail_routes::dispatch_post(p, body))
             }
+            // DNS K1: agent DNS verbs (principal-bound; toggle-gated in handlers).
+            p if p.starts_with("/cli/dns/") && is_post => {
+                from_cli(crate::dns_routes::dispatch_post(p, body))
+            }
             p if crate::session_token::is_agent_verb(p) && !is_post => {
                 from_cli(crate::cli::dispatch(p, params))
             }

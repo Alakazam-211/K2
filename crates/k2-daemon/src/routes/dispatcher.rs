@@ -620,6 +620,18 @@ async fn handle_one_request(
             | "/cli/mail/folder/create"
             | "/cli/mail/folder/rename"
             | "/cli/mail/draft"
+            // DNS K1 — principal-bound control-plane proxy. JSON-bodied
+            // POSTs; token_ok OR scoped require_hook in the dedicated arm
+            // below (mirrors mail). Zone create/delete are owner-only
+            // local rejects; agents use access/zones/records/verify.
+            | "/cli/dns/access"
+            | "/cli/dns/zones"
+            | "/cli/dns/records"
+            | "/cli/dns/records/add"
+            | "/cli/dns/records/remove"
+            | "/cli/dns/verify"
+            | "/cli/dns/zones/create"
+            | "/cli/dns/zones/delete"
             // Projects V1 P2 (prd-projects-v1 §4.1) — project-GROUP
             // mutations (NOT the legacy /cli/projects/* workspace
             // registry). JSON-bodied POSTs (msg carries free chat text;
@@ -3381,6 +3393,44 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // DNS K1 — `/cli/dns/*` mutations. JSON-bodied POSTs;
+        // token_ok OR scoped require_hook (same dual-auth as mail).
+        // Handlers run in spawn_blocking (blocking reqwest to the web
+        // DNS API + SQLite toggle reads). Principal stamped for scoped
+        // callers; zone create/delete are owner-only local rejects.
+        p if is_post && post_allowed && p.starts_with("/cli/dns/") => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::dns_routes::dispatch_post(&p_owned, &body_bytes)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // K2 Mail — `/cli/mail/*` mutations. JSON-bodied POSTs;
         // token_ok + require_post per feedback_post_only_route_guards.
         // OWNER-OR-ADMIN additionally gates the server/domain/config/
@@ -3396,7 +3446,7 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let (auth_ok, scoped_principal) =
-                mail_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
             if !auth_ok {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
@@ -4364,6 +4414,36 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // DNS K1 — EVERY dns GET runs in spawn_blocking (blocking
+        // reqwest to the web DNS API + SQLite toggle reads). Dual auth
+        // like mail: token_ok OR scoped require_hook. POSTs never reach
+        // here (the is_post dns arm above matches first).
+        p if p.starts_with("/cli/dns/") => {
+            let _ = stream.read(&mut buf).await;
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let mut params = super::http::parse_params(&path, &query);
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // K2 Mail S11 — the unified inbox catalog. The AGENT view
         // (?project=<ws>) rides a plain workspace token; the OWNER view
         // (no project — it enumerates ALL inboxes across workspaces) is
@@ -4470,7 +4550,7 @@ async fn handle_one_request(
         {
             let _ = stream.read(&mut buf).await;
             let (auth_ok, scoped_principal) =
-                mail_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
             if !auth_ok {
                 let r = crate::cli::CliResponse::forbidden();
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
@@ -4681,8 +4761,10 @@ fn dispatch_connect_gap_post(path: &str, body: &[u8]) -> crate::cli::CliResponse
 
 // ─────────────────────────────────────────────────────────────────────
 
-/// Wave 0 — mail auth: owner/connect-user via token_ok, OR scoped hook principal.
-fn mail_auth(
+/// Wave 0 / DNS K1 — dual auth for mail + dns families: owner/connect-user
+/// via `token_ok`, OR a scoped hook principal via `require_hook` (path must
+/// be on the agent-verb allowlist).
+fn token_or_scoped_hook_auth(
     path: &str,
     query: &str,
     bearer: Option<&str>,

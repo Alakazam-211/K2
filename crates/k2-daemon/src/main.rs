@@ -72,6 +72,9 @@ mod llm_routes;
 // family (supervisor/jmap/doctor skeletons + `/cli/mail/*` handlers).
 mod mail;
 mod mail_routes;
+// DNS K1 — control-plane proxy + principal-bound `/cli/dns/*` routes.
+mod dns;
+mod dns_routes;
 mod misc_routes;
 mod ops_routes;
 mod ops_stream_ws;

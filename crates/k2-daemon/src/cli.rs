@@ -121,6 +121,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::mail_routes::dispatch(path, params) {
         return resp;
     }
+    // DNS K1 — `/cli/dns/*` reads (access/zones/records) + 405 guards
+    // for POST-only mutations. Principal-bound; toggle-gated in handlers.
+    if let Some(resp) = crate::dns_routes::dispatch(path, params) {
+        return resp;
+    }
     // 0.40.34 — `/cli/browser/open-url` 405 guard for the POST-only
     // mutation reached via the GET chain (no browser GET reads).
     if let Some(resp) = crate::browser_routes::dispatch(path, params) {

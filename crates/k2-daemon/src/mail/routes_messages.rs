@@ -49,7 +49,7 @@ use crate::mail::messages::{
     self, ListError, MailBackend, MailFolder, ManageBackend, ReadBackend, ReadError, WatchAddress,
 };
 use crate::mail::secrets::SecretStore as _;
-use crate::mail::{access, domains, external, external_imap};
+use crate::mail::{access, domains, external, external_imap, graph};
 
 // ── Response helpers (the S2/S3 error contract) ─────────────────────────
 
@@ -175,6 +175,20 @@ fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
                 password,
                 std::sync::Arc::new(external_imap::RealImapOps),
             )))
+        }
+        MailBackend::Graph => {
+            // Microsoft Graph (O3): no vault password to resolve — the
+            // Bearer token is minted per-request INSIDE RealGraphHttp via
+            // the O1 engine, so the seam here only needs the row.
+            let Some(row) = external::inbox_for_address(address) else {
+                return Err(error_response(
+                    "404 Not Found",
+                    "not_found",
+                    &format!("no address '{address}' in this workspace"),
+                ));
+            };
+            let http = std::sync::Arc::new(graph::RealGraphHttp::new(row.id.clone()));
+            Ok(Box::new(graph::GraphBackend::new(row, http)))
         }
     }
 }
@@ -813,6 +827,20 @@ fn manage_backend_for(address: &str) -> Result<Box<dyn ManageBackend>, CliRespon
                 password,
                 std::sync::Arc::new(external_imap::RealImapOps),
             )))
+        }
+        MailBackend::Graph => {
+            // Microsoft Graph manage surface (move/flag/archive/delete-to-
+            // DeletedItems/folder) — same row-only construction as reads;
+            // the token is minted inside RealGraphHttp.
+            let Some(row) = external::inbox_for_address(address) else {
+                return Err(error_response(
+                    "404 Not Found",
+                    "not_found",
+                    &format!("no address '{address}' in this workspace"),
+                ));
+            };
+            let http = std::sync::Arc::new(graph::RealGraphHttp::new(row.id.clone()));
+            Ok(Box::new(graph::GraphBackend::new(row, http)))
         }
     }
 }

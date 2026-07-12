@@ -60,17 +60,23 @@ pub enum MailBackend {
     /// `not_found`), exactly like local ownership — this enum only
     /// answers WHICH engine speaks for the address.
     ExternalImap,
+    /// A Microsoft 365 / Exchange Online inbox linked over the Microsoft
+    /// Graph REST API (O3, `mail_external_inboxes.kind = 'graph'`). A
+    /// PEER backend to the IMAP one — same trait surface, no IMAP.
+    Graph,
 }
 
 /// THE seam function (§17.5 BINDING): routes resolve "which backend
 /// serves this address" here and nowhere else. An address found in
-/// `mail_external_inboxes` routes to the IMAP backend; every K2-minted
-/// address stays local Stalwart. Callers treat the result as opaque.
+/// `mail_external_inboxes` routes to its linked backend — a `graph` row
+/// to Microsoft Graph (O3), every other kind to the IMAP backend; every
+/// K2-minted address stays local Stalwart. Callers treat the result as
+/// opaque.
 pub fn backend_for_address(address: &str) -> MailBackend {
-    if crate::mail::external::inbox_for_address(address).is_some() {
-        MailBackend::ExternalImap
-    } else {
-        MailBackend::LocalStalwart
+    match crate::mail::external::inbox_for_address(address) {
+        Some(row) if row.kind == "graph" => MailBackend::Graph,
+        Some(_) => MailBackend::ExternalImap,
+        None => MailBackend::LocalStalwart,
     }
 }
 

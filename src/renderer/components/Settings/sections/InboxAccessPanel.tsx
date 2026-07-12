@@ -75,7 +75,10 @@ function ManageToggles({
   const { canManage, canDelete } = participant
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] text-[var(--color-text-secondary)]">
+          Allow inbox management
+        </span>
         <Toggle
           checked={canManage}
           disabled={disabled}
@@ -83,19 +86,16 @@ function ManageToggles({
           onChange={(next) => onChange(next, next ? canDelete : false)}
           aria-label="Allow inbox management"
         />
-        <span className="text-[11px] text-[var(--color-text-secondary)]">
-          Allow inbox management
-        </span>
       </div>
       {canManage && (
-        <div className="flex items-center gap-2 pl-5">
+        <div className="flex items-center justify-between gap-2 pl-5">
+          <span className="text-[11px] text-[var(--color-text-secondary)]">Allow delete</span>
           <Toggle
             checked={canDelete}
             disabled={disabled}
             onChange={(next) => onChange(true, next)}
             aria-label="Allow delete"
           />
-          <span className="text-[11px] text-[var(--color-text-secondary)]">Allow delete</span>
         </div>
       )}
     </div>

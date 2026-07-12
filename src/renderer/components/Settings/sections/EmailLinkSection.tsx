@@ -314,13 +314,13 @@ function OauthConnect({
           type="button"
           disabled
           title="Microsoft (Outlook / 365) linking is coming soon"
-          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
         >
           Connect Microsoft (Outlook / 365)
+          <span className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide border border-[var(--color-border)] flex-shrink-0">
+            Coming soon
+          </span>
         </button>
-        <span className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)] border border-[var(--color-border)] flex-shrink-0">
-          Coming soon
-        </span>
       </div>
 
       {/* ── Live flow / result card ── */}

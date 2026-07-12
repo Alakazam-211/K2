@@ -78,6 +78,11 @@ interface SettingsState {
   // enforces it server-side; the renderer-hide reads this same signal.
   allowRemoteInstruct: boolean
 
+  // DNS K1 — per-host opt-in letting agents manage DNS records.
+  // DEFAULTS OFF (deny-by-default). Effective gate is app master OR
+  // per-workspace (`dns_manage_allowed_for_path`).
+  dnsManageEnabled: boolean
+
   // Cross-server federation master switch (K2 Connect → Enable federation).
   // Persisted per-server; the daemon's /cli/federation/* gate honors it via
   // federation::set_enabled(). DEFAULTS OFF (dark by default).
@@ -152,6 +157,7 @@ interface SettingsState {
   setActiveWindowHours: (hours: number) => void
   setOwnerDisplayName: (name: string) => void
   setAllowRemoteInstruct: (enabled: boolean) => void
+  setDnsManageEnabled: (enabled: boolean) => void
   setFederationEnabled: (enabled: boolean) => void
   setApiEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
@@ -262,6 +268,7 @@ async function persistAndApply(
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
+      dnsManageEnabled: result.dnsManageEnabled ?? false,
       federationEnabled: result.federationEnabled ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -290,6 +297,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   activeWindowHours: DEFAULT_ACTIVE_WINDOW_HOURS,
   ownerDisplayName: '',
   allowRemoteInstruct: false,
+  dnsManageEnabled: false,
   federationEnabled: false,
   apiEnabled: false,
   useLlmHitlDetection: false,
@@ -450,6 +458,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setDnsManageEnabled: async (enabled: boolean) => {
+    const prev = get().dnsManageEnabled
+    set({ dnsManageEnabled: enabled }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `dnsManageEnabled`.
+      // Owner/admin gated via REMOTE_ACCESS_KEYS server-side.
+      await persistAndApply(set, { dnsManageEnabled: enabled })
+    } catch (err) {
+      console.error('[settings] Failed to persist dns-manage-enabled:', err)
+      set({ dnsManageEnabled: prev })
+    }
+  },
+
   setFederationEnabled: async (enabled: boolean) => {
     const prev = get().federationEnabled
     set({ federationEnabled: enabled }) // optimistic
@@ -557,6 +578,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       projectSettings: result.projectSettings ?? {},
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
+      dnsManageEnabled: result.dnsManageEnabled ?? false,
       federationEnabled: result.federationEnabled ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -599,6 +621,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
+      dnsManageEnabled: result.dnsManageEnabled ?? false,
       federationEnabled: result.federationEnabled ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,

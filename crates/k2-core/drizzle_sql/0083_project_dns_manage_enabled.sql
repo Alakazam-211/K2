@@ -1,0 +1,18 @@
+-- DNS K1 — per-workspace DNS-manage opt-in.
+--
+-- Refines the agent DNS-mutation gate from an APP-LEVEL flag
+-- (`~/.k2/settings.json` `dnsManageEnabled`) to a PER-WORKSPACE
+-- opt-in. The owner enables DNS management for SPECIFIC workspaces;
+-- default OFF, fail-closed.
+--
+-- Effective semantics: a workspace may manage DNS records iff its
+-- per-workspace flag is 1 OR the app-level `dnsManageEnabled` master
+-- is on — i.e. the app-level flag stays a GLOBAL MASTER so enabling
+-- it once opts in every workspace. Unknown/unregistered workspaces
+-- fail closed when the master is off.
+--
+-- Default 0 (OFF): DNS mutation is high-impact (zone create/update/
+-- delete at the registrar), so a workspace must never gain the
+-- capability until the owner explicitly opts it in. Existing rows
+-- backfill to 0.
+ALTER TABLE projects ADD COLUMN dns_manage_enabled INTEGER NOT NULL DEFAULT 0;

@@ -32,6 +32,7 @@ import type { SettingEntry } from '../searchManifest'
 import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingControls'
 import { Toggle } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
+import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
 import { TunnelUrlsPanel } from './TunnelUrlsPanel'
 import {
   signIn as accountSignIn,
@@ -1233,6 +1234,9 @@ export function K2ConnectSection(): React.JSX.Element {
                 aria-label="Enable public API"
               />
             </div>
+            {/* DNS K1 — agent DNS-mutation master (deny-by-default). Same
+                owner/admin gate as the remote-access keys above. */}
+            <DnsManageEnabledRow />
           </div>
         )}
 

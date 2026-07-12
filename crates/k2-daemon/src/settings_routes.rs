@@ -34,7 +34,7 @@ use crate::cli_response::CliResponse;
 /// names (`AppSettings` is `rename_all = "camelCase"` with no aliases, so
 /// no other spelling reaches the struct fields).
 const REMOTE_ACCESS_KEYS: &[&str] =
-    &["federationEnabled", "allowRemoteInstruct", "apiEnabled"];
+    &["federationEnabled", "allowRemoteInstruct", "apiEnabled", "dnsManageEnabled"];
 
 /// Handler for `GET /cli/settings/get`.
 ///
@@ -96,6 +96,9 @@ pub fn handle_settings_update(body: &[u8], actor_can_manage: bool) -> CliRespons
             };
         }
     }
+    // TODO grant announce — if partial flips dnsManageEnabled false→true,
+    // best-effort append a one-line DNS-manage capability note (daemon
+    // agent follow-up). Same hook as per-workspace `/cli/dns-manage`.
     match k2_core::app_settings::update(partial) {
         Ok(merged) => {
             // Sync the federation master switch into the running process so the
@@ -246,12 +249,13 @@ mod tests {
             assert!(!cm, "Member session must NOT resolve to the manage tier");
             for body in [
                 // Gate is on key PRESENCE — enabling, disabling, and the
-                // consent key are all barred for a Member.
+                // consent / DNS-manage keys are all barred for a Member.
                 br#"{"federationEnabled":true}"#.as_slice(),
                 br#"{"federationEnabled":false}"#.as_slice(),
                 br#"{"allowRemoteInstruct":true}"#.as_slice(),
                 br#"{"apiEnabled":true}"#.as_slice(),
                 br#"{"apiEnabled":false}"#.as_slice(),
+                br#"{"dnsManageEnabled":true}"#.as_slice(),
             ] {
                 let r = handle_settings_update(body, cm);
                 assert_eq!(r.status, "403 Forbidden", "got: {}", r.body);
@@ -269,6 +273,7 @@ mod tests {
                 !k2_core::app_settings::api_enabled_setting(),
                 "403 must never sync the /v1 mirror"
             );
+            assert!(!s.dns_manage_enabled, "403 must leave the value unchanged");
         });
     }
 

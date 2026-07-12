@@ -656,6 +656,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0082_mail_oauth",
             include_str!("../../drizzle_sql/0082_mail_oauth.sql"),
         ),
+        // 0083 (DNS K1): per-workspace DNS-manage opt-in column on
+        // `projects` (default 0/OFF, fail-closed). App-level
+        // `dnsManageEnabled` stays a global master (OR'd on top).
+        (
+            "0083_project_dns_manage_enabled",
+            include_str!("../../drizzle_sql/0083_project_dns_manage_enabled.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

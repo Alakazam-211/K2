@@ -179,6 +179,38 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
             Err(r) => r,
         },
+        // DNS K1 — per-workspace DNS-manage opt-in. GET with `?enable=`
+        // mirrors `/cli/remote-instruct` (path-scoped write via
+        // `update_project_setting`). Default OFF / fail-closed; effective
+        // gate is `dns_manage_allowed_for_path` (app master OR workspace).
+        // // TODO grant announce — when false→true, append a one-line
+        // capability note for the workspace agent (daemon agent follow-up).
+        "/cli/dns-manage" => match need_project(params) {
+            Ok(p) => {
+                let enable = bool_param(params, "enable");
+                let value = if enable { "1" } else { "0" };
+                match k2_core::workspace::settings::update_project_setting(
+                    &p,
+                    "dns_manage_enabled",
+                    value,
+                ) {
+                    Ok(()) => {
+                        // TODO grant announce: if enable (false→true), best-effort
+                        // append a one-line DNS-manage capability note.
+                        k2_core::agent_hooks::emit(
+                            k2_core::agent_hooks::HookEvent::SyncProjects,
+                            serde_json::Value::Null,
+                        );
+                        CliResponse::ok_json(
+                            serde_json::json!({"success": true, "dnsManageEnabled": enable})
+                                .to_string(),
+                        )
+                    }
+                    Err(e) => CliResponse::bad_request(e),
+                }
+            }
+            Err(r) => r,
+        },
         "/cli/agentic" => {
             // Global toggle, not project-specific.
             if let Some(enable) = opt_param(params, "enable") {

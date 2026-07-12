@@ -2471,7 +2471,7 @@ async fn handle_one_request(
         // the same process that owns the live companion runtime.
         // Method gate per feedback_post_only_route_guards memory.
         // Remote-access keys (federationEnabled / allowRemoteInstruct /
-        // apiEnabled)
+        // apiEnabled / dnsManageEnabled)
         // additionally require owner-or-admin — resolved here via the same
         // `token_is_owner_or_admin` tier the federation management routes
         // use, enforced key-aware inside the handler (a Member touching a

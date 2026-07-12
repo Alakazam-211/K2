@@ -1636,6 +1636,11 @@ function ProjectDetail({
         <RemoteInstructToggle project={project} fetchProjects={fetchProjects} />
       </SettingsGroup>
 
+      {/* ── DNS K1 (per-workspace DNS-manage opt-in) ── */}
+      <SettingsGroup title="DNS">
+        <DnsManageToggle project={project} fetchProjects={fetchProjects} />
+      </SettingsGroup>
+
       {/* ── Group 4: Chat Migrations ── */}
       <SettingsGroup title="Chat Migrations">
         <CursorMigrationPanel projectPath={project.path} />
@@ -1856,6 +1861,86 @@ function RemoteInstructToggle({
             <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
               Currently allowed anyway: the global &ldquo;Let remote users message
               agents&rdquo; switch (Settings → K2 Connect) opts in every workspace,
+              overriding this toggle.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── DNS K1 Per-workspace DNS-manage opt-in ─────────────────────────
+// Lets agents create/update/delete DNS records for THIS workspace.
+// DEFAULTS OFF / fail-closed. The daemon ENFORCES this server-side via
+// `dns_manage_allowed_for_path` (app master OR per-workspace). Reads
+// from the projects store (`dnsManageEnabled`); writes via /cli/dns-manage.
+function DnsManageToggle({
+  project,
+  fetchProjects,
+}: {
+  project: ProjectWithWorkspaces
+  fetchProjects: () => Promise<void>
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const enabled = (project.dnsManageEnabled ?? 0) === 1
+  // The app-level master (K2 Connect → "Allow agents to manage DNS records")
+  // OR-overrides this per-workspace flag server-side
+  // (`dns_manage_allowed_for_path`): with the master ON, DNS manage is
+  // allowed here even while this toggle shows OFF. Surface that so an
+  // OFF toggle never reads as a deny it doesn't enforce.
+  const globalAllow = useSettingsStore((s) => s.dnsManageEnabled)
+
+  const toggle = async (): Promise<void> => {
+    if (busy) return
+    const next = !enabled
+    setBusy(true)
+    try {
+      await daemonCliGet('dns-manage', {
+        project: project.path,
+        enable: next ? '1' : '0',
+      })
+      await fetchProjects()
+    } catch (err) {
+      console.error('[dns-manage] write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          disabled={busy}
+          data-settings-id="projects.dns-manage-enabled"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={enabled ? 'Agents may manage DNS for this workspace' : 'Agents cannot manage DNS for this workspace'}
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Allow agents to manage DNS for this workspace
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            {enabled
+              ? 'Agents in this workspace may create, update, and delete DNS records.'
+              : 'Off (recommended): agents in this workspace cannot mutate DNS. Turn on to grant DNS management for this workspace only.'}
+          </div>
+          {!enabled && globalAllow && (
+            <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
+              Currently allowed anyway: the global &ldquo;Allow agents to manage DNS
+              records&rdquo; switch (Settings → K2 Connect) opts in every workspace,
               overriding this toggle.
             </div>
           )}

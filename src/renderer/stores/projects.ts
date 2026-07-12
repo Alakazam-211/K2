@@ -162,6 +162,10 @@ interface Project {
   // agent via the composer. The daemon ENFORCES the gate server-side;
   // this drives the renderer composer-hide for non-owner principals.
   allowRemoteInstruct: number
+  // DNS K1 — per-workspace DNS-manage opt-in (0/1, default 0/OFF).
+  // 1 = agents may manage DNS records for this workspace. Effective
+  // gate is app master OR this flag (`dns_manage_allowed_for_path`).
+  dnsManageEnabled: number
   // Agent de-generalization S1 (migration 0063) — per-workspace default
   // agent: an agent_presets preset id (UUID string), though readers must
   // ALSO tolerate a legacy command token like 'claude'. null = inherit

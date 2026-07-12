@@ -111,6 +111,10 @@ export interface AppSettingsResponse {
   // daemon enforces the gate server-side (renderer-hide is defense-in-depth).
   // Optional: older snapshots omit it → readers treat absent as false.
   allowRemoteInstruct?: boolean
+  // DNS K1 — per-host opt-in that lets agents manage DNS records.
+  // DEFAULTS OFF (deny-by-default). Optional: older snapshots omit it →
+  // readers treat absent as false.
+  dnsManageEnabled?: boolean
   // Federation (0.40.14+) — whether cross-server messaging is enabled on
   // this host. Optional: older snapshots omit it → readers treat absent
   // as false (the store reads it with `?? false`).

@@ -249,6 +249,21 @@ pub struct AppSettings {
     /// refinement tracked as follow-up. Default MUST stay OFF either way.
     #[serde(default)]
     pub allow_remote_instruct: bool,
+    /// DNS K1 — per-host opt-in that lets agents manage DNS records
+    /// (create/update/delete at the registrar / zone). **Defaults OFF**
+    /// (deny-by-default): DNS mutation is a high-impact capability, so a
+    /// daemon must never grant it until the owner explicitly opts this
+    /// host in. A typed `bool` is required: `AppSettings` round-trips
+    /// through `serde_json::from_value` on every `load`/`update`, which
+    /// silently drops keys with no matching field — an untyped key would
+    /// never persist.
+    ///
+    /// Wire name `dnsManageEnabled` (serde camelCase). Per-workspace
+    /// refinement lives on `projects.dns_manage_enabled` (migration 0079);
+    /// effective gate is `workspace::settings::dns_manage_allowed_for_path`
+    /// (app master OR per-workspace, fail-closed).
+    #[serde(default)]
+    pub dns_manage_enabled: bool,
     /// Cross-server federation master switch (K2 Connect → Enable federation).
     /// Persisted app-level mirror of the `K2_FEDERATION` env var so the owner
     /// can turn federation on/off per-server from the UI without editing a
@@ -591,6 +606,7 @@ impl Default for AppSettings {
             active_window_hours: default_active_window_hours(),
             owner_display_name: None,
             allow_remote_instruct: false,
+            dns_manage_enabled: false,
             federation_enabled: false,
             api_enabled: false,
             use_llm_hitl_detection: false,
@@ -983,6 +999,39 @@ mod tests {
         // reset() returns to the OFF default.
         let after = reset().expect("reset");
         assert!(!after.allow_remote_instruct);
+    }
+
+    /// DNS K1 — the dns-manage opt-in must default OFF on a fresh settings
+    /// file, persist through save→load, and ingest the camelCase
+    /// `dnsManageEnabled` key via the generic `update()` deep-merge (the
+    /// /cli/settings/update path the toggle hits). Default MUST be OFF:
+    /// it gates agent DNS mutation (high-impact zone writes).
+    #[test]
+    fn dns_manage_enabled_defaults_off_and_round_trips() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        // Fresh file: the security default is OFF.
+        assert!(!load().dns_manage_enabled);
+        assert!(!AppSettings::default().dns_manage_enabled);
+
+        // save → load preserves an explicit opt-in.
+        let mut s = AppSettings::default();
+        s.dns_manage_enabled = true;
+        save(&s).expect("save");
+        assert!(load().dns_manage_enabled);
+
+        // update() deep-merge ingests the camelCase key like any other field.
+        let merged = update(serde_json::json!({
+            "dnsManageEnabled": false
+        }))
+        .expect("update");
+        assert!(!merged.dns_manage_enabled);
+        assert!(!load().dns_manage_enabled);
+
+        // reset() returns to the OFF default.
+        let after = reset().expect("reset");
+        assert!(!after.dns_manage_enabled);
     }
 
     /// Federation toggle-topology consolidation (UI-only move of the

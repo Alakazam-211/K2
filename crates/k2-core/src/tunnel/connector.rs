@@ -27,6 +27,7 @@ use serde::Serialize;
 use super::config::{self, RelayEndpoint, TunnelConfig, SUBDOMAIN_HOST};
 use super::failover::{RelaySelector, RelaySwitch};
 use super::render::render_frpc_toml_for_relay;
+use super::watchdog::DisconnectTracker;
 
 /// Where to find the `frpc` binary.
 #[derive(Debug, Clone)]
@@ -451,6 +452,61 @@ enum ChildOutcome {
     /// relay after a stable run on a fallback — respawn immediately, no
     /// failure counted, no backoff.
     FailBack(RelaySwitch),
+    /// The mid-session watchdog declared the relay dead (frpc alive but
+    /// storming reconnect errors — it never exits on a post-login relay
+    /// death) and WE killed the child. Always counts as a relay FAILURE:
+    /// the generic uptime classification would wrongly credit the long
+    /// pre-death run as a success and never rotate.
+    WatchdogKill,
+}
+
+/// Shared per-child-run state for the MID-SESSION relay-death watchdog.
+///
+/// frpc self-exits only on a failed LOGIN (`loginFailExit` defaults
+/// true) — when an ESTABLISHED session's relay dies, frpc stays alive and
+/// reconnect-retries internally forever, so the supervise loop's
+/// exit-based failover never fires. The pump threads feed every frpc log
+/// line through a [`DisconnectTracker`]; when it declares the session
+/// dead the poll loop kills the child, CONVERTING the stuck session into
+/// the exit the existing failover path already handles. One instance per
+/// spawned child — a fresh child starts with a clean streak.
+struct SessionWatch {
+    /// Pure death-detection policy, fed by BOTH pump threads (stdout +
+    /// stderr) — hence the mutex; contention is two line-rate readers.
+    tracker: Mutex<DisconnectTracker>,
+    /// Latched by the pump side once the tracker declares death; the
+    /// supervise poll loop observes it and kills the child.
+    dead: AtomicBool,
+}
+
+impl SessionWatch {
+    fn new() -> Self {
+        Self {
+            tracker: Mutex::new(DisconnectTracker::new()),
+            dead: AtomicBool::new(false),
+        }
+    }
+
+    /// Feed one frpc log line (called from the pump threads).
+    fn observe_line(&self, line: &str) {
+        if self.dead.load(Ordering::SeqCst) {
+            return; // already declared — nothing more to learn
+        }
+        let mut tracker = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
+        if tracker.observe(line, Instant::now()) {
+            self.dead.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn is_dead(&self) -> bool {
+        self.dead.load(Ordering::SeqCst)
+    }
+
+    /// (threshold, window) of the policy — for the kill log line.
+    fn policy(&self) -> (usize, Duration) {
+        let tracker = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
+        (tracker.threshold(), tracker.window())
+    }
 }
 
 /// Wait for the current child to end.
@@ -460,13 +516,22 @@ enum ChildOutcome {
 ///   no fail-back to evaluate, no behavior change.
 /// * Multi-relay — poll `try_wait` on [`SUPERVISE_POLL`] so we can (a)
 ///   feed healthy uptime into the selector while the child lives (the
-///   fail-back streak) and (b) observe `stop()` and kill the child we're
-///   holding (it was TAKEN from the slot, so `stop()` can't reach it).
+///   fail-back streak), (b) observe `stop()` and kill the child we're
+///   holding (it was TAKEN from the slot, so `stop()` can't reach it),
+///   and (c) observe the mid-session watchdog ([`SessionWatch`]) and kill
+///   a live-but-stuck child whose relay died AFTER login (frpc never
+///   exits on its own in that state — it reconnect-retries forever).
+///
+/// The solo path deliberately carries NO watchdog: with a single relay
+/// there is nowhere to rotate to, and killing a reconnect-looping frpc
+/// would only replace frp's own retry loop with ours — the blocking
+/// `wait()` stays byte-identical to the pre-failover supervisor.
 fn wait_for_exit(
     child: &mut Child,
     running: &AtomicBool,
     selector: &mut RelaySelector,
     spawned_at: Instant,
+    watch: Option<&SessionWatch>,
 ) -> ChildOutcome {
     if selector.is_solo() {
         return ChildOutcome::Exited(child.wait().ok().and_then(|s| s.code()));
@@ -486,6 +551,22 @@ fn wait_for_exit(
             let _ = child.kill();
             let _ = child.wait();
             return ChildOutcome::Exited(None);
+        }
+        // Mid-session relay death: the watchdog (fed by the pump threads)
+        // declared the session dead — kill the stuck child so the normal
+        // exit path runs. Checked BEFORE the healthy-uptime feed below so
+        // a just-declared death can't credit one more success tick.
+        if let Some(w) = watch {
+            if w.is_dead() {
+                let (n, window) = w.policy();
+                crate::log_debug!(
+                    "[tunnel] mid-session relay death detected ({n} errors/{}s) — cycling frpc",
+                    window.as_secs()
+                );
+                let _ = child.kill();
+                let _ = child.wait();
+                return ChildOutcome::WatchdogKill;
+            }
         }
         // A child alive past HEALTHY_UPTIME is a working relay: reset the
         // failure counter and extend the fail-back streak. The selector
@@ -513,6 +594,15 @@ fn wait_for_exit(
 /// and resets the backoff. With a single relay the selector never switches
 /// and the wait path is the original blocking `wait()` — behavior is
 /// byte-identical to the pre-failover supervisor.
+///
+/// **Mid-session relay death** (multi-relay only): exits alone can't see a
+/// relay that dies AFTER a successful login — frpc never exits then, it
+/// reconnect-retries internally forever. Each child therefore gets a
+/// [`SessionWatch`] fed by its log pumps; when the [`DisconnectTracker`]
+/// declares the session dead the poll loop kills the child
+/// ([`ChildOutcome::WatchdogKill`]) and the death is counted as one
+/// explicit `on_failure()` — the same threshold/rotation policy as fast
+/// dial failures, just triggered by log evidence instead of an exit.
 fn spawn_supervised(
     frpc: PathBuf,
     child_slot: Arc<Mutex<Option<Child>>>,
@@ -521,9 +611,17 @@ fn spawn_supervised(
     resolved_local_port: u16,
     e2e: bool,
 ) -> Result<(), String> {
+    // Mid-session watchdog only in multi-relay mode: it exists to drive
+    // ROTATION, and the single-relay path stays byte-identical to the
+    // pre-failover supervisor (see `wait_for_exit`). One SessionWatch per
+    // spawned child so every run starts with a clean disconnect streak.
+    let multi = cfg.relay_list().len() > 1;
+    let new_watch = move || multi.then(|| Arc::new(SessionWatch::new()));
+
     // First spawn happens synchronously so `start()` fails loud if the
     // very first launch can't even exec.
-    let first = spawn_once(&frpc)?;
+    let mut watch = new_watch();
+    let first = spawn_once(&frpc, watch.clone())?;
     *child_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(first);
 
     let frpc_thread = frpc.clone();
@@ -549,7 +647,8 @@ fn spawn_supervised(
                         if !running.load(Ordering::SeqCst) {
                             return;
                         }
-                        match spawn_once(&frpc_thread) {
+                        watch = new_watch();
+                        match spawn_once(&frpc_thread, watch.clone()) {
                             Ok(c) => c,
                             Err(e) => {
                                 crate::log_debug!("[tunnel] respawn failed: {e}");
@@ -562,7 +661,13 @@ fn spawn_supervised(
                 };
 
                 let spawned_at = Instant::now();
-                let outcome = wait_for_exit(&mut child, &running, &mut selector, spawned_at);
+                let outcome = wait_for_exit(
+                    &mut child,
+                    &running,
+                    &mut selector,
+                    spawned_at,
+                    watch.as_deref(),
+                );
                 if !running.load(Ordering::SeqCst) {
                     // Stop requested — do not restart.
                     return;
@@ -638,11 +743,52 @@ fn spawn_supervised(
                         std::thread::sleep(backoff);
                         backoff = (backoff * 2).min(max_backoff);
                     }
+                    ChildOutcome::WatchdogKill => {
+                        // The watchdog killed a live-but-stuck child whose
+                        // relay died AFTER login. Uptime classification
+                        // would credit the long pre-death run as a success,
+                        // so the failure is recorded EXPLICITLY: each
+                        // declared death is one on_failure(), and the
+                        // consecutive-failure threshold still owns the
+                        // rotation decision (a lone mid-session death whose
+                        // relay answers the redial never rotates — no
+                        // thrash). WatchdogKill is never a fail-back:
+                        // on_failure() only ever returns rotations.
+                        if let Some(sw) = selector.on_failure() {
+                            crate::log_debug!(
+                                "[tunnel] relay failover: {} -> {} after {} failures",
+                                sw.from,
+                                sw.to,
+                                sw.after_failures
+                            );
+                            if let Err(e) = write_relay_config(
+                                &cfg_thread,
+                                selector.current(),
+                                resolved_local_port,
+                                e2e,
+                            ) {
+                                crate::log_debug!(
+                                    "[tunnel] WARN: rewrite frpc.toml for {} failed: {e}",
+                                    selector.current()
+                                );
+                            }
+                            // Fresh target — dial it promptly instead of
+                            // inheriting the dead relay's grown backoff.
+                            backoff = initial_backoff;
+                        }
+                        crate::log_debug!(
+                            "[tunnel] frpc cycled by watchdog; restarting in {:?}",
+                            backoff
+                        );
+                        std::thread::sleep(backoff);
+                        backoff = (backoff * 2).min(max_backoff);
+                    }
                 }
                 if !running.load(Ordering::SeqCst) {
                     return;
                 }
-                match spawn_once(&frpc_thread) {
+                watch = new_watch();
+                match spawn_once(&frpc_thread, watch.clone()) {
                     Ok(c) => {
                         *child_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(c);
                     }
@@ -843,8 +989,10 @@ fn spawn_subdomain_refresh(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
 }
 
 /// Spawn a single `frpc -c <config>` child, redirecting stdout+stderr
-/// into the append-mode log. Returns the child handle.
-fn spawn_once(frpc: &Path) -> Result<Child, String> {
+/// into the append-mode log. When a `watch` is given (multi-relay mode),
+/// every line is ALSO fed to the mid-session watchdog — a tee, so the
+/// `~/.k2/frpc.log` contract is untouched. Returns the child handle.
+fn spawn_once(frpc: &Path, watch: Option<Arc<SessionWatch>>) -> Result<Child, String> {
     let cfg_path = frpc_config_path();
     let log = open_log()?;
     let log_err = log
@@ -863,15 +1011,19 @@ fn spawn_once(frpc: &Path) -> Result<Child, String> {
     // never fill and block the child. We do NOT log the rendered config
     // or token — only frpc's own output (which never echoes the meta).
     if let Some(out) = child.stdout.take() {
-        pump(out, log);
+        pump(out, log, watch.clone());
     }
     if let Some(err) = child.stderr.take() {
-        pump(err, log_err);
+        pump(err, log_err, watch);
     }
     Ok(child)
 }
 
-fn pump(reader: impl std::io::Read + Send + 'static, mut sink: std::fs::File) {
+fn pump(
+    reader: impl std::io::Read + Send + 'static,
+    mut sink: std::fs::File,
+    watch: Option<Arc<SessionWatch>>,
+) {
     use std::io::Write;
     std::thread::spawn(move || {
         let buf = BufReader::new(reader);
@@ -879,6 +1031,9 @@ fn pump(reader: impl std::io::Read + Send + 'static, mut sink: std::fs::File) {
             match line {
                 Ok(l) => {
                     let _ = writeln!(sink, "{l}");
+                    if let Some(w) = &watch {
+                        w.observe_line(&l);
+                    }
                 }
                 Err(_) => break,
             }
@@ -1166,6 +1321,108 @@ mod tests {
 
             stop().expect("stop");
             assert!(!status().running);
+        });
+    }
+
+    /// Mid-session relay death, end to end through the REAL supervise
+    /// loop: a fake frpc that LOGS IN successfully and then spews
+    /// `connect to server error` lines forever WITHOUT EXITING — exactly
+    /// the frpc-internal-reconnect-loop state a post-login relay death
+    /// leaves behind, where exit-based failover alone would hang on the
+    /// dead relay for good. The watchdog must declare each run dead, kill
+    /// the stuck child, and after 3 consecutive watchdog kills the
+    /// supervisor must rotate frpc.toml to the SECOND relay.
+    #[test]
+    fn watchdog_kills_stuck_midsession_child_and_supervisor_rotates() {
+        with_temp_home(|| {
+            // Fake frpc: one success line, then an error storm, never exits.
+            // The storm rate (10 lines/s) crosses the watchdog threshold
+            // (3 in 30s) almost immediately.
+            let dir = std::env::temp_dir().join(format!(
+                "k2so-fake-frpc-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
+            let script = dir.join("frpc-stuck.sh");
+            std::fs::write(
+                &script,
+                "#!/bin/sh\n\
+                 echo '[I] [service.go:299] login to server success, get run id [test]'\n\
+                 while true; do\n\
+                 \techo '[W] [service.go:132] connect to server error: dial tcp 10.0.0.1:7000: i/o timeout'\n\
+                 \tsleep 0.1\n\
+                 done\n",
+            )
+            .expect("write fake frpc");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                    .expect("chmod fake frpc");
+            }
+
+            config::save(&TunnelConfig {
+                relays: vec![
+                    RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
+                    RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 },
+                ],
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false, // skip the HTTPS-listener path in this unit context
+                ..Default::default()
+            })
+            .expect("seed two-relay config");
+
+            let st = start(None, 57839, &FrpcBinary::Explicit(script.clone()))
+                .expect("start with stuck fake frpc");
+            assert!(st.running);
+            let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+            assert!(
+                toml.contains("serverAddr = \"10.0.0.1\""),
+                "must dial the primary first\n{toml}"
+            );
+
+            // Each cycle: watchdog declares dead within ~1 poll tick (the
+            // error storm crosses the threshold in ~0.3s), kill, backoff
+            // (0.5s/1s/2s), respawn. Three cycles land well inside the
+            // deadline; poll generously so slow CI can't flake this.
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let rotated = loop {
+                let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+                if toml.contains("serverAddr = \"10.0.0.2\"") {
+                    break toml;
+                }
+                if Instant::now() >= deadline {
+                    panic!(
+                        "watchdog never converted the stuck child into a rotation; \
+                         frpc.toml:\n{toml}"
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            };
+
+            // Only the server endpoint rotates — token/subdomain/proxy name
+            // are byte-identical (the relays are peers).
+            assert!(rotated.contains("token = \"tok\""), "{rotated}");
+            assert!(rotated.contains("subdomain = \"rosson\""), "{rotated}");
+            assert!(rotated.contains("name = \"k2so-rosson\""), "{rotated}");
+
+            // The tee contract: the stuck child's lines still landed in
+            // ~/.k2/frpc.log — the watchdog reads a COPY, not the file.
+            let log = std::fs::read_to_string(frpc_log_path()).expect("frpc.log");
+            assert!(
+                log.contains("login to server success"),
+                "frpc.log must still capture child output\n{log}"
+            );
+            assert!(log.contains("connect to server error"), "{log}");
+
+            stop().expect("stop");
+            assert!(!status().running);
+            let _ = std::fs::remove_dir_all(&dir);
         });
     }
 

@@ -642,6 +642,20 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0081_mail_manage_caps",
             include_str!("../../drizzle_sql/0081_mail_manage_caps.sql"),
         ),
+        // 0082 (K2 Mail — OAuth linked inboxes, prd-email-oauth-providers-v1
+        // slice O1): three additive columns on `mail_external_inboxes` —
+        // `auth_kind` ('password'|'oauth', default 'password'),
+        // `provider` ('gmail'|'microsoft'|NULL), `token_expires_at` (unix
+        // secs; the only non-secret token bit — tokens themselves vault
+        // under `ext-inbox-<id>-oauth`). ALSO widens the `kind` CHECK to
+        // admit 'graph' (Phase-2 Graph backend). SQLite can't ALTER a
+        // CHECK, so it's a safe TABLE REBUILD (create-copy-drop-rename +
+        // recreate index) inside the one migration transaction; no FK
+        // references this table so the drop is safe. Runs once by name.
+        (
+            "0082_mail_oauth",
+            include_str!("../../drizzle_sql/0082_mail_oauth.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

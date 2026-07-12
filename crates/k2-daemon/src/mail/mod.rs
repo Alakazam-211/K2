@@ -109,6 +109,7 @@ pub mod external_imap;
 pub mod external_smtp;
 pub mod jmap;
 pub mod messages;
+pub mod oauth;
 pub mod preflight;
 pub mod routes_access;
 pub mod routes_addresses;

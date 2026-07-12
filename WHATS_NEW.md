@@ -3,32 +3,47 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
-## 0.40.42 — Connect Gmail without an app-password
+## 0.40.42 — K2 gets email
 
-- **Link Gmail over OAuth.** Settings → Email Link → **Connect Gmail**
-  signs you in through Google in your browser — no app-specific password
-  to generate. The bound workspace's agents read the inbox and save reply
-  drafts as before, and now they can also **send** from the account once
-  you grant the send level. Microsoft (Outlook / 365) is marked
-  *Coming soon*.
+The big one: agents can now run and use **real email**. Three pieces, tied together by one CLI.
 
-- **Send attachments.** `k2 mail send` and `k2 mail reply` now take
-  `--attach <path>` (a workspace-relative file, repeatable) — the file
-  rides along on the message, and `k2 mail outbox` lists what you attached
-  so an agent can confirm its own send without opening the recipient's
-  inbox.
+- **A mail CLI built for agents (`k2 mail`).** The layer that brings it
+  all together: a workspace's agent can mint addresses, list and read
+  incoming mail, block on `k2 mail wait` for a verification code, and
+  send / reply / draft — all under your governance (`off` by default,
+  `approval`, or `on`, with an outbox and audit trail). Every message body
+  arrives wrapped in `BEGIN/END EXTERNAL EMAIL` markers so the agent treats
+  it as data, never instructions. Whether an address is hosted by K2 or a
+  linked account you own, it's the same verbs.
 
-- **Bring your own OAuth app.** Settings → Email Link → **OAuth apps
-  (advanced)** points K2 at your *own* registered Google/Microsoft client
-  — your quota, your consent screen — instead of the built-in default.
-  The client secret is write-only: vaulted and never shown back.
+- **Host your own mail server — Email Hosting (Linux).** On a Linux
+  deployment, Settings → Email Hosting stands up a real mail server: add a
+  domain and K2 shows the exact **MX / SPF / DKIM / DMARC / rDNS** records
+  to set, verifies them, then you mint **unlimited addresses** on that
+  domain (cPanel-style, with catch-all and plus-addressing). A built-in
+  **deliverability doctor** probes port 25, reverse DNS, blocklists, TLS,
+  and open-relay safety and grades your send readiness; send **direct from
+  the box** or via a **relay** (SMTP / SES / Mailgun / Resend). (On Mac the
+  page shows with a "Linux deployments only" banner.)
 
-- **Sturdier mail plumbing.** `k2 mail delete <message-id>` now moves the
-  message to Trash (it was mis-routing to address retirement);
-  folder-create applies the right server prefix automatically; reading
-  across all inboxes returns partial results instead of failing when one
-  inbox has a hiccup; and a batch of help-text, status, and wording fixes
-  straight from real agent testing.
+- **Or link an inbox you already have — Email Linking.** Connect your own
+  account as a read + draft (and, when you allow it, **send**) assistant
+  inbox, bound to one workspace. Two ways in: an app-password over
+  **IMAP** (Gmail, Fastmail, company IMAP), or **Gmail over OAuth** — sign
+  in through Google in your browser, no app-password to generate. Reply
+  drafts land in the account's real Drafts folder for you to review.
+  **Microsoft (Outlook / 365) is coming soon.**
+
+- **Attachments + bring-your-own OAuth.** `k2 mail send`/`reply` take
+  `--attach <path>` (repeatable), and `k2 mail outbox` lists what you
+  attached. And Settings → Email Link → **OAuth apps (advanced)** points
+  K2 at your *own* registered Google/Microsoft OAuth client — your quota,
+  your consent screen — instead of the built-in default; the client secret
+  is write-only, vaulted and never shown back.
+
+- **Organize + polish.** Move, flag, archive, delete-to-Trash, and manage
+  folders on any inbox — plus a batch of help-text, status, routing, and
+  wording fixes from real agent testing.
 
 ## 0.40.41 — The heartbeat CLI you were promised
 

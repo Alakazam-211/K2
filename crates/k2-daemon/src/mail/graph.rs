@@ -778,10 +778,10 @@ impl GraphBackend {
     /// NEVER `/send` — the user reviews + sends from their own client
     /// (the exact draft-only model as the IMAP/local backends).
     ///
-    /// ⚠ O4 wires this into the `draft` route (the `draft` handler is
-    /// currently IMAP-only); it is built + tested here so the Graph
-    /// backend satisfies the full seam surface.
-    #[allow(dead_code)]
+    /// O4 wires this into the `draft` route (`routes_external::handle_draft`
+    /// dispatches Graph rows here; IMAP rows keep the `external::
+    /// save_reply_draft` APPEND path), so the Graph backend satisfies the
+    /// full seam surface.
     pub fn save_reply_draft(&self, account_id: &str, email_id: &str, body: &str) -> Result<String, String> {
         self.check_handle(account_id)?;
         let Some(graph_id) = decode_graph_email_id(email_id) else {

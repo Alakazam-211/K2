@@ -116,6 +116,7 @@ pub mod routes_access;
 pub mod routes_addresses;
 pub mod routes_domains;
 pub mod routes_external;
+pub mod routes_link_oauth;
 pub mod routes_messages;
 pub mod routes_send;
 pub mod routes_server;

@@ -578,6 +578,12 @@ async fn handle_one_request(
             // `link/*` = the Settings UI's aliases for external add/remove.
             | "/cli/mail/link/add"
             | "/cli/mail/link/remove"
+            // O4: begin an OAuth link (Gmail loopback / Microsoft device
+            // flow); owner-or-admin via is_owner_level_mutation's
+            // /cli/mail/link/oauth/ prefix. The server-side poll/exchange
+            // (blocking reqwest + a loopback listener) rides this arm's
+            // spawn_blocking; the paired status GET is owner-gated below.
+            | "/cli/mail/link/oauth/start"
             // S11: the unified access-management surface (owner-or-admin
             // via is_owner_level_mutation's /cli/mail/access/ prefix).
             | "/cli/mail/access/grant"
@@ -4231,6 +4237,32 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            let resp = crate::cli::dispatch(p, &params);
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // K2 Mail O4 — the OAuth-link long-poll status. Owner-or-admin
+        // only (the paired `link/oauth/start` is owner-gated in the POST
+        // arm; observing a link is the same owner surface). SQLite/in-
+        // memory only — no engine dial, so it needs no spawn_blocking.
+        p if p == "/cli/mail/link/oauth/status" => {
+            let _ = stream.read(&mut buf).await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"OAuth linking is an owner/admin action — ask your human"}}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
             let resp = crate::cli::dispatch(p, &params);
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;

@@ -1036,6 +1036,135 @@ pub fn add_inbox(
     }))
 }
 
+// ── OAuth-linked add (O4 — Gmail IMAP-XOAUTH2 + Microsoft Graph) ────────
+
+/// The provider-preset connection shape for an OAuth-linked row (prd §9):
+/// Gmail rides the EXISTING IMAP backend (`kind='imap'`,
+/// `imap.gmail.com:993` implicit-TLS), Microsoft rides the Graph backend
+/// (`kind='graph'`, HTTPS to graph.microsoft.com — the host/port/tls are
+/// carried for shape only, Graph ignores them). Nothing here is a secret.
+fn oauth_row_preset(provider: crate::mail::oauth::OauthProvider) -> (&'static str, &'static str, u16) {
+    use crate::mail::oauth::OauthProvider;
+    match provider {
+        // Gmail: the XOAUTH2 branch of the IMAP backend (O2).
+        OauthProvider::Gmail => (KIND_IMAP, "imap.gmail.com", 993),
+        // Microsoft: the Graph REST backend (O3). host/port are unused by
+        // Graph (it dials graph.microsoft.com over HTTPS) but the columns
+        // are NOT NULL, so a truthful preset is stored.
+        OauthProvider::Microsoft => ("graph", "graph.microsoft.com", 443),
+    }
+}
+
+/// The OAuth link COMPLETION (O4): after the daemon's server-side flow
+/// (device-poll or loopback exchange) yields a token set, mint the linked
+/// inbox row bound to `owner_project_id`, VAULT the tokens under the
+/// deterministic `ext-inbox-<id>-oauth` key, and persist the absolute
+/// `token_expires_at`. The row is `auth_kind='oauth'` with the provider's
+/// preset `kind`/host/port (prd §4/§9); `now` is injected (no clock).
+///
+/// Tokens NEVER touch a column, a response, or a log line — only the
+/// non-secret `token_expires_at` is stored on the row (so refresh is
+/// decidable without unvaulting). The returned JSON carries NO token.
+/// Compensation: a failed insert wipes the just-vaulted tokens (no
+/// orphaned credential outlives a failed link).
+pub fn add_oauth_inbox(
+    secrets: &dyn SecretStore,
+    owner_project_id: &str,
+    provider: crate::mail::oauth::OauthProvider,
+    raw_address: &str,
+    tokens: &crate::mail::oauth::Tokens,
+    now: i64,
+) -> Result<serde_json::Value, ExtError> {
+    let email_address = addresses::normalize_address(raw_address).map_err(|e| match e {
+        AddrError::Usage(hint) => ExtError::Usage(hint),
+        _ => ExtError::Usage(format!("'{raw_address}' is not a valid address")),
+    })?;
+    // Collisions — identical rule to the app-password add: one row per
+    // account, and a K2-MINTED address can never double as a linked inbox.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let minted: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM mail_addresses WHERE address = ?1",
+                rusqlite::params![email_address],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if minted {
+            return Err(ExtError::Exists(format!(
+                "'{email_address}' is an address on THIS K2 mail server — external inboxes are \
+                 for accounts hosted elsewhere"
+            )));
+        }
+        let taken: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM mail_external_inboxes WHERE email_address = ?1",
+                rusqlite::params![email_address],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if taken {
+            return Err(ExtError::Exists(format!(
+                "external inbox '{email_address}' is already connected — remove it first with \
+                 'k2 mail link remove {email_address}'"
+            )));
+        }
+    }
+    let (kind, host, port) = oauth_row_preset(provider);
+    let id = uuid::Uuid::new_v4().to_string();
+    // Vault the tokens FIRST (returns the absolute expiry the row stores).
+    let token_expires_at = crate::mail::oauth::store_tokens(secrets, &id, tokens, now)
+        .map_err(|e| ExtError::Engine(format!("vault oauth tokens: {e}")))?;
+    let inserted = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, \
+             kind, host, port, tls, username, status, last_checked_at, created_at, \
+             auth_kind, provider, token_expires_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'implicit-tls', ?3, 'connected', ?7, ?7, \
+             ?8, ?9, ?10)",
+            rusqlite::params![
+                id,
+                owner_project_id,
+                email_address,
+                kind,
+                host,
+                port,
+                now,
+                AUTH_OAUTH,
+                provider.as_str(),
+                token_expires_at,
+            ],
+        )
+    };
+    if let Err(e) = inserted {
+        // Compensating wipe — no vaulted token outlives a failed insert.
+        let _ = secrets.delete(&crate::mail::oauth::oauth_vault_key(&id));
+        return Err(ExtError::Engine(format!("insert oauth inbox: {e}")));
+    }
+    k2_core::log_debug!(
+        "[mail/external] linked oauth inbox {} (provider {}, kind {}) bound to workspace {}",
+        email_address,
+        provider.as_str(),
+        kind,
+        owner_project_id
+    );
+    Ok(serde_json::json!({
+        "ok": true,
+        "id": id,
+        "address": email_address,
+        "workspace": owner_project_id,
+        "provider": provider.as_str(),
+        "kind": kind,
+        "hint": format!(
+            "connected — agents in the bound workspace can read '{email_address}' and save \
+             reply drafts. OAuth inboxes are read + draft (no send scope in Phase 1)."
+        ),
+    }))
+}
+
 /// The owner remove flow: delete the row AND its vault entry. Owner
 /// surface — no masking (the owner sees everything).
 pub fn remove_inbox(
@@ -1052,10 +1181,14 @@ pub fn remove_inbox(
         ))
     })?;
     // Vault first: if the secret can't be purged the row must stay
-    // visible (an invisible credential is the worse failure).
+    // visible (an invisible credential is the worse failure). Wipe BOTH
+    // possible keys — the app-password (`ext-inbox-<id>`) AND the O4 OAuth
+    // token bundle (`ext-inbox-<id>-oauth`); the oauth wipe is best-effort
+    // (a password row has no oauth entry, and vice versa).
     secrets
         .delete(&vault_key(&row.id))
         .map_err(|e| ExtError::Engine(format!("vault delete failed: {e}")))?;
+    let _ = secrets.delete(&crate::mail::oauth::oauth_vault_key(&row.id));
     let db = k2_core::db::shared();
     let conn = db.lock();
     // Cascade the S11 access grants in code (inbox_id is not a FK —

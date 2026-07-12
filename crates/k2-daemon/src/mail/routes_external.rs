@@ -36,7 +36,8 @@ use crate::cli_response::CliResponse;
 use crate::mail::access::{self, Source};
 use crate::mail::external::{self, ExtError};
 use crate::mail::external_imap::RealImapOps;
-use crate::mail::messages::{self, ReadError};
+use crate::mail::graph;
+use crate::mail::messages::{self, MailBackend, ReadError};
 use crate::mail::secrets::{self, FileSecretStore, SecretStore as _};
 use crate::mail::send;
 
@@ -347,24 +348,9 @@ pub fn handle_draft(body: &[u8]) -> CliResponse {
     let Some(inbox) = resolved.linked else {
         return teach_reply();
     };
-    let secrets = FileSecretStore::default();
-    let password = match secrets.resolve(&external::vault_key(&inbox.id)) {
-        Ok(Some(p)) => p,
-        Ok(None) => {
-            return error_response(
-                "503 Service Unavailable",
-                "not_ready",
-                &format!(
-                    "credentials for '{}' are missing from the vault — your human can \
-                     reconnect it with 'k2 mail external add'",
-                    inbox.email_address
-                ),
-            )
-        }
-        Err(hint) => return error_response("503 Service Unavailable", "not_ready", &hint),
-    };
-    match external::save_reply_draft(&RealImapOps, &inbox, &password, &email_id, &b.body) {
-        Ok(folder) => ok_json(serde_json::json!({
+    // The stable "draft saved" success shape (identical for both backends).
+    let ok_draft = |folder: String| {
+        ok_json(serde_json::json!({
             "ok": true,
             "id": b.id,
             "address": inbox.email_address,
@@ -374,8 +360,61 @@ pub fn handle_draft(body: &[u8]) -> CliResponse {
                  their own mail client (K2 cannot send from external accounts)",
                 inbox.email_address
             ),
-        })),
-        Err(e) => ext_error_response(e),
+        }))
+    };
+    // §17.5 seam: DISPATCH the draft to the row's backend (O4). A Graph row
+    // (Microsoft 365, kind='graph') lands the reply via
+    // createReply+PATCH-body — its Bearer token is minted inside
+    // `RealGraphHttp`, so there is NO vault password to resolve. Every
+    // other linked row is IMAP (Gmail XOAUTH2 or app-password) and APPENDs
+    // a `\Draft` with `external::save_reply_draft`. Both are draft-only —
+    // no send path exists in either backend.
+    match messages::backend_for_address(&inbox.email_address) {
+        MailBackend::Graph => {
+            let http = std::sync::Arc::new(graph::RealGraphHttp::new(inbox.id.clone()));
+            let backend = graph::GraphBackend::new(inbox.clone(), http);
+            match backend.save_reply_draft(&inbox.id, &email_id, &b.body) {
+                Ok(folder) => ok_draft(folder),
+                Err(hint) => error_response("502 Bad Gateway", "engine", &hint),
+            }
+        }
+        // IMAP: Gmail XOAUTH2 (auth_kind='oauth') OR generic app-password.
+        _ => {
+            let secrets = FileSecretStore::default();
+            // For an OAuth-IMAP row (Gmail XOAUTH2) `login()` mints the
+            // access token itself and IGNORES this param, so there is no
+            // app-password to require; a `password` row must still have its
+            // vaulted credential (503 → re-link).
+            let is_oauth = matches!(
+                external::read_oauth_fields(&inbox.id),
+                Ok(f) if f.auth_kind == external::AUTH_OAUTH
+            );
+            let password = if is_oauth {
+                String::new()
+            } else {
+                match secrets.resolve(&external::vault_key(&inbox.id)) {
+                    Ok(Some(p)) => p,
+                    Ok(None) => {
+                        return error_response(
+                            "503 Service Unavailable",
+                            "not_ready",
+                            &format!(
+                                "credentials for '{}' are missing from the vault — your human \
+                                 can reconnect it with 'k2 mail link add'",
+                                inbox.email_address
+                            ),
+                        )
+                    }
+                    Err(hint) => {
+                        return error_response("503 Service Unavailable", "not_ready", &hint)
+                    }
+                }
+            };
+            match external::save_reply_draft(&RealImapOps, &inbox, &password, &email_id, &b.body) {
+                Ok(folder) => ok_draft(folder),
+                Err(e) => ext_error_response(e),
+            }
+        }
     }
 }
 

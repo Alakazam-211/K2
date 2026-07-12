@@ -37,6 +37,8 @@
 //! | POST /cli/mail/approvals/deny     | mail/routes_send.rs     |
 //! | POST /cli/mail/external/add       | mail/routes_external.rs |
 //! | POST /cli/mail/external/remove    | mail/routes_external.rs |
+//! | POST /cli/mail/link/oauth/start   | mail/routes_link_oauth.rs |
+//! | GET  /cli/mail/link/oauth/status  | mail/routes_link_oauth.rs |
 //! | POST /cli/mail/draft              | mail/routes_external.rs |
 //! | GET  /cli/mail/inboxes            | mail/routes_access.rs   |
 //! | POST /cli/mail/access/grant       | mail/routes_access.rs   |
@@ -95,8 +97,8 @@ use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
 use crate::mail::{
-    routes_access, routes_addresses, routes_domains, routes_external, routes_messages,
-    routes_send, routes_server,
+    routes_access, routes_addresses, routes_domains, routes_external, routes_link_oauth,
+    routes_messages, routes_send, routes_server,
 };
 
 /// Mail-domain GET dispatch. Returns `Some(resp)` for a handled path,
@@ -133,6 +135,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/inboxes" => routes_access::handle_inboxes(params),
         // 0081: list an inbox's folders (can_manage; workspace token).
         "/cli/mail/folder/list" => routes_messages::handle_folder_list(params),
+        // O4: the OAuth-link long-poll target (owner-gated in the
+        // dispatcher's own clause, like approvals/list). Returns only
+        // {state, address?, hint?} — never a code/token.
+        "/cli/mail/link/oauth/status" => routes_link_oauth::handle_link_oauth_status(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -155,6 +161,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // handlers (the CLI verb is `k2 mail link`); aliased below.
         | "/cli/mail/link/add"
         | "/cli/mail/link/remove"
+        // O4: begin an OAuth link (POST-only; GET on it → 405).
+        | "/cli/mail/link/oauth/start"
         | "/cli/mail/access/grant"
         | "/cli/mail/access/revoke"
         | "/cli/mail/access/set-primary"
@@ -201,6 +209,10 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         // via `external/*`. Same handlers, no behavior difference.
         "/cli/mail/link/add" => routes_external::handle_external_add(body),
         "/cli/mail/link/remove" => routes_external::handle_external_remove(body),
+        // O4: begin an OAuth link (Gmail loopback / Microsoft device flow).
+        // Owner-gated (is_owner_level_mutation's /cli/mail/link/oauth/
+        // prefix); the server-side flow runs in this arm's spawn_blocking.
+        "/cli/mail/link/oauth/start" => routes_link_oauth::handle_link_oauth_start(body),
         "/cli/mail/access/grant" => routes_access::handle_grant(body),
         "/cli/mail/access/revoke" => routes_access::handle_revoke(body),
         "/cli/mail/access/set-primary" => routes_access::handle_set_primary(body),
@@ -235,6 +247,10 @@ pub fn is_owner_level_mutation(path: &str) -> bool {
         // agent verb on that inbox is `draft`, which is deliberately
         // NOT in this set.
         || path.starts_with("/cli/mail/external/")
+        // O4: beginning an OAuth link (Gmail/Microsoft) is owner surface
+        // (it binds tokens + a workspace). The `status` GET is owner-gated
+        // separately in the dispatcher; it never reaches this classifier.
+        || path.starts_with("/cli/mail/link/oauth/")
         // S11: the PRIMARY/owner access-management surface (grant /
         // revoke / set-primary / set-level) is owner-or-admin.
         || path.starts_with("/cli/mail/access/")
@@ -275,6 +291,7 @@ mod tests {
             "/cli/mail/approvals/deny",
             "/cli/mail/external/add",
             "/cli/mail/external/remove",
+            "/cli/mail/link/oauth/start",
             "/cli/mail/access/grant",
             "/cli/mail/access/revoke",
             "/cli/mail/access/set-primary",
@@ -434,6 +451,7 @@ mod tests {
         for route in [
             "/cli/mail/external/add",
             "/cli/mail/external/remove",
+            "/cli/mail/link/oauth/start",
             "/cli/mail/access/grant",
             "/cli/mail/access/revoke",
             "/cli/mail/access/set-primary",
@@ -497,6 +515,8 @@ mod tests {
             // S11: the access-management surface = owner surface.
             "/cli/mail/external/add",
             "/cli/mail/external/remove",
+            // O4: beginning an OAuth link is owner surface.
+            "/cli/mail/link/oauth/start",
             "/cli/mail/access/grant",
             "/cli/mail/access/revoke",
             "/cli/mail/access/set-primary",

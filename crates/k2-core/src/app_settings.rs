@@ -315,6 +315,24 @@ pub struct AppSettings {
     /// `load`/`update`, which silently drops unknown keys.
     #[serde(default)]
     pub mail_default_domain: String,
+    /// K2 Mail BYO OAuth (S1 — bring-your-own OAuth client) — the
+    /// owner's OWN Google/Gmail OAuth client id, used INSTEAD of the
+    /// baked default at link/refresh time when non-empty. A client id
+    /// is PUBLIC (not a secret); the paired Gmail client SECRET lives
+    /// in the daemon vault (`mail::oauth_config`), NEVER here and never
+    /// in any DB column. Empty (the default) = use the baked default.
+    /// A typed field is required: `AppSettings` round-trips through
+    /// `serde_json::from_value` on every `load`/`update`, which silently
+    /// drops keys with no matching field — an untyped key would never
+    /// persist.
+    #[serde(default)]
+    pub mail_oauth_gmail_client_id: String,
+    /// K2 Mail BYO OAuth (S1) — the owner's OWN Microsoft/Azure PUBLIC
+    /// client id, used instead of the baked default when non-empty.
+    /// Microsoft device-code is a TRUE public client: there is NO client
+    /// secret, ever (the set route rejects one). Empty = baked default.
+    #[serde(default)]
+    pub mail_oauth_microsoft_client_id: String,
     #[serde(default)]
     pub editor: EditorSettings,
     /// Style System P3 — the user's Style selection (style / palette /
@@ -565,6 +583,8 @@ impl Default for AppSettings {
             mail_agent_send: default_mail_agent_send(),
             mail_address_cap: default_mail_address_cap(),
             mail_default_domain: String::new(),
+            mail_oauth_gmail_client_id: String::new(),
+            mail_oauth_microsoft_client_id: String::new(),
             editor: EditorSettings::default(),
             style: StyleSettings::default(),
             companion: CompanionSettings::default(),

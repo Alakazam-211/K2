@@ -141,24 +141,82 @@ fn client_id_override_seam() {
 #[test]
 fn client_secret_override_seam() {
     // Override wins over the placeholder (BYO / enterprise seam).
+    // (`.as_deref()` because the resolver now returns an owned `String`.)
     assert_eq!(
-        client_secret(OauthProvider::Gmail, Some("my-byo-secret")),
+        client_secret(OauthProvider::Gmail, Some("my-byo-secret")).as_deref(),
         Some("my-byo-secret")
     );
     // No override → Google's placeholder secret.
     assert_eq!(
-        client_secret(OauthProvider::Gmail, None),
+        client_secret(OauthProvider::Gmail, None).as_deref(),
         OauthProvider::Gmail.config().client_secret_placeholder
     );
     // Blank override falls back to the placeholder (mirrors client_id).
     assert_eq!(
-        client_secret(OauthProvider::Gmail, Some("   ")),
+        client_secret(OauthProvider::Gmail, Some("   ")).as_deref(),
         OauthProvider::Gmail.config().client_secret_placeholder
     );
     // Microsoft has no secret even with a blank/None override.
     assert_eq!(client_secret(OauthProvider::Microsoft, None), None);
     // But an explicit override still applies if a caller forces one.
-    assert_eq!(client_secret(OauthProvider::Microsoft, Some("x")), Some("x"));
+    assert_eq!(
+        client_secret(OauthProvider::Microsoft, Some("x")).as_deref(),
+        Some("x")
+    );
+}
+
+/// S1 (BYO OAuth client) — the resolution ORDER through the real
+/// `client_id`/`client_secret` seams: explicit call override > stored BYO
+/// override > baked default. The stored BYO is injected via the hermetic
+/// thread-local fake (no real fs); `clear()` returns to the baked default.
+#[test]
+fn byo_resolution_order_explicit_then_stored_then_baked() {
+    super::test_byo::clear();
+
+    // 1) Nothing stored → baked default (unchanged legacy behavior).
+    assert_eq!(
+        client_id(OauthProvider::Gmail, None),
+        OauthProvider::Gmail.config().client_id_placeholder
+    );
+    assert_eq!(
+        client_secret(OauthProvider::Gmail, None).as_deref(),
+        OauthProvider::Gmail.config().client_secret_placeholder
+    );
+
+    // 2) Stored BYO set → it wins over the baked default when the caller
+    //    passes no explicit override (the production link/refresh callers).
+    super::test_byo::set_client_id(OauthProvider::Gmail, "byo-gmail-id.apps.googleusercontent.com");
+    super::test_byo::set_client_secret(OauthProvider::Gmail, "byo-gmail-secret");
+    assert_eq!(
+        client_id(OauthProvider::Gmail, None),
+        "byo-gmail-id.apps.googleusercontent.com"
+    );
+    assert_eq!(
+        client_secret(OauthProvider::Gmail, None).as_deref(),
+        Some("byo-gmail-secret")
+    );
+
+    // 3) An explicit call override STILL wins over the stored BYO.
+    assert_eq!(client_id(OauthProvider::Gmail, Some("explicit-id")), "explicit-id");
+    assert_eq!(
+        client_secret(OauthProvider::Gmail, Some("explicit-secret")).as_deref(),
+        Some("explicit-secret")
+    );
+
+    // 4) Microsoft is a public client: a stored id resolves, but there is
+    //    NEVER a secret (its config placeholder is None and no vault key
+    //    exists), even if the caller forces nothing.
+    super::test_byo::set_client_id(OauthProvider::Microsoft, "byo-ms-id");
+    assert_eq!(client_id(OauthProvider::Microsoft, None), "byo-ms-id");
+    assert_eq!(client_secret(OauthProvider::Microsoft, None), None);
+
+    // 5) clear() → back to the baked default.
+    super::test_byo::clear();
+    assert_eq!(
+        client_id(OauthProvider::Gmail, None),
+        OauthProvider::Gmail.config().client_id_placeholder
+    );
+    assert_eq!(client_id(OauthProvider::Microsoft, None), OauthProvider::Microsoft.config().client_id_placeholder);
 }
 
 #[test]

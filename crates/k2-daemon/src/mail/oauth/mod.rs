@@ -208,29 +208,95 @@ pub static MICROSOFT: ProviderConfig = ProviderConfig {
     client_secret_placeholder: None,
 };
 
-/// Resolve the effective client_id: a caller-supplied override (BYO /
-/// enterprise seam) wins, else the provider's placeholder const.
-pub fn client_id<'a>(provider: OauthProvider, override_id: Option<&'a str>) -> &'a str {
-    match override_id.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(id) => id,
-        None => provider.config().client_id_placeholder,
+/// Resolve the effective client_id. Order (BYO OAuth client, S1):
+/// **explicit call override > stored BYO override > baked default**. An
+/// explicit non-blank `override_id` always wins (the enterprise/per-call
+/// seam); otherwise the owner's STORED client id ([`stored_client_id`]) is
+/// used when set; otherwise the provider's placeholder const. Returns an
+/// owned `String` because the stored value is read at runtime.
+pub fn client_id(provider: OauthProvider, override_id: Option<&str>) -> String {
+    if let Some(id) = override_id.map(str::trim).filter(|s| !s.is_empty()) {
+        return id.to_string();
     }
+    if let Some(id) = stored_client_id(provider) {
+        return id;
+    }
+    provider.config().client_id_placeholder.to_string()
 }
 
-/// Resolve the effective client_secret, mirroring [`client_id`]: a
-/// caller-supplied override wins, else the provider's placeholder const.
+/// Resolve the effective client_secret, mirroring [`client_id`]. Order:
+/// **explicit call override > stored BYO override > baked default**.
 /// `None` means "this provider sends NO client_secret" (Microsoft, a true
 /// public client) — callers MUST omit the field from the token form when
 /// this is `None` so Microsoft's request stays byte-for-byte secret-free.
 /// Google returns `Some(secret)` (Desktop clients require it at the token
-/// endpoint). The result is never logged (it is a token-grade value).
-pub fn client_secret<'a>(
-    provider: OauthProvider,
-    override_secret: Option<&'a str>,
-) -> Option<&'a str> {
-    match override_secret.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(secret) => Some(secret),
-        None => provider.config().client_secret_placeholder,
+/// endpoint). The result is a token-grade value — NEVER log it.
+pub fn client_secret(provider: OauthProvider, override_secret: Option<&str>) -> Option<String> {
+    if let Some(secret) = override_secret.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(secret.to_string());
+    }
+    if let Some(secret) = stored_client_secret(provider) {
+        return Some(secret);
+    }
+    provider.config().client_secret_placeholder.map(str::to_string)
+}
+
+// ── Stored BYO override seam (S1) ───────────────────────────────────────
+//
+// In production these read the owner's stored client from
+// `mail::oauth_config` (app_settings id + vault secret). In the O1 unit
+// tests they read a THREAD-LOCAL fake so the engine stays hermetic (no real
+// fs) — the thread-local defaults to empty, so every existing engine test
+// resolves to the baked default exactly as before, while the S1 resolution
+// tests install values on their own test thread with no cross-test leakage.
+
+#[cfg(not(test))]
+fn stored_client_id(provider: OauthProvider) -> Option<String> {
+    crate::mail::oauth_config::stored_client_id(provider)
+}
+#[cfg(not(test))]
+fn stored_client_secret(provider: OauthProvider) -> Option<String> {
+    crate::mail::oauth_config::stored_client_secret_default(provider)
+}
+
+#[cfg(test)]
+fn stored_client_id(provider: OauthProvider) -> Option<String> {
+    test_byo::client_id(provider)
+}
+#[cfg(test)]
+fn stored_client_secret(provider: OauthProvider) -> Option<String> {
+    test_byo::client_secret(provider)
+}
+
+/// Thread-local BYO override fake for the O1 engine tests. Per-test-thread
+/// (Rust runs each `#[test]` on its own thread) so installing a value in one
+/// resolution test never bleeds into a concurrent engine test.
+#[cfg(test)]
+pub(crate) mod test_byo {
+    use super::OauthProvider;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static IDS: RefCell<HashMap<&'static str, String>> = RefCell::new(HashMap::new());
+        static SECRETS: RefCell<HashMap<&'static str, String>> = RefCell::new(HashMap::new());
+    }
+
+    pub fn set_client_id(p: OauthProvider, v: &str) {
+        IDS.with(|m| m.borrow_mut().insert(p.as_str(), v.to_string()));
+    }
+    pub fn set_client_secret(p: OauthProvider, v: &str) {
+        SECRETS.with(|m| m.borrow_mut().insert(p.as_str(), v.to_string()));
+    }
+    pub fn clear() {
+        IDS.with(|m| m.borrow_mut().clear());
+        SECRETS.with(|m| m.borrow_mut().clear());
+    }
+    pub fn client_id(p: OauthProvider) -> Option<String> {
+        IDS.with(|m| m.borrow().get(p.as_str()).cloned())
+    }
+    pub fn client_secret(p: OauthProvider) -> Option<String> {
+        SECRETS.with(|m| m.borrow().get(p.as_str()).cloned())
     }
 }
 
@@ -528,7 +594,7 @@ pub fn device_start(
         OauthError::Config(format!("{} has no device-authorization endpoint", cfg.name))
     })?;
     let cid = client_id(provider, client_id_override);
-    let resp = http.post_form(url, &[("client_id", cid), ("scope", cfg.scope)])?;
+    let resp = http.post_form(url, &[("client_id", cid.as_str()), ("scope", cfg.scope)])?;
     let v = parse_json(resp.status, &resp.body)?;
     if let Some(e) = provider_error(&v) {
         return Err(e);
@@ -590,7 +656,7 @@ pub fn device_poll(
     let resp = http.post_form(
         cfg.token_url,
         &[
-            ("client_id", cid),
+            ("client_id", cid.as_str()),
             ("device_code", device_code),
             ("grant_type", DEVICE_GRANT),
         ],
@@ -704,7 +770,7 @@ pub fn loopback_build_url(
         .ok_or_else(|| OauthError::Config(format!("{} has no authorization endpoint", cfg.name)))?;
     let cid = client_id(provider, client_id_override);
     let mut params: Vec<(&str, &str)> = vec![
-        ("client_id", cid),
+        ("client_id", cid.as_str()),
         ("redirect_uri", redirect_uri),
         ("response_type", "code"),
         ("scope", cfg.scope),
@@ -762,8 +828,11 @@ pub fn loopback_exchange(
 ) -> Result<Tokens, OauthError> {
     let cfg = provider.config();
     let cid = client_id(provider, client_id_override);
+    // Resolved once, hoisted so the borrow outlives `form` (it is a
+    // token-grade owned String; never logged). `None` for Microsoft.
+    let secret = client_secret(provider, client_secret_override);
     let mut form: Vec<(&str, &str)> = vec![
-        ("client_id", cid),
+        ("client_id", cid.as_str()),
         ("code", code),
         ("redirect_uri", redirect_uri),
         ("grant_type", "authorization_code"),
@@ -774,7 +843,7 @@ pub fn loopback_exchange(
     // Google Desktop clients require a `client_secret` here or the token
     // endpoint answers `invalid_client`. Microsoft resolves to `None` →
     // the field is OMITTED, keeping its public-client form unchanged.
-    if let Some(secret) = client_secret(provider, client_secret_override) {
+    if let Some(secret) = secret.as_deref() {
         form.push(("client_secret", secret));
     }
     let resp = http.post_form(cfg.token_url, &form)?;
@@ -812,15 +881,17 @@ pub fn refresh(
 ) -> Result<Tokens, OauthError> {
     let cfg = provider.config();
     let cid = client_id(provider, client_id_override);
+    // Hoisted so the owned secret String outlives `form` (never logged).
+    let secret = client_secret(provider, client_secret_override);
     let mut form: Vec<(&str, &str)> = vec![
-        ("client_id", cid),
+        ("client_id", cid.as_str()),
         ("refresh_token", refresh_token),
         ("grant_type", "refresh_token"),
     ];
     // Google requires the `client_secret` on refresh too (same
     // `invalid_client` failure without it). Microsoft → `None` → OMITTED,
     // so its refresh form is unchanged.
-    if let Some(secret) = client_secret(provider, client_secret_override) {
+    if let Some(secret) = secret.as_deref() {
         form.push(("client_secret", secret));
     }
     let resp = http.post_form(cfg.token_url, &form)?;

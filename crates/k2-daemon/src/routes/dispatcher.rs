@@ -584,6 +584,12 @@ async fn handle_one_request(
             // (blocking reqwest + a loopback listener) rides this arm's
             // spawn_blocking; the paired status GET is owner-gated below.
             | "/cli/mail/link/oauth/start"
+            // S1 BYO OAuth client — the owner sets/clears their OWN
+            // per-provider OAuth client id + (Gmail) secret. Owner-or-admin
+            // via is_owner_level_mutation's /cli/mail/oauth-config/ prefix.
+            // Reads app_settings + the vault → the POST arm's spawn_blocking.
+            | "/cli/mail/oauth-config/set"
+            | "/cli/mail/oauth-config/clear"
             // S11: the unified access-management surface (owner-or-admin
             // via is_owner_level_mutation's /cli/mail/access/ prefix).
             | "/cli/mail/access/grant"
@@ -4258,6 +4264,34 @@ async fn handle_one_request(
                     "403 Forbidden",
                     "application/json",
                     r#"{"ok":false,"error":{"code":"forbidden","hint":"OAuth linking is an owner/admin action — ask your human"}}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            let resp = crate::cli::dispatch(p, &params);
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // K2 Mail S1 (BYO OAuth client) — the owner reads their per-provider
+        // OAuth client config. Owner-or-admin only (the paired
+        // oauth-config/{set,clear} POSTs are owner-gated via
+        // is_owner_level_mutation; reading the config is the same owner
+        // surface). Reports {source, clientId, secretSet} — NEVER the secret
+        // value. Reads app_settings + the vault (small fs), no engine dial.
+        p if p == "/cli/mail/oauth-config" => {
+            let _ = stream.read(&mut buf).await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"OAuth client config is an owner/admin surface — ask your human"}}"#,
                 )
                 .await;
                 return DispatchOutcome::Done;

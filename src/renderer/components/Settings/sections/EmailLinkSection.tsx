@@ -562,6 +562,14 @@ function OauthClientRow({
           <span className="text-[9px] text-[var(--color-text-muted)]">
             Write-only — stored in the daemon vault and never shown again.
           </span>
+          {cfg.secretSet &&
+            clientSecret.length === 0 &&
+            clientId.trim() !== (cfg.clientId ?? '') && (
+              <span className="text-[9px] text-[var(--color-status-warn)]">
+                You changed the client ID — re-enter the secret too, or the new ID pairs
+                with the old secret and the link will fail.
+              </span>
+            )}
         </label>
       )}
 

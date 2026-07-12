@@ -21,6 +21,9 @@
 //!   * [`connector`] — spawn / supervise / stop the `frpc` child, and
 //!                     drive the daemon-owned subdomain lease renewal
 //!                     while the tunnel is up.
+//!   * [`failover`]  — pure multi-relay failover policy: which relay of
+//!                     the ordered fallback list frpc should dial now
+//!                     (frpc itself can't fail over — one `serverAddr`).
 //!   * [`lease`]     — subdomain claim/lease keepalive (K2SO #674): the
 //!                     daemon re-POSTs the `claim_subdomain` RPC on its own
 //!                     timer so the lease never lapses with the UI closed
@@ -39,13 +42,15 @@ use serde::{Deserialize, Serialize};
 pub mod cert_broker;
 pub mod config;
 pub mod connector;
+pub mod failover;
 pub mod lease;
 pub mod render;
 pub mod subdomains;
 pub mod tls;
 
-pub use config::{e2e_enabled, TunnelConfig};
+pub use config::{e2e_enabled, RelayEndpoint, TunnelConfig};
 pub use connector::{FrpcBinary, TunnelStatus};
+pub use failover::{RelaySelector, RelaySwitch};
 
 /// Redacted view of the tunnel config for the UI. NEVER carries the
 /// secret token — only `tokenSet`. Field names are camelCase to match

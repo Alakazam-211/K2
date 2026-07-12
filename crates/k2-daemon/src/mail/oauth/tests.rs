@@ -8,7 +8,8 @@
 use super::*;
 use crate::mail::secrets::SecretStore;
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Barrier, Mutex};
+use std::time::Duration;
 
 // ── Fakes ───────────────────────────────────────────────────────────────
 
@@ -567,6 +568,206 @@ fn access_token_for_without_refresh_token_fails_loud() {
     .unwrap_err();
     assert!(matches!(err, OauthError::Vault(_)));
     assert_eq!(http.calls(), 0);
+}
+
+// ── M1: per-inbox single-flight around the refresh cycle ─────────────────
+
+/// A counting, rotating HTTP mock for the M1 concurrency tests. Every
+/// `post_form` here is a refresh POST: it records the presented
+/// `refresh_token`, bumps the POST counter, then either rendezvous on a
+/// shared [`Barrier`] (to PROVE two refreshes run in parallel) or sleeps
+/// `delay` (to widen the single-flight race window), and finally returns a
+/// UNIQUELY rotated bundle — modeling Microsoft rotation (a brand-new
+/// `refresh_token` on every refresh), which is what makes a racing second
+/// refresh able to persist an already-revoked token.
+struct RaceHttp {
+    posts: Mutex<usize>,
+    seen_refresh: Mutex<Vec<String>>,
+    seq: Mutex<usize>,
+    barrier: Option<Arc<Barrier>>,
+    delay: Duration,
+}
+
+impl RaceHttp {
+    fn new(barrier: Option<Arc<Barrier>>, delay: Duration) -> Self {
+        Self {
+            posts: Mutex::new(0),
+            seen_refresh: Mutex::new(Vec::new()),
+            seq: Mutex::new(0),
+            barrier,
+            delay,
+        }
+    }
+    fn posts(&self) -> usize {
+        *self.posts.lock().unwrap()
+    }
+    fn seen_refresh(&self) -> Vec<String> {
+        self.seen_refresh.lock().unwrap().clone()
+    }
+}
+
+impl HttpClient for RaceHttp {
+    fn post_form(&self, _url: &str, form: &[(&str, &str)]) -> Result<HttpResponse, OauthError> {
+        if let Some((_, v)) = form.iter().find(|(k, _)| *k == "refresh_token") {
+            self.seen_refresh.lock().unwrap().push(v.to_string());
+        }
+        *self.posts.lock().unwrap() += 1;
+        if let Some(b) = &self.barrier {
+            b.wait();
+        }
+        if !self.delay.is_zero() {
+            std::thread::sleep(self.delay);
+        }
+        let n = {
+            let mut s = self.seq.lock().unwrap();
+            *s += 1;
+            *s
+        };
+        // Microsoft-style rotation: a fresh access token AND a NEW refresh
+        // token on every refresh.
+        let body = format!(
+            r#"{{"access_token":"AT{n}","refresh_token":"RT-rot-{n}","expires_in":3600,"token_type":"Bearer"}}"#
+        );
+        Ok(HttpResponse { status: 200, body })
+    }
+}
+
+#[test]
+fn access_token_for_single_flight_one_refresh_per_inbox() {
+    // Two concurrent callers on the SAME expired inbox. Without the
+    // single-flight lock both would load RT1 and both would POST
+    // grant_type=refresh_token; Microsoft rotates RT1→RT2 (revoking RT1),
+    // so the racing second writer could persist an already-revoked token
+    // and brick the inbox. Prove exactly ONE refresh happens.
+    let store = MemStore::default();
+    seed(&store, "m1-single", "AT-old", Some("RT1"));
+    // 50ms in the (single) refresh guarantees the second caller is blocked
+    // on the per-inbox lock while the first refreshes.
+    let http = RaceHttp::new(None, Duration::from_millis(50));
+    let start = Barrier::new(2);
+    let now = 1_000_000; // far past the seeded expiry → both take the slow path
+
+    let (a, b) = std::thread::scope(|s| {
+        let h1 = s.spawn(|| {
+            start.wait();
+            access_token_for(
+                &store,
+                "m1-single",
+                OauthProvider::Microsoft,
+                None, // unknown expiry → force the refresh path
+                now,
+                None,
+                None,
+                &http,
+            )
+            .expect("caller 1")
+        });
+        let h2 = s.spawn(|| {
+            start.wait();
+            access_token_for(
+                &store,
+                "m1-single",
+                OauthProvider::Microsoft,
+                None,
+                now,
+                None,
+                None,
+                &http,
+            )
+            .expect("caller 2")
+        });
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+
+    // Exactly ONE network refresh despite two concurrent callers.
+    assert_eq!(http.posts(), 1, "single-flight: exactly one refresh POST per inbox");
+    // That one refresh presented RT1 — the second caller never POSTed at
+    // all, so a now-revoked RT1 can never be re-presented (or re-persisted).
+    assert_eq!(http.seen_refresh(), vec!["RT1".to_string()]);
+    // Both callers got the SAME freshly-minted, valid access token.
+    assert_eq!(a.access_token, "AT1");
+    assert_eq!(b.access_token, "AT1");
+    assert!(a.refreshed && b.refreshed);
+    // The PERSISTED refresh token is the ROTATED one (RT-rot-1), never the
+    // stale/revoked RT1 — the last-writer-wins corruption is impossible.
+    let reloaded = load_tokens(&store, "m1-single").expect("reload");
+    assert_eq!(reloaded.refresh_token.as_deref(), Some("RT-rot-1"));
+    assert_eq!(reloaded.access_token, "AT1");
+}
+
+#[test]
+fn access_token_for_fast_path_no_network_under_concurrency() {
+    // A still-valid token returns via the fast path with NO refresh POST,
+    // even under concurrent callers (the fast path takes no lock at all).
+    let store = MemStore::default();
+    seed(&store, "m1-fast", "AT-valid", Some("RT1"));
+    let http = RaceHttp::new(None, Duration::ZERO);
+    let now = 1_000; // exp is far ahead → always fresh
+    std::thread::scope(|s| {
+        for _ in 0..8 {
+            s.spawn(|| {
+                let f = access_token_for(
+                    &store,
+                    "m1-fast",
+                    OauthProvider::Microsoft,
+                    Some(1_000_000),
+                    now,
+                    None,
+                    None,
+                    &http,
+                )
+                .expect("fast path");
+                assert_eq!(f.access_token, "AT-valid");
+                assert!(!f.refreshed);
+            });
+        }
+    });
+    assert_eq!(http.posts(), 0, "fast path must never hit the network");
+}
+
+#[test]
+fn access_token_for_different_inboxes_refresh_concurrently() {
+    // Distinct row_ids must NOT serialize against each other — they get
+    // distinct locks.
+    assert!(
+        !Arc::ptr_eq(&refresh_lock_for("m1-a"), &refresh_lock_for("m1-b")),
+        "distinct inboxes must not share a refresh lock"
+    );
+
+    let store = MemStore::default();
+    seed(&store, "m1-a", "AT-a-old", Some("RTa"));
+    seed(&store, "m1-b", "AT-b-old", Some("RTb"));
+    // A 2-party barrier INSIDE the refresh proves both refreshes are in
+    // flight simultaneously: if the two inboxes serialized on one lock the
+    // second would never reach the barrier and the test would hang.
+    let barrier = Arc::new(Barrier::new(2));
+    let http = RaceHttp::new(Some(barrier), Duration::ZERO);
+    let now = 1_000_000;
+
+    let (a, b) = std::thread::scope(|s| {
+        let h1 = s.spawn(|| {
+            access_token_for(&store, "m1-a", OauthProvider::Microsoft, None, now, None, None, &http)
+                .expect("inbox a")
+        });
+        let h2 = s.spawn(|| {
+            access_token_for(&store, "m1-b", OauthProvider::Microsoft, None, now, None, None, &http)
+                .expect("inbox b")
+        });
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+
+    // Both inboxes refreshed independently → two POSTs.
+    assert_eq!(http.posts(), 2, "distinct inboxes each perform their own refresh");
+    let mut seen = http.seen_refresh();
+    seen.sort();
+    assert_eq!(seen, vec!["RTa".to_string(), "RTb".to_string()]);
+    assert!(a.refreshed && b.refreshed);
+    // Each inbox persisted its OWN distinct rotated token.
+    let ra = load_tokens(&store, "m1-a").expect("reload a");
+    let rb = load_tokens(&store, "m1-b").expect("reload b");
+    assert!(ra.refresh_token.as_deref().unwrap().starts_with("RT-rot-"));
+    assert!(rb.refresh_token.as_deref().unwrap().starts_with("RT-rot-"));
+    assert_ne!(ra.refresh_token, rb.refresh_token, "each inbox got a distinct rotated token");
 }
 
 // ── Revoke ───────────────────────────────────────────────────────────────

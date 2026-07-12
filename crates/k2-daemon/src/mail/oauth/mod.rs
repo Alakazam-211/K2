@@ -44,6 +44,9 @@
 #![allow(dead_code)]
 
 use crate::mail::secrets::SecretStore;
+use parking_lot::Mutex as PlMutex;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
 
 // ─────────────────────────────────────────────────────────────────────
 // Providers + static config (prd §9)
@@ -762,15 +765,20 @@ pub fn oauth_vault_key(row_id: &str) -> String {
 }
 
 /// Serialize a token set to the vaulted JSON shape (prd §4:
-/// `{access_token, refresh_token, scope, token_type}`). `expires_in` is
-/// NOT stored — the absolute `token_expires_at` lives in the row.
-fn tokens_to_json(t: &Tokens) -> String {
+/// `{access_token, refresh_token, scope, token_type}`) plus a redundant
+/// absolute `token_expires_at` copy (M1). The row remains the source of
+/// truth for freshness; this vaulted copy exists ONLY so a single-flight
+/// follower (see [`access_token_for`]) can hand back the exact expiry a
+/// sibling just computed without re-reading the DB. A timestamp is not a
+/// secret, so it is safe to co-locate with the token bundle.
+fn tokens_to_json(t: &Tokens, expires_at: i64) -> String {
     // Manual serde_json::Value build (no derive on the secret struct).
     serde_json::json!({
         "access_token": t.access_token,
         "refresh_token": t.refresh_token,
         "scope": t.scope,
         "token_type": t.token_type,
+        "token_expires_at": expires_at,
     })
     .to_string()
 }
@@ -784,16 +792,29 @@ pub fn store_tokens(
     tokens: &Tokens,
     now: i64,
 ) -> Result<i64, OauthError> {
+    let expires_at = now.saturating_add(tokens.expires_in);
     secrets
-        .store_exact(&oauth_vault_key(row_id), &tokens_to_json(tokens))
+        .store_exact(&oauth_vault_key(row_id), &tokens_to_json(tokens, expires_at))
         .map_err(OauthError::Vault)?;
-    Ok(now.saturating_add(tokens.expires_in))
+    Ok(expires_at)
 }
 
 /// Load a token bundle from the vault. A missing entry is an
 /// [`OauthError::Vault`] (an oauth inbox with no vaulted tokens is a
 /// broken row — fail loud, never silently treat as unauthenticated).
 pub fn load_tokens(secrets: &dyn SecretStore, row_id: &str) -> Result<Tokens, OauthError> {
+    Ok(load_tokens_with_expiry(secrets, row_id)?.0)
+}
+
+/// Like [`load_tokens`] but also returns the redundant vaulted absolute
+/// `token_expires_at` (M1), if present. `None` = a bundle written before
+/// M1 (or by a hand-crafted vault entry) with no expiry copy → the
+/// single-flight follower path treats that as "unknown" and falls back.
+/// Internal: only [`access_token_for`]'s double-check needs the expiry.
+fn load_tokens_with_expiry(
+    secrets: &dyn SecretStore,
+    row_id: &str,
+) -> Result<(Tokens, Option<i64>), OauthError> {
     let raw = secrets
         .resolve(&oauth_vault_key(row_id))
         .map_err(OauthError::Vault)?
@@ -806,7 +827,7 @@ pub fn load_tokens(secrets: &dyn SecretStore, row_id: &str) -> Result<Tokens, Oa
         .and_then(|s| s.as_str())
         .ok_or_else(|| OauthError::Parse("vaulted oauth tokens missing access_token".to_string()))?
         .to_string();
-    Ok(Tokens {
+    let tokens = Tokens {
         access_token,
         refresh_token: v
             .get("refresh_token")
@@ -821,7 +842,45 @@ pub fn load_tokens(secrets: &dyn SecretStore, row_id: &str) -> Result<Tokens, Oa
         // The vault stores no lifetime; the row's `token_expires_at` is
         // the source of truth. Treat a loaded token as expiry-unknown.
         expires_in: 0,
-    })
+    };
+    let vaulted_expiry = as_i64(&v, "token_expires_at");
+    Ok((tokens, vaulted_expiry))
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// M1 — per-inbox single-flight around the refresh cycle
+// ─────────────────────────────────────────────────────────────────────
+
+/// Per-inbox single-flight locks (M1), keyed by `row_id`.
+///
+/// The refresh cycle — load token → (if stale) POST `refresh_token` →
+/// re-vault — is a read-modify-write with no lock spanning it in the
+/// original code. Two concurrent operations on the SAME inbox both loaded
+/// refresh token `RT1` and both POSTed `grant_type=refresh_token`. Since
+/// Microsoft ROTATES the refresh token (`RT1`→`RT2`, invalidating `RT1`),
+/// the racing second writer could persist a token the provider has
+/// ALREADY revoked, bricking the inbox (manual re-link). This lock
+/// serializes the refresh cycle per inbox so exactly ONE refresh happens
+/// and every other caller reuses the freshly-vaulted result.
+///
+/// The outer map mutex is held only long enough to clone out the per-row
+/// `Arc<Mutex<()>>` — NEVER across the network refresh. Every refresher
+/// of the same inbox converges on the SAME inner mutex; different
+/// `row_id`s get different mutexes and never serialize against each
+/// other. Entries are tiny; we never reap them. `parking_lot` mutexes do
+/// NOT poison, and the guard is RAII (released on every return path), so
+/// a panic or early-return can never leave an inbox wedged. Mirrors the
+/// keyed-lock pattern in `workspace_msg.rs` (INJECT_LOCKS / WAKE_LOCKS).
+static REFRESH_LOCKS: LazyLock<PlMutex<HashMap<String, Arc<PlMutex<()>>>>> =
+    LazyLock::new(|| PlMutex::new(HashMap::new()));
+
+/// Clone out the single-flight refresh lock for `row_id`, creating it on
+/// first use. The map lock is short-lived — held only for the insert/clone.
+fn refresh_lock_for(row_id: &str) -> Arc<PlMutex<()>> {
+    let mut map = REFRESH_LOCKS.lock();
+    map.entry(row_id.to_string())
+        .or_insert_with(|| Arc::new(PlMutex::new(())))
+        .clone()
 }
 
 /// The refresh-if-stale entry point (prd §6). Given the row's
@@ -831,6 +890,15 @@ pub fn load_tokens(secrets: &dyn SecretStore, row_id: &str) -> Result<Tokens, Oa
 /// the provider omitted a new one (Google), else take the NEW one
 /// (Microsoft rotation), re-vault the bundle, and hand back the new
 /// absolute expiry for the caller to persist. `now` is injected.
+///
+/// **M1 — single-flight.** The refresh cycle is serialized PER INBOX (see
+/// [`REFRESH_LOCKS`]). The still-valid fast path takes NO lock (the common
+/// case has zero contention). Only when a refresh is needed do we acquire
+/// the per-inbox lock and DOUBLE-CHECK: re-load from the vault under the
+/// lock; if the vaulted access token changed since our pre-lock read, a
+/// sibling just refreshed — reuse its result and skip the network. This
+/// makes it impossible for two callers to both POST `RT1` and race a
+/// rotated-token write.
 pub fn access_token_for(
     secrets: &dyn SecretStore,
     row_id: &str,
@@ -844,7 +912,9 @@ pub fn access_token_for(
     const SKEW: i64 = 60; // refresh 60s early (prd §10 clock margin)
     let stored = load_tokens(secrets, row_id)?;
 
-    // Fresh enough? Reuse the vaulted access token untouched.
+    // Fast path — NO lock. Fresh enough per the row's persisted expiry?
+    // Reuse the vaulted access token untouched. The common case never
+    // contends on the single-flight lock.
     if let Some(exp) = token_expires_at {
         if now < exp - SKEW {
             return Ok(FreshAccess {
@@ -855,9 +925,31 @@ pub fn access_token_for(
         }
     }
 
-    // Refresh. A missing refresh_token is fatal (the inbox must be
-    // re-linked) — never keep serving a stale/absent token silently.
-    let refresh_token = stored.refresh_token.clone().ok_or_else(|| {
+    // A refresh is needed → serialize per inbox (M1 single-flight). The
+    // RAII guard releases on EVERY return path below; parking_lot never
+    // poisons, so an early return / panic can't wedge the inbox.
+    let lock = refresh_lock_for(row_id);
+    let _guard = lock.lock();
+
+    // Double-check under the lock: another thread may have refreshed while
+    // we blocked. Re-load from the vault; if the access token changed
+    // since our pre-lock read, a sibling just rotated + re-vaulted — reuse
+    // its freshly-vaulted token and its exact expiry, skipping the network
+    // entirely (so we never POST a now-revoked refresh token).
+    let (current, vaulted_expiry) = load_tokens_with_expiry(secrets, row_id)?;
+    if current.access_token != stored.access_token {
+        return Ok(FreshAccess {
+            access_token: current.access_token,
+            // A sibling that refreshed always wrote the vaulted expiry;
+            // fall back to the caller's expiry only defensively.
+            token_expires_at: vaulted_expiry.or(token_expires_at).unwrap_or(now),
+            refreshed: true,
+        });
+    }
+
+    // Still ours to refresh. A missing refresh_token is fatal (the inbox
+    // must be re-linked) — never keep serving a stale/absent token silently.
+    let refresh_token = current.refresh_token.clone().ok_or_else(|| {
         OauthError::Vault(format!(
             "inbox {row_id} has no refresh_token — it must be re-linked"
         ))
@@ -875,7 +967,7 @@ pub fn access_token_for(
     let merged = Tokens {
         access_token: fresh.access_token,
         refresh_token: fresh.refresh_token.or(Some(refresh_token)),
-        scope: fresh.scope.or(stored.scope),
+        scope: fresh.scope.or(current.scope),
         token_type: fresh.token_type,
         expires_in: fresh.expires_in,
     };
@@ -885,6 +977,7 @@ pub fn access_token_for(
         token_expires_at: new_expiry,
         refreshed: true,
     })
+    // `_guard` drops here → the per-inbox lock is released.
 }
 
 #[cfg(test)]

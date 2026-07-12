@@ -6335,7 +6335,7 @@ cmd_schema() {
     {
       "name": "mail outbox",
       "usage": "k2 mail outbox [<id>] [--limit N] [--json]",
-      "description": "Your outbound messages + status (pending_approval / approved / submitted / rejected / failed), newest first. Rejected items carry your human's note inline. Point lookup by out_... id (ids are stable in --json).",
+      "description": "Your outbound messages + status (pending_approval / approved / submitted / rejected / failed), newest first. Rejected items carry your human's note inline. A send that carried attachments shows an 'attachments' summary ({count, names} in --json) so you can verify what you attached without opening the recipient inbox. Point lookup by out_... id (ids are stable in --json).",
       "args": [{"name": "id", "required": false}],
       "flags": [
         {"name": "--limit", "arg": "N", "description": "1-100 (default 20)."},
@@ -11801,6 +11801,11 @@ def print_outbound_row(r):
     print("%s  %-17s %-11s to %s — %s" % (
         r.get("id", ""), r.get("status", "?"), unix_ago(r.get("createdAt")),
         ", ".join(r.get("to") or []) or "?", r.get("subject") or "(no subject)"))
+    att = r.get("attachments") or {}
+    if att.get("count"):
+        # What rode this send — so an agent can verify its own attachment
+        # send without opening the recipient inbox (#31.5 follow-up).
+        print("    attachments: %d (%s)" % (att["count"], ", ".join(att.get("names") or [])))
     if r.get("note"):
         # §11.1.9: the owner's note rides inline (esp. on rejected).
         print("    note from your human: %s" % r["note"])
@@ -11813,6 +11818,9 @@ def print_outbound_detail(r):
     if r.get("cc"):
         print("cc       : %s" % ", ".join(r["cc"]))
     print("subject  : %s" % (r.get("subject") or "(no subject)"))
+    att = r.get("attachments") or {}
+    if att.get("count"):
+        print("attach   : %d (%s)" % (att["count"], ", ".join(att.get("names") or [])))
     print("queued   : %s" % unix_ago(r.get("createdAt")))
     if r.get("decidedAt"):
         by = " by %s" % r["decidedBy"] if r.get("decidedBy") else ""

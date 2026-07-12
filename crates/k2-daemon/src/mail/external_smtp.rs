@@ -268,6 +268,10 @@ pub struct LinkedReceipt {
     pub to: Vec<String>,
     pub cc: Vec<String>,
     pub subject: String,
+    /// The attachment filenames (basenames only — never paths, never
+    /// bytes) that rode this submission, so the outbox trail can show
+    /// what was attached (issue #31.5 follow-up). Empty = none.
+    pub attachments: Vec<String>,
 }
 
 /// Resolve the SMTP authentication for a linked inbox from its already-
@@ -505,7 +509,12 @@ pub fn send_linked_message(
     let result = smtp.submit(&route, &inbox.username, &auth, &inbox.email_address, &recipients, &rfc822);
     external::record_check(&inbox.id, result.as_ref().map(|_| ()).map_err(|e| e.as_str()));
     result
-        .map(|()| LinkedReceipt { to: to.to_vec(), cc: cc.to_vec(), subject: subject.to_string() })
+        .map(|()| LinkedReceipt {
+            to: to.to_vec(),
+            cc: cc.to_vec(),
+            subject: subject.to_string(),
+            attachments: attachments.iter().map(|a| a.filename.clone()).collect(),
+        })
         .map_err(|e| ExtError::Engine(format!("SMTP send failed: {e}")))
 }
 
@@ -600,7 +609,12 @@ pub fn send_linked_reply(
     let result = smtp.submit(&route, &inbox.username, &auth, &inbox.email_address, &recipients, &rfc822);
     external::record_check(&inbox.id, result.as_ref().map(|_| ()).map_err(|e| e.as_str()));
     result
-        .map(|()| LinkedReceipt { to: vec![recipient], cc: Vec::new(), subject })
+        .map(|()| LinkedReceipt {
+            to: vec![recipient],
+            cc: Vec::new(),
+            subject,
+            attachments: attachments.iter().map(|a| a.filename.clone()).collect(),
+        })
         .map_err(|e| ExtError::Engine(format!("SMTP send failed: {e}")))
 }
 

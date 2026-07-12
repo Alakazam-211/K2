@@ -210,6 +210,10 @@ pub struct NewOutbound<'a> {
     pub message: &'a OutboundMessage,
     pub status: &'a str,
     pub decided_by: Option<&'a str>,
+    /// Attachment filenames (basenames only — never paths, never bytes)
+    /// that rode this send. Stored as a compact JSON array of strings in
+    /// `attachments_ref`; empty leaves the column NULL.
+    pub attachment_names: &'a [String],
     pub now: i64,
 }
 
@@ -342,15 +346,25 @@ impl OutboundStore for DbOutboundStore {
                     .map_err(|e| format!("cc serialize: {e}"))?,
             )
         };
+        // Filenames only — basenames, never paths, never bytes (they're
+        // non-secret display names). Empty leaves the column NULL.
+        let attachments_ref = if new.attachment_names.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(new.attachment_names)
+                    .map_err(|e| format!("attachments serialize: {e}"))?,
+            )
+        };
         let decided_at: Option<i64> = new.decided_by.map(|_| new.now);
         let inserted = {
             let db = k2_core::db::shared();
             let conn = db.lock();
             conn.execute(
                 "INSERT INTO mail_outbound (id, owner_project_id, agent_name, from_address, \
-                 to_json, cc_json, subject, body_ref, status, decided_by, decided_at, \
-                 created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                 to_json, cc_json, subject, body_ref, attachments_ref, status, decided_by, \
+                 decided_at, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
                 rusqlite::params![
                     id,
                     new.owner_project_id,
@@ -360,6 +374,7 @@ impl OutboundStore for DbOutboundStore {
                     cc_json,
                     new.message.subject,
                     path.to_string_lossy(),
+                    attachments_ref,
                     new.status,
                     new.decided_by,
                     decided_at,
@@ -473,6 +488,7 @@ pub fn record_linked_submitted(
     owner_project_id: &str,
     agent_name: &str,
     message: &OutboundMessage,
+    attachment_names: &[String],
     now: i64,
 ) -> Result<String, String> {
     let id = store.insert(&NewOutbound {
@@ -481,6 +497,7 @@ pub fn record_linked_submitted(
         message,
         status: "approved",
         decided_by: None,
+        attachment_names,
         now,
     })?;
     // Stamp it accepted-for-delivery. A failed transition leaves a
@@ -598,7 +615,7 @@ pub fn outbound_json(row: &MailOutbound) -> serde_json::Value {
         raw.and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
             .unwrap_or_default()
     };
-    serde_json::json!({
+    let mut v = serde_json::json!({
         "id": row.id,
         "from": row.from_address,
         "to": list(Some(row.to_json.as_str())),
@@ -612,7 +629,16 @@ pub fn outbound_json(row: &MailOutbound) -> serde_json::Value {
         "createdAt": row.created_at,
         "decidedAt": row.decided_at,
         "sentAt": row.sent_at,
-    })
+    });
+    // Attachment trail (issue #31.5 follow-up): the outbox row records the
+    // filenames that rode a send so an agent can verify its own attachment
+    // send without opening the recipient inbox. Filenames only — the row
+    // never stores bytes or paths. Omitted entirely when there were none.
+    let names = list(row.attachments_ref.as_deref());
+    if !names.is_empty() {
+        v["attachments"] = serde_json::json!({ "count": names.len(), "names": names });
+    }
+    v
 }
 
 // ── The submit seam (local Stalwart behind a trait) ─────────────────────
@@ -827,6 +853,7 @@ pub fn gate_and_dispatch(
                     message: req.message,
                     status: "pending",
                     decided_by: None,
+                    attachment_names: &[],
                     now,
                 })
                 .map_err(SendError::Engine)?;
@@ -846,6 +873,7 @@ pub fn gate_and_dispatch(
                     message: req.message,
                     status: "approved",
                     decided_by: Some("policy:agent-send-on"),
+                    attachment_names: &[],
                     now,
                 })
                 .map_err(SendError::Engine)?;
@@ -1132,6 +1160,7 @@ mod tests {
         fail_count: bool,
         counts: (u32, u32), // (hour, day)
         inserts: Mutex<Vec<(String, Option<String>)>>, // (status, decided_by)
+        insert_attachments: Mutex<Vec<Vec<String>>>,    // attachment_names per insert
         transitions: Mutex<Vec<(String, String, String)>>,
         transition_result: Option<bool>, // None = Err
         row: Option<MailOutbound>,
@@ -1147,6 +1176,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((new.status.to_string(), new.decided_by.map(String::from)));
+            self.insert_attachments
+                .lock()
+                .unwrap()
+                .push(new.attachment_names.to_vec());
             Ok("out_fake00000001".to_string())
         }
         fn load(&self, _id: &str) -> Result<Option<MailOutbound>, String> {
@@ -1253,6 +1286,70 @@ mod tests {
         assert!(matches!(out, SendOutcome::Queued { .. }), "{out:?}");
         let inserts = store.inserts.lock().unwrap();
         assert_eq!(inserts.as_slice(), &[("pending".to_string(), None)]);
+    }
+
+    /// #31.5 follow-up: a linked send threads its attachment filenames
+    /// (basenames only) into the audit row; a send with none records an
+    /// empty list (→ NULL `attachments_ref`).
+    #[test]
+    fn record_linked_submitted_threads_attachment_filenames() {
+        let store = FakeStore { transition_result: Some(true), ..Default::default() };
+        let m = msg();
+        let names = vec!["invoice.pdf".to_string(), "photo.jpg".to_string()];
+        record_linked_submitted(&store, "P1", "bot", &m, &names, 1_000_000)
+            .expect("recorded");
+        assert_eq!(
+            store.insert_attachments.lock().unwrap().as_slice(),
+            &[names.clone()],
+            "the two basenames rode the insert"
+        );
+        // No bytes / no paths — the recorded names are exactly the basenames.
+        for n in store.insert_attachments.lock().unwrap().iter().flatten() {
+            assert!(!n.contains('/'), "no path separators in a recorded name: {n}");
+        }
+
+        // Zero attachments → an empty list (the store turns that into a
+        // NULL column, verified in the DB-backed route test).
+        let store2 = FakeStore { transition_result: Some(true), ..Default::default() };
+        record_linked_submitted(&store2, "P1", "bot", &m, &[], 1_000_000).expect("recorded");
+        assert_eq!(
+            store2.insert_attachments.lock().unwrap().as_slice(),
+            &[Vec::<String>::new()],
+            "no attachments → empty list"
+        );
+    }
+
+    /// The outbox read surfaces a `{count, names}` summary when the row
+    /// carries attachment filenames, and omits it entirely otherwise.
+    #[test]
+    fn outbound_json_surfaces_attachments_summary() {
+        let base = MailOutbound {
+            id: "out_x".into(),
+            owner_project_id: "P1".into(),
+            agent_name: "bot".into(),
+            from_address: "bot@acme.dev".into(),
+            to_json: r#"["human@example.com"]"#.into(),
+            cc_json: None,
+            subject: "Files".into(),
+            body_ref: Some("/tmp/out_x.json".into()),
+            attachments_ref: Some(r#"["invoice.pdf","photo.jpg"]"#.into()),
+            status: "sent".into(),
+            decided_by: None,
+            note: None,
+            created_at: 1,
+            updated_at: 1,
+            decided_at: None,
+            sent_at: Some(1),
+        };
+        let v = outbound_json(&base);
+        assert_eq!(v["attachments"]["count"], 2);
+        assert_eq!(v["attachments"]["names"][0], "invoice.pdf");
+        assert_eq!(v["attachments"]["names"][1], "photo.jpg");
+
+        // No attachments → no key at all.
+        let plain = MailOutbound { attachments_ref: None, ..base };
+        let v = outbound_json(&plain);
+        assert!(v.get("attachments").is_none(), "omitted when none: {v}");
     }
 
     /// PRE-MORTEM #11 (BINDING): the audit row write FAILS → nothing is
@@ -1729,10 +1826,13 @@ mod tests {
                 message: &m,
                 status: "pending",
                 decided_by: None,
+                attachment_names: &[],
                 now: 1_000_000,
             })
             .expect("insert");
         assert!(id.starts_with("out_"), "{id}");
+        // A no-attachment insert leaves attachments_ref NULL.
+        assert!(store.load(&id).unwrap().unwrap().attachments_ref.is_none());
 
         // The body file is 0600 and rounds the message back.
         #[cfg(unix)]
@@ -1796,6 +1896,7 @@ mod tests {
                 message: &m,
                 status: "pending",
                 decided_by: None,
+                attachment_names: &[],
                 now: now - APPROVAL_EXPIRE_SECS - 10,
             })
             .expect("insert old");
@@ -1806,6 +1907,7 @@ mod tests {
                 message: &m,
                 status: "pending",
                 decided_by: None,
+                attachment_names: &[],
                 now: now - 100,
             })
             .expect("insert fresh");

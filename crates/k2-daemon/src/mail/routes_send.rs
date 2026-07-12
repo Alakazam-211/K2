@@ -680,7 +680,14 @@ fn record_linked_outbox(
         references: None,
     };
     let store = DbOutboundStore::default();
-    if let Err(e) = send::record_linked_submitted(&store, project_id, agent_name, &msg, now_secs()) {
+    if let Err(e) = send::record_linked_submitted(
+        &store,
+        project_id,
+        agent_name,
+        &msg,
+        &receipt.attachments,
+        now_secs(),
+    ) {
         k2_core::log_debug!(
             "[mail/send] linked outbox audit write failed (the send itself succeeded): {e}"
         );
@@ -1738,7 +1745,7 @@ mod tests {
             in_reply_to: None,
             references: None,
         };
-        let id = send::record_linked_submitted(&store, &project_id, "Agent", &msg, now_secs())
+        let id = send::record_linked_submitted(&store, &project_id, "Agent", &msg, &[], now_secs())
             .expect("record linked send");
         assert!(id.starts_with("out_"), "{id}");
         assert_eq!(outbound_count(&project_id), 1, "one audit row after a linked send");
@@ -1757,6 +1764,63 @@ mod tests {
             "sent_at is stamped: {}",
             resp.body
         );
+        // A no-attachment send surfaces NO attachments summary.
+        assert!(
+            v["outbound"].get("attachments").is_none(),
+            "no attachments key for a plain send: {}",
+            resp.body
+        );
+
+        cleanup(&project_id, None);
+    }
+
+    /// #31.5 follow-up: a linked send WITH attachments records the
+    /// filenames in the outbox trail (`attachments_ref` = the JSON of the
+    /// basenames), and the outbox read surfaces `{count, names}`. Never
+    /// bytes, never paths — filenames only.
+    #[test]
+    fn linked_send_records_attachment_filenames_in_the_outbox_trail() {
+        let (name, path) = unique("linkatt");
+        let project_id = insert_project(&name, &path);
+
+        let store = DbOutboundStore::default();
+        let msg = OutboundMessage {
+            from_name: Some("Agent".to_string()),
+            from: "me@gmail.com".to_string(),
+            to: vec!["pat@dest.example".to_string()],
+            cc: Vec::new(),
+            subject: "Here are the files".to_string(),
+            text_body: "see attached".to_string(),
+            in_reply_to: None,
+            references: None,
+        };
+        let names = vec!["invoice.pdf".to_string(), "photo.jpg".to_string()];
+        let id = send::record_linked_submitted(
+            &store, &project_id, "Agent", &msg, &names, now_secs(),
+        )
+        .expect("record linked send with attachments");
+
+        // The stored row's attachments_ref is EXACTLY the two basenames —
+        // no bytes, no paths.
+        let stored: String = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT attachments_ref FROM mail_outbound WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .expect("attachments_ref present")
+        };
+        assert_eq!(stored, r#"["invoice.pdf","photo.jpg"]"#, "basenames only: {stored}");
+
+        // The outbox read surfaces the {count, names} summary.
+        let resp = handle_outbox(&params(&[("project", &path), ("id", &id)]));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["outbound"]["attachments"]["count"], 2);
+        assert_eq!(v["outbound"]["attachments"]["names"][0], "invoice.pdf");
+        assert_eq!(v["outbound"]["attachments"]["names"][1], "photo.jpg");
 
         cleanup(&project_id, None);
     }
@@ -1919,6 +1983,7 @@ mod tests {
                     message: &msg,
                     status: "pending",
                     decided_by: None,
+                    attachment_names: &[],
                     now,
                 })
                 .expect("seed audit row");
@@ -2066,6 +2131,7 @@ mod tests {
                 message: &msg,
                 status: "pending",
                 decided_by: None,
+                attachment_names: &[],
                 now: now_secs(),
             })
             .expect("seed foreign row");

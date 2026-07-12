@@ -52,6 +52,7 @@ pub mod lease;
 pub mod render;
 pub mod subdomains;
 pub mod tls;
+pub mod unpair;
 pub mod watchdog;
 
 pub use config::{e2e_enabled, RelayEndpoint, TunnelConfig};
@@ -90,6 +91,14 @@ pub struct TunnelConfigView {
     /// but can surface this to explain when an env var is overriding the
     /// stored preference.
     pub e2e_effective: bool,
+    /// The persisted PAUSE flag (PRD tunnel-disable-unpair §2A, camelCase
+    /// `enabled`): `false` = the user disabled the tunnel on this device;
+    /// no frpc spawns until re-enabled.
+    pub enabled: bool,
+    /// True when this device is in the RELEASED (unpaired) state (PRD
+    /// §2B): the identity was deleted + tombstoned. The UI's tunnel card
+    /// tri-state (Connected / Disabled / Released) reads this.
+    pub released: bool,
 }
 
 impl From<&TunnelConfig> for TunnelConfigView {
@@ -104,6 +113,10 @@ impl From<&TunnelConfig> for TunnelConfigView {
             auto_start: c.auto_start,
             e2e: c.e2e,
             e2e_effective: config::e2e_enabled(c),
+            enabled: c.enabled,
+            // Disk read (tombstone), like e2e_effective's env read: the
+            // view reports the EFFECTIVE device state, not just the file.
+            released: unpair::released_state(c),
         }
     }
 }
@@ -217,6 +230,52 @@ pub fn start_tunnel(
 /// Stop the tunnel (kills the supervised `frpc` child; no restart).
 pub fn stop_tunnel() -> Result<(), String> {
     connector::stop()
+}
+
+/// **Disable** the tunnel (PRD `prd-tunnel-disable-unpair-v1.md` §2A) —
+/// the persisted PAUSE. Writes `enabled: false` into `tunnel.json` FIRST
+/// (so the state survives daemon restarts, reboots, and orphaned daemons
+/// — the spawn gate re-reads it from disk at every spawn), then stops the
+/// live connector. Identity/lease are untouched; [`enable_tunnel`] is the
+/// symmetric one-click undo. Returns the post-disable status.
+pub fn disable_tunnel() -> Result<TunnelStatus, String> {
+    config::update(|c| c.enabled = false)?;
+    connector::stop()?;
+    Ok(connector::status())
+}
+
+/// **Re-enable** a disabled tunnel (PRD §2A) and bring it up. Persists
+/// `enabled: true` (plus an optional subdomain override), then starts the
+/// connector when the config is connectable; a not-yet-configured device
+/// just persists the flag and reports the (stopped) status — enabling is
+/// meaningful before pairing too.
+pub fn enable_tunnel(
+    subdomain: Option<String>,
+    daemon_port: u16,
+) -> Result<TunnelStatus, String> {
+    let cfg = config::update(|c| {
+        c.enabled = true;
+        if let Some(s) = &subdomain {
+            let s = s.trim();
+            if !s.is_empty() {
+                c.subdomain = s.to_string();
+            }
+        }
+    })?;
+    if cfg.is_connectable() {
+        connector::start(None, daemon_port, &FrpcBinary::Auto)
+    } else {
+        Ok(connector::status())
+    }
+}
+
+/// **Release (unpair)** this device's tunnel identity (PRD §2B) — the
+/// destructive divorce: stop, report upstream (queue on failure),
+/// tombstone, and delete `tunnel.json` + the rendered frpc config + the
+/// E2E keypair. The device can never re-claim its old subdomain; the
+/// subdomain stays owned by the ACCOUNT and re-attachable elsewhere.
+pub fn release_tunnel_identity() -> Result<unpair::ReleaseReport, String> {
+    unpair::perform_release()
 }
 
 /// Current tunnel status (running? + predicted public URL).

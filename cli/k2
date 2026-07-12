@@ -4632,6 +4632,109 @@ else:
     print(f"Failed to stop tunnel: {err}", file=sys.stderr); sys.exit(1)
 '
             ;;
+        # PRD tunnel-disable-unpair §2A — the persisted PAUSE. Unlike
+        # `stop` (this daemon session only), `disable` writes
+        # `enabled:false` into ~/.k2/tunnel.json, so daemon restarts,
+        # reboots, and orphaned daemons all keep the tunnel dark until
+        # `enable`. Identity and subdomain are untouched.
+        disable)
+            cli_post "/cli/tunnel/disable" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f"Failed to parse daemon response: {e}", file=sys.stderr); sys.exit(1)
+if d.get("error"):
+    err = d["error"]
+    print(f"Failed to disable tunnel: {err}", file=sys.stderr); sys.exit(1)
+print("Tunnel disabled (persisted — survives daemon restarts and reboots).")
+print("Re-enable with: k2 tunnel enable")
+'
+            ;;
+        enable)
+            local subdomain=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --subdomain) subdomain="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            local extra=""
+            [ -n "$subdomain" ] && extra="subdomain=$(urlencode "$subdomain")"
+            cli_post "/cli/tunnel/enable" $extra | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f"Failed to parse daemon response: {e}", file=sys.stderr); sys.exit(1)
+if d.get("error"):
+    err = d["error"]
+    print(f"Failed to enable tunnel: {err}", file=sys.stderr); sys.exit(1)
+if d.get("running"):
+    url = d.get("public_url") or "(subdomain assigned by the server)"
+    print(f"Tunnel enabled and running. Public URL: {url}")
+else:
+    print("Tunnel enabled (persisted). Not running yet — pair a subdomain in")
+    print("Settings -> K2 Connect (or run: k2 tunnel start).")
+'
+            ;;
+        # PRD tunnel-disable-unpair §2B — the DESTRUCTIVE unpair. Deletes
+        # this DEVICE's tunnel identity (tunnel.json + rendered frpc config
+        # + E2E keypair), tombstones ~/.k2/unpaired.json, and reports the
+        # release upstream so the relay refuses the old identity. The
+        # subdomain stays owned by your ACCOUNT — attach it to another
+        # device by pairing there. Requires --confirm.
+        release)
+            local confirmed=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --confirm) confirmed=1; shift ;;
+                    *) shift ;;
+                esac
+            done
+            if [ "$confirmed" != "1" ]; then
+                local _sub
+                _sub=$(python3 -c '
+import json, sys
+try:
+    print((json.load(open(sys.argv[1])).get("subdomain") or "").strip())
+except Exception:
+    print("")
+' "${K2_HOME}/tunnel.json" 2>/dev/null || true)
+                echo "k2 tunnel release permanently unpairs THIS DEVICE from its subdomain:" >&2
+                if [ -n "$_sub" ]; then
+                    echo "  - ${_sub}.k2.dev stops routing here and this device can NEVER reclaim it" >&2
+                else
+                    echo "  - this device's tunnel identity is deleted and can NEVER reclaim its subdomain" >&2
+                fi
+                echo "  - your ACCOUNT keeps the subdomain — pair it on another device any time" >&2
+                echo "  - this is NOT a pause; for that use: k2 tunnel disable" >&2
+                echo "Re-run with --confirm to proceed: k2 tunnel release --confirm" >&2
+                exit 1
+            fi
+            cli_post "/cli/tunnel/release" "confirm=1" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f"Failed to parse daemon response: {e}", file=sys.stderr); sys.exit(1)
+if d.get("error"):
+    err = d["error"]
+    print(f"Failed to release tunnel identity: {err}", file=sys.stderr); sys.exit(1)
+sub = (d.get("subdomain") or "").strip()
+label = f"{sub}.k2.dev" if sub else "its subdomain"
+if d.get("alreadyReleased"):
+    print(f"This device was already released from {label}.")
+else:
+    print(f"Released: this device is permanently unpaired from {label}.")
+if d.get("upstreamReported"):
+    print("The relay has been notified — the old identity is refused everywhere.")
+else:
+    print("Relay notification is QUEUED (device offline?) — it replays on next")
+    print("daemon boot; you can also force-release from the k2.dev account portal.")
+print("Your account still owns the subdomain; pair it on another device any time.")
+'
+            ;;
         status)
             local as_json=0
             [ "${1:-}" = "--json" ] && as_json=1
@@ -4647,6 +4750,13 @@ except Exception as e:
 print("K2 Connect tunnel")
 running = "yes" if d.get("running") else "no"
 print(f"  Running:    {running}")
+# Tri-state truth (PRD tunnel-disable-unpair §4): never hide WHY the
+# tunnel is down. Pre-PRD daemons omit the fields -> show nothing extra.
+if not d.get("running"):
+    if d.get("released"):
+        print("  State:      RELEASED — this device is unpaired (re-pair to mint a fresh identity)")
+    elif d.get("enabled") is False:
+        print("  State:      DISABLED (by you, persisted) — re-enable with: k2 tunnel enable")
 if d.get("running"):
     public_url = d.get("public_url") or "(assigned by server)"
     print(f"  Public URL: {public_url}")
@@ -4719,7 +4829,10 @@ if not targets:
 '
             ;;
         *)
-            echo "Usage: k2 tunnel <start [--subdomain <s>]|stop|status [--json]|subdomains [--json]>" >&2
+            echo "Usage: k2 tunnel <start [--subdomain <s>]|stop|disable|enable [--subdomain <s>]|release --confirm|status [--json]|subdomains [--json]>" >&2
+            echo "  disable  pause the tunnel, persisted on disk (survives restarts/reboots)" >&2
+            echo "  enable   undo disable and bring the tunnel up" >&2
+            echo "  release  permanently unpair THIS DEVICE from its subdomain (destructive)" >&2
             exit 1
             ;;
     esac
@@ -6628,6 +6741,27 @@ cmd_schema() {
       "description": "K2 Connect tunnel — expose this daemon at https://<user>.k2.dev.",
       "args": [],
       "flags": []
+    },
+    {
+      "name": "tunnel disable",
+      "usage": "k2 tunnel disable",
+      "description": "Pause the tunnel, PERSISTED on disk — survives daemon restarts, reboots, and orphaned daemons. Identity/subdomain untouched; undo with 'k2 tunnel enable'.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "tunnel enable",
+      "usage": "k2 tunnel enable [--subdomain <s>]",
+      "description": "Undo 'k2 tunnel disable' (persisted) and bring the tunnel up when a subdomain is paired.",
+      "args": [],
+      "flags": [{"name": "--subdomain", "arg": "s", "description": "Override the stored subdomain label."}]
+    },
+    {
+      "name": "tunnel release",
+      "usage": "k2 tunnel release --confirm",
+      "description": "DESTRUCTIVE: permanently unpair THIS DEVICE from its subdomain — deletes the local tunnel identity and notifies the relay so the old identity is refused forever. The account keeps the subdomain (pair it elsewhere). Not a pause; that is 'k2 tunnel disable'.",
+      "args": [],
+      "flags": [{"name": "--confirm", "arg": null, "description": "Required — the release cannot be undone on this device."}]
     },
     {
       "name": "tunnel subdomains",

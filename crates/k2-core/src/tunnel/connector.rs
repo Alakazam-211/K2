@@ -120,8 +120,10 @@ fn is_executable(p: &Path) -> bool {
     p.is_file()
 }
 
-/// Path the rendered frpc config is written to.
-fn frpc_config_path() -> PathBuf {
+/// Path the rendered frpc config is written to. `pub(crate)` so a
+/// Release ([`super::unpair`]) can delete it — the rendered TOML embeds
+/// the bearer token, so it is identity material too.
+pub(crate) fn frpc_config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
@@ -172,6 +174,68 @@ fn state() -> &'static Mutex<Option<ConnectorState>> {
     STATE.get_or_init(|| Mutex::new(None))
 }
 
+/// Why the ON-DISK spawn gate refused to arm frpc (PRD
+/// `prd-tunnel-disable-unpair-v1.md`). Both variants are TERMINAL for the
+/// supervisor: it must exit, not backoff-retry — a refused zombie hammering
+/// the relay every 33s forever is the pre-mortem this kills.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SpawnBlock {
+    /// `tunnel.json` `enabled: false` — the user's persisted PAUSE.
+    Disabled,
+    /// The identity on disk matches the `unpaired.json` tombstone (or the
+    /// tunnel state is unreadable, which fails CLOSED) — this device
+    /// released its subdomain and can never re-arm with that identity.
+    Released,
+    /// `tunnel.json` exists but can't be read/parsed. Fail closed: a
+    /// corrupt secret store must never spawn a tunnel.
+    Unreadable(String),
+}
+
+impl std::fmt::Display for SpawnBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpawnBlock::Disabled => write!(
+                f,
+                "tunnel is disabled on this device (persisted in tunnel.json) — \
+                 re-enable with `k2 tunnel enable` or the Settings → K2 Connect toggle"
+            ),
+            SpawnBlock::Released => write!(
+                f,
+                "this device's tunnel identity was released (unpaired) — it can no \
+                 longer claim its old subdomain; re-pair in Settings → K2 Connect to \
+                 mint a fresh identity"
+            ),
+            SpawnBlock::Unreadable(e) => write!(f, "tunnel state unreadable: {e}"),
+        }
+    }
+}
+
+/// The ON-DISK gate every frpc spawn must pass (PRD §2 pre-mortem: "the
+/// flag must be read at frpc-SPAWN time by whatever process spawns frpc —
+/// no cached copy. Kill the class, not the instance"). Reads `tunnel.json`
+/// + the `unpaired.json` tombstone FRESH from disk on every call, so a
+/// restarted daemon, a rebooted machine, and an orphaned second daemon all
+/// observe a disable/release they never saw happen.
+///
+/// Checked in [`start`] (boot autostart + every route/CLI start) and by
+/// the supervisor before EVERY respawn — a disable or release landing
+/// mid-flight stops the tunnel at the next child exit and is never undone
+/// by a stale in-memory copy.
+fn spawn_gate() -> Result<(), SpawnBlock> {
+    let cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => return Err(SpawnBlock::Unreadable(e)),
+    };
+    // Released beats disabled: a tombstoned identity is permanent.
+    if super::unpair::identity_released(&cfg).is_some() {
+        return Err(SpawnBlock::Released);
+    }
+    if !cfg.enabled {
+        return Err(SpawnBlock::Disabled);
+    }
+    Ok(())
+}
+
 /// Reported status of the connector.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TunnelStatus {
@@ -193,10 +257,22 @@ pub struct TunnelStatus {
     /// (no skip) so the client never sees `undefined` and mis-renders the
     /// warning.
     pub frpc_installed: bool,
+    /// The persisted PAUSE flag (PRD tunnel-disable-unpair §2A), read from
+    /// disk: `false` = the user disabled the tunnel on this device and no
+    /// frpc will spawn until re-enabled. Always emitted so the UI can show
+    /// "Disabled (by you)" instead of a generic "stopped".
+    pub enabled: bool,
+    /// True when this device is in the RELEASED (unpaired) state — the
+    /// identity was deleted and tombstoned (PRD §2B). Always emitted so
+    /// the UI's tri-state (Connected / Disabled / Released) never guesses.
+    pub released: bool,
 }
 
 impl TunnelStatus {
     fn stopped() -> Self {
+        // Disk truth for the tri-state: the connector singleton being
+        // empty says nothing about WHY the tunnel is down.
+        let cfg = config::load().unwrap_or_default();
         Self {
             running: false,
             public_url: None,
@@ -204,6 +280,8 @@ impl TunnelStatus {
             local_port: None,
             server_addr: None,
             frpc_installed: resolve_frpc(&FrpcBinary::Auto).is_ok(),
+            enabled: cfg.enabled,
+            released: super::unpair::released_state(&cfg),
         }
     }
 }
@@ -231,6 +309,15 @@ pub fn start(
         if st.running.load(Ordering::SeqCst) {
             return Ok(status_from(st));
         }
+    }
+
+    // The ON-DISK gate FIRST (PRD tunnel-disable-unpair): a disabled or
+    // released device never spawns frpc, regardless of relay list or how
+    // the start was reached (boot autostart, route, CLI). Checked before
+    // config reconciliation so a disabled tunnel reports "disabled", not
+    // a misleading "not configured".
+    if let Err(block) = spawn_gate() {
+        return Err(block.to_string());
     }
 
     // Load + reconcile config.
@@ -396,6 +483,9 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
         local_port: Some(st.resolved_local_port),
         server_addr: Some(server_addr),
         frpc_installed: resolve_frpc(&FrpcBinary::Auto).is_ok(),
+        // A live connector implies the gate passed at spawn time.
+        enabled: true,
+        released: false,
     }
 }
 
@@ -678,6 +768,18 @@ fn spawn_supervised(
                         if !running.load(Ordering::SeqCst) {
                             return;
                         }
+                        // ON-DISK gate at the spawn site (PRD tunnel-
+                        // disable-unpair): re-read fresh every attempt —
+                        // a disable/release landing mid-flight must stop
+                        // the class of respawns, terminally (no backoff
+                        // retry-loop from a refused device).
+                        if let Err(block) = spawn_gate() {
+                            crate::log_debug!(
+                                "[tunnel] respawn blocked — supervisor exiting: {block}"
+                            );
+                            running.store(false, Ordering::SeqCst);
+                            return;
+                        }
                         watch = new_watch();
                         match spawn_once(&frpc_thread, watch.clone()) {
                             Ok(c) => c,
@@ -819,6 +921,16 @@ fn spawn_supervised(
                     }
                 }
                 if !running.load(Ordering::SeqCst) {
+                    return;
+                }
+                // Same ON-DISK gate before the post-exit respawn: read at
+                // frpc-spawn time, never from a cached copy (PRD tunnel-
+                // disable-unpair pre-mortem). Terminal on block.
+                if let Err(block) = spawn_gate() {
+                    crate::log_debug!(
+                        "[tunnel] respawn blocked — supervisor exiting: {block}"
+                    );
+                    running.store(false, Ordering::SeqCst);
                     return;
                 }
                 watch = new_watch();
@@ -1618,6 +1730,143 @@ mod tests {
                 "restart must render the new preferred relay\n{toml}"
             );
             stop().expect("stop");
+        });
+    }
+
+    /// PRD tunnel-disable-unpair §2A — DISABLE BLOCKS SPAWN: with the
+    /// persisted pause flag down, `start()` must refuse before any side
+    /// effect (no frpc.toml render, no child), whoever calls it (boot
+    /// autostart, route, CLI — all funnel here).
+    #[test]
+    fn start_refuses_when_disabled_and_never_renders() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                enabled: false,
+                ..Default::default()
+            })
+            .expect("seed disabled config");
+
+            let err = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect_err("disabled tunnel must refuse to start");
+            assert!(
+                err.contains("disabled"),
+                "error must name the persisted disable, got: {err}"
+            );
+            assert!(!status().running, "no child after a refused start");
+            assert!(
+                !frpc_config_path().exists(),
+                "a refused start must not render frpc.toml (gate sits ABOVE the connector)"
+            );
+            // Status carries the tri-state truth for the UI.
+            let st = status();
+            assert!(!st.enabled, "status must report the persisted disable");
+            assert!(!st.released);
+
+            // Re-enable is symmetric: same config, flag up, start works.
+            config::update(|c| c.enabled = true).expect("re-enable");
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect("re-enabled tunnel must start");
+            assert!(st.running);
+            stop().expect("stop");
+        });
+    }
+
+    /// PRD tunnel-disable-unpair §2B — a RELEASED identity can never
+    /// re-arm the connector: a planted copy of the old tunnel.json (the
+    /// stale-backup / zombie case) is refused by the local gate even
+    /// before the relay gets a say.
+    #[test]
+    fn released_identity_cannot_rearm_connector() {
+        with_temp_home(|| {
+            // The planted stale backup: a fully connectable config…
+            config::save(&TunnelConfig {
+                token: "tok-old".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("plant stale identity");
+            // …whose identity was RELEASED on this device.
+            super::super::unpair::save(&super::super::unpair::UnpairTombstone {
+                released_at: "2026-07-12T00:00:00+00:00".to_string(),
+                subdomain: "rosson".to_string(),
+                device_id: None,
+                token_sha256: super::super::unpair::token_fingerprint("tok-old"),
+                upstream_reported: true,
+                pending_token: None,
+            })
+            .expect("save tombstone");
+
+            let err = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect_err("released identity must never re-arm");
+            assert!(
+                err.contains("released"),
+                "error must name the release, got: {err}"
+            );
+            assert!(!status().running);
+            assert!(status().released, "status must report the released state");
+
+            // A FRESH identity (normal re-pair) passes the gate and starts.
+            config::save(&TunnelConfig {
+                token: "tok-new".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("re-pair with fresh identity");
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect("fresh identity must start");
+            assert!(st.running);
+            stop().expect("stop");
+        });
+    }
+
+    /// The incident's KILL-THE-CLASS requirement, end to end through the
+    /// REAL supervisor: a disable persisted ON DISK while the tunnel is up
+    /// must stop the respawn loop at the next child exit — the supervisor
+    /// re-reads the flag at spawn time (no cached copy), exits terminally,
+    /// and flips the connector to stopped. This is exactly what an
+    /// orphaned daemon does after the user disables from anywhere else.
+    #[test]
+    fn supervisor_stops_respawning_after_on_disk_disable() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed config");
+
+            // /bin/true exits instantly → the supervisor is in a steady
+            // exit→backoff→respawn cycle.
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect("start");
+            assert!(st.running);
+
+            // The disable lands ON DISK only — no stop() call, exactly
+            // like a second daemon / another surface flipping the flag.
+            config::update(|c| c.enabled = false).expect("persist disable");
+
+            // The next respawn attempt must observe the flag and exit the
+            // supervisor terminally. Backoff starts at 0.5s; poll
+            // generously so slow CI can't flake this.
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                if !status().running {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    panic!("supervisor kept respawning after an on-disk disable");
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            let st = status();
+            assert!(!st.enabled, "status must show the persisted disable");
+            stop().expect("stop is idempotent after the gate exit");
         });
     }
 

@@ -315,6 +315,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/tunnel/subdomains/claim"
         | "/cli/tunnel/subdomains/unclaim"
         | "/cli/tunnel/subdomains/refresh" => CliResponse::method_not_allowed(),
+        // PRD tunnel-disable-unpair — disable/enable/release are POST-only
+        // mutations (dispatcher arms); a GET landing here gets an explicit
+        // 405, never a silent no-op (feedback_post_only_route_guards).
+        "/cli/tunnel/disable" | "/cli/tunnel/enable" | "/cli/tunnel/release" => {
+            CliResponse::method_not_allowed()
+        }
         "/cli/companion/presets" => match k2_core::companion::cli_routes::list_presets() {
             Ok(body) => CliResponse::ok_json(body),
             Err(e) => CliResponse::bad_request(e),

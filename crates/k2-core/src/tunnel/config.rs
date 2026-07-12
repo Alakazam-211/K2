@@ -154,6 +154,23 @@ pub struct TunnelConfig {
     /// truthy value forces ON, and unset → follow this field.
     #[serde(default = "default_e2e")]
     pub e2e: bool,
+
+    /// **Disable-vs-Release PRD (`prd-tunnel-disable-unpair-v1.md` §2A) —
+    /// the persisted PAUSE flag.** `false` = the user disabled the tunnel
+    /// on this device: frpc must never spawn, across daemon restarts,
+    /// machine reboots, and orphaned daemons alike. The gate lives at the
+    /// frpc-SPAWN site (`connector::spawn_gate`), which re-reads this
+    /// field from DISK on every spawn attempt — no cached copy, so a
+    /// second/orphaned daemon respects a disable it never saw happen.
+    ///
+    /// Defaults `true` (a config that omits the field — every pre-PRD
+    /// `tunnel.json` — stays enabled), and the default is skipped on
+    /// serialize so an enabled config keeps its old on-disk shape.
+    /// Identity (token, subdomain, lease) is untouched by this flag —
+    /// disable is the reversible pause; Release (`unpair`) is the
+    /// destructive divorce.
+    #[serde(default = "default_enabled", skip_serializing_if = "is_true")]
+    pub enabled: bool,
 }
 
 /// True when K2 Connect end-to-end encryption (Option A) is enabled for
@@ -207,6 +224,21 @@ fn env_e2e_override() -> Option<bool> {
     }
 }
 
+/// Default for the `enabled` pause flag when absent from `tunnel.json`:
+/// **true** — every pre-PRD config (no field) stays enabled. Only an
+/// explicit `"enabled": false` (written by `k2 tunnel disable` / the
+/// Settings toggle / `POST /cli/tunnel/disable`) pauses the tunnel.
+fn default_enabled() -> bool {
+    true
+}
+
+/// serde `skip_serializing_if` helper: skip the `enabled` field when it
+/// holds the default (`true`) so an enabled config keeps the legacy
+/// on-disk shape byte-for-byte.
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 fn default_server_host() -> String {
     DEFAULT_SERVER_HOST.to_string()
 }
@@ -229,6 +261,9 @@ impl Default for TunnelConfig {
             device_label: None,
             // E2E ON by default (0.40.6+); user opts out via `e2e: false`.
             e2e: default_e2e(),
+            // Enabled by default — `false` is the persisted PAUSE
+            // (PRD tunnel-disable-unpair §2A).
+            enabled: default_enabled(),
         }
     }
 }
@@ -417,6 +452,7 @@ mod tests {
                 device_id: Some("dev-abc".to_string()),
                 device_label: Some("MacIntel".to_string()),
                 e2e: true,
+                enabled: true,
             };
             save(&cfg).expect("save");
             let back = load().expect("load");
@@ -612,6 +648,64 @@ mod tests {
             let back = load().expect("load");
             assert_eq!(back, cfg, "multi-relay config must round-trip");
             assert_eq!(back.relay_list().len(), 2);
+        });
+    }
+
+    #[test]
+    fn enabled_defaults_true_and_legacy_json_is_enabled() {
+        // PRD tunnel-disable-unpair §2A: the pause flag defaults ON so
+        // every pre-PRD tunnel.json (no field) keeps working untouched.
+        assert!(TunnelConfig::default().enabled, "enabled must default true");
+        let cfg: TunnelConfig =
+            serde_json::from_str(r#"{"token":"tok","subdomain":"rosson"}"#)
+                .expect("parse legacy config");
+        assert!(cfg.enabled, "absent enabled field must deserialize true");
+    }
+
+    #[test]
+    fn disable_persists_across_simulated_restart() {
+        // The incident's exact failure, as a state-file round-trip: a
+        // persisted disable must survive a fresh process reading the file
+        // cold (daemon restart / reboot / orphaned second daemon).
+        with_temp_home(|| {
+            save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                enabled: false,
+                ..Default::default()
+            })
+            .expect("save disabled config");
+            // Simulated restart = a cold load with no in-memory state.
+            let back = load().expect("reload after 'restart'");
+            assert!(!back.enabled, "disable must survive the round-trip");
+            // The flag is IN the file, not implied — a raw read shows it.
+            let raw = std::fs::read_to_string(config_path()).expect("read tunnel.json");
+            assert!(
+                raw.contains("\"enabled\": false"),
+                "disable must be persisted on disk, not in-memory\n{raw}"
+            );
+            // Re-enable is symmetric.
+            update(|c| c.enabled = true).expect("re-enable");
+            assert!(load().expect("reload").enabled, "re-enable must persist");
+        });
+    }
+
+    #[test]
+    fn enabled_config_resave_keeps_legacy_shape() {
+        // An enabled (default) config re-saved by the daemon must not grow
+        // an `"enabled": true` key — same contract as the empty relays list.
+        with_temp_home(|| {
+            save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                ..Default::default()
+            })
+            .expect("save enabled config");
+            let raw = std::fs::read_to_string(config_path()).expect("read tunnel.json");
+            assert!(
+                !raw.contains("enabled"),
+                "default (enabled) must be skipped on serialize\n{raw}"
+            );
         });
     }
 

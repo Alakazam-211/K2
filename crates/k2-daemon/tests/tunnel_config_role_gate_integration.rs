@@ -407,8 +407,9 @@ async fn must_change_password_owner_session_is_blocked_then_released() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// (6) start/stop REMAIN owner-token-only — even an Owner-ROLE session is
-//     403'd — and their POST-only guards hold.
+// (6) start/stop — plus the PRD tunnel-disable-unpair verbs disable/
+//     enable/release — REMAIN owner-token-only — even an Owner-ROLE
+//     session is 403'd — and their POST-only guards hold.
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -420,7 +421,15 @@ async fn start_stop_stay_owner_token_only_even_for_owner_role() {
             let sess =
                 provision_and_login(d.port, "tr_owner2", "hunter2-strong-4", "owner", false);
 
-            for path in ["/cli/tunnel/start", "/cli/tunnel/stop"] {
+            // disable/enable/release (PRD tunnel-disable-unpair) share
+            // start/stop's tier exactly: owner-token-only + POST-gated.
+            for path in [
+                "/cli/tunnel/start",
+                "/cli/tunnel/stop",
+                "/cli/tunnel/disable",
+                "/cli/tunnel/enable",
+                "/cli/tunnel/release",
+            ] {
                 // Owner-ROLE session → 403 (the deliberate footgun guard:
                 // config-POST relaxed, start/stop NOT).
                 let r = http(d.port, "POST", &format!("{path}?token={sess}"), Some(""));

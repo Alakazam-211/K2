@@ -120,6 +120,11 @@ interface TunnelStatus {
   running: boolean
   public_url: string | null
   frpc_installed: boolean
+  /** PRD tunnel-disable-unpair §2A — persisted pause flag (false = user
+   *  disabled the tunnel on this device). Optional: pre-PRD daemons omit it. */
+  enabled?: boolean
+  /** PRD §2B — this device released (unpaired) its tunnel identity. */
+  released?: boolean
 }
 
 // K2 #629 — connect-user permission tier. 'viewer' (presence S4) is the
@@ -163,6 +168,10 @@ interface TunnelConfigView {
   e2e: boolean
   /** Effective state after any K2_E2E env override (may differ from `e2e`). */
   e2eEffective: boolean
+  /** PRD tunnel-disable-unpair §2A — persisted pause flag. Optional: pre-PRD daemons omit it. */
+  enabled?: boolean
+  /** PRD §2B — this device is in the released (unpaired) state. */
+  released?: boolean
 }
 
 // The daemon rotates ~/.k2so/daemon.token on every restart; getDaemonWs()
@@ -477,20 +486,26 @@ export function K2ConnectSection(): React.JSX.Element {
   const [policySavedMsg, setPolicySavedMsg] = useState<string | null>(null)
   const [policyError, setPolicyError] = useState<string | null>(null)
 
+  // (Re)load the stored tunnel config into the form state. Shared by the
+  // mount effect and the release flow (which must show the identity GONE).
+  const loadConfig = async (): Promise<void> => {
+    try {
+      const res = await tunnelGet('config')
+      if (res.ok) {
+        const cfg = (await res.json()) as TunnelConfigView
+        setServerAddr(cfg.serverAddr || DEFAULT_SERVER_ADDR)
+        setServerPort(String(cfg.serverPort || DEFAULT_SERVER_PORT))
+        setSubdomain(cfg.subdomain || '')
+        setTokenSet(cfg.tokenSet)
+        setAutoStart(cfg.autoStart ?? false)
+      }
+    } catch { /* ignore */ }
+  }
+
   // Load config + status on mount, then poll status while mounted.
   useEffect(() => {
     void (async () => {
-      try {
-        const res = await tunnelGet('config')
-        if (res.ok) {
-          const cfg = (await res.json()) as TunnelConfigView
-          setServerAddr(cfg.serverAddr || DEFAULT_SERVER_ADDR)
-          setServerPort(String(cfg.serverPort || DEFAULT_SERVER_PORT))
-          setSubdomain(cfg.subdomain || '')
-          setTokenSet(cfg.tokenSet)
-          setAutoStart(cfg.autoStart ?? false)
-        }
-      } catch { /* ignore */ }
+      await loadConfig()
       void refreshStatus()
       // K2 #629: resolve the viewer's role FIRST so the management UI
       // gates correctly; only load the user list + policy when the viewer
@@ -845,7 +860,10 @@ export function K2ConnectSection(): React.JSX.Element {
       // start — its renewal loop spins up on tunnel start and reads the
       // stored identity.
       await pushDeviceIdentity()
-      const res = await tunnelPost(`start${sub ? `?subdomain=${encodeURIComponent(sub)}` : ''}`)
+      // PRD tunnel-disable-unpair §2A: Start goes through /enable so the
+      // PERSISTED pause flag is raised by the same click — all surfaces
+      // (this button, `k2 tunnel enable`, the route) write the SAME flag.
+      const res = await tunnelPost(`enable${sub ? `?subdomain=${encodeURIComponent(sub)}` : ''}`)
       if (!res.ok) {
         // The connector surfaces the frpc-not-installed hint verbatim here.
         setError(await errText(res))
@@ -873,7 +891,11 @@ export function K2ConnectSection(): React.JSX.Element {
     const bound = subdomain.trim()
     if (accessToken && bound) void releaseSubdomain(accessToken, bound, deviceId).catch(() => undefined)
     try {
-      const res = await tunnelPost('stop')
+      // PRD tunnel-disable-unpair §2A: Stop goes through /disable — the
+      // pause is PERSISTED on disk, so a daemon restart / reboot /
+      // orphaned daemon can never quietly bring the tunnel back (the
+      // incident this PRD was born from). Start symmetrically re-enables.
+      const res = await tunnelPost('disable')
       if (!res.ok) {
         setError(await errText(res))
         return
@@ -881,6 +903,44 @@ export function K2ConnectSection(): React.JSX.Element {
       await refreshStatus()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Stop failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // PRD tunnel-disable-unpair §2B — Release subdomain from this device
+  // (unpair). DESTRUCTIVE: deletes this device's tunnel identity
+  // (tunnel.json + rendered frpc config + E2E keypair), tombstones
+  // ~/.k2/unpaired.json, and notifies the relay so the old identity is
+  // refused forever. The ACCOUNT keeps the subdomain — the confirm text
+  // must say "this device", never "your subdomain".
+  const releaseFromDevice = async (): Promise<void> => {
+    const sub = subdomain.trim()
+    const label = sub ? `${sub}.k2.dev` : 'its subdomain'
+    const ok = await confirm({
+      title: 'Release subdomain from this device?',
+      message:
+        `${label} will stop routing to THIS DEVICE permanently — even a restored ` +
+        `backup of this machine can never reclaim it. Your account keeps the ` +
+        `subdomain; you can pair it on another device any time. ` +
+        `(Just want to pause? Use Stop tunnel instead — it now persists.)`,
+      confirmLabel: 'Release this device',
+    })
+    if (!ok) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await tunnelPost('release?confirm=1')
+      if (!res.ok) {
+        setError(await errText(res))
+        return
+      }
+      // Identity is gone — reload config (tokenSet drops) + status
+      // (released: true drives the tri-state card).
+      await loadConfig()
+      await refreshStatus()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Release failed')
     } finally {
       setBusy(false)
     }
@@ -980,6 +1040,10 @@ export function K2ConnectSection(): React.JSX.Element {
     'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 
   const running = status?.running ?? false
+  // PRD tunnel-disable-unpair tri-state. Optional-safe: a pre-PRD daemon
+  // omits both fields → plain running/stopped, exactly the old card.
+  const tunnelDisabled = status?.enabled === false
+  const tunnelReleased = status?.released === true
   const publicUrl = status?.public_url ?? (subdomain.trim() ? `https://${subdomain.trim()}.k2.dev` : null)
   const frpcMissing = status ? !status.frpc_installed : false
 
@@ -1292,14 +1356,28 @@ export function K2ConnectSection(): React.JSX.Element {
           )}
         </SettingsGroup>
 
-        {/* ── Live status ──────────────────────────────────────────── */}
+        {/* ── Live status — tri-state, never a spinner that hides which
+            (PRD tunnel-disable-unpair §4): Connected / Disabled (by you)
+            / Released (this device unpaired) / plain stopped. ────────── */}
         <div className="flex items-center gap-2 px-3 py-2 border border-[var(--color-border)]">
           <span
             className="w-2 h-2 flex-shrink-0 rounded-full"
-            style={{ backgroundColor: running ? 'var(--color-status-ok)' : 'var(--color-neutral)' }}
+            style={{
+              backgroundColor: running
+                ? 'var(--color-status-ok)'
+                : tunnelReleased || tunnelDisabled
+                  ? 'var(--color-status-warn-amber)'
+                  : 'var(--color-neutral)',
+            }}
           />
           <span className="text-xs text-[var(--color-text-secondary)]">
-            {running ? 'Tunnel running' : 'Tunnel stopped'}
+            {running
+              ? 'Tunnel running'
+              : tunnelReleased
+                ? 'Released — this device is unpaired (re-pair to use a subdomain here)'
+                : tunnelDisabled
+                  ? 'Tunnel disabled (by you) — persists across restarts'
+                  : 'Tunnel stopped'}
           </span>
           {running && publicUrl && (
             <a
@@ -1368,6 +1446,21 @@ export function K2ConnectSection(): React.JSX.Element {
           )}
         </div>
 
+        {/* ── Release subdomain from this device (PRD tunnel-disable-
+            unpair §2B) — destructive, confirm-gated. Only offered while
+            an identity exists to release (token bound, not yet
+            released). ─────────────────────────────────────────────────── */}
+        {tokenSet && !tunnelReleased && (
+          <div className="flex items-center justify-end" data-settings-id="k2-connect.release-device">
+            <button
+              onClick={() => void releaseFromDevice()}
+              disabled={busy || swapBusy}
+              className="text-[10px] text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error)] hover:underline no-drag cursor-pointer disabled:opacity-60"
+            >
+              Release subdomain from this device…
+            </button>
+          </div>
+        )}
 
         <div className="text-[10px] text-[var(--color-text-muted)] space-y-1">
           <p>1. Sign in to k2.dev above and pick a subdomain you own (e.g. <span className="font-mono">alice</span>).</p>

@@ -312,6 +312,16 @@ async fn handle_one_request(
             // crate::cli::dispatch.
             | "/cli/tunnel/start"
             | "/cli/tunnel/stop"
+            // PRD tunnel-disable-unpair — the two-intent split. `disable`/
+            // `enable` write the PERSISTED pause flag in tunnel.json (and
+            // stop/start the connector); `release` permanently deletes this
+            // device's tunnel identity (tombstone + upstream revocation).
+            // All owner-token-only like start/stop (tunnel control =
+            // exposure control) and method-gated per-handler below
+            // (feedback_post_only_route_guards).
+            | "/cli/tunnel/disable"
+            | "/cli/tunnel/enable"
+            | "/cli/tunnel/release"
             // 0074 — nested-subdomain workspace attribution writes
             // (`k2 publish subdomain claim/unclaim` + the create/point/rm
             // stamp seams). Method-gated per-handler below
@@ -1533,6 +1543,143 @@ async fn handle_one_request(
                     crate::cli::CliResponse::ok_json(r#"{"ok":true}"#.to_string())
                 }
                 Err(e) => crate::cli::CliResponse::bad_request(e),
+            };
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // POST /cli/tunnel/disable — PRD tunnel-disable-unpair §2A: the
+        // persisted PAUSE. Writes `enabled: false` into ~/.k2/tunnel.json
+        // (so restarts/reboots/orphaned daemons all respect it — the
+        // spawn gate re-reads the flag from disk at every frpc spawn) and
+        // stops the live connector. Identity/lease intact; /enable is the
+        // symmetric undo.
+        //
+        // Method gate: explicit `require_post` (feedback_post_only_route_
+        // guards). OWNER-ONLY: same tier as start/stop — pausing the
+        // host's exposure is tunnel control.
+        "/cli/tunnel/disable" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = tokio::task::spawn_blocking(k2_core::tunnel::disable_tunnel)
+                .await
+                .unwrap_or_else(|e| Err(format!("worker join: {e}")));
+            let resp = match result {
+                Ok(status) => {
+                    // Connector is down; push the cleared status (#675.5).
+                    let _ = crate::session_events::emit(
+                        crate::session_events::SessionEvent::TunnelStatusChanged {
+                            running: false,
+                            public_url: None,
+                        },
+                    );
+                    crate::cli::CliResponse::ok_json(
+                        serde_json::to_string(&status)
+                            .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}")),
+                    )
+                }
+                Err(e) => crate::cli::CliResponse::bad_request(e),
+            };
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // POST /cli/tunnel/enable — PRD tunnel-disable-unpair §2A: the
+        // one-click undo of /disable. Persists `enabled: true` (plus an
+        // optional `subdomain` override, mirroring /start) and brings the
+        // tunnel up when the config is connectable.
+        //
+        // Method gate + OWNER-ONLY: identical tier to /start (enabling IS
+        // starting, with the flag write in front).
+        "/cli/tunnel/enable" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let params = super::http::parse_params(&path, &query);
+            let subdomain = params
+                .get("subdomain")
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty());
+            let daemon_port = state.port;
+            let result = tokio::task::spawn_blocking(move || {
+                k2_core::tunnel::enable_tunnel(subdomain, daemon_port)
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("worker join: {e}")));
+            let resp = match result {
+                Ok(status) => {
+                    let _ = crate::session_events::emit(
+                        crate::session_events::SessionEvent::TunnelStatusChanged {
+                            running: status.running,
+                            public_url: status.public_url.clone(),
+                        },
+                    );
+                    crate::cli::CliResponse::ok_json(
+                        serde_json::to_string(&status)
+                            .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}")),
+                    )
+                }
+                Err(e) => crate::cli::CliResponse::bad_request(e),
+            };
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // POST /cli/tunnel/release — PRD tunnel-disable-unpair §2B: the
+        // DESTRUCTIVE unpair. Stops the tunnel, reports the release
+        // upstream (queued + replayed at boot when offline), tombstones
+        // `~/.k2/unpaired.json`, and DELETES this device's tunnel identity
+        // (tunnel.json + rendered frpc.toml + E2E keypair). The device can
+        // never re-claim the subdomain; re-pairing mints a fresh identity.
+        //
+        // Requires `confirm=1` (or `true`/`yes`) — a destructive verb must
+        // never fire from a bare POST; the CLI's `--confirm` and the app's
+        // confirm dialog both map here. Method gate + OWNER-ONLY: the most
+        // privileged tunnel op there is.
+        "/cli/tunnel/release" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let params = super::http::parse_params(&path, &query);
+            let confirmed = matches!(
+                params.get("confirm").map(|s| s.as_str()),
+                Some("1") | Some("true") | Some("yes")
+            );
+            let resp = if !confirmed {
+                crate::cli::CliResponse::bad_request(
+                    "release is destructive and permanent for this device — \
+                     pass confirm=1 (CLI: `k2 tunnel release --confirm`)"
+                        .to_string(),
+                )
+            } else {
+                let result =
+                    tokio::task::spawn_blocking(k2_core::tunnel::release_tunnel_identity)
+                        .await
+                        .unwrap_or_else(|e| Err(format!("worker join: {e}")));
+                match result {
+                    Ok(report) => {
+                        let _ = crate::session_events::emit(
+                            crate::session_events::SessionEvent::TunnelStatusChanged {
+                                running: false,
+                                public_url: None,
+                            },
+                        );
+                        k2_core::log_debug!(
+                            "[tunnel] identity RELEASED for subdomain {:?} (upstream_reported={})",
+                            report.subdomain,
+                            report.upstream_reported
+                        );
+                        crate::cli::CliResponse::ok_json(
+                            serde_json::to_string(&report)
+                                .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}")),
+                        )
+                    }
+                    Err(e) => crate::cli::CliResponse::bad_request(e),
+                }
             };
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;

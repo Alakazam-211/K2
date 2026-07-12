@@ -945,6 +945,23 @@ async fn async_main() {
 ///     no-op (the common case).
 fn maybe_autostart_tunnel(daemon_port: u16) {
     tokio::spawn(async move {
+        // PRD tunnel-disable-unpair §2B — offline-release replay: a
+        // Release that couldn't reach the control plane queued its
+        // upstream revocation in the tombstone; retry it once per boot
+        // (best-effort, logged; the portal force-release is the backstop).
+        // Blocking HTTP → worker pool; failures never touch boot.
+        tokio::task::spawn_blocking(|| {
+            match k2_core::tunnel::unpair::replay_pending() {
+                Ok(true) => log_debug!(
+                    "[daemon/tunnel] queued release revocation replayed upstream"
+                ),
+                Ok(false) => { /* nothing pending — the common case */ }
+                Err(e) => log_debug!(
+                    "[daemon/tunnel] queued release revocation replay failed (will retry next boot): {e}"
+                ),
+            }
+        });
+
         // Cheap read of the opt-in flag off the boot path.
         let cfg = match k2_core::tunnel::config::load() {
             Ok(c) => c,
@@ -955,6 +972,17 @@ fn maybe_autostart_tunnel(daemon_port: u16) {
         };
         if !cfg.auto_start {
             return; // not opted in — the common case, no log noise
+        }
+        // PRD tunnel-disable-unpair §2A — the persisted PAUSE outranks the
+        // auto-start opt-in. `start_tunnel` would refuse anyway (the gate
+        // re-reads the flag at the spawn site); this early return just
+        // logs the honest reason instead of a generic start error.
+        if !cfg.enabled {
+            log_debug!(
+                "[daemon/tunnel] auto-start skipped: tunnel is disabled (persisted) — \
+                 re-enable with `k2 tunnel enable` or Settings → K2 Connect"
+            );
+            return;
         }
         if !cfg.is_connectable() {
             log_debug!(

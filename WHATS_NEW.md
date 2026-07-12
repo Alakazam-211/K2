@@ -3,6 +3,35 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.43 — Resilient Edge
+
+Your tunnel now survives infrastructure failures — and you get real control
+over its lifecycle.
+
+- **Automatic tunnel failover.** K2's secure tunnel now knows about a
+  *list* of relay servers instead of one. If your relay becomes
+  unreachable — mid-session or at connect time — the tunnel automatically
+  re-homes to a backup relay within seconds and fails back once the
+  primary has proven stable. New K2 Cloud servers get the two-relay
+  configuration out of the box; existing tunnels keep working exactly as
+  before and gain failover as their configuration updates. Nothing to set
+  up, nothing changes about your `you.k2.dev` address.
+
+- **Disable vs. Release — two clear tunnel controls.** *Disable* pauses
+  the tunnel and stays paused across daemon restarts, reboots, and even a
+  forgotten background daemon — no more zombie processes reclaiming your
+  subdomain. *Release* goes further: it permanently retires this device's
+  claim on the subdomain (with a confirmation step), so a stale backup or
+  an old machine can never contest the name again. `k2 tunnel
+  disable|enable|release` from the CLI, or Settings → K2 Connect in the
+  app. `k2 migrate` now releases the old machine's claim automatically as
+  its final step.
+
+- **Public API toggle in Settings.** The `/v1` HTTP API can now be
+  switched on per server by the owner in Settings (or `k2 api on|off`) —
+  it takes effect immediately, no restart, and the `K2_API=1` environment
+  variable still works as a force-on for headless deployments.
+
 ## 0.40.42 — K2 gets email
 
 The big one: agents can now run and use **real email**. Three pieces, tied together by one CLI.

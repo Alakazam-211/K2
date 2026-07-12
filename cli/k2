@@ -13804,7 +13804,7 @@ WRITE
   reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox)
   outbox [<id>]               Your outbound + status (denied shows your human's note)
 
-ORGANIZE (needs canManage; delete needs canDelete — 'k2 mail manage --help')
+ORGANIZE (needs canManage; delete needs canDelete — the owner grants these via 'k2 mail access manage')
   move <message-id> <folder>  Move a message to a folder
   flag <message-id>           Mark read/unread (--read/--unread), flag/unflag (--star/--unstar)
   archive <message-id>        Move to the Archive folder

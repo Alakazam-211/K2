@@ -256,6 +256,21 @@ pub struct AppSettings {
     /// the env var OR this flag is set. Default MUST stay OFF (dark by default).
     #[serde(default)]
     pub federation_enabled: bool,
+    /// 0.40.43 (1c) — public `/v1` API master switch (K2 Connect → Enable
+    /// public API). Persisted app-level mirror of the `K2_API` env flag so
+    /// the owner can flip the external `/v1` surface per-server from Settings
+    /// without editing a launchd plist / systemd drop-in + restarting the
+    /// daemon. The daemon's `misc_routes::api_enabled()` gate is true when
+    /// EITHER the env flag OR this setting is on (env stays a valid force-on
+    /// override for headless boxes — nsi's systemd drop-in keeps working).
+    /// The gate consults the [`api_enabled_setting`] runtime mirror PER
+    /// REQUEST, so the Settings toggle takes effect live — no restart, no
+    /// confirm+reboot dialog. Default MUST stay OFF (surface dark by
+    /// default). A typed `bool` is required: `AppSettings` round-trips
+    /// through `serde_json::from_value` on every `load`/`update`, which
+    /// silently drops keys with no matching field.
+    #[serde(default)]
+    pub api_enabled: bool,
     /// GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
     /// Gates whether the `talk` CLI tool's `/cli/terminal/classify`
     /// detection step is allowed to run the bundled 1.5B model.
@@ -577,6 +592,7 @@ impl Default for AppSettings {
             owner_display_name: None,
             allow_remote_instruct: false,
             federation_enabled: false,
+            api_enabled: false,
             use_llm_hitl_detection: false,
             push_gateway_url: None,
             push_gateway_token: None,
@@ -591,6 +607,33 @@ impl Default for AppSettings {
             wake_scheduler: WakeSchedulerSettings::default(),
         }
     }
+}
+
+// ── 0.40.43 (1c) — public /v1 API switch, runtime mirror ─────────────────
+//
+// Same shape as `federation::SETTING_ENABLED`: the daemon syncs the
+// persisted `AppSettings.api_enabled` value into this process at boot and
+// after every `/cli/settings/{update,reset}`, so the per-request gate
+// (`misc_routes::api_enabled()`) stays a pure, cheap, thread-safe check —
+// no per-request disk read — yet the Settings toggle flips the `/v1`
+// surface live, with NO daemon restart and no confirm+reboot dialog.
+
+static API_SETTING_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Sync the persisted `api_enabled` setting into this process. The daemon
+/// calls this at boot and after a `/cli/settings/update` or `/reset` that
+/// (re)establishes the flag's value.
+pub fn set_api_enabled(on: bool) {
+    API_SETTING_ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The runtime mirror of the persisted `api_enabled` setting — one leg of
+/// the daemon's `misc_routes::api_enabled()` OR (the other legs are the
+/// `K2_API` env flag and the legacy `K2_SANDBOX_API` implication). Reads
+/// the atomic only; never touches disk.
+pub fn api_enabled_setting() -> bool {
+    API_SETTING_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 // ── File I/O ─────────────────────────────────────────────────────────────
@@ -991,6 +1034,36 @@ mod tests {
                 "toggling allowRemoteInstruct must not touch federationEnabled"
             );
         }
+    }
+
+    /// 0.40.43 (1c) — the public `/v1` API switch must default OFF on a
+    /// fresh settings file, ingest the camelCase `apiEnabled` key via the
+    /// generic `update()` deep-merge (the /cli/settings/update path the
+    /// toggle hits), round-trip through save→load, and return to OFF on
+    /// reset. Default MUST be OFF: the external `/v1` surface stays dark
+    /// unless the owner (or the K2_API env flag) explicitly enables it.
+    /// Also exercises the runtime mirror pair (`set_api_enabled` /
+    /// `api_enabled_setting`) the daemon syncs at boot + on update.
+    #[test]
+    fn api_enabled_defaults_off_and_round_trips() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        assert!(!load().api_enabled, "apiEnabled must default OFF");
+
+        let merged = update(serde_json::json!({ "apiEnabled": true })).expect("update");
+        assert!(merged.api_enabled, "update must ingest camelCase apiEnabled");
+        assert!(load().api_enabled, "apiEnabled must persist through save→load");
+
+        let after = reset().expect("reset");
+        assert!(!after.api_enabled, "reset must return apiEnabled to OFF");
+
+        // Runtime mirror: pure atomic, defaults OFF, flips both ways.
+        assert!(!api_enabled_setting(), "mirror must default OFF");
+        set_api_enabled(true);
+        assert!(api_enabled_setting(), "mirror must reflect set(true)");
+        set_api_enabled(false);
+        assert!(!api_enabled_setting(), "mirror must reflect set(false)");
     }
 
     /// GH#8 — the "Use local LLM to detect HITL" opt-in must default OFF

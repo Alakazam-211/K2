@@ -1158,10 +1158,19 @@ pub(crate) fn sandbox_api_enabled() -> bool {
 
 /// F3 gate split (prd-v1-api-completion §5): true iff the external `/v1/*`
 /// surface EXISTS at all — auth tier, `/v1/ping`, `POST /v1/w/<ws>/message`.
-/// Gated on the `K2_API` env flag, **default OFF**; with it off EVERY `/v1/*`
+/// Gated on the `K2_API` env flag OR (0.40.43 item 1c) the owner's persisted
+/// `apiEnabled` app-setting, **default OFF**; with both off EVERY `/v1/*`
 /// path 404s as if it didn't exist (the dispatcher consults this before
 /// routing any `/v1/*` request), so the whole external surface is dark and
-/// flag-off is byte-identical to no surface.
+/// off is byte-identical to no surface.
+///
+/// 0.40.43 (1c): the settings leg reads the
+/// [`k2_core::app_settings::api_enabled_setting`] runtime mirror — synced at
+/// boot and after every `/cli/settings/{update,reset}` — and this function is
+/// evaluated PER REQUEST, so flipping the Settings toggle takes effect with
+/// NO daemon restart (the settings path deliberately skips the confirm+reboot
+/// dialog). The env flag stays a valid force-on override for headless boxes
+/// (nsi's systemd drop-in keeps working untouched).
 ///
 /// BACK-COMPAT: the legacy `K2_SANDBOX_API` (which pre-split meant "the whole
 /// /v1 surface") still implies the surface is on — existing Dedicated units
@@ -1170,6 +1179,7 @@ pub(crate) fn sandbox_api_enabled() -> bool {
 pub(crate) fn api_enabled() -> bool {
     let via_new = env_truthy("K2_API");
     let via_legacy = sandbox_api_enabled();
+    let via_setting = k2_core::app_settings::api_enabled_setting();
     if via_legacy && !via_new {
         static DEPRECATION_LOGGED: std::sync::Once = std::sync::Once::new();
         DEPRECATION_LOGGED.call_once(|| {
@@ -1180,7 +1190,7 @@ pub(crate) fn api_enabled() -> bool {
             );
         });
     }
-    via_new || via_legacy
+    via_new || via_legacy || via_setting
 }
 
 /// F3 capability object:
@@ -1754,19 +1764,41 @@ mod api_key_route_tests {
     }
 
     /// F3 gate split: `api_enabled()` = `K2_API` truthy OR the legacy
-    /// `K2_SANDBOX_API` (back-compat implies), default OFF; the capability
+    /// `K2_SANDBOX_API` (back-compat implies) OR (0.40.43 1c) the persisted
+    /// `apiEnabled` setting's runtime mirror, default OFF; the capability
     /// object mirrors it and reports `sandboxes` from `can_sandbox()`.
     #[test]
     fn api_enabled_combos_and_capability_shape() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // ALSO hold the crate-wide home lock: the settings-mirror leg below
+        // shares process state (`app_settings::API_SETTING_ENABLED`) with the
+        // settings_routes tests, which serialize on this lock via
+        // with_temp_home. Holding both prevents a parallel settings test's
+        // transient mirror flip from racing the default-OFF assertions here.
+        let _h = crate::test_support::lock_home();
         let prev_api = std::env::var_os("K2_API");
         let prev_sbx = std::env::var_os("K2_SANDBOX_API");
+        // Defensive: a previously-failed test could leak the mirror ON.
+        k2_core::app_settings::set_api_enabled(false);
 
-        // Both unset → surface dark.
+        // Both env flags unset + setting off → surface dark.
         std::env::remove_var("K2_API");
         std::env::remove_var("K2_SANDBOX_API");
         assert!(!api_enabled(), "K2_API must default OFF");
         assert_eq!(api_capability()["enabled"], serde_json::json!(false));
+
+        // 0.40.43 (1c): the persisted-setting mirror alone turns the surface
+        // on — the no-restart Settings-toggle path — and back off. Env flags
+        // stay unset throughout, proving the OR's third leg is independent.
+        k2_core::app_settings::set_api_enabled(true);
+        assert!(api_enabled(), "apiEnabled setting alone must enable the surface");
+        assert!(
+            !sandbox_api_enabled(),
+            "…without implying the sandbox gate (setting maps to K2_API, not K2_SANDBOX_API)"
+        );
+        assert_eq!(api_capability()["enabled"], serde_json::json!(true));
+        k2_core::app_settings::set_api_enabled(false);
+        assert!(!api_enabled(), "apiEnabled setting OFF must go dark again");
 
         // K2_API alone turns the surface on.
         std::env::set_var("K2_API", "1");

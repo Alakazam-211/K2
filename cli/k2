@@ -3389,6 +3389,74 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
 }
 
+# 0.40.43 (1c) — owner/admin switch for the public /v1 API surface.
+#   k2 api on|off   → POST /cli/settings/update {"apiEnabled":true|false}
+#   k2 api status   → effective gate (env OR setting) + the persisted setting
+# The daemon evaluates the gate PER REQUEST (misc_routes::api_enabled() =
+# K2_API env OR legacy K2_SANDBOX_API OR this setting), so on/off take
+# effect IMMEDIATELY — no daemon restart, no confirm+reboot. The env flags
+# remain a force-on override for headless boxes (nsi's systemd drop-in);
+# where one is set, `k2 api off` clears only the setting and `status`
+# explains why the surface is still up. The daemon 403s non-owner/admin
+# writers of apiEnabled server-side.
+cmd_api() {
+    local sub="${1:-status}"
+    case "$sub" in
+        on|off)
+            local val="true"
+            [[ "$sub" == "off" ]] && val="false"
+            cli_post_json "/cli/settings/update" "{\"apiEnabled\":${val}}" | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print('Error: daemon returned an unparseable response: %r' % raw[:200])
+    sys.exit(1)
+if 'error' in d:
+    print('Error: %s' % d['error'])
+    sys.exit(1)
+on = bool(d.get('apiEnabled'))
+print('Public /v1 API setting: %s (live now — no restart needed)' % ('ON' if on else 'OFF'))
+if not on:
+    print('Note: where the K2_API (or legacy K2_SANDBOX_API) env flag is set, it still forces the surface on; check with: k2 api status')
+"
+            ;;
+        status)
+            # Effective state comes from the daemon itself: /boot-status is
+            # the unauthenticated handshake carrying the api capability
+            # object (env OR setting, evaluated per request); the persisted
+            # switch rides the authenticated settings snapshot.
+            local boot settings
+            boot="$(curl -s "${BASE_URL}/boot-status" --connect-timeout 5 --max-time 10 2>/dev/null || true)"
+            settings="$(cli_request "/cli/settings/get" || true)"
+            K2_API_BOOT="$boot" K2_API_SETTINGS="$settings" python3 <<'PY'
+import json, os
+def parse(name):
+    try:
+        return json.loads(os.environ.get(name, '') or '{}')
+    except Exception:
+        return {}
+boot = parse('K2_API_BOOT')
+settings = parse('K2_API_SETTINGS')
+eff = boot.get('api', {}).get('enabled')
+setting = settings.get('apiEnabled')
+fmt = lambda v: '?' if v is None else ('on' if v else 'off')
+print('Public /v1 API surface: %s' % fmt(eff))
+print('  Settings switch:      %s' % fmt(setting))
+if eff and setting is False:
+    print('  (forced on by the K2_API or legacy K2_SANDBOX_API env flag)')
+PY
+            ;;
+        *)
+            echo "Usage: k2 api <on|off|status>" >&2
+            echo "  on/off  — flip the public /v1 API surface (owner/admin; live immediately, no restart)" >&2
+            echo "  status  — effective gate (env OR setting) plus the persisted Settings switch" >&2
+            exit 2
+            ;;
+    esac
+}
+
 # P3a (sandbox / K2-as-a-server) — OWNER-only API-key auth-tier management for
 # the external /v1/* surface. Subcommands:
 #   k2 api-key create [--label L] [--anthropic-key K | --llm-key K] \
@@ -15580,6 +15648,11 @@ EOF
             exit 0
         fi
         shift; cmd_connections "$@"
+        ;;
+    api)
+        # 0.40.43 (1c) — public /v1 API surface switch (owner/admin). The
+        # daemon gate is per-request, so on/off are live with no restart.
+        shift; cmd_api "$@"
         ;;
     api-key)
         # P3a (sandbox) — owner-only API-key auth-tier management for /v1/*.

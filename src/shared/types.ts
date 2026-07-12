@@ -115,6 +115,12 @@ export interface AppSettingsResponse {
   // this host. Optional: older snapshots omit it → readers treat absent
   // as false (the store reads it with `?? false`).
   federationEnabled?: boolean
+  // 0.40.43 (1c) — public /v1 API master switch (K2 Connect → Enable
+  // public API). ORed with the K2_API env flag server-side and checked
+  // per request, so flipping it needs NO daemon restart. Owner/Admin-only
+  // to write (the daemon 403s a Member touching it). Optional: older
+  // snapshots omit it → readers treat absent as false (surface dark).
+  apiEnabled?: boolean
   // GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
   // Gates whether the `talk` CLI's /cli/terminal/classify detection step
   // runs the bundled 1.5B model (ON) or stays regex-only (OFF, default).

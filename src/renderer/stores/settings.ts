@@ -83,6 +83,14 @@ interface SettingsState {
   // federation::set_enabled(). DEFAULTS OFF (dark by default).
   federationEnabled: boolean
 
+  // 0.40.43 (1c) — public /v1 API master switch (K2 Connect → Enable
+  // public API). Persisted per-server; the daemon's misc_routes::
+  // api_enabled() gate ORs it with the K2_API env flag and checks it PER
+  // REQUEST, so the toggle takes effect live — no daemon restart, no
+  // confirm+reboot dialog. Owner/Admin-only server-side (the daemon 403s
+  // a Member touching apiEnabled). DEFAULTS OFF (surface dark by default).
+  apiEnabled: boolean
+
   // GH#8 — "Use local LLM to detect HITL" opt-in. Gates whether the
   // `talk` CLI's /cli/terminal/classify detection step runs the bundled
   // 1.5B model (ON) or stays regex-only (OFF). DEFAULTS OFF (inference
@@ -145,6 +153,7 @@ interface SettingsState {
   setOwnerDisplayName: (name: string) => void
   setAllowRemoteInstruct: (enabled: boolean) => void
   setFederationEnabled: (enabled: boolean) => void
+  setApiEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
   setCompletionSoundEnabled: (enabled: boolean) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
@@ -254,6 +263,7 @@ async function persistAndApply(
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       federationEnabled: result.federationEnabled ?? false,
+      apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
@@ -281,6 +291,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   ownerDisplayName: '',
   allowRemoteInstruct: false,
   federationEnabled: false,
+  apiEnabled: false,
   useLlmHitlDetection: false,
   completionSoundEnabled: true,
   editor: { ...DEFAULT_EDITOR },
@@ -454,6 +465,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setApiEnabled: async (enabled: boolean) => {
+    const prev = get().apiEnabled
+    set({ apiEnabled: enabled }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `apiEnabled` and syncs it
+      // into its runtime mirror so misc_routes::api_enabled() flips the /v1
+      // surface immediately on THIS host (per-request check — no restart,
+      // no confirm+reboot dialog). persistAndApply is host-aware, so
+      // toggling while connected to a remote server writes to THAT
+      // server's daemon. K2_API env force-on still wins server-side.
+      await persistAndApply(set, { apiEnabled: enabled })
+    } catch (err) {
+      console.error('[settings] Failed to persist api-enabled:', err)
+      set({ apiEnabled: prev })
+    }
+  },
+
   setUseLlmHitlDetection: async (enabled: boolean) => {
     const prev = get().useLlmHitlDetection
     set({ useLlmHitlDetection: enabled }) // optimistic
@@ -530,6 +558,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       federationEnabled: result.federationEnabled ?? false,
+      apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),
@@ -571,6 +600,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       federationEnabled: result.federationEnabled ?? false,
+      apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       editor: mergeEditorDefaults(result.editor),

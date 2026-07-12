@@ -24,14 +24,17 @@
 use crate::cli_response::CliResponse;
 
 /// Settings keys that grant REMOTE ACCESS to this daemon — the federation
-/// master switch and the remote-instruct delivery consent. Writes touching
-/// any of these require the owner-or-admin tier (federation-toggle audit
-/// finding #4): with only `token_ok` on `/cli/settings/update`, a Member
-/// connect-user could POST `{"federationEnabled":true}` and open the
-/// cross-server surface the renderer only HID from them. Keys are the
-/// camelCase wire names (`AppSettings` is `rename_all = "camelCase"` with
-/// no aliases, so no other spelling reaches the struct fields).
-const REMOTE_ACCESS_KEYS: &[&str] = &["federationEnabled", "allowRemoteInstruct"];
+/// master switch, the remote-instruct delivery consent, and (0.40.43 1c)
+/// the public `/v1` API switch. Writes touching any of these require the
+/// owner-or-admin tier (federation-toggle audit finding #4): with only
+/// `token_ok` on `/cli/settings/update`, a Member connect-user could POST
+/// `{"federationEnabled":true}` and open the cross-server surface the
+/// renderer only HID from them — and `{"apiEnabled":true}` would open the
+/// whole external `/v1` surface the same way. Keys are the camelCase wire
+/// names (`AppSettings` is `rename_all = "camelCase"` with no aliases, so
+/// no other spelling reaches the struct fields).
+const REMOTE_ACCESS_KEYS: &[&str] =
+    &["federationEnabled", "allowRemoteInstruct", "apiEnabled"];
 
 /// Handler for `GET /cli/settings/get`.
 ///
@@ -99,6 +102,11 @@ pub fn handle_settings_update(body: &[u8], actor_can_manage: bool) -> CliRespons
             // /cli/federation/* gate flips immediately (no restart) when the K2
             // Connect toggle changes it. Env-var force-on still wins in enabled().
             k2_core::federation::set_enabled(merged.federation_enabled);
+            // 0.40.43 (1c): same deal for the public /v1 API switch — sync the
+            // runtime mirror so misc_routes::api_enabled() (checked PER REQUEST
+            // by the dispatcher's /v1 arm) flips the surface live, with no
+            // restart and no confirm+reboot dialog. K2_API force-on still wins.
+            k2_core::app_settings::set_api_enabled(merged.api_enabled);
             match serde_json::to_string(&merged) {
                 Ok(body) => CliResponse::ok_json(body),
                 Err(e) => CliResponse::bad_request(format!("serialize merged: {e}")),
@@ -120,6 +128,8 @@ pub fn handle_settings_reset() -> CliResponse {
         Ok(defaults) => {
             // Reset returns federation to its default (OFF) — sync it.
             k2_core::federation::set_enabled(defaults.federation_enabled);
+            // …and the /v1 API switch back to its default (OFF) too (1c).
+            k2_core::app_settings::set_api_enabled(defaults.api_enabled);
             match serde_json::to_string(&defaults) {
                 Ok(body) => CliResponse::ok_json(body),
                 Err(e) => CliResponse::bad_request(format!("serialize defaults: {e}")),
@@ -170,6 +180,59 @@ mod tests {
         });
     }
 
+    /// 0.40.43 (1c): an owner write of `apiEnabled` must persist AND sync
+    /// the runtime mirror in the same request — the mirror is what
+    /// `misc_routes::api_enabled()` reads per request, so this IS the
+    /// no-restart property (surface flips live, no confirm+reboot dialog).
+    /// Runs entirely with the env flags untouched; ends with the switch
+    /// OFF so the process-wide mirror never leaks into other tests.
+    #[test]
+    fn owner_token_may_write_api_enabled_and_mirror_syncs_live() {
+        with_temp_home(|| {
+            let cm = can_manage("token=ownertok", "ownertok");
+            assert!(cm, "owner token must resolve to the manage tier");
+
+            let r = handle_settings_update(br#"{"apiEnabled":true}"#, cm);
+            assert_eq!(r.status, "200 OK", "got: {}", r.body);
+            assert!(
+                k2_core::app_settings::load().api_enabled,
+                "owner write must persist"
+            );
+            assert!(
+                k2_core::app_settings::api_enabled_setting(),
+                "update must sync the runtime mirror in-request (the no-restart path)"
+            );
+
+            // …and back OFF (also restores process state for other tests).
+            let r = handle_settings_update(br#"{"apiEnabled":false}"#, cm);
+            assert_eq!(r.status, "200 OK", "got: {}", r.body);
+            assert!(!k2_core::app_settings::load().api_enabled);
+            assert!(
+                !k2_core::app_settings::api_enabled_setting(),
+                "disable must sync the mirror OFF just as immediately"
+            );
+        });
+    }
+
+    /// 1c: reset() returns `apiEnabled` to its OFF default and syncs the
+    /// mirror down with it — a reset must never leave the /v1 surface open.
+    #[test]
+    fn reset_returns_api_enabled_to_off_and_syncs_mirror() {
+        with_temp_home(|| {
+            let r = handle_settings_update(br#"{"apiEnabled":true}"#, true);
+            assert_eq!(r.status, "200 OK", "got: {}", r.body);
+            assert!(k2_core::app_settings::api_enabled_setting());
+
+            let r = handle_settings_reset();
+            assert_eq!(r.status, "200 OK", "got: {}", r.body);
+            assert!(!k2_core::app_settings::load().api_enabled);
+            assert!(
+                !k2_core::app_settings::api_enabled_setting(),
+                "reset must sync the mirror OFF"
+            );
+        });
+    }
+
     #[test]
     fn member_connect_user_gets_403_and_value_unchanged() {
         with_temp_home(|| {
@@ -187,6 +250,8 @@ mod tests {
                 br#"{"federationEnabled":true}"#.as_slice(),
                 br#"{"federationEnabled":false}"#.as_slice(),
                 br#"{"allowRemoteInstruct":true}"#.as_slice(),
+                br#"{"apiEnabled":true}"#.as_slice(),
+                br#"{"apiEnabled":false}"#.as_slice(),
             ] {
                 let r = handle_settings_update(body, cm);
                 assert_eq!(r.status, "403 Forbidden", "got: {}", r.body);
@@ -199,6 +264,11 @@ mod tests {
             let s = k2_core::app_settings::load();
             assert!(!s.federation_enabled, "403 must leave the value unchanged");
             assert!(!s.allow_remote_instruct, "403 must leave the value unchanged");
+            assert!(!s.api_enabled, "403 must leave the value unchanged");
+            assert!(
+                !k2_core::app_settings::api_enabled_setting(),
+                "403 must never sync the /v1 mirror"
+            );
         });
     }
 

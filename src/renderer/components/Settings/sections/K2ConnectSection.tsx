@@ -113,6 +113,7 @@ export const K2_CONNECT_MANIFEST: SettingEntry[] = [
   { id: 'k2-connect.urls', section: 'k2-connect', label: 'URLs', description: 'Tunnel status plus every nested subdomain URL and its workspace', keywords: ['urls', 'nested', 'subdomains', 'routing', 'targets', 'ports', 'workspace', 'attribution', 'claim'] },
   { id: 'k2-connect.federation', section: 'k2-connect', label: 'Enable federation', description: 'Allow cross-server agent communication on this server', keywords: ['federation', 'cross-server', 'peers', 'agents', 'connect', 'mesh', 'cortana'] },
   { id: 'k2-connect.allow-remote-instruct', section: 'k2-connect', label: 'Let remote users message agents', description: 'Delivery consent for remote messages: K2 Connect users via the composer, and paired federation servers', keywords: ['remote', 'instruct', 'message', 'agents', 'composer', 'consent', 'federation', 'inbound', 'connect users', 'allow'] },
+  { id: 'k2-connect.public-api', section: 'k2-connect', label: 'Enable public API (/v1)', description: 'Serve the external /v1 API from this daemon — takes effect immediately, no restart', keywords: ['api', 'v1', 'public api', 'rest', 'http', 'external', 'surface', 'K2_API', 'api keys', 'host sessions'] },
 ]
 
 interface TunnelStatus {
@@ -426,6 +427,13 @@ export function K2ConnectSection(): React.JSX.Element {
   // server's daemon — that's the per-server enable.
   const federationEnabled = useSettingsStore((s) => s.federationEnabled)
   const setFederationEnabled = useSettingsStore((s) => s.setFederationEnabled)
+  // 0.40.43 (1c): public /v1 API switch for the ACTIVE host. Same
+  // host-aware persist as the federation master above; the daemon checks
+  // the flag PER REQUEST, so this toggle needs no restart and therefore
+  // NO confirm+reboot dialog — flipping it is immediately effective and
+  // immediately reversible.
+  const apiEnabled = useSettingsStore((s) => s.apiEnabled)
+  const setApiEnabled = useSettingsStore((s) => s.setApiEnabled)
   // #638: when viewing a REMOTE host whose version is known but predates
   // roles (#629), whoami returns no role → the generic "handled by an
   // administrator" note would mislead. Swap in a version-aware hint instead.
@@ -1099,18 +1107,19 @@ export function K2ConnectSection(): React.JSX.Element {
 
       <div className="space-y-5">
         {/* ── Remote access (PER-SERVER) — renders for owner/admin on BOTH
-            this Mac AND a remote host. Both switches are per-server settings,
-            so they must be settable wherever you're looking; the rest of
-            K2 Connect (tunnel config) is local-only below. Host-aware persist
-            writes to the ACTIVE server's daemon. Hidden for confirmed members
-            — defense-in-depth only: the daemon enforces owner-or-admin on
-            these keys itself (/cli/settings/update 403s a Member touching
-            federationEnabled or allowRemoteInstruct, and the
+            this Mac AND a remote host. All three switches are per-server
+            settings, so they must be settable wherever you're looking; the
+            rest of K2 Connect (tunnel config) is local-only below. Host-aware
+            persist writes to the ACTIVE server's daemon. Hidden for confirmed
+            members — defense-in-depth only: the daemon enforces owner-or-admin
+            on these keys itself (/cli/settings/update 403s a Member touching
+            federationEnabled, allowRemoteInstruct, or apiEnabled, and the
             /cli/federation/* surface is role-gated server-side too). The
             group pairs the federation MASTER
             (does the cross-server surface exist at all) with the delivery
-            CONSENT (may remote principals actually message agents) so
-            enabling federation and granting consent are one surface. ── */}
+            CONSENT (may remote principals actually message agents) and the
+            public /v1 API switch, so every remote-access surface is enabled
+            from one place. ── */}
         {viewerRole !== 'member' && (
           <div className="space-y-1">
             <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
@@ -1135,6 +1144,31 @@ export function K2ConnectSection(): React.JSX.Element {
                 servers' inbound federation messages). NOT nested under the
                 checkbox: it works with federation off (composer path). */}
             <AllowRemoteInstructRow />
+            {/* 0.40.43 (1c) — public /v1 API switch. ORed server-side with
+                the K2_API env flag (env stays a valid headless force-on)
+                and evaluated PER REQUEST by the daemon, so the flip is live
+                instantly: deliberately NO restart-confirmation dialog here,
+                unlike env-var changes. Owner/Admin only — the daemon 403s a
+                Member POSTing apiEnabled (this group is already hidden for
+                confirmed members; server enforcement is the real gate). */}
+            <div
+              className="flex items-center justify-between gap-3"
+              data-settings-id="k2-connect.public-api"
+            >
+              <div className="min-w-0">
+                <span className="text-xs text-[var(--color-text-secondary)]">
+                  Enable public API (/v1)
+                </span>
+                <span className="text-[10px] text-[var(--color-text-muted)] ml-2">
+                  {isRemote ? 'this server' : 'this device'} · takes effect immediately, no restart
+                </span>
+              </div>
+              <Toggle
+                checked={apiEnabled}
+                onChange={(next) => void setApiEnabled(next)}
+                aria-label="Enable public API"
+              />
+            </div>
           </div>
         )}
 

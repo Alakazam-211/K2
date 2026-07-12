@@ -435,3 +435,90 @@ async fn boot_status_reports_api_capability_in_all_gate_combinations() {
         drop(env);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// (e) 0.40.43 (1c) — the owner's Settings toggle flips the surface LIVE.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Restores the process-wide `/v1` settings mirror on drop — panic
+/// included — so a failed assertion mid-test can never leak an enabled
+/// surface into the other (gate-off) tests in this binary.
+struct MirrorReset;
+impl Drop for MirrorReset {
+    fn drop(&mut self) {
+        k2_core::app_settings::set_api_enabled(false);
+    }
+}
+
+/// Release acceptance criterion (prd-0.40.43 §4): "K2_API Settings toggle
+/// enables `/v1` with no daemon restart." Driven through the REAL stack:
+/// ONE daemon instance serves the whole test — dark surface → owner POSTs
+/// `{"apiEnabled":true}` to `/cli/settings/update` → the very next `/v1`
+/// request is served (per-request gate; no reboot, no confirm dialog) →
+/// POST `{"apiEnabled":false}` → dark again. Env flags stay UNSET
+/// throughout, proving the settings leg is independent of `K2_API`.
+#[tokio::test(flavor = "multi_thread")]
+async fn settings_toggle_flips_v1_surface_live_without_restart() {
+    let _g = lock();
+    let _env = GateEnv::set(None, None);
+    let _mirror = MirrorReset;
+    let d = test_harness::start(OWNER_TOKEN).await;
+
+    // Fresh HOME + no env flags → the surface is dark, even for the owner.
+    let r = http(d.port, "GET", &format!("/v1/ping?token={OWNER_TOKEN}"), None);
+    assert_eq!(r.status, 404, "pre-toggle the surface must be dark; body={}", r.body);
+    assert_eq!(r.body, SURFACE_OFF, "pre-toggle body is the uniform outer 404");
+
+    // Owner flips the switch through the REAL settings route.
+    let on = http(
+        d.port,
+        "POST",
+        &format!("/cli/settings/update?token={OWNER_TOKEN}"),
+        Some(r#"{"apiEnabled":true}"#),
+    );
+    assert_eq!(on.status, 200, "owner settings write must succeed; body={}", on.body);
+    assert_eq!(
+        json(&on.body)["apiEnabled"],
+        serde_json::json!(true),
+        "merged settings echo must carry the new value; body={}",
+        on.body
+    );
+
+    // SAME daemon instance, very next request: the surface is live.
+    let r = http(d.port, "GET", &format!("/v1/ping?token={OWNER_TOKEN}"), None);
+    assert_eq!(
+        r.status, 200,
+        "toggle ON must expose /v1 with NO restart; body={}",
+        r.body
+    );
+    let v = json(&r.body);
+    assert_eq!(v["ok"], serde_json::json!(true), "body={}", r.body);
+    assert_capability(&v["api"], true, "/v1/ping (settings toggle)");
+
+    // The sandbox families stay surface-absent — the setting maps to the
+    // K2_API leg only, never the K2_SANDBOX_API one.
+    let sbx = http(d.port, "POST", &format!("/v1/sandboxes?token={OWNER_TOKEN}"), Some("{}"));
+    assert_eq!(
+        sbx.status, 404,
+        "settings toggle must not imply the sandbox gate; body={}",
+        sbx.body
+    );
+    assert_eq!(sbx.body, ROUTE_NOT_FOUND, "uniform unknown-route 404, no 405/409 oracle");
+
+    // The unauthenticated boot-status handshake reports the flip too.
+    let bs = http(d.port, "GET", "/boot-status", None);
+    assert_eq!(bs.status, 200, "body={}", bs.body);
+    assert_capability(&json(&bs.body)["api"], true, "/boot-status (settings toggle)");
+
+    // Flip OFF: the very next request is dark again — still no restart.
+    let off = http(
+        d.port,
+        "POST",
+        &format!("/cli/settings/update?token={OWNER_TOKEN}"),
+        Some(r#"{"apiEnabled":false}"#),
+    );
+    assert_eq!(off.status, 200, "owner disable must succeed; body={}", off.body);
+    let r = http(d.port, "GET", &format!("/v1/ping?token={OWNER_TOKEN}"), None);
+    assert_eq!(r.status, 404, "toggle OFF must darken /v1 live; body={}", r.body);
+    assert_eq!(r.body, SURFACE_OFF, "post-disable body is the uniform outer 404");
+}

@@ -24,6 +24,11 @@
 //!   * [`failover`]  — pure multi-relay failover policy: which relay of
 //!                     the ordered fallback list frpc should dial now
 //!                     (frpc itself can't fail over — one `serverAddr`).
+//!   * [`watchdog`]  — pure mid-session relay-death detection: frpc never
+//!                     exits when an ESTABLISHED session's relay dies (it
+//!                     reconnect-retries internally), so the connector
+//!                     watches its log lines and kills the stuck child to
+//!                     hand the failure to the exit-based failover path.
 //!   * [`lease`]     — subdomain claim/lease keepalive (K2SO #674): the
 //!                     daemon re-POSTs the `claim_subdomain` RPC on its own
 //!                     timer so the lease never lapses with the UI closed
@@ -47,10 +52,12 @@ pub mod lease;
 pub mod render;
 pub mod subdomains;
 pub mod tls;
+pub mod watchdog;
 
 pub use config::{e2e_enabled, RelayEndpoint, TunnelConfig};
 pub use connector::{FrpcBinary, TunnelStatus};
 pub use failover::{RelaySelector, RelaySwitch};
+pub use watchdog::{frpc_line_signals_disconnect, frpc_line_signals_recovery, DisconnectTracker};
 
 /// Redacted view of the tunnel config for the UI. NEVER carries the
 /// secret token — only `tokenSet`. Field names are camelCase to match

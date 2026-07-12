@@ -102,6 +102,11 @@ struct SetFocusBody {
 ///
 /// Blocking work: posix_spawn + alacritty Term init + worker thread
 /// startup. Callers wrap in `tokio::task::spawn_blocking` (F5).
+///
+/// COMPAT-58 (#58 Phase 1 / PR-A): when scoped hooks are ON (default),
+/// mint a per-terminal passport and inject it via `create_with_env` so
+/// the child NEVER receives the daemon owner token. Bind the per-cell
+/// UDS after create. Teardown revoke runs best-effort on kill.
 pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
     let body: CreateBody = match serde_json::from_slice(body_bytes) {
         Ok(b) => b,
@@ -117,9 +122,42 @@ pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
         }
     };
 
+    // COMPAT-58 — mint a scoped passport when the terminal id is a UUID
+    // (renderer always supplies one). Non-UUID ids skip mint (can't key
+    // the registry) but still never get the owner token injected.
+    let mut passport_env: Option<std::collections::HashMap<String, String>> = None;
+    let mut passport_sid: Option<k2_core::session::SessionId> = None;
+    if let Some(sid) = k2_core::session::SessionId::parse(&body.id) {
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace::agent_identity::resolve_project_id(&conn, &body.cwd)
+                    .unwrap_or_default()
+            },
+            agent_address: body.id.clone(),
+        };
+        let owner = k2_core::hook_config::get_token();
+        let mut env = std::collections::HashMap::new();
+        let minted = crate::session_token::prepare_agent_spawn_env(
+            &mut env,
+            &sid,
+            &body.id,
+            principal,
+            crate::session_token::CredMode::ApiKey,
+            crate::session_token::Provider::Anthropic,
+            None,
+            owner,
+        );
+        if minted {
+            passport_sid = Some(sid);
+            passport_env = Some(env);
+        }
+    }
+
     let manager = k2_core::terminal::shared();
     let mut manager = manager.lock();
-    match manager.create(
+    let create_result = manager.create_with_env(
         body.id.clone(),
         body.cwd,
         body.command,
@@ -127,11 +165,24 @@ pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
         body.cols,
         body.rows,
         sink,
-    ) {
-        Ok(()) => CliResponse::ok_json(
-            serde_json::json!({ "id": body.id }).to_string(),
-        ),
-        Err(e) => CliResponse::bad_request(e),
+        passport_env,
+    );
+    match create_result {
+        Ok(()) => {
+            if let Some(sid) = passport_sid {
+                crate::session_token::activate_cell_uds(sid, None);
+            }
+            CliResponse::ok_json(
+                serde_json::json!({ "id": body.id }).to_string(),
+            )
+        }
+        Err(e) => {
+            // Minted but spawn failed → revoke so the token doesn't linger.
+            if let Some(sid) = passport_sid {
+                crate::session_token::revoke_session(&sid);
+            }
+            CliResponse::bad_request(e)
+        }
     }
 }
 
@@ -145,7 +196,22 @@ pub fn handle_kill(body_bytes: &[u8]) -> CliResponse {
     let manager = k2_core::terminal::shared();
     let mut manager = manager.lock();
     match manager.kill(&body.id) {
-        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
+        Ok(()) => {
+            // COMPAT-58: revoke any scoped passport minted for this terminal
+            // id + drop its UDS. No-op when flag off / never minted.
+            if let Some(sid) = k2_core::session::SessionId::parse(&body.id) {
+                if crate::session_token::scoped_hooks_enabled() {
+                    crate::session_token::revoke_session(&sid);
+                    #[cfg(unix)]
+                    {
+                        let _ = std::fs::remove_file(
+                            crate::cell_uds::cell_socket_path(&sid),
+                        );
+                    }
+                }
+            }
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }

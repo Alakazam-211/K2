@@ -91,8 +91,8 @@ mod review_checklist_routes;
 mod routes;
 // K2 Cloud S2 — boot-time consume-once ~/.k2/seed-users.json.
 mod seed_users;
-// COMPAT-58 (#58 Phase 0): scoped per-session hook tokens + per-cell UDS.
-// Dormant superset, gated on K2_HOOK_SCOPED (default OFF).
+// COMPAT-58 (#58 Phase 1 / PR-A): scoped per-session hook tokens + per-cell UDS
+// (default ON; opt out with K2_HOOK_SCOPED=0). Owner never enters agent env.
 mod cell_server;
 mod cell_uds;
 // P4-H5: host nft fail-closed egress allowlist for microVM cells (see lib.rs).

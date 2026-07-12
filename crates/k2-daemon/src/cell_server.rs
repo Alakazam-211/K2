@@ -1,5 +1,5 @@
 //! Per-cell Unix-domain-socket hook server (#58 Phase 1 — flag-gated by
-//! `K2_HOOK_SCOPED`, default OFF).
+//! `K2_HOOK_SCOPED`, default ON; opt out with `0`/`false`/`off`).
 //!
 //! ## What this is
 //!

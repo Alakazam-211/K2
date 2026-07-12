@@ -1,9 +1,9 @@
-//! Scoped per-session hook tokens (#58 Phase 0 — DORMANT / default OFF).
+//! Scoped per-session hook tokens (#58 Phase 1 — default ON, dual-accept).
 //!
 //! ## Why this exists
 //!
-//! Today the "hook token" injected into every spawned PTY IS the daemon
-//! OWNER token (`main.rs` writes one `generate_token()` into
+//! Historically the "hook token" injected into every spawned PTY WAS the
+//! daemon OWNER token (`main.rs` writes one `generate_token()` into
 //! `daemon.token` + `heartbeat.token` + `state.token` + every child env).
 //! A prompt-injected agent that reads `$K2_HOOK_TOKEN` therefore holds the
 //! crown-jewel credential — the confused-deputy in its strongest form (see
@@ -14,15 +14,14 @@
 //! machinery (per-principal epoch + SHA-256-at-rest + restart-surviving
 //! revocation) rather than adding a second `OnceLock`.
 //!
-//! ## Phase 0 scope (this module)
+//! ## Phase 1 scope (this module + spawn paths)
 //!
-//! Everything here is an **additive superset, gated on `K2_HOOK_SCOPED`
-//! (default OFF)**. With the flag off NOTHING mints a scoped token, no
-//! per-cell UDS is bound, and every existing owner-token caller behaves
-//! byte-identically. Phase 1 (mint + inject the scoped token into the PTY
-//! env, behind `K2_HOOK_TOKEN`) and Phase 2 (reject the owner token) ship
-//! LATER, separately. This module deliberately does NOT inject anything
-//! into a child env.
+//! Gated on `K2_HOOK_SCOPED` (**default ON**; opt out with `0`/`false`/`off`).
+//! When ON, every agent spawn path mints a scoped passport into
+//! `K2_HOOK_TOKEN` + binds a per-cell UDS. **The owner token never enters
+//! an agent child env** (the load-bearing security fix of PR-A). Owner
+//! still works on TCP for the host/app surface (dual-accept) — Phase 2
+//! (owner REJECTION on agent verbs) ships separately.
 //!
 //! ## Token format — selector + verifier (PAT pattern)
 //!
@@ -83,16 +82,25 @@ const TOKEN_LIFETIME_HOURS: i64 = 24;
 // Feature flag
 // ─────────────────────────────────────────────────────────────────────
 
-/// True iff `K2_HOOK_SCOPED` is set to an affirmative value
-/// (`1`/`true`/`yes`/`on`, case-insensitive). **Default OFF.**
+/// True unless `K2_HOOK_SCOPED` is explicitly set to a negative value
+/// (`0`/`false`/`no`/`off`, case-insensitive). **Default ON** (Phase 1 /
+/// PR-A — agent sessions get a real passport at spawn; dual-accept keeps
+/// owner TCP for host/app rollback).
 ///
-/// This is the single gate that keeps #58 Phase 0 dormant: minting, the
-/// per-cell UDS bind, and the scoped arm of `/hook/complete` all consult
-/// it. Off → zero behavior change.
+/// This is the single gate for minting, the per-cell UDS bind, and the
+/// scoped arm of `/hook/complete`. Explicit opt-out is the fleet-safety
+/// rollback (`Environment=K2_HOOK_SCOPED=0`).
 pub fn scoped_hooks_enabled() -> bool {
     match std::env::var("K2_HOOK_SCOPED") {
-        Ok(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
-        Err(_) => false,
+        Ok(v) => {
+            !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off" | ""
+            )
+        }
+        // Unset → ON (Phase 1 default). Cloud provision scripts also set
+        // `K2_HOOK_SCOPED=1` explicitly; that remains a no-op affirmative.
+        Err(_) => true,
     }
 }
 
@@ -700,10 +708,11 @@ pub fn scoped_cell_env_for_token(
     pairs
 }
 
-/// Phase 1 spawn entry point: when scoped hooks are ON, mint a per-cell
-/// scoped token (process registry + disk) and return the env pairs to inject
-/// into the child PTY. **Returns `None` when the flag is OFF — the default —
-/// so the caller injects NOTHING and behavior is byte-identical to Phase 0.**
+/// Phase 1 spawn entry point: when scoped hooks are ON (the default), mint a
+/// per-cell scoped token (process registry + disk) and return the env pairs
+/// to inject into the child PTY. **Returns `None` when the flag is
+/// explicitly OFF** so a fleet opt-out injects no scoped env (and still must
+/// not inject the owner — see [`strip_owner_hook_tokens`]).
 ///
 /// The minted token is bound to `(session_id, pane_id, principal)`; the
 /// socket path is the deterministic [`crate::cell_uds::cell_socket_path`].
@@ -739,6 +748,115 @@ pub fn cell_env_pairs(
         provider,
         api_key,
     ))
+}
+
+/// Env keys that must never carry the daemon owner token into an agent
+/// child. Dual-emitted (K2 + K2SO) for the 0.40 rebrand.
+const HOOK_TOKEN_ENV_KEYS: &[&str] = &["K2_HOOK_TOKEN", "K2SO_HOOK_TOKEN"];
+
+/// Remove any `K2_HOOK_TOKEN` / `K2SO_HOOK_TOKEN` entries whose value equals
+/// the daemon owner token. **Always safe to call** on agent/PTY spawn env —
+/// the load-bearing PR-A invariant: agent children never receive the owner
+/// credential in env (even when scoped mint is opted out).
+///
+/// Does not touch non-owner values (a pre-minted scoped passport is kept).
+pub fn strip_owner_hook_tokens(
+    env: &mut std::collections::HashMap<String, String>,
+    owner_token: &str,
+) {
+    if owner_token.is_empty() {
+        return;
+    }
+    for key in HOOK_TOKEN_ENV_KEYS {
+        if env.get(*key).map(|v| v == owner_token).unwrap_or(false) {
+            env.remove(*key);
+        }
+    }
+}
+
+/// Merge scoped passport pairs into a spawn env, **replacing** any prior
+/// hook-token values. Call after [`cell_env_pairs`] returns `Some`. The
+/// scoped token rides the same keys the CLI / notify.sh already read —
+/// that is the security change (value is per-cell, not owner).
+pub fn apply_scoped_passport(
+    env: &mut std::collections::HashMap<String, String>,
+    pairs: Vec<(String, String)>,
+) {
+    for (k, v) in pairs {
+        env.insert(k, v);
+    }
+}
+
+/// Full PR-A spawn-env preparation for an agent cell:
+/// 1. Mint + apply scoped passport when the flag is ON (default).
+/// 2. Always strip any residual owner-token values from hook keys.
+///
+/// Returns `true` when a scoped passport was minted (caller should bind
+/// the per-cell UDS after the PTY is open).
+pub fn prepare_agent_spawn_env(
+    env: &mut std::collections::HashMap<String, String>,
+    session_id: &SessionId,
+    pane_id: &str,
+    principal: HookPrincipal,
+    cred_mode: CredMode,
+    provider: Provider,
+    api_key: Option<&str>,
+    owner_token: &str,
+) -> bool {
+    let minted = if let Some(pairs) =
+        cell_env_pairs(session_id, pane_id, principal, cred_mode, provider, api_key)
+    {
+        apply_scoped_passport(env, pairs);
+        true
+    } else {
+        false
+    };
+    // Defense in depth: even if a caller pre-seeded the owner into env
+    // (legacy alacritty path, preset leak, inherited process env), strip it.
+    strip_owner_hook_tokens(env, owner_token);
+    minted
+}
+
+/// Bind the per-cell UDS and start the cell server when scoped hooks are ON.
+/// Call AFTER the PTY is open (the socket path was already injected into the
+/// child env at mint time). Bind failure is non-fatal — the cell degrades to
+/// the TCP dual-accept / disk-owner CLI fallback (non-stranding).
+///
+/// `per_session_uid` is `Some` only for microVM cells (socket chown + peer-cred
+/// belt); bare-PTY agent sessions pass `None`.
+#[cfg(unix)]
+pub fn activate_cell_uds(session_id: SessionId, per_session_uid: Option<u32>) {
+    if !scoped_hooks_enabled() {
+        return;
+    }
+    match crate::cell_uds::bind_cell_socket(&session_id) {
+        Ok(listener) => {
+            if let Some(cell_uid) = per_session_uid {
+                if let Err(e) =
+                    crate::cell_uds::set_cell_socket_owner(&session_id, cell_uid)
+                {
+                    log_debug!(
+                        "[hook-scoped] WARN chown cell sock to uid {cell_uid} failed for session={session_id}: {e}; socket stays daemon-only"
+                    );
+                }
+            }
+            crate::cell_server::serve_cell(session_id, listener, per_session_uid);
+            log_debug!(
+                "[hook-scoped] bound + serving per-cell UDS for session={session_id}"
+            );
+        }
+        Err(e) => {
+            log_debug!(
+                "[hook-scoped] WARN bind cell sock failed for session={session_id}: {e}; degrading to TCP dual-accept"
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn activate_cell_uds(_session_id: SessionId, _per_session_uid: Option<u32>) {
+    // UDS is unix-only; scoped tokens still mint into env for TCP dual-accept
+    // of /hook/complete when the flag is ON.
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -795,11 +913,25 @@ mod tests {
     // ── env flag ─────────────────────────────────────────────────────
 
     #[test]
-    fn scoped_hooks_flag_defaults_off() {
-        // Don't mutate the real env in a way that races other tests: just
-        // assert the unset/disabled mappings. (CI runs without the flag.)
+    fn scoped_hooks_flag_defaults_on() {
+        // Phase 1 / PR-A: default ON so new agent sessions get a passport.
+        // Opt-out is explicit (`0`/`false`/`off`). Restore whatever was set
+        // so parallel tests that pin the flag keep working.
+        let prev = std::env::var("K2_HOOK_SCOPED").ok();
         std::env::remove_var("K2_HOOK_SCOPED");
-        assert!(!scoped_hooks_enabled(), "must default OFF when unset");
+        assert!(scoped_hooks_enabled(), "must default ON when unset");
+        std::env::set_var("K2_HOOK_SCOPED", "0");
+        assert!(!scoped_hooks_enabled(), "explicit 0 must opt out");
+        std::env::set_var("K2_HOOK_SCOPED", "false");
+        assert!(!scoped_hooks_enabled(), "explicit false must opt out");
+        std::env::set_var("K2_HOOK_SCOPED", "off");
+        assert!(!scoped_hooks_enabled(), "explicit off must opt out");
+        std::env::set_var("K2_HOOK_SCOPED", "1");
+        assert!(scoped_hooks_enabled(), "explicit 1 must stay ON");
+        match prev {
+            Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
+            None => std::env::remove_var("K2_HOOK_SCOPED"),
+        }
     }
 
     // ── mint + validate round trip ──────────────────────────────────
@@ -1082,19 +1214,110 @@ mod tests {
         );
     }
 
-    // ── Phase 1: spawn-time activation (flag-OFF no-op + env shape) ──
+    // ── Phase 1: spawn-time activation (flag opt-out + env shape) ──
 
     #[test]
     fn cell_env_pairs_returns_none_when_flag_off() {
-        // THE load-bearing Phase-1 default-OFF no-op: with K2_HOOK_SCOPED
-        // unset, the spawn path mints NOTHING and injects NO env — behavior
-        // is byte-identical to Phase 0. (Only reads the env var; no disk,
-        // no registry mutation, so it's safe regardless of test ordering.)
-        std::env::remove_var("K2_HOOK_SCOPED");
+        // Explicit fleet opt-out: K2_HOOK_SCOPED=0 → mint NOTHING.
+        // (Only reads the env var; no disk, no registry mutation.)
+        let prev = std::env::var("K2_HOOK_SCOPED").ok();
+        std::env::set_var("K2_HOOK_SCOPED", "0");
         let sid = SessionId::new();
         assert!(
             cell_env_pairs(&sid, &sid.to_string(), principal(), CredMode::ApiKey, Provider::Anthropic, None).is_none(),
-            "flag OFF (default) MUST inject no scoped env (zero behavior change)",
+            "flag OFF (explicit opt-out) MUST inject no scoped env",
+        );
+        match prev {
+            Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
+            None => std::env::remove_var("K2_HOOK_SCOPED"),
+        }
+    }
+
+    #[test]
+    fn prepare_agent_spawn_env_never_leaves_owner_token() {
+        // PR-A load-bearing invariant: after prepare_agent_spawn_env, the
+        // child env must not carry the owner token behind K2_HOOK_TOKEN
+        // (whether scoped mint ran or the flag was opted out).
+        let owner = "owner-secret-deadbeef-aaaaaaaa";
+        let sid = SessionId::new();
+        let pane = sid.to_string();
+
+        // Path A — flag ON (default mint): scoped passport replaces owner.
+        let prev = std::env::var("K2_HOOK_SCOPED").ok();
+        std::env::set_var("K2_HOOK_SCOPED", "1");
+        let mut env = std::collections::HashMap::new();
+        env.insert("K2_HOOK_TOKEN".to_string(), owner.to_string());
+        env.insert("K2SO_HOOK_TOKEN".to_string(), owner.to_string());
+        let minted = prepare_agent_spawn_env(
+            &mut env,
+            &sid,
+            &pane,
+            principal(),
+            CredMode::ApiKey,
+            Provider::Anthropic,
+            None,
+            owner,
+        );
+        assert!(minted, "flag ON must mint a scoped passport");
+        let tok = env.get("K2_HOOK_TOKEN").expect("scoped K2_HOOK_TOKEN present");
+        assert_ne!(tok, owner, "scoped path must not leave the owner token");
+        assert_ne!(
+            env.get("K2SO_HOOK_TOKEN").map(String::as_str),
+            Some(owner),
+            "legacy alias must not leave the owner token",
+        );
+        // Minted value must validate as a real principal.
+        let v = validate_hook(tok).expect("minted passport must validate_hook");
+        assert_eq!(v.session_id, sid.to_string());
+        assert_eq!(v.pane_id, pane);
+        assert_eq!(v.principal, principal());
+
+        // Path B — flag OFF: still strips owner even without a mint.
+        std::env::set_var("K2_HOOK_SCOPED", "0");
+        let mut env_off = std::collections::HashMap::new();
+        env_off.insert("K2_HOOK_TOKEN".to_string(), owner.to_string());
+        env_off.insert("K2SO_HOOK_TOKEN".to_string(), owner.to_string());
+        let minted_off = prepare_agent_spawn_env(
+            &mut env_off,
+            &sid,
+            &pane,
+            principal(),
+            CredMode::ApiKey,
+            Provider::Anthropic,
+            None,
+            owner,
+        );
+        assert!(!minted_off, "flag OFF must not mint");
+        assert!(
+            env_off.get("K2_HOOK_TOKEN").is_none(),
+            "flag OFF must still strip owner from K2_HOOK_TOKEN",
+        );
+        assert!(
+            env_off.get("K2SO_HOOK_TOKEN").is_none(),
+            "flag OFF must still strip owner from K2SO_HOOK_TOKEN",
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
+            None => std::env::remove_var("K2_HOOK_SCOPED"),
+        }
+    }
+
+    #[test]
+    fn strip_owner_hook_tokens_preserves_non_owner_values() {
+        let owner = "owner-secret";
+        let mut env = std::collections::HashMap::new();
+        env.insert("K2_HOOK_TOKEN".to_string(), "sid.scopedsecret".to_string());
+        env.insert("K2SO_HOOK_TOKEN".to_string(), owner.to_string());
+        strip_owner_hook_tokens(&mut env, owner);
+        assert_eq!(
+            env.get("K2_HOOK_TOKEN").map(String::as_str),
+            Some("sid.scopedsecret"),
+            "non-owner scoped value must be preserved",
+        );
+        assert!(
+            env.get("K2SO_HOOK_TOKEN").is_none(),
+            "owner value on the legacy key must be stripped",
         );
     }
 

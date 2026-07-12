@@ -84,8 +84,8 @@ pub mod routes;
 // in the lib so the provision_users integration suite can drive the
 // SAME module function main.rs's boot sequence calls.
 pub mod seed_users;
-// COMPAT-58 (#58 Phase 0): scoped per-session hook tokens + per-cell UDS.
-// Dormant superset, gated on K2_HOOK_SCOPED (default OFF).
+// COMPAT-58 (#58 Phase 1 / PR-A): scoped per-session hook tokens + per-cell UDS
+// (default ON; opt out with K2_HOOK_SCOPED=0). Owner never enters agent env.
 pub mod cell_server;
 pub mod cell_uds;
 // P4-H5 (sandbox hardening): host nft fail-closed egress allowlist for microVM

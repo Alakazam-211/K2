@@ -888,17 +888,15 @@ async fn handle_one_request(
                 // via the in-daemon binary swap (Shape B). The renderer reads
                 // this to vary copy; update/start routes on it server-side.
                 "installKind": crate::boot_status::install_kind(),
-                // COMPAT-58 (#58 Phase 0): advertise the scoped-hook
+                // COMPAT-58 (#58 Phase 1 / PR-A): advertise the scoped-hook
                 // capability so clients can FEATURE-DETECT it without an app
                 // version bump. `supported` = this daemon understands the
-                // scoped per-cell token superset (always true once Phase 0
-                // lands); `enabled` = whether K2_HOOK_SCOPED is on for this
-                // process (default OFF). A daemon talking to an OLDER fleet
-                // peer that omits this field treats it as unsupported and
-                // stays on the owner-token/TCP path. PROTOCOL is intentionally
-                // NOT bumped: this is an additive, forward-compatible field,
-                // not a breaking contract change (boot_status::PROTOCOL gates
-                // only the latter).
+                // scoped per-cell token superset; `enabled` = whether
+                // K2_HOOK_SCOPED is on for this process (default ON; opt out
+                // with 0/false/off). A daemon talking to an OLDER fleet peer
+                // that omits this field treats it as unsupported and stays on
+                // the owner-token/TCP path. PROTOCOL is intentionally NOT
+                // bumped: this is an additive, forward-compatible field.
                 "scopedHooks": {
                     "supported": true,
                     "enabled": crate::session_token::scoped_hooks_enabled(),
@@ -986,13 +984,11 @@ async fn handle_one_request(
             // a hook for ANY pane (it is the daemon-wide credential).
             let owner_ok = super::http::ct_eq_token(&req_token, &state.token);
 
-            // #58 Phase 0 SCOPED arm — DORMANT unless K2_HOOK_SCOPED is on.
-            // A per-session scoped token authorizes ONLY its own paneId:
-            // the Bearer header is preferred (kept out of logs/transcripts),
-            // falling back to the `?token=` value. With the flag OFF nothing
-            // ever mints a scoped token, so `require_hook` never matches →
-            // this arm is inert and the gate is byte-identical to the
-            // owner-only check above.
+            // #58 Phase 1 SCOPED arm — dual-accept with owner (Phase 2 is
+            // owner REJECTION, not this PR). A per-session scoped token
+            // authorizes ONLY its own paneId: Bearer preferred (kept out of
+            // logs/transcripts), falling back to `?token=`. Flag default ON;
+            // with explicit OFF nothing mints → this arm is inert.
             let scoped_ok = if !owner_ok && crate::session_token::scoped_hooks_enabled() {
                 let presented = bearer_token
                     .as_deref()

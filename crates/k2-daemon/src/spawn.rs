@@ -217,14 +217,56 @@ pub fn spawn_agent_session_v2_blocking(
     // working directory as `Option<PathBuf>` rather than a String,
     // and stores `program: Option<String>` (vs legacy `command`),
     // but the wire shape is otherwise identical.
+    let session_id = SessionId::new();
+    let mut env = req.env.clone();
+
+    // COMPAT-58 (#58 Phase 1 / PR-A) — real passport at every agent spawn
+    // path (wake / heartbeat / canonical / agents launch). Same seam as
+    // `v2_spawn::spawn_session`: mint scoped token (default ON) and NEVER
+    // leave the owner token in child env. Bare-PTY only here (no microVM).
+    {
+        let pane_id = session_id.to_string();
+        let workspace_uuid = req
+            .project_id
+            .clone()
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace::agent_identity::resolve_project_id(&conn, &req.cwd)
+                    .unwrap_or_default()
+            });
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid,
+            agent_address: req.agent_name.clone(),
+        };
+        let owner = k2_core::hook_config::get_token();
+        let minted = crate::session_token::prepare_agent_spawn_env(
+            &mut env,
+            &session_id,
+            &pane_id,
+            principal,
+            crate::session_token::CredMode::ApiKey,
+            crate::session_token::Provider::Anthropic,
+            None, // bare-PTY — never stage workspace API keys
+            owner,
+        );
+        if minted {
+            log_debug!(
+                "[hook-scoped] spawn.rs injected scoped K2_HOOK_TOKEN + K2_HOOK_SOCK for session={}",
+                session_id
+            );
+        }
+    }
+
     let cfg = DaemonPtyConfig {
-        session_id: SessionId::new(),
+        session_id,
         cols: req.cols,
         rows: req.rows,
         cwd: Some(PathBuf::from(&req.cwd)),
         program: req.command.clone(),
         args: req.args.clone().unwrap_or_default(),
-        env: req.env.clone(),
+        env,
         drain_on_exit: true,
         label: label_seed,
         label_source: k2_core::terminal::LabelSource::Locked,
@@ -240,6 +282,10 @@ pub fn spawn_agent_session_v2_blocking(
 
     let session = DaemonPtySession::spawn(cfg)
         .map_err(|e| format!("v2 spawn failed: {e}"))?;
+
+    // COMPAT-58 — bind per-cell UDS after PTY open (bare-PTY → no chown).
+    crate::session_token::activate_cell_uds(session_id, None);
+
     v2_session_map::register(canonical_key.clone(), session.clone());
 
     // Wire the child-exit observer so the v2_session_map slot
@@ -248,6 +294,8 @@ pub fn spawn_agent_session_v2_blocking(
     // No ephemeral workspace here (this is the canonical pinned-chat spawn, not
     // a `/v1/sandboxes` API session) → `None` for the teardown dir AND `None`
     // for the P4-H4 quota principal (no concurrent-cell slot was acquired).
+    // Child-exit also revokes the scoped token + removes the UDS (flag-gated
+    // inside the observer).
     crate::v2_spawn::spawn_child_exit_observer(
         canonical_key.clone(),
         session.clone(),

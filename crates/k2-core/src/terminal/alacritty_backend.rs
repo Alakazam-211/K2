@@ -288,6 +288,24 @@ impl TerminalManager {
         rows: Option<u16>,
         event_sink: Arc<dyn TerminalEventSink>,
     ) -> Result<(), String> {
+        self.create_with_env(id, cwd, command, args, cols, rows, event_sink, None)
+    }
+
+    /// Like [`create`], but accepts optional env overrides applied into the
+    /// child PTY. Used by the daemon's `/cli/terminal/create` path to inject a
+    /// COMPAT-58 scoped passport (`K2_HOOK_TOKEN` + `K2_HOOK_SOCK`) without
+    /// ever placing the owner token in the child env.
+    pub fn create_with_env(
+        &mut self,
+        id: String,
+        cwd: String,
+        command: Option<String>,
+        args: Option<Vec<String>>,
+        cols: Option<u16>,
+        rows: Option<u16>,
+        event_sink: Arc<dyn TerminalEventSink>,
+        extra_env: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<(), String> {
         if self.terminals.contains_key(&id) {
             log_debug!("[terminal/alacritty] Terminal {} already exists, skipping creation", id);
             return Ok(());
@@ -363,8 +381,30 @@ impl TerminalManager {
             pty_options.env.insert("K2_PANE_ID".to_string(), id.clone());
             pty_options.env.insert("K2SO_TAB_ID".to_string(), id.clone());
             pty_options.env.insert("K2_TAB_ID".to_string(), id.clone());
-            pty_options.env.insert("K2SO_HOOK_TOKEN".to_string(), crate::hook_config::get_token().to_string());
-            pty_options.env.insert("K2_HOOK_TOKEN".to_string(), crate::hook_config::get_token().to_string());
+            // COMPAT-58 (#58 Phase 1 / PR-A): NEVER inject the daemon OWNER
+            // token here (historically `hook_config::get_token()`). A scoped
+            // passport — when the daemon mints one via `create_with_env` —
+            // rides the same K2_HOOK_TOKEN keys from `extra_env`. Otherwise
+            // leave them unset: the CLI falls back to disk for human shells,
+            // and agents never find crown-jewel credentials in their env.
+            // (Phase 2 still owns disk `heartbeat.token` hardening.)
+            if let Some(extra) = extra_env.as_ref() {
+                for (k, v) in extra {
+                    // Only overlay passport / sock / identity keys the
+                    // daemon prepared — never blank out TERM etc.
+                    if k.starts_with("K2_HOOK_")
+                        || k.starts_with("K2SO_HOOK_")
+                        || k == "K2_PANE_ID"
+                        || k == "K2SO_PANE_ID"
+                        || k == "K2_TAB_ID"
+                        || k == "K2SO_TAB_ID"
+                        || k == "K2_PORT"
+                        || k == "K2SO_PORT"
+                    {
+                        pty_options.env.insert(k.clone(), v.clone());
+                    }
+                }
+            }
         }
 
         // K2SO CLI: add cli/ directory to PATH so agents can call `k2so` commands

@@ -697,16 +697,15 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     };
     let session_id_for_response = cfg.session_id;
 
-    // COMPAT-58 (#58 Phase 1) — OPT-IN per-cell scoped token + UDS, gated on
-    // K2_HOOK_SCOPED (default OFF → this whole block is skipped and the env is
-    // untouched, i.e. ZERO behavior change AND zero extra work — no principal
-    // resolution / db lock on the hot spawn path). When ON we mint a per-cell
-    // scoped token (NOT the owner token) + the deterministic per-cell socket
-    // path and inject them into the child env behind the SAME K2_HOOK_TOKEN
-    // key + K2_HOOK_SOCK. The owner token is STILL accepted over TCP
-    // (dual-accept); Phase 2 (owner REJECTION) ships separately. The socket
-    // is bound + served AFTER spawn below.
-    if crate::session_token::scoped_hooks_enabled() {
+    // COMPAT-58 (#58 Phase 1 / PR-A) — per-cell scoped passport + UDS.
+    // Default ON (`K2_HOOK_SCOPED`); opt out with `0`/`false`/`off`.
+    // When ON we mint a per-cell scoped token (NOT the owner token) + the
+    // deterministic per-cell socket path into K2_HOOK_TOKEN + K2_HOOK_SOCK.
+    // ALWAYS strips any residual owner token from hook env keys — agent
+    // children never receive the daemon owner credential in env. Owner is
+    // still accepted over TCP for host/app (dual-accept); Phase 2 (owner
+    // REJECTION) ships separately. Socket bound + served AFTER spawn below.
+    {
         let pane_id = session_id_for_response.to_string();
         let principal = crate::session_token::HookPrincipal {
             workspace_uuid: scoped_principal_workspace(&req.agent_name, &req.cwd),
@@ -716,9 +715,7 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         // The cell NEVER chooses its mode/key. ApiKey is the only built mode
         // (Subscription is a deferred no-op stub). The PER-WORKSPACE key is
         // staged ONLY for a microVM-backed cell (the jail that isolates it);
-        // a non-microVM (passthrough) session resolves NO key → byte-identical
-        // default-OFF parity (no DB lookup, no env delta). On Mac / feature-off
-        // builds `resolve_sandbox` is always Passthrough, so this never fires.
+        // a non-microVM (passthrough) session resolves NO key.
         let cred_mode = crate::session_token::CredMode::ApiKey;
         let provider = crate::session_token::Provider::Anthropic;
         let microvm_backed =
@@ -741,17 +738,18 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         } else {
             None
         };
-        if let Some(pairs) = crate::session_token::cell_env_pairs(
+        let owner = k2_core::hook_config::get_token();
+        let minted = crate::session_token::prepare_agent_spawn_env(
+            &mut cfg.env,
             &session_id_for_response,
             &pane_id,
             principal,
             cred_mode,
             provider,
             workspace_api_key.as_deref(),
-        ) {
-            for (k, v) in pairs {
-                cfg.env.insert(k, v);
-            }
+            owner,
+        );
+        if minted {
             log_debug!(
                 "[hook-scoped] injected scoped K2_HOOK_TOKEN + K2_HOOK_SOCK for session={}",
                 session_id_for_response
@@ -911,23 +909,22 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     };
     let dpty_spawn_ms = __t_spawn.elapsed().as_secs_f64() * 1000.0;
 
-    // COMPAT-58 (#58 Phase 1) — OPT-IN per-cell UDS, gated on K2_HOOK_SCOPED
-    // (default OFF → never runs → ZERO behavior change). When ON we bind the
-    // cell's socket (0600 in 0700) and hand the listener to the per-cell hook
-    // server, which authenticates + serves `/hook/complete` for THIS cell
-    // (structural socket binding + scoped-token + peer-cred belt). The scoped
-    // token + this socket's path were already injected into the child env
-    // above. Bind failure logs + degrades to the TCP hook path (non-fatal).
+    // COMPAT-58 (#58 Phase 1 / PR-A) — per-cell UDS after PTY open.
+    // Default ON; bind failure degrades to TCP dual-accept (non-fatal).
+    // MicroVM cells chown the socket to their per-session uid (see
+    // `activate_cell_uds`); bare-PTY stays daemon-only 0600.
     #[cfg(unix)]
     if crate::session_token::scoped_hooks_enabled() {
+        // Keep the richer microVM chown logging inline; activate_cell_uds
+        // covers the bare-PTY + common path used by spawn.rs.
         match crate::cell_uds::bind_cell_socket(&session_id_for_response) {
             Ok(listener) => {
                 // Sandbox B2 / P4-H6: per-session tier gating. A microVM-backed
                 // cell additionally allows EXACTLY its per-session peer uid (the
                 // VMM is the host-socket peer after priv-drop to that uid); a
                 // bare-PTY cell does not → the allowed peer-uid set stays
-                // `{daemon uid}`, default-OFF parity. `per_session_uid` is `Some`
-                // iff this is a microVM cell the door allocated for.
+                // `{daemon uid}`. `per_session_uid` is `Some` iff this is a
+                // microVM cell the door allocated for.
                 //
                 // BLOCKER 2: the in-jail libkrun unix-proxy does the host-side
                 // connect() AS the VMM's per-session uid (no guest→host idmap),

@@ -63,7 +63,7 @@ Every K2-spawned PTY gets, for free:
 | Variable | Meaning |
 |---|---|
 | `K2_PORT` | Loopback port of the daemon's CLI API |
-| `K2_HOOK_TOKEN` | Auth token for the `k2` CLI. Under `K2_HOOK_SCOPED=1` (the K2 Cloud default) API-launched sessions get a **per-session scoped token** here — it identifies *your session*, and is what `k2 respond` authenticates with |
+| `K2_HOOK_TOKEN` | Auth token for the `k2` CLI. By default (`K2_HOOK_SCOPED` on, opt out with `0`/`false`/`off`) every agent session gets a **per-session scoped token** here — it identifies *your session*, and is what `k2 respond` authenticates with. Never the daemon owner token. |
 | `K2_PROJECT_PATH` | The workspace root |
 
 So any process inside the PTY can already run `k2 respond`, `k2 feedback ask`,

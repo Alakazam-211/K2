@@ -1,5 +1,5 @@
 //! Per-cell Unix-domain socket bind + accept-time peer-cred attestation
-//! (#58 Phase 0 — DORMANT helper, default OFF).
+//! (#58 Phase 1 — per-cell UDS bind helper; gated on `K2_HOOK_SCOPED`, default ON).
 //!
 //! ## Why this exists
 //!
@@ -18,11 +18,10 @@
 //! ONLY the bind helper (the peer-cred reader — `PeerCred`/`peer_cred` —
 //! was never wired to a caller and was deleted in the 0.40.31 warning-zero
 //! pass; recover from git history when the accept loop lands). It is CALLED only
-//! behind `K2_HOOK_SCOPED` (see [`crate::session_token::scoped_hooks_enabled`])
-//! and Phase 0 never actually serves traffic on the socket — the accept
-//! loop + vsock bridge + dispatch generalization are Phase 1/2. With the
-//! flag OFF nothing here ever runs. UDS is unix-only; a non-unix stub
-//! keeps the daemon compiling.
+//! behind `K2_HOOK_SCOPED` (see [`crate::session_token::scoped_hooks_enabled`],
+//! default ON). Phase 1 binds + serves agent verbs on the socket via
+//! `cell_server`. With the flag explicitly OFF nothing here runs. UDS is
+//! unix-only; a non-unix stub keeps the daemon compiling.
 
 #[cfg(unix)]
 pub use unix_impl::{bind_cell_socket, cell_socket_path};

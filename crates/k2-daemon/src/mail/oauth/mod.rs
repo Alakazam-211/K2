@@ -44,7 +44,9 @@
 #![allow(dead_code)]
 
 use crate::mail::secrets::SecretStore;
+use base64::Engine as _;
 use parking_lot::Mutex as PlMutex;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -615,18 +617,86 @@ pub fn device_poll(
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Flow B — auth-code + loopback (RFC 8252)
+// Flow B — auth-code + loopback (RFC 8252) + PKCE (RFC 7636, M2)
 // ─────────────────────────────────────────────────────────────────────
+
+/// A PKCE (RFC 7636) `code_verifier` + `code_challenge` pair for ONE
+/// loopback flow (M2 — closes the local token-injection vector).
+///
+/// The `verifier` is a per-flow SECRET the daemon keeps to itself and only
+/// reveals on the token exchange; the `challenge` = `BASE64URL-NOPAD(
+/// SHA256(verifier))` is public and rides on the consent URL. Because the
+/// authorization server binds the issued code to *this* challenge, an
+/// attacker who races the loopback with a code minted in THEIR own session
+/// (a different, unknown verifier) fails the exchange (`invalid_grant`) —
+/// even if they stole the genuine `state` off the browser-launch argv.
+///
+/// `Debug` REDACTS the verifier (it is token-grade: whoever holds it
+/// defeats PKCE). The challenge is public knowledge, so it prints.
+#[derive(Clone)]
+pub struct PkcePair {
+    pub verifier: String,
+    pub challenge: String,
+}
+
+impl std::fmt::Debug for PkcePair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PkcePair")
+            // The verifier is a per-flow secret — never let it reach a log.
+            .field("verifier", &"<redacted>")
+            .field("challenge", &self.challenge)
+            .finish()
+    }
+}
+
+/// URL-safe, no-pad Base64 (RFC 4648 §5) — the encoding both PKCE
+/// (`code_challenge`) and the verifier itself use so every byte lands in
+/// the RFC 7636 unreserved set.
+fn base64_url_nopad(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// `code_challenge = BASE64URL-NOPAD(SHA256(code_verifier))` — the RFC 7636
+/// **S256** transform. Pure; no secret is retained.
+pub fn pkce_challenge(verifier: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(verifier.as_bytes());
+    base64_url_nopad(&hasher.finalize())
+}
+
+/// Mint a fresh per-flow [`PkcePair`]. The verifier is 32 bytes of OS
+/// randomness rendered as 43-char URL-safe Base64 — inside RFC 7636's
+/// 43–128 unreserved-char range, and the same getrandom-for-secrets idiom
+/// the crate uses for other high-entropy secrets (`secrets::generate_
+/// secret`). Fails LOUD if the OS RNG is unavailable rather than mint a
+/// weak, guessable verifier (which would silently defeat the M2 fix).
+pub fn generate_pkce() -> Result<PkcePair, OauthError> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|e| OauthError::Config(format!("os rng unavailable for PKCE: {e}")))?;
+    let verifier = base64_url_nopad(&bytes);
+    let challenge = pkce_challenge(&verifier);
+    Ok(PkcePair { verifier, challenge })
+}
 
 /// Build the system-browser authorization URL for the loopback flow
 /// (PURE — no network). `redirect_uri` is O2's `http://127.0.0.1:<port>`
 /// callback; `state` is O2's CSRF nonce (validated on the redirect with
-/// [`validate_state`]).
+/// [`validate_state`]); `code_challenge` is the PKCE S256 challenge (M2),
+/// the public half of a per-flow [`PkcePair`].
+///
+/// NOTE (M2): the finished URL is handed to the SYSTEM browser via
+/// `open`/`xdg-open`, so it (with `state` + `client_id`) is inherently
+/// visible on the process argv to any local user — that leak is inherent
+/// to launching a browser and is NOT something we can remove. PKCE is what
+/// neutralizes it: a stolen `state` alone can no longer inject a code,
+/// because the attacker cannot produce the matching `code_verifier`.
 pub fn loopback_build_url(
     provider: OauthProvider,
     client_id_override: Option<&str>,
     redirect_uri: &str,
     state: &str,
+    code_challenge: &str,
 ) -> Result<String, OauthError> {
     let cfg = provider.config();
     let auth = cfg
@@ -639,29 +709,53 @@ pub fn loopback_build_url(
         ("response_type", "code"),
         ("scope", cfg.scope),
         ("state", state),
+        // PKCE S256 (M2): binds the issued code to our per-flow verifier.
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", "S256"),
     ];
     params.extend(cfg.extra_auth_params.iter().copied());
     Ok(format!("{auth}?{}", encode_form(&params)))
 }
 
-/// Constant-ish-time `state` check (CSRF guard). Empty expected/actual
-/// never matches. O2 calls this on the loopback redirect before
-/// exchanging the code.
+/// Constant-time `state` check (CSRF guard). Empty expected/actual never
+/// matches. O2's loopback listener calls this on every redirect and only a
+/// state-VALID callback proceeds to the exchange (M2). The comparison is
+/// constant-time in the byte content (L3) so a local attacker cannot use
+/// response timing to recover the genuine `state` byte-by-byte.
 pub fn validate_state(expected: &str, got: &str) -> Result<(), OauthError> {
-    if !expected.is_empty() && expected == got {
+    if !expected.is_empty() && constant_time_eq(expected.as_bytes(), got.as_bytes()) {
         Ok(())
     } else {
         Err(OauthError::State)
     }
 }
 
+/// Constant-time byte-slice equality. Length inequality returns early
+/// (lengths are not secret here — the `state` length is fixed), but for
+/// equal lengths every byte is always compared, so a matching prefix does
+/// not leak via a shorter runtime.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// Exchange a loopback authorization `code` for tokens (`grant_type=
 /// authorization_code`). `redirect_uri` MUST match the one in
-/// `loopback_build_url`.
+/// `loopback_build_url`. `code_verifier` is the SAME per-flow PKCE secret
+/// whose challenge went out on the auth URL (M2) — Google (and any RFC 7636
+/// server) rejects the exchange with `invalid_grant` if it is absent or
+/// does not hash to the code's bound challenge. It is never logged.
 pub fn loopback_exchange(
     provider: OauthProvider,
     code: &str,
     redirect_uri: &str,
+    code_verifier: &str,
     client_id_override: Option<&str>,
     client_secret_override: Option<&str>,
     http: &dyn HttpClient,
@@ -673,6 +767,9 @@ pub fn loopback_exchange(
         ("code", code),
         ("redirect_uri", redirect_uri),
         ("grant_type", "authorization_code"),
+        // PKCE proof (M2): the verifier for this flow's challenge. Google
+        // Desktop clients send BOTH this AND the client_secret below.
+        ("code_verifier", code_verifier),
     ];
     // Google Desktop clients require a `client_secret` here or the token
     // endpoint answers `invalid_client`. Microsoft resolves to `None` →

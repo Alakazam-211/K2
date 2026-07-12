@@ -24,9 +24,16 @@
 //! #8). Microsoft (device flow) has no such limit — it works local + remote.
 //!
 //! No real network in this module's tests: the flow ENGINE ([`run_device_
-//! flow`]/[`run_loopback_flow`]/[`serve_loopback_once`]) is injected with
+//! flow`]/[`run_loopback_flow`]/[`serve_loopback`]) is injected with
 //! O1's mock `HttpClient` + a real localhost loopback fed by a client
 //! thread — no Google/Microsoft, no browser, ever.
+//!
+//! LOOPBACK HARDENING (M2): the 127.0.0.1 listener no longer trusts the
+//! FIRST connection. It answers any callback whose `state` does not match
+//! ours with a benign page and KEEPS listening, so a local attacker racing
+//! `GET /cb?code=<their-code>&state=<stolen-state>` cannot abort or hijack
+//! the link; only a state-valid callback proceeds, and PKCE (O1) then makes
+//! even a state-valid injected code fail at the token exchange.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -249,10 +256,12 @@ struct LoopbackCapture {
     error: Option<String>,
 }
 
-/// The server-side LOOPBACK flow (Gmail, §3b): await the single redirect on
-/// the 127.0.0.1 listener, validate `state`, exchange the `code` for
-/// tokens, create the row + vault them. Every terminal outcome updates the
-/// registry; the `code`/tokens never leave the daemon.
+/// The server-side LOOPBACK flow (Gmail, §3b): await the state-VALID
+/// redirect on the 127.0.0.1 listener (M2 — bad-state callbacks are ignored
+/// and we keep listening; see [`serve_loopback`]), exchange the `code` for
+/// tokens WITH the flow's PKCE `code_verifier` (M2), create the row + vault
+/// them. Every terminal outcome updates the registry; the `code`/verifier/
+/// tokens never leave the daemon.
 #[allow(clippy::too_many_arguments)]
 fn run_loopback_flow(
     secrets: &dyn SecretStore,
@@ -264,10 +273,15 @@ fn run_loopback_flow(
     listener: TcpListener,
     redirect_uri: &str,
     expected_state: &str,
+    code_verifier: &str,
     timeout: Duration,
     now_fn: &mut dyn FnMut() -> i64,
 ) {
-    let capture = match serve_loopback_once(&listener, timeout) {
+    // `serve_loopback` only returns a capture whose `state` matched ours —
+    // it silently ignores (and keeps listening past) any wrong/missing-state
+    // connection, so a local attacker's race can neither abort nor hijack
+    // the link. A timeout means the real browser never returned in time.
+    let capture = match serve_loopback(&listener, expected_state, timeout) {
         Ok(c) => c,
         Err(_) => {
             set_terminal(
@@ -279,7 +293,8 @@ fn run_loopback_flow(
         }
     };
     if let Some(err) = capture.error {
-        // Google redirects `?error=access_denied` on a refusal.
+        // Google redirects `?error=access_denied` on a refusal (with our
+        // `state`, so it reaches us here rather than being ignored).
         let status = if err == "access_denied" { LinkStatus::Denied } else { LinkStatus::Error };
         set_terminal(link_id, status, Some(format!("the browser returned '{err}'")));
         return;
@@ -292,19 +307,11 @@ fn run_loopback_flow(
         );
         return;
     };
-    // CSRF guard (prd §10): the redirect's `state` must equal ours.
-    if oauth::validate_state(expected_state, capture.state.as_deref().unwrap_or("")).is_err() {
-        set_terminal(
-            link_id,
-            LinkStatus::Error,
-            Some("state mismatch on the redirect (possible CSRF) — run 'k2 mail link add' again".to_string()),
-        );
-        return;
-    }
     // `None` client_secret override → the provider's placeholder resolves
     // (Google's Desktop secret; Microsoft omits it). Same seam as
-    // `client_id_override`, currently `None`.
-    match oauth::loopback_exchange(provider, &code, redirect_uri, None, None, http) {
+    // `client_id_override`, currently `None`. `code_verifier` completes the
+    // PKCE proof — an injected code minted in another session fails here.
+    match oauth::loopback_exchange(provider, &code, redirect_uri, code_verifier, None, None, http) {
         Ok(tokens) => {
             complete_with_tokens(secrets, provider, link_id, owner_project_id, address, &tokens, now_fn())
         }
@@ -312,11 +319,38 @@ fn run_loopback_flow(
     }
 }
 
-/// Accept ONE redirect on the ephemeral loopback, parse `?code`/`?state`/
-/// `?error`, and reply with a tiny "you can close this tab" page and
-/// nothing else (prd §10). Bounded by `timeout` (non-blocking accept loop)
-/// so a browser that never returns can't hang the flow thread.
-fn serve_loopback_once(listener: &TcpListener, timeout: Duration) -> Result<LoopbackCapture, String> {
+/// Write the tiny fixed HTTP text response the loopback always serves (the
+/// browser tab that hit the redirect just shows this line). Carries no
+/// secret and no per-request data — identical bytes for good and bad
+/// callbacks so it leaks nothing.
+fn write_loopback_page(stream: &mut std::net::TcpStream, page: &str) {
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        page.len(),
+        page
+    );
+    let _ = stream.write_all(resp.as_bytes());
+    let _ = stream.flush();
+}
+
+/// Await the loopback redirect, parsing `?code`/`?state`/`?error` from each
+/// connection. Bounded by `timeout` (non-blocking accept loop) so a browser
+/// that never returns can't hang the flow thread.
+///
+/// M2 — KEEP LISTENING PAST BAD STATE. A connection whose `state` does not
+/// match `expected_state` (a local attacker racing the callback with a
+/// stolen `state`+port, or any stray probe) is answered with a benign page
+/// and IGNORED; the loop keeps accepting until a state-VALID callback
+/// arrives or the deadline passes. Only a state-valid capture is returned —
+/// so exactly one, the genuine browser redirect, ever reaches the exchange.
+/// (An earlier design trusted the FIRST connection, which let an attacker
+/// abort the link or inject a code; PKCE then closes the residual window.)
+fn serve_loopback(
+    listener: &TcpListener,
+    expected_state: &str,
+    timeout: Duration,
+) -> Result<LoopbackCapture, String> {
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let deadline = Instant::now() + timeout;
     loop {
@@ -342,15 +376,26 @@ fn serve_loopback_once(listener: &TcpListener, timeout: Duration) -> Result<Loop
                 }
                 let req = String::from_utf8_lossy(&data);
                 let capture = parse_loopback_request(&req);
-                let page = "You can close this tab and return to your terminal.";
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    page.len(),
-                    page
+                // M2 CSRF/injection guard: only a state-VALID callback is
+                // honored. Anything else (wrong/missing state — an attacker's
+                // race or a stray probe) gets a benign page and is ignored;
+                // we keep listening for the real one until the deadline.
+                if oauth::validate_state(expected_state, capture.state.as_deref().unwrap_or(""))
+                    .is_err()
+                {
+                    write_loopback_page(
+                        &mut stream,
+                        "This authorization request could not be matched. You can close this tab.",
+                    );
+                    if Instant::now() >= deadline {
+                        return Err("loopback timeout".to_string());
+                    }
+                    continue;
+                }
+                write_loopback_page(
+                    &mut stream,
+                    "You can close this tab and return to your terminal.",
                 );
-                let _ = stream.write_all(resp.as_bytes());
-                let _ = stream.flush();
                 return Ok(capture);
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -572,7 +617,24 @@ fn start_loopback(
     };
     let redirect_uri = format!("http://{addr}/cb");
     let state = uuid::Uuid::new_v4().to_string();
-    let url = match oauth::loopback_build_url(provider, None, &redirect_uri, &state) {
+    // PKCE (M2): a per-flow verifier/challenge pair. The challenge rides on
+    // the (argv-visible) consent URL; the verifier stays in this flow's
+    // in-memory state and is only revealed on the token exchange — so a
+    // local attacker who scrapes `state`/`client_id` off the browser-launch
+    // argv still cannot inject a code (they lack the verifier). It is
+    // token-grade: never logged, redacted in `PkcePair`'s Debug.
+    let pkce = match oauth::generate_pkce() {
+        Ok(p) => p,
+        Err(e) => {
+            return error_response(
+                "502 Bad Gateway",
+                "engine",
+                &format!("could not initialize the secure link: {e}"),
+            )
+        }
+    };
+    let url = match oauth::loopback_build_url(provider, None, &redirect_uri, &state, &pkce.challenge)
+    {
         Ok(u) => u,
         Err(e) => {
             return error_response(
@@ -595,12 +657,16 @@ fn start_loopback(
         );
     }
     insert_pending(link_id, address);
-    let (lid, pid, addr2, ruri, st) = (
+    // The PKCE verifier travels into the flow thread alongside `state` and
+    // is consumed only by the token exchange — it never touches the
+    // registry, a log line, or the response.
+    let (lid, pid, addr2, ruri, st, verifier) = (
         link_id.to_string(),
         project_id.to_string(),
         address.to_string(),
         redirect_uri.clone(),
         state.clone(),
+        pkce.verifier.clone(),
     );
     std::thread::spawn(move || {
         let secrets = FileSecretStore::default();
@@ -616,6 +682,7 @@ fn start_loopback(
             listener,
             &ruri,
             &st,
+            &verifier,
             Duration::from_secs(300),
             &mut now_fn,
         );
@@ -680,23 +747,37 @@ mod tests {
     // ── Fakes (mirror the O1 engine tests) ──
 
     /// Scripted HTTP mock: FIFO of canned `(status, body)`; an empty queue
-    /// PANICS so a test that must not hit the network fails loudly.
+    /// PANICS so a test that must not hit the network fails loudly. Records
+    /// every request's form so tests can assert what went on the wire (e.g.
+    /// the PKCE `code_verifier`).
     struct MockHttp {
         queue: StdMutex<VecDeque<(u16, String)>>,
+        seen: StdMutex<Vec<Vec<(String, String)>>>,
     }
     impl MockHttp {
         fn new(replies: &[(u16, &str)]) -> Self {
             Self {
                 queue: StdMutex::new(replies.iter().map(|(s, b)| (*s, b.to_string())).collect()),
+                seen: StdMutex::new(Vec::new()),
             }
+        }
+        /// Value of a form field in the Nth recorded request.
+        fn field(&self, n: usize, key: &str) -> Option<String> {
+            self.seen.lock().unwrap().get(n).and_then(|form| {
+                form.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+            })
         }
     }
     impl HttpClient for MockHttp {
         fn post_form(
             &self,
             _url: &str,
-            _form: &[(&str, &str)],
+            form: &[(&str, &str)],
         ) -> Result<oauth::HttpResponse, oauth::OauthError> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(form.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
             let (status, body) = self
                 .queue
                 .lock()
@@ -956,11 +1037,15 @@ mod tests {
             listener,
             &redirect_uri,
             &state,
+            "PKCE-VERIFIER-abc",
             Duration::from_secs(5),
             &mut now_fn,
         );
         let served = client.join().unwrap();
         assert!(served.contains("close this tab"), "close-tab page served: {served}");
+
+        // PKCE (M2): the flow's verifier round-tripped into the token POST.
+        assert_eq!(http.field(0, "code_verifier").as_deref(), Some("PKCE-VERIFIER-abc"));
 
         let params: HashMap<String, String> =
             HashMap::from([("linkId".to_string(), link_id)]);
@@ -972,10 +1057,95 @@ mod tests {
         cleanup(&project);
     }
 
+    // ── M2: a bad-state connection is IGNORED; the listener keeps listening
+    // and the flow still completes on a subsequent good-state callback. ──
+
     #[test]
-    fn loopback_state_mismatch_is_rejected_no_row() {
+    fn loopback_bad_state_ignored_then_good_state_completes() {
         let project = insert_project();
-        let address = format!("bad-{}@gmail.com", &project[..8]);
+        let address = format!("m2-{}@gmail.com", &project[..8]);
+        let link_id = uuid::Uuid::new_v4().to_string();
+        insert_pending(&link_id, &address);
+
+        let (listener, addr) = oauth::bind_ephemeral_loopback().expect("bind");
+        let redirect_uri = format!("http://{addr}/cb");
+        let good_state = "GOOD-state".to_string();
+
+        // The attacker connects FIRST with a stolen-but-wrong state + their
+        // own code; then the real browser connects with the correct state.
+        let gs = good_state.clone();
+        let client = std::thread::spawn(move || {
+            // 1) Attacker race: wrong state → must be ignored, NOT exchanged.
+            std::thread::sleep(Duration::from_millis(50));
+            let mut atk = TcpStream::connect(addr).expect("attacker connect");
+            atk.write_all(
+                b"GET /cb?code=ATTACKER-code&state=WRONG HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            )
+            .unwrap();
+            let mut atk_resp = String::new();
+            let _ = atk.read_to_string(&mut atk_resp);
+
+            // 2) Real browser: correct state + the genuine code.
+            std::thread::sleep(Duration::from_millis(50));
+            let mut real = TcpStream::connect(addr).expect("browser connect");
+            let req = format!(
+                "GET /cb?code=REAL-code&state={gs} HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            );
+            real.write_all(req.as_bytes()).unwrap();
+            let mut real_resp = String::new();
+            let _ = real.read_to_string(&mut real_resp);
+            (atk_resp, real_resp)
+        });
+
+        // Exactly ONE token-exchange reply is queued. If the attacker's
+        // bad-state connection had reached the exchange, the genuine one
+        // would panic on the empty queue — so a single reply PROVES only the
+        // state-valid callback exchanged.
+        let http = MockHttp::new(&[(
+            200,
+            r#"{"access_token":"GAT","refresh_token":"GRT","token_type":"Bearer","expires_in":3599,"scope":"https://mail.google.com/"}"#,
+        )]);
+        let store = MemStore::default();
+        let mut now_fn = || 4_000i64;
+        run_loopback_flow(
+            &store,
+            &http,
+            OauthProvider::Gmail,
+            &link_id,
+            &project,
+            &address,
+            listener,
+            &redirect_uri,
+            &good_state,
+            "PKCE-VERIFIER",
+            Duration::from_secs(5),
+            &mut now_fn,
+        );
+        let (atk_resp, real_resp) = client.join().unwrap();
+        // Both connections got a benign page; only the good one closes-tab.
+        assert!(atk_resp.contains("could not be matched"), "attacker page: {atk_resp}");
+        assert!(real_resp.contains("close this tab"), "browser page: {real_resp}");
+
+        // The exchange ran exactly once, for the REAL code (never the
+        // attacker's), and it carried the flow's PKCE verifier.
+        assert_eq!(http.field(0, "code").as_deref(), Some("REAL-code"));
+        assert!(http.field(1, "code").is_none(), "only one exchange must run");
+        assert_eq!(http.field(0, "code_verifier").as_deref(), Some("PKCE-VERIFIER"));
+
+        let params: HashMap<String, String> =
+            HashMap::from([("linkId".to_string(), link_id)]);
+        assert_eq!(body_json(&handle_link_oauth_status(&params))["state"], "connected");
+        assert!(row_oauth(&address).is_some(), "row created from the genuine callback");
+        cleanup(&project);
+    }
+
+    #[test]
+    fn loopback_wrong_state_only_times_out_no_row() {
+        // A lone wrong-state connection is ignored; with no good callback the
+        // flow times out (expired) and creates NO row — the attacker cannot
+        // even force an early terminal state. Short timeout keeps it fast.
+        let project = insert_project();
+        let address = format!("m2to-{}@gmail.com", &project[..8]);
         let link_id = uuid::Uuid::new_v4().to_string();
         insert_pending(&link_id, &address);
         let (listener, addr) = oauth::bind_ephemeral_loopback().expect("bind");
@@ -983,10 +1153,10 @@ mod tests {
         let client = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
             let mut s = TcpStream::connect(addr).unwrap();
-            // WRONG state → CSRF guard fires; no token exchange happens.
             s.write_all(b"GET /cb?code=X&state=WRONG HTTP/1.1\r\n\r\n").unwrap();
             let mut r = String::new();
             let _ = s.read_to_string(&mut r);
+            r
         });
         // Empty HTTP queue → a token exchange would PANIC (proves none ran).
         let http = MockHttp::new(&[]);
@@ -1002,14 +1172,16 @@ mod tests {
             listener,
             &redirect_uri,
             "EXPECTED-state",
-            Duration::from_secs(5),
+            "PKCE-VERIFIER",
+            Duration::from_millis(400),
             &mut now_fn,
         );
-        client.join().unwrap();
+        let atk_resp = client.join().unwrap();
+        assert!(atk_resp.contains("could not be matched"), "attacker page: {atk_resp}");
         let params: HashMap<String, String> =
             HashMap::from([("linkId".to_string(), link_id)]);
-        assert_eq!(body_json(&handle_link_oauth_status(&params))["state"], "error");
-        assert!(row_oauth(&address).is_none(), "no row on state mismatch");
+        assert_eq!(body_json(&handle_link_oauth_status(&params))["state"], "expired");
+        assert!(row_oauth(&address).is_none(), "no row when only a bad-state callback arrives");
         cleanup(&project);
     }
 

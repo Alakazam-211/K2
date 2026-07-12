@@ -293,6 +293,7 @@ fn loopback_build_url_pure_and_encoded() {
         None,
         "http://127.0.0.1:53017/cb",
         "state-nonce-abc",
+        "CHALLENGE-abc123",
     )
     .expect("build url");
     assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"), "{url}");
@@ -300,9 +301,59 @@ fn loopback_build_url_pure_and_encoded() {
     assert!(url.contains("state=state-nonce-abc"));
     assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A53017%2Fcb"));
     assert!(url.contains("scope=https%3A%2F%2Fmail.google.com%2F"));
+    // PKCE (M2): the S256 challenge + method ride on the consent URL.
+    assert!(url.contains("code_challenge=CHALLENGE-abc123"), "{url}");
+    assert!(url.contains("code_challenge_method=S256"), "{url}");
     // Google's refresh-token-forcing params rode along.
     assert!(url.contains("access_type=offline"));
     assert!(url.contains("prompt=consent"));
+}
+
+// ── PKCE (RFC 7636, S256) — M2 ───────────────────────────────────────────
+
+#[test]
+fn pkce_challenge_is_s256_of_verifier() {
+    // A generated pair must satisfy challenge == BASE64URL-NOPAD(SHA256(v)).
+    let pair = generate_pkce().expect("pkce");
+    assert_eq!(pair.challenge, pkce_challenge(&pair.verifier));
+    // And an independently computed S256 over a KNOWN verifier matches
+    // (RFC 7636 Appendix B uses this exact verifier/challenge vector).
+    let v = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    assert_eq!(pkce_challenge(v), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+    // The verifier is in the RFC 7636 unreserved set (URL-safe base64,
+    // no pad) and within the 43–128 length range.
+    assert!((43..=128).contains(&pair.verifier.len()), "len {}", pair.verifier.len());
+    assert!(
+        pair.verifier
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')),
+        "verifier has non-unreserved chars: {}",
+        pair.verifier
+    );
+}
+
+#[test]
+fn generate_pkce_yields_distinct_verifiers() {
+    // Every flow gets its own secret — two mints must differ (both verifier
+    // and, since the challenge is its hash, the challenge too).
+    let a = generate_pkce().expect("a");
+    let b = generate_pkce().expect("b");
+    assert_ne!(a.verifier, b.verifier, "two flows must get distinct verifiers");
+    assert_ne!(a.challenge, b.challenge);
+}
+
+#[test]
+fn pkce_pair_debug_redacts_verifier() {
+    // The per-flow secret must never surface via Debug (the challenge is
+    // public and may print).
+    let pair = PkcePair {
+        verifier: SENTINEL.into(),
+        challenge: "public-challenge".into(),
+    };
+    let dbg = format!("{pair:?}");
+    assert!(!dbg.contains(SENTINEL), "PkcePair Debug leaked the verifier: {dbg}");
+    assert!(dbg.contains("<redacted>"));
+    assert!(dbg.contains("public-challenge"), "challenge is public: {dbg}");
 }
 
 #[test]
@@ -316,6 +367,7 @@ fn loopback_exchange_request_and_tokens() {
         OauthProvider::Gmail,
         "auth-code-xyz",
         "http://127.0.0.1:53017/cb",
+        "VERIFIER-xyz",
         None,
         None,
         &http,
@@ -326,8 +378,11 @@ fn loopback_exchange_request_and_tokens() {
     assert_eq!(http.field(0, "grant_type").as_deref(), Some("authorization_code"));
     assert_eq!(http.field(0, "code").as_deref(), Some("auth-code-xyz"));
     assert_eq!(http.field(0, "redirect_uri").as_deref(), Some("http://127.0.0.1:53017/cb"));
+    // PKCE (M2): the exchange MUST post the flow's code_verifier.
+    assert_eq!(http.field(0, "code_verifier").as_deref(), Some("VERIFIER-xyz"));
     // Google Desktop client → the exchange form MUST include client_secret
-    // (resolved to the provider placeholder here).
+    // (resolved to the provider placeholder here) — PKCE and the secret
+    // coexist for Desktop clients.
     assert_eq!(
         http.field(0, "client_secret").as_deref(),
         OauthProvider::Gmail.config().client_secret_placeholder,
@@ -346,6 +401,7 @@ fn loopback_exchange_gmail_includes_secret_override_wins() {
         OauthProvider::Gmail,
         "code",
         "http://127.0.0.1:1/cb",
+        "VERIFIER",
         None,
         Some("byo-secret-123"),
         &http,
@@ -358,7 +414,7 @@ fn loopback_exchange_gmail_includes_secret_override_wins() {
 #[test]
 fn loopback_exchange_microsoft_omits_secret() {
     // Microsoft is a public client: even via the loopback exchange path
-    // its form must carry NO client_secret (byte-for-byte unchanged).
+    // its form must carry NO client_secret. It DOES carry the PKCE verifier.
     let http = MockHttp::new();
     http.push(
         200,
@@ -368,15 +424,16 @@ fn loopback_exchange_microsoft_omits_secret() {
         OauthProvider::Microsoft,
         "code",
         "http://127.0.0.1:1/cb",
+        "VERIFIER",
         None,
         None,
         &http,
     )
     .expect("exchange");
     assert_eq!(http.field(0, "client_secret"), None, "MS exchange must carry no secret");
-    // The form is exactly the four public-client fields.
+    // The form is the four public-client fields plus the PKCE verifier.
     let keys: Vec<String> = http.request(0).1.into_iter().map(|(k, _)| k).collect();
-    assert_eq!(keys, vec!["client_id", "code", "redirect_uri", "grant_type"]);
+    assert_eq!(keys, vec!["client_id", "code", "redirect_uri", "grant_type", "code_verifier"]);
 }
 
 #[test]

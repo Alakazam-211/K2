@@ -137,6 +137,24 @@ cfg["token"] = os.environ["K2_TUNNEL_TOKEN"]
 cfg["subdomain"] = os.environ["K2_SUBDOMAIN"]
 cfg["auto_start"] = True
 cfg.setdefault("device_label", "k2-cloud")
+# Multi-relay failover (0.40.43): ordered fallback list, index 0 = primary.
+# K2_RELAYS is "host[:port],host[:port]"; default = the two edge relays
+# (k2e-01 primary, k2e-02 secondary). An empty value leaves relays unset so
+# the daemon falls back to its single default endpoint (byte-identical old
+# behavior). The primary MUST stay element 0 so a config push to an already-
+# connected box doesn't move it until a real failure.
+_relays_raw = os.environ.get("K2_RELAYS", "178.156.232.105,40.160.53.25")
+_relays = []
+for _r in (x.strip() for x in _relays_raw.split(",") if x.strip()):
+    _host, _, _port = _r.partition(":")
+    _entry = {"host": _host}
+    if _port:
+        _entry["port"] = int(_port)
+    _relays.append(_entry)
+if _relays:
+    cfg["relays"] = _relays
+else:
+    cfg.pop("relays", None)
 tmp = path + ".tmp"
 with open(tmp, "w") as f:
     json.dump(cfg, f, indent=2)

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # private-docs-gate.sh — the K2 repo is PUBLIC; the cloud/monetization
-# layer is documented ONLY in the private cloud repo (policy 2026-07-10:
-# public repo = how K2 works; relay/fleet/supply/pricing/billing = private).
+# layer is documented ONLY in the private cloud repo (policy 2026-07-10,
+# sharpened 2026-07-11: public repo = the K2 software/daemon; anything in
+# OUR control layer — relay/edge, fleet, supply, pricing/billing, and the
+# DNS/nameserver layer — is private).
 # `.k2/` is gitignored, so these docs can only leak via a deliberate
 # `git add -f` — this gate makes that a CI failure instead of an incident.
 #
@@ -9,7 +11,7 @@
 set -euo pipefail
 
 # Deny-list of TRACKED doc names that mark cloud-business content.
-PATTERN='(cloud|billing|fleet|relay|bare-metal|master-plan|server-migration|server-upgrade|hosted-servers|federations)'
+PATTERN='(cloud|billing|fleet|relay|bare-metal|master-plan|server-migration|server-upgrade|hosted-servers|federations|nameserver|dns-edge|edge-r2|resilient-edge)'
 
 hits=$(git ls-files '.k2/prds/' '.k2/notes/' | grep -iE "$PATTERN" || true)
 if [ -n "$hits" ]; then

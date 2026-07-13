@@ -257,6 +257,7 @@ export function createWebglPainter(
       // changes deliberately do NOT land here (color is
       // per-instance; the atlas is colorless — brief §1.3's win over
       // xterm's rebuild-on-theme).
+      atlas?.dispose()
       atlas = new GlyphAtlas({
         deviceCellW,
         deviceCellH,
@@ -294,6 +295,8 @@ export function createWebglPainter(
       backend = null
       canvas = null
       lastFrame = null
+      atlas?.dispose()
+      atlas = null
       cache.clear()
     },
   }

@@ -39,12 +39,23 @@ const SLOT_PAD = 1
  *  (globals.css sets -webkit-font-smoothing: antialiased): macOS
  *  otherwise rasterizes canvas text with dilated "smoothed" stems,
  *  which read as chunkier glyphs than the DOM at the same font.
- *  Best-effort — engines that ignore the property on canvas (or on
- *  detached elements) fall back to the shader's coverage-gamma
- *  correction (glBackend u_gamma). */
-function requestThinFontSmoothing(canvas: HTMLCanvasElement): void {
+ *
+ *  The inline style alone is NOT enough: canvas-text smoothing comes
+ *  from the element's COMPUTED style, and a detached canvas resolves
+ *  none — so the page canvas is also parked in the document, fixed
+ *  far offscreen (never painted, no layout impact), where the style
+ *  actually applies. Engines that still ignore it fall back to the
+ *  shader's coverage-gamma correction (glBackend u_gamma). Pages are
+ *  detached again on atlas dispose/growth. */
+function attachAtlasPage(canvas: HTMLCanvasElement): void {
   ;(canvas.style as CSSStyleDeclaration & { webkitFontSmoothing?: string })
     .webkitFontSmoothing = 'antialiased'
+  canvas.style.position = 'fixed'
+  canvas.style.left = '-100000px'
+  canvas.style.top = '0'
+  canvas.setAttribute('aria-hidden', 'true')
+  canvas.setAttribute('data-k2-atlas-page', '')
+  document.body?.appendChild(canvas)
 }
 
 export interface GlyphSlot {
@@ -96,12 +107,12 @@ export class GlyphAtlas implements GlyphSource {
   constructor(private cfg: GlyphAtlasConfig) {
     this.layout = createLayout()
     this.canvas = document.createElement('canvas')
-    requestThinFontSmoothing(this.canvas)
     this.canvas.width = this.layout.size
     this.canvas.height = this.layout.size
     const ctx = this.canvas.getContext('2d', { willReadFrequently: true })
     if (!ctx) throw new Error('canvas 2d context unavailable')
     this.ctx = ctx
+    attachAtlasPage(this.canvas)
     // CSS line-box vertical centering: baseline sits so the font
     // bounding box is centered in the cell — closest match to how
     // the DOM strip (line-height = cellH) places glyphs.
@@ -115,6 +126,13 @@ export class GlyphAtlas implements GlyphSource {
             (cfg.deviceCellH - (ascent + descent)) / 2 + ascent,
           )
         : Math.round(cfg.deviceCellH * 0.8)
+  }
+
+  /** Detach the page canvas parked in the document (see
+   *  attachAtlasPage). Call when the atlas is replaced (font/DPR
+   *  change) or the painter is disposed. */
+  dispose(): void {
+    this.canvas.remove()
   }
 
   get size(): number {
@@ -166,12 +184,13 @@ export class GlyphAtlas implements GlyphSource {
         // Double the page, preserving existing pixels at (0,0) so
         // every already-issued coordinate stays valid.
         const grown = document.createElement('canvas')
-        requestThinFontSmoothing(grown)
         grown.width = this.layout.size
         grown.height = this.layout.size
         const gctx = grown.getContext('2d', { willReadFrequently: true })
         if (!gctx) return null
         gctx.drawImage(this.canvas, 0, 0)
+        this.canvas.remove()
+        attachAtlasPage(grown)
         this.canvas = grown
         this.ctx = gctx
         this.version++

@@ -83,6 +83,7 @@ import {
   scrollPxFromThumbTopFrac,
 } from './scrollMath'
 import { decodeGridFrame, type WireFrame } from './gridWire'
+import { computeResyncScrollPx } from './resyncAnchor'
 import { colToTextIndex, runColSpan } from './runCols'
 import { hexToCss, TerminalRow } from './rowRender'
 import { createWebglPainter } from './webgl/webglPainter'
@@ -688,6 +689,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // immune to cap-trim); a full snapshot (including the k1 resync
     // the daemon sends when our acks lag, i.e. exactly during fast
     // scrolling) contributes its total-row growth.
+    const prevSnap = next
     const prevTotal =
       (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
     let appendedRows = 0
@@ -705,6 +707,25 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const nextTotal =
         (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
       appendedRows = Math.max(appendedRows, nextTotal - prevTotal)
+      // Content seam-match (audit fix): once the daemon's scrollback
+      // ring is at cap, resync totals stop growing while content
+      // shifts — the growth heuristic above reads 0 and the view
+      // yanks. Re-derive scrollPx by finding the VIEWED rows in the
+      // new snapshot; exact whenever a confident match exists, with
+      // the growth heuristic as fallback (appendedRows path below).
+      if (scrollPxRef.current > 0 && prevSnap && next) {
+        const ch = cellMetricsRef.current.height || 20
+        const re = computeResyncScrollPx(
+          prevSnap,
+          next,
+          scrollPxRef.current,
+          ch,
+        )
+        if (re !== null) {
+          commitScrollPx(clampScrollPx(re, next.scrollback.length, ch))
+          appendedRows = 0
+        }
+      }
     }
     liveGridRef.current = next
     // SCROLL ANCHORING: pin the viewed content while scrolled up.

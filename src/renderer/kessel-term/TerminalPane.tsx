@@ -4212,7 +4212,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           scrollAccumRef.current = 0
           if (accum === 0) return
           const deltaPx = accum * config.scrolling.multiplier
-          const scrollbackLen = snapshotRef.current?.scrollback.length ?? 0
+          // Paint + clamp against the LIVE grid, not the passively-
+          // synced snapshotRef (audit finding): when a WS flush lands
+          // earlier in this same frame, scrollPxRef is already
+          // anchored for the NEW snapshot while snapshotRef still
+          // holds the old one — that mismatched pair painted a
+          // one-frame content jog. The one divergence where liveGrid
+          // must NOT be shown is the resize hold (it deliberately
+          // keeps the last non-blank frame), so use the rendered
+          // snapshot there. Clamp length comes from the SAME grid
+          // that gets painted, so position and content always agree.
+          const snapForPaint = resizeHoldActiveRef.current
+            ? snapshotRef.current
+            : (liveGridRef.current ?? snapshotRef.current)
+          const scrollbackLen = snapForPaint?.scrollback.length ?? 0
           if (import.meta.env.DEV) scrollFlushCountRef.current++
           // deltaY > 0 scrolls toward the bottom (scrollPx → 0).
           // Vsync scroll pump: compute the new position HERE (this
@@ -4225,7 +4238,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           const nextPx = commitScrollPx((px) =>
             clampScrollPx(px - deltaPx, scrollbackLen, cellH),
           )
-          if (useWebglRef.current) paintWebglRef.current(nextPx)
+          if (useWebglRef.current) {
+            paintWebglRef.current(nextPx, snapForPaint)
+          }
         })
       }
     }
@@ -4338,8 +4353,28 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const grabFrac = onThumb ? yFrac - thumb.topFrac : thumb.heightFrac / 2
       const apply = (clientY: number) => {
         const topFrac = (clientY - rect.top) / rect.height - grabFrac
+        // Recompute buffer geometry LIVE each move (audit finding):
+        // scrollback grows while an agent streams mid-drag, and
+        // mapping against the mousedown-captured length made the
+        // thumb position drift from the content and kept the true
+        // top of history unreachable. `grabFrac` stays captured —
+        // the grip point on the thumb is a gesture-time fact.
+        const liveSnap = snapshotRef.current ?? snap
+        const liveLen = liveSnap.scrollback.length
+        const liveThumb = computeScrollbarThumb(
+          scrollPxRef.current,
+          liveLen,
+          liveLen + liveSnap.grid.length,
+          liveSnap.rows,
+          ch,
+        )
         commitScrollPx(
-          scrollPxFromThumbTopFrac(topFrac, thumb.heightFrac, scrollbackLen, ch),
+          scrollPxFromThumbTopFrac(
+            topFrac,
+            (liveThumb ?? thumb).heightFrac,
+            liveLen,
+            ch,
+          ),
         )
       }
       apply(e.clientY)

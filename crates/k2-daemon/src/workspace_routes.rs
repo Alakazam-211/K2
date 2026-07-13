@@ -280,6 +280,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/workspace/msg" => {
             let workspace = str_param(params, "workspace");
             let text = str_param(params, "text");
+            // C2: display `from` may be free-text for humans, but PEER
+            // IDENTITY is the stamped principal (or owner bypass) — never
+            // free-text `--from` as the gate subject.
             let from = opt_param(params, "from").unwrap_or_default();
             // 0.39.25: optional slash-command prepended at the very front
             // of the delivered payload (before the `[from <name>]`
@@ -310,6 +313,17 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
             if text.is_empty() {
                 return Some(CliResponse::bad_request("Missing text"));
+            }
+            // C2: scoped principal → require local connection to target.
+            // Owner ambient (no principal) bypasses (Phase 2 residual).
+            let principal = crate::caller_workspace::principal_from_params(params);
+            match crate::comms::gate_cross_workspace(principal.as_ref(), &workspace) {
+                Ok(()) => {}
+                Err(Some(resp)) => return Some(resp),
+                Err(None) => {
+                    // Unknown target — fall through to deliver_live's
+                    // workspace_not_found reason/hint (stable shape).
+                }
             }
             let resp = crate::workspace_msg::deliver_live(
                 &workspace, &text, &from, &command, wake, wake_timeout,

@@ -105,6 +105,18 @@ pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
         Ok(p) => p,
         Err(r) => return r,
     };
+    // C2: composing into ANOTHER workspace's inbox requires a local
+    // connection when the caller is a scoped principal. Owner ambient
+    // (no principal) bypasses. `project=` is the compose TARGET; identity
+    // comes from stamped `project_id` / request principal — not free-text
+    // `--from`.
+    let principal = crate::caller_workspace::principal_from_params(params);
+    let target_token = workspace.to_string_lossy();
+    match crate::comms::gate_cross_workspace(principal.as_ref(), &target_token) {
+        Ok(()) => {}
+        Err(Some(resp)) => return resp,
+        Err(None) => {}
+    }
     let title = str_param(params, "title");
     if title.is_empty() {
         return CliResponse::bad_request("Missing title");

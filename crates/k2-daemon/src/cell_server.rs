@@ -456,7 +456,28 @@ mod unix_impl {
         };
 
         // Sender identity is stamped server-side; body never trusted for it.
+        // C2: inbox routes use `project=` as the TARGET resource (compose
+        // into another workspace, list that inbox, …) — preserve across
+        // stamp (which rewrites project to the caller's own path).
+        let inbox_target = if path.starts_with("/cli/inbox/") {
+            (
+                params.get("project").cloned(),
+                params.get("project_path").cloned(),
+            )
+        } else {
+            (None, None)
+        };
         stamp_principal(&mut params, &principal);
+        if let (Some(t), _) = &inbox_target {
+            if !t.trim().is_empty() {
+                params.insert("project".to_string(), t.clone());
+            }
+        }
+        if let (_, Some(t)) = &inbox_target {
+            if !t.trim().is_empty() {
+                params.insert("project_path".to_string(), t.clone());
+            }
+        }
 
         let path_owned = path.to_string();
         let method_owned = method.to_string();
@@ -514,6 +535,8 @@ mod unix_impl {
                 k2_core::agent_hooks::handle_hook_complete(params).to_string(),
             ),
             "/cli/workspace/msg" => from_cli(crate::cli::dispatch(path, params)),
+            // C2: peer-gated live terminal peek (`k2 read <ws>`).
+            "/cli/terminal/read" => from_cli(crate::cli::dispatch(path, params)),
             // F2 (sandbox API): the in-cell agent's RESPONSE egress. Append the
             // message text to THIS session's response log (pinned to
             // `this_session_id` — the body can't name another session). The text

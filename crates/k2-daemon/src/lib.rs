@@ -104,6 +104,8 @@ pub mod cell_uid_pool;
 pub mod session_token;
 // Wave 0: caller-asserted workspace must never be identity (mail/DNS grants).
 pub mod caller_workspace;
+// C2 (0.40.45): connection-required local agent msg/read/inbox.
+pub mod comms;
 // P3b (sandbox / K2-as-a-server): per-session stream tokens + the public
 // `POST /v1/sandboxes` route + policy-resolver. Behind K2_SANDBOX_API (OFF).
 pub mod stream_token;

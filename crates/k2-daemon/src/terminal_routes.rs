@@ -86,6 +86,15 @@ pub(crate) fn resolve_screen_lines(
         .map(String::as_str)
         .filter(|s| !s.is_empty())
     {
+        // C2: scoped principal reading ANOTHER workspace's live terminal
+        // requires a local connection. Owner ambient (no principal) bypasses.
+        // Unknown targets fall through to the existing not-found 400.
+        let principal = crate::caller_workspace::principal_from_params(params);
+        match crate::comms::gate_cross_workspace(principal.as_ref(), ws) {
+            Ok(()) => {}
+            Err(Some(resp)) => return Err(resp),
+            Err(None) => {}
+        }
         let project_path = match crate::workspace_msg::resolve_workspace(ws) {
             Some(p) => p,
             None => {

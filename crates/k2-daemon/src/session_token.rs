@@ -436,7 +436,21 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/tunnel/",
         "/cli/daemon/",
         "/cli/sessions/v2/", // PTY spawn/close = RCE-adjacent
-        "/cli/terminal/",
+        // `/cli/terminal/*` mutations (write/spawn/kill/…) stay denied;
+        // C2 admits exact `/cli/terminal/read` via ALLOW_EXACT below so
+        // agents can peer-gated `k2 read` of connected workspaces.
+        "/cli/terminal/write",
+        "/cli/terminal/create",
+        "/cli/terminal/kill",
+        "/cli/terminal/resize",
+        "/cli/terminal/kill-foreground",
+        "/cli/terminal/scroll",
+        "/cli/terminal/log",
+        "/cli/terminal/lifecycle-write",
+        "/cli/terminal/set-focus",
+        "/cli/terminal/pin-size",
+        "/cli/terminal/send-message",
+        "/cli/terminal/classify",
         // Wave 0: mail owner/admin surfaces stay off the scoped allowlist
         // (server lifecycle, domains, config, approvals, external link,
         // access management, doctor probes). Agent mail verbs are admitted
@@ -463,6 +477,9 @@ pub fn is_agent_verb(path: &str) -> bool {
     const ALLOW_EXACT: &[&str] = &[
         "/hook/complete",
         "/cli/workspace/msg",
+        // C2: workspace-addressed live terminal peek (`k2 read <ws>`).
+        // Peer gate runs in the handler when principal is scoped.
+        "/cli/terminal/read",
         // #58 Phase-1 close: awareness publish is the agent's peer-signal
         // egress (status/reservation/presence). +1 allowlist delta this
         // release. `subscribe` (a WS) is NOT here — read-only fan-out stays
@@ -1226,14 +1243,18 @@ mod tests {
         // #58 Phase-1 close: publish is the +1 allowlist delta; subscribe
         // (read-only WS) and resolve are NOT widened onto the scoped token.
         assert!(is_agent_verb("/cli/awareness/publish"));
+        // C2: workspace-addressed terminal read is peer-gated agent verb.
+        assert!(
+            is_agent_verb("/cli/terminal/read"),
+            "C2 admits k2 read <ws> for scoped principals (peer-gated)"
+        );
         // The deliberate this-release DENIALS (PRD §B SCOPE HONESTY): these
-        // stay owner/connect-user over TCP.
+        // stay owner/connect-user over TCP (write still denied).
         for p in [
             "/cli/awareness/subscribe",
             "/cli/workspace/resolve",
             "/cli/sessions/list-for-workspace",
             "/cli/terminal/write",
-            "/cli/terminal/read",
         ] {
             assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
         }

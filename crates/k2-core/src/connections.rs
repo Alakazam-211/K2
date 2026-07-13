@@ -408,6 +408,37 @@ pub fn is_remote_connection(source_project_path_or_id: &str, remote_addr: &str) 
     WorkspaceRemoteConnection::exists(&conn, &source_id, remote_addr).unwrap_or(false)
 }
 
+/// C2 (0.40.45) — THE LOCAL SAME-DAEMON PEER GATE.
+///
+/// Returns `true` when `a` and `b` are the same project id, OR when a
+/// `workspace_relations` row links them in either direction (the
+/// bidirectional awareness model — one row per pair is enough).
+/// Fails CLOSED: empty ids, unresolvable rows, or DB errors yield
+/// `false`. Used by agent-initiated `msg` / `read` / `inbox compose`
+/// into another workspace; owner ambient tokens bypass at the route
+/// layer (Phase 2 residual).
+pub fn are_local_peers(caller_project_id: &str, target_project_id: &str) -> bool {
+    let a = caller_project_id.trim();
+    let b = target_project_id.trim();
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a == b {
+        return true;
+    }
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT 1 FROM workspace_relations \
+         WHERE (source_project_id = ?1 AND target_project_id = ?2) \
+            OR (source_project_id = ?2 AND target_project_id = ?1) \
+         LIMIT 1",
+        rusqlite::params![a, b],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
 /// Dispatch by `action`. Returns a JSON-serialized string.
 ///
 /// **0.39.0 list-shape change**: `action == "list"` now returns the
@@ -757,6 +788,35 @@ mod tests {
         )
         .expect("insert project");
         (path, id)
+    }
+
+    // ── C2 (0.40.45): are_local_peers pure peer-id gate ─────────────
+
+    #[test]
+    fn are_local_peers_same_id_ok() {
+        let (_p, id) = make_project("same-id");
+        assert!(are_local_peers(&id, &id));
+    }
+
+    #[test]
+    fn are_local_peers_strangers_false() {
+        let (_pa, a) = make_project("stranger-a");
+        let (_pb, b) = make_project("stranger-b");
+        assert!(!are_local_peers(&a, &b));
+        assert!(!are_local_peers(&b, &a));
+    }
+
+    #[test]
+    fn are_local_peers_linked_either_direction() {
+        let (_pa, a) = make_project("link-a");
+        let (_pb, b) = make_project("link-b");
+        let db = crate::db::shared();
+        let conn = db.lock();
+        WorkspaceRelation::create(&conn, &Uuid::new_v4().to_string(), &a, &b, "collaborator")
+            .expect("link");
+        drop(conn);
+        assert!(are_local_peers(&a, &b), "forward edge");
+        assert!(are_local_peers(&b, &a), "reverse awareness");
     }
 
     #[test]

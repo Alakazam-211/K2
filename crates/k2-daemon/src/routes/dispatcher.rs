@@ -3638,8 +3638,14 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // C2: dual-auth (owner OR scoped) so agent-initiated compose into
+        // another workspace is principal-bound and peer-gated. Compose
+        // TARGET is `project=` — preserve it across stamp_principal
+        // (which otherwise rewrites project to the caller's own path).
         p if is_post && post_allowed && p.starts_with("/cli/inbox/") => {
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -3660,9 +3666,24 @@ async fn handle_one_request(
             for (k, v) in super::http::parse_form_body(&body_bytes) {
                 params.insert(k, v);
             }
+            // Preserve compose TARGET (`project` / `project_path`) across
+            // identity stamp — stamp rewrites those to the caller's path.
+            let compose_target = params.get("project").cloned();
+            let compose_target_path = params.get("project_path").cloned();
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+                if let Some(t) = compose_target.filter(|s| !s.trim().is_empty()) {
+                    params.insert("project".to_string(), t);
+                }
+                if let Some(t) = compose_target_path.filter(|s| !s.trim().is_empty()) {
+                    params.insert("project_path".to_string(), t);
+                }
+            }
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                crate::inbox_routes::dispatch_post(&p_owned, &params)
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::inbox_routes::dispatch_post(&p_owned, &params)
+                })
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -3680,8 +3701,14 @@ async fn handle_one_request(
         // silently clipped long live messages. Body wins on collision.
         // Runs in spawn_blocking: deliver_live sleeps across its
         // inject/verify/retry windows and must not pin a runtime worker.
+        //
+        // C2 (0.40.45): dual-auth like mail/dns — owner/connect-user via
+        // token_ok (NO principal → peer-gate bypass) OR scoped require_hook
+        // (principal stamped → peer gate enforces local connection).
         p if is_post && p == "/cli/workspace/msg" => {
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -3697,9 +3724,15 @@ async fn handle_one_request(
             for (k, v) in super::http::parse_form_body(&body_bytes) {
                 params.insert(k, v);
             }
+            // Preserve recipient `workspace=` (routing); stamp identity.
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {
-                crate::cli::dispatch(&p_owned, &params)
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -4604,6 +4637,52 @@ async fn handle_one_request(
             }
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // C2 (0.40.45): dual-auth peer-gated agent comms GETs —
+        // `/cli/workspace/msg` (legacy GET form), `/cli/terminal/read`
+        // (`k2 read <ws>`), and `/cli/inbox/*` reads. Owner/connect-user
+        // via token_ok (no principal → peer bypass); scoped via
+        // require_hook (principal stamped → peer gate).
+        p if p == "/cli/workspace/msg"
+            || p == "/cli/terminal/read"
+            || p.starts_with("/cli/inbox/") =>
+        {
+            let _ = stream.read(&mut buf).await;
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let mut params = super::http::parse_params(&path, &query);
+            // Inbox GETs use `project=` as the resource path — preserve
+            // across stamp (stamp rewrites project to caller's path).
+            let resource_project = params.get("project").cloned();
+            let resource_project_path = params.get("project_path").cloned();
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+                if p.starts_with("/cli/inbox/") {
+                    if let Some(t) = resource_project.filter(|s| !s.trim().is_empty()) {
+                        params.insert("project".to_string(), t);
+                    }
+                    if let Some(t) = resource_project_path.filter(|s| !s.trim().is_empty()) {
+                        params.insert("project_path".to_string(), t);
+                    }
+                }
             }
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {

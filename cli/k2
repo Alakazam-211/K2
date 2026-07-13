@@ -351,6 +351,8 @@ cli_post_json_uds() {
 _uds_eligible() {
     case "$1" in
         /cli/workspace/msg|/cli/awareness/publish) return 0 ;;
+        # C2: peer-gated live terminal peek (k2 read <ws>).
+        /cli/terminal/read) return 0 ;;
         /cli/inbox/*|/cli/review-checklist/*) return 0 ;;
         # DNS K1 — cell_server serves /cli/dns/* POSTs + is_agent_verb GETs.
         /cli/dns/*) return 0 ;;
@@ -2581,20 +2583,35 @@ cmd_read() {
     fi
     # Prefer python to unwrap {"lines":[...]} into one line per row and
     # surface daemon {"error":...} to stderr with a non-zero exit (so
-    # agents scripting `k2 read` can detect failure). Fall back to the
-    # raw daemon JSON only when python3 is genuinely unavailable.
+    # agents scripting `k2 read` can detect failure). C2: not_connected /
+    # gated / forbidden → exit 3 with mail/dns teaching shape.
+    # Fall back to the raw daemon JSON only when python3 is genuinely
+    # unavailable.
     if command -v python3 >/dev/null 2>&1; then
-        cli_request "/cli/terminal/read" "$query" | python3 -c "
+        # Prefer UDS+scoped when available (C2 peer gate sees principal).
+        cli_send cli_request "/cli/terminal/read" "$query" | python3 -c "
 import json, sys
-data = json.loads(sys.stdin.read())
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.stderr.write(raw[:200] + '\n')
+    sys.exit(1)
 if isinstance(data, dict) and 'error' in data:
-    sys.stderr.write(str(data['error']) + '\n')
+    err = data['error']
+    if isinstance(err, dict):
+        code = err.get('code') or 'error'
+        hint = err.get('hint') or code
+        sys.stderr.write(json.dumps({'error': {'code': code, 'hint': hint}},
+                                    ensure_ascii=False, separators=(',', ':')) + '\n')
+        sys.exit(3 if code in ('not_connected', 'gated', 'forbidden') else 1)
+    sys.stderr.write(str(err) + '\n')
     sys.exit(1)
 for line in data.get('lines', []):
     print(line)
 "
     else
-        cli_request "/cli/terminal/read" "$query"
+        cli_send cli_request "/cli/terminal/read" "$query"
     fi
 }
 
@@ -3993,15 +4010,34 @@ try:
 except Exception:
     pass' 2>/dev/null
 
-    # Exit code mirrors the response's success field so shell scripts
-    # can branch cleanly: `k2 msg foo "hi" && echo delivered`.
-    local success
-    success=$(echo "$response" | python3 -c 'import json,sys
+    # C2 (0.40.45): 403 not_connected / gated → exit 3 + teaching stderr
+    # (mail/dns shape). deliver-or-fail MsgResponse still exits 2.
+    local gate_rc
+    gate_rc=$(echo "$response" | python3 -c 'import json,sys
 try:
-    print("true" if json.load(sys.stdin).get("success") else "false")
+    d = json.load(sys.stdin)
+    err = d.get("error")
+    if isinstance(err, dict):
+        code = err.get("code") or ""
+        if code in ("not_connected", "gated", "forbidden"):
+            hint = err.get("hint") or code
+            sys.stderr.write(json.dumps({"error": {"code": code, "hint": hint}},
+                                        ensure_ascii=False, separators=(",", ":")) + "\n")
+            print(3)
+            raise SystemExit
+    if d.get("success") is True:
+        print(0)
+    else:
+        print(2)
+except SystemExit:
+    pass
 except Exception:
-    print("false")' 2>/dev/null)
-    if [[ "$success" != "true" ]]; then
+    print(2)
+' 2>/dev/null)
+    if [[ "$gate_rc" == "3" ]]; then
+        return 3
+    fi
+    if [[ "$gate_rc" != "0" ]]; then
         return 2
     fi
     return $rc
@@ -10313,11 +10349,32 @@ except: pass' 2>/dev/null)
     # the inbox-compose route names it `from` (writes to the YAML
     # frontmatter `from:` field — identical persisted shape).
     [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
-    curl -s -X POST "${BASE_URL}/cli/inbox/compose?token=${TOKEN}&project=$(urlencode "$resolved")" \
-        --connect-timeout 5 --max-time 30 \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        --data-raw "$params" 2>/dev/null
-    echo
+    # C2: prefer UDS+scoped (peer-gated) when available; fall back to TCP.
+    # Dual-auth on the daemon stamps principal and preserves project=target.
+    local response
+    response=$(cli_send cli_post_form "/cli/inbox/compose" \
+        "project=$(urlencode "$resolved")&${params}")
+    echo "$response"
+    # Map 403 not_connected / gated → exit 3 (mail/dns teaching shape).
+    if command -v python3 >/dev/null 2>&1; then
+        echo "$response" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+err = d.get("error")
+if isinstance(err, dict):
+    code = err.get("code") or ""
+    if code in ("not_connected", "gated", "forbidden"):
+        hint = err.get("hint") or code
+        sys.stderr.write(json.dumps({"error": {"code": code, "hint": hint}},
+                                    ensure_ascii=False, separators=(",", ":")) + "\n")
+        sys.exit(3)
+if d.get("ok") is False:
+    sys.exit(1)
+' || return $?
+    fi
 }
 
 cmd_msg_signal_form() {

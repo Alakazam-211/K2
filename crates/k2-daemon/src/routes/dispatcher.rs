@@ -3454,27 +3454,23 @@ async fn handle_one_request(
             let (auth_ok, scoped_principal) =
                 token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
             if !auth_ok {
+                // #34: valid scoped passport on owner surface → owner_only
+                // (exit 3), not opaque "invalid or missing token".
                 let _ = stream.read(&mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"invalid or missing token"}"#,
-                )
-                .await;
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
             if crate::mail_routes::is_owner_level_mutation(p)
                 && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
             {
+                // #34: stable owner_only (exit 3) for non-owner callers
+                // that passed dual-auth (e.g. connect-user).
                 let _ = stream.read(&mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"mail server, domain, config, approval, and doctor actions can only be made by the owner or an admin"}}"#,
-                )
-                .await;
+                let r = crate::mail_routes::owner_only_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -4437,18 +4433,15 @@ async fn handle_one_request(
         p if p == "/cli/mail/approvals/list" => {
             let _ = stream.read(&mut buf).await;
             if !super::http::token_ok(&query, state.token.as_str()) {
-                let r = crate::cli::CliResponse::forbidden();
+                // #34: scoped agent on owner GET → owner_only, not invalid token.
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
             if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"this mail surface requires owner/admin — ask your human"}}"#,
-                )
-                .await;
+                let r = crate::mail_routes::owner_only_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
@@ -4501,7 +4494,7 @@ async fn handle_one_request(
             let (auth_ok, scoped_principal) =
                 token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
             if !auth_ok {
-                let r = crate::cli::CliResponse::forbidden();
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
@@ -4550,18 +4543,15 @@ async fn handle_one_request(
         p if p == "/cli/mail/link/oauth/status" => {
             let _ = stream.read(&mut buf).await;
             if !super::http::token_ok(&query, state.token.as_str()) {
-                let r = crate::cli::CliResponse::forbidden();
+                // #34: scoped agent on owner GET → owner_only.
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
             if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"OAuth linking is an owner/admin action — ask your human"}}"#,
-                )
-                .await;
+                let r = crate::mail_routes::owner_only_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
@@ -4578,18 +4568,15 @@ async fn handle_one_request(
         p if p == "/cli/mail/oauth-config" => {
             let _ = stream.read(&mut buf).await;
             if !super::http::token_ok(&query, state.token.as_str()) {
-                let r = crate::cli::CliResponse::forbidden();
+                // #34: scoped agent on owner GET → owner_only.
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
             if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"OAuth client config is an owner/admin surface — ask your human"}}"#,
-                )
-                .await;
+                let r = crate::mail_routes::owner_only_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
@@ -4625,7 +4612,9 @@ async fn handle_one_request(
             let (auth_ok, scoped_principal) =
                 token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
             if !auth_ok {
-                let r = crate::cli::CliResponse::forbidden();
+                // #34: hostmail domain/server/access/… GETs deny scoped
+                // agents via is_agent_verb — teach owner_only (exit 3).
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
@@ -5000,6 +4989,33 @@ fn token_or_scoped_hook_auth(
         Some(v) => (true, Some(v.principal)),
         None => (false, None),
     }
+}
+
+/// Presented bearer for dual-auth failure classification (query token or
+/// Authorization header). Empty when neither is present.
+fn presented_bearer<'a>(query: &'a str, bearer: Option<&'a str>) -> &'a str {
+    bearer
+        .filter(|s| !s.is_empty())
+        .or_else(|| super::http::extract_token(query))
+        .unwrap_or("")
+}
+
+/// #34: when dual-auth fails on a mail route, distinguish a **valid
+/// scoped agent passport on an owner surface** (teaching `owner_only`)
+/// from a missing/bogus credential (`Invalid or missing auth token`).
+fn mail_dual_auth_failure(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+) -> crate::cli_response::CliResponse {
+    let presented = presented_bearer(query, bearer);
+    if !presented.is_empty()
+        && crate::session_token::validate_hook(presented).is_some()
+        && crate::mail_routes::is_mail_owner_surface(path)
+    {
+        return crate::mail_routes::owner_only_response();
+    }
+    crate::cli_response::CliResponse::forbidden()
 }
 
 // Inline unit tests — dispatch sub-helpers

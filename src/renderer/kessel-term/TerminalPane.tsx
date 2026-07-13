@@ -599,12 +599,25 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // consumers derive their window via `computeStripLayout`.
   const [scrollPx, setScrollPx] = useState(0)
   // Current scroll position for handlers that must read it without
-  // re-binding per frame (scrollbar drag). Same mirror pattern as
-  // `phaseRef` / `snapshotRef`.
+  // re-binding per frame (scrollbar drag, the vsync scroll pump).
+  // The ref is AUTHORITATIVE and always LEADS state: every writer
+  // goes through commitScrollPx (ref first, then the state commit),
+  // and nothing copies state back into the ref. The old mirror
+  // effect did exactly that — when React commits lagged the wheel
+  // rAF it yanked the ref BACK to an older committed value, the
+  // next frame recomputed from the stale base, and fast scrolling
+  // visibly "jumped back" on BOTH painters.
   const scrollPxRef = useRef(0)
-  useEffect(() => {
-    scrollPxRef.current = scrollPx
-  }, [scrollPx])
+  const commitScrollPx = useCallback(
+    (next: number | ((px: number) => number)): number => {
+      const value =
+        typeof next === 'function' ? next(scrollPxRef.current) : next
+      scrollPxRef.current = value
+      setScrollPx(value)
+      return value
+    },
+    [],
+  )
 
   // ── rAF frame coalescing ──────────────────────────────────────
   // WS snapshot/delta messages queue here and apply once per
@@ -2344,7 +2357,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useLayoutEffect(() => {
     if (!useWebgl) return
     if (!snapshot) return
-    paintWebglRef.current(scrollPx, snapshot)
+    // Paint the REF position, not the committed `scrollPx` value:
+    // during a fast scroll this commit can lag the wheel rAF by a
+    // frame, and painting the older committed value snapped the
+    // canvas backwards ("jump back then catch up"). scrollPx stays
+    // in the dep array as the trigger; the ref supplies the truth.
+    paintWebglRef.current(scrollPxRef.current, snapshot)
   }, [useWebgl, snapshot, scrollPx, painterTheme, cellMetrics, selectionVersion])
 
   // S5 — subtle read-only hint. Latched when the daemon reports this
@@ -2888,7 +2906,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const natural = naturalTextEditingSequence(e)
       if (natural !== null) {
         e.preventDefault()
-        setScrollPx(0)
+        commitScrollPx(0)
         sendInput(natural)
         // Clear so the textarea never accumulates.
         if (shadowInputRef.current) shadowInputRef.current.value = ''
@@ -2897,14 +2915,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const seq = keyEventToSequence(e, 0)
       if (seq === null) return
       e.preventDefault()
-      setScrollPx(0)
+      commitScrollPx(0)
       sendInput(seq)
       if (shadowInputRef.current) shadowInputRef.current.value = ''
     }
     const onPaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData('text') ?? ''
       e.preventDefault()
-      setScrollPx(0)
+      commitScrollPx(0)
 
       // Finder's Cmd+C copies file refs via NSFilenamesPboardType,
       // which WKWebView doesn't expose through the web clipboard
@@ -2939,7 +2957,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (composingRef.current) return
       const text = el.value
       if (text.length === 0) return
-      setScrollPx(0)
+      commitScrollPx(0)
       sendInput(text)
       el.value = ''
     }
@@ -3000,7 +3018,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         sendInput('\x7f'.repeat(prevLen))
       }
       if (committed) {
-        setScrollPx(0)
+        commitScrollPx(0)
         sendInput(committed)
       }
       compositionLastLengthRef.current = 0
@@ -3487,7 +3505,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         const snap = snapshotRef.current
         const ch = cellMetricsRef.current.height || 20
         const scrollbackLen = snap?.scrollback.length ?? 0
-        setScrollPx((px) => clampScrollPx(px + dir * ch, scrollbackLen, ch))
+        commitScrollPx((px) => clampScrollPx(px + dir * ch, scrollbackLen, ch))
         updateFocus()
       }, 50)
     }
@@ -4160,21 +4178,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           if (import.meta.env.DEV) scrollFlushCountRef.current++
           // deltaY > 0 scrolls toward the bottom (scrollPx → 0).
           // Vsync scroll pump: compute the new position HERE (this
-          // rAF is display-aligned), paint the WebGL frame directly,
-          // then commit state for the rest of the UI — the paint no
-          // longer waits on React's scheduler, whose late commits
-          // were the scroll "hops" (LEARNINGS-webgl-scroll.md). The
-          // ref write keeps consecutive rAFs accumulating correctly
-          // between commits; the DOM strip path is unchanged (its
-          // translateY layer is already compositor-driven).
-          const nextPx = clampScrollPx(
-            scrollPxRef.current - deltaPx,
-            scrollbackLen,
-            cellH,
+          // rAF is display-aligned), commit it ref-first through
+          // commitScrollPx (consecutive rAFs accumulate off the ref
+          // even before React commits), and paint the WebGL frame
+          // directly — the paint never waits on React's scheduler,
+          // whose late commits were the scroll "hops"
+          // (LEARNINGS-webgl-scroll.md).
+          const nextPx = commitScrollPx((px) =>
+            clampScrollPx(px - deltaPx, scrollbackLen, cellH),
           )
-          scrollPxRef.current = nextPx
           if (useWebglRef.current) paintWebglRef.current(nextPx)
-          setScrollPx(nextPx)
         })
       }
     }
@@ -4207,7 +4220,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // functional update bails without a re-render on the common path.
   useEffect(() => {
     const scrollbackLen = snapshot?.scrollback.length ?? 0
-    setScrollPx((px) => clampScrollPx(px, scrollbackLen, cellHeightPx))
+    commitScrollPx((px) => clampScrollPx(px, scrollbackLen, cellHeightPx))
   }, [snapshot, cellHeightPx])
 
   // ── Overlay scrollbar ─────────────────────────────────────────
@@ -4287,7 +4300,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const grabFrac = onThumb ? yFrac - thumb.topFrac : thumb.heightFrac / 2
       const apply = (clientY: number) => {
         const topFrac = (clientY - rect.top) / rect.height - grabFrac
-        setScrollPx(
+        commitScrollPx(
           scrollPxFromThumbTopFrac(topFrac, thumb.heightFrac, scrollbackLen, ch),
         )
       }

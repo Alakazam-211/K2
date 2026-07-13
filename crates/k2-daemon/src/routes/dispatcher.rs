@@ -4573,6 +4573,11 @@ async fn handle_one_request(
         // the exact-path `/cli/mail/approvals/list` arm above also
         // stays ahead of this one. Token gate + dispatch chain
         // identical to the /cli/* catch-all below.
+        //
+        // E2: `address/list?all=true` enumerates EVERY hosted address
+        // (Settings→Email table) — owner-or-admin only, same posture as
+        // the owner inboxes view. Agent self-view (`?project=` /
+        // principal) rides any workspace token.
         p if p.starts_with("/cli/mail/") =>
         {
             let _ = stream.read(&mut buf).await;
@@ -4584,6 +4589,19 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let mut params = super::http::parse_params(&path, &query);
+            if p == "/cli/mail/address/list"
+                && crate::cli::bool_param(&params, "all")
+                && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
+            {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"listing every hosted address requires owner/admin — pass project=<workspace> for the agent view, or ask your human"}}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
             }

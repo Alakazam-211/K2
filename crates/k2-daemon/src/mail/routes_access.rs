@@ -109,7 +109,7 @@ struct GrantBody {
 }
 
 /// POST `/cli/mail/access/grant` — Primary/owner: grant a workspace
-/// read|draft|send access to any inbox (upsert). 'send' works on hosted (governed) and linked (SMTP, ungated);
+/// read|draft|send access to any inbox (upsert). 'send' works on hosted (governed) and linked (SMTP + same mail_agent_send gate, E4);
 /// granting the PRIMARY teaches.
 pub fn handle_grant(body: &[u8]) -> CliResponse {
     let b: GrantBody = match serde_json::from_slice(body) {

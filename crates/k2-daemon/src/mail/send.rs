@@ -117,6 +117,38 @@ pub fn effective_gate(mode: Result<String, String>) -> Result<Gate, SendError> {
     }
 }
 
+/// Resolve the effective send gate for a workspace path via the
+/// sanctioned settings reader (fail-closed to `off` there; unrecognized
+/// stored values still surface as Engine via [`effective_gate`]).
+pub fn gate_for_path(project_path: &str) -> Result<Gate, SendError> {
+    effective_gate(Ok(
+        k2_core::workspace::settings::mail_agent_send_for_path(project_path),
+    ))
+}
+
+/// Linked/BYO SMTP send gate (hole #3 / E4). Same `mail_agent_send`
+/// setting as hosted: **off** refuses, **on** allows. **approval**
+/// refuses with a clear teaching — the Approvals queue + approve path
+/// submit via Stalwart (hosted only); linked SMTP has no approve→SMTP
+/// hand-off yet, so we never queue a message that cannot be approved.
+pub fn allow_linked_send(gate: Gate) -> Result<(), SendError> {
+    match gate {
+        Gate::On => Ok(()),
+        Gate::Off => Err(SendError::Gated(
+            "outbound email is disabled for this workspace. Your human can enable it in \
+             Settings → Email → Sending"
+                .to_string(),
+        )),
+        Gate::Approval => Err(SendError::Gated(
+            "outbound email requires approval for this workspace, but the approval queue \
+             only covers hosted K2 mailboxes — linked/BYO send needs mode 'on'. Your human \
+             can set Sending to 'on' in Settings → Email → Sending, or send from a hosted \
+             address"
+                .to_string(),
+        )),
+    }
+}
+
 // ── The composed message (stored at body_ref; JSON, never MIME) ─────────
 
 /// One composed outbound message — the §8.4 "full rendered message
@@ -475,14 +507,15 @@ impl OutboundStore for DbOutboundStore {
 }
 
 /// Record a SUCCESSFUL linked-SMTP submission in the outbox (issue
-/// #31.5). Unlike hosted sends, linked send is ungated and goes out
-/// immediately — so the row is born via the same `approved → sent`
-/// lifecycle a hosted send ends on, leaving it `sent` (wire:
-/// `submitted` — accepted-for-delivery, NEVER "delivered", pre-mortem
-/// #9) with `sent_at`/`updated_at` stamped exactly like a hosted row.
-/// `decided_by` is `None` (no human decision — it's ungated). Returns
-/// the new `out_…` id. The caller treats a failure as non-fatal: the
-/// mail already left, this is only the audit trail.
+/// #31.5). Linked send is gated by [`allow_linked_send`] (`on` only)
+/// before SMTP; once the provider accepts, the row is born via the
+/// same `approved → sent` lifecycle a hosted send ends on, leaving it
+/// `sent` (wire: `submitted` — accepted-for-delivery, NEVER
+/// "delivered", pre-mortem #9) with `sent_at`/`updated_at` stamped
+/// exactly like a hosted row. `decided_by` is `None` (mode was `on` —
+/// policy auto-approved at the gate, no human decision). Returns the
+/// new `out_…` id. The caller treats a failure as non-fatal: the mail
+/// already left, this is only the audit trail.
 pub fn record_linked_submitted(
     store: &dyn OutboundStore,
     owner_project_id: &str,
@@ -1262,6 +1295,36 @@ mod tests {
         // An AMBIGUOUS stored value is an error too.
         let err = effective_gate(Ok("banana".into())).expect_err("must refuse");
         assert!(matches!(&err, SendError::Engine(h) if h.contains("banana")), "{err:?}");
+    }
+
+    /// E4: linked/BYO SMTP — off blocks, on allows, approval refuses
+    /// with a teaching (hosted-only queue) rather than queueing a
+    /// message that approve cannot SMTP-submit.
+    #[test]
+    fn linked_send_gate_off_blocks_on_allows_approval_refuses_with_teaching() {
+        assert!(allow_linked_send(Gate::On).is_ok());
+
+        let err = allow_linked_send(Gate::Off).expect_err("off must block");
+        match err {
+            SendError::Gated(h) => {
+                assert!(h.contains("disabled"), "{h}");
+                assert!(h.contains("Settings → Email → Sending"), "{h}");
+            }
+            other => panic!("expected Gated, got {other:?}"),
+        }
+
+        let err = allow_linked_send(Gate::Approval).expect_err("approval must refuse linked");
+        match err {
+            SendError::Gated(h) => {
+                assert!(h.contains("approval"), "{h}");
+                assert!(h.contains("hosted"), "{h}");
+                assert!(
+                    h.contains("linked") || h.contains("BYO") || h.contains("'on'"),
+                    "{h}"
+                );
+            }
+            other => panic!("expected Gated, got {other:?}"),
+        }
     }
 
     #[test]

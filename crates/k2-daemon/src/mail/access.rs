@@ -15,9 +15,10 @@
 //!   for EITHER source** (§17.5 linked-send opt-in): hosted 'send' goes
 //!   out through Stalwart submission under the `mail_agent_send`
 //!   off/approval/on governance; linked 'send' goes out through SMTP
-//!   submission from the user's own account and is UNGATED for now. A
-//!   linked primary still *defaults* to 'draft' (send is opt-in — the
-//!   owner raises the level), but its ceiling is 'send'.
+//!   under the SAME `mail_agent_send` gate (E4 — off blocks, on allows;
+//!   approval refuses with a hosted-only-queue teaching). A linked
+//!   primary still *defaults* to 'draft' (send is opt-in — the owner
+//!   raises the level), but its ceiling is 'send'.
 //!
 //! MASKING (the S3 rule, preserved everywhere): a workspace with no
 //! access to an address gets the SAME `not_found` a foreign/unknown
@@ -28,10 +29,9 @@
 //! [`set_level`]) is NOT masked (the primary sees its own inboxes).
 //!
 //! Send governance stays ORTHOGONAL: `can_send` only answers "may this
-//! workspace send FROM this address" (either source). For HOSTED, the
-//! actual send still passes the `mail_agent_send` off/approval/on gate
-//! (S5); for LINKED, send is UNGATED for now (§17.5 — unified gating for
-//! linked lands with the wider email layer).
+//! workspace send FROM this address" (either source). The actual send
+//! still passes the `mail_agent_send` off/approval/on gate for BOTH
+//! sources (S5 / E4); approval-mode queue+approve is hosted-only today.
 
 use crate::mail::addresses::{self, AddrError};
 use crate::mail::external;
@@ -361,10 +361,10 @@ pub fn can_draft(project_id: &str, raw_address: &str) -> Result<AccessInbox, Rea
 
 /// The MASKED SEND gate: effective level == send, for EITHER source
 /// (§17.5). A draft/read grant, or no access, answers the same masked
-/// `not_found`. Send GOVERNANCE differs by source and is layered on by
-/// the caller: HOSTED passes the off/approval/on gate; LINKED is ungated
-/// (SMTP submission). This only answers "may this workspace send FROM
-/// this address" — the caller branches on `AccessInbox.source`.
+/// `not_found`. The workspace `mail_agent_send` gate is layered on by
+/// the caller for BOTH sources (hosted Stalwart + linked SMTP / E4).
+/// This only answers "may this workspace send FROM this address" — the
+/// caller branches on `AccessInbox.source`.
 pub fn can_send(project_id: &str, raw_address: &str) -> Result<AccessInbox, ReadError> {
     resolve(project_id, raw_address, Level::Send)
 }

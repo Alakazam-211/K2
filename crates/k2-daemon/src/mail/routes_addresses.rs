@@ -471,6 +471,13 @@ mod tests {
         cleanup_project(&project_id);
     }
 
+    /// Pure E2 gate for tests + documentation: `?all=true` is
+    /// owner-or-admin only. The dispatcher enforces this with
+    /// `token_is_owner_or_admin` before dispatching to the handler.
+    fn address_list_all_allowed(is_owner_or_admin: bool) -> bool {
+        is_owner_or_admin
+    }
+
     /// E2 pure helper: the owner-table gate decision is
     /// owner-or-admin only (mirrors the dispatcher clause).
     #[test]
@@ -478,11 +485,4 @@ mod tests {
         assert!(address_list_all_allowed(true));
         assert!(!address_list_all_allowed(false));
     }
-}
-
-/// Pure E2 gate for tests + documentation: `?all=true` is
-/// owner-or-admin only. The dispatcher enforces this with
-/// `token_is_owner_or_admin` before dispatching to the handler.
-pub fn address_list_all_allowed(is_owner_or_admin: bool) -> bool {
-    is_owner_or_admin
 }

@@ -117,3 +117,22 @@ Root causes (ranked):
   revisit if externally-reported.
 - kitty-style flicker coalescing knob (input_delay) if partial-frame
   tearing is ever observed on full-screen TUI redraws.
+
+## POSTSCRIPT (2026-07-13) — the ACTUAL fast-scroll jump, found last
+
+After the vsync pump + ref-race fixes, jumping persisted on BOTH
+painters. Real root cause: **no scroll anchoring.** scrollPx is
+bottom-anchored and nothing compensated for appended rows; under fast
+scroll the pane's k1 acks lag, the daemon resyncs with a full
+snapshot carrying the whole backlog, and the view yanked by that many
+rows at once — "jumps like it's catching up" was the resync itself.
+Fix `1e96f54`: applyFrameBatch counts appended rows (deltas:
+scrollbackAppended; snapshots: total growth) and pins the view via
+anchorScrollPx while scrolled up (xterm isUserScrolling / kitty
+scrolled_by equivalent). User-confirmed fixed.
+
+Lesson for the file: when a scroll defect is painter-independent and
+load-correlated, suspect the DATA path (flow control, anchoring)
+before the paint path. The two paint-side fixes were real bugs, but
+the mechanism matching the symptom lived in the wire protocol's
+interaction with a bottom-anchored coordinate.

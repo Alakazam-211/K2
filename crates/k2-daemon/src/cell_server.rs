@@ -946,7 +946,13 @@ mod unix_impl {
                 Some(ws_path),
                 "body `project_path` must be FORCED to the principal's own workspace"
             );
-            assert_eq!(params.get("from").map(String::as_str), Some("agent-W"));
+            // 0.40.46: display stamp is workspace name ("W"), not mint-time
+            // agent_address ("agent-W"). Peer trust still uses project_id.
+            assert_eq!(params.get("from").map(String::as_str), Some("W"));
+            assert_eq!(
+                params.get("project_id").map(String::as_str),
+                Some(ws_uuid)
+            );
 
             // Fail-closed: an unresolvable principal REMOVES both keys even
             // when the body supplied them.

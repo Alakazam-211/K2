@@ -3,6 +3,16 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.46 — Agent-to-agent messages show names again
+
+- **`[from Elon]`, not `[from <uuid>]`.** When agents message each other,
+  the live envelope now uses the workspace agent **display name**
+  (`AGENT.md` / workspace name) instead of the project or session UUID
+  that some sessions mint as their technical address. Cross-workspace
+  **trust is unchanged**: delivery still requires a scoped session plus a
+  local connection (0.40.45 C2). The name is a convenience label, not a
+  capability — connections are the gate.
+
 ## 0.40.45 — Safer agent mail, cleaner terminals, smoother painting
 
 Agents get clearer boundaries on mail and messaging — and the terminal

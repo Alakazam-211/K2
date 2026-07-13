@@ -185,11 +185,44 @@ pub fn request_principal() -> Option<HookPrincipal> {
 /// (e.g. pure unit tests of param maps).
 pub const PRINCIPAL_BOUND_KEY: &str = "principal_bound";
 
+/// Resolve the **display** label for a scoped principal's `[from …]` stamp.
+///
+/// C2 (0.40.45+) peer trust is `HookPrincipal::workspace_uuid` + local
+/// connections — never the free-text `from` string. The envelope is
+/// convenience for humans/agents reading a PTY. Prefer the workspace
+/// agent display name (`AGENT.md` → `projects.name`); fall back to the
+/// mint-time `agent_address` only when the workspace cannot be resolved
+/// (empty uuid, missing projects row). That fallback still covers older
+/// principals whose address was a friendly name, and avoids blank stamps.
+fn display_from_for_principal(principal: &HookPrincipal) -> String {
+    let uuid = principal.workspace_uuid.trim();
+    if !uuid.is_empty() {
+        if let Some(path) = crate::workspace_msg::resolve_workspace(uuid) {
+            let name = k2_core::workspace::display::agent_display_name(&path);
+            if !name.trim().is_empty() {
+                return name;
+            }
+        }
+    }
+    let addr = principal.agent_address.trim();
+    if !addr.is_empty() {
+        return principal.agent_address.clone();
+    }
+    "external".to_string()
+}
+
 /// Stamp server-side caller identity into a params map.
 ///
-/// Overwrites `from`, `project_id`, and (when the principal's workspace
-/// resolves) `project` / `project_path`. Sets [`PRINCIPAL_BOUND_KEY`].
+/// Overwrites `from` (display label), `project_id` (trust / peer-gate
+/// subject), and (when the principal's workspace resolves) `project` /
+/// `project_path`. Sets [`PRINCIPAL_BOUND_KEY`].
 /// Recipient/routing args (`workspace` / `target`) are left untouched.
+///
+/// **`from` is not proof of identity.** Peer messaging is gated on
+/// `workspace_uuid` + connections (C2). `from` is the human-readable
+/// agent/workspace name so live injects render as `[from Elon]` rather
+/// than `[from <project-uuid>]` when the mint-time `agent_address` was
+/// the pinned-chat project id.
 ///
 /// Shared by the cell UDS server and the HTTP mail/DNS arms so identity
 /// stamping is not unix-only.
@@ -197,7 +230,7 @@ pub fn stamp_principal(
     params: &mut std::collections::HashMap<String, String>,
     principal: &HookPrincipal,
 ) {
-    params.insert("from".to_string(), principal.agent_address.clone());
+    params.insert("from".to_string(), display_from_for_principal(principal));
     params.insert("project_id".to_string(), principal.workspace_uuid.clone());
     params.insert(PRINCIPAL_BOUND_KEY.to_string(), "1".to_string());
 
@@ -410,5 +443,59 @@ mod tests {
 
         cleanup(a_id);
         cleanup(b_id);
+    }
+
+    /// 0.40.46: when the mint-time `agent_address` is the project UUID
+    /// (pinned-chat keying), the display stamp must still be the
+    /// workspace name — not the UUID. Peer trust stays on workspace_uuid.
+    #[test]
+    fn stamp_from_uses_workspace_display_name_not_project_uuid() {
+        let _ = k2_core::db::init_for_tests();
+        let id = "56565656-5656-5656-5656-565656565656";
+        let path = "/tmp/k2-caller-ws-Elon";
+        seed_project(id, path, "Elon");
+
+        let principal = HookPrincipal {
+            workspace_uuid: id.to_string(),
+            // Mimic v2 pinned-chat mint: agent_address == project id.
+            agent_address: id.to_string(),
+        };
+        let mut params = HashMap::new();
+        params.insert("from".to_string(), "FORGED-ATTACKER".to_string());
+        stamp_principal(&mut params, &principal);
+
+        assert_eq!(
+            params.get("from").map(String::as_str),
+            Some("Elon"),
+            "from stamp must be the workspace display name, not the project UUID"
+        );
+        assert_eq!(
+            params.get("project_id").map(String::as_str),
+            Some(id),
+            "peer-gate subject remains the workspace uuid"
+        );
+        assert_ne!(
+            params.get("from").map(String::as_str),
+            Some(id),
+            "must not leak the project UUID into the display envelope"
+        );
+
+        cleanup(id);
+    }
+
+    #[test]
+    fn stamp_from_falls_back_to_agent_address_when_unresolvable() {
+        let _ = k2_core::db::init_for_tests();
+        let principal = HookPrincipal {
+            workspace_uuid: "99999999-9999-9999-9999-999999999999".to_string(),
+            agent_address: "orphan-agent".to_string(),
+        };
+        let mut params = HashMap::new();
+        stamp_principal(&mut params, &principal);
+        assert_eq!(
+            params.get("from").map(String::as_str),
+            Some("orphan-agent"),
+            "unresolvable principal still stamps mint-time agent_address"
+        );
     }
 }

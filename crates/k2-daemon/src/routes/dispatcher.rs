@@ -4632,13 +4632,14 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            // #38: stamp_principal writes identity into `from=` (agent
-            // address / workspace uuid). Mail `messages` / `wait` treat
-            // `from` as an IMAP/JMAP From: filter — so a scoped agent
-            // silently searched FROM "<principal>" and always got empty
-            // while folder list (no from filter) still worked.
-            // Capture the client filter BEFORE stamp; restore after.
-            // Absent client --from → remove stamp pollution so no filter.
+            // #38: stamp_principal writes a display label into `from=`
+            // (workspace agent name; peer trust is project_id / uuid).
+            // Mail `messages` / `wait` treat `from` as an IMAP/JMAP From:
+            // filter — so a scoped agent silently searched FROM
+            // "<stamp>" and always got empty while folder list (no from
+            // filter) still worked. Capture the client filter BEFORE
+            // stamp; restore after. Absent client --from → remove stamp
+            // pollution so no filter.
             let client_from_filter = params
                 .get("from")
                 .cloned()

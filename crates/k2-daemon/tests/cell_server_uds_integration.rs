@@ -331,9 +331,15 @@ async fn case6b_inbox_compose_stamps_principal_from_durably() {
         !rbody.contains("FORGED-ATTACKER"),
         "stored memo must NOT carry the forged from; body={rbody}"
     );
+    // 0.40.46: display stamp is the workspace name ("wsc"), not mint-time
+    // agent_address ("agent-c3"). The body cannot forge either.
     assert!(
-        rbody.contains("agent-c3"),
-        "stored memo must carry the principal-stamped from (agent-c3); body={rbody}"
+        rbody.contains("wsc"),
+        "stored memo must carry the workspace display name as from (wsc); body={rbody}"
+    );
+    assert!(
+        !rbody.contains("agent-c3"),
+        "mint-time agent_address must not be preferred over display name when the workspace resolves; body={rbody}"
     );
 }
 

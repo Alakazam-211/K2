@@ -280,9 +280,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/workspace/msg" => {
             let workspace = str_param(params, "workspace");
             let text = str_param(params, "text");
-            // C2: display `from` may be free-text for humans, but PEER
-            // IDENTITY is the stamped principal (or owner bypass) — never
-            // free-text `--from` as the gate subject.
+            // C2: PEER IDENTITY is the stamped principal's workspace_uuid
+            // (or owner bypass) + connections — never free-text `--from`.
+            // After stamp, `from` is the workspace agent display name
+            // (0.40.46); client `--from` is overwritten on scoped paths.
             let from = opt_param(params, "from").unwrap_or_default();
             // 0.39.25: optional slash-command prepended at the very front
             // of the delivered payload (before the `[from <name>]`

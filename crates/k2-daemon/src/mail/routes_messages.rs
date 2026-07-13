@@ -168,15 +168,17 @@ fn resolve_linked_password(
     }
 }
 
-/// Client `from` filter for messages/wait — NOT the identity stamp.
+/// Client `from` filter for messages/wait — NOT the identity / display stamp.
 ///
-/// Wave 0 / dual-auth `stamp_principal` writes the agent address into
-/// `from=`. Mail list/wait treat `from` as an IMAP/JMAP From: substring
-/// filter. Under a scoped passport that became `FROM "<workspace-uuid>"`
-/// and always returned empty while folder list (no filter) still worked
-/// (#38 agent AKZM retest). Dispatcher restores client --from after stamp;
-/// this belt also drops a remaining stamp when `principal_bound` is set
-/// and `from` equals the stamped `project_id` (common agent_address shape).
+/// Wave 0 / dual-auth `stamp_principal` writes a display label into `from=`
+/// (workspace agent name since 0.40.46; historically often the project
+/// uuid when mint-time `agent_address` was the pinned-chat id). Mail
+/// list/wait treat `from` as an IMAP/JMAP From: substring filter. Under a
+/// scoped passport that pollution became `FROM "<stamp>"` and returned
+/// empty while folder list (no filter) still worked (#38 agent AKZM
+/// retest). Dispatcher restores client --from after stamp; this belt also
+/// drops a remaining stamp when `principal_bound` is set and `from`
+/// equals the stamped `project_id` (legacy uuid-shaped stamp).
 fn mail_from_filter(params: &HashMap<String, String>) -> Option<String> {
     let from = crate::cli::opt_param(params, "from")?;
     if params.get("principal_bound").map(|s| s == "1").unwrap_or(false) {

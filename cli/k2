@@ -10439,10 +10439,12 @@ cmd_msg_inbox_form() {
     fi
 
     # 0.39.45 (#35/#37): title/body/priority/from ride a REAL form body.
-    # Compose TARGET rides the form body as `project=<token>` so it wins
-    # over any query-string `project=$PROJECT` (caller) on the TCP arm.
-    # Dual-auth stamps principal then re-applies this target.
-    local params="project=$(urlencode "$target")&title=$(urlencode "$title")"
+    #
+    # #36: recipient is `workspace=<token>` (same as live msg) — stamp_principal
+    # NEVER overwrites workspace=/target=, only project=/from=/project_id=.
+    # Putting the peer in project= fought stamp restore and silently wrote
+    # to the sender's own inbox while the peer gate saw same-workspace.
+    local params="workspace=$(urlencode "$target")&title=$(urlencode "$title")"
     [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
     [[ -n "$priority" ]] && params="${params}&priority=$(urlencode "$priority")"
     # `--from` was historically `assigned_by` on the old work-route;

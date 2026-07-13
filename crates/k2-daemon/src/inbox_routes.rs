@@ -106,14 +106,27 @@ pub fn handle_search(params: &HashMap<String, String>) -> CliResponse {
 // They're routed through `dispatch_inbox_post` registered in main.rs.
 
 pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
-    // Compose TARGET is `project=` / `project_path` — a workspace name,
-    // absolute path, or UUID (same token contract as `k2 msg <workspace>`).
-    // Resolve to a real registered path before writing; never treat a bare
-    // name as a relative filesystem path (that silently wrote into CWD).
-    let target_token = match need_project_path(params) {
-        Ok(p) => p.to_string_lossy().into_owned(),
-        Err(r) => return r,
-    };
+    // Compose TARGET (who receives the inbox item):
+    //
+    // Prefer `workspace=` / `target=` — the same recipient keys as live
+    // `k2 msg`. Those are NEVER rewritten by stamp_principal (sender
+    // identity only overwrites `project` / `project_path` / `from`).
+    //
+    // Fall back to `project=` / `project_path` for older clients and for
+    // owner ambient compose-into-self (no recipient key). #36 retest proved
+    // that fighting stamp by "restoring" project= is fragile: a partial
+    // restore left project_path as the caller and need_project_path wrote
+    // into the sender's own inbox while the peer gate saw same-workspace.
+    let target_token = opt_param(params, "workspace")
+        .or_else(|| opt_param(params, "target"))
+        .or_else(|| opt_param(params, "project"))
+        .or_else(|| opt_param(params, "project_path"))
+        .unwrap_or_default();
+    if target_token.is_empty() {
+        return CliResponse::bad_request(
+            "Missing workspace (or target/project) — the inbox to compose into",
+        );
+    }
     let Some(resolved_path) = crate::workspace_msg::resolve_workspace(&target_token) else {
         // Same "unknown workspace" shape as live msg — not a connection
         // deny. CLI maps this to exit 1 (not exit 3).
@@ -124,13 +137,10 @@ pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
     // (no principal) bypasses. Identity comes from stamped principal —
     // never free-text `--from`.
     let principal = crate::caller_workspace::principal_from_params(params);
-    // Gate against the resolved path (stable id lookup); teaching hint
-    // still shows the caller's token via gate_cross_workspace display.
     match crate::comms::gate_cross_workspace(principal.as_ref(), &resolved_path) {
         Ok(()) => {}
         Err(Some(resp)) => return resp,
         Err(None) => {
-            // Path resolved but no projects.id (race / incomplete row).
             return crate::workspace_routes::workspace_not_found_response(&target_token);
         }
     }
@@ -448,33 +458,15 @@ mod tests {
     use crate::session_token::HookPrincipal;
     use std::collections::HashMap;
 
-    /// #36 regression: after stamp forces both keys to the caller path and
-    /// only `project` is restored to the compose target, preferring
-    /// `project_path` would silently target the caller's inbox.
+    /// #36: stamp rewrites project= to the caller; `workspace=` (recipient
+    /// key, same as live msg) must still be the compose target.
     #[test]
-    fn need_project_path_prefers_project_over_stale_project_path() {
-        let mut params = HashMap::new();
-        params.insert("project".to_string(), "/tmp/target-ws".to_string());
-        params.insert("project_path".to_string(), "/tmp/caller-ws".to_string());
-        let p = match need_project_path(&params) {
-            Ok(p) => p,
-            Err(_) => panic!("project present"),
-        };
-        assert_eq!(
-            p,
-            PathBuf::from("/tmp/target-ws"),
-            "compose target in `project` must win over stamped `project_path`"
-        );
-    }
-
-    /// Simulate the stamp + restore that cell_server / TCP dispatcher do
-    /// for inbox compose, then assert need_project_path sees the target.
-    #[test]
-    fn stamp_then_restore_both_keys_keeps_compose_target() {
+    fn compose_target_uses_workspace_key_after_stamp() {
         let _ = k2_core::db::init_for_tests();
         let caller_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-        let caller_path = "/tmp/k2-compose-caller";
-        let target_name = "Sarah";
+        let caller_path = "/tmp/k2-compose-caller-ws";
+        let peer_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let peer_path = "/tmp/k2-compose-peer-ws";
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -483,33 +475,48 @@ mod tests {
                 rusqlite::params![caller_id, caller_path, "Caller"],
             )
             .unwrap();
+            conn.execute(
+                "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+                rusqlite::params![peer_id, peer_path, "Peer"],
+            )
+            .unwrap();
         }
         let principal = HookPrincipal {
             workspace_uuid: caller_id.to_string(),
             agent_address: caller_id.to_string(),
         };
         let mut params = HashMap::new();
-        params.insert("project".to_string(), target_name.to_string());
-        params.insert("title".to_string(), "t".to_string());
-        // Capture target, stamp, restore both (the fixed restore shape).
-        let target = params
-            .get("project")
-            .or_else(|| params.get("project_path"))
-            .cloned()
-            .filter(|s| !s.trim().is_empty());
+        // New CLI shape: recipient in workspace=, not project=.
+        params.insert("workspace".to_string(), peer_path.to_string());
+        params.insert("title".to_string(), "gate-check".to_string());
+        params.insert("body".to_string(), "x".to_string());
         crate::caller_workspace::stamp_principal(&mut params, &principal);
-        if let Some(t) = target {
-            params.insert("project".to_string(), t.clone());
-            params.insert("project_path".to_string(), t);
-        }
-        let p = match need_project_path(&params) {
-            Ok(p) => p,
-            Err(_) => panic!("target restored"),
-        };
-        assert_eq!(p, PathBuf::from(target_name));
-        // Cleanup
+        // After stamp, project is caller; workspace must still be peer.
+        assert_eq!(
+            params.get("project").map(String::as_str),
+            Some(caller_path),
+            "stamp forces project to caller"
+        );
+        assert_eq!(
+            params.get("workspace").map(String::as_str),
+            Some(peer_path),
+            "stamp must NOT touch workspace= recipient"
+        );
+
+        // No relation → gate denies (not_connected), does not write.
+        let resp = crate::caller_workspace::with_request_principal(Some(principal.clone()), || {
+            handle_compose_post(&params)
+        });
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert!(
+            resp.body.contains("not_connected"),
+            "expected not_connected, got {}",
+            resp.body
+        );
+
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![caller_id]);
+        let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![peer_id]);
     }
 }

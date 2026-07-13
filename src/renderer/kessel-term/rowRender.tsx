@@ -34,13 +34,25 @@
 
 // SYNTHETIC GLYPHS (2026-07 rendering-polish layer): box-drawing
 // (U+2500–257F) and block-element (U+2580–259F, sextants) cells
-// REPLACE their font glyph with painted CSS geometry — stacked
-// background gradients on the same per-char span (arcs ╭╮╰╯ get one
-// child div). Font ink never exactly fills a line box or reaches the
-// cell edges, so stacked blocks (Claude Code's logo) showed
-// horizontal seams and TUI borders got hairline breaks at some
-// zooms; painted rects span exact device-rounded cell fractions, so
-// adjacent cells tile seamlessly. See syntheticGlyphs.ts.
+// REPLACE their font glyph with painted geometry. Font ink never
+// exactly fills a line box or reaches the cell edges, so stacked
+// blocks (Claude Code's logo) showed horizontal seams and TUI
+// borders got hairline breaks at some zooms; painted rects span
+// exact device-rounded cell fractions, so adjacent cells tile
+// seamlessly. See syntheticGlyphs.ts for the shared spec/metrics.
+//
+// PER-ROW CANVAS (2026-07 grid-scroll fix): synthetic cells used to
+// paint as stacked CSS gradient layers on per-cell spans, but
+// WebKit's CoreGraphics backend has NO solid-fill fast path for
+// gradients — a border row was ~80 spans × ~2 gradient shader draws
+// each, re-rasterized on every window-edge row mount, which made
+// scrolling stutter on grid-heavy screens (LEARNINGS-dom-grids.md).
+// A row's synthetic cells now draw ONCE into a single absolutely-
+// positioned <canvas> via drawSyntheticGlyph (solid fillRects + arc
+// strokes — the same rasterizer the WebGL atlas uses), and scrolling
+// just composites the static bitmap. Font-path exotic cells
+// (braille, geometric shapes, diagonals ╱╲╳, powerline) stay text
+// spans; run background underlays are unchanged.
 
 import React from 'react'
 import {
@@ -49,11 +61,8 @@ import {
   runColSpan,
   runNeedsPerCharCells,
 } from './runCols'
-import {
-  paintSyntheticGlyph,
-  syntheticGlyphSpec,
-  type ArcChild,
-} from './syntheticGlyphs'
+import { syntheticGlyphSpec, type SyntheticGlyph } from './syntheticGlyphs'
+import { drawSyntheticGlyph } from './webgl/syntheticRaster'
 
 /** The visual subset of the wire CellRun this renderer needs
  *  (structurally satisfied by TerminalPane's CellRun). */
@@ -123,39 +132,74 @@ function runStyle(
   return style
 }
 
-/** The border-radius stroke corner for ╭╮╰╯ — the one synthetic
- *  shape CSS gradients can't express, hence the single child div. */
-function arcChildStyle(arc: ArcChild, color: string): React.CSSProperties {
-  const b = `${arc.borderWidth}px`
-  const style: React.CSSProperties = {
-    position: 'absolute',
-    left: arc.left,
-    top: arc.top,
-    width: arc.width,
-    height: arc.height,
-    boxSizing: 'border-box',
-    borderStyle: 'solid',
-    borderColor: color,
-  }
-  switch (arc.corner) {
-    case 'tl': // ╭
-      style.borderWidth = `${b} 0 0 ${b}`
-      style.borderTopLeftRadius = arc.radius
-      break
-    case 'tr': // ╮
-      style.borderWidth = `${b} ${b} 0 0`
-      style.borderTopRightRadius = arc.radius
-      break
-    case 'br': // ╯
-      style.borderWidth = `0 ${b} ${b} 0`
-      style.borderBottomRightRadius = arc.radius
-      break
-    case 'bl': // ╰
-      style.borderWidth = `0 0 ${b} ${b}`
-      style.borderBottomLeftRadius = arc.radius
-      break
-  }
-  return style
+/** One synthetic cell queued for the row's canvas: resolved spec +
+ *  css-space cell box + resolved ink/opacity. Geometry stays css
+ *  here; device rounding happens at draw time so adjacent cells
+ *  share exact device-pixel edges (x0 = round(leftCss·dpr)). */
+interface SynthCell {
+  spec: SyntheticGlyph
+  leftCss: number
+  widthCss: number
+  ink: string
+  alpha: number
+}
+
+/** All of a row's synthetic cells, drawn once into one canvas. The
+ *  bitmap is device-pixel sized (style maps it back to css at
+ *  exactly 1:1 physical pixels) and static after the draw — window-
+ *  edge row mounts cost N solid fillRects instead of N×layers CSS
+ *  gradient rasterizations, and scrolling composites the bitmap.
+ *  Re-renders only when the parent row does (TerminalRow memo). */
+function SyntheticRowCanvas({
+  cells,
+  cellHeight,
+  dpr,
+}: {
+  cells: SynthCell[]
+  cellHeight: number
+  dpr: number
+}): React.JSX.Element {
+  const ref = React.useRef<HTMLCanvasElement | null>(null)
+  let endCss = 0
+  for (const c of cells) endCss = Math.max(endCss, c.leftCss + c.widthCss)
+  const wDev = Math.max(1, Math.round(endCss * dpr))
+  const hDev = Math.max(1, Math.round(cellHeight * dpr))
+  React.useLayoutEffect(() => {
+    const canvas = ref.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return // jsdom: structure renders, pixels skipped
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    for (const c of cells) {
+      const x0 = Math.round(c.leftCss * dpr)
+      const x1 = Math.round((c.leftCss + c.widthCss) * dpr)
+      drawSyntheticGlyph(
+        ctx,
+        c.spec,
+        x0,
+        0,
+        Math.max(1, x1 - x0),
+        hDev,
+        c.ink,
+        c.alpha,
+      )
+    }
+  })
+  return (
+    <canvas
+      ref={ref}
+      width={wDev}
+      height={hDev}
+      data-synth-canvas
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: wDev / dpr,
+        height: hDev / dpr,
+        pointerEvents: 'none',
+      }}
+    />
+  )
 }
 
 function renderRowRuns(
@@ -173,6 +217,12 @@ function renderRowRuns(
   const anchored = cellWidth > 0
   const offsets = anchored ? runColOffsets(row) : null
   const spans: React.ReactNode[] = []
+  // Synthetic cells accumulate row-wide and draw into ONE canvas
+  // appended after the loop (header: PER-ROW CANVAS). Cells occupy
+  // disjoint columns from the text spans, so paint order vs the
+  // clipped run spans is immaterial; within its own run the canvas
+  // correctly paints above the bg underlay.
+  const synth: SynthCell[] = []
   for (let i = 0; i < row.length; i++) {
     const run = row[i]
     const style = runStyle(run, defaultFg, defaultBg)
@@ -230,37 +280,18 @@ function renderRowRuns(
             ? syntheticGlyphSpec(cell.text.codePointAt(0) ?? 0)
             : null
         if (spec) {
-          // SYNTHETIC GEOMETRY: no text node — the glyph is painted
-          // as background layers (or an arc child) on the cell span.
-          // Text styles (decoration/weight) don't apply; heavy/light
-          // weight is intrinsic to the code point. Dim still dims
-          // via opacity, like the font path.
-          const paint = paintSyntheticGlyph(
+          // SYNTHETIC GEOMETRY: no DOM node at all — the glyph is
+          // queued for the row's canvas (solid fills, not CSS
+          // gradients). Text styles (decoration/weight) don't apply;
+          // heavy/light weight is intrinsic to the code point. Dim
+          // dims via the draw alpha, like the font path's opacity.
+          synth.push({
             spec,
-            cell.width * cellWidth,
-            cellHeight,
-            dpr,
+            leftCss: (startCol + cell.col) * cellWidth,
+            widthCss: cell.width * cellWidth,
             ink,
-          )
-          spans.push(
-            <span
-              key={`a${absRow}s${i}c${c}`}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: (startCol + cell.col) * cellWidth,
-                width: cell.width * cellWidth,
-                height: '100%',
-                overflow: 'hidden',
-                opacity: style.opacity,
-                ...('background' in paint ? paint.background : undefined),
-              }}
-            >
-              {'arc' in paint ? (
-                <div style={arcChildStyle(paint.arc, paint.color)} />
-              ) : null}
-            </span>,
-          )
+            alpha: typeof style.opacity === 'number' ? style.opacity : 1,
+          })
           continue
         }
         spans.push(
@@ -316,6 +347,16 @@ function renderRowRuns(
       </span>,
     )
   }
+  if (synth.length > 0) {
+    spans.push(
+      <SyntheticRowCanvas
+        key={`a${absRow}synth`}
+        cells={synth}
+        cellHeight={cellHeight}
+        dpr={dpr}
+      />,
+    )
+  }
   return spans
 }
 
@@ -352,10 +393,14 @@ export const TerminalRow = React.memo(function TerminalRow({
   // Fixed height (one cell) + relative positioning host the
   // absolutely-anchored run spans; before metrics are measured the
   // row keeps its natural line box (cellHeight === lineHeight, so
-  // strip math is unaffected either way).
+  // strip math is unaffected either way). `contain: layout paint`
+  // makes each row an independent layout/paint boundary, so a row
+  // mounting at the window edge invalidates its own box instead of
+  // widening traversal into the strip layer (LEARNINGS-dom-grids.md;
+  // safe here: fixed height, spans already clip to their cells).
   const style: React.CSSProperties | undefined =
     cellWidth > 0 && cellHeight > 0
-      ? { position: 'relative', height: cellHeight }
+      ? { position: 'relative', height: cellHeight, contain: 'layout paint' }
       : undefined
   return (
     <div data-abs-row={absRow} style={style}>

@@ -48,7 +48,13 @@ function renderRow(row: RenderRun[], cellWidth = CELL_W, cellHeight = CELL_H) {
   )
   const rowDiv = container.querySelector('[data-abs-row]') as HTMLElement
   expect(rowDiv).not.toBeNull()
-  return { rowDiv, spans: Array.from(rowDiv.querySelectorAll('span')) }
+  return {
+    rowDiv,
+    spans: Array.from(rowDiv.querySelectorAll('span')),
+    canvas: rowDiv.querySelector(
+      'canvas[data-synth-canvas]',
+    ) as HTMLCanvasElement | null,
+  }
 }
 
 describe('TerminalRow column anchoring', () => {
@@ -259,98 +265,100 @@ describe('TerminalRow synthetic box/block glyphs', () => {
   // exactly fills the line box or reaches the cell edges, so stacked
   // blocks (Claude Code's logo) showed horizontal seams and TUI
   // borders broke at some zooms. Box-drawing and block-element cells
-  // now render as painted CSS geometry — background gradient layers
-  // (or an arc child div) — with NO text node.
+  // render as painted geometry with NO text node — since the grid-
+  // scroll fix, drawn into ONE per-row <canvas> (solid fillRects via
+  // drawSyntheticGlyph) instead of per-cell CSS gradient spans.
+  // jsdom has no Canvas2D, so these tests pin the STRUCTURE (which
+  // cells route to the canvas vs font spans, canvas geometry); the
+  // draw itself is pinned by syntheticRaster.test.ts's stub-ctx
+  // suite and the shared math by syntheticGlyphs.test.ts.
 
-  it('renders a box-drawing char as geometry (no text) while an ordinary letter still renders text', () => {
-    const { spans } = renderRow([run('A─')])
-    expect(spans).toHaveLength(2)
-    const [letter, line] = spans
-    expect(letter.textContent).toBe('A')
-    expect(letter.style.backgroundImage).toBe('')
-    expect(line.textContent).toBe('') // no text node — pure paint
-    expect(line.style.backgroundImage).toContain('linear-gradient')
-    expect(line.style.backgroundRepeat).toBe('no-repeat')
-    expect(line.style.left).toBe(`${CELL_W}px`)
-    expect(line.style.width).toBe(`${CELL_W}px`)
-    expect(line.style.height).toBe('100%')
+  it('renders a box-drawing char on the row canvas (no text span) while an ordinary letter still renders text', () => {
+    const { spans, canvas } = renderRow([run('A─')])
+    expect(spans).toHaveLength(1) // only the letter — ─ has no span
+    expect(spans[0].textContent).toBe('A')
+    expect(canvas).not.toBeNull()
+    // Canvas covers through the last synthetic cell (col 1 + 1 wide)
+    // at dpr 1, one cell tall.
+    expect(canvas!.width).toBe(2 * CELL_W)
+    expect(canvas!.height).toBe(CELL_H)
+    expect(canvas!.style.pointerEvents).toBe('none')
   })
 
-  it('█ paints the FULL cell box — the stacked-logo seam killer', () => {
-    const { spans } = renderRow([run('█')])
+  it('█ routes to the canvas with no DOM span at all', () => {
+    const { spans, canvas } = renderRow([run('█')])
+    expect(spans).toHaveLength(0)
+    expect(canvas).not.toBeNull()
+    expect(canvas!.width).toBe(CELL_W)
+  })
+
+  it('one canvas serves the whole row regardless of cell count', () => {
+    const { rowDiv, canvas } = renderRow([run('──'), run('x'), run('┼┼')])
+    expect(rowDiv.querySelectorAll('canvas')).toHaveLength(1)
+    expect(canvas!.width).toBe(5 * CELL_W) // through the last ┼
+  })
+
+  it('inverse ─ keeps its block via the run underlay span', () => {
+    const { spans, canvas } = renderRow([run('─', { inverse: true })])
+    // Inverse with default colors: underlay = default fg; the stroke
+    // itself (ink = default bg) lives on the canvas.
     expect(spans).toHaveLength(1)
-    expect(spans[0].textContent).toBe('')
-    expect(spans[0].style.backgroundSize).toBe('100% 100%')
-    expect(spans[0].style.backgroundPosition).toBe('0px 0px')
+    expect(spans[0].style.backgroundColor).toBe('rgb(224, 224, 224)')
+    expect(canvas).not.toBeNull()
   })
 
-  it('ADJACENCY: two adjacent ─ cells paint identical full-width stroke bands that tile', () => {
-    const { spans } = renderRow([run('──')])
-    expect(spans).toHaveLength(2)
-    const [a, b] = spans
-    // Identical per-cell geometry…
-    expect(a.style.backgroundImage).toBe(b.style.backgroundImage)
-    expect(a.style.backgroundPosition).toBe(b.style.backgroundPosition)
-    expect(a.style.backgroundSize).toBe(b.style.backgroundSize)
-    // …in cell boxes that abut exactly: a ends where b begins.
-    expect(a.style.left).toBe('0px')
-    expect(b.style.left).toBe(`${CELL_W}px`)
-    expect(a.style.width).toBe(`${CELL_W}px`)
-    // Both arm layers reach the cell edges (x position 0 for the
-    // left arm; the paint math is pinned in syntheticGlyphs.test.ts).
-    expect(a.style.backgroundPosition.startsWith('0px')).toBe(true)
-  })
-
-  it('uses the run\'s resolved fg as ink, and the inverse-swapped bg when inverted', () => {
-    const { spans } = renderRow([run('─', { fg: 0xff0000 })])
-    expect(spans[0].style.backgroundImage).toContain('rgb(255, 0, 0)')
-    const inv = renderRow([run('─', { inverse: true })])
-    // Inverse with default colors: ink = default bg, underlay = fg.
-    expect(inv.spans[1].style.backgroundImage).toContain('rgb(0, 0, 0)')
-    expect(inv.spans[0].style.backgroundColor).toBe('rgb(224, 224, 224)')
-  })
-
-  it('░ shade paints at 25% alpha over the run background underlay', () => {
-    const { spans } = renderRow([run('░', { bg: 0x102030 })])
-    expect(spans).toHaveLength(2)
+  it('░ shade keeps the run background underlay under the canvas', () => {
+    const { spans, canvas } = renderRow([run('░', { bg: 0x102030 })])
+    expect(spans).toHaveLength(1)
     expect(spans[0].style.backgroundColor).toBe('rgb(16, 32, 48)') // underlay
-    expect(spans[1].style.backgroundImage).toContain('rgba(224, 224, 224, 0.25)')
+    expect(canvas).not.toBeNull()
   })
 
-  it('╭ renders one child div carrying the border-radius stroke corner', () => {
-    const { spans } = renderRow([run('╭')])
+  it('╭ routes to the canvas (arc stroke, no child div)', () => {
+    const { spans, canvas } = renderRow([run('╭')])
+    expect(spans).toHaveLength(0)
+    expect(canvas).not.toBeNull()
+    expect(canvas!.querySelector('div')).toBeNull()
+  })
+
+  it('a sextant (U+1FB00) routes to the canvas; its neighbor stays a font span', () => {
+    const { spans, canvas } = renderRow([run('\u{1FB00}x')])
     expect(spans).toHaveLength(1)
-    expect(spans[0].textContent).toBe('')
-    const child = spans[0].querySelector('div') as HTMLElement
-    expect(child).not.toBeNull()
-    expect(child.style.borderStyle).toBe('solid')
-    expect(child.style.borderTopLeftRadius).not.toBe('')
-    expect(child.style.boxSizing).toBe('border-box')
+    expect(spans[0].textContent).toBe('x')
+    expect(canvas).not.toBeNull()
   })
 
-  it('a sextant (U+1FB00) routes per-char and paints geometry', () => {
-    const { spans } = renderRow([run('\u{1FB00}x')])
-    expect(spans).toHaveLength(2)
-    expect(spans[0].textContent).toBe('')
-    expect(spans[0].style.backgroundImage).toContain('linear-gradient')
-    expect(spans[1].textContent).toBe('x')
-  })
-
-  it('geometric shapes (U+25A0+) and braille still render as font text', () => {
-    const { spans } = renderRow([run('■⠋')])
+  it('geometric shapes (U+25A0+) and braille still render as font text, no canvas', () => {
+    const { spans, canvas } = renderRow([run('■⠋')])
     expect(spans[0].textContent).toBe('■')
     expect(spans[1].textContent).toBe('⠋')
-    for (const s of spans) expect(s.style.backgroundImage).toBe('')
+    expect(canvas).toBeNull()
   })
 
-  it('dim applies opacity to the painted glyph like it does to text', () => {
-    const { spans } = renderRow([run('█', { dim: true })])
-    expect(spans[0].style.opacity).toBe('0.6')
+  it('scales the canvas bitmap to device pixels', () => {
+    const { container } = render(
+      <TerminalRow
+        row={[run('─')]}
+        absRow={7}
+        defaultFg="rgb(224,224,224)"
+        defaultBg="rgb(0,0,0)"
+        cellWidth={CELL_W}
+        cellHeight={CELL_H}
+        dpr={2}
+      />,
+    )
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement
+    expect(canvas.width).toBe(2 * CELL_W)
+    expect(canvas.height).toBe(2 * CELL_H)
+    // css box stays cell-sized so the bitmap maps 1:1 to physical px
+    expect(canvas.style.width).toBe(`${CELL_W}px`)
+    expect(canvas.style.height).toBe(`${CELL_H}px`)
   })
 
   it('falls back to font text in the unmeasured (pre-layout) state', () => {
-    const { spans } = renderRow([run('─│')], 0, 0)
+    const { spans, canvas } = renderRow([run('─│')], 0, 0)
     expect(spans).toHaveLength(1)
     expect(spans[0].textContent).toBe('─│')
+    expect(canvas).toBeNull()
   })
 })

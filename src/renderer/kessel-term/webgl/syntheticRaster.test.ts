@@ -19,6 +19,7 @@ import {
 import {
   arcStroke,
   dashSegments,
+  drawSyntheticGlyph,
   syntheticSpecForCluster,
 } from './syntheticRaster'
 
@@ -158,6 +159,87 @@ describe('arcStroke', () => {
       expect([a.cornerX, a.cornerY]).toEqual([cx, cy])
       expect(a.lineWidth).toBe(M.lt)
       expect(a.radius).toBeGreaterThan(0)
+    }
+  })
+})
+
+describe('drawSyntheticGlyph — ink/alpha contract (recording stub ctx)', () => {
+  // drawSyntheticGlyph only touches a handful of ctx members, so a
+  // recording stub exercises the real draw path in node — what the
+  // jsdom row tests can't (no Canvas2D there).
+  interface Fill {
+    x: number
+    y: number
+    w: number
+    h: number
+    alpha: number
+    style: string | CanvasGradient | CanvasPattern
+  }
+  function stubCtx() {
+    const fills: Fill[] = []
+    const strokes: { alpha: number; style: unknown; lineWidth: number }[] = []
+    const ctx = {
+      fillStyle: '' as string,
+      strokeStyle: '' as string,
+      lineWidth: 0,
+      globalAlpha: 1,
+      fillRect(x: number, y: number, w: number, h: number) {
+        fills.push({ x, y, w, h, alpha: this.globalAlpha, style: this.fillStyle })
+      },
+      beginPath() {},
+      moveTo() {},
+      arcTo() {},
+      lineTo() {},
+      stroke() {
+        strokes.push({
+          alpha: this.globalAlpha,
+          style: this.strokeStyle,
+          lineWidth: this.lineWidth,
+        })
+      },
+    }
+    return { ctx: ctx as unknown as CanvasRenderingContext2D, fills, strokes }
+  }
+
+  function spec(ch: string) {
+    const s = syntheticSpecForCluster(ch)
+    if (!s) throw new Error(`no spec: ${ch}`)
+    return s
+  }
+
+  it('█ fills the whole cell box with the ink color at the origin offset', () => {
+    const { ctx, fills } = stubCtx()
+    drawSyntheticGlyph(ctx, spec('█'), 5, 7, 9, 20, 'rgb(255,0,0)')
+    expect(fills).toHaveLength(1)
+    expect(fills[0]).toMatchObject({ x: 5, y: 7, w: 9, h: 20, alpha: 1 })
+    expect(fills[0].style).toBe('rgb(255,0,0)')
+  })
+
+  it('░ shade composes spec alpha with the cell alpha (dim) and resets', () => {
+    const { ctx, fills } = stubCtx()
+    drawSyntheticGlyph(ctx, spec('░'), 0, 0, 9, 20, '#fff', 0.6)
+    expect(fills).toHaveLength(1)
+    expect(fills[0].alpha).toBeCloseTo(0.25 * 0.6)
+    expect(ctx.globalAlpha).toBe(1) // reset after draw
+  })
+
+  it('╭ strokes with the ink color, light thickness, and cell alpha', () => {
+    const { ctx, strokes } = stubCtx()
+    drawSyntheticGlyph(ctx, spec('╭'), 0, 0, 9, 20, 'rgb(0,255,0)', 0.6)
+    expect(strokes).toHaveLength(1)
+    expect(strokes[0].style).toBe('rgb(0,255,0)')
+    expect(strokes[0].lineWidth).toBe(glyphMetrics(9, 20, 1).lt)
+    expect(strokes[0].alpha).toBe(0.6)
+    expect(ctx.globalAlpha).toBe(1)
+  })
+
+  it('defaults stay white/opaque — the WebGL atlas contract', () => {
+    const { ctx, fills } = stubCtx()
+    drawSyntheticGlyph(ctx, spec('─'), 0, 0, 9, 20)
+    expect(fills.length).toBeGreaterThan(0)
+    for (const f of fills) {
+      expect(f.style).toBe('#ffffff')
+      expect(f.alpha).toBe(1)
     }
   })
 })

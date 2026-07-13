@@ -150,9 +150,17 @@ export function arcStroke(
   }
 }
 
-/** Rasterize one synthetic glyph, white-on-transparent, into the
- *  atlas page at slot origin (x, y) with device cell box (w, h). The
- *  caller has already save()d and clipped the ctx to the slot. */
+/** Rasterize one synthetic glyph into a device cell box (w, h) at
+ *  origin (x, y). Two consumers, one geometry:
+ *  - WebGL atlas (defaults): white-on-transparent coverage mask,
+ *    tinted per instance by the shader; caller clips to the slot.
+ *  - DOM per-row canvas: pass the cell's resolved ink color and its
+ *    dim/opacity as `alpha` — the strokes rasterize pre-colored
+ *    (solid fillRects, NOT CSS gradients: WebKit has no solid-fill
+ *    fast path for gradients, which was the grid-scroll cost —
+ *    LEARNINGS-dom-grids.md). Shade specs (`spec.alpha`) compose
+ *    multiplicatively with `alpha`, mirroring the shader's
+ *    coverage × instance-alpha and the DOM's rgba × opacity. */
 export function drawSyntheticGlyph(
   ctx: CanvasRenderingContext2D,
   spec: SyntheticGlyph,
@@ -160,25 +168,28 @@ export function drawSyntheticGlyph(
   y: number,
   w: number,
   h: number,
+  ink: string = '#ffffff',
+  alpha: number = 1,
 ): void {
   const m = glyphMetrics(w, h, 1)
-  ctx.fillStyle = '#ffffff'
+  ctx.fillStyle = ink
   if (spec.kind === 'arc') {
     const a = arcStroke(spec.corner, m)
-    ctx.strokeStyle = '#ffffff'
+    ctx.strokeStyle = ink
+    if (alpha !== 1) ctx.globalAlpha = alpha
     ctx.lineWidth = a.lineWidth
     ctx.beginPath()
     ctx.moveTo(x + a.startX, y + a.startY)
     ctx.arcTo(x + a.cornerX, y + a.cornerY, x + a.endX, y + a.endY, a.radius)
     ctx.lineTo(x + a.endX, y + a.endY)
     ctx.stroke()
+    ctx.globalAlpha = 1
     return
   }
-  if (spec.kind === 'rects' && spec.alpha !== undefined) {
-    // Shades ░▒▓: fractional-alpha coverage; the shader's tint path
-    // multiplies it with the instance alpha (dim) for free.
-    ctx.globalAlpha = spec.alpha
-  }
+  const specAlpha =
+    spec.kind === 'rects' && spec.alpha !== undefined ? spec.alpha : 1
+  const combined = alpha * specAlpha
+  if (combined !== 1) ctx.globalAlpha = combined
   const rects =
     spec.kind === 'lines' && spec.dash
       ? dashSegments(spec, m)

@@ -6,10 +6,30 @@ import {
   TEXT_GAMMA_MAX,
   TEXT_GAMMA_MIN,
   clampTextGamma,
+  clearStoredTextGamma,
   defaultTextGammaFor,
+  readStoredTextGamma,
   relativeLuminance,
+  resolveEffectiveTextGamma,
   resolveTextGammaPreset,
+  textGammaStorageKey,
+  writeStoredTextGamma,
 } from './text-gamma'
+
+const mem = new Map<string, string>()
+// node env — stub localStorage for storage-key tests
+if (typeof localStorage === 'undefined') {
+  // vitest may not provide it; style tests use vi.stubGlobal. Mirror here.
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
+      setItem: (k: string, v: string) => void mem.set(k, v),
+      removeItem: (k: string) => void mem.delete(k),
+      clear: () => mem.clear(),
+    },
+    configurable: true,
+  })
+}
 
 describe('clampTextGamma', () => {
   it('clamps to [0.5, 3]', () => {
@@ -99,5 +119,59 @@ describe('resolveTextGammaPreset', () => {
     expect(resolveTextGammaPreset({ ...style, terminalTextGamma: 0.1 }, darkPal)).toBe(
       TEXT_GAMMA_MIN,
     )
+  })
+})
+
+describe('per-style storage keys', () => {
+  it('keys include style id and scheme', () => {
+    expect(textGammaStorageKey('square', 'dark')).toBe('k2.textGamma.square.dark')
+    expect(textGammaStorageKey('glass', 'light')).toBe('k2.textGamma.glass.light')
+  })
+
+  it('write / read / clear round-trip', () => {
+    mem.clear()
+    writeStoredTextGamma('square', 'dark', 1.75)
+    expect(readStoredTextGamma('square', 'dark')).toBe(1.75)
+    clearStoredTextGamma('square', 'dark')
+    expect(readStoredTextGamma('square', 'dark')).toBeNull()
+  })
+
+  it('resolveEffectiveTextGamma prefers stored override over preset', () => {
+    mem.clear()
+    const style = {
+      id: 'fake',
+      name: 'Fake',
+      author: 't',
+      description: '',
+      defaultPalette: 'ink',
+      defaultPalettes: {},
+      capabilities: { gaps: false, backdrop: false, schemes: ['dark' as const] },
+      gapPresets: [],
+      dials: [],
+      palettes: [],
+    }
+    const darkPal = {
+      id: 'ink',
+      name: 'Ink',
+      schemes: ['dark' as const],
+      swatch: {
+        bg: '#000',
+        surface: '#111',
+        elevated: '#222',
+        accent: '#f00',
+        textPrimary: '#eee',
+        border: '#333',
+      },
+      terminal: {
+        foreground: 0xe0e0e0,
+        background: 0x0a0a0a,
+        palette: Array.from({ length: 16 }, (_, i) => i),
+        cursor: { text: null, cursor: 0xe0e0e0 },
+        selection: { text: null, background: 0x444444 },
+      },
+    }
+    expect(resolveEffectiveTextGamma(style, darkPal, 'dark')).toBe(TEXT_GAMMA_DARK)
+    writeStoredTextGamma('fake', 'dark', 1.1)
+    expect(resolveEffectiveTextGamma(style, darkPal, 'dark')).toBe(1.1)
   })
 })

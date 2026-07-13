@@ -5,25 +5,76 @@
 //   - dark terminal bg  → ~0.7 (fatten; light-on-dark reads thin)
 //   - light terminal bg → ~1.2 (thin; dark-on-light reads bold)
 //
+// User overrides are PER-STYLE / PER-SCHEME (like style dials), stored
+// under localStorage `k2.textGamma.<styleId>.<scheme>`. The Styles
+// Settings section owns the UI; switching styles restores that style's
+// saved weight (or the polarity preset if never adjusted).
+//
 // Precedence at paint time (highest first):
 //   1. localStorage.K2SO_WEBGL_TEXT_GAMMA  — dev escape hatch
-//   2. terminal-settings.textGamma         — user value (style selection writes this)
+//   2. style-store textGamma               — effective value for the
+//      active style (loaded from per-style storage or preset)
 //
 // See PLAN-text-gamma-per-style.md / LEARNINGS-webgl-scroll.md §chonky.
 
-import type { StyleMeta, StylePaletteMeta } from '@/styles.generated'
+import type { StyleMeta, StylePaletteMeta, StyleScheme } from '@/styles.generated'
 
 /** Dark-theme preset (fatten). */
 export const TEXT_GAMMA_DARK = 0.7
-/** Light-theme preset (thin). Also the store default for fresh installs. */
+/** Light-theme preset (thin). */
 export const TEXT_GAMMA_LIGHT = 1.2
-/** Inclusive clamp for both store writes and paint-time resolution. */
+/** Inclusive clamp for store writes and paint-time resolution. */
 export const TEXT_GAMMA_MIN = 0.5
 export const TEXT_GAMMA_MAX = 3
 
 export function clampTextGamma(v: number): number {
   if (!Number.isFinite(v)) return TEXT_GAMMA_LIGHT
   return Math.min(TEXT_GAMMA_MAX, Math.max(TEXT_GAMMA_MIN, v))
+}
+
+/** localStorage key for a user override of WebGL text weight.
+ *  One value per (style, resolved scheme) — dark and light keep
+ *  independent tweaks, matching polarity-dependent presets. */
+export function textGammaStorageKey(styleId: string, scheme: StyleScheme): string {
+  return `k2.textGamma.${styleId}.${scheme}`
+}
+
+/** Read a stored override; null when absent / unreadable / non-finite. */
+export function readStoredTextGamma(styleId: string, scheme: StyleScheme): number | null {
+  try {
+    if (typeof localStorage === 'undefined') return null
+    const raw = localStorage.getItem(textGammaStorageKey(styleId, scheme))
+    if (raw == null || raw.trim() === '') return null
+    const n = Number(raw)
+    if (!Number.isFinite(n)) return null
+    return clampTextGamma(n)
+  } catch {
+    return null
+  }
+}
+
+/** Persist a per-style / per-scheme override. */
+export function writeStoredTextGamma(
+  styleId: string,
+  scheme: StyleScheme,
+  value: number,
+): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(textGammaStorageKey(styleId, scheme), String(clampTextGamma(value)))
+  } catch {
+    // Privacy-mode / full storage — live value still applies via the store.
+  }
+}
+
+/** Drop the override so the next resolve falls back to the preset. */
+export function clearStoredTextGamma(styleId: string, scheme: StyleScheme): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.removeItem(textGammaStorageKey(styleId, scheme))
+  } catch {
+    // Best-effort.
+  }
 }
 
 /** Relative luminance of a 0xRRGGBB (or CSS hex) terminal background.
@@ -66,9 +117,9 @@ export function defaultTextGammaFor(bg: string | number): number {
 }
 
 /**
- * Resolve the preset gamma for a style + its resolved palette.
- * Optional `style.terminalTextGamma` (if the style registry ever stamps
- * one) wins; otherwise derive from the palette's terminal background.
+ * Resolve the PRESET gamma for a style + its resolved palette
+ * (ignoring user localStorage). Optional `style.terminalTextGamma`
+ * wins; otherwise derive from the palette's terminal background.
  */
 export function resolveTextGammaPreset(
   style: StyleMeta & { terminalTextGamma?: number },
@@ -79,4 +130,18 @@ export function resolveTextGammaPreset(
     return clampTextGamma(explicit)
   }
   return defaultTextGammaFor(palette.terminal.background)
+}
+
+/**
+ * Effective gamma for a fully resolved style selection:
+ * stored per-style/scheme override, else polarity/style preset.
+ */
+export function resolveEffectiveTextGamma(
+  style: StyleMeta & { terminalTextGamma?: number },
+  palette: StylePaletteMeta,
+  scheme: StyleScheme,
+): number {
+  const stored = readStoredTextGamma(style.id, scheme)
+  if (stored != null) return stored
+  return resolveTextGammaPreset(style, palette)
 }

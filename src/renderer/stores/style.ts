@@ -28,8 +28,13 @@ import {
   type StyleSelection,
 } from '@/lib/style-resolve'
 import { dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
-import { resolveTextGammaPreset } from '@/lib/text-gamma'
-import { useTerminalSettingsStore } from '@/stores/terminal-settings'
+import {
+  clampTextGamma,
+  clearStoredTextGamma,
+  resolveEffectiveTextGamma,
+  resolveTextGammaPreset,
+  writeStoredTextGamma,
+} from '@/lib/text-gamma'
 
 // ── localStorage mirror keys (dotted convention, see index.html) ─────
 export const LS_STYLE = 'k2.style'
@@ -61,11 +66,23 @@ interface StyleState extends StyleSelection {
   resolvedScheme: StyleScheme
   /** Palette id after the per-style fallback chain. */
   resolvedPaletteId: string
+  /**
+   * Effective WebGL text-weight gamma for the ACTIVE style/scheme.
+   * Loaded from per-style localStorage (`k2.textGamma.<style>.<scheme>`)
+   * or the polarity preset. Styles Settings owns the slider; open
+   * WebGL panes re-read this live via PainterTheme.
+   */
+  textGamma: number
   /** Resolve `sel` (merged over the current selection), stamp <html>,
    *  refresh the localStorage mirror. Idempotent. Does NOT talk to the
    *  daemon — SSOT is localStorage; callers that commit a user choice
    *  also go through settings.updateStyleSettings (local-only). */
   applyStyle: (sel: Partial<StyleSelection>) => void
+  /** Persist a manual text-weight for the active style+resolved scheme
+   *  and push it live into open WebGL panes. */
+  setTextGamma: (v: number) => void
+  /** Drop the active style+scheme override; restore polarity preset. */
+  resetTextGamma: () => void
 }
 
 function osPrefersLight(): boolean {
@@ -304,18 +321,25 @@ export function styleSelectionToBackend(sel: {
 
 const bootSelection = readMirror()
 const bootResolved = resolveStyleSelection(bootSelection, osPrefersLight())
+const bootTextGamma = resolveEffectiveTextGamma(
+  bootResolved.style,
+  bootResolved.resolvedPalette,
+  bootResolved.resolvedScheme,
+)
 
 export const useStyleStore = create<StyleState>((set, get) => ({
   ...bootSelection,
   resolvedScheme: bootResolved.resolvedScheme,
   resolvedPaletteId: bootResolved.resolvedPalette.id,
+  textGamma: bootTextGamma,
 
   applyStyle: (partial: Partial<StyleSelection>) => {
     const cur = get()
-    // Resolved identity BEFORE this apply — used to gate the textGamma
-    // preset write so boot / no-op re-apply never clobbers a manual
-    // Settings tweak. Real style switches (incl. schemeMode:auto OS
-    // flips that change the resolved palette) DO overwrite.
+    // When the resolved style identity changes (style / palette / scheme),
+    // load THAT identity's stored textGamma or its polarity preset.
+    // Same-identity re-apply (boot no-op, multi-window restamp with no
+    // change) leaves the live textGamma alone so a mid-session slider
+    // value isn't clobbered before it's written — setTextGamma owns writes.
     const prevResolvedKey = `${cur.styleId}\0${cur.resolvedPaletteId}\0${cur.resolvedScheme}`
     const sel: StyleSelection = {
       styleId: partial.styleId ?? cur.styleId,
@@ -325,17 +349,45 @@ export const useStyleStore = create<StyleState>((set, get) => ({
     }
     const resolved = resolveStyleSelection(sel, osPrefersLight())
     const nextResolvedKey = `${sel.styleId}\0${resolved.resolvedPalette.id}\0${resolved.resolvedScheme}`
-    set({
+    const next: Partial<StyleState> = {
       ...sel,
       resolvedScheme: resolved.resolvedScheme,
       resolvedPaletteId: resolved.resolvedPalette.id,
-    })
+    }
+    if (prevResolvedKey !== nextResolvedKey) {
+      next.textGamma = resolveEffectiveTextGamma(
+        resolved.style,
+        resolved.resolvedPalette,
+        resolved.resolvedScheme,
+      )
+    }
+    set(next)
     stampStyleAttributes(sel)
     writeMirror(sel)
-    if (prevResolvedKey !== nextResolvedKey) {
-      const preset = resolveTextGammaPreset(resolved.style, resolved.resolvedPalette)
-      useTerminalSettingsStore.getState().setTextGamma(preset)
-    }
+  },
+
+  setTextGamma: (v: number) => {
+    const cur = get()
+    const clamped = clampTextGamma(v)
+    writeStoredTextGamma(cur.styleId, cur.resolvedScheme, clamped)
+    set({ textGamma: clamped })
+  },
+
+  resetTextGamma: () => {
+    const cur = get()
+    clearStoredTextGamma(cur.styleId, cur.resolvedScheme)
+    const resolved = resolveStyleSelection(
+      {
+        styleId: cur.styleId,
+        paletteId: cur.paletteId,
+        schemeMode: cur.schemeMode,
+        gapsPreset: cur.gapsPreset,
+      },
+      osPrefersLight(),
+    )
+    set({
+      textGamma: resolveTextGammaPreset(resolved.style, resolved.resolvedPalette),
+    })
   },
 }))
 

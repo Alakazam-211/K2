@@ -53,6 +53,7 @@ import {
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, daemonWsBase, type DaemonWsAvailable } from '../kessel/daemon-ws'
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
+import { useStyleStore } from '@/stores/style'
 import { useTabsStore } from '@/stores/tabs'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import {
@@ -2307,10 +2308,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // canvas.
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const painterRef = useRef<TerminalPainter | null>(null)
-  // Live WebGL text-weight: store value must participate in the
-  // theme object so lastPaintedRef / layout-effect deps repaint when
-  // the Settings slider moves (no remount required).
-  const textGamma = useTerminalSettingsStore((s) => s.textGamma)
+  // Live WebGL text-weight: per-style value from the style store
+  // (Settings → Styles). Must participate in the theme object so
+  // lastPaintedRef / layout-effect deps repaint when the slider moves
+  // (no remount required).
+  const textGamma = useStyleStore((s) => s.textGamma)
   const painterTheme = useMemo(
     () => ({
       fg: config.colors.foreground,

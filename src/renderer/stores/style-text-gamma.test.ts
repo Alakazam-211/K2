@@ -1,4 +1,4 @@
-// applyStyle ↔ textGamma preset: boot preserves manual; real switches overwrite.
+// Per-style textGamma: stored per (style, scheme); Styles UI owns the slider.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 const mem = new Map<string, string>()
@@ -22,8 +22,11 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import { useStyleStore } from './style'
-import { useTerminalSettingsStore } from './terminal-settings'
-import { TEXT_GAMMA_DARK, TEXT_GAMMA_LIGHT } from '@/lib/text-gamma'
+import {
+  TEXT_GAMMA_DARK,
+  TEXT_GAMMA_LIGHT,
+  textGammaStorageKey,
+} from '@/lib/text-gamma'
 
 beforeEach(() => {
   mem.clear()
@@ -33,54 +36,62 @@ beforeEach(() => {
     schemeMode: 'dark',
     gapsPreset: '',
   })
-  // After the real switch above, gamma is the dark preset. Set a manual value.
-  useTerminalSettingsStore.getState().setTextGamma(1.75)
 })
 
-describe('applyStyle textGamma gate', () => {
-  it('boot / no-op re-apply does NOT overwrite a manual textGamma', () => {
-    expect(useTerminalSettingsStore.getState().textGamma).toBe(1.75)
-    // Same resolved identity as current store state.
-    useStyleStore.getState().applyStyle({})
-    expect(useTerminalSettingsStore.getState().textGamma).toBe(1.75)
-    useStyleStore.getState().applyStyle({
-      styleId: 'square',
-      paletteId: 'charcoal',
-      schemeMode: 'dark',
-    })
-    expect(useTerminalSettingsStore.getState().textGamma).toBe(1.75)
+describe('per-style textGamma', () => {
+  it('dark style lands on the dark polarity preset', () => {
+    expect(useStyleStore.getState().textGamma).toBe(TEXT_GAMMA_DARK)
   })
 
-  it('real style switch overwrites with the new style preset', () => {
-    expect(useTerminalSettingsStore.getState().textGamma).toBe(1.75)
-    // square/charcoal dark → dark preset 0.7
+  it('setTextGamma persists under k2.textGamma.<style>.<scheme> and is live', () => {
+    useStyleStore.getState().setTextGamma(1.75)
+    expect(useStyleStore.getState().textGamma).toBe(1.75)
+    expect(mem.get(textGammaStorageKey('square', 'dark'))).toBe('1.75')
+  })
+
+  it('boot / no-op re-apply does not clobber a live slider value', () => {
+    useStyleStore.getState().setTextGamma(1.75)
+    useStyleStore.getState().applyStyle({})
+    expect(useStyleStore.getState().textGamma).toBe(1.75)
+  })
+
+  it('switching style loads the other style preset; switching back restores saved value', () => {
+    useStyleStore.getState().setTextGamma(1.75)
+    // bezel graphite dark → dark preset (no stored override)
     useStyleStore.getState().applyStyle({
       styleId: 'bezel',
       paletteId: 'graphite',
       schemeMode: 'dark',
     })
-    expect(useTerminalSettingsStore.getState().textGamma).toBe(TEXT_GAMMA_DARK)
+    expect(useStyleStore.getState().textGamma).toBe(TEXT_GAMMA_DARK)
 
-    // light palette → light preset 1.2
-    useStyleStore.getState().applyStyle({
-      styleId: 'bezel',
-      paletteId: 'porcelain',
-      schemeMode: 'light',
-    })
-    expect(useTerminalSettingsStore.getState().textGamma).toBe(TEXT_GAMMA_LIGHT)
-  })
-
-  it('schemeMode auto OS flip that changes resolved scheme overwrites gamma', () => {
-    // Force dark resolved, manual tweak, then switch to light schemeMode
-    // (simulates auto→light without needing matchMedia).
+    // back to square dark → restores the 1.75 override
     useStyleStore.getState().applyStyle({
       styleId: 'square',
       paletteId: 'charcoal',
       schemeMode: 'dark',
     })
-    useTerminalSettingsStore.getState().setTextGamma(1.9)
+    expect(useStyleStore.getState().textGamma).toBe(1.75)
+  })
+
+  it('light scheme loads light preset; dark and light keep independent overrides', () => {
+    useStyleStore.getState().setTextGamma(0.9) // square dark
     useStyleStore.getState().applyStyle({ schemeMode: 'light' })
-    // square light resolves to paper (light bg) → 1.2
-    expect(useTerminalSettingsStore.getState().textGamma).toBe(TEXT_GAMMA_LIGHT)
+    // square light → paper palette → light preset (no override yet)
+    expect(useStyleStore.getState().textGamma).toBe(TEXT_GAMMA_LIGHT)
+
+    useStyleStore.getState().setTextGamma(1.4) // square light override
+    expect(mem.get(textGammaStorageKey('square', 'light'))).toBe('1.4')
+    expect(mem.get(textGammaStorageKey('square', 'dark'))).toBe('0.9')
+
+    useStyleStore.getState().applyStyle({ schemeMode: 'dark' })
+    expect(useStyleStore.getState().textGamma).toBe(0.9)
+  })
+
+  it('resetTextGamma clears storage and restores the polarity preset', () => {
+    useStyleStore.getState().setTextGamma(1.75)
+    useStyleStore.getState().resetTextGamma()
+    expect(useStyleStore.getState().textGamma).toBe(TEXT_GAMMA_DARK)
+    expect(mem.get(textGammaStorageKey('square', 'dark'))).toBeUndefined()
   })
 })

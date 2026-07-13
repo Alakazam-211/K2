@@ -41,10 +41,11 @@ const PREWARM_BUDGET_MS = 2
 
 /** Text-weight ("chonky") gamma resolution. Precedence (highest first):
  *    1. localStorage.K2SO_WEBGL_TEXT_GAMMA — dev escape hatch
- *    2. frame.theme.textGamma — terminal-settings (style preset or
- *       user slider; live per frame so Settings updates open tabs)
+ *    2. frame.theme.textGamma — style-store effective value
+ *       (per-style/scheme override or polarity preset; live from
+ *       Settings → Styles so open tabs update without remount)
  *  Clamp [0.5, 3] applied once here. Default when both missing is
- *  the light-theme preset (1.2) — store migration stamps that too. */
+ *  the light-theme preset (1.2). */
 function resolveFrameTextGamma(frameGamma: number | undefined): number {
   try {
     const raw = localStorage.getItem('K2SO_WEBGL_TEXT_GAMMA')

@@ -19,6 +19,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { stampStyleAttributes, useStyleStore } from '@/stores/style'
 import type { StyleSelection } from '@/lib/style-resolve'
 import { dialDefault, dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
+import { TEXT_GAMMA_MAX, TEXT_GAMMA_MIN } from '@/lib/text-gamma'
 import {
   STYLES,
   type StyleDialMeta,
@@ -37,6 +38,7 @@ export const STYLES_MANIFEST: SettingEntry[] = [
   { id: 'styles.scheme', section: 'styles', label: 'Scheme', description: 'Light / Dark / Auto — Auto follows the OS appearance', keywords: ['scheme', 'light', 'dark', 'auto', 'appearance', 'mode', 'night', 'day', 'os'] },
   { id: 'styles.density', section: 'styles', label: 'Density', description: 'Compact / Regular / Spacious gaps between panes and tiles', keywords: ['density', 'gaps', 'spacing', 'compact', 'regular', 'spacious', 'padding', 'tiles'] },
   { id: 'styles.dials', section: 'styles', label: 'Dials', description: 'Style-specific adjustments the active style advertises (e.g. Glass frost)', keywords: ['dials', 'dial', 'knobs', 'frost', 'blur', 'adjust', 'tweak', 'slider', 'glass'] },
+  { id: 'styles.text-weight', section: 'styles', label: 'Terminal text weight (WebGL)', description: 'Per-style WebGL glyph weight. Lower = thicker. Saved per style and scheme.', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text', 'terminal'] },
 ]
 
 const SCHEME_OPTIONS: { id: 'light' | 'dark' | 'auto'; label: string }[] = [
@@ -86,6 +88,9 @@ export function StylesSection(): React.JSX.Element {
   const resolvedScheme = useStyleStore((s) => s.resolvedScheme)
   const resolvedPaletteId = useStyleStore((s) => s.resolvedPaletteId)
   const applyStyle = useStyleStore((s) => s.applyStyle)
+  const textGamma = useStyleStore((s) => s.textGamma)
+  const setTextGamma = useStyleStore((s) => s.setTextGamma)
+  const resetTextGamma = useStyleStore((s) => s.resetTextGamma)
   const updateStyleSettings = useSettingsStore((s) => s.updateStyleSettings)
 
   const committed: StyleSelection = { styleId, paletteId, schemeMode, gapsPreset }
@@ -428,6 +433,53 @@ export function StylesSection(): React.JSX.Element {
             </div>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
               {selectedStyle.name}&apos;s own adjustments — saved on this machine.
+            </div>
+          </div>
+        )}
+
+        {/* WebGL terminal text weight — per active style + resolved scheme.
+            Saved like dials (localStorage k2.textGamma.<style>.<scheme>).
+            Only the ACTIVE style is editable; browsing another style's
+            detail doesn't re-tune the live painter. */}
+        {selectedIsActive && (
+          <div className="mb-6" data-settings-id="styles.text-weight">
+            <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
+              Terminal text weight (WebGL)
+            </div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <input
+                type="range"
+                min={TEXT_GAMMA_MIN}
+                max={TEXT_GAMMA_MAX}
+                step={0.05}
+                value={textGamma}
+                onChange={(e) => setTextGamma(parseFloat(e.target.value))}
+                className="w-40 no-drag k2so-slider"
+              />
+              <input
+                type="number"
+                min={TEXT_GAMMA_MIN}
+                max={TEXT_GAMMA_MAX}
+                step={0.05}
+                value={Number(textGamma.toFixed(2))}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value)
+                  if (Number.isFinite(v)) setTextGamma(v)
+                }}
+                className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
+              />
+              <button
+                type="button"
+                onClick={() => resetTextGamma()}
+                className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+                title="Restore the polarity default for this style (dark ≈ 0.7, light ≈ 1.2)"
+              >
+                Reset
+              </button>
+            </div>
+            <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
+              Only affects the WebGL painter (Settings → Terminal → Painter).
+              Lower = thicker. Saved for {selectedStyle.name} / {resolvedScheme} on this machine.
             </div>
           </div>
         )}

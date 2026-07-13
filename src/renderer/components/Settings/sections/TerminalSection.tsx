@@ -1,11 +1,8 @@
-import React, { useMemo } from 'react'
+import React from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import type { TerminalSettings } from '@/stores/settings'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import type { LinkClickMode, TerminalPainterKind, TerminalRenderer } from '@/stores/terminal-settings'
-import { useStyleStore } from '@/stores/style'
-import { resolveStyleSelection } from '@/lib/style-resolve'
-import { resolveTextGammaPreset, TEXT_GAMMA_MAX, TEXT_GAMMA_MIN } from '@/lib/text-gamma'
 import { SettingRow } from '../controls/SettingControls'
 import { SettingDropdown } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
@@ -20,7 +17,6 @@ export const TERMINAL_MANIFEST: SettingEntry[] = [
   { id: 'terminal.open-links-in-split', section: 'terminal', label: 'Open Links in Split Pane', description: 'Open file links in a sibling pane when splits are active', keywords: ['link', 'split', 'pane'] },
   { id: 'terminal.renderer', section: 'terminal', label: 'Terminal Renderer', description: 'Kessel (default)', keywords: ['renderer', 'engine', 'alacritty', 'kessel', 'v2', 'session stream', 'legacy'] },
   { id: 'terminal.painter', section: 'terminal', label: 'Terminal Painter', description: 'DOM (default) or WebGL (experimental)', keywords: ['painter', 'webgl', 'gpu', 'canvas', 'rendering', 'experimental'] },
-  { id: 'terminal.text-gamma', section: 'terminal', label: 'Terminal text weight (WebGL)', description: 'Only affects the WebGL painter. Lower = thicker.', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text'] },
 ]
 
 export function TerminalSection(): React.JSX.Element {
@@ -34,23 +30,6 @@ export function TerminalSection(): React.JSX.Element {
   const setRenderer = useTerminalSettingsStore((s) => s.setRenderer)
   const painter = useTerminalSettingsStore((s) => s.painter)
   const setPainter = useTerminalSettingsStore((s) => s.setPainter)
-  const textGamma = useTerminalSettingsStore((s) => s.textGamma)
-  const setTextGamma = useTerminalSettingsStore((s) => s.setTextGamma)
-  const styleId = useStyleStore((s) => s.styleId)
-  const paletteId = useStyleStore((s) => s.paletteId)
-  const schemeMode = useStyleStore((s) => s.schemeMode)
-  const gapsPreset = useStyleStore((s) => s.gapsPreset)
-  const styleDefaultGamma = useMemo(() => {
-    const osLight =
-      typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-color-scheme: light)').matches
-    const resolved = resolveStyleSelection(
-      { styleId, paletteId, schemeMode, gapsPreset },
-      osLight,
-    )
-    return resolveTextGammaPreset(resolved.style, resolved.resolvedPalette)
-  }, [styleId, paletteId, schemeMode, gapsPreset])
 
   return (
     <div className="max-w-xl">
@@ -202,47 +181,6 @@ export function TerminalSection(): React.JSX.Element {
             ]}
             onChange={(v) => setPainter(v as TerminalPainterKind)}
           />
-        </SettingRow>
-
-        {/* WebGL text weight (coverage gamma). Live — open WebGL tabs
-         *  re-read terminal-settings.textGamma every frame. Style
-         *  selection overwrites this with a dark/light preset. */}
-        <SettingRow settingId="terminal.text-gamma" label={
-          <span title="Only affects the WebGL painter. Lower = thicker. Styles set a preset when you pick them; drag to fine-tune. No effect while Terminal Painter is DOM.">
-            Terminal text weight (WebGL)
-          </span>
-        }>
-          <div className="flex items-center gap-3 flex-wrap">
-            <input
-              type="range"
-              min={TEXT_GAMMA_MIN}
-              max={TEXT_GAMMA_MAX}
-              step={0.05}
-              value={textGamma}
-              onChange={(e) => setTextGamma(parseFloat(e.target.value))}
-              className="w-40 no-drag k2so-slider"
-            />
-            <input
-              type="number"
-              min={TEXT_GAMMA_MIN}
-              max={TEXT_GAMMA_MAX}
-              step={0.05}
-              value={Number(textGamma.toFixed(2))}
-              onChange={(e) => {
-                const v = parseFloat(e.target.value)
-                if (Number.isFinite(v)) setTextGamma(v)
-              }}
-              className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
-            />
-            <button
-              type="button"
-              onClick={() => setTextGamma(styleDefaultGamma)}
-              className="px-2 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] no-drag cursor-pointer"
-              title={`Reset to current style default (${styleDefaultGamma})`}
-            >
-              Reset to style default
-            </button>
-          </div>
         </SettingRow>
 
         {/* Open Links in Split Pane */}

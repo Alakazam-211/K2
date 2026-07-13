@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   colToTextIndex,
+  isEmojiCp,
+  isWideCp,
   rowColSpan,
   runCells,
   runColOffsets,
@@ -239,5 +241,34 @@ describe('runCells', () => {
     const cells = runCells(run)
     const last = cells[cells.length - 1]
     expect(last.col + last.width).toBe(runColSpan(run))
+  })
+})
+
+describe('BMP emoji width (the squished-✅ fix)', () => {
+  it('counts BMP emoji-presentation chars as wide, matching the daemon', () => {
+    for (const ch of ['✅', '❌', '⚡', '⭐', '⌚', '✊', '⛔']) {
+      expect(isWideCp(ch.codePointAt(0)!)).toBe(true)
+    }
+    // Non-emoji BMP symbols stay narrow.
+    for (const ch of ['✓', '→', '•', '§']) {
+      expect(isWideCp(ch.codePointAt(0)!)).toBe(false)
+    }
+  })
+
+  it('gives ✅ a two-column cell inside an annotated run', () => {
+    const cells = runCells({ text: '✅x', cols: 3 })
+    expect(cells).toEqual([
+      { text: '✅', col: 0, width: 2 },
+      { text: 'x', col: 2, width: 1 },
+    ])
+  })
+
+  it('isEmojiCp covers BMP emoji + plane-1, not text symbols', () => {
+    expect(isEmojiCp(0x2705)).toBe(true) // ✅
+    expect(isEmojiCp(0x1f600)).toBe(true) // 😀
+    expect(isEmojiCp(0x2764)).toBe(true) // ❤
+    expect(isEmojiCp(0x2713)).toBe(false) // ✓ text check mark
+    expect(isEmojiCp(0x2500)).toBe(false) // ─ box drawing
+    expect(isEmojiCp(0x2800)).toBe(false) // braille
   })
 })

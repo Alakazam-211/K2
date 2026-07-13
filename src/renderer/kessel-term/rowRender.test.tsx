@@ -362,3 +362,27 @@ describe('TerminalRow synthetic box/block glyphs', () => {
     expect(canvas).toBeNull()
   })
 })
+
+describe('TerminalRow emoji clip exemption (the squished-✅ fix)', () => {
+  it('✅ gets a two-column anchored cell WITHOUT overflow clipping', () => {
+    const { spans } = renderRow([run('✅', { cols: 2 })])
+    expect(spans).toHaveLength(1)
+    const cell = spans[0]
+    expect(cell.textContent).toBe('✅')
+    expect(cell.style.left).toBe('0px')
+    expect(cell.style.width).toBe(`${2 * CELL_W}px`) // anchored box
+    expect(cell.style.overflow).toBe('') // clip lifted — no truncation
+    expect(cell.style.textAlign).toBe('center') // overflow hangs evenly
+  })
+
+  it('anchoring survives: the run AFTER an emoji sits at its model column', () => {
+    const { spans } = renderRow([run('✅', { cols: 2 }), run('ok')])
+    expect(spans[1].textContent).toBe('ok')
+    expect(spans[1].style.left).toBe(`${2 * CELL_W}px`)
+  })
+
+  it('non-emoji exotic glyphs (braille) keep their clip', () => {
+    const { spans } = renderRow([run('⠋')])
+    expect(spans[0].style.overflow).toBe('hidden')
+  })
+})

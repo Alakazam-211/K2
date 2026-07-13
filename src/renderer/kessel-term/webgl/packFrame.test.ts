@@ -457,3 +457,31 @@ describe('prewarmRows — scroll-hop prewarm', () => {
     expect(cache.size).toBe(sizeAfterWarm) // no new expansions needed
   })
 })
+
+describe('emoji slot overhang (a_geom.x plumbing)', () => {
+  it('packs slot.offsetX into float 0 of the glyph instance', () => {
+    const glyphs: GlyphSource = {
+      epoch: 0,
+      get(text) {
+        return {
+          texX: 1,
+          texY: 2,
+          w: 24, // wider than the 2-cell box (20) — emoji overhang
+          h: 20,
+          color: true,
+          offsetX: text === '✅' ? -2 : 0,
+        }
+      },
+    }
+    const f = frame([[run('✅', { cols: 2 })]], [], 0, 4)
+    const p = pack(f, new RowCache(), new FrameBuffers(), glyphs)
+    expect(p.glyphData[0]).toBe(-2) // a_geom.x — symmetric overhang
+    expect(p.glyphData[2]).toBe(24) // quad width = widened slot
+  })
+
+  it('slots without offsetX pack 0 (fixed-slot glyphs unchanged)', () => {
+    const f = frame([[run('A')]])
+    const p = pack(f)
+    expect(p.glyphData[0]).toBe(0)
+  })
+})

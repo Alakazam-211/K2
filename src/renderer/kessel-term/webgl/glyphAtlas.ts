@@ -30,6 +30,7 @@ import {
   type AtlasLayout,
 } from './atlasLayout'
 import { drawSyntheticGlyph, syntheticSpecForCluster } from './syntheticRaster'
+import { isEmojiCp } from '../runCols'
 
 /** 1px transparent border around every slot so LINEAR sampling (or a
  *  half-texel rounding slip) can never bleed a neighbor glyph. */
@@ -61,12 +62,17 @@ function attachAtlasPage(canvas: HTMLCanvasElement): void {
 export interface GlyphSlot {
   texX: number
   texY: number
-  /** Quad/texture size in device px (uniform per atlas: widthCells ×
-   *  cell). */
+  /** Quad/texture size in device px. Normally widthCells × cell;
+   *  emoji slots may be WIDER (clip exemption — sized to the emoji
+   *  font's measured advance so the frame can't truncate ink). */
   w: number
   h: number
   /** True ⇒ emoji/multi-color: shader outputs the sample untinted. */
   color: boolean
+  /** Horizontal quad offset in device px (a_geom.x): emoji slots
+   *  wider than their cell box hang the overflow SYMMETRICALLY over
+   *  the neighbors (offsetX = -(overhang/2)); 0/absent otherwise. */
+  offsetX?: number
 }
 
 /** The face packFrame consumes — narrow so tests can stub it with a
@@ -170,7 +176,22 @@ export class GlyphAtlas implements GlyphSource {
     const hit = this.glyphs.get(key)
     if (hit) return hit
 
-    const w = widthCells * this.cfg.deviceCellW
+    const cellBoxW = widthCells * this.cfg.deviceCellW
+    let w = cellBoxW
+    let offsetX = 0
+    let advance = 0
+    if (!spec) {
+      // Measure BEFORE slot allocation: emoji slots widen to the
+      // emoji font's real advance so the frame can't truncate ink
+      // (clip exemption — DOM counterpart lifts overflow:hidden).
+      // The overflow hangs symmetrically via offsetX → a_geom.x.
+      this.ctx.font = this.fontString(bold, italic)
+      advance = this.ctx.measureText(text).width
+      if (isEmojiCp(text.codePointAt(0) ?? 0) && advance > w) {
+        w = Math.ceil(advance)
+        offsetX = -Math.round((w - cellBoxW) / 2)
+      }
+    }
     const h = this.cfg.deviceCellH
     const slotW = w + SLOT_PAD * 2
     const slotH = h + SLOT_PAD * 2
@@ -229,11 +250,12 @@ export class GlyphAtlas implements GlyphSource {
     ctx.fillStyle = '#ffffff'
     ctx.font = this.fontString(bold, italic)
     ctx.textBaseline = 'alphabetic'
-    // Center horizontally in the cell box: exact-monospace advances
+    // Center horizontally in the slot: exact-monospace advances
     // round dx to 0; over-wide fallback glyphs (braille art from a
     // substituted font) clip symmetrically instead of right-only —
     // parity with the DOM strip's textAlign:center per-char cells.
-    const advance = ctx.measureText(text).width
+    // (Emoji slots were widened above, so their dx centering never
+    // clips — the slot fits the full advance.)
     const dx = Math.round((w - advance) / 2)
     ctx.fillText(text, x + dx, y + this.baseline)
     ctx.restore()
@@ -251,7 +273,7 @@ export class GlyphAtlas implements GlyphSource {
       }
     }
 
-    const slot: GlyphSlot = { texX: x, texY: y, w, h, color }
+    const slot: GlyphSlot = { texX: x, texY: y, w, h, color, offsetX }
     this.glyphs.set(key, slot)
     this.version++
     return slot

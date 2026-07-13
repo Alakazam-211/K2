@@ -60,8 +60,77 @@ export function isZeroWidthCp(cp: number): boolean {
   )
 }
 
+/** BMP emoji-presentation code points (East Asian Width = Wide since
+ *  Unicode 9) — the set the daemon's width table (Rust unicode-width)
+ *  counts as TWO columns but our CJK + plane-1 ranges missed: ✅ ⚡
+ *  ⭐ ❌ ⌚ etc. Missing them under-allotted one column and the cell
+ *  frame clipped half the glyph (the "squished emoji" bug). Mirrors
+ *  unicode-width's BMP wide-emoji entries. */
+export function isBmpEmojiWideCp(cp: number): boolean {
+  return (
+    cp === 0x231a || cp === 0x231b || // watch, hourglass
+    (cp >= 0x23e9 && cp <= 0x23ec) || // av-control block
+    cp === 0x23f0 ||
+    cp === 0x23f3 ||
+    cp === 0x25fd ||
+    cp === 0x25fe || // small squares
+    cp === 0x2614 ||
+    cp === 0x2615 || // umbrella, hot beverage
+    (cp >= 0x2648 && cp <= 0x2653) || // zodiac
+    cp === 0x267f ||
+    cp === 0x2693 ||
+    cp === 0x26a1 ||
+    cp === 0x26aa ||
+    cp === 0x26ab ||
+    cp === 0x26bd ||
+    cp === 0x26be ||
+    cp === 0x26c4 ||
+    cp === 0x26c5 ||
+    cp === 0x26ce ||
+    cp === 0x26d4 ||
+    cp === 0x26ea ||
+    cp === 0x26f2 ||
+    cp === 0x26f3 ||
+    cp === 0x26f5 ||
+    cp === 0x26fa ||
+    cp === 0x26fd ||
+    cp === 0x2705 || // ✅ — the reported glyph
+    cp === 0x270a ||
+    cp === 0x270b ||
+    cp === 0x2728 ||
+    cp === 0x274c ||
+    cp === 0x274e ||
+    (cp >= 0x2753 && cp <= 0x2755) ||
+    cp === 0x2757 ||
+    (cp >= 0x2795 && cp <= 0x2797) ||
+    cp === 0x27b0 ||
+    cp === 0x27bf ||
+    cp === 0x2b1b ||
+    cp === 0x2b1c ||
+    cp === 0x2b50 ||
+    cp === 0x2b55
+  )
+}
+
+/** Emoji cluster test for the CLIP EXEMPTION (rowRender per-char
+ *  cells + the WebGL atlas): color-emoji glyphs rasterize from the
+ *  emoji font at whatever advance IT chooses, so framing them to the
+ *  cell box can truncate ink even at the correct column width.
+ *  Anchoring stays (no column drift); only the clip is lifted — DOM
+ *  renders the cell overflow:visible, the atlas widens the slot and
+ *  hangs the overflow symmetrically. Deliberately a superset (the
+ *  exemption is harmless on a glyph that fits). */
+export function isEmojiCp(cp: number): boolean {
+  return (
+    isBmpEmojiWideCp(cp) ||
+    (cp >= 0x1f000 && cp <= 0x1faff) || // plane-1 emoji blocks
+    cp === 0x2764 // ❤ heavy black heart
+  )
+}
+
 export function isWideCp(cp: number): boolean {
   return (
+    isBmpEmojiWideCp(cp) || // ✅⚡⭐… — 2 columns per the daemon
     (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
     (cp >= 0x2e80 && cp <= 0x303e) || // CJK radicals, punctuation
     (cp >= 0x3041 && cp <= 0x33ff) || // Hiragana..CJK compat

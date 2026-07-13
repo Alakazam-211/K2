@@ -20,8 +20,8 @@ import type { GlyphSource } from './glyphAtlas'
  *  is packed as fg alpha, 4-component color — brief §2.3 left it to
  *  the build agent):
  *    0-1  a_geom.xy — glyph offset within the cell, device px
- *         (always 0 in the fixed-slot atlas; kept for a future
- *         trimmed-glyph atlas)
+ *         (x = the emoji clip-exemption's symmetric overhang,
+ *         slot.offsetX; otherwise 0)
  *    2-3  a_geom.zw — quad + texture size, device px (0 ⇒ blank
  *         cell, degenerate quad, no fragments)
  *    4-5  a_tex     — atlas origin, PIXELS (shader normalizes by a
@@ -116,6 +116,7 @@ function buildSlab(
     const slot = glyphs.get(g.text, g.bold, g.italic, g.widthCells)
     if (!slot) continue
     const o = g.col * GLYPH_FLOATS
+    slab[o + 0] = slot.offsetX ?? 0
     slab[o + 2] = slot.w
     slab[o + 3] = slot.h
     slab[o + 4] = slot.texX

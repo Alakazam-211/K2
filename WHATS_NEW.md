@@ -3,6 +3,45 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.45 — Safer agent mail, cleaner terminals, smoother painting
+
+Agents get clearer boundaries on mail and messaging — and the terminal
+looks and scrolls the way you expect, whether you stick with the classic
+painter or try the new WebGL one.
+
+- **Mail that knows who you are.** Agent mail keeps riding the same
+  grants and levels you already set, but catalog and send paths are
+  tighter: the inboxes list is dual-auth with a real session passport,
+  linked/BYO send follows the same agent-send gate as hosted mail, and
+  listing every hosted address stays owner-only. Agents can also
+  **schedule** outbound mail with `--at` / `--in` and track it in the
+  outbox. Owner-only hostmail and access verbs now answer with a clear
+  **owner-only** teaching error (exit 3) instead of a misleading
+  “invalid token.”
+
+- **Connections before you talk.** Cross-workspace `msg`, `read`, and
+  inbox compose from an agent require a local connection first — no more
+  silent surprise paths. Creating those connections stays **off by
+  default** until you enable “Allow agents to create connections” in
+  Settings (or per workspace). Compose and inbox targets also stay put
+  under stamp (no more writing the wrong inbox after identity stamp).
+
+- **Copy that actually pastes.** New agent sessions inherit a proper
+  UTF-8 locale, so box-drawing and typography copied from TUI tools
+  (Claude Code, etc.) land on the pasteboard cleanly instead of as
+  mojibake.
+
+- **Terminal painter upgrades (opt-in WebGL still in Settings).** Better
+  synthetic box/block glyphs, steadier scroll (no hop or jump-back while
+  scrolled up), fuller TUI wheel forwarding, weight/smoothing fixes for
+  “chonky” text, and emoji that keep their width and a bit more presence.
+  Flip **Settings → Terminal → Terminal Painter** when you want WebGL;
+  DOM remains the default.
+
+- **Phone push that actually fires.** Feedback and project-chat already
+  knew how to notify; a gateway URL normalization fix means those
+  notifications reach registered devices instead of dying on a bad path.
+
 ## 0.40.44 — DNS your agents can manage
 
 Point a domain at K2 and let an agent run its DNS — safely, because every

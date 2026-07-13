@@ -1129,6 +1129,36 @@ mod tests {
         }
     }
 
+    /// E3 — prove scoped agents cannot self-grant: every access management
+    /// verb is DENY_PREFIXES (`/cli/mail/access/`) before ALLOW_PREFIXES
+    /// `/cli/mail/`. Mirrors the DNS zones/create denial style.
+    #[test]
+    fn is_agent_verb_denies_mail_access_mutations() {
+        // Agent catalog + read/send stay admitted…
+        assert!(
+            is_agent_verb("/cli/mail/inboxes"),
+            "agent view of the catalog remains an agent verb"
+        );
+        assert!(is_agent_verb("/cli/mail/messages"));
+        assert!(is_agent_verb("/cli/mail/send"));
+        // …but ALL access management verbs are denied (prefix denylist).
+        for p in [
+            "/cli/mail/access/grant",
+            "/cli/mail/access/revoke",
+            "/cli/mail/access/set-primary",
+            "/cli/mail/access/set-level",
+            "/cli/mail/access/set-manage",
+            // Prefix denial covers nested / unknown sub-paths too.
+            "/cli/mail/access/",
+            "/cli/mail/access/anything-future",
+        ] {
+            assert!(
+                !is_agent_verb(p),
+                "scoped token must NOT reach {p} (no self-grant)"
+            );
+        }
+    }
+
     #[test]
     fn is_agent_verb_allows_dns_prefixes_and_denies_zone_lifecycle() {
         assert!(is_agent_verb("/cli/dns/access"));

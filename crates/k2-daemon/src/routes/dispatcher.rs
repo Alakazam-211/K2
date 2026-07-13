@@ -574,6 +574,7 @@ async fn handle_one_request(
             | "/cli/mail/address/delete"
             | "/cli/mail/send"
             | "/cli/mail/reply"
+            | "/cli/mail/outbox/cancel"
             | "/cli/mail/approvals/approve"
             | "/cli/mail/approvals/deny"
             // S9 external assistant inboxes (PRD §17.5): owner CRUD
@@ -4444,34 +4445,60 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
-        // K2 Mail S11 — the unified inbox catalog. The AGENT view
-        // (?project=<ws>) rides a plain workspace token; the OWNER view
-        // (no project — it enumerates ALL inboxes across workspaces) is
-        // owner-or-admin-only, so agents never learn what exists outside
-        // their own access. SQLite-only (no engine dial).
+        // K2 Mail S11 / E1 — the unified inbox catalog. Dual-auth like
+        // every other mail GET: owner/connect-user via token_ok OR a
+        // scoped hook principal via require_hook. Principal is stamped
+        // so the agent view resolves via proven workspace_uuid — never
+        // raw client `project=` as who-you-are when a passport is present.
+        // OWNER view (no principal, no project claim — ALL inboxes) is
+        // owner-or-admin-only so agents never learn what exists outside
+        // their own access. SQLite-only (no engine dial) but still runs
+        // in spawn_blocking so with_request_principal is thread-local
+        // for the handler chain (matches other mail dual-auth arms).
         p if p == "/cli/mail/inboxes" => {
             let _ = stream.read(&mut buf).await;
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
                 let r = crate::cli::CliResponse::forbidden();
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
-            let params = super::http::parse_params(&path, &query);
-            let agent_view = params
-                .get("project")
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false);
-            if !agent_view && !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+            let mut params = super::http::parse_params(&path, &query);
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            // Owner "all inboxes" view: no scoped principal and no project
+            // claim. Scoped agents always take the agent view for their
+            // stamped workspace (even if stamp cleared project on an
+            // unresolvable principal — handler fails closed).
+            let owner_all_view = scoped_principal.is_none()
+                && params
+                    .get("project")
+                    .map(|s| s.trim().is_empty())
+                    .unwrap_or(true);
+            if owner_all_view
+                && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
+            {
                 super::http::send_response(
                     &mut *stream,
                     "403 Forbidden",
                     "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"listing every inbox requires owner/admin — pass project=<workspace> for the agent view, or ask your human"}}"#,
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"listing every inbox requires owner/admin — present a scoped session for the agent view, or pass project=<workspace> on an owner token, or ask your human"}}"#,
                 )
                 .await;
                 return DispatchOutcome::Done;
             }
-            let resp = crate::cli::dispatch(p, &params);
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }

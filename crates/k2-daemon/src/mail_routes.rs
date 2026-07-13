@@ -133,8 +133,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/wait" => routes_messages::handle_wait(params),
         "/cli/mail/outbox" => routes_send::handle_outbox(params),
         "/cli/mail/approvals/list" => routes_send::handle_approvals_list(params),
-        // S11: the unified inbox catalog (agent view via ?project=;
-        // owner view — no project — is owner-gated in the dispatcher).
+        // S11/E1: unified inbox catalog (agent view via proven principal
+        // or residual project=; owner view — no identity — is
+        // owner-or-admin-gated in the dispatcher's dual-auth arm).
         "/cli/mail/inboxes" => routes_access::handle_inboxes(params),
         // 0081: list an inbox's folders (can_manage; workspace token).
         "/cli/mail/folder/list" => routes_messages::handle_folder_list(params),
@@ -435,6 +436,7 @@ mod tests {
         for route in [
             "/cli/mail/send",
             "/cli/mail/reply",
+            "/cli/mail/outbox/cancel",
             "/cli/mail/approvals/approve",
             "/cli/mail/approvals/deny",
         ] {

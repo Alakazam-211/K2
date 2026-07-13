@@ -67,6 +67,29 @@ export type TerminalRenderer = 'alacritty' | 'alacritty-v2' | 'kessel'
  */
 export type TerminalPainterKind = 'dom' | 'webgl'
 
+/** Cell line-height as a multiple of font size (matches prior Kessel
+ *  default of 1.2). Global across styles — Terminal settings, not Styles. */
+export const LINE_HEIGHT_MULT_DEFAULT = 1.2
+export const LINE_HEIGHT_MULT_MIN = 1.0
+export const LINE_HEIGHT_MULT_MAX = 1.6
+
+/** Character tracking: multiplies measured monospace cell width.
+ *  1.0 = measured advance; >1 opens spacing (DOM often reads a hair
+ *  wider than device-floored WebGL). Global across styles. */
+export const CHAR_TRACKING_DEFAULT = 1.0
+export const CHAR_TRACKING_MIN = 0.9
+export const CHAR_TRACKING_MAX = 1.2
+
+export function clampLineHeightMult(v: number): number {
+  if (!Number.isFinite(v)) return LINE_HEIGHT_MULT_DEFAULT
+  return Math.min(LINE_HEIGHT_MULT_MAX, Math.max(LINE_HEIGHT_MULT_MIN, v))
+}
+
+export function clampCharTracking(v: number): number {
+  if (!Number.isFinite(v)) return CHAR_TRACKING_DEFAULT
+  return Math.min(CHAR_TRACKING_MAX, Math.max(CHAR_TRACKING_MIN, v))
+}
+
 interface TerminalSettingsState {
   fontSize: number
   linkClickMode: LinkClickMode
@@ -75,11 +98,15 @@ interface TerminalSettingsState {
   renderer: TerminalRenderer
   painter: TerminalPainterKind
   /**
-   * WebGL coverage-gamma for glyph edges. Style selection writes a
-   * per-style preset; the user can then override in Settings. Live —
-   * open WebGL panes re-read this every frame via PainterTheme.
+   * WebGL coverage-gamma for glyph edges (legacy channel; live gamma
+   * is owned by the style store — Settings → Styles). Kept for
+   * migrate compatibility.
    */
   textGamma: number
+  /** Line height multiplier of font size → cell height. Live. */
+  lineHeightMultiplier: number
+  /** Cell-width multiplier (character tracking). Live. */
+  charTracking: number
   incrementFontSize: () => void
   decrementFontSize: () => void
   resetFontSize: () => void
@@ -89,6 +116,8 @@ interface TerminalSettingsState {
   setRenderer: (renderer: TerminalRenderer) => void
   setPainter: (painter: TerminalPainterKind) => void
   setTextGamma: (v: number) => void
+  setLineHeightMultiplier: (v: number) => void
+  setCharTracking: (v: number) => void
 }
 
 /** Persist migrate for k2so-terminal-settings. Exported for unit tests. */
@@ -101,6 +130,8 @@ export function migrateTerminalSettings(
       renderer?: string
       painter?: string
       textGamma?: number
+      lineHeightMultiplier?: number
+      charTracking?: number
     }
     if (version < 2 && ps.renderer === 'alacritty') {
       ps = { ...ps, renderer: 'alacritty-v2' }
@@ -116,6 +147,15 @@ export function migrateTerminalSettings(
     }
     if (version < 6 && (ps.textGamma === undefined || !Number.isFinite(ps.textGamma))) {
       ps = { ...ps, textGamma: TEXT_GAMMA_LIGHT }
+    }
+    if (
+      version < 7 &&
+      (ps.lineHeightMultiplier === undefined || !Number.isFinite(ps.lineHeightMultiplier))
+    ) {
+      ps = { ...ps, lineHeightMultiplier: LINE_HEIGHT_MULT_DEFAULT }
+    }
+    if (version < 7 && (ps.charTracking === undefined || !Number.isFinite(ps.charTracking))) {
+      ps = { ...ps, charTracking: CHAR_TRACKING_DEFAULT }
     }
     return ps as Partial<TerminalSettingsState>
   }
@@ -146,6 +186,8 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       // Light-theme preset; dark styles overwrite via applyStyle.
       // Matches the previous hard-coded WebGL default (c2e634c 1.2).
       textGamma: TEXT_GAMMA_LIGHT,
+      lineHeightMultiplier: LINE_HEIGHT_MULT_DEFAULT,
+      charTracking: CHAR_TRACKING_DEFAULT,
 
       incrementFontSize: () => {
         set((state) => ({
@@ -199,6 +241,14 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       setTextGamma: (v: number) => {
         set({ textGamma: clampTextGamma(v) })
       },
+
+      setLineHeightMultiplier: (v: number) => {
+        set({ lineHeightMultiplier: clampLineHeightMult(v) })
+      },
+
+      setCharTracking: (v: number) => {
+        set({ charTracking: clampCharTracking(v) })
+      },
     }),
     {
       name: 'k2so-terminal-settings',
@@ -213,8 +263,10 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
         renderer: state.renderer,
         painter: state.painter,
         textGamma: state.textGamma,
+        lineHeightMultiplier: state.lineHeightMultiplier,
+        charTracking: state.charTracking,
       }),
-      version: 6,
+      version: 7,
       // 0.37.0 (v1 → v2): force-migrate users who had the persisted
       // renderer set to 'alacritty' (Legacy) onto 'alacritty-v2'.
       // The legacy option is removed from the Settings UI and the
@@ -241,6 +293,8 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       // the key; stamp the light-theme default (1.2). Style selection
       // overwrites with the dark (0.7) / light (1.2) preset on the
       // next explicit style change.
+      // 0.40.47 (v6 → v7): cell line-height multiplier + character
+      // tracking (global Terminal knobs for WebGL/DOM spacing parity).
       migrate: migrateTerminalSettings,
     },
   ),

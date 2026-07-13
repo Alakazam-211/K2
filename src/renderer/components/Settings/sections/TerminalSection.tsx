@@ -1,7 +1,15 @@
 import React from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import type { TerminalSettings } from '@/stores/settings'
-import { useTerminalSettingsStore } from '@/stores/terminal-settings'
+import {
+  useTerminalSettingsStore,
+  LINE_HEIGHT_MULT_DEFAULT,
+  LINE_HEIGHT_MULT_MIN,
+  LINE_HEIGHT_MULT_MAX,
+  CHAR_TRACKING_DEFAULT,
+  CHAR_TRACKING_MIN,
+  CHAR_TRACKING_MAX,
+} from '@/stores/terminal-settings'
 import type { LinkClickMode, TerminalPainterKind, TerminalRenderer } from '@/stores/terminal-settings'
 import { SettingRow } from '../controls/SettingControls'
 import { SettingDropdown } from '../controls/SettingControls'
@@ -10,6 +18,8 @@ import type { SettingEntry } from '../searchManifest'
 export const TERMINAL_MANIFEST: SettingEntry[] = [
   { id: 'terminal.font-family', section: 'terminal', label: 'Font Family', description: 'Typeface for terminal text', keywords: ['font', 'typeface'] },
   { id: 'terminal.font-size', section: 'terminal', label: 'Font Size', description: 'Text size in pixels', keywords: ['font', 'size', 'zoom'] },
+  { id: 'terminal.line-height', section: 'terminal', label: 'Line height', description: 'Row spacing as a multiple of font size', keywords: ['line height', 'leading', 'spacing', 'rows', 'dense', 'open'] },
+  { id: 'terminal.char-tracking', section: 'terminal', label: 'Character spacing', description: 'Horizontal spacing between characters (tracking)', keywords: ['tracking', 'letter spacing', 'kerning', 'width', 'cell', 'character', 'open', 'tight'] },
   { id: 'terminal.cursor-style', section: 'terminal', label: 'Cursor Style', description: 'Bar, block, or underline', keywords: ['cursor', 'caret'] },
   { id: 'terminal.scrollback', section: 'terminal', label: 'Scrollback Buffer', description: 'Number of scrollback lines retained', keywords: ['history', 'buffer', 'scroll'] },
   { id: 'terminal.natural-text-editing', section: 'terminal', label: 'Natural Text Editing', description: 'Opt+Arrow word motion, Cmd+Arrow line motion', keywords: ['keyboard', 'edit', 'opt', 'alt'] },
@@ -30,6 +40,10 @@ export function TerminalSection(): React.JSX.Element {
   const setRenderer = useTerminalSettingsStore((s) => s.setRenderer)
   const painter = useTerminalSettingsStore((s) => s.painter)
   const setPainter = useTerminalSettingsStore((s) => s.setPainter)
+  const lineHeightMultiplier = useTerminalSettingsStore((s) => s.lineHeightMultiplier)
+  const setLineHeightMultiplier = useTerminalSettingsStore((s) => s.setLineHeightMultiplier)
+  const charTracking = useTerminalSettingsStore((s) => s.charTracking)
+  const setCharTracking = useTerminalSettingsStore((s) => s.setCharTracking)
 
   return (
     <div className="max-w-xl">
@@ -69,6 +83,84 @@ export function TerminalSection(): React.JSX.Element {
               }}
               className="w-14 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
             />
+          </div>
+        </SettingRow>
+
+        {/* Line height — cell row pitch as × font size. Global (not per-style).
+         *  Live for open tabs; useful to open WebGL up toward DOM feel. */}
+        <SettingRow settingId="terminal.line-height" label={
+          <span title="Vertical space per row as a multiple of font size. Default 1.2. Higher = more open leading. Applies to DOM and WebGL.">
+            Line height
+          </span>
+        }>
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="range"
+              min={LINE_HEIGHT_MULT_MIN}
+              max={LINE_HEIGHT_MULT_MAX}
+              step={0.02}
+              value={lineHeightMultiplier}
+              onChange={(e) => setLineHeightMultiplier(parseFloat(e.target.value))}
+              className="w-40 no-drag k2so-slider"
+            />
+            <input
+              type="number"
+              min={LINE_HEIGHT_MULT_MIN}
+              max={LINE_HEIGHT_MULT_MAX}
+              step={0.02}
+              value={Number(lineHeightMultiplier.toFixed(2))}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value)
+                if (Number.isFinite(v)) setLineHeightMultiplier(v)
+              }}
+              className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
+            />
+            <button
+              type="button"
+              onClick={() => setLineHeightMultiplier(LINE_HEIGHT_MULT_DEFAULT)}
+              className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+            >
+              Reset
+            </button>
+          </div>
+        </SettingRow>
+
+        {/* Character tracking — cell width multiplier. Opens WebGL (which
+         *  device-floors advance) toward DOM's slightly wider cells. */}
+        <SettingRow settingId="terminal.char-tracking" label={
+          <span title="Horizontal spacing between characters (tracking). 1.0 = measured monospace width; higher = more open. Especially useful to match DOM when using the WebGL painter.">
+            Character spacing
+          </span>
+        }>
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="range"
+              min={CHAR_TRACKING_MIN}
+              max={CHAR_TRACKING_MAX}
+              step={0.01}
+              value={charTracking}
+              onChange={(e) => setCharTracking(parseFloat(e.target.value))}
+              className="w-40 no-drag k2so-slider"
+            />
+            <input
+              type="number"
+              min={CHAR_TRACKING_MIN}
+              max={CHAR_TRACKING_MAX}
+              step={0.01}
+              value={Number(charTracking.toFixed(2))}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value)
+                if (Number.isFinite(v)) setCharTracking(v)
+              }}
+              className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
+            />
+            <button
+              type="button"
+              onClick={() => setCharTracking(CHAR_TRACKING_DEFAULT)}
+              className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+            >
+              Reset
+            </button>
           </div>
         </SettingRow>
 

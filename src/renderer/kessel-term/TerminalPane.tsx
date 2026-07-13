@@ -475,6 +475,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const storeFontSize = useTerminalSettingsStore((s) => s.fontSize)
   const fontSize = props.fontSize ?? storeFontSize
   const linkClickMode = useTerminalSettingsStore((s) => s.linkClickMode)
+  // Global cell spacing (Terminal settings — not per-style). Live;
+  // drives both painters' cell metrics so WebGL can be opened up to
+  // match DOM or tuned denser/looser on demand.
+  const lineHeightMultiplier = useTerminalSettingsStore((s) => s.lineHeightMultiplier)
+  const charTracking = useTerminalSettingsStore((s) => s.charTracking)
 
   // ── WebGL painter flag ────────────────────────────────────────
   // Read ONCE at mount (the same affects-new-panes contract as
@@ -2291,12 +2296,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // metric keeps the DOM overlays pixel-aligned with the canvas
     // instead of drifting sub-pixel-per-column). DOM path keeps the
     // fractional measurement byte-identically.
-    const width = useWebgl ? Math.floor(rect.width * dpr) / dpr : rect.width
+    // charTracking multiplies the measured advance (opens/tightens
+    // inter-character spacing); re-quantize after for WebGL.
+    const measured = useWebgl ? Math.floor(rect.width * dpr) / dpr : rect.width
+    const tracked = Math.max(0.5, measured * charTracking)
+    const width = useWebgl ? Math.max(1 / dpr, Math.floor(tracked * dpr) / dpr) : tracked
     setCellMetrics({
       width,
-      height: Math.ceil(fontSize * config.font.lineHeightMultiplier),
+      height: Math.max(1, Math.ceil(fontSize * lineHeightMultiplier)),
     })
-  }, [fontSize, config.font.family, config.font.lineHeightMultiplier, useWebgl, dpr])
+  }, [
+    fontSize,
+    config.font.family,
+    lineHeightMultiplier,
+    charTracking,
+    useWebgl,
+    dpr,
+  ])
 
   // ── WebGL painter lifecycle (useWebgl only) ───────────────────
   // The painter is a pure consumer downstream of the rAF coalescer:
@@ -4438,7 +4454,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     () => ({
       fontFamily: config.font.family,
       fontSize: `${fontSize}px`,
-      lineHeight: `${Math.ceil(fontSize * config.font.lineHeightMultiplier)}px`,
+      lineHeight: `${Math.max(1, Math.ceil(fontSize * lineHeightMultiplier))}px`,
       color: `rgb(${(config.colors.foreground >> 16) & 0xff},${(config.colors.foreground >> 8) & 0xff},${config.colors.foreground & 0xff})`,
       // Seam fill (see `seamBg`): a fullscreen TUI's own bg extends
       // into the cell-quantization remainder at the right/bottom
@@ -4459,7 +4475,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     [
       fontSize,
       config.font.family,
-      config.font.lineHeightMultiplier,
+      lineHeightMultiplier,
       config.colors.foreground,
       config.colors.background,
       seamBg,

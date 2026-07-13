@@ -129,7 +129,7 @@ class H(BaseHTTPRequestHandler):
                 "ok": False,
                 "error": {
                     "code": "dns_manage_disabled",
-                    "hint": "this agent isn't allowed to manage DNS — the owner can enable it in Settings → Agents / Projects (or flip dnsManageEnabled)",
+                    "hint": "this agent isn't allowed to manage DNS — the owner can enable it in Settings → K2 Connect (Allow agents to manage DNS records) or Workspaces → (workspace) → Allow DNS manage",
                 },
             }).encode()
             self.send_response(403)

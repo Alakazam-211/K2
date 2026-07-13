@@ -4925,11 +4925,38 @@ if not targets:
     print("  (no nested subdomains configured)")
 '
             ;;
+        --help|-h|help)
+            cat <<'EOF'
+k2 tunnel — device tunnel to primary *.k2.dev (frpc)
+
+PRODUCT BOUNDARY
+  Device tunnel to primary *.k2.dev         → k2 tunnel (this family)
+  Nested label.user.k2.dev + local target   → k2 publish subdomain
+  Custom zone records (A/TXT/MX/…)          → k2 dns
+  Hosted mail domain / MX                   → k2 hostmail domain (owner)
+
+USAGE
+  k2 tunnel start [--subdomain <s>]
+  k2 tunnel stop | disable | enable [--subdomain <s>]
+  k2 tunnel release --confirm
+  k2 tunnel status [--json]
+  k2 tunnel subdomains [--json]
+
+OUTPUT CONTRACT
+  status / subdomains: human by default; --json → single JSON object on stdout
+  ERRORS on stderr (human text today for most tunnel verbs)
+
+EXIT CODES
+  0 ok · 1 error
+EOF
+            exit 0
+            ;;
         *)
             echo "Usage: k2 tunnel <start [--subdomain <s>]|stop|disable|enable [--subdomain <s>]|release --confirm|status [--json]|subdomains [--json]>" >&2
             echo "  disable  pause the tunnel, persisted on disk (survives restarts/reboots)" >&2
             echo "  enable   undo disable and bring the tunnel up" >&2
             echo "  release  permanently unpair THIS DEVICE from its subdomain (destructive)" >&2
+            echo "  See: k2 tunnel --help for product boundary vs publish/dns" >&2
             exit 1
             ;;
     esac
@@ -5073,10 +5100,53 @@ _connect_curl() {
 }
 
 _publish_usage() {
-    echo "Usage: k2 publish <status|subdomain> ..." >&2
-    echo "  status                                Connected subdomain + its plan" >&2
-    echo "  subdomain <create|list|point|rm|claim|unclaim> ...  Manage Pro nested subdomains + workspace attribution" >&2
-    echo "  (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)" >&2
+    cat <<'EOF' >&2
+k2 publish — K2 Connect nested subdomains + connected plan (control plane)
+
+PRODUCT BOUNDARY
+  Nested label.user.k2.dev + local target   → k2 publish subdomain (this family)
+  Device tunnel to primary *.k2.dev         → k2 tunnel
+  Custom zone records (A/TXT/MX/…)          → k2 dns (zone must already exist)
+  Hosted mail domain / MX                   → k2 hostmail domain (owner)
+
+USAGE
+  k2 publish status [--json]
+  k2 publish subdomain <create|list|point|rm|claim|unclaim> ...
+
+COMMANDS
+  status [--json]                           Connected subdomain + plan
+  subdomain list [--json]                   Your subdomains (HOST/TARGET/PLAN)
+  subdomain create <label> --target <e>     Create nested subdomain (Pro)
+  subdomain point <label> --target <e>      Repoint (Pro)
+  subdomain rm <label>                      Remove (Pro)
+  subdomain claim|unclaim <label>           Workspace attribution (local daemon)
+
+FLAGS
+  --json                                    Machine-readable success output
+
+OUTPUT CONTRACT
+  Success is human by default; --json → single JSON object on stdout
+  (status + subdomain list). ERRORS are always on stderr; with --json
+  they use {"error":{"code","hint"}} when the renderer supports it.
+
+EXIT CODES
+  0 ok
+  1 error (no token, control plane, not found, …)
+  2 bad usage (missing args)
+
+Subscription/plan changes: https://k2.dev/dashboard (not in the CLI).
+EOF
+}
+
+# GH#33 / #35 — publish errors as JSON when AS_JSON=true.
+_publish_err() {
+    local code="$1" hint="$2"
+    if [ "${AS_JSON:-false}" = "true" ] || [ "${as_json:-false}" = "true" ]; then
+        python3 -c 'import json,sys; print(json.dumps({"error":{"code":sys.argv[1],"hint":sys.argv[2]}}), file=sys.stderr)' \
+            "$code" "$hint" 2>/dev/null || echo "{\"error\":{\"code\":\"$code\",\"hint\":\"$hint\"}}" >&2
+    else
+        echo "Error: $hint" >&2
+    fi
 }
 
 cmd_publish() {
@@ -5091,7 +5161,7 @@ cmd_publish() {
             ;;
         ""|help|--help|-h)
             _publish_usage
-            exit 1
+            exit 0
             ;;
         *)
             echo "Unknown 'k2 publish' subcommand: $sub" >&2
@@ -5109,14 +5179,105 @@ cmd_publish() {
 # whose tunnel_token matched), else falling back to the local subdomain
 # label. Displays the per-row `tier` (free|single|pro) as a friendly plan.
 # Display is UX only — the create/point gate is enforced server-side.
+# GH#33: --json → single JSON object (mail/dns contract).
 cmd_publish_status() {
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --help|-h)
+                cat <<'EOF'
+Show the connected K2 Connect subdomain and plan for this device.
+
+USAGE
+  k2 publish status [--json]
+
+FLAGS
+  --json                 JSON: {connected, host, plan, tier, nested_subdomains}
+
+EXIT CODES
+  0 ok
+  1 error (no tunnel token / control plane)
+EOF
+                exit 0 ;;
+            -*)
+                _publish_err "usage" "unknown flag '$1' — usage: k2 publish status [--json]"
+                exit 2 ;;
+            *)
+                _publish_err "usage" "unexpected argument '$1' — usage: k2 publish status [--json]"
+                exit 2 ;;
+        esac
+    done
     if [ -z "$(_connect_bearer_token)" ]; then
-        echo "Error: no K2 Connect tunnel token found in ${K2_HOME}/tunnel.json." >&2
-        echo "Select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first." >&2
+        as_json="$as_json" _publish_err "no_token" \
+            "no K2 Connect tunnel token in ${K2_HOME}/tunnel.json — Settings → K2 Connect or k2 tunnel start"
         exit 1
     fi
     local self
     self="$(_connect_self_subdomain)"
+    if [ "$as_json" = "true" ]; then
+        _connect_curl GET "/subdomains" | SELF="$self" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+nl = raw.find("\n")
+if nl < 0:
+    print(json.dumps({"error":{"code":"unreachable","hint":"no response from control plane"}}), file=sys.stderr)
+    sys.exit(1)
+status, body = raw[:nl].strip(), raw[nl+1:]
+try:
+    code = int(status)
+except ValueError:
+    print(json.dumps({"error":{"code":"bad_status","hint":status}}), file=sys.stderr)
+    sys.exit(1)
+try:
+    d = json.loads(body) if body.strip() else {}
+except Exception:
+    d = {}
+if not (200 <= code < 300):
+    err = (d.get("error") if isinstance(d, dict) else None) or "http_%s" % code
+    print(json.dumps({"error":{"code":str(err),"hint":(d.get("detail") if isinstance(d, dict) else None) or body[:200]}}), file=sys.stderr)
+    sys.exit(1)
+self_label = (os.environ.get("SELF") or "").strip().lower()
+subs = d.get("subdomains", []) if isinstance(d, dict) else []
+
+def host_of(s):
+    return s.get("host") or (str(s.get("label","?")) + ".k2.dev")
+
+def label_of(s):
+    lbl = s.get("label")
+    if lbl:
+        return str(lbl).strip().lower()
+    return host_of(s).split(".")[0].strip().lower()
+
+row = None
+for s in subs:
+    if s.get("connected") or s.get("current") or s.get("is_current"):
+        row = s; break
+if row is None and self_label:
+    for s in subs:
+        if label_of(s) == self_label:
+            row = s; break
+if row is None:
+    host = ("%s.k2.dev" % self_label) if self_label else None
+    print(json.dumps({
+        "connected": bool(self_label),
+        "host": host,
+        "plan": None,
+        "tier": None,
+        "nested_subdomains": False,
+    }, separators=(",", ":")))
+    sys.exit(0)
+tier = (row.get("tier") or "").strip().lower()
+print(json.dumps({
+    "connected": True,
+    "host": host_of(row),
+    "plan": {"pro": "Pro", "single": "Single", "free": "Free"}.get(tier, tier or None),
+    "tier": tier or None,
+    "nested_subdomains": tier == "pro",
+}, separators=(",", ":")))
+'
+        return 0
+    fi
     _connect_curl GET "/subdomains" | SELF="$self" _connect_subdomain_render '
 import os
 self_label = (os.environ.get("SELF") or "").strip().lower()
@@ -5306,8 +5467,88 @@ print("  effective: %s" % d.get("effective","?"))
             _nudge_subdomain_refresh
             ;;
         list)
+            # GH#33: --json for agent scripting (parity with tunnel/dns/mail).
+            local as_json=false
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --help|-h)
+                        cat <<'EOF'
+List your K2 Connect subdomains (primary + nested).
+
+USAGE
+  k2 publish subdomain list [--json]
+
+FLAGS
+  --json                 JSON: {subdomains:[{host,target,plan,tier,status,flags}]}
+EOF
+                        exit 0 ;;
+                    -*)
+                        echo "Error: unknown flag '$1'" >&2
+                        exit 2 ;;
+                    *)
+                        echo "Error: unexpected argument '$1'" >&2
+                        exit 2 ;;
+                esac
+            done
             local self
             self="$(_connect_self_subdomain)"
+            if [ "$as_json" = "true" ]; then
+                _connect_curl GET "/subdomains" | SELF="$self" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+nl = raw.find("\n")
+if nl < 0:
+    print(json.dumps({"error":{"code":"unreachable","hint":"no response from control plane"}}), file=sys.stderr)
+    sys.exit(1)
+status, body = raw[:nl].strip(), raw[nl+1:]
+try:
+    code = int(status)
+except ValueError:
+    print(json.dumps({"error":{"code":"bad_status","hint":status}}), file=sys.stderr)
+    sys.exit(1)
+try:
+    d = json.loads(body) if body.strip() else {}
+except Exception:
+    d = {}
+if not (200 <= code < 300):
+    err = (d.get("error") if isinstance(d, dict) else None) or "http_%s" % code
+    print(json.dumps({"error":{"code":str(err),"hint":(d.get("detail") if isinstance(d, dict) else None) or body[:200]}}), file=sys.stderr)
+    sys.exit(1)
+self_label = (os.environ.get("SELF") or "").strip().lower()
+subs = d.get("subdomains", []) if isinstance(d, dict) else []
+
+def label_of(s):
+    lbl = s.get("label")
+    if lbl:
+        return str(lbl).strip().lower()
+    return (s.get("host") or "").split(".")[0].strip().lower()
+
+def plan_of(s):
+    t = (s.get("tier") or "").strip().lower()
+    return {"pro": "Pro", "single": "Single", "free": "Free"}.get(t, t or None)
+
+out = []
+for s in subs:
+    flags = []
+    if s.get("primary"):
+        flags.append("primary")
+    if s.get("connected") or s.get("current") or s.get("is_current") \
+       or (self_label and label_of(s) == self_label):
+        flags.append("connected")
+    out.append({
+        "host": s.get("host") or (str(s.get("label","?")) + ".k2.dev"),
+        "target": s.get("target") or "",
+        "plan": plan_of(s),
+        "tier": (s.get("tier") or "").strip().lower() or None,
+        "status": s.get("effective") or s.get("status") or "",
+        "flags": flags,
+        "label": s.get("label"),
+    })
+print(json.dumps({"subdomains": out}, separators=(",", ":")))
+'
+                return 0
+            fi
             _connect_curl GET "/subdomains" | SELF="$self" _connect_subdomain_render '
 import os
 self_label = (os.environ.get("SELF") or "").strip().lower()
@@ -6715,7 +6956,7 @@ cmd_schema() {
     {
       "name": "dns access",
       "usage": "k2 dns access [--json]",
-      "description": "DNS manage capability probe for this workspace (allowed?, record types, zones summary). Toggle-off returns allowed:false without dialing the control plane. Exit codes (whole dns family): 0 ok, 1 error, 2 bad usage, 3 gated/forbidden (Settings → K2 Connect or Workspaces → Allow DNS manage).",
+      "description": "DNS manage capability probe for this workspace (allowed?, record types, zones summary). Toggle-off returns allowed:false without dialing the control plane. Exit 3 when gated: Settings → K2 Connect (Allow agents to manage DNS records) or Workspaces → (workspace) → Allow DNS manage.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON capability envelope."}]
     },
@@ -6766,7 +7007,7 @@ cmd_schema() {
     {
       "name": "dns",
       "usage": "k2 dns <access|list|records|record|verify> ...",
-      "description": "Manage DNS records for K2 Connect zones (toggle-gated). access = capability; list = zones; records <domain> = record table; record add|remove = mutate; verify = delegation check. Exit 3 when DNS manage is off — Settings → K2 Connect or Workspaces → Allow DNS manage. ID/locked tool (session passport in-cell).",
+      "description": "Manage DNS records for K2 Connect zones (toggle-gated). access/list/records/record add|remove/verify. Exit 3 when off — Settings → K2 Connect (Allow agents to manage DNS records) or Workspaces → (workspace) → Allow DNS manage. Not for nested *.k2.dev (publish) or tunnel. ID/locked tool.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -9883,14 +10124,16 @@ EMAIL (K2 Mail — real addresses for agents; server runs on Linux daemons)
                                         for approval — that's success, exit 0)
                                         (domains/status/doctor/config/approvals — `k2 mail --help`)
 
-DNS (K2 Connect zones — toggle-gated; Settings → K2 Connect / Workspaces)
+DNS (K2 Connect zones — toggle-gated)
   dns access                            Capability probe (allowed? types? zones)
   dns list                              List zones
   dns records <domain>                  List records (daemon resolves zone)
   dns record add <domain> <type> <name> <value> [--ttl N] [--priority N]
   dns record remove <record-id>         Delete a user-managed record
   dns verify <domain>                   Delegation check
-                                        (exit 3 when DNS manage is off — `k2 dns --help`)
+    enable: Settings → K2 Connect (Allow agents to manage DNS records)
+            or Workspaces → (workspace) → Allow DNS manage  (exit 3 if off)
+    not for: nested *.k2.dev labels (use publish) · tunnel (use tunnel) · mail MX (hostmail)
 
 PROJECTS
   project msg [<project>] "text"        Post to your project's shared chat (delivered
@@ -9968,20 +10211,22 @@ DAEMON LIFECYCLE
   daemon reap                                   GC dead-PID sessions
   daemon uninstall                              Remove daemon plist
 
-TUNNEL (K2 Connect — expose this daemon at https://<user>.k2.dev)
+TUNNEL (device → primary *.k2.dev; not custom DNS zones)
   tunnel start [--subdomain <s>]                Start the frpc tunnel
   tunnel stop                                   Stop the tunnel
   tunnel status [--json]                        Running? + public URL
   tunnel subdomains [--json]                    Daemon-cached nested map (label -> target + workspace)
+  tunnel --help                                 Product boundary vs publish/dns
 
-PUBLISH (K2 Connect — Pro subdomains + plan; talks to the control plane)
-  publish status                                Connected subdomain + its plan
-  publish subdomain list                        Your subdomains + plan/status
+PUBLISH (nested label.user.k2.dev; control plane — not zone DNS)
+  publish status [--json]                       Connected subdomain + plan (GH#33)
+  publish subdomain list [--json]               Your subdomains + plan/status
   publish subdomain create <label> --target <e> Create a nested subdomain (Pro; attributed to this workspace)
   publish subdomain point <label> --target <e>  Repoint a subdomain (Pro)
   publish subdomain rm <label>                  Remove a subdomain (Pro)
   publish subdomain claim <label>               Adopt an existing label for THIS workspace (daemon-local)
   publish subdomain unclaim <label>             Drop a label's workspace attribution (daemon-local)
+  publish --help                                OUTPUT CONTRACT + product boundary
   (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)
 
 SETTINGS
@@ -14890,6 +15135,8 @@ def dumps(obj):
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 # Teaching text when the local toggle is off (must name Settings path).
+# GH#32 — single canonical owner path, shared with daemon DNS_DENIED_HINT
+# and k2 dns --help exit-3 prose.
 DNS_GATED_HINT = (
     "this agent isn't allowed to manage DNS — the owner can enable it in "
     "Settings \u2192 K2 Connect (Allow agents to manage DNS records) or "
@@ -14975,7 +15222,9 @@ if verb == "list":
         sys.exit(0)
     zones = d.get("zones") or []
     if not zones:
+        # GH#35 — empty list when manage is on: zone lifecycle is dashboard-only.
         print("(no DNS zones)")
+        print("hint: add a zone in the K2 Connect dashboard (https://k2.dev), then delegate NS to ns1.k2.dev / ns2.k2.dev — agents cannot create zones")
         sys.exit(0)
     print("%-28s  %-12s  %s" % ("DOMAIN", "STATUS", "ID"))
     for z in zones:
@@ -15281,6 +15530,13 @@ k2 dns — manage DNS records for zones on this K2 Connect account (toggle-gated
 Agents can list zones, list/add/remove user-managed records, and verify
 delegation when the owner opts in. Zone create/delete is owner/dashboard-only.
 
+PRODUCT BOUNDARY (agents: pick the right tool)
+  Custom zone records (A/TXT/MX/…)     → k2 dns (this family; zone must already
+                                           exist + be delegated; manage toggle ON)
+  Nested label.user.k2.dev + target    → k2 publish subdomain
+  Device tunnel to primary *.k2.dev    → k2 tunnel
+  Hosted mail domain / MX recipe       → k2 hostmail domain (owner)
+
 USAGE
   k2 dns <command> [args] [flags]
 
@@ -15308,6 +15564,7 @@ EXIT CODES
   3 gated/forbidden — DNS manage is off; ask your human to enable it in
     Settings → K2 Connect (Allow agents to manage DNS records) or
     Workspaces → (workspace) → Allow DNS manage
+    (same path as the access-denied `hint` — GH#32)
 
 NS and zone lifecycle are not available to agents.
 

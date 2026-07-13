@@ -18,8 +18,12 @@ pub mod routes;
 pub const AGENT_RECORD_TYPES: &[&str] = &["A", "AAAA", "CNAME", "TXT", "MX", "SRV", "CAA"];
 
 /// Teaching text when the DNS-manage toggle is off for the caller's workspace.
+/// Canonical owner path (must match `cli/k2` `DNS_GATED_HINT` / `k2 dns --help`
+/// exit-3 prose — GH#32). Product UI: app master under Settings → K2 Connect,
+/// per-workspace under Workspaces → (workspace) → Allow DNS manage.
 pub const DNS_DENIED_HINT: &str = "this agent isn't allowed to manage DNS — \
-the owner can enable it in Settings → Agents / Projects (or flip dnsManageEnabled)";
+the owner can enable it in Settings → K2 Connect (Allow agents to manage DNS records) \
+or Workspaces → (workspace) → Allow DNS manage";
 
 /// Teaching text when a local envelope check rejects the request.
 pub const ZONE_LIFECYCLE_HINT: &str =

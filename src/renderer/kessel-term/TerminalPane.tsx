@@ -4048,22 +4048,26 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const scrollAccumRef = useRef(0)
   const scrollRafRef = useRef<number | null>(null)
   // Mouse-reporting (fullscreen TUI) wheel: accumulate + flush per
-  // animation frame, capped by a token bucket so a trackpad's momentum
-  // flood can't storm the PTY (or a long-distance K2 Connect link).
-  // The bucket keeps the ORIGINAL flood ceiling — 8 notches per 50ms —
-  // but lets notches leave smoothly each frame; the old single 50ms
-  // flush timer quantized TUI scrolling to 20Hz, which read as "locked
-  // at 20fps" inside claude/Ink surfaces.
+  // animation frame. NO time-window budget — the six-terminal survey
+  // (kitty/alacritty/ghostty/zed/iterm2/wezterm; see
+  // LEARNINGS-webgl-scroll.md addendum) found NOBODY rate-windows
+  // wheel forwarding: our old 8-per-50ms refill bucket stalled fling
+  // bursts and REPLAYED them after the gesture — the exact
+  // "scroll → freeze → jump to catch up" jitter in fullscreen TUIs.
+  // Shape now matches iTerm2: proportional presses per flush, hard
+  // per-flush cap of 32 ("prevent runaway redraws", PTYSession.m),
+  // all presses coalesced into ONE write, and overflow beyond the
+  // cap is DROPPED (keep only the sub-notch remainder) — a fling
+  // that outruns the TUI loses the excess instead of replaying it
+  // late. Direction reversals clear the accumulator (iTerm2's
+  // fast-turnaround), and sub-notch momentum tails emit nothing.
   const mouseWheelAccumRef = useRef(0)
   const mouseWheelRafRef = useRef<number | null>(null)
   const mouseWheelPosRef = useRef({ col: 1, row: 1 })
-  const notchWindowStartRef = useRef(0)
-  const notchBudgetRef = useRef(0)
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    const NOTCH_WINDOW_MS = 50
-    const NOTCHES_PER_WINDOW = 8
+    const MAX_NOTCHES_PER_FLUSH = 32
     // Higher = less sensitive: one SGR notch per ~this many
     // cell-heights of accumulated movement. Tune to taste.
     const CELLS_PER_NOTCH = 1.0
@@ -4071,11 +4075,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       mouseWheelRafRef.current = null
       const ch2 = cellMetrics.height
       if (ch2 <= 0) return
-      const now = performance.now()
-      if (now - notchWindowStartRef.current >= NOTCH_WINDOW_MS) {
-        notchWindowStartRef.current = now
-        notchBudgetRef.current = NOTCHES_PER_WINDOW
-      }
       const accum = mouseWheelAccumRef.current
       const notchPx = ch2 * CELLS_PER_NOTCH
       // Sub-notch remainder stays accumulated until more input arrives
@@ -4083,15 +4082,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // min-1-tick flush over-scrolled on every 50ms tail tick).
       let ticks = Math.floor(Math.abs(accum) / notchPx)
       if (ticks === 0) return
-      if (ticks > notchBudgetRef.current) ticks = notchBudgetRef.current
-      if (ticks === 0) {
-        // Window budget exhausted; keep the accumulation and re-check
-        // next frame (a fresh 50ms window refills the bucket).
-        mouseWheelRafRef.current = requestAnimationFrame(flushMouseWheelNotches)
-        return
+      if (ticks > MAX_NOTCHES_PER_FLUSH) {
+        ticks = MAX_NOTCHES_PER_FLUSH
+        // Drop the overflow, keep only the sub-notch remainder.
+        mouseWheelAccumRef.current =
+          Math.sign(accum) * (Math.abs(accum) % notchPx)
+      } else {
+        mouseWheelAccumRef.current = accum - Math.sign(accum) * ticks * notchPx
       }
-      notchBudgetRef.current -= ticks
-      mouseWheelAccumRef.current -= Math.sign(accum) * ticks * notchPx
       // SGR button: wheel-up = 64 (deltaY<0, toward older content),
       // wheel-down = 65.
       const btn = accum < 0 ? 64 : 65
@@ -4099,9 +4097,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const seq = `\x1b[<${btn};${c};${r}M`
       sendInput(seq.repeat(ticks))
       if (import.meta.env.DEV) scrollFlushCountRef.current++
-      if (Math.abs(mouseWheelAccumRef.current) >= notchPx) {
-        mouseWheelRafRef.current = requestAnimationFrame(flushMouseWheelNotches)
-      }
+      // Remainder is < notchPx by construction — no re-flush loop;
+      // the next wheel event schedules the next flush.
     }
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY === 0) return
@@ -4142,6 +4139,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
                 ? e.deltaY * ch2 * (snap?.rows ?? 24)
                 : e.deltaY
+          // Direction reversal clears the accumulator (iTerm2's
+          // fast-turnaround): the first counter-swipe responds
+          // immediately instead of unwinding the old remainder.
+          if (
+            mouseWheelAccumRef.current !== 0 &&
+            Math.sign(pixelDelta) !== Math.sign(mouseWheelAccumRef.current)
+          ) {
+            mouseWheelAccumRef.current = 0
+          }
           mouseWheelAccumRef.current += pixelDelta
           if (mouseWheelRafRef.current === null) {
             mouseWheelRafRef.current = requestAnimationFrame(

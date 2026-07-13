@@ -30,7 +30,7 @@ import {
   type AtlasLayout,
 } from './atlasLayout'
 import { drawSyntheticGlyph, syntheticSpecForCluster } from './syntheticRaster'
-import { isEmojiCp } from '../runCols'
+import { EMOJI_FONT_SCALE, isEmojiCp } from '../runCols'
 
 /** 1px transparent border around every slot so LINEAR sampling (or a
  *  half-texel rounding slip) can never bleed a neighbor glyph. */
@@ -149,8 +149,9 @@ export class GlyphAtlas implements GlyphSource {
     return this.glyphs.size
   }
 
-  private fontString(bold: boolean, italic: boolean): string {
-    return `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${this.cfg.fontDevicePx}px ${this.cfg.fontFamily}`
+  private fontString(bold: boolean, italic: boolean, scale = 1): string {
+    const px = Math.round(this.cfg.fontDevicePx * scale)
+    return `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${px}px ${this.cfg.fontFamily}`
   }
 
   /** Pre-rasterize printable ASCII so the first frame never draws
@@ -180,14 +181,22 @@ export class GlyphAtlas implements GlyphSource {
     let w = cellBoxW
     let offsetX = 0
     let advance = 0
+    let emoji = false
     if (!spec) {
       // Measure BEFORE slot allocation: emoji slots widen to the
       // emoji font's real advance so the frame can't truncate ink
       // (clip exemption — DOM counterpart lifts overflow:hidden).
       // The overflow hangs symmetrically via offsetX → a_geom.x.
-      this.ctx.font = this.fontString(bold, italic)
+      // Emoji measure AND draw at EMOJI_FONT_SCALE (they render
+      // visibly smaller than text at equal point size).
+      emoji = isEmojiCp(text.codePointAt(0) ?? 0)
+      this.ctx.font = this.fontString(
+        bold,
+        italic,
+        emoji ? EMOJI_FONT_SCALE : 1,
+      )
       advance = this.ctx.measureText(text).width
-      if (isEmojiCp(text.codePointAt(0) ?? 0) && advance > w) {
+      if (emoji && advance > w) {
         w = Math.ceil(advance)
         offsetX = -Math.round((w - cellBoxW) / 2)
       }
@@ -248,7 +257,7 @@ export class GlyphAtlas implements GlyphSource {
     }
 
     ctx.fillStyle = '#ffffff'
-    ctx.font = this.fontString(bold, italic)
+    ctx.font = this.fontString(bold, italic, emoji ? EMOJI_FONT_SCALE : 1)
     ctx.textBaseline = 'alphabetic'
     // Center horizontally in the slot: exact-monospace advances
     // round dx to 0; over-wide fallback glyphs (braille art from a

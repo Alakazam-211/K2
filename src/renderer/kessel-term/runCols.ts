@@ -120,6 +120,14 @@ export function isBmpEmojiWideCp(cp: number): boolean {
  *  renders the cell overflow:visible, the atlas widens the slot and
  *  hangs the overflow symmetrically. Deliberately a superset (the
  *  exemption is harmless on a glyph that fits). */
+/** Emoji glyphs render noticeably SMALLER than text at the same
+ *  point size (color-emoji faces are square with built-in padding),
+ *  so both painters draw emoji clusters at this scale factor — the
+ *  DOM cell via font-size em, the WebGL atlas via a scaled
+ *  fontDevicePx. The clip exemption absorbs the grown advance, and
+ *  the cell box/columns are untouched. Tuned by eye; 1.0 = off. */
+export const EMOJI_FONT_SCALE = 1.15
+
 export function isEmojiCp(cp: number): boolean {
   return (
     isBmpEmojiWideCp(cp) ||

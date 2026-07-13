@@ -386,3 +386,16 @@ describe('TerminalRow emoji clip exemption (the squished-✅ fix)', () => {
     expect(spans[0].style.overflow).toBe('hidden')
   })
 })
+
+describe('TerminalRow emoji size bump', () => {
+  it('emoji cells render at EMOJI_FONT_SCALE em, text cells inherit', () => {
+    const { spans } = renderRow([run('✅', { cols: 2 }), run('ok')])
+    expect(spans[0].style.fontSize).toBe('1.15em')
+    expect(spans[1].style.fontSize).toBe('')
+  })
+
+  it('braille keeps the inherited size (only emoji scale)', () => {
+    const { spans } = renderRow([run('⠋')])
+    expect(spans[0].style.fontSize).toBe('')
+  })
+})

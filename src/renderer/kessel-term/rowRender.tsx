@@ -56,6 +56,7 @@
 
 import React from 'react'
 import {
+  EMOJI_FONT_SCALE,
   isEmojiCp,
   runCells,
   runColOffsets,
@@ -300,8 +301,11 @@ function renderRowRuns(
         // "squished ✅"). The cell box + centering stay (anchoring
         // is what killed column drift); only the clip is lifted —
         // overflow hangs symmetrically over the neighbors, exactly
-        // like a wide glyph in a real terminal.
-        const clipCell = !isEmojiCp(cell.text.codePointAt(0) ?? 0)
+        // like a wide glyph in a real terminal. Emoji also render
+        // at EMOJI_FONT_SCALE (they draw visibly smaller than text
+        // at equal point size); px line-height inherits unchanged,
+        // so the baseline stays put and the glyph grows in place.
+        const isEmoji = isEmojiCp(cell.text.codePointAt(0) ?? 0)
         spans.push(
           <span
             key={`a${absRow}s${i}c${c}`}
@@ -312,7 +316,8 @@ function renderRowRuns(
               left: (startCol + cell.col) * cellWidth,
               width: cell.width * cellWidth,
               height: '100%',
-              overflow: clipCell ? 'hidden' : undefined,
+              overflow: isEmoji ? undefined : 'hidden',
+              fontSize: isEmoji ? `${EMOJI_FONT_SCALE}em` : undefined,
               whiteSpace: 'pre',
               textAlign: 'center',
             }}

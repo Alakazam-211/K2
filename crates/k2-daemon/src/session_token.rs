@@ -922,12 +922,18 @@ fn restrict_mode(file: &std::path::Path) {
 fn restrict_mode(_file: &std::path::Path) {}
 
 // ─────────────────────────────────────────────────────────────────────
-// Tests — pure registry logic, no disk (fail-loud per feedback_test_discipline)
+// Tests — pure registry logic on a *local* SessionTokenRegistry::new()
+// never touches disk. Tests that call the process-wide mint/validate/
+// prepare helpers (mint_session_token → save_to_disk → real ~/.k2) MUST
+// wrap in `crate::test_support::with_temp_home` so dirs::home_dir()
+// redirects store_path() to a throwaway dir (fail-loud per
+// feedback_test_discipline; prevents live hook-sessions.json pollution).
 // ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::with_temp_home;
 
     fn principal() -> HookPrincipal {
         HookPrincipal {
@@ -1290,17 +1296,29 @@ mod tests {
     fn cell_env_pairs_returns_none_when_flag_off() {
         // Explicit fleet opt-out: K2_HOOK_SCOPED=0 → mint NOTHING.
         // (Only reads the env var; no disk, no registry mutation.)
-        let prev = std::env::var("K2_HOOK_SCOPED").ok();
-        std::env::set_var("K2_HOOK_SCOPED", "0");
-        let sid = SessionId::new();
-        assert!(
-            cell_env_pairs(&sid, &sid.to_string(), principal(), CredMode::ApiKey, Provider::Anthropic, None).is_none(),
-            "flag OFF (explicit opt-out) MUST inject no scoped env",
-        );
-        match prev {
-            Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
-            None => std::env::remove_var("K2_HOOK_SCOPED"),
-        }
+        // Still wrap in with_temp_home so a future edit that mints cannot
+        // silently write real ~/.k2/hook-sessions.json.
+        with_temp_home(|| {
+            let prev = std::env::var("K2_HOOK_SCOPED").ok();
+            std::env::set_var("K2_HOOK_SCOPED", "0");
+            let sid = SessionId::new();
+            assert!(
+                cell_env_pairs(
+                    &sid,
+                    &sid.to_string(),
+                    principal(),
+                    CredMode::ApiKey,
+                    Provider::Anthropic,
+                    None
+                )
+                .is_none(),
+                "flag OFF (explicit opt-out) MUST inject no scoped env",
+            );
+            match prev {
+                Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
+                None => std::env::remove_var("K2_HOOK_SCOPED"),
+            }
+        });
     }
 
     #[test]
@@ -1308,69 +1326,77 @@ mod tests {
         // PR-A load-bearing invariant: after prepare_agent_spawn_env, the
         // child env must not carry the owner token behind K2_HOOK_TOKEN
         // (whether scoped mint ran or the flag was opted out).
-        let owner = "owner-secret-deadbeef-aaaaaaaa";
-        let sid = SessionId::new();
-        let pane = sid.to_string();
+        //
+        // MUST run under with_temp_home: flag-ON path calls mint_session_token
+        // → save_to_disk(store_path()) which otherwise pollutes the
+        // developer's real ~/.k2/hook-sessions.json with test principals
+        // (ws-uuid-1 / agent-a).
+        with_temp_home(|| {
+            let owner = "owner-secret-deadbeef-aaaaaaaa";
+            let sid = SessionId::new();
+            let pane = sid.to_string();
 
-        // Path A — flag ON (default mint): scoped passport replaces owner.
-        let prev = std::env::var("K2_HOOK_SCOPED").ok();
-        std::env::set_var("K2_HOOK_SCOPED", "1");
-        let mut env = std::collections::HashMap::new();
-        env.insert("K2_HOOK_TOKEN".to_string(), owner.to_string());
-        env.insert("K2SO_HOOK_TOKEN".to_string(), owner.to_string());
-        let minted = prepare_agent_spawn_env(
-            &mut env,
-            &sid,
-            &pane,
-            principal(),
-            CredMode::ApiKey,
-            Provider::Anthropic,
-            None,
-            owner,
-        );
-        assert!(minted, "flag ON must mint a scoped passport");
-        let tok = env.get("K2_HOOK_TOKEN").expect("scoped K2_HOOK_TOKEN present");
-        assert_ne!(tok, owner, "scoped path must not leave the owner token");
-        assert_ne!(
-            env.get("K2SO_HOOK_TOKEN").map(String::as_str),
-            Some(owner),
-            "legacy alias must not leave the owner token",
-        );
-        // Minted value must validate as a real principal.
-        let v = validate_hook(tok).expect("minted passport must validate_hook");
-        assert_eq!(v.session_id, sid.to_string());
-        assert_eq!(v.pane_id, pane);
-        assert_eq!(v.principal, principal());
+            // Path A — flag ON (default mint): scoped passport replaces owner.
+            let prev = std::env::var("K2_HOOK_SCOPED").ok();
+            std::env::set_var("K2_HOOK_SCOPED", "1");
+            let mut env = std::collections::HashMap::new();
+            env.insert("K2_HOOK_TOKEN".to_string(), owner.to_string());
+            env.insert("K2SO_HOOK_TOKEN".to_string(), owner.to_string());
+            let minted = prepare_agent_spawn_env(
+                &mut env,
+                &sid,
+                &pane,
+                principal(),
+                CredMode::ApiKey,
+                Provider::Anthropic,
+                None,
+                owner,
+            );
+            assert!(minted, "flag ON must mint a scoped passport");
+            let tok = env.get("K2_HOOK_TOKEN").expect("scoped K2_HOOK_TOKEN present");
+            assert_ne!(tok, owner, "scoped path must not leave the owner token");
+            assert_ne!(
+                env.get("K2SO_HOOK_TOKEN").map(String::as_str),
+                Some(owner),
+                "legacy alias must not leave the owner token",
+            );
+            // Minted value must validate as a real principal (process registry
+            // under this temp HOME).
+            let v = validate_hook(tok).expect("minted passport must validate_hook");
+            assert_eq!(v.session_id, sid.to_string());
+            assert_eq!(v.pane_id, pane);
+            assert_eq!(v.principal, principal());
 
-        // Path B — flag OFF: still strips owner even without a mint.
-        std::env::set_var("K2_HOOK_SCOPED", "0");
-        let mut env_off = std::collections::HashMap::new();
-        env_off.insert("K2_HOOK_TOKEN".to_string(), owner.to_string());
-        env_off.insert("K2SO_HOOK_TOKEN".to_string(), owner.to_string());
-        let minted_off = prepare_agent_spawn_env(
-            &mut env_off,
-            &sid,
-            &pane,
-            principal(),
-            CredMode::ApiKey,
-            Provider::Anthropic,
-            None,
-            owner,
-        );
-        assert!(!minted_off, "flag OFF must not mint");
-        assert!(
-            env_off.get("K2_HOOK_TOKEN").is_none(),
-            "flag OFF must still strip owner from K2_HOOK_TOKEN",
-        );
-        assert!(
-            env_off.get("K2SO_HOOK_TOKEN").is_none(),
-            "flag OFF must still strip owner from K2SO_HOOK_TOKEN",
-        );
+            // Path B — flag OFF: still strips owner even without a mint.
+            std::env::set_var("K2_HOOK_SCOPED", "0");
+            let mut env_off = std::collections::HashMap::new();
+            env_off.insert("K2_HOOK_TOKEN".to_string(), owner.to_string());
+            env_off.insert("K2SO_HOOK_TOKEN".to_string(), owner.to_string());
+            let minted_off = prepare_agent_spawn_env(
+                &mut env_off,
+                &sid,
+                &pane,
+                principal(),
+                CredMode::ApiKey,
+                Provider::Anthropic,
+                None,
+                owner,
+            );
+            assert!(!minted_off, "flag OFF must not mint");
+            assert!(
+                env_off.get("K2_HOOK_TOKEN").is_none(),
+                "flag OFF must still strip owner from K2_HOOK_TOKEN",
+            );
+            assert!(
+                env_off.get("K2SO_HOOK_TOKEN").is_none(),
+                "flag OFF must still strip owner from K2SO_HOOK_TOKEN",
+            );
 
-        match prev {
-            Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
-            None => std::env::remove_var("K2_HOOK_SCOPED"),
-        }
+            match prev {
+                Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
+                None => std::env::remove_var("K2_HOOK_SCOPED"),
+            }
+        });
     }
 
     #[test]

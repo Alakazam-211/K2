@@ -85,7 +85,12 @@ import { decodeGridFrame, type WireFrame } from './gridWire'
 import { colToTextIndex, runColSpan } from './runCols'
 import { hexToCss, TerminalRow } from './rowRender'
 import { createWebglPainter } from './webgl/webglPainter'
-import type { SelectionRange, TerminalPainter } from './webgl/painterTypes'
+import type {
+  PainterFrame,
+  PainterTheme,
+  SelectionRange,
+  TerminalPainter,
+} from './webgl/painterTypes'
 import {
   normalizeSelection,
   wordRangeAtCol,
@@ -2248,6 +2253,61 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       config.colors.selection.background,
     ],
   )
+  // ── Vsync scroll pump (LEARNINGS-webgl-scroll.md) ─────────────
+  // Scroll frames must paint at DISPLAY cadence, not React-commit
+  // cadence: the wheel rAF paints directly through these latest-value
+  // refs, and the layout effect below repaints on snapshot/theme/
+  // selection/metrics commits. `lastPaintedRef` dedupes the two paths
+  // (the post-scroll commit becomes a no-op) so it's exactly one
+  // paint per frame. Reset to force a repaint with unchanged inputs
+  // (new painter, new atlas/metrics).
+  const painterThemeRef = useRef(painterTheme)
+  painterThemeRef.current = painterTheme
+  const useWebglRef = useRef(useWebgl)
+  useWebglRef.current = useWebgl
+  const selectionVersionRef = useRef(selectionVersion)
+  selectionVersionRef.current = selectionVersion
+  const lastPaintedRef = useRef<{
+    snapshot: PainterFrame['snapshot'] | null
+    scrollPx: number
+    selectionVersion: number
+    theme: PainterTheme | null
+  }>({ snapshot: null, scrollPx: -1, selectionVersion: -1, theme: null })
+  // `snapOverride`: the layout effect passes its fresh state snapshot
+  // (snapshotRef syncs in a PASSIVE effect — stale during layout
+  // effects); the wheel rAF omits it (outside React, ref is current).
+  const paintWebglRef = useRef<
+    (scrollPxValue: number, snapOverride?: PainterFrame['snapshot'] | null) => void
+  >(() => {})
+  paintWebglRef.current = (
+    scrollPxValue: number,
+    snapOverride?: PainterFrame['snapshot'] | null,
+  ): void => {
+    const painter = painterRef.current
+    const snap = snapOverride ?? snapshotRef.current
+    const theme = painterThemeRef.current
+    if (!painter || !snap) return
+    if (!cellMetrics.width || !cellMetrics.height) return
+    const last = lastPaintedRef.current
+    if (
+      last.snapshot === snap &&
+      last.scrollPx === scrollPxValue &&
+      last.selectionVersion === selectionVersionRef.current &&
+      last.theme === theme
+    ) {
+      return
+    }
+    last.snapshot = snap
+    last.scrollPx = scrollPxValue
+    last.selectionVersion = selectionVersionRef.current
+    last.theme = theme
+    painter.render({
+      snapshot: snap,
+      scrollPx: scrollPxValue,
+      selection: webglSelectionRef.current,
+      theme,
+    })
+  }
   useLayoutEffect(() => {
     if (!useWebgl) return
     const canvas = webglCanvasRef.current
@@ -2260,6 +2320,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     })
     painter.mount(canvas)
     painterRef.current = painter
+    lastPaintedRef.current.snapshot = null
     return () => {
       painterRef.current = null
       painter.dispose()
@@ -2277,18 +2338,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       fontFamily: config.font.family,
       fontSize,
     })
+    // New atlas/device grid ⇒ the same frame inputs must repaint.
+    lastPaintedRef.current.snapshot = null
   }, [useWebgl, cellMetrics, config.font.family, fontSize, dpr])
   useLayoutEffect(() => {
     if (!useWebgl) return
-    const painter = painterRef.current
-    if (!painter || !snapshot) return
-    if (!cellMetrics.width || !cellMetrics.height) return
-    painter.render({
-      snapshot,
-      scrollPx,
-      selection: webglSelectionRef.current,
-      theme: painterTheme,
-    })
+    if (!snapshot) return
+    paintWebglRef.current(scrollPx, snapshot)
   }, [useWebgl, snapshot, scrollPx, painterTheme, cellMetrics, selectionVersion])
 
   // S5 — subtle read-only hint. Latched when the daemon reports this
@@ -4103,7 +4159,22 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           const scrollbackLen = snapshotRef.current?.scrollback.length ?? 0
           if (import.meta.env.DEV) scrollFlushCountRef.current++
           // deltaY > 0 scrolls toward the bottom (scrollPx → 0).
-          setScrollPx((px) => clampScrollPx(px - deltaPx, scrollbackLen, cellH))
+          // Vsync scroll pump: compute the new position HERE (this
+          // rAF is display-aligned), paint the WebGL frame directly,
+          // then commit state for the rest of the UI — the paint no
+          // longer waits on React's scheduler, whose late commits
+          // were the scroll "hops" (LEARNINGS-webgl-scroll.md). The
+          // ref write keeps consecutive rAFs accumulating correctly
+          // between commits; the DOM strip path is unchanged (its
+          // translateY layer is already compositor-driven).
+          const nextPx = clampScrollPx(
+            scrollPxRef.current - deltaPx,
+            scrollbackLen,
+            cellH,
+          )
+          scrollPxRef.current = nextPx
+          if (useWebglRef.current) paintWebglRef.current(nextPx)
+          setScrollPx(nextPx)
         })
       }
     }

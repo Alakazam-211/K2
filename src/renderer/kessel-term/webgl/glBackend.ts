@@ -171,6 +171,12 @@ export function createWebgl2Backend(
     depth: false,
     stencil: false,
     preserveDrawingBuffer: false,
+    // Shorter input-to-photon present path where honored (Chromium/
+    // WebView2 desync the canvas from the compositor; WebKit ignores
+    // it). Every visible cell redraws each frame, so neither hint
+    // risks stale content.
+    desynchronized: true,
+    powerPreference: 'high-performance',
   }) as WebGL2RenderingContext | null
   if (!gl) return null
 

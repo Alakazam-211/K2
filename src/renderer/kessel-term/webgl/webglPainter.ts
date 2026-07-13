@@ -18,7 +18,7 @@ import {
   createWebgl2Backend,
   type PainterBackend,
 } from './glBackend'
-import { FrameBuffers, packFrame, RowCache } from './packFrame'
+import { FrameBuffers, packFrame, prewarmRows, RowCache } from './packFrame'
 import { GlyphAtlas } from './glyphAtlas'
 import { createContextLossTracker } from './contextLoss'
 
@@ -27,6 +27,13 @@ import { createContextLossTracker } from './contextLoss'
  *  check before trusting the context). Arbitrary, unlikely theme
  *  color. */
 const SANITY_COLOR = 0x3a7b19
+
+/** Post-draw row-cache prewarm (scroll-hop fix, LEARNINGS-webgl-
+ *  scroll.md): rows outside the window pre-expanded each frame so a
+ *  fast scroll hits warm slabs. Band = how far to reach in each
+ *  direction; budget caps the leftover-frame time it may spend. */
+const PREWARM_BAND = 24
+const PREWARM_BUDGET_MS = 2
 
 export interface WebglPainterDeps {
   /** Test seam: swap the real WebGL2 backend for a stub. */
@@ -93,7 +100,7 @@ export function createWebglPainter(
       backend.resize(w, h)
     }
 
-    const packed = packFrame({
+    const packInput = {
       frame,
       cssCellH: metrics.cssCellH,
       deviceCellW,
@@ -103,7 +110,8 @@ export function createWebglPainter(
       buffers,
       glyphs: atlas,
       decoThickness,
-    })
+    }
+    const packed = packFrame(packInput)
 
     // Packing may have rasterized new glyphs — re-upload the page
     // once per frame at most, keyed off the atlas version.
@@ -128,6 +136,11 @@ export function createWebglPainter(
     // glyphs (pass order per brief §2.2; the block cursor stays a DOM
     // overlay above the whole canvas — §5).
     backend.drawRects(packed.deco.data, packed.deco.count)
+
+    // Leftover-frame prewarm: expand rows just outside the window so
+    // the NEXT scroll frame's reveals are cache hits. New glyphs it
+    // rasterizes ride the next frame's atlas-version upload.
+    prewarmRows(packInput, packed, PREWARM_BAND, PREWARM_BUDGET_MS)
 
     if (diagEnabled) {
       diagMs += performance.now() - t0

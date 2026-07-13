@@ -254,6 +254,38 @@ function rowAt(
   return grid[abs - scrollback.length] ?? null
 }
 
+/** Pre-expand + pack rows just OUTSIDE the visible window so a fast
+ *  scroll lands on warm cache entries instead of paying expandRow +
+ *  slab allocation synchronously mid-frame (the diagnosed cause of
+ *  scroll hops: newly revealed rows miss the identity-keyed cache).
+ *  Nearest-first, alternating above/below, under a time budget —
+ *  call AFTER the frame's draw so it spends leftover frame time,
+ *  never draw time. Returns rows warmed (diagnostics). */
+export function prewarmRows(
+  input: PackInput,
+  packed: PackedFrame,
+  band: number,
+  budgetMs: number,
+  now: () => number = () => performance.now(),
+): number {
+  const { frame, cache, glyphs } = input
+  const cols = frame.snapshot.cols
+  const start = now()
+  let warmed = 0
+  for (let d = 1; d <= band; d++) {
+    const above = packed.windowStart - d
+    const below = packed.windowStart + packed.rowCount - 1 + d
+    for (const abs of [above, below]) {
+      const row = rowAt(frame, abs)
+      if (!row || row.length === 0) continue
+      cache.slabFor(row, frame.theme, cols, glyphs)
+      warmed++
+    }
+    if (now() - start >= budgetMs) break
+  }
+  return warmed
+}
+
 export function packFrame(input: PackInput): PackedFrame {
   const {
     frame,

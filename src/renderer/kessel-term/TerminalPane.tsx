@@ -76,6 +76,7 @@ import {
 import { useConnectHostStore } from '@/stores/connect-host'
 import { executeRemoteDrop } from '@/lib/handle-remote-drop'
 import {
+  anchorScrollPx,
   clampScrollPx,
   computeScrollbarThumb,
   computeStripLayout,
@@ -682,10 +683,41 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // inside the state updater (a StrictMode double-invoke would
     // re-apply deltas onto an already-merged base).
     let next: TermGridSnapshot | null = liveGridRef.current
+    // Scroll-anchoring input: rows appended below the view in this
+    // batch. Deltas carry the exact count (scrollbackAppended —
+    // immune to cap-trim); a full snapshot (including the k1 resync
+    // the daemon sends when our acks lag, i.e. exactly during fast
+    // scrolling) contributes its total-row growth.
+    const prevTotal =
+      (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
+    let appendedRows = 0
+    let sawSnapshot = false
     for (const f of pending) {
-      next = f.kind === 'snapshot' ? f.payload : mergeDelta(next, f.payload)
+      if (f.kind === 'snapshot') {
+        sawSnapshot = true
+        next = f.payload
+      } else {
+        appendedRows += f.payload.scrollbackAppended.length
+        next = mergeDelta(next, f.payload)
+      }
+    }
+    if (sawSnapshot) {
+      const nextTotal =
+        (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
+      appendedRows = Math.max(appendedRows, nextTotal - prevTotal)
     }
     liveGridRef.current = next
+    // SCROLL ANCHORING: pin the viewed content while scrolled up.
+    // Without this, every appended row shifted the bottom-anchored
+    // window ("text crawls while reading"), and a resync snapshot
+    // yanked it by the whole backlog — the "jumps like it's catching
+    // up" during fast scroll. scrollPx === 0 (at bottom) still
+    // follows live output; see anchorScrollPx.
+    if (appendedRows > 0 && scrollPxRef.current > 0) {
+      const ch = cellMetricsRef.current.height || 20
+      const sbLen = next?.scrollback.length ?? 0
+      commitScrollPx((px) => anchorScrollPx(px, appendedRows, sbLen, ch))
+    }
     // Resize hold, content half: a resize's clear-then-repaint gap can
     // arrive as a BLANK grid (an old daemon broadcasts the cleared
     // intermediate; a new daemon's settle timeout can still fire

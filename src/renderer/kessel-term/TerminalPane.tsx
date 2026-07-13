@@ -76,6 +76,7 @@ import {
 import { useConnectHostStore } from '@/stores/connect-host'
 import { executeRemoteDrop } from '@/lib/handle-remote-drop'
 import {
+  anchorScrollPx,
   clampScrollPx,
   computeScrollbarThumb,
   computeStripLayout,
@@ -85,7 +86,12 @@ import { decodeGridFrame, type WireFrame } from './gridWire'
 import { colToTextIndex, runColSpan } from './runCols'
 import { hexToCss, TerminalRow } from './rowRender'
 import { createWebglPainter } from './webgl/webglPainter'
-import type { SelectionRange, TerminalPainter } from './webgl/painterTypes'
+import type {
+  PainterFrame,
+  PainterTheme,
+  SelectionRange,
+  TerminalPainter,
+} from './webgl/painterTypes'
 import {
   normalizeSelection,
   wordRangeAtCol,
@@ -594,12 +600,25 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // consumers derive their window via `computeStripLayout`.
   const [scrollPx, setScrollPx] = useState(0)
   // Current scroll position for handlers that must read it without
-  // re-binding per frame (scrollbar drag). Same mirror pattern as
-  // `phaseRef` / `snapshotRef`.
+  // re-binding per frame (scrollbar drag, the vsync scroll pump).
+  // The ref is AUTHORITATIVE and always LEADS state: every writer
+  // goes through commitScrollPx (ref first, then the state commit),
+  // and nothing copies state back into the ref. The old mirror
+  // effect did exactly that — when React commits lagged the wheel
+  // rAF it yanked the ref BACK to an older committed value, the
+  // next frame recomputed from the stale base, and fast scrolling
+  // visibly "jumped back" on BOTH painters.
   const scrollPxRef = useRef(0)
-  useEffect(() => {
-    scrollPxRef.current = scrollPx
-  }, [scrollPx])
+  const commitScrollPx = useCallback(
+    (next: number | ((px: number) => number)): number => {
+      const value =
+        typeof next === 'function' ? next(scrollPxRef.current) : next
+      scrollPxRef.current = value
+      setScrollPx(value)
+      return value
+    },
+    [],
+  )
 
   // ── rAF frame coalescing ──────────────────────────────────────
   // WS snapshot/delta messages queue here and apply once per
@@ -664,10 +683,41 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // inside the state updater (a StrictMode double-invoke would
     // re-apply deltas onto an already-merged base).
     let next: TermGridSnapshot | null = liveGridRef.current
+    // Scroll-anchoring input: rows appended below the view in this
+    // batch. Deltas carry the exact count (scrollbackAppended —
+    // immune to cap-trim); a full snapshot (including the k1 resync
+    // the daemon sends when our acks lag, i.e. exactly during fast
+    // scrolling) contributes its total-row growth.
+    const prevTotal =
+      (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
+    let appendedRows = 0
+    let sawSnapshot = false
     for (const f of pending) {
-      next = f.kind === 'snapshot' ? f.payload : mergeDelta(next, f.payload)
+      if (f.kind === 'snapshot') {
+        sawSnapshot = true
+        next = f.payload
+      } else {
+        appendedRows += f.payload.scrollbackAppended.length
+        next = mergeDelta(next, f.payload)
+      }
+    }
+    if (sawSnapshot) {
+      const nextTotal =
+        (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
+      appendedRows = Math.max(appendedRows, nextTotal - prevTotal)
     }
     liveGridRef.current = next
+    // SCROLL ANCHORING: pin the viewed content while scrolled up.
+    // Without this, every appended row shifted the bottom-anchored
+    // window ("text crawls while reading"), and a resync snapshot
+    // yanked it by the whole backlog — the "jumps like it's catching
+    // up" during fast scroll. scrollPx === 0 (at bottom) still
+    // follows live output; see anchorScrollPx.
+    if (appendedRows > 0 && scrollPxRef.current > 0) {
+      const ch = cellMetricsRef.current.height || 20
+      const sbLen = next?.scrollback.length ?? 0
+      commitScrollPx((px) => anchorScrollPx(px, appendedRows, sbLen, ch))
+    }
     // Resize hold, content half: a resize's clear-then-repaint gap can
     // arrive as a BLANK grid (an old daemon broadcasts the cleared
     // intermediate; a new daemon's settle timeout can still fire
@@ -2248,6 +2298,61 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       config.colors.selection.background,
     ],
   )
+  // ── Vsync scroll pump (LEARNINGS-webgl-scroll.md) ─────────────
+  // Scroll frames must paint at DISPLAY cadence, not React-commit
+  // cadence: the wheel rAF paints directly through these latest-value
+  // refs, and the layout effect below repaints on snapshot/theme/
+  // selection/metrics commits. `lastPaintedRef` dedupes the two paths
+  // (the post-scroll commit becomes a no-op) so it's exactly one
+  // paint per frame. Reset to force a repaint with unchanged inputs
+  // (new painter, new atlas/metrics).
+  const painterThemeRef = useRef(painterTheme)
+  painterThemeRef.current = painterTheme
+  const useWebglRef = useRef(useWebgl)
+  useWebglRef.current = useWebgl
+  const selectionVersionRef = useRef(selectionVersion)
+  selectionVersionRef.current = selectionVersion
+  const lastPaintedRef = useRef<{
+    snapshot: PainterFrame['snapshot'] | null
+    scrollPx: number
+    selectionVersion: number
+    theme: PainterTheme | null
+  }>({ snapshot: null, scrollPx: -1, selectionVersion: -1, theme: null })
+  // `snapOverride`: the layout effect passes its fresh state snapshot
+  // (snapshotRef syncs in a PASSIVE effect — stale during layout
+  // effects); the wheel rAF omits it (outside React, ref is current).
+  const paintWebglRef = useRef<
+    (scrollPxValue: number, snapOverride?: PainterFrame['snapshot'] | null) => void
+  >(() => {})
+  paintWebglRef.current = (
+    scrollPxValue: number,
+    snapOverride?: PainterFrame['snapshot'] | null,
+  ): void => {
+    const painter = painterRef.current
+    const snap = snapOverride ?? snapshotRef.current
+    const theme = painterThemeRef.current
+    if (!painter || !snap) return
+    if (!cellMetrics.width || !cellMetrics.height) return
+    const last = lastPaintedRef.current
+    if (
+      last.snapshot === snap &&
+      last.scrollPx === scrollPxValue &&
+      last.selectionVersion === selectionVersionRef.current &&
+      last.theme === theme
+    ) {
+      return
+    }
+    last.snapshot = snap
+    last.scrollPx = scrollPxValue
+    last.selectionVersion = selectionVersionRef.current
+    last.theme = theme
+    painter.render({
+      snapshot: snap,
+      scrollPx: scrollPxValue,
+      selection: webglSelectionRef.current,
+      theme,
+    })
+  }
   useLayoutEffect(() => {
     if (!useWebgl) return
     const canvas = webglCanvasRef.current
@@ -2260,6 +2365,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     })
     painter.mount(canvas)
     painterRef.current = painter
+    lastPaintedRef.current.snapshot = null
     return () => {
       painterRef.current = null
       painter.dispose()
@@ -2277,18 +2383,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       fontFamily: config.font.family,
       fontSize,
     })
+    // New atlas/device grid ⇒ the same frame inputs must repaint.
+    lastPaintedRef.current.snapshot = null
   }, [useWebgl, cellMetrics, config.font.family, fontSize, dpr])
   useLayoutEffect(() => {
     if (!useWebgl) return
-    const painter = painterRef.current
-    if (!painter || !snapshot) return
-    if (!cellMetrics.width || !cellMetrics.height) return
-    painter.render({
-      snapshot,
-      scrollPx,
-      selection: webglSelectionRef.current,
-      theme: painterTheme,
-    })
+    if (!snapshot) return
+    // Paint the REF position, not the committed `scrollPx` value:
+    // during a fast scroll this commit can lag the wheel rAF by a
+    // frame, and painting the older committed value snapped the
+    // canvas backwards ("jump back then catch up"). scrollPx stays
+    // in the dep array as the trigger; the ref supplies the truth.
+    paintWebglRef.current(scrollPxRef.current, snapshot)
   }, [useWebgl, snapshot, scrollPx, painterTheme, cellMetrics, selectionVersion])
 
   // S5 — subtle read-only hint. Latched when the daemon reports this
@@ -2832,7 +2938,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const natural = naturalTextEditingSequence(e)
       if (natural !== null) {
         e.preventDefault()
-        setScrollPx(0)
+        commitScrollPx(0)
         sendInput(natural)
         // Clear so the textarea never accumulates.
         if (shadowInputRef.current) shadowInputRef.current.value = ''
@@ -2841,14 +2947,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const seq = keyEventToSequence(e, 0)
       if (seq === null) return
       e.preventDefault()
-      setScrollPx(0)
+      commitScrollPx(0)
       sendInput(seq)
       if (shadowInputRef.current) shadowInputRef.current.value = ''
     }
     const onPaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData('text') ?? ''
       e.preventDefault()
-      setScrollPx(0)
+      commitScrollPx(0)
 
       // Finder's Cmd+C copies file refs via NSFilenamesPboardType,
       // which WKWebView doesn't expose through the web clipboard
@@ -2883,7 +2989,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (composingRef.current) return
       const text = el.value
       if (text.length === 0) return
-      setScrollPx(0)
+      commitScrollPx(0)
       sendInput(text)
       el.value = ''
     }
@@ -2944,7 +3050,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         sendInput('\x7f'.repeat(prevLen))
       }
       if (committed) {
-        setScrollPx(0)
+        commitScrollPx(0)
         sendInput(committed)
       }
       compositionLastLengthRef.current = 0
@@ -3431,7 +3537,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         const snap = snapshotRef.current
         const ch = cellMetricsRef.current.height || 20
         const scrollbackLen = snap?.scrollback.length ?? 0
-        setScrollPx((px) => clampScrollPx(px + dir * ch, scrollbackLen, ch))
+        commitScrollPx((px) => clampScrollPx(px + dir * ch, scrollbackLen, ch))
         updateFocus()
       }, 50)
     }
@@ -3974,22 +4080,26 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const scrollAccumRef = useRef(0)
   const scrollRafRef = useRef<number | null>(null)
   // Mouse-reporting (fullscreen TUI) wheel: accumulate + flush per
-  // animation frame, capped by a token bucket so a trackpad's momentum
-  // flood can't storm the PTY (or a long-distance K2 Connect link).
-  // The bucket keeps the ORIGINAL flood ceiling — 8 notches per 50ms —
-  // but lets notches leave smoothly each frame; the old single 50ms
-  // flush timer quantized TUI scrolling to 20Hz, which read as "locked
-  // at 20fps" inside claude/Ink surfaces.
+  // animation frame. NO time-window budget — the six-terminal survey
+  // (kitty/alacritty/ghostty/zed/iterm2/wezterm; see
+  // LEARNINGS-webgl-scroll.md addendum) found NOBODY rate-windows
+  // wheel forwarding: our old 8-per-50ms refill bucket stalled fling
+  // bursts and REPLAYED them after the gesture — the exact
+  // "scroll → freeze → jump to catch up" jitter in fullscreen TUIs.
+  // Shape now matches iTerm2: proportional presses per flush, hard
+  // per-flush cap of 32 ("prevent runaway redraws", PTYSession.m),
+  // all presses coalesced into ONE write, and overflow beyond the
+  // cap is DROPPED (keep only the sub-notch remainder) — a fling
+  // that outruns the TUI loses the excess instead of replaying it
+  // late. Direction reversals clear the accumulator (iTerm2's
+  // fast-turnaround), and sub-notch momentum tails emit nothing.
   const mouseWheelAccumRef = useRef(0)
   const mouseWheelRafRef = useRef<number | null>(null)
   const mouseWheelPosRef = useRef({ col: 1, row: 1 })
-  const notchWindowStartRef = useRef(0)
-  const notchBudgetRef = useRef(0)
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    const NOTCH_WINDOW_MS = 50
-    const NOTCHES_PER_WINDOW = 8
+    const MAX_NOTCHES_PER_FLUSH = 32
     // Higher = less sensitive: one SGR notch per ~this many
     // cell-heights of accumulated movement. Tune to taste.
     const CELLS_PER_NOTCH = 1.0
@@ -3997,11 +4107,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       mouseWheelRafRef.current = null
       const ch2 = cellMetrics.height
       if (ch2 <= 0) return
-      const now = performance.now()
-      if (now - notchWindowStartRef.current >= NOTCH_WINDOW_MS) {
-        notchWindowStartRef.current = now
-        notchBudgetRef.current = NOTCHES_PER_WINDOW
-      }
       const accum = mouseWheelAccumRef.current
       const notchPx = ch2 * CELLS_PER_NOTCH
       // Sub-notch remainder stays accumulated until more input arrives
@@ -4009,15 +4114,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // min-1-tick flush over-scrolled on every 50ms tail tick).
       let ticks = Math.floor(Math.abs(accum) / notchPx)
       if (ticks === 0) return
-      if (ticks > notchBudgetRef.current) ticks = notchBudgetRef.current
-      if (ticks === 0) {
-        // Window budget exhausted; keep the accumulation and re-check
-        // next frame (a fresh 50ms window refills the bucket).
-        mouseWheelRafRef.current = requestAnimationFrame(flushMouseWheelNotches)
-        return
+      if (ticks > MAX_NOTCHES_PER_FLUSH) {
+        ticks = MAX_NOTCHES_PER_FLUSH
+        // Drop the overflow, keep only the sub-notch remainder.
+        mouseWheelAccumRef.current =
+          Math.sign(accum) * (Math.abs(accum) % notchPx)
+      } else {
+        mouseWheelAccumRef.current = accum - Math.sign(accum) * ticks * notchPx
       }
-      notchBudgetRef.current -= ticks
-      mouseWheelAccumRef.current -= Math.sign(accum) * ticks * notchPx
       // SGR button: wheel-up = 64 (deltaY<0, toward older content),
       // wheel-down = 65.
       const btn = accum < 0 ? 64 : 65
@@ -4025,9 +4129,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const seq = `\x1b[<${btn};${c};${r}M`
       sendInput(seq.repeat(ticks))
       if (import.meta.env.DEV) scrollFlushCountRef.current++
-      if (Math.abs(mouseWheelAccumRef.current) >= notchPx) {
-        mouseWheelRafRef.current = requestAnimationFrame(flushMouseWheelNotches)
-      }
+      // Remainder is < notchPx by construction — no re-flush loop;
+      // the next wheel event schedules the next flush.
     }
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY === 0) return
@@ -4068,6 +4171,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
                 ? e.deltaY * ch2 * (snap?.rows ?? 24)
                 : e.deltaY
+          // Direction reversal clears the accumulator (iTerm2's
+          // fast-turnaround): the first counter-swipe responds
+          // immediately instead of unwinding the old remainder.
+          if (
+            mouseWheelAccumRef.current !== 0 &&
+            Math.sign(pixelDelta) !== Math.sign(mouseWheelAccumRef.current)
+          ) {
+            mouseWheelAccumRef.current = 0
+          }
           mouseWheelAccumRef.current += pixelDelta
           if (mouseWheelRafRef.current === null) {
             mouseWheelRafRef.current = requestAnimationFrame(
@@ -4103,7 +4215,17 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           const scrollbackLen = snapshotRef.current?.scrollback.length ?? 0
           if (import.meta.env.DEV) scrollFlushCountRef.current++
           // deltaY > 0 scrolls toward the bottom (scrollPx → 0).
-          setScrollPx((px) => clampScrollPx(px - deltaPx, scrollbackLen, cellH))
+          // Vsync scroll pump: compute the new position HERE (this
+          // rAF is display-aligned), commit it ref-first through
+          // commitScrollPx (consecutive rAFs accumulate off the ref
+          // even before React commits), and paint the WebGL frame
+          // directly — the paint never waits on React's scheduler,
+          // whose late commits were the scroll "hops"
+          // (LEARNINGS-webgl-scroll.md).
+          const nextPx = commitScrollPx((px) =>
+            clampScrollPx(px - deltaPx, scrollbackLen, cellH),
+          )
+          if (useWebglRef.current) paintWebglRef.current(nextPx)
         })
       }
     }
@@ -4136,7 +4258,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // functional update bails without a re-render on the common path.
   useEffect(() => {
     const scrollbackLen = snapshot?.scrollback.length ?? 0
-    setScrollPx((px) => clampScrollPx(px, scrollbackLen, cellHeightPx))
+    commitScrollPx((px) => clampScrollPx(px, scrollbackLen, cellHeightPx))
   }, [snapshot, cellHeightPx])
 
   // ── Overlay scrollbar ─────────────────────────────────────────
@@ -4216,7 +4338,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const grabFrac = onThumb ? yFrac - thumb.topFrac : thumb.heightFrac / 2
       const apply = (clientY: number) => {
         const topFrac = (clientY - rect.top) / rect.height - grabFrac
-        setScrollPx(
+        commitScrollPx(
           scrollPxFromThumbTopFrac(topFrac, thumb.heightFrac, scrollbackLen, ch),
         )
       }

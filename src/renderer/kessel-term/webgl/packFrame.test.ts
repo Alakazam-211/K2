@@ -3,8 +3,10 @@ import {
   FrameBuffers,
   GLYPH_FLOATS,
   packFrame,
+  prewarmRows,
   RowCache,
   RectList,
+  type PackInput,
 } from './packFrame'
 import type { PainterFrame } from './painterTypes'
 import type { WireCellRun } from '../gridWire'
@@ -380,5 +382,106 @@ describe('RowCache — identity damage test', () => {
     cache.get(r3, THEME) // evicts r2
     expect(cache.size).toBe(2)
     expect(cache.get(r1, THEME)).toBe(e1)
+  })
+})
+
+describe('prewarmRows — scroll-hop prewarm', () => {
+  // 6 scrollback + 2 grid rows = 8 total, viewport 2, cols 4.
+  function bigFrame(scrollPx: number): PainterFrame {
+    const sb = Array.from({ length: 6 }, (_, i) => [run(`s${i}`)])
+    const g = [[run('a')], [run('b')]]
+    return frame(g, sb, scrollPx)
+  }
+
+  function inputFor(f: PainterFrame, cache: RowCache): PackInput {
+    return {
+      frame: f,
+      cssCellH: 10,
+      deviceCellW: 10,
+      deviceCellH: 20,
+      dpr: 2,
+      cache,
+      buffers: new FrameBuffers(),
+      glyphs: stubGlyphs(),
+      decoThickness: 2,
+    }
+  }
+
+  it('warms rows on both sides of the window, nearest-first', () => {
+    const cache = new RowCache()
+    const f = bigFrame(30) // window rows 3..4 of 0..7
+    const input = inputFor(f, cache)
+    const packed = packFrame(input)
+    expect(packed.windowStart).toBe(3)
+    expect(cache.size).toBe(2) // the visible rows
+    const warmed = prewarmRows(input, packed, 2, Infinity)
+    expect(warmed).toBe(4) // rows 2,5 (d=1) + 1,6 (d=2)
+    expect(cache.size).toBe(6)
+  })
+
+  it('skips out-of-range rows at the buffer edges', () => {
+    const cache = new RowCache()
+    const f = bigFrame(0) // pinned to bottom: window rows 6..7
+    const input = inputFor(f, cache)
+    const packed = packFrame(input)
+    expect(packed.windowStart).toBe(6)
+    const warmed = prewarmRows(input, packed, 2, Infinity)
+    expect(warmed).toBe(2) // rows 5, 4 — nothing exists below 7
+    expect(cache.size).toBe(4)
+  })
+
+  it('stops at the time budget between distance steps', () => {
+    const cache = new RowCache()
+    const f = bigFrame(30)
+    const input = inputFor(f, cache)
+    const packed = packFrame(input)
+    let t = 0
+    const now = () => (t += 1.5)
+    const warmed = prewarmRows(input, packed, 24, 1, now)
+    expect(warmed).toBe(2) // one distance step, then budget hit
+    expect(cache.size).toBe(4)
+  })
+
+  it('warmed rows are cache hits for the next packed frame', () => {
+    const cache = new RowCache()
+    const f = bigFrame(30)
+    const input = inputFor(f, cache)
+    const packed = packFrame(input)
+    prewarmRows(input, packed, 2, Infinity)
+    const sizeAfterWarm = cache.size
+    // Scroll up one row: the newly revealed row 2 was prewarmed.
+    const scrolled = inputFor(bigFrame(40), cache)
+    scrolled.frame.snapshot.scrollback = f.snapshot.scrollback
+    scrolled.frame.snapshot.grid = f.snapshot.grid
+    packFrame(scrolled)
+    expect(cache.size).toBe(sizeAfterWarm) // no new expansions needed
+  })
+})
+
+describe('emoji slot overhang (a_geom.x plumbing)', () => {
+  it('packs slot.offsetX into float 0 of the glyph instance', () => {
+    const glyphs: GlyphSource = {
+      epoch: 0,
+      get(text) {
+        return {
+          texX: 1,
+          texY: 2,
+          w: 24, // wider than the 2-cell box (20) — emoji overhang
+          h: 20,
+          color: true,
+          offsetX: text === '✅' ? -2 : 0,
+        }
+      },
+    }
+    const f = frame([[run('✅', { cols: 2 })]], [], 0, 4)
+    const p = pack(f, new RowCache(), new FrameBuffers(), glyphs)
+    expect(p.glyphData[0]).toBe(-2) // a_geom.x — symmetric overhang
+    expect(p.glyphData[2]).toBe(24) // quad width = widened slot
+  })
+
+  it('slots without offsetX pack 0 (fixed-slot glyphs unchanged)', () => {
+    const f = frame([[run('A')]])
+    const p = pack(f)
+    expect(p.glyphData[0]).toBe(0)
   })
 })

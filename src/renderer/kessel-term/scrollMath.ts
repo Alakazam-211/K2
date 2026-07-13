@@ -148,3 +148,26 @@ export function scrollPxFromThumbTopFrac(
   const t = Math.min(range, Math.max(0, topFrac))
   return clampScrollPx((1 - t / range) * max, scrollbackLen, cellHeight)
 }
+
+/** Scroll anchoring: keep the viewed content stationary when rows
+ *  append BELOW it. `scrollPx` measures from the buffer BOTTOM, so
+ *  every appended row silently shifts the window down one row —
+ *  streaming output made a scrolled-up reader's text crawl, and a k1
+ *  resync snapshot (sent by the daemon exactly when acks lag, i.e.
+ *  during fast scrolling) yanked the view by the whole backlog at
+ *  once. Every terminal pins here (xterm's isUserScrolling, kitty's
+ *  scrolled_by). At the bottom (scrollPx === 0) the viewport keeps
+ *  following live output — that behavior is unchanged. */
+export function anchorScrollPx(
+  scrollPx: number,
+  appendedRows: number,
+  scrollbackLen: number,
+  cellHeight: number,
+): number {
+  if (scrollPx <= 0 || appendedRows <= 0) return scrollPx
+  return clampScrollPx(
+    scrollPx + appendedRows * cellHeight,
+    scrollbackLen,
+    cellHeight,
+  )
+}

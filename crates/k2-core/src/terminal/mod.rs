@@ -25,6 +25,10 @@ pub mod sandbox;
 // inherited launchd PATH) so agent CLIs in ~/.local/bin, homebrew,
 // nvm shims, etc. resolve by bare name instead of ENOENT.
 pub mod login_path;
+// UTF-8 locale defaulting for spawned children (launchd/systemd give
+// the daemon NO LANG/LC_*; locale-less `pbcopy` MacRoman-mangles
+// TUI-driven copies while the screen looks fine).
+pub mod locale_env;
 // Kessel grid snapshot + delta wire types + serializers
 // (Phase A2). Shared between the daemon's WS endpoint (A3) and
 // the Tauri thin client (A5). Generic over `EventListener` so

@@ -654,6 +654,14 @@ impl DaemonPtySession {
             .entry("TERM_PROGRAM".to_string())
             .or_insert_with(|| "K2".to_string());
 
+        // Locale: launchd/systemd hand the daemon NO LANG/LC_*, so
+        // children land in the C locale — under which `pbcopy`
+        // MacRoman-mangles UTF-8 (TUI copy-on-select puts `‚îå‚îÄ`
+        // mojibake on the pasteboard while the screen looks fine).
+        // Default a UTF-8 LANG the way real terminal emulators do;
+        // caller- or daemon-env-provided locales win.
+        crate::terminal::locale_env::ensure_utf8_locale(&mut child_env);
+
         // 0.40.34 browser-open shim: children that run `xdg-open <url>`
         // or honor `$BROWSER` must surface the URL in the CONNECTED K2
         // app (as an `open_url` session event) instead of launching a

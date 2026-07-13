@@ -62,6 +62,10 @@ pub const APPROVAL_EXPIRE_SECS: i64 = 7 * 86_400;
 /// `send --wait` poll cadence inside the held request (§11.1.4 —
 /// timeout bounds reuse the S4 wait constants).
 pub const DECISION_POLL_SECS: u64 = 2;
+/// Max horizon for `--at` / `--in` scheduling (30 days).
+pub const MAX_SCHEDULE_SECS: i64 = 30 * 86_400;
+/// Scheduled-send flusher tick (overridable via K2_MAIL_SCHEDULED_TICK_SECS).
+pub const DEFAULT_SCHEDULED_TICK_SECS: u64 = 15;
 
 // ── Errors (mapped onto the route layer's stable {code, hint}) ──────────
 
@@ -114,6 +118,38 @@ pub fn effective_gate(mode: Result<String, String>) -> Result<Gate, SendError> {
         Err(e) => Err(SendError::Engine(format!(
             "could not read the send-gating setting — refusing to send (fail-closed): {e}"
         ))),
+    }
+}
+
+/// Resolve the effective send gate for a workspace path via the
+/// sanctioned settings reader (fail-closed to `off` there; unrecognized
+/// stored values still surface as Engine via [`effective_gate`]).
+pub fn gate_for_path(project_path: &str) -> Result<Gate, SendError> {
+    effective_gate(Ok(
+        k2_core::workspace::settings::mail_agent_send_for_path(project_path),
+    ))
+}
+
+/// Linked/BYO SMTP send gate (hole #3 / E4). Same `mail_agent_send`
+/// setting as hosted: **off** refuses, **on** allows. **approval**
+/// refuses with a clear teaching — the Approvals queue + approve path
+/// submit via Stalwart (hosted only); linked SMTP has no approve→SMTP
+/// hand-off yet, so we never queue a message that cannot be approved.
+pub fn allow_linked_send(gate: Gate) -> Result<(), SendError> {
+    match gate {
+        Gate::On => Ok(()),
+        Gate::Off => Err(SendError::Gated(
+            "outbound email is disabled for this workspace. Your human can enable it in \
+             Settings → Email → Sending"
+                .to_string(),
+        )),
+        Gate::Approval => Err(SendError::Gated(
+            "outbound email requires approval for this workspace, but the approval queue \
+             only covers hosted K2 mailboxes — linked/BYO send needs mode 'on'. Your human \
+             can set Sending to 'on' in Settings → Email → Sending, or send from a hosted \
+             address"
+                .to_string(),
+        )),
     }
 }
 
@@ -214,6 +250,9 @@ pub struct NewOutbound<'a> {
     /// that rode this send. Stored as a compact JSON array of strings in
     /// `attachments_ref`; empty leaves the column NULL.
     pub attachment_names: &'a [String],
+    /// Unix seconds when the message may leave. None = immediate.
+    /// Rate limits apply at enqueue time.
+    pub send_after: Option<i64>,
     pub now: i64,
 }
 
@@ -248,7 +287,8 @@ pub trait OutboundStore {
 
 const OUTBOUND_COLS: &str = "id, owner_project_id, agent_name, from_address, to_json, \
                              cc_json, subject, body_ref, attachments_ref, status, \
-                             decided_by, note, created_at, updated_at, decided_at, sent_at";
+                             decided_by, note, created_at, updated_at, decided_at, sent_at, \
+                             send_after";
 
 fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
     Ok(MailOutbound {
@@ -268,6 +308,7 @@ fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
         updated_at: r.get(13)?,
         decided_at: r.get(14)?,
         sent_at: r.get(15)?,
+        send_after: r.get(16)?,
     })
 }
 
@@ -363,8 +404,8 @@ impl OutboundStore for DbOutboundStore {
             conn.execute(
                 "INSERT INTO mail_outbound (id, owner_project_id, agent_name, from_address, \
                  to_json, cc_json, subject, body_ref, attachments_ref, status, decided_by, \
-                 decided_at, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+                 decided_at, created_at, updated_at, send_after) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14)",
                 rusqlite::params![
                     id,
                     new.owner_project_id,
@@ -379,6 +420,7 @@ impl OutboundStore for DbOutboundStore {
                     new.decided_by,
                     decided_at,
                     new.now,
+                    new.send_after,
                 ],
             )
         };
@@ -431,7 +473,8 @@ impl OutboundStore for DbOutboundStore {
             "UPDATE mail_outbound SET status = ?2, \
              decided_by = COALESCE(?3, decided_by), \
              note = COALESCE(?4, note), \
-             decided_at = CASE WHEN ?2 IN ('approved','denied') THEN ?5 ELSE decided_at END, \
+             decided_at = CASE WHEN ?2 IN ('approved','denied','scheduled') \
+                               AND ?3 IS NOT NULL THEN ?5 ELSE decided_at END, \
              sent_at = CASE WHEN ?2 = 'sent' THEN ?5 ELSE sent_at END, \
              updated_at = ?5 \
              WHERE id = ?1 AND status = ?6",
@@ -475,14 +518,15 @@ impl OutboundStore for DbOutboundStore {
 }
 
 /// Record a SUCCESSFUL linked-SMTP submission in the outbox (issue
-/// #31.5). Unlike hosted sends, linked send is ungated and goes out
-/// immediately — so the row is born via the same `approved → sent`
-/// lifecycle a hosted send ends on, leaving it `sent` (wire:
-/// `submitted` — accepted-for-delivery, NEVER "delivered", pre-mortem
-/// #9) with `sent_at`/`updated_at` stamped exactly like a hosted row.
-/// `decided_by` is `None` (no human decision — it's ungated). Returns
-/// the new `out_…` id. The caller treats a failure as non-fatal: the
-/// mail already left, this is only the audit trail.
+/// #31.5). Linked send is gated by [`allow_linked_send`] (`on` only)
+/// before SMTP; once the provider accepts, the row is born via the
+/// same `approved → sent` lifecycle a hosted send ends on, leaving it
+/// `sent` (wire: `submitted` — accepted-for-delivery, NEVER
+/// "delivered", pre-mortem #9) with `sent_at`/`updated_at` stamped
+/// exactly like a hosted row. `decided_by` is `None` (mode was `on` —
+/// policy auto-approved at the gate, no human decision). Returns the
+/// new `out_…` id. The caller treats a failure as non-fatal: the mail
+/// already left, this is only the audit trail.
 pub fn record_linked_submitted(
     store: &dyn OutboundStore,
     owner_project_id: &str,
@@ -498,6 +542,7 @@ pub fn record_linked_submitted(
         status: "approved",
         decided_by: None,
         attachment_names,
+        send_after: None,
         now,
     })?;
     // Stamp it accepted-for-delivery. A failed transition leaves a
@@ -592,6 +637,7 @@ pub fn wire_status(db_status: &str) -> &'static str {
         "denied" => "rejected",
         "sent" => "submitted",
         "failed" => "failed",
+        "scheduled" => "scheduled",
         _ => "unknown",
     }
 }
@@ -604,6 +650,7 @@ pub fn status_note(db_status: &str) -> &'static str {
         "denied" => "denied by your human — see the note",
         "sent" => "accepted-for-delivery (final delivery is the receiving server's business)",
         "failed" => "submission failed — see the note",
+        "scheduled" => "scheduled — waiting for send_after before leaving the box",
         _ => "unknown state",
     }
 }
@@ -629,6 +676,7 @@ pub fn outbound_json(row: &MailOutbound) -> serde_json::Value {
         "createdAt": row.created_at,
         "decidedAt": row.decided_at,
         "sentAt": row.sent_at,
+        "sendAfter": row.send_after,
     });
     // Attachment trail (issue #31.5 follow-up): the outbox row records the
     // filenames that rode a send so an agent can verify its own attachment
@@ -814,23 +862,25 @@ pub struct OutboundRequest<'a> {
     /// The From address's backend mailbox handle (submission scope).
     pub account_id: &'a str,
     pub message: &'a OutboundMessage,
+    /// Optional future unix seconds; None = send as soon as policy allows.
+    pub send_after: Option<i64>,
 }
 
 /// What the gate decided + did.
 #[derive(Debug)]
 pub enum SendOutcome {
     /// Approval mode: row is pending; NOTHING left the box.
-    Queued { id: String },
+    Queued { id: String, send_after: Option<i64> },
+    /// On mode + future send_after: row is `scheduled`; NOTHING left yet.
+    Scheduled { id: String, send_after: i64 },
     /// On mode: audited, handed to Stalwart, accepted-for-delivery.
     Submitted { id: String },
     /// On mode: audited, submission failed — row is `failed`.
     SubmitFailed { id: String, error: String },
 }
 
-/// The §8.4 pipeline tail: rate limits → audit row → (queue | submit).
-/// INVARIANTS (tested): `Off` never writes and never submits; a failed
-/// insert never submits (no row, no send); `Approval` never touches
-/// `backend`; `On` without a backend refuses (fail-closed).
+/// Rate limits → audit row → (queue | schedule | submit).
+/// Rate limits apply at *enqueue*; spacing is agent-driven via send_after.
 pub fn gate_and_dispatch(
     store: &dyn OutboundStore,
     backend: Option<&dyn SubmitBackend>,
@@ -839,6 +889,7 @@ pub fn gate_and_dispatch(
     now: i64,
 ) -> Result<SendOutcome, SendError> {
     check_rate_limits(store, &req.message.from, now)?;
+    let future_after = req.send_after.filter(|t| *t > now);
     match gate {
         Gate::Off => Err(SendError::Gated(
             "outbound email is disabled for this workspace. Your human can enable it in \
@@ -854,18 +905,39 @@ pub fn gate_and_dispatch(
                     status: "pending",
                     decided_by: None,
                     attachment_names: &[],
+                    send_after: future_after.or(req.send_after),
                     now,
                 })
                 .map_err(SendError::Engine)?;
-            Ok(SendOutcome::Queued { id })
+            Ok(SendOutcome::Queued {
+                id,
+                send_after: future_after.or(req.send_after),
+            })
         }
         Gate::On => {
+            if let Some(after) = future_after {
+                let id = store
+                    .insert(&NewOutbound {
+                        owner_project_id: req.project_id,
+                        agent_name: req.agent_name,
+                        message: req.message,
+                        status: "scheduled",
+                        decided_by: Some("policy:agent-send-on"),
+                        attachment_names: &[],
+                        send_after: Some(after),
+                        now,
+                    })
+                    .map_err(SendError::Engine)?;
+                return Ok(SendOutcome::Scheduled {
+                    id,
+                    send_after: after,
+                });
+            }
             let backend = backend.ok_or_else(|| {
                 SendError::Engine(
                     "no submit backend available — refusing to send (fail-closed)".to_string(),
                 )
             })?;
-            // Audit row FIRST (no row, no send), decided by policy.
             let id = store
                 .insert(&NewOutbound {
                     owner_project_id: req.project_id,
@@ -874,14 +946,13 @@ pub fn gate_and_dispatch(
                     status: "approved",
                     decided_by: Some("policy:agent-send-on"),
                     attachment_names: &[],
+                    send_after: None,
                     now,
                 })
                 .map_err(SendError::Engine)?;
             match backend.submit(req.account_id, req.message) {
                 Ok(()) => {
                     if let Err(e) = store.transition(&id, "approved", "sent", None, None, now) {
-                        // The message IS accepted — a bookkeeping miss
-                        // must not double-send; log and report success.
                         k2_core::log_debug!("[mail/send] sent-mark failed for {id}: {e}");
                     }
                     Ok(SendOutcome::Submitted { id })
@@ -902,18 +973,13 @@ pub fn gate_and_dispatch(
 pub enum ApproveOutcome {
     /// approved → handed to Stalwart → `sent`.
     Submitted,
-    /// approved, but the hand-off failed → row is `failed` with the
-    /// reason appended to its note. NOTHING left the box.
+    /// approved, but the hand-off failed → row is `failed`.
     FailedToSubmit(String),
+    /// Human approved; send_after still future → now `scheduled`.
+    Scheduled { send_after: i64 },
 }
 
-/// Approve one pending outbound and submit it. The transition is
-/// ATOMIC (`pending → approved`); any other current state refuses
-/// without submitting (pre-mortem #11: an unknown/ambiguous approval
-/// state never sends). `backend` arrives as a Result so an engine that
-/// can't even be constructed marks the row failed rather than leaving
-/// it silently approved-forever (no background retrier exists —
-/// pre-mortem #9).
+/// Approve one pending outbound and submit it (or hold as scheduled).
 pub fn approve_and_submit(
     store: &dyn OutboundStore,
     backend: Result<&dyn SubmitBackend, String>,
@@ -929,6 +995,20 @@ pub fn approve_and_submit(
     let Some(row) = row else {
         return Err(SendError::NotFound(format!("no outbound message '{id}'")));
     };
+    if let Some(after) = row.send_after.filter(|t| *t > now) {
+        let flipped = store
+            .transition(id, "pending", "scheduled", Some(decided_by), note, now)
+            .map_err(|e| {
+                SendError::Engine(format!("approval transition failed — nothing sent: {e}"))
+            })?;
+        if !flipped {
+            return Err(SendError::Conflict(format!(
+                "outbound '{id}' is already {} — approve applies to pending messages only",
+                wire_status(&row.status)
+            )));
+        }
+        return Ok(ApproveOutcome::Scheduled { send_after: after });
+    }
     let flipped = store
         .transition(id, "pending", "approved", Some(decided_by), note, now)
         .map_err(|e| {
@@ -967,6 +1047,7 @@ pub fn approve_and_submit(
         Err(e) => fail(store, &e),
     }
 }
+
 
 /// Deny one pending outbound (atomic; the note flows back to the
 /// agent's outbox, §8.4).
@@ -1159,7 +1240,7 @@ mod tests {
         fail_insert: bool,
         fail_count: bool,
         counts: (u32, u32), // (hour, day)
-        inserts: Mutex<Vec<(String, Option<String>)>>, // (status, decided_by)
+        inserts: Mutex<Vec<(String, Option<String>, Option<i64>)>>, // (status, decided_by, send_after)
         insert_attachments: Mutex<Vec<Vec<String>>>,    // attachment_names per insert
         transitions: Mutex<Vec<(String, String, String)>>,
         transition_result: Option<bool>, // None = Err
@@ -1172,10 +1253,11 @@ mod tests {
             if self.fail_insert {
                 return Err("db unreachable".to_string());
             }
-            self.inserts
-                .lock()
-                .unwrap()
-                .push((new.status.to_string(), new.decided_by.map(String::from)));
+            self.inserts.lock().unwrap().push((
+                new.status.to_string(),
+                new.decided_by.map(String::from),
+                new.send_after,
+            ));
             self.insert_attachments
                 .lock()
                 .unwrap()
@@ -1246,6 +1328,17 @@ mod tests {
             agent_name: "bot",
             account_id: "acc-1",
             message: m,
+            send_after: None,
+        }
+    }
+
+    fn req_at(m: &OutboundMessage, send_after: i64) -> OutboundRequest<'_> {
+        OutboundRequest {
+            project_id: "P1",
+            agent_name: "bot",
+            account_id: "acc-1",
+            message: m,
+            send_after: Some(send_after),
         }
     }
 
@@ -1262,6 +1355,36 @@ mod tests {
         // An AMBIGUOUS stored value is an error too.
         let err = effective_gate(Ok("banana".into())).expect_err("must refuse");
         assert!(matches!(&err, SendError::Engine(h) if h.contains("banana")), "{err:?}");
+    }
+
+    /// E4: linked/BYO SMTP — off blocks, on allows, approval refuses
+    /// with a teaching (hosted-only queue) rather than queueing a
+    /// message that approve cannot SMTP-submit.
+    #[test]
+    fn linked_send_gate_off_blocks_on_allows_approval_refuses_with_teaching() {
+        assert!(allow_linked_send(Gate::On).is_ok());
+
+        let err = allow_linked_send(Gate::Off).expect_err("off must block");
+        match err {
+            SendError::Gated(h) => {
+                assert!(h.contains("disabled"), "{h}");
+                assert!(h.contains("Settings → Email → Sending"), "{h}");
+            }
+            other => panic!("expected Gated, got {other:?}"),
+        }
+
+        let err = allow_linked_send(Gate::Approval).expect_err("approval must refuse linked");
+        match err {
+            SendError::Gated(h) => {
+                assert!(h.contains("approval"), "{h}");
+                assert!(h.contains("hosted"), "{h}");
+                assert!(
+                    h.contains("linked") || h.contains("BYO") || h.contains("'on'"),
+                    "{h}"
+                );
+            }
+            other => panic!("expected Gated, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1285,7 +1408,7 @@ mod tests {
             .expect("queued");
         assert!(matches!(out, SendOutcome::Queued { .. }), "{out:?}");
         let inserts = store.inserts.lock().unwrap();
-        assert_eq!(inserts.as_slice(), &[("pending".to_string(), None)]);
+        assert_eq!(inserts.as_slice(), &[("pending".to_string(), None, None)]);
     }
 
     /// #31.5 follow-up: a linked send threads its attachment filenames
@@ -1340,6 +1463,7 @@ mod tests {
             updated_at: 1,
             decided_at: None,
             sent_at: Some(1),
+            send_after: None,
         };
         let v = outbound_json(&base);
         assert_eq!(v["attachments"]["count"], 2);
@@ -1409,7 +1533,7 @@ mod tests {
         // approved → sent.
         assert_eq!(
             store.inserts.lock().unwrap().as_slice(),
-            &[("approved".to_string(), Some("policy:agent-send-on".to_string()))]
+            &[("approved".to_string(), Some("policy:agent-send-on".to_string()), None)]
         );
         assert_eq!(
             store.transitions.lock().unwrap().as_slice(),
@@ -1497,6 +1621,7 @@ mod tests {
             updated_at: 1_000_000,
             decided_at: None,
             sent_at: None,
+            send_after: None,
         }
     }
 
@@ -1827,6 +1952,7 @@ mod tests {
                 status: "pending",
                 decided_by: None,
                 attachment_names: &[],
+                send_after: None,
                 now: 1_000_000,
             })
             .expect("insert");
@@ -1897,6 +2023,7 @@ mod tests {
                 status: "pending",
                 decided_by: None,
                 attachment_names: &[],
+                send_after: None,
                 now: now - APPROVAL_EXPIRE_SECS - 10,
             })
             .expect("insert old");
@@ -1908,6 +2035,7 @@ mod tests {
                 status: "pending",
                 decided_by: None,
                 attachment_names: &[],
+                send_after: None,
                 now: now - 100,
             })
             .expect("insert fresh");
@@ -1923,6 +2051,62 @@ mod tests {
         assert_eq!(fresh_row.status, "pending", "fresh items stay queued");
         cleanup_rows(&project);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+
+    #[test]
+    fn on_mode_with_future_send_after_inserts_scheduled_not_submitted() {
+        let store = FakeStore {
+            transition_result: Some(true),
+            ..Default::default()
+        };
+        let submit = FakeSubmit::default();
+        let m = msg();
+        let now = 1_000_000i64;
+        let after = now + 3_600;
+        let out = gate_and_dispatch(&store, Some(&submit), Gate::On, &req_at(&m, after), now)
+            .expect("scheduled");
+        match out {
+            SendOutcome::Scheduled { send_after, .. } => assert_eq!(send_after, after),
+            other => panic!("expected Scheduled, got {other:?}"),
+        }
+        assert_eq!(submit.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            store.inserts.lock().unwrap().as_slice(),
+            &[(
+                "scheduled".to_string(),
+                Some("policy:agent-send-on".to_string()),
+                Some(after)
+            )]
+        );
+    }
+
+    #[test]
+    fn approval_with_send_after_then_approve_schedules() {
+        let m = msg();
+        let now = 1_000_000i64;
+        let after = now + 7_200;
+        let store = FakeStore {
+            transition_result: Some(true),
+            ..Default::default()
+        };
+        let out = gate_and_dispatch(&store, None, Gate::Approval, &req_at(&m, after), now)
+            .expect("queued");
+        assert!(matches!(out, SendOutcome::Queued { send_after: Some(t), .. } if t == after));
+
+        let mut pending = pending_row("out_sched");
+        pending.send_after = Some(after);
+        let store = FakeStore {
+            row: Some(pending),
+            transition_result: Some(true),
+            ..Default::default()
+        };
+        let submit = FakeSubmit::default();
+        let mut acct = |_from: &str| Ok("acc-1".to_string());
+        let out = approve_and_submit(&store, Ok(&submit), &mut acct, "out_sched", "owner", None, now + 10)
+            .expect("ok");
+        assert_eq!(out, ApproveOutcome::Scheduled { send_after: after });
+        assert_eq!(submit.calls.load(Ordering::SeqCst), 0);
     }
 
     // ── domain send-mode / relay validation (shared DB seeds) ──

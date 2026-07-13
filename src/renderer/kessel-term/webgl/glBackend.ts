@@ -17,6 +17,11 @@ export interface GlyphDrawUniforms {
   scrollY: number
   texW: number
   texH: number
+  /** Coverage-gamma exponent for tinted glyphs (text-weight tuning,
+   *  the "chonky text" fix): AA edge coverage is raised to this
+   *  power, thinning (>1) or fattening (<1) glyph edges without
+   *  touching fully-covered pixels. 1 = raw atlas coverage. */
+  textGamma: number
 }
 
 export interface PainterBackend {
@@ -99,11 +104,18 @@ void main() {
 
 // Monochrome glyphs: the white atlas sample is a coverage mask —
 // tint with the per-instance fg (AA fringes tint with the glyph,
-// never halo). Color glyphs (emoji): sample directly, fg alpha still
-// applies (dim emoji).
+// never halo). Coverage is raised to u_gamma before tinting: macOS
+// rasterizes Canvas2D text with dilated ("smoothed") stems while the
+// DOM strip renders -webkit-font-smoothing:antialiased, so raw atlas
+// coverage reads visibly bolder than the DOM at the same font —
+// u_gamma > 1 thins the AA edges back (pow leaves solid pixels and
+// blank pixels alone; shades ░▒▓ shift slightly, acceptably). Color
+// glyphs (emoji): sample directly, fg alpha still applies (dim
+// emoji), no gamma (their alpha is content, not edge coverage).
 const GLYPH_FS = `#version 300 es
 precision highp float;
 uniform sampler2D u_atlas;
+uniform float u_gamma;
 in vec2 v_uv;
 in vec4 v_color;
 flat in float v_flags;
@@ -113,7 +125,7 @@ void main() {
   if (v_flags > 0.5) {
     outColor = vec4(s.rgb, s.a * v_color.a);
   } else {
-    outColor = vec4(v_color.rgb, v_color.a * s.a);
+    outColor = vec4(v_color.rgb, v_color.a * pow(s.a, u_gamma));
   }
 }`
 
@@ -171,6 +183,12 @@ export function createWebgl2Backend(
     depth: false,
     stencil: false,
     preserveDrawingBuffer: false,
+    // Shorter input-to-photon present path where honored (Chromium/
+    // WebView2 desync the canvas from the compositor; WebKit ignores
+    // it). Every visible cell redraws each frame, so neither hint
+    // risks stale content.
+    desynchronized: true,
+    powerPreference: 'high-performance',
   }) as WebGL2RenderingContext | null
   if (!gl) return null
 
@@ -186,6 +204,7 @@ export function createWebgl2Backend(
   const uGlyphScrollY = gl.getUniformLocation(glyphProgram, 'u_scrollY')
   const uGlyphTexSize = gl.getUniformLocation(glyphProgram, 'u_texSize')
   const uGlyphAtlas = gl.getUniformLocation(glyphProgram, 'u_atlas')
+  const uGlyphGamma = gl.getUniformLocation(glyphProgram, 'u_gamma')
 
   // Shared unit quad (TRIANGLE_STRIP): (0,0)(1,0)(0,1)(1,1).
   const unitQuad = gl.createBuffer()
@@ -298,6 +317,7 @@ export function createWebgl2Backend(
       gl.uniform1f(uGlyphScrollY, u.scrollY)
       gl.uniform2f(uGlyphTexSize, u.texW, u.texH)
       gl.uniform1i(uGlyphAtlas, 0)
+      gl.uniform1f(uGlyphGamma, u.textGamma)
       gl.activeTexture(gl.TEXTURE0)
       gl.bindTexture(gl.TEXTURE_2D, atlasTexture)
       gl.bindVertexArray(glyphVao)

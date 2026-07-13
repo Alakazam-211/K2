@@ -369,6 +369,10 @@ impl TerminalManager {
         pty_options.env.insert("TERM_PROGRAM".to_string(), "K2".to_string());
         pty_options.env.insert("COLORTERM".to_string(), "truecolor".to_string());
         pty_options.env.insert("PROMPT_EOL_MARK".to_string(), String::new());
+        // Locale: same defaulting as the v2 path (daemon_pty.rs) — a
+        // launchd/systemd daemon has no LANG/LC_*, and locale-less
+        // children MacRoman-mangle UTF-8 through `pbcopy`.
+        crate::terminal::locale_env::ensure_utf8_locale(&mut pty_options.env);
 
         // Agent lifecycle hook env vars
         let hook_port = crate::hook_config::get_port();

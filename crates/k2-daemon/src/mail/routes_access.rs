@@ -1,18 +1,21 @@
 //! `/cli/mail/inboxes` + `/cli/mail/access/*` — the S11 unified ACCESS
 //! surface over BOTH provisioning sources (PRD §17.5).
 //!
-//! - `GET /cli/mail/inboxes` — the unified catalog. `?project=<ws>` =
-//!   the AGENT view (only inboxes that workspace can access, each with
-//!   `yourLevel`); no `project` = the OWNER/admin view (ALL inboxes with
-//!   full primary + grants). The owner view is owner-or-admin-gated in
-//!   the dispatcher's dedicated `inboxes` clause (the agent view rides a
-//!   plain workspace token). SQLite-only — no engine dial.
-//! - `POST /cli/mail/access/grant|revoke|set-primary|set-level` — the
+//! - `GET /cli/mail/inboxes` — the unified catalog. **Agent view**: viewer
+//!   identity from Wave 0 `resolve_caller_params` (stamped scoped principal
+//!   / proven `workspace_uuid` wins over client `project=`). Only inboxes
+//!   that workspace can access, each with `yourLevel`. **Owner/admin view**:
+//!   no principal and no project claim → ALL inboxes with full primary +
+//!   grants; owner-or-admin-gated in the dispatcher's dedicated `inboxes`
+//!   clause (dual-auth: `token_or_scoped_hook_auth` + stamp). SQLite-only —
+//!   no engine dial.
+//! - `POST /cli/mail/access/grant|revoke|set-primary|set-level|set-manage` —
 //!   PRIMARY/owner MANAGEMENT surface (owner-or-admin-gated via
-//!   `is_owner_level_mutation`'s `/cli/mail/access/` prefix). These act
-//!   BY ADDRESS across hosted + linked; the ops layer resolves which
-//!   provisioning row the address names, accepts 'send' on either source
-//!   (§17.5 — linked send is the SMTP opt-in), and never touches
+//!   `is_owner_level_mutation`'s `/cli/mail/access/` prefix; also on
+//!   `is_agent_verb` DENY_PREFIXES so scoped agents cannot self-grant).
+//!   These act BY ADDRESS across hosted + linked; the ops layer resolves
+//!   which provisioning row the address names, accepts 'send' on either
+//!   source (§17.5 — linked send is the SMTP opt-in), and never touches
 //!   credentials.
 //!
 //! Masking: these are the primary's own surface (unmasked not_found with
@@ -65,19 +68,33 @@ fn resolve_project(project: &str) -> Result<String, CliResponse> {
 
 // ── GET /cli/mail/inboxes ───────────────────────────────────────────────
 
-/// The unified inbox catalog. `?project=<ws>` → agent view (only what
-/// that workspace can access, with `yourLevel`); none → owner view
-/// (ALL, full primary + grants — owner gate in the dispatcher).
+/// The unified inbox catalog.
+///
+/// * **Agent view** — a scoped principal is stamped / request-scoped, or
+///   an owner-token residual supplies `project=`. Viewer is resolved via
+///   [`crate::mail::identity::resolve_caller_params`] so a passport's
+///   proven `workspace_uuid` always wins over a spoofed `project=` claim.
+/// * **Owner view** — no principal and no project claim → ALL inboxes
+///   (owner-or-admin gate lives in the dispatcher).
 pub fn handle_inboxes(params: &HashMap<String, String>) -> CliResponse {
-    match params.get("project").map(String::as_str).map(str::trim).filter(|s| !s.is_empty()) {
-        Some(project) => {
-            let project_id = match resolve_project(project) {
-                Ok(id) => id,
-                Err(resp) => return resp,
-            };
-            ok_json(access::catalog_json(Some(&project_id)))
+    match crate::mail::identity::resolve_caller_params(params) {
+        Ok((_path, project_id)) => ok_json(access::catalog_json(Some(&project_id))),
+        Err(resp) => {
+            // Missing identity → owner catalog. Any other resolve error
+            // (unknown claim, unresolvable principal) surfaces as-is so
+            // agents never fall open into the all-inboxes view.
+            let no_identity = crate::caller_workspace::principal_from_params(params).is_none()
+                && params
+                    .get("project")
+                    .or_else(|| params.get("project_path"))
+                    .map(|s| s.trim().is_empty())
+                    .unwrap_or(true);
+            if no_identity {
+                ok_json(access::catalog_json(None))
+            } else {
+                resp
+            }
         }
-        None => ok_json(access::catalog_json(None)),
     }
 }
 
@@ -92,7 +109,7 @@ struct GrantBody {
 }
 
 /// POST `/cli/mail/access/grant` — Primary/owner: grant a workspace
-/// read|draft|send access to any inbox (upsert). 'send' works on hosted (governed) and linked (SMTP, ungated);
+/// read|draft|send access to any inbox (upsert). 'send' works on hosted (governed) and linked (SMTP + same mail_agent_send gate, E4);
 /// granting the PRIMARY teaches.
 pub fn handle_grant(body: &[u8]) -> CliResponse {
     let b: GrantBody = match serde_json::from_slice(body) {
@@ -411,6 +428,63 @@ mod tests {
 
         cleanup(&owner_id);
         cleanup(&grantee_id);
+    }
+
+    /// E1: stamped principal wins over a spoofed `project=` claim for the
+    /// agent catalog view (passport identity, never raw project=).
+    #[test]
+    fn inboxes_agent_view_uses_proven_principal_not_spoofed_project() {
+        let (aname, apath) = unique("prinA");
+        let a_id = insert_project(&aname, &apath);
+        let (bname, bpath) = unique("prinB");
+        let b_id = insert_project(&bname, &bpath);
+        let addr_a = format!("a-{}@acc.example", &a_id[..8]);
+        let addr_b = format!("b-{}@acc.example", &b_id[..8]);
+        seed_hosted(&a_id, &addr_a);
+        seed_hosted(&b_id, &addr_b);
+
+        // Grant B read on A's inbox so a B-viewer would see addr_a if spoof worked.
+        // Principal is A; spoofed project= points at B — catalog must stay A's.
+        let mut params = HashMap::new();
+        params.insert(
+            crate::caller_workspace::PRINCIPAL_BOUND_KEY.to_string(),
+            "1".to_string(),
+        );
+        params.insert("project_id".to_string(), a_id.clone());
+        params.insert("from".to_string(), "agent-A".to_string());
+        // Hostile claim: pretend to be workspace B.
+        params.insert("project".to_string(), bpath.clone());
+
+        let mine = body_json(&handle_inboxes(&params));
+        let rows = mine["inboxes"].as_array().expect("inboxes array");
+        assert!(
+            rows.iter().any(|i| i["address"] == addr_a.as_str()),
+            "principal A must see its own inbox: {}",
+            mine
+        );
+        assert!(
+            !rows.iter().any(|i| i["address"] == addr_b.as_str()),
+            "principal A must NOT see B's inbox via spoofed project=: {}",
+            mine
+        );
+        let row = rows
+            .iter()
+            .find(|i| i["address"] == addr_a.as_str())
+            .expect("A's row");
+        assert_eq!(row["yourLevel"], "send", "primary of A has send: {}", mine);
+
+        // No identity → owner catalog (dispatcher still gates owner-or-admin).
+        let all = body_json(&handle_inboxes(&HashMap::new()));
+        let all_rows = all["inboxes"].as_array().expect("owner inboxes");
+        assert!(
+            all_rows.iter().any(|i| i["address"] == addr_a.as_str())
+                && all_rows.iter().any(|i| i["address"] == addr_b.as_str()),
+            "owner view lists both: {}",
+            all
+        );
+
+        cleanup(&a_id);
+        cleanup(&b_id);
     }
 
     #[test]

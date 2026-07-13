@@ -9,7 +9,7 @@
 # either layout (`.k2/` preferred, `.k2so/` fallback) via `_ws_dot_dir()`, so
 # agents should read/write `<workspace>/.k2/...` going forward.
 
-K2_CLI_VERSION="0.40.44"
+K2_CLI_VERSION="0.40.45-dev"
 
 set -euo pipefail
 
@@ -351,9 +351,13 @@ cli_post_json_uds() {
 _uds_eligible() {
     case "$1" in
         /cli/workspace/msg|/cli/awareness/publish) return 0 ;;
+        # C2: peer-gated live terminal peek (k2 read <ws>).
+        /cli/terminal/read) return 0 ;;
         /cli/inbox/*|/cli/review-checklist/*) return 0 ;;
         # DNS K1 — cell_server serves /cli/dns/* POSTs + is_agent_verb GETs.
         /cli/dns/*) return 0 ;;
+        # C1 — connections list/add/remove (mutate toggle-gated server-side).
+        /cli/connections) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -2581,20 +2585,35 @@ cmd_read() {
     fi
     # Prefer python to unwrap {"lines":[...]} into one line per row and
     # surface daemon {"error":...} to stderr with a non-zero exit (so
-    # agents scripting `k2 read` can detect failure). Fall back to the
-    # raw daemon JSON only when python3 is genuinely unavailable.
+    # agents scripting `k2 read` can detect failure). C2: not_connected /
+    # gated / forbidden → exit 3 with mail/dns teaching shape.
+    # Fall back to the raw daemon JSON only when python3 is genuinely
+    # unavailable.
     if command -v python3 >/dev/null 2>&1; then
-        cli_request "/cli/terminal/read" "$query" | python3 -c "
+        # Prefer UDS+scoped when available (C2 peer gate sees principal).
+        cli_send cli_request "/cli/terminal/read" "$query" | python3 -c "
 import json, sys
-data = json.loads(sys.stdin.read())
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.stderr.write(raw[:200] + '\n')
+    sys.exit(1)
 if isinstance(data, dict) and 'error' in data:
-    sys.stderr.write(str(data['error']) + '\n')
+    err = data['error']
+    if isinstance(err, dict):
+        code = err.get('code') or 'error'
+        hint = err.get('hint') or code
+        sys.stderr.write(json.dumps({'error': {'code': code, 'hint': hint}},
+                                    ensure_ascii=False, separators=(',', ':')) + '\n')
+        sys.exit(3 if code in ('not_connected', 'gated', 'forbidden') else 1)
+    sys.stderr.write(str(err) + '\n')
     sys.exit(1)
 for line in data.get('lines', []):
     print(line)
 "
     else
-        cli_request "/cli/terminal/read" "$query"
+        cli_send cli_request "/cli/terminal/read" "$query"
     fi
 }
 
@@ -3993,15 +4012,34 @@ try:
 except Exception:
     pass' 2>/dev/null
 
-    # Exit code mirrors the response's success field so shell scripts
-    # can branch cleanly: `k2 msg foo "hi" && echo delivered`.
-    local success
-    success=$(echo "$response" | python3 -c 'import json,sys
+    # C2 (0.40.45): 403 not_connected / gated → exit 3 + teaching stderr
+    # (mail/dns shape). deliver-or-fail MsgResponse still exits 2.
+    local gate_rc
+    gate_rc=$(echo "$response" | python3 -c 'import json,sys
 try:
-    print("true" if json.load(sys.stdin).get("success") else "false")
+    d = json.load(sys.stdin)
+    err = d.get("error")
+    if isinstance(err, dict):
+        code = err.get("code") or ""
+        if code in ("not_connected", "gated", "forbidden"):
+            hint = err.get("hint") or code
+            sys.stderr.write(json.dumps({"error": {"code": code, "hint": hint}},
+                                        ensure_ascii=False, separators=(",", ":")) + "\n")
+            print(3)
+            raise SystemExit
+    if d.get("success") is True:
+        print(0)
+    else:
+        print(2)
+except SystemExit:
+    pass
 except Exception:
-    print("false")' 2>/dev/null)
-    if [[ "$success" != "true" ]]; then
+    print(2)
+' 2>/dev/null)
+    if [[ "$gate_rc" == "3" ]]; then
+        return 3
+    fi
+    if [[ "$gate_rc" != "0" ]]; then
         return 2
     fi
     return $rc
@@ -4567,6 +4605,10 @@ cmd_release() {
 }
 
 cmd_connections() {
+    # #37: `k2 connections --json` (no subcommand) == list --json
+    if [[ "${1:-}" == "--json" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        set -- list "$@"
+    fi
     local action="${1:-list}"
     shift 2>/dev/null || true
     case "$action" in
@@ -4582,34 +4624,77 @@ cmd_connections() {
             # 0.39.45 (#31): print WHOSE connections these are (the
             # daemon-resolved source workspace) so an inherited/parent
             # resolution is self-evident, and flag unreachable peers.
-            cli_request "/cli/connections" "action=list" | python3 -c "
-import json, sys
+            # #37: honor --json (same contract as tunnel/dns/mail status).
+            local as_json=false
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --help|-h) cmd_help_connections; return 0 ;;
+                    *) shift ;;
+                esac
+            done
+            # Prefer UDS when present so scoped agents list their own mesh.
+            local raw
+            raw=$(cli_send cli_request "/cli/connections" "action=list")
+            AS_JSON="$as_json" python3 -c "
+import json, sys, os
 raw = sys.stdin.read()
+as_json = os.environ.get('AS_JSON') == 'true'
 try:
     d = json.loads(raw)
 except Exception:
     sys.stdout.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
     sys.exit(1)
-if 'error' in d:
-    sys.stdout.write('Error: %s\n' % d['error'])
+err = d.get('error')
+if err is not None:
+    if isinstance(err, dict):
+        sys.stderr.write(json.dumps({'error': err}, ensure_ascii=False) + '\n')
+    else:
+        sys.stdout.write('Error: %s\n' % err)
     sys.exit(1)
 ws = d.get('workspace') or {}
+conns = d.get('connections', []) or []
+if as_json:
+    out = {
+        'ok': True,
+        'workspace': {
+            'name': ws.get('name') or '',
+            'path': ws.get('path') or '',
+            'id': ws.get('id') or ws.get('projectId') or '',
+        },
+        'connections': [],
+    }
+    for c in conns:
+        if c.get('remote'):
+            addr = c.get('address') or ('%s@%s' % (c.get('agent', '?'), c.get('host', '?')))
+            out['connections'].append({
+                'name': addr,
+                'kind': 'remote',
+                'address': addr,
+                'agent': c.get('agent'),
+                'host': c.get('host'),
+            })
+        else:
+            out['connections'].append({
+                'name': c.get('projectName') or c.get('name') or '?',
+                'kind': 'local',
+                'projectId': c.get('projectId') or c.get('id'),
+                'reachable': c.get('reachable', True),
+            })
+    print(json.dumps(out, ensure_ascii=False, separators=(',', ':')))
+    raise SystemExit(0)
 label = ws.get('name') or ws.get('path') or '?'
 print('Connections for %s:' % label)
-conns = d.get('connections', [])
 if not conns:
     print('  (none)')
 for c in conns:
     if c.get('remote'):
-        # Cross-server connection (issue #13B). Show the address + a
-        # (remote) tag. We deliberately do NOT surface the daemon's
-        # hardcoded reachable:true as a liveness signal for remotes.
         addr = c.get('address') or ('%s@%s' % (c.get('agent', '?'), c.get('host', '?')))
         print('  - %s   (remote)' % addr)
     else:
         flag = '' if c.get('reachable', True) else '  [UNREACHABLE — project missing or path gone]'
         print('  - %s%s' % (c.get('projectName', '?'), flag))
-"
+" <<< "$raw"
             ;;
         add)
             local target="${1:-}"
@@ -4617,6 +4702,8 @@ for c in conns:
             # 0.39.45 (#32): NEVER exit silently. Errors used to go to
             # stderr and then get eaten by a 2>/dev/null on this pipe —
             # a failed add looked identical to success with no output.
+            # C1 (0.40.45): gated agents get exit 3 + JSON teaching
+            # Settings path (agents_create_connections_disabled).
             cli_request "/cli/connections" "action=add&target=$(urlencode "$target")" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
@@ -4625,8 +4712,30 @@ try:
 except Exception:
     sys.stdout.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
     sys.exit(1)
-if 'error' in d:
-    sys.stdout.write('Error: %s\n' % d['error'])
+err = d.get('error')
+if err is not None:
+    code, hint = '', ''
+    if isinstance(err, dict):
+        code = err.get('code') or ''
+        hint = err.get('hint') or json.dumps(err)
+    else:
+        hint = str(err)
+    gated = (
+        code in ('agents_create_connections_disabled', 'gated', 'forbidden')
+        or 'Allow agents to create connections' in hint
+        or \"isn't allowed to create or remove connections\" in hint
+    )
+    if gated:
+        if 'Settings' not in hint:
+            hint = (hint + ' — ' if hint else '') + (
+                \"this agent isn't allowed to create or remove connections — \"
+                'the owner can enable it in Settings \u2192 K2 Connect '
+                '(Allow agents to create connections) or Workspaces \u2192 '
+                '(workspace) \u2192 Allow agents to create connections'
+            )
+        sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')
+        sys.exit(3)
+    sys.stdout.write('Error: %s\n' % hint)
     sys.exit(1)
 if d.get('noop'):
     print('Already connected to %s (%s)' % (d.get('target', '?'), d.get('message', '')))
@@ -4637,6 +4746,7 @@ else:
         remove)
             local target="${1:-}"
             [[ -z "$target" ]] && { echo "Usage: k2 connections remove <workspace-name>" >&2; exit 1; }
+            # C1 (0.40.45): same gated exit-3 teaching as add.
             cli_request "/cli/connections" "action=remove&target=$(urlencode "$target")" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
@@ -4645,17 +4755,39 @@ try:
 except Exception:
     sys.stdout.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
     sys.exit(1)
-if 'error' in d:
-    sys.stdout.write('Error: %s\n' % d['error'])
+err = d.get('error')
+if err is not None:
+    code, hint = '', ''
+    if isinstance(err, dict):
+        code = err.get('code') or ''
+        hint = err.get('hint') or json.dumps(err)
+    else:
+        hint = str(err)
+    gated = (
+        code in ('agents_create_connections_disabled', 'gated', 'forbidden')
+        or 'Allow agents to create connections' in hint
+        or \"isn't allowed to create or remove connections\" in hint
+    )
+    if gated:
+        if 'Settings' not in hint:
+            hint = (hint + ' — ' if hint else '') + (
+                \"this agent isn't allowed to create or remove connections — \"
+                'the owner can enable it in Settings \u2192 K2 Connect '
+                '(Allow agents to create connections) or Workspaces \u2192 '
+                '(workspace) \u2192 Allow agents to create connections'
+            )
+        sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')
+        sys.exit(3)
+    sys.stdout.write('Error: %s\n' % hint)
     sys.exit(1)
 print('Disconnected.')
 "
             ;;
         *)
-            echo "Usage: k2 connections [list|add|remove] [workspace-name]" >&2
-            echo "  list              List connections for this workspace" >&2
-            echo "  add <name>        Connect to another workspace" >&2
-            echo "  remove <name>     Disconnect from a workspace" >&2
+            echo "Usage: k2 connections [list|add|remove] [workspace-name] [--json]" >&2
+            echo "  list [--json]     List connections for this workspace (exit 0)" >&2
+            echo "  add <name>        Connect (agents need Settings → Allow agents to create connections; exit 3 when gated)" >&2
+            echo "  remove <name>     Disconnect (same agent create/remove gate as add; exit 3 when gated)" >&2
             exit 1
             ;;
     esac
@@ -6822,7 +6954,9 @@ cmd_schema() {
         {"name": "--cc", "arg": "addr", "description": "Cc (repeatable / comma-separated)."},
         {"name": "--from", "arg": "owned-addr", "description": "Which of your addresses sends (needed with several)."},
         {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). LINKED inboxes only. Max 10 files, 25MB each / 25MB total."},
-        {"name": "--wait", "arg": null, "description": "Block until DECIDED: approved-and-submitted or denied (approval mode) / accepted-for-delivery (on mode). Exit 2 on timeout — the message is still queued; check the outbox."},
+        {"name": "--at", "arg": "when", "description": "Schedule leave time (HOSTED): RFC3339 with offset. Past times hard-reject exit 2. Max 30d. Mutex with --in."},
+        {"name": "--in", "arg": "duration", "description": "Schedule relative (HOSTED): 30m, 2h, 1d. Max 30d. Mutex with --at."},
+        {"name": "--wait", "arg": null, "description": "Block until DECIDED (not with --at/--in). Exit 2 on timeout — still queued."},
         {"name": "--timeout", "arg": "secs", "description": "With --wait: 1-900 (default 300)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
@@ -6854,7 +6988,7 @@ cmd_schema() {
     },
     {
       "name": "mail outbox",
-      "usage": "k2 mail outbox [<id>] [--limit N] [--json]",
+      "usage": "k2 mail outbox [<id>] [--limit N] [--json] | k2 mail outbox cancel <id> [--json]",
       "description": "Your outbound messages + status (pending_approval / approved / submitted / rejected / failed), newest first. Rejected items carry your human's note inline. A send that carried attachments shows an 'attachments' summary ({count, names} in --json) so you can verify what you attached without opening the recipient inbox. Point lookup by out_... id (ids are stable in --json).",
       "args": [{"name": "id", "required": false}],
       "flags": [
@@ -7310,7 +7444,7 @@ cmd_update() {
 
     # Extract the version from the remote script
     local remote_version
-    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | sed 's/K2_CLI_VERSION="0.40.44"//')
+    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | sed 's/K2_CLI_VERSION="0.40.45-dev"//')
     if [ -z "$remote_version" ]; then
         echo "Error: Could not parse remote version." >&2
         exit 1
@@ -7785,16 +7919,30 @@ EOF
 
 cmd_help_connections() {
     cat <<'EOF'
-k2 connections [list|add|remove] [workspace-name]
+k2 connections [list|add|remove] [workspace-name] [--json]
 
 Manage this workspace's connections to other workspaces (agents).
 
-  list              List connections for this workspace
+  list [--json]     List connections for this workspace (exit 0)
   add <name>        Connect to another workspace (name, path, or <agent>@<host>)
   remove <name>     Disconnect from a workspace
 
+AGENT GATE (create / remove)
+  Adding and removing connections is OFF by default for agents.
+  When gated, both `add` and `remove` exit 3 with:
+    {"error":{"code":"agents_create_connections_disabled","hint":"…"}}
+  Owner can enable: Settings → K2 Connect → Allow agents to create
+  connections (or Workspaces → (workspace) → Allow agents to create
+  connections). `list` is always allowed.
+
+MSG / READ PEER GATE
+  Live `k2 msg`, `k2 msg --inbox`, and `k2 read` require a local
+  connection to the target (or same-workspace). Unconnected peers
+  return exit 3 with code `not_connected` — add them here first.
+
 EXAMPLES
   k2 connections list
+  k2 connections list --json
   k2 connections add "QA Bot"
   k2 connections remove scout
 EOF
@@ -10079,9 +10227,9 @@ TALK TO OTHERS
   msg <workspace> "text" --inbox        Drop in their inbox (email — async, no length limit)
   msg <workspace> --signal <kind> ...   Emit a typed signal (advanced)
   read <workspace> [--lines N]          Read their live terminal (peek before you inject)
-  connections list                      Connected workspaces (bidirectional)
-  connections add <path>                Connect to another workspace
-  connections remove <name>             Disconnect
+  connections list [--json]             Connected workspaces (bidirectional)
+  connections add <path>                Connect (agent: gated; exit 3 when disabled)
+  connections remove <name>             Disconnect (same agent create/remove gate)
 
 YOUR INBOX
   inbox                                 Show inbox items (default)
@@ -10264,9 +10412,14 @@ EOF
 cmd_msg_inbox_form() {
     # 0.39.0f Phase 2.1c: migrated from /cli/work/inbox/create (now 410)
     # to POST /cli/inbox/compose?project=<target>. The new inbox surface
-    # uses `project=<path>` to target a different workspace's inbox —
-    # same shape as the local `inbox compose` POST, just with a different
-    # `project` parameter than the caller's PWD.
+    # uses `project=<token>` to target a different workspace's inbox —
+    # same token contract as live `k2 msg <workspace>` (name | path | UUID).
+    #
+    # #36 (0.40.45): do NOT pre-resolve via TCP `/cli/workspace/resolve`
+    # (not UDS-eligible; agents often got plain "workspace not found"
+    # exit 1 for a peer that live msg correctly reports as
+    # `not_connected` exit 3). Pass the target token straight through;
+    # the daemon resolves, peer-gates, and returns the shared JSON contract.
     # `msg <ws> --inbox --title "..." --body "..."`
     local target="$1"
     shift
@@ -10285,37 +10438,49 @@ cmd_msg_inbox_form() {
         exit 1
     fi
 
-    # Resolve target → workspace path
-    local resolved
-    resolved=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
-        | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("path",""))
-except: pass' 2>/dev/null)
-    [[ -z "$resolved" ]] && {
-        echo "Error: workspace not found: $target" >&2
-        exit 1
-    }
-
-    # POST to /cli/inbox/compose with project=<target-workspace>. Note
-    # we deliberately do NOT call cli_post_form or cli_request here —
-    # both hard-code project=$PROJECT (caller's PWD), and we need to
-    # override it to address the recipient's workspace.
-    #
     # 0.39.45 (#35/#37): title/body/priority/from ride a REAL form body.
-    # The old `curl -sG -X POST` put them on the URL, where the daemon's
-    # request-head cap silently clipped memo bodies at ~2.7KB.
-    local params="title=$(urlencode "$title")"
+    #
+    # #36: recipient is `workspace=<token>` (same as live msg) — stamp_principal
+    # NEVER overwrites workspace=/target=, only project=/from=/project_id=.
+    # Putting the peer in project= fought stamp restore and silently wrote
+    # to the sender's own inbox while the peer gate saw same-workspace.
+    local params="workspace=$(urlencode "$target")&title=$(urlencode "$title")"
     [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
     [[ -n "$priority" ]] && params="${params}&priority=$(urlencode "$priority")"
     # `--from` was historically `assigned_by` on the old work-route;
     # the inbox-compose route names it `from` (writes to the YAML
     # frontmatter `from:` field — identical persisted shape).
     [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
-    curl -s -X POST "${BASE_URL}/cli/inbox/compose?token=${TOKEN}&project=$(urlencode "$resolved")" \
-        --connect-timeout 5 --max-time 30 \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        --data-raw "$params" 2>/dev/null
-    echo
+    # C2: prefer UDS+scoped (peer-gated) when available; fall back to TCP.
+    local response
+    response=$(cli_send cli_post_form "/cli/inbox/compose" "$params")
+    echo "$response"
+    # Map 403 not_connected / gated → exit 3 (same as live msg / read).
+    # workspace not_found / other structured errors → exit 1 JSON on stderr.
+    if command -v python3 >/dev/null 2>&1; then
+        echo "$response" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+err = d.get("error")
+if isinstance(err, dict):
+    code = err.get("code") or ""
+    hint = err.get("hint") or code
+    sys.stderr.write(json.dumps({"error": {"code": code, "hint": hint}},
+                                ensure_ascii=False, separators=(",", ":")) + "\n")
+    if code in ("not_connected", "gated", "forbidden"):
+        sys.exit(3)
+    sys.exit(1)
+if isinstance(err, str) and err:
+    sys.stderr.write(json.dumps({"error": {"code": "error", "hint": err}},
+                                ensure_ascii=False, separators=(",", ":")) + "\n")
+    sys.exit(1)
+if d.get("ok") is False:
+    sys.exit(1)
+' || return $?
+    fi
 }
 
 cmd_msg_signal_form() {
@@ -12267,16 +12432,18 @@ def die(err, exit_code=None):
         err = {"code": "error", "hint": err}
     code = err.get("code", "error")
     hint = err.get("hint", "")
-    if code == "forbidden" and "ask your human" not in hint:
-        # §11.1.3 teaching line — owner verbs are futile for agents,
-        # by server-side enforcement; the fix is always a human.
+    if code in ("forbidden", "owner_only") and "ask your human" not in hint:
+        # §11.1.3 / GH #34 teaching line — owner verbs are futile for
+        # agents, by server-side enforcement; the fix is always a human.
         hint = (hint + " — " if hint else "") + "requires owner/admin — ask your human"
     sys.stderr.write(dumps({"error": {"code": code, "hint": hint}}) + "\n")
     if exit_code is None:
         # PRD §11 exit contract: 3 = gated-off / owner-only · 2 = bad
         # usage (timeouts also exit 2, via explicit die(..., 2) at the
         # wait/--wait sites) · 1 = everything else.
-        exit_code = 3 if code in ("gated", "forbidden") else 2 if code == "usage" else 1
+        # GH #34: daemon returns code owner_only on hostmail/access/…
+        # owner surfaces for valid agent passports (not "invalid token").
+        exit_code = 3 if code in ("gated", "forbidden", "owner_only") else 2 if code == "usage" else 1
     sys.exit(exit_code)
 
 def request(method, route, params=None, body=None, timeout=30):
@@ -12731,6 +12898,10 @@ elif verb == "send":
         # Workspace-relative file PATHS — the daemon reads the bytes
         # (CLI stays dumb: no file I/O, no base64 over the wire).
         body["attachments"] = attach
+    if env("M_SEND_AT"):
+        body["sendAt"] = env("M_SEND_AT")
+    if env("M_SEND_IN"):
+        body["sendIn"] = env("M_SEND_IN")
     waiting = env("M_WAIT") == "true"
     t = wait_timeout_secs()
     if waiting:
@@ -12754,6 +12925,14 @@ elif verb == "reply":
             body["timeout"] = int(env("M_TIMEOUT"))
     d = call("POST", "/cli/mail/reply", body=body, timeout=(t + 30) if waiting else 30)
     send_outcome(d, waiting, t)
+
+elif verb == "outbox_cancel":
+    d = call("POST", "/cli/mail/outbox/cancel",
+             body={"project": ws_path, "id": env("M_ID")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print(d.get("hint") or ("cancelled %s" % d.get("id", "")))
 
 elif verb == "outbox":
     params = {"project": ws_path}
@@ -13487,7 +13666,7 @@ cmd_mail_wait() {
 cmd_mail_send() {
     if _wants_help "$@"; then cmd_help_mail_send; exit 0; fi
     local to="" subject="" body="" body_file="" cc="" from="" attach=""
-    local wait=false timeout="" as_json=false
+    local wait=false timeout="" as_json=false send_at="" send_in=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --to)
@@ -13512,6 +13691,12 @@ cmd_mail_send() {
             --attach)
                 [ $# -ge 2 ] || { _mail_err "usage" "--attach requires a file path"; exit 2; }
                 attach="${attach}${attach:+$'\n'}$2"; shift 2 ;;
+            --at)
+                [ $# -ge 2 ] || { _mail_err "usage" "--at requires an RFC3339 timestamp"; exit 2; }
+                send_at="$2"; shift 2 ;;
+            --in)
+                [ $# -ge 2 ] || { _mail_err "usage" "--in requires a duration (e.g. 30m, 2h, 1d)"; exit 2; }
+                send_in="$2"; shift 2 ;;
             --wait) wait=true; shift ;;
             --timeout)
                 [ $# -ge 2 ] || { _mail_err "usage" "--timeout requires a value in seconds (1-900)"; exit 2; }
@@ -13557,9 +13742,17 @@ cmd_mail_send() {
         fi
         _mail_check_timeout "$timeout"
     fi
+    if [ -n "$send_at" ] && [ -n "$send_in" ]; then
+        _mail_err "usage" "pass only one of --at <when> or --in <duration>, not both"
+        exit 2
+    fi
+    if $wait && { [ -n "$send_at" ] || [ -n "$send_in" ]; }; then
+        _mail_err "usage" "--wait cannot combine with --at/--in"
+        exit 2
+    fi
     local M_VERB="send" M_JSON="$as_json" M_TO="$to" M_SUBJECT="$subject" \
           M_BODY="$body" M_CC="$cc" M_FROM="$from" M_ATTACH="$attach" \
-          M_WAIT="$wait" M_TIMEOUT="$timeout"
+          M_WAIT="$wait" M_TIMEOUT="$timeout" M_SEND_AT="$send_at" M_SEND_IN="$send_in"
     _mail_py
 }
 
@@ -13629,6 +13822,21 @@ cmd_mail_reply() {
 
 cmd_mail_outbox() {
     if _wants_help "$@"; then cmd_help_mail_outbox; exit 0; fi
+    if [ "${1:-}" = "cancel" ]; then
+        shift
+        local id="" as_json=false
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --json) as_json=true; shift ;;
+                -*) _mail_err "usage" "usage: k2 mail outbox cancel <id> [--json]"; exit 2 ;;
+                *) if [ -z "$id" ]; then id="$1"; else _mail_err "usage" "one <id> only"; exit 2; fi; shift ;;
+            esac
+        done
+        [ -n "$id" ] || { _mail_err "usage" "outbox cancel requires out_… id"; exit 2; }
+        local M_VERB="outbox_cancel" M_JSON="$as_json" M_ID="$id"
+        _mail_py
+        return
+    fi
     local id="" limit="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in

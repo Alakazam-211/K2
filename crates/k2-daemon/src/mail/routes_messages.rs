@@ -168,6 +168,27 @@ fn resolve_linked_password(
     }
 }
 
+/// Client `from` filter for messages/wait — NOT the identity stamp.
+///
+/// Wave 0 / dual-auth `stamp_principal` writes the agent address into
+/// `from=`. Mail list/wait treat `from` as an IMAP/JMAP From: substring
+/// filter. Under a scoped passport that became `FROM "<workspace-uuid>"`
+/// and always returned empty while folder list (no filter) still worked
+/// (#38 agent AKZM retest). Dispatcher restores client --from after stamp;
+/// this belt also drops a remaining stamp when `principal_bound` is set
+/// and `from` equals the stamped `project_id` (common agent_address shape).
+fn mail_from_filter(params: &HashMap<String, String>) -> Option<String> {
+    let from = crate::cli::opt_param(params, "from")?;
+    if params.get("principal_bound").map(|s| s == "1").unwrap_or(false) {
+        if let Some(pid) = params.get("project_id") {
+            if from == *pid {
+                return None;
+            }
+        }
+    }
+    Some(from)
+}
+
 /// §17.5: resolve one address's backend and construct it — the ONLY
 /// place a backend is instantiated. `LocalStalwart` → the production
 /// JMAP client from the `mail_server` row (503 `not_ready` when
@@ -410,7 +431,8 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
     let filter = messages::ListFilter {
         unread_only: crate::cli::bool_param(params, "unread"),
         query: crate::cli::opt_param(params, "query"),
-        from: crate::cli::opt_param(params, "from"),
+        // #38: never treat identity stamp `from=` as a From: filter.
+        from: mail_from_filter(params),
         since_unix: None,
         after_unix,
         before_unix,
@@ -427,6 +449,9 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
     // A single EXPLICIT address still surfaces its error directly (the
     // `explicit_address` early-returns below preserve S3 behavior).
     let mut inbox_errors: Vec<serde_json::Value> = Vec::new();
+    // #38: track whether ANY backend list completed (Ok) so a total
+    // failure cannot look like a successful empty inbox.
+    let mut lists_ok: usize = 0;
     for w in &watch {
         let backend = match backend_for(&w.address) {
             Ok(b) => b,
@@ -439,7 +464,10 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
             }
         };
         let summaries = match backend.list_inbox(&w.account_id, &filter, limit) {
-            Ok(s) => s,
+            Ok(s) => {
+                lists_ok += 1;
+                s
+            }
             Err(e) => {
                 if explicit_address {
                     return list_error_response(e);
@@ -457,6 +485,43 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
                 messages::shape_summary_json(&w.address, s),
             ));
         }
+    }
+    // #38: if every watched inbox errored (no successful list), surface
+    // a hard error — never `{count:0, ok:true}` for "all backends failed".
+    // Agents branch on exit code; silent empty teaches the wrong fix.
+    if lists_ok == 0 && !inbox_errors.is_empty() {
+        let first = inbox_errors.first().cloned().unwrap_or_else(|| {
+            serde_json::json!({"code": "engine", "hint": "all inboxes failed to list"})
+        });
+        let code = first
+            .get("code")
+            .and_then(|c| c.as_str())
+            .unwrap_or("engine");
+        let hint = first
+            .get("hint")
+            .and_then(|h| h.as_str())
+            .unwrap_or("all inboxes failed to list messages");
+        let status = if code == "not_ready" {
+            "503 Service Unavailable"
+        } else {
+            "502 Bad Gateway"
+        };
+        return CliResponse {
+            status,
+            content_type: "application/json",
+            body: serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": code,
+                    "hint": format!(
+                        "{hint} ({} inbox(es) failed; none returned a list)",
+                        inbox_errors.len()
+                    ),
+                },
+                "inboxErrors": inbox_errors,
+            })
+            .to_string(),
+        };
     }
     // Merge across addresses newest-first, then apply the limit.
     shaped.sort_by(|a, b| b.0.cmp(&a.0));
@@ -808,7 +873,8 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
         .zip(backends.iter().map(|b| b.as_ref()))
         .collect();
     let filters = messages::WaitFilters {
-        from: crate::cli::opt_param(params, "from"),
+        // #38: same stamp-vs-filter collision as messages.
+        from: mail_from_filter(params),
         subject: crate::cli::opt_param(params, "subject"),
     };
     let mut now = || {
@@ -1320,6 +1386,37 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn mail_from_filter_drops_principal_stamp_collision() {
+        // Identity stamp shape: principal_bound + from == project_id.
+        let p = params(&[
+            ("principal_bound", "1"),
+            ("project_id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            ("from", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        ]);
+        assert_eq!(
+            mail_from_filter(&p),
+            None,
+            "stamped agent uuid must not become IMAP From: filter"
+        );
+        // Real client --from survives.
+        let p = params(&[
+            ("principal_bound", "1"),
+            ("project_id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            ("from", "boss@example.com"),
+        ]);
+        assert_eq!(
+            mail_from_filter(&p).as_deref(),
+            Some("boss@example.com")
+        );
+        // Owner path (no principal_bound): from is always the filter.
+        let p = params(&[("from", "boss@example.com")]);
+        assert_eq!(
+            mail_from_filter(&p).as_deref(),
+            Some("boss@example.com")
+        );
+    }
+
     /// These tests assert the no-server 503 — hold the singleton lock
     /// and clear the `mail_server` row so a concurrently seeded row
     /// can't turn the assertion into a live engine dial (house rule:
@@ -1341,18 +1438,20 @@ mod tests {
         assert_eq!(resp.status, "400 Bad Request");
         assert_eq!(body_json(&resp)["error"]["code"], "usage");
 
-        // Bad limit → usage (0 and non-numeric both die).
-        for bad in ["0", "abc"] {
-            let resp = handle_messages(&params(&[("project", "/tmp/x"), ("limit", bad)]));
-            assert_eq!(resp.status, "400 Bad Request", "limit={bad}");
-        }
-
-        // Unknown workspace → the shared 404 shape.
+        // Unknown workspace → the shared 404 shape (identity resolves
+        // before flag validation — a registered project is required to
+        // exercise limit/usage checks).
         let resp = handle_messages(&params(&[("project", "no-such-workspace-xyz")]));
         assert_eq!(resp.status, "404 Not Found");
 
         let (name, path) = unique("messages");
         let project_id = insert_project(&name, &path);
+
+        // Bad limit → usage (0 and non-numeric both die) on a registered ws.
+        for bad in ["0", "abc"] {
+            let resp = handle_messages(&params(&[("project", &path), ("limit", bad)]));
+            assert_eq!(resp.status, "400 Bad Request", "limit={bad}");
+        }
 
         // No addresses minted → an EMPTY inbox (200), never an error,
         // never an engine dial.
@@ -1397,11 +1496,10 @@ mod tests {
         cleanup_project(&project2);
     }
 
-    /// #31.4: the ALL-INBOX sweep degrades per inbox — one inbox erroring
-    /// (here: no mail server, so its backend is 503 not_ready) returns a
-    /// 200 with that inbox named in `inboxErrors`, NOT a 5xx that sinks
-    /// the whole call. An EXPLICIT single address still surfaces the same
-    /// error directly (single-address path unchanged).
+    /// #31.4 + #38: the ALL-INBOX sweep degrades per inbox when at least
+    /// one list succeeds. When EVERY watched inbox fails, #38 hard-fails
+    /// (never `{count:0, ok:true}` for total engine failure). An EXPLICIT
+    /// single address still surfaces the error directly.
     #[test]
     fn all_inbox_sweep_degrades_per_inbox_instead_of_hard_failing() {
         let _g = crate::mail::mail_server_test_lock();
@@ -1424,15 +1522,14 @@ mod tests {
         assert_eq!(v["error"]["code"], "not_ready");
         assert!(v.get("inboxErrors").is_none(), "single-address path never partial: {v}");
 
-        // All-inbox sweep → 200 (NEVER 5xx). Both inboxes land in
-        // inboxErrors with address + code + hint; the messages array is
-        // still present (empty here). One bad inbox never aborts the call.
+        // #38: all-inbox sweep where EVERY inbox fails → hard error
+        // (not silent empty success). Both failures still named in
+        // inboxErrors for agent debugging.
         let resp = handle_messages(&params(&[("project", &path)]));
-        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
         let v = body_json(&resp);
-        assert_eq!(v["ok"], true);
-        assert_eq!(v["count"], 0);
-        assert!(v["messages"].is_array(), "healthy-path shape preserved: {v}");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "not_ready");
         let errs = v["inboxErrors"].as_array().expect("inboxErrors array present");
         assert_eq!(errs.len(), 2, "both failing inboxes reported: {v}");
         let mut seen: Vec<&str> = errs.iter().map(|e| e["address"].as_str().unwrap()).collect();
@@ -1450,20 +1547,23 @@ mod tests {
     fn messages_validates_triage_flags_before_any_engine_dial() {
         let _g = crate::mail::mail_server_test_lock();
         clear_mail_server();
-        // Bad offset / bad dates / conflicting folder flags are all
-        // usage 400s answered BEFORE identity or engine work.
-        let resp = handle_messages(&params(&[("project", "/tmp/x"), ("offset", "abc")]));
+        // Flag validation runs after identity resolve — use a registered
+        // workspace so usage errors surface (unregistered paths 404 first).
+        let (name0, path0) = unique("triage-flags");
+        let project0 = insert_project(&name0, &path0);
+
+        let resp = handle_messages(&params(&[("project", &path0), ("offset", "abc")]));
         assert_eq!(resp.status, "400 Bad Request");
         assert_eq!(body_json(&resp)["error"]["code"], "usage");
 
         for k in ["since", "before"] {
-            let resp = handle_messages(&params(&[("project", "/tmp/x"), (k, "yesteryear")]));
+            let resp = handle_messages(&params(&[("project", &path0), (k, "yesteryear")]));
             assert_eq!(resp.status, "400 Bad Request", "{k}");
             assert_eq!(body_json(&resp)["error"]["code"], "usage");
         }
 
         let resp = handle_messages(&params(&[
-            ("project", "/tmp/x"),
+            ("project", &path0),
             ("junk", "1"),
             ("folder", "Archive"),
         ]));
@@ -1472,6 +1572,7 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("--junk or --folder"));
+        cleanup_project(&project0);
 
         // A valid date window + folder on an addressless workspace is an
         // empty 200 (accepted, no engine dial) — and an over-cap limit

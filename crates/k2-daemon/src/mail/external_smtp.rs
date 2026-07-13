@@ -12,13 +12,12 @@
 //! verification and is deliberately not mockable, exactly like the IMAP
 //! client).
 //!
-//! GOVERNANCE: linked send is currently UNGATED (Rosson's contract —
-//! unified gating for linked arrives with the wider email layer). The
-//! access layer's `can_send` decides *whether* a workspace may send from
-//! a linked inbox (effective level == 'send'); this module only performs
-//! the submission once that check has passed. The obvious future home
-//! for a per-message gate is the route branch that calls
-//! [`send_linked_message`] / [`send_linked_reply`].
+//! GOVERNANCE: the route layer applies the workspace `mail_agent_send`
+//! gate (E4 / [`crate::mail::send::allow_linked_send`]) before calling
+//! into this module. The access layer's `can_send` decides *whether* a
+//! workspace may send FROM a linked inbox (effective level == 'send');
+//! this module only performs the submission once both checks have
+//! passed.
 //!
 //! ⚠ LIVE-BOX functions (genuinely-uncertain live-server behavior —
 //! verify against real providers on a live box before trusting edge

@@ -663,6 +663,18 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0083_project_dns_manage_enabled",
             include_str!("../../drizzle_sql/0083_project_dns_manage_enabled.sql"),
         ),
+        (
+            "0084_mail_outbound_scheduled",
+            include_str!("../../drizzle_sql/0084_mail_outbound_scheduled.sql"),
+        ),
+        // 0085 (C1): per-workspace agents-may-create-connections opt-in
+        // on `projects` (default 0/OFF, fail-closed). App-level
+        // `agentsCanCreateConnections` stays a global master (OR'd on top).
+        // Owner / Owner-role always bypass; agents need the effective OR.
+        (
+            "0085_project_agents_can_create_connections",
+            include_str!("../../drizzle_sql/0085_project_agents_can_create_connections.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

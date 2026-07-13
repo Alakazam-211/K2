@@ -211,6 +211,38 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
             Err(r) => r,
         },
+        // C1 (0.40.45) — per-workspace agents-may-create-connections opt-in.
+        // GET with `?enable=` mirrors `/cli/dns-manage`. Default OFF /
+        // fail-closed; effective gate is
+        // `agents_can_create_connections_for_path` (app master OR workspace).
+        // Owner / Owner-role always bypass the mutate gate regardless.
+        "/cli/agents-create-connections" => match need_project(params) {
+            Ok(p) => {
+                let enable = bool_param(params, "enable");
+                let value = if enable { "1" } else { "0" };
+                match k2_core::workspace::settings::update_project_setting(
+                    &p,
+                    "agents_can_create_connections",
+                    value,
+                ) {
+                    Ok(()) => {
+                        k2_core::agent_hooks::emit(
+                            k2_core::agent_hooks::HookEvent::SyncProjects,
+                            serde_json::Value::Null,
+                        );
+                        CliResponse::ok_json(
+                            serde_json::json!({
+                                "success": true,
+                                "agentsCanCreateConnections": enable
+                            })
+                            .to_string(),
+                        )
+                    }
+                    Err(e) => CliResponse::bad_request(e),
+                }
+            }
+            Err(r) => r,
+        },
         "/cli/agentic" => {
             // Global toggle, not project-specific.
             if let Some(enable) = opt_param(params, "enable") {
@@ -363,6 +395,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         },
 
         // ── Workspace connections ───────────────────────────────────
+        // C1 (0.40.45): add/remove gated for non-privileged actors.
+        // Privilege is stamped by the dispatcher as `actor_privileged=1`
+        // when the request token is owner-or-admin (owner daemon token
+        // OR Owner/Admin connect-user). Scoped agent principals never
+        // get the stamp (cell UDS / dual-auth arms leave it unset →
+        // fail-closed unless the effective toggle is on).
         "/cli/connections" => match need_project(params) {
             Ok(p) => {
                 let action = params
@@ -371,14 +409,49 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     .unwrap_or_else(|| "list".to_string());
                 let target = opt_param(params, "target");
                 let rel_type = opt_param(params, "type");
-                match k2_core::connections::connections(
+                // Scoped principal (agent) can never claim privilege via
+                // a client-supplied flag — stamp is server-only, but a
+                // body/query spoof of actor_privileged must not elevate.
+                let actor_is_privileged = if crate::caller_workspace::principal_from_params(params)
+                    .is_some()
+                {
+                    false
+                } else {
+                    params
+                        .get("actor_privileged")
+                        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false)
+                };
+                match k2_core::connections::connections_for_actor(
                     &p,
                     &action,
                     target.as_deref(),
                     rel_type.as_deref(),
+                    actor_is_privileged,
                 ) {
                     Ok(body) => CliResponse::ok_json(body),
-                    Err(e) => CliResponse::bad_request(e),
+                    Err(e) => {
+                        // Teaching deny (toggle off for agent) → 403 so
+                        // CLI maps to exit 3; other errors stay 400.
+                        if e.contains("isn't allowed to create or remove connections")
+                            || e.contains(k2_core::connections::CONNECTIONS_MUTATE_DENIED_HINT)
+                        {
+                            CliResponse {
+                                status: "403 Forbidden",
+                                content_type: "application/json",
+                                body: serde_json::json!({
+                                    "ok": false,
+                                    "error": {
+                                        "code": "agents_create_connections_disabled",
+                                        "hint": e,
+                                    }
+                                })
+                                .to_string(),
+                            }
+                        } else {
+                            CliResponse::bad_request(e)
+                        }
+                    }
                 }
             }
             Err(r) => r,

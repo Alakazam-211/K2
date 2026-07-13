@@ -18,7 +18,7 @@ import {
   createWebgl2Backend,
   type PainterBackend,
 } from './glBackend'
-import { FrameBuffers, packFrame, RowCache } from './packFrame'
+import { FrameBuffers, packFrame, prewarmRows, RowCache } from './packFrame'
 import { GlyphAtlas } from './glyphAtlas'
 import { createContextLossTracker } from './contextLoss'
 
@@ -27,6 +27,31 @@ import { createContextLossTracker } from './contextLoss'
  *  check before trusting the context). Arbitrary, unlikely theme
  *  color. */
 const SANITY_COLOR = 0x3a7b19
+
+/** Post-draw row-cache prewarm (scroll-hop fix, LEARNINGS-webgl-
+ *  scroll.md): rows outside the window pre-expanded each frame so a
+ *  fast scroll hits warm slabs. Band = how far to reach in each
+ *  direction; budget caps the leftover-frame time it may spend. */
+const PREWARM_BAND = 24
+const PREWARM_BUDGET_MS = 2
+
+/** Text-weight tuning ("chonky text" fix): coverage-gamma exponent
+ *  for tinted glyphs. macOS dilates Canvas2D text stems relative to
+ *  the DOM's -webkit-font-smoothing:antialiased rendering; >1 thins
+ *  AA edges back toward DOM weight. Feel-tunable live without a
+ *  rebuild: localStorage.K2SO_WEBGL_TEXT_GAMMA = '1.4' (re-open the
+ *  tab to apply); clamped to a sane band. */
+const TEXT_GAMMA_DEFAULT = 1.3
+function textGammaSetting(): number {
+  try {
+    const raw = localStorage.getItem('K2SO_WEBGL_TEXT_GAMMA')
+    const v = raw === null ? NaN : parseFloat(raw)
+    if (Number.isFinite(v)) return Math.min(3, Math.max(0.5, v))
+  } catch {
+    // localStorage unavailable (tests) — fall through to default.
+  }
+  return TEXT_GAMMA_DEFAULT
+}
 
 export interface WebglPainterDeps {
   /** Test seam: swap the real WebGL2 backend for a stub. */
@@ -57,6 +82,7 @@ export function createWebglPainter(
 
   const cache = new RowCache()
   const buffers = new FrameBuffers()
+  const textGamma = textGammaSetting()
 
   // Diagnostics (owner feel-test aid): localStorage.K2SO_WEBGL_DIAG='1'
   // → one console line per 60 rendered frames with timing + volume.
@@ -93,7 +119,7 @@ export function createWebglPainter(
       backend.resize(w, h)
     }
 
-    const packed = packFrame({
+    const packInput = {
       frame,
       cssCellH: metrics.cssCellH,
       deviceCellW,
@@ -103,7 +129,8 @@ export function createWebglPainter(
       buffers,
       glyphs: atlas,
       decoThickness,
-    })
+    }
+    const packed = packFrame(packInput)
 
     // Packing may have rasterized new glyphs — re-upload the page
     // once per frame at most, keyed off the atlas version.
@@ -123,11 +150,17 @@ export function createWebglPainter(
       scrollY: packed.fractionDevice,
       texW: atlas.size,
       texH: atlas.size,
+      textGamma,
     })
     // Decorations LAST: underline/strikethrough bars draw over their
     // glyphs (pass order per brief §2.2; the block cursor stays a DOM
     // overlay above the whole canvas — §5).
     backend.drawRects(packed.deco.data, packed.deco.count)
+
+    // Leftover-frame prewarm: expand rows just outside the window so
+    // the NEXT scroll frame's reveals are cache hits. New glyphs it
+    // rasterizes ride the next frame's atlas-version upload.
+    prewarmRows(packInput, packed, PREWARM_BAND, PREWARM_BUDGET_MS)
 
     if (diagEnabled) {
       diagMs += performance.now() - t0
@@ -137,7 +170,8 @@ export function createWebglPainter(
           `[webgl-diag] frames=${diagFrames} avg=${(diagMs / diagFrames).toFixed(2)}ms ` +
             `glyphInstances=${packed.glyphCount} bgRects=${packed.bg.count} ` +
             `rows=${packed.rowCount} cacheRows=${cache.size} ` +
-            `atlas=${atlas.size}px/${atlas.glyphCount} glyphs`,
+            `atlas=${atlas.size}px/${atlas.glyphCount} glyphs ` +
+            `textGamma=${textGamma}`,
         )
         diagFrames = 0
         diagMs = 0
@@ -223,6 +257,7 @@ export function createWebglPainter(
       // changes deliberately do NOT land here (color is
       // per-instance; the atlas is colorless — brief §1.3's win over
       // xterm's rebuild-on-theme).
+      atlas?.dispose()
       atlas = new GlyphAtlas({
         deviceCellW,
         deviceCellH,
@@ -260,6 +295,8 @@ export function createWebglPainter(
       backend = null
       canvas = null
       lastFrame = null
+      atlas?.dispose()
+      atlas = null
       cache.clear()
     },
   }

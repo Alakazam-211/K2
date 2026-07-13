@@ -83,6 +83,12 @@ interface SettingsState {
   // per-workspace (`dns_manage_allowed_for_path`).
   dnsManageEnabled: boolean
 
+  // C1 (0.40.45) — per-host opt-in letting agents add/remove connections.
+  // DEFAULTS OFF (deny-by-default). Effective gate is app master OR
+  // per-workspace (`agents_can_create_connections_for_path`). Owner always
+  // may manage connections regardless.
+  agentsCanCreateConnections: boolean
+
   // Cross-server federation master switch (K2 Connect → Enable federation).
   // Persisted per-server; the daemon's /cli/federation/* gate honors it via
   // federation::set_enabled(). DEFAULTS OFF (dark by default).
@@ -158,6 +164,7 @@ interface SettingsState {
   setOwnerDisplayName: (name: string) => void
   setAllowRemoteInstruct: (enabled: boolean) => void
   setDnsManageEnabled: (enabled: boolean) => void
+  setAgentsCanCreateConnections: (enabled: boolean) => void
   setFederationEnabled: (enabled: boolean) => void
   setApiEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
@@ -269,6 +276,7 @@ async function persistAndApply(
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       dnsManageEnabled: result.dnsManageEnabled ?? false,
+      agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
       federationEnabled: result.federationEnabled ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -298,6 +306,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   ownerDisplayName: '',
   allowRemoteInstruct: false,
   dnsManageEnabled: false,
+  agentsCanCreateConnections: false,
   federationEnabled: false,
   apiEnabled: false,
   useLlmHitlDetection: false,
@@ -471,6 +480,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setAgentsCanCreateConnections: async (enabled: boolean) => {
+    const prev = get().agentsCanCreateConnections
+    set({ agentsCanCreateConnections: enabled }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `agentsCanCreateConnections`.
+      // Owner/admin gated via REMOTE_ACCESS_KEYS server-side.
+      await persistAndApply(set, { agentsCanCreateConnections: enabled })
+    } catch (err) {
+      console.error('[settings] Failed to persist agents-can-create-connections:', err)
+      set({ agentsCanCreateConnections: prev })
+    }
+  },
+
   setFederationEnabled: async (enabled: boolean) => {
     const prev = get().federationEnabled
     set({ federationEnabled: enabled }) // optimistic
@@ -579,6 +601,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       dnsManageEnabled: result.dnsManageEnabled ?? false,
+      agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
       federationEnabled: result.federationEnabled ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -622,6 +645,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       dnsManageEnabled: result.dnsManageEnabled ?? false,
+      agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
       federationEnabled: result.federationEnabled ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,

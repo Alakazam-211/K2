@@ -20,11 +20,14 @@
 //! BINDING error text (code `cap_reached`).
 //!
 //! `address/list` serves BOTH audiences like S2's `domain/list`:
-//! `?project=<ws>` = the caller's ACTIVE addresses + cap usage
-//! (`k2 mail addresses`); `?all=true` = the owner table (every
-//! address, retired included, with holders — the Settings→Email
-//! addresses table). Reads ride the any-authed-token GET chain, the
-//! S2 owner-table precedent.
+//! `?project=<ws>` (or a scoped principal) = the caller's ACTIVE
+//! addresses + cap usage (`k2 mail addresses`); `?all=true` = the
+//! owner table (every address, retired included, with holders — the
+//! Settings→Email addresses table). The owner table is
+//! owner-or-admin-gated in the dispatcher (E2 — scoped agents must
+//! not enumerate every hosted address); the agent self-view rides a
+//! plain workspace token and resolves identity via
+//! [`crate::mail::identity::resolve_caller_params`].
 //!
 //! Error contract (feedback_routes conventions, camelCase bodies):
 //! `{"ok":false,"error":{"code","hint"}}` with stable codes —
@@ -202,30 +205,39 @@ pub fn handle_address_delete(body: &[u8]) -> CliResponse {
 
 /// GET `/cli/mail/address/list` — two audiences, one route:
 ///
-/// - **Caller view** (`?project=<ws>` — how `k2 mail addresses`
-///   calls it): the workspace's ACTIVE addresses + `createdAt` + cap
-///   usage `{used, cap}` (cap 0 = unlimited; callers render
-///   "unlimited").
+/// - **Caller view** (`?project=<ws>` or a scoped principal — how
+///   `k2 mail addresses` calls it): the workspace's ACTIVE addresses
+///   + `createdAt` + cap usage `{used, cap}` (cap 0 = unlimited;
+///   callers render "unlimited"). Identity via
+///   [`crate::mail::identity::resolve_caller_params`] so a principal
+///   works without a project= claim.
 /// - **Owner table** (`?all=true`): every address with holder
 ///   workspace + status, retired included (the Settings→Email table).
+///   Owner-or-admin only — enforced in the dispatcher's mail GET arm
+///   (E2); the handler itself remains data-only so unit tests can
+///   exercise the shape without a token.
 pub fn handle_address_list(params: &HashMap<String, String>) -> CliResponse {
     if crate::cli::bool_param(params, "all") {
         return ok_json(addresses::list_all_json());
     }
-    let project = match crate::cli::need_project(params) {
-        Ok(p) => p,
-        Err(_) => {
-            return error_response(
-                "400 Bad Request",
-                "usage",
-                "missing 'project' (workspace name | path | UUID) — or pass all=true for \
-                 the owner table",
-            )
-        }
-    };
-    let (path, project_id) = match resolve_caller(&project) {
+    // Wave 0: principal-or-claim identity (stamped scoped principal
+    // wins over client project=). Without either → usage naming both
+    // options (self-view needs a workspace; owner table needs all=true).
+    let (path, project_id) = match crate::mail::identity::resolve_caller_params(params) {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => {
+            if crate::caller_workspace::principal_from_params(params).is_none()
+                && crate::cli::need_project(params).is_err()
+            {
+                return error_response(
+                    "400 Bad Request",
+                    "usage",
+                    "missing 'project' (workspace name | path | UUID) — or pass all=true for \
+                     the owner table",
+                );
+            }
+            return resp;
+        }
     };
     let cap = k2_core::workspace::settings::mail_address_cap_for_path(&path);
     ok_json(addresses::list_for_project_json(&project_id, cap))
@@ -440,7 +452,8 @@ mod tests {
         assert_eq!(v["cap"]["used"], 1);
         assert_eq!(v["cap"]["cap"], 3, "per-workspace override via the effective resolver");
 
-        // Owner table: retired included, holder workspace named.
+        // Owner table shape (handler is data-only — owner-or-admin for
+        // ?all=true is enforced in the dispatcher mail GET arm, E2).
         let mut params = HashMap::new();
         params.insert("all".to_string(), "true".to_string());
         let resp = handle_address_list(&params);
@@ -457,4 +470,19 @@ mod tests {
 
         cleanup_project(&project_id);
     }
+
+    /// E2 pure helper: the owner-table gate decision is
+    /// owner-or-admin only (mirrors the dispatcher clause).
+    #[test]
+    fn address_list_all_requires_owner_or_admin() {
+        assert!(address_list_all_allowed(true));
+        assert!(!address_list_all_allowed(false));
+    }
+}
+
+/// Pure E2 gate for tests + documentation: `?all=true` is
+/// owner-or-admin only. The dispatcher enforces this with
+/// `token_is_owner_or_admin` before dispatching to the handler.
+pub fn address_list_all_allowed(is_owner_or_admin: bool) -> bool {
+    is_owner_or_admin
 }

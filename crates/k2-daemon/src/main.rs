@@ -105,6 +105,8 @@ mod cell_uid_pool;
 mod session_token;
 // Wave 0: caller-asserted workspace must never be identity (mail/DNS grants).
 mod caller_workspace;
+// C2 (0.40.45): connection-required local agent msg/read/inbox.
+mod comms;
 // P3b (sandbox / K2-as-a-server): stream tokens + POST /v1/sandboxes + policy.
 mod stream_token;
 // P4-H4: per-principal + global concurrent-cell cap (429); /v1/sandboxes only.
@@ -898,6 +900,9 @@ async fn async_main() {
     // raises the standard `mail:domain-status-changed` event. No-op
     // every tick while no mail domains exist (one indexed SELECT).
     let _mail_dns_verify_handle = mail::dns_verify::spawn();
+
+    // Agent-scheduled outbound flusher (mail_outbound status=scheduled).
+    let _mail_scheduled_flusher_handle = mail::schedule::spawn_scheduled_flusher();
 
     // K2 Mail S8 (prd-email-server-v1 §9) — the nightly deliverability
     // doctor: a server-level `k2 mail doctor` run re-taken daily while

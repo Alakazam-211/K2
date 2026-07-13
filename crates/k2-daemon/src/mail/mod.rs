@@ -125,6 +125,7 @@ pub mod routes_send;
 pub mod routes_server;
 pub mod secrets;
 pub mod send;
+pub mod schedule;
 pub mod supervisor;
 pub mod sysops;
 

@@ -15,7 +15,12 @@ use crate::cli_response::CliResponse;
 // ── Helpers ────────────────────────────────────────────────────────────
 
 fn need_project_path(params: &HashMap<String, String>) -> Result<PathBuf, CliResponse> {
-    for key in &["project_path", "project"] {
+    // Prefer `project` over `project_path`. Cross-workspace compose
+    // (msg --inbox) restores TARGET into `project=` after stamp_principal
+    // rewrites both keys to the caller's path; if only `project` is restored
+    // and we prefer `project_path`, compose silently writes to the caller's
+    // own inbox and the peer gate always sees same-workspace → OK (#36).
+    for key in &["project", "project_path"] {
         if let Some(v) = params.get(*key) {
             if !v.is_empty() {
                 return Ok(PathBuf::from(v));
@@ -101,10 +106,44 @@ pub fn handle_search(params: &HashMap<String, String>) -> CliResponse {
 // They're routed through `dispatch_inbox_post` registered in main.rs.
 
 pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
-    let workspace = match need_project_path(params) {
-        Ok(p) => p,
-        Err(r) => return r,
+    // Compose TARGET (who receives the inbox item):
+    //
+    // Prefer `workspace=` / `target=` — the same recipient keys as live
+    // `k2 msg`. Those are NEVER rewritten by stamp_principal (sender
+    // identity only overwrites `project` / `project_path` / `from`).
+    //
+    // Fall back to `project=` / `project_path` for older clients and for
+    // owner ambient compose-into-self (no recipient key). #36 retest proved
+    // that fighting stamp by "restoring" project= is fragile: a partial
+    // restore left project_path as the caller and need_project_path wrote
+    // into the sender's own inbox while the peer gate saw same-workspace.
+    let target_token = opt_param(params, "workspace")
+        .or_else(|| opt_param(params, "target"))
+        .or_else(|| opt_param(params, "project"))
+        .or_else(|| opt_param(params, "project_path"))
+        .unwrap_or_default();
+    if target_token.is_empty() {
+        return CliResponse::bad_request(
+            "Missing workspace (or target/project) — the inbox to compose into",
+        );
+    }
+    let Some(resolved_path) = crate::workspace_msg::resolve_workspace(&target_token) else {
+        // Same "unknown workspace" shape as live msg — not a connection
+        // deny. CLI maps this to exit 1 (not exit 3).
+        return crate::workspace_routes::workspace_not_found_response(&target_token);
     };
+    // C2: composing into ANOTHER workspace's inbox requires a local
+    // connection when the caller is a scoped principal. Owner ambient
+    // (no principal) bypasses. Identity comes from stamped principal —
+    // never free-text `--from`.
+    let principal = crate::caller_workspace::principal_from_params(params);
+    match crate::comms::gate_cross_workspace(principal.as_ref(), &resolved_path) {
+        Ok(()) => {}
+        Err(Some(resp)) => return resp,
+        Err(None) => {
+            return crate::workspace_routes::workspace_not_found_response(&target_token);
+        }
+    }
     let title = str_param(params, "title");
     if title.is_empty() {
         return CliResponse::bad_request("Missing title");
@@ -113,6 +152,7 @@ pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
     let priority = opt_param(params, "priority");
     let source = opt_param(params, "source");
     let from = opt_param(params, "from");
+    let workspace = PathBuf::from(&resolved_path);
     match k2_core::inbox::compose(
         &workspace,
         &title,
@@ -256,8 +296,8 @@ const GLOSSARY: &[GlossaryEntry] = &[
     },
     GlossaryEntry {
         term: "connections",
-        summary: "Cross-workspace links: which workspaces can read each other's status",
-        definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, A can read B's `who` / `activity` / inbox presence; B can show up in A's `workspace list`. Used for declaring \"these workspaces work together\" so K2SO surfaces the right context.\n\nManage via: `k2so connections list` / `add <path>` / `remove <path>`. Connections are symmetric (both sides see each other) and persisted per-workspace.\n\nNOT the same as: skill profiles (`k2so skills`), live sessions (`k2so workspace list --running`), or ngrok tunnel state (`k2so daemon companion`).",
+        summary: "Cross-workspace links: local peers for msg/read/inbox + roster",
+        definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, both sides see each other in `k2 connections list`, and agent-initiated `k2 msg` / `k2 msg --inbox` / `k2 read` to that peer is allowed. Without a connection (and outside same-workspace), those verbs return exit 3 with code `not_connected`.\n\nManage via: `k2 connections list` / `add <name|path>` / `remove <name>`. `list --json` is supported. Connections are symmetric and persisted per-workspace.\n\nAgent create/remove is OFF by default: gated agents get exit 3 with code `agents_create_connections_disabled` until the owner enables Settings → K2 Connect → Allow agents to create connections (or the per-workspace toggle). `list` is always allowed.\n\nNOT the same as: skill profiles (`k2 skills`), live sessions (`k2 workspace list --running`), or ngrok tunnel state (`k2 tunnel` / `k2 daemon companion`).",
     },
     GlossaryEntry {
         term: "feedback",
@@ -409,5 +449,74 @@ pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliRespons
         "/cli/inbox/respond" => handle_respond_post(params),
         "/cli/inbox/migrate" => handle_migrate_post(params),
         _ => CliResponse::not_found(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_token::HookPrincipal;
+    use std::collections::HashMap;
+
+    /// #36: stamp rewrites project= to the caller; `workspace=` (recipient
+    /// key, same as live msg) must still be the compose target.
+    #[test]
+    fn compose_target_uses_workspace_key_after_stamp() {
+        let _ = k2_core::db::init_for_tests();
+        let caller_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let caller_path = "/tmp/k2-compose-caller-ws";
+        let peer_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let peer_path = "/tmp/k2-compose-peer-ws";
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+                rusqlite::params![caller_id, caller_path, "Caller"],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+                rusqlite::params![peer_id, peer_path, "Peer"],
+            )
+            .unwrap();
+        }
+        let principal = HookPrincipal {
+            workspace_uuid: caller_id.to_string(),
+            agent_address: caller_id.to_string(),
+        };
+        let mut params = HashMap::new();
+        // New CLI shape: recipient in workspace=, not project=.
+        params.insert("workspace".to_string(), peer_path.to_string());
+        params.insert("title".to_string(), "gate-check".to_string());
+        params.insert("body".to_string(), "x".to_string());
+        crate::caller_workspace::stamp_principal(&mut params, &principal);
+        // After stamp, project is caller; workspace must still be peer.
+        assert_eq!(
+            params.get("project").map(String::as_str),
+            Some(caller_path),
+            "stamp forces project to caller"
+        );
+        assert_eq!(
+            params.get("workspace").map(String::as_str),
+            Some(peer_path),
+            "stamp must NOT touch workspace= recipient"
+        );
+
+        // No relation → gate denies (not_connected), does not write.
+        let resp = crate::caller_workspace::with_request_principal(Some(principal.clone()), || {
+            handle_compose_post(&params)
+        });
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert!(
+            resp.body.contains("not_connected"),
+            "expected not_connected, got {}",
+            resp.body
+        );
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![caller_id]);
+        let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![peer_id]);
     }
 }

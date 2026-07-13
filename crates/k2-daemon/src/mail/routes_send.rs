@@ -249,11 +249,14 @@ fn dispatch_and_respond(
     msg: &OutboundMessage,
     gate: Gate,
     wait_timeout: Option<u64>,
+    send_after: Option<i64>,
 ) -> CliResponse {
     let store = DbOutboundStore::default();
+    let now = now_secs();
+    let future_schedule = send_after.filter(|t| *t > now);
     let engine_client;
-    let backend: Option<&dyn SubmitBackend> = match gate {
-        Gate::On => match domains::engine_from_db() {
+    let backend: Option<&dyn SubmitBackend> = match (gate, future_schedule) {
+        (Gate::On, None) => match domains::engine_from_db() {
             Ok((client, _)) => {
                 engine_client = client;
                 Some(&engine_client)
@@ -262,9 +265,14 @@ fn dispatch_and_respond(
         },
         _ => None,
     };
-    // The wait slot is claimed BEFORE queueing: a fanned-out caller is
-    // refused without consuming queue/audit budget (pre-mortem #10 —
-    // same RAII cap as the S4 wait).
+    if wait_timeout.is_some() && future_schedule.is_some() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "--wait cannot combine with --at/--in — schedule the send, then poll \
+             'k2 mail outbox <id>' (or cancel with 'k2 mail outbox cancel <id>')",
+        );
+    }
     let _slot = if wait_timeout.is_some() && gate == Gate::Approval {
         match WaitSlot::try_acquire(project_id) {
             Some(s) => Some(s),
@@ -287,15 +295,35 @@ fn dispatch_and_respond(
     } else {
         None
     };
-    let req = OutboundRequest { project_id, agent_name, account_id, message: msg };
-    let outcome = match send::gate_and_dispatch(&store, backend, gate, &req, now_secs()) {
+    let req = OutboundRequest {
+        project_id,
+        agent_name,
+        account_id,
+        message: msg,
+        send_after,
+    };
+    let outcome = match send::gate_and_dispatch(&store, backend, gate, &req, now) {
         Ok(o) => o,
         Err(e) => return send_error_response(e),
     };
     match outcome {
-        SendOutcome::Queued { id } => {
-            // Notify the owner (content-free payload — the Approvals
-            // tab refetches; feedback-notification conventions).
+        SendOutcome::Scheduled { id, send_after } => {
+            let when = crate::mail::schedule::format_send_after(send_after);
+            ok_json(serde_json::json!({
+                "ok": true,
+                "queued": true,
+                "scheduled": true,
+                "id": id,
+                "status": "scheduled",
+                "sendAfter": send_after,
+                "sendAfterRfc3339": when,
+                "hint": format!(
+                    "scheduled ({id}) — will leave after {when}; track with \
+                     'k2 mail outbox {id}', cancel with 'k2 mail outbox cancel {id}'"
+                ),
+            }))
+        }
+        SendOutcome::Queued { id, send_after } => {
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::MailSendApprovalRequested,
                 serde_json::json!({
@@ -305,7 +333,7 @@ fn dispatch_and_respond(
                 }),
             );
             let Some(timeout_secs) = wait_timeout else {
-                return ok_json(serde_json::json!({
+                let mut body = serde_json::json!({
                     "ok": true,
                     "queued": true,
                     "id": id,
@@ -314,10 +342,19 @@ fn dispatch_and_respond(
                         "queued for approval ({id}) — your human decides in Settings → \
                          Email → Approvals; track with 'k2 mail outbox {id}'"
                     ),
-                }));
+                });
+                if let Some(after) = send_after {
+                    body["sendAfter"] = serde_json::json!(after);
+                    body["sendAfterRfc3339"] =
+                        serde_json::json!(crate::mail::schedule::format_send_after(after));
+                    body["hint"] = serde_json::json!(format!(
+                        "queued for approval ({id}) — after approve, sends after {}; \
+                         track with 'k2 mail outbox {id}'",
+                        crate::mail::schedule::format_send_after(after)
+                    ));
+                }
+                return ok_json(body);
             };
-            // §11.1.4: block until decided (bounded in-handler poll —
-            // the dispatcher runs this arm in spawn_blocking).
             let mut poll = || -> Result<(String, Option<String>), String> {
                 match store.load(&id)? {
                     Some(row) => Ok((row.status, row.note)),
@@ -341,8 +378,6 @@ fn dispatch_and_respond(
                     "statusNote": send::status_note(&db_status),
                     "note": note,
                 })),
-                // Timeout: the message is STILL QUEUED (exit 2 at the
-                // CLI; §11.1.4 wording).
                 Ok(None) => ok_json(serde_json::json!({
                     "ok": true,
                     "id": id,
@@ -379,7 +414,20 @@ fn dispatch_and_respond(
     }
 }
 
-// ── LINKED send (§17.5, UNGATED — SMTP submission) ──────────────────────
+// ── LINKED send (§17.5, GATED — same mail_agent_send as hosted) ─────────
+
+/// Apply the workspace `mail_agent_send` gate to a linked/BYO SMTP send
+/// (E4 / hole #3). Hosted already ran this before Stalwart; linked used
+/// to bypass it. Semantics via [`send::allow_linked_send`]: off → 403
+/// `gated`; approval → 403 `gated` with a hosted-only-queue teaching;
+/// on → allow. Fail-closed on unreadable/unrecognized mode.
+fn require_linked_send_gate(project_path: &str) -> Result<(), CliResponse> {
+    let gate = match send::gate_for_path(project_path) {
+        Ok(g) => g,
+        Err(e) => return Err(send_error_response(e)),
+    };
+    send::allow_linked_send(gate).map_err(send_error_response)
+}
 
 /// Resolve a linked inbox's vaulted app-password (same key as IMAP).
 /// Missing/unreadable → 503 not_ready with the reconnect pointer (never
@@ -411,15 +459,6 @@ fn linked_password(inbox: &MailExternalInbox) -> Result<String, CliResponse> {
     }
 }
 
-/// UNGATED linked send over SMTP. `can_send` (effective 'send' on the
-/// linked inbox) has ALREADY passed. Linked send is deliberately NOT
-/// behind the `mail_agent_send` off/approval/on gate for now — Rosson:
-/// unified gating for linked lands with the wider email layer.
-///
-/// ⚠ FUTURE GATE HOME: a per-message linked-send governance check (and
-/// any audit row) belongs right HERE, before the SMTP submission — the
-/// hosted path's queue/audit/rate-limit machinery is intentionally NOT
-/// applied to linked yet.
 // ── Attachments (§17.5 send/reply): daemon reads workspace-relative ─────
 
 /// Max attachments per message, and the per-file / total size caps
@@ -602,6 +641,10 @@ fn hosted_attachments_unsupported() -> CliResponse {
     )
 }
 
+/// Linked send over SMTP after `can_send` (effective 'send') AND the
+/// workspace `mail_agent_send` gate ([`require_linked_send_gate`]) have
+/// both passed. Audit/rate-limit machinery stays hosted-side; once SMTP
+/// succeeds we record a submitted outbox row (issue #31.5).
 fn dispatch_linked_send(
     project_id: &str,
     agent_name: &str,
@@ -680,9 +723,9 @@ fn record_linked_outbox(
     }
 }
 
-/// UNGATED linked REPLY over SMTP (same governance stance as
-/// [`dispatch_linked_send`]). Fetches the source over IMAP, threads, and
-/// submits. `source_uid_token` is the linked message's `uid:…` id.
+/// Linked REPLY over SMTP (same gate as [`dispatch_linked_send`]).
+/// Fetches the source over IMAP, threads, and submits.
+/// `source_uid_token` is the linked message's `uid:…` id.
 fn dispatch_linked_reply(
     project_id: &str,
     agent_name: &str,
@@ -784,9 +827,9 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     };
 
     // Resolve the sender FIRST — its SOURCE decides the whole pipeline:
-    // hosted goes through Stalwart submission + the mail_agent_send gate;
-    // LINKED goes out over SMTP and is UNGATED (§17.5). `can_send` masks
-    // any no-access case identically for both sources.
+    // hosted → Stalwart + mail_agent_send gate; LINKED → same
+    // mail_agent_send gate then SMTP (E4). `can_send` masks any
+    // no-access case identically for both sources.
     let from_inbox = match resolve_from_inbox(&project_id, v["from"].as_str()) {
         Ok(i) => i,
         Err(resp) => return resp,
@@ -827,9 +870,22 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         );
     }
 
+    let schedule_requested = v["sendAt"].as_str().or_else(|| v["send_at"].as_str()).is_some()
+        || v["sendIn"].as_str().or_else(|| v["send_in"].as_str()).is_some();
+
     match from_inbox.source {
-        // ── LINKED: ungated SMTP submission (§17.5) ──
+        // ── LINKED: mail_agent_send gate then SMTP (§17.5 / E4) ──
         Source::Linked => {
+            if schedule_requested {
+                return error_response(
+                    "400 Bad Request",
+                    "usage",
+                    "--at/--in scheduling is for hosted K2 mailboxes; linked/BYO sends                      immediately over SMTP (no schedule queue)",
+                );
+            }
+            if let Err(resp) = require_linked_send_gate(&path) {
+                return resp;
+            }
             let Some(inbox) = from_inbox.linked else {
                 return error_response(
                     "502 Bad Gateway",
@@ -872,9 +928,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 );
             };
             // The D4 gate — fail-closed reader (tested in mail::send).
-            let gate = match send::effective_gate(Ok(
-                k2_core::workspace::settings::mail_agent_send_for_path(&path),
-            )) {
+            let gate = match send::gate_for_path(&path) {
                 Ok(g) => g,
                 Err(e) => return send_error_response(e),
             };
@@ -903,6 +957,14 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 in_reply_to: None,
                 references: None,
             };
+            let send_after = match crate::mail::schedule::resolve_send_after(
+                v["sendAt"].as_str().or_else(|| v["send_at"].as_str()),
+                v["sendIn"].as_str().or_else(|| v["send_in"].as_str()),
+                now_secs(),
+            ) {
+                Ok(t) => t,
+                Err(e) => return send_error_response(e),
+            };
             dispatch_and_respond(
                 &project_id,
                 &path,
@@ -911,6 +973,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 &msg,
                 gate,
                 wait_timeout,
+                send_after,
             )
         }
     }
@@ -968,7 +1031,8 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
     // can SEND from — the address rides inside the opaque id (S4) and
     // re-passes the masked ownership gate here. Resolving the sender's
     // SOURCE first decides the pipeline (hosted → governed Stalwart;
-    // LINKED → ungated SMTP, §17.5) — exactly like `handle_send`.
+    // LINKED → same mail_agent_send gate then SMTP, E4) — like
+    // `handle_send`.
     let Some((address, email_id)) = messages::decode_message_id(token) else {
         return error_response(
             "400 Bad Request",
@@ -1006,8 +1070,11 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
     }
 
     match from_inbox.source {
-        // ── LINKED: ungated threaded SMTP reply (§17.5) ──
+        // ── LINKED: mail_agent_send gate then threaded SMTP (E4) ──
         Source::Linked => {
+            if let Err(resp) = require_linked_send_gate(&path) {
+                return resp;
+            }
             let Some(inbox) = from_inbox.linked else {
                 return error_response(
                     "502 Bad Gateway",
@@ -1043,9 +1110,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 return masked();
             };
             // Gate: off refuses BEFORE any engine dial.
-            let gate = match send::effective_gate(Ok(
-                k2_core::workspace::settings::mail_agent_send_for_path(&path),
-            )) {
+            let gate = match send::gate_for_path(&path) {
                 Ok(g) => g,
                 Err(e) => return send_error_response(e),
             };
@@ -1101,6 +1166,14 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                     ctx.message_id.as_deref(),
                 ),
             };
+            let send_after = match crate::mail::schedule::resolve_send_after(
+                v["sendAt"].as_str().or_else(|| v["send_at"].as_str()),
+                v["sendIn"].as_str().or_else(|| v["send_in"].as_str()),
+                now_secs(),
+            ) {
+                Ok(t) => t,
+                Err(e) => return send_error_response(e),
+            };
             dispatch_and_respond(
                 &project_id,
                 &path,
@@ -1109,6 +1182,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 &msg,
                 gate,
                 wait_timeout,
+                send_after,
             )
         }
     }
@@ -1121,14 +1195,21 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
 /// `project` (required) · `id` · `limit` (default 20, max 100).
 /// Expired pending items lazily auto-deny on every read (§12).
 pub fn handle_outbox(params: &HashMap<String, String>) -> CliResponse {
-    let project = match crate::cli::need_project(params) {
-        Ok(p) => p,
-        Err(_) => {
-            return error_response(
-                "400 Bad Request",
-                "usage",
-                "missing 'project' (workspace name | path | UUID)",
-            )
+    // Wave 0: principal-or-claim identity (stamped scoped principal wins
+    // over client project= / K2_PROJECT_PATH).
+    let (_path, project_id) = match crate::mail::identity::resolve_caller_params(params) {
+        Ok(v) => v,
+        Err(resp) => {
+            if crate::caller_workspace::principal_from_params(params).is_none()
+                && crate::cli::need_project(params).is_err()
+            {
+                return error_response(
+                    "400 Bad Request",
+                    "usage",
+                    "missing 'project' (workspace name | path | UUID)",
+                );
+            }
+            return resp;
         }
     };
     let limit: usize = match params.get("limit").map(|v| v.parse::<usize>()) {
@@ -1141,10 +1222,6 @@ pub fn handle_outbox(params: &HashMap<String, String>) -> CliResponse {
                 "invalid 'limit' — a number from 1 to 100 (default 20)",
             )
         }
-    };
-    let (_path, project_id) = match resolve_caller(&project) {
-        Ok(p) => p,
-        Err(resp) => return resp,
     };
     send::auto_deny_expired(now_secs());
 
@@ -1176,6 +1253,50 @@ pub fn handle_outbox(params: &HashMap<String, String>) -> CliResponse {
         "count": list.len(),
         "outbox": list,
     }))
+}
+
+// ── POST /cli/mail/outbox/cancel ────────────────────────────────────────
+
+pub fn handle_outbox_cancel(body: &[u8]) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let Some(project) = v["project"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'project' (workspace name | path | UUID)",
+        );
+    };
+    let Some(id) = v["id"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'id' — a scheduled outbound id (out_…)",
+        );
+    };
+    let (path, project_id) = match resolve_caller(project) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let agent_name = k2_core::workspace::display::agent_display_name(&path);
+    let store = DbOutboundStore::default();
+    match crate::mail::schedule::cancel_scheduled(
+        &store,
+        id,
+        &project_id,
+        &format!("agent:{agent_name}"),
+        now_secs(),
+    ) {
+        Ok(()) => ok_json(serde_json::json!({
+            "ok": true,
+            "id": id,
+            "status": "rejected",
+            "hint": format!("cancelled scheduled send {id} — it will not leave the box"),
+        })),
+        Err(e) => send_error_response(e),
+    }
 }
 
 // ── GET /cli/mail/approvals/list ────────────────────────────────────────
@@ -1290,6 +1411,19 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
                 "id": id,
                 "status": "submitted",
                 "hint": "approved and accepted-for-delivery",
+            }))
+        }
+        Ok(send::ApproveOutcome::Scheduled { send_after }) => {
+            ok_json(serde_json::json!({
+                "ok": true,
+                "id": id,
+                "status": "scheduled",
+                "sendAfter": send_after,
+                "sendAfterRfc3339": crate::mail::schedule::format_send_after(send_after),
+                "hint": format!(
+                    "approved — held until {} (scheduled)",
+                    crate::mail::schedule::format_send_after(send_after)
+                ),
             }))
         }
         Ok(send::ApproveOutcome::FailedToSubmit(error)) => {
@@ -1970,6 +2104,7 @@ mod tests {
                     status: "pending",
                     decided_by: None,
                     attachment_names: &[],
+                    send_after: None,
                     now,
                 })
                 .expect("seed audit row");
@@ -2118,6 +2253,7 @@ mod tests {
                 status: "pending",
                 decided_by: None,
                 attachment_names: &[],
+                send_after: None,
                 now: now_secs(),
             })
             .expect("seed foreign row");
@@ -2132,7 +2268,7 @@ mod tests {
         cleanup(&project2, None);
     }
 
-    // ── LINKED send (§17.5) — routing + ungated + masking ──
+    // ── LINKED send (§17.5 / E4) — routing + mail_agent_send gate ──
 
     /// Seed a linked inbox bound to `project_id` at `primary_level`.
     fn seed_linked(project_id: &str, address: &str, primary_level: &str) -> String {
@@ -2164,22 +2300,56 @@ mod tests {
         let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![project_id]);
     }
 
-    /// §17.5: a linked inbox at 'send' is UNGATED — gating 'off' does NOT
-    /// block it (the hosted-only D4 gate never runs on the linked path).
-    /// With no vaulted credential the send stops at 503 not_ready, having
-    /// already proven the linked branch was taken and the gate skipped.
+    /// E4: linked send honors `mail_agent_send` — off → 403 `gated`
+    /// (same teaching as hosted), never reaches SMTP/credentials.
     #[test]
-    fn linked_send_is_ungated_and_reaches_the_smtp_stage() {
+    fn linked_send_is_gated_off_like_hosted() {
         let (name, path) = unique("lsend");
         let project_id = insert_project(&name, &path);
         let linked = format!("me-{}@linked.example", &project_id[..8]);
         seed_linked(&project_id, &linked, "send");
-        // Gating OFF — a hosted send would 403 here; linked must not.
         set_gating(&path, "off");
         let resp = handle_send(&send_body(&path, serde_json::json!({ "from": linked })));
-        assert_ne!(resp.status, "403 Forbidden", "linked send must not be gated: {}", resp.body);
-        // No vaulted credential → 503 not_ready (the SMTP stage was
-        // reached, gating skipped). Mirrors the S9 draft test pattern.
+        assert_eq!(resp.status, "403 Forbidden", "linked send must honor off: {}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "gated");
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains("Settings → Email → Sending"), "{hint}");
+        assert_eq!(outbound_count(&project_id), 0, "off mode never audits linked");
+        cleanup_linked(&project_id);
+    }
+
+    /// E4: linked send under approval mode refuses with a clear
+    /// teaching (approval queue is hosted-only) — no SMTP, no queue row.
+    #[test]
+    fn linked_send_approval_mode_refuses_with_teaching() {
+        let (name, path) = unique("lapp");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        seed_linked(&project_id, &linked, "send");
+        set_gating(&path, "approval");
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "from": linked })));
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "gated");
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains("approval"), "{hint}");
+        assert!(hint.contains("hosted"), "{hint}");
+        assert_eq!(outbound_count(&project_id), 0, "approval does not queue linked");
+        cleanup_linked(&project_id);
+    }
+
+    /// E4: linked send with mode `on` reaches the SMTP stage (no
+    /// vaulted credential → 503 not_ready — proves the gate passed).
+    #[test]
+    fn linked_send_on_mode_reaches_the_smtp_stage() {
+        let (name, path) = unique("lon");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        seed_linked(&project_id, &linked, "send");
+        set_gating(&path, "on");
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "from": linked })));
+        assert_ne!(resp.status, "403 Forbidden", "on must allow linked: {}", resp.body);
         assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
         assert_eq!(body_json(&resp)["error"]["code"], "not_ready");
         cleanup_linked(&project_id);

@@ -441,13 +441,24 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     if let Some(from_ws) = req.from_workspace.as_deref().filter(|s| !s.is_empty()) {
         let remote_addr = format!("{agent}@{}", peer_host(&peer.subdomain));
         if !k2_core::connections::is_remote_connection(from_ws, &remote_addr) {
-            return json_err(
-                "403 Forbidden",
-                format!(
-                    "'{remote_addr}' is not a connection — add it with \
-                     `k2 connections add {remote_addr}`"
-                ),
-            );
+            // C2 teaching shape parity with local not_connected (mail/dns):
+            // stable code + hint so CLI exit-3 mappers recognize it.
+            return CliResponse {
+                status: "403 Forbidden",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "ok": false,
+                    "error": {
+                        "code": "not_connected",
+                        "hint": format!(
+                            "'{remote_addr}' is not a connection — add it with \
+                             `k2 connections add {remote_addr}` (or ask your human: \
+                             Settings → Connections)."
+                        ),
+                    },
+                })
+                .to_string(),
+            };
         }
     }
 

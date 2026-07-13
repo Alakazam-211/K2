@@ -408,6 +408,37 @@ pub fn is_remote_connection(source_project_path_or_id: &str, remote_addr: &str) 
     WorkspaceRemoteConnection::exists(&conn, &source_id, remote_addr).unwrap_or(false)
 }
 
+/// C2 (0.40.45) — THE LOCAL SAME-DAEMON PEER GATE.
+///
+/// Returns `true` when `a` and `b` are the same project id, OR when a
+/// `workspace_relations` row links them in either direction (the
+/// bidirectional awareness model — one row per pair is enough).
+/// Fails CLOSED: empty ids, unresolvable rows, or DB errors yield
+/// `false`. Used by agent-initiated `msg` / `read` / `inbox compose`
+/// into another workspace; owner ambient tokens bypass at the route
+/// layer (Phase 2 residual).
+pub fn are_local_peers(caller_project_id: &str, target_project_id: &str) -> bool {
+    let a = caller_project_id.trim();
+    let b = target_project_id.trim();
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a == b {
+        return true;
+    }
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT 1 FROM workspace_relations \
+         WHERE (source_project_id = ?1 AND target_project_id = ?2) \
+            OR (source_project_id = ?2 AND target_project_id = ?1) \
+         LIMIT 1",
+        rusqlite::params![a, b],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
 /// Dispatch by `action`. Returns a JSON-serialized string.
 ///
 /// **0.39.0 list-shape change**: `action == "list"` now returns the
@@ -420,12 +451,54 @@ pub fn is_remote_connection(source_project_path_or_id: &str, remote_addr: &str) 
 /// workspace==agent model. Callers that still need the raw
 /// directional rows can use `WorkspaceRelation::list_for_source` /
 /// `list_for_target` directly.
+///
+/// # C1 (0.40.45) — agents-may-create-connections gate
+///
+/// `add` / `remove` are gated for non-privileged actors:
+/// - **Privileged** (owner token, Owner/Admin connect-user): always allowed.
+/// - **Agent / non-owner**: allowed only when
+///   [`crate::workspace::settings::agents_can_create_connections_for_path`]
+///   is true (app master OR per-workspace; default OFF).
+///
+/// `list` is never gated. Pass `actor_is_privileged = true` for owner-side
+/// and in-process setup callers; the daemon computes the flag from the
+/// request token / principal.
 pub fn connections(
     project_path: &str,
     action: &str,
     target: Option<&str>,
     rel_type: Option<&str>,
 ) -> Result<String, String> {
+    // Default: privileged (owner-like). In-process callers (tests,
+    // federation fixtures, Tauri) are owner-side. The daemon agent path
+    // must call [`connections_for_actor`] with `actor_is_privileged=false`.
+    connections_for_actor(project_path, action, target, rel_type, true)
+}
+
+/// Teaching text when an agent is denied connection mutate (add/remove).
+/// Canonical owner path — must match CLI exit-3 prose / Settings labels.
+pub const CONNECTIONS_MUTATE_DENIED_HINT: &str = "this agent isn't allowed to create or remove \
+connections — the owner can enable it in Settings → K2 Connect (Allow agents to create connections) \
+or Workspaces → (workspace) → Allow agents to create connections";
+
+/// Same as [`connections`] but with an explicit actor-privilege bit.
+///
+/// When `actor_is_privileged` is false and the effective
+/// `agents_can_create_connections` toggle is off, `add`/`remove` return
+/// [`CONNECTIONS_MUTATE_DENIED_HINT`].
+pub fn connections_for_actor(
+    project_path: &str,
+    action: &str,
+    target: Option<&str>,
+    rel_type: Option<&str>,
+    actor_is_privileged: bool,
+) -> Result<String, String> {
+    if matches!(action, "add" | "remove")
+        && !actor_is_privileged
+        && !crate::workspace::settings::agents_can_create_connections_for_path(project_path)
+    {
+        return Err(CONNECTIONS_MUTATE_DENIED_HINT.to_string());
+    }
     match action {
         "list" => {
             let peers = list_peers(project_path)?;
@@ -757,6 +830,35 @@ mod tests {
         )
         .expect("insert project");
         (path, id)
+    }
+
+    // ── C2 (0.40.45): are_local_peers pure peer-id gate ─────────────
+
+    #[test]
+    fn are_local_peers_same_id_ok() {
+        let (_p, id) = make_project("same-id");
+        assert!(are_local_peers(&id, &id));
+    }
+
+    #[test]
+    fn are_local_peers_strangers_false() {
+        let (_pa, a) = make_project("stranger-a");
+        let (_pb, b) = make_project("stranger-b");
+        assert!(!are_local_peers(&a, &b));
+        assert!(!are_local_peers(&b, &a));
+    }
+
+    #[test]
+    fn are_local_peers_linked_either_direction() {
+        let (_pa, a) = make_project("link-a");
+        let (_pb, b) = make_project("link-b");
+        let db = crate::db::shared();
+        let conn = db.lock();
+        WorkspaceRelation::create(&conn, &Uuid::new_v4().to_string(), &a, &b, "collaborator")
+            .expect("link");
+        drop(conn);
+        assert!(are_local_peers(&a, &b), "forward edge");
+        assert!(are_local_peers(&b, &a), "reverse awareness");
     }
 
     #[test]
@@ -1778,6 +1880,80 @@ mod tests {
             // A different host stays unrouted.
             assert!(!host_has_trusted_peer("other.k2.dev"));
             assert!(!host_has_trusted_peer(""));
+        });
+    }
+
+    // ── C1 (0.40.45): agents_can_create_connections gate ───────────────
+
+    /// Agent (non-privileged) is denied add/remove when the effective
+    /// toggle is OFF (default). Owner/privileged always allowed.
+    /// Effective OR: app master OR per-workspace unlocks the agent path.
+    #[test]
+    fn agents_create_connections_gate_owner_always_agent_toggle() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let (src_path, _) = make_project("C1GateSrc");
+            let (tgt_path, _) = make_project("C1GateTgt");
+            let _ = tgt_path;
+
+            // Ensure both flags OFF.
+            crate::app_settings::update(serde_json::json!({
+                "agentsCanCreateConnections": false
+            }))
+            .expect("app off");
+            let _ = crate::workspace::settings::update_project_setting(
+                &src_path,
+                "agents_can_create_connections",
+                "0",
+            );
+
+            // Privileged (owner) always allowed even with toggle off.
+            connections_for_actor(&src_path, "add", Some("C1GateTgt"), None, true)
+                .expect("owner add must succeed with toggle off");
+            connections_for_actor(&src_path, "remove", Some("C1GateTgt"), None, true)
+                .expect("owner remove must succeed with toggle off");
+
+            // Agent denied when toggle off.
+            let err = connections_for_actor(&src_path, "add", Some("C1GateTgt"), None, false)
+                .expect_err("agent add must fail with toggle off");
+            assert!(
+                err.contains("Allow agents to create connections"),
+                "deny must teach Settings path; got {err}"
+            );
+            assert!(
+                err.contains(CONNECTIONS_MUTATE_DENIED_HINT)
+                    || err.contains("isn't allowed to create"),
+                "deny must use the teaching hint; got {err}"
+            );
+
+            // List is never gated for agents.
+            connections_for_actor(&src_path, "list", None, None, false)
+                .expect("agent list must always work");
+
+            // Per-workspace ON → agent allowed.
+            crate::workspace::settings::update_project_setting(
+                &src_path,
+                "agents_can_create_connections",
+                "1",
+            )
+            .expect("ws on");
+            connections_for_actor(&src_path, "add", Some("C1GateTgt"), None, false)
+                .expect("agent add with per-workspace on");
+            connections_for_actor(&src_path, "remove", Some("C1GateTgt"), None, false)
+                .expect("agent remove with per-workspace on");
+
+            // Per-workspace OFF, app master ON → agent allowed (OR).
+            crate::workspace::settings::update_project_setting(
+                &src_path,
+                "agents_can_create_connections",
+                "0",
+            )
+            .expect("ws off");
+            crate::app_settings::update(serde_json::json!({
+                "agentsCanCreateConnections": true
+            }))
+            .expect("app on");
+            connections_for_actor(&src_path, "add", Some("C1GateTgt"), None, false)
+                .expect("agent add with app master on");
         });
     }
 }

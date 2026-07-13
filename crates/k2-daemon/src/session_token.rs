@@ -436,7 +436,21 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/tunnel/",
         "/cli/daemon/",
         "/cli/sessions/v2/", // PTY spawn/close = RCE-adjacent
-        "/cli/terminal/",
+        // `/cli/terminal/*` mutations (write/spawn/kill/…) stay denied;
+        // C2 admits exact `/cli/terminal/read` via ALLOW_EXACT below so
+        // agents can peer-gated `k2 read` of connected workspaces.
+        "/cli/terminal/write",
+        "/cli/terminal/create",
+        "/cli/terminal/kill",
+        "/cli/terminal/resize",
+        "/cli/terminal/kill-foreground",
+        "/cli/terminal/scroll",
+        "/cli/terminal/log",
+        "/cli/terminal/lifecycle-write",
+        "/cli/terminal/set-focus",
+        "/cli/terminal/pin-size",
+        "/cli/terminal/send-message",
+        "/cli/terminal/classify",
         // Wave 0: mail owner/admin surfaces stay off the scoped allowlist
         // (server lifecycle, domains, config, approvals, external link,
         // access management, doctor probes). Agent mail verbs are admitted
@@ -463,6 +477,9 @@ pub fn is_agent_verb(path: &str) -> bool {
     const ALLOW_EXACT: &[&str] = &[
         "/hook/complete",
         "/cli/workspace/msg",
+        // C2: workspace-addressed live terminal peek (`k2 read <ws>`).
+        // Peer gate runs in the handler when principal is scoped.
+        "/cli/terminal/read",
         // #58 Phase-1 close: awareness publish is the agent's peer-signal
         // egress (status/reservation/presence). +1 allowlist delta this
         // release. `subscribe` (a WS) is NOT here — read-only fan-out stays
@@ -483,6 +500,11 @@ pub fn is_agent_verb(path: &str) -> bool {
         // filesystem and never shells out. Not under any DENY_PREFIX
         // (`/cli/browser/` is new with this verb).
         "/cli/browser/open-url",
+        // C1 (0.40.45): workspace connections list/add/remove. Mutate is
+        // further gated by agents_can_create_connections_for_path (owner
+        // always bypasses; agents need the effective toggle ON). List is
+        // free for any authenticated agent principal.
+        "/cli/connections",
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
@@ -1111,6 +1133,8 @@ mod tests {
         assert!(is_agent_verb("/cli/dns/records/add"));
         assert!(is_agent_verb("/cli/dns/records/remove"));
         assert!(is_agent_verb("/cli/dns/verify"));
+        // C1 (0.40.45): connections list/add/remove (mutate toggle-gated).
+        assert!(is_agent_verb("/cli/connections"));
     }
 
     #[test]
@@ -1126,6 +1150,36 @@ mod tests {
             "/cli/mail/doctor",
         ] {
             assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
+        }
+    }
+
+    /// E3 — prove scoped agents cannot self-grant: every access management
+    /// verb is DENY_PREFIXES (`/cli/mail/access/`) before ALLOW_PREFIXES
+    /// `/cli/mail/`. Mirrors the DNS zones/create denial style.
+    #[test]
+    fn is_agent_verb_denies_mail_access_mutations() {
+        // Agent catalog + read/send stay admitted…
+        assert!(
+            is_agent_verb("/cli/mail/inboxes"),
+            "agent view of the catalog remains an agent verb"
+        );
+        assert!(is_agent_verb("/cli/mail/messages"));
+        assert!(is_agent_verb("/cli/mail/send"));
+        // …but ALL access management verbs are denied (prefix denylist).
+        for p in [
+            "/cli/mail/access/grant",
+            "/cli/mail/access/revoke",
+            "/cli/mail/access/set-primary",
+            "/cli/mail/access/set-level",
+            "/cli/mail/access/set-manage",
+            // Prefix denial covers nested / unknown sub-paths too.
+            "/cli/mail/access/",
+            "/cli/mail/access/anything-future",
+        ] {
+            assert!(
+                !is_agent_verb(p),
+                "scoped token must NOT reach {p} (no self-grant)"
+            );
         }
     }
 
@@ -1196,14 +1250,18 @@ mod tests {
         // #58 Phase-1 close: publish is the +1 allowlist delta; subscribe
         // (read-only WS) and resolve are NOT widened onto the scoped token.
         assert!(is_agent_verb("/cli/awareness/publish"));
+        // C2: workspace-addressed terminal read is peer-gated agent verb.
+        assert!(
+            is_agent_verb("/cli/terminal/read"),
+            "C2 admits k2 read <ws> for scoped principals (peer-gated)"
+        );
         // The deliberate this-release DENIALS (PRD §B SCOPE HONESTY): these
-        // stay owner/connect-user over TCP.
+        // stay owner/connect-user over TCP (write still denied).
         for p in [
             "/cli/awareness/subscribe",
             "/cli/workspace/resolve",
             "/cli/sessions/list-for-workspace",
             "/cli/terminal/write",
-            "/cli/terminal/read",
         ] {
             assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
         }

@@ -65,6 +65,11 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // (default 0/OFF, fail-closed). Gates agent DNS mutation for
         // THIS workspace; see `dns_manage_allowed_for_path`.
         "dns_manage_enabled",
+        // C1 (0.40.45) — per-workspace agents-may-create-connections
+        // opt-in. Values: '1' | '0' (default 0/OFF, fail-closed). Gates
+        // agent `connections add|remove` for THIS workspace; see
+        // `agents_can_create_connections_for_path`. Owner always bypasses.
+        "agents_can_create_connections",
         // Sandbox v2 (PRD §G2 #1) — per-workspace sandbox FS mode. Values:
         // 'overlay' | 'ro+scratch' (default 'overlay'). See `get_workspace_fs_mode`.
         "sandbox_fs_mode",
@@ -148,6 +153,13 @@ pub fn update_project_setting(
             "dns_manage_enabled must be '0' or '1', got {value:?}"
         ));
     }
+    // C1 (0.40.45) — same discipline for the per-workspace
+    // agents-may-create-connections flag (migration 0085).
+    if field == "agents_can_create_connections" && value != "0" && value != "1" {
+        return Err(format!(
+            "agents_can_create_connections must be '0' or '1', got {value:?}"
+        ));
+    }
     // Same discipline for the host-session skip-permissions opt-in
     // (migration 0069) — it gates dangerous auto-approve flags, so a typo
     // must never leave it in an undefined state.
@@ -228,7 +240,7 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
                 agent_enabled, \
                 pinned, name, tier_id, use_session_stream, allow_remote_instruct, \
-                dns_manage_enabled \
+                dns_manage_enabled, agents_can_create_connections \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| {
@@ -252,6 +264,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "allowRemoteInstruct": row.get::<_, i64>(8).unwrap_or(0) == 1,
                 // DNS K1 — per-workspace DNS-manage opt-in (default 0/OFF).
                 "dnsManageEnabled": row.get::<_, i64>(9).unwrap_or(0) == 1,
+                // C1 — per-workspace agents-may-create-connections (default 0/OFF).
+                "agentsCanCreateConnections": row.get::<_, i64>(10).unwrap_or(0) == 1,
             }))
         },
     )
@@ -415,6 +429,44 @@ pub fn dns_manage_allowed_for_path(project_path: &str) -> bool {
     }
     // Otherwise consult the per-workspace flag.
     get_dns_manage_enabled(project_path)
+}
+
+/// C1 (0.40.45) — read the PER-WORKSPACE agents-may-create-connections
+/// opt-in for `project_path`. Returns `false` (fail-closed) when the
+/// project isn't registered or the column reads NULL. Does NOT consider
+/// the app-level master flag — use
+/// [`agents_can_create_connections_for_path`] for the effective gate.
+pub fn get_agents_can_create_connections(project_path: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_create_connections FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// C1 (0.40.45) — the EFFECTIVE agents-may-create-connections gate for
+/// `project_path`.
+///
+/// An agent may add/remove connections for a workspace iff its
+/// per-workspace flag is set OR the app-level `agentsCanCreateConnections`
+/// master is on. The app-level flag is a GLOBAL MASTER: enabling it once
+/// opts in every workspace, while the default (both OFF) denies,
+/// fail-closed.
+///
+/// This gates ONLY the agent / non-owner path. Owner token and Owner-role
+/// (or Admin) connect-users always may mutate connections — the daemon
+/// short-circuits privileged actors before consulting this helper.
+///
+/// Fail-closed: an unknown/unregistered workspace + app-level off → false.
+pub fn agents_can_create_connections_for_path(project_path: &str) -> bool {
+    if crate::app_settings::load().agents_can_create_connections {
+        return true;
+    }
+    get_agents_can_create_connections(project_path)
 }
 
 // ── K2 Mail (prd-email-server-v1 §12) — gating-setting resolvers ────────
@@ -855,6 +907,90 @@ mod tests {
             .expect("app on");
         assert!(
             dns_manage_allowed_for_path(&path),
+            "app-level master must opt in every workspace",
+        );
+    }
+
+    // ── C1 per-workspace agents-may-create-connections ─────────────
+
+    /// A fresh workspace row defaults to agents-create-connections OFF
+    /// (fail-closed), surfaces as `agentsCanCreateConnections: false`
+    /// in the settings JSON, and round-trips through
+    /// `update_project_setting`.
+    #[test]
+    fn agents_can_create_connections_defaults_off_and_round_trips() {
+        let path = unique_path("agents-conn");
+        let _pid = insert_project(&path);
+
+        let settings = get_project_settings(&path).expect("read default");
+        assert_eq!(settings["agentsCanCreateConnections"], false);
+        assert!(!get_agents_can_create_connections(&path));
+
+        update_project_setting(&path, "agents_can_create_connections", "1").expect("opt in");
+        assert!(get_agents_can_create_connections(&path));
+        let settings = get_project_settings(&path).expect("read on");
+        assert_eq!(settings["agentsCanCreateConnections"], true);
+
+        update_project_setting(&path, "agents_can_create_connections", "0").expect("opt out");
+        assert!(!get_agents_can_create_connections(&path));
+    }
+
+    #[test]
+    fn agents_can_create_connections_rejects_bad_value() {
+        let path = unique_path("agents-conn-bad");
+        let _pid = insert_project(&path);
+        let err = update_project_setting(&path, "agents_can_create_connections", "true")
+            .expect_err("non 0/1 value must be rejected");
+        assert!(
+            err.contains("agents_can_create_connections"),
+            "error should reference the field, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn get_agents_can_create_connections_fails_closed_for_unknown_path() {
+        let path = unique_path("agents-conn-missing");
+        assert!(!get_agents_can_create_connections(&path));
+    }
+
+    /// Effective gate OR semantics (same as dns_manage / remote_instruct):
+    ///   - both OFF → deny
+    ///   - per-workspace ON, app OFF → allow
+    ///   - per-workspace OFF, app ON → allow
+    ///   - unknown path + app OFF → deny
+    #[test]
+    fn agents_can_create_connections_effective_or_semantics() {
+        let _g = HOME_TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        let path = unique_path("agents-conn-effective");
+        let _pid = insert_project(&path);
+
+        crate::app_settings::update(serde_json::json!({ "agentsCanCreateConnections": false }))
+            .expect("app off");
+        update_project_setting(&path, "agents_can_create_connections", "0").expect("ws off");
+        assert!(
+            !agents_can_create_connections_for_path(&path),
+            "both flags off must deny (fail-closed)",
+        );
+
+        let missing = unique_path("agents-conn-effective-missing");
+        assert!(
+            !agents_can_create_connections_for_path(&missing),
+            "unknown workspace path must deny when master is off",
+        );
+
+        update_project_setting(&path, "agents_can_create_connections", "1").expect("ws on");
+        assert!(
+            agents_can_create_connections_for_path(&path),
+            "per-workspace opt-in must allow even with app-level off",
+        );
+
+        update_project_setting(&path, "agents_can_create_connections", "0").expect("ws off again");
+        crate::app_settings::update(serde_json::json!({ "agentsCanCreateConnections": true }))
+            .expect("app on");
+        assert!(
+            agents_can_create_connections_for_path(&path),
             "app-level master must opt in every workspace",
         );
     }

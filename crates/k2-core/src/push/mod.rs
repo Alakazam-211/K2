@@ -352,11 +352,35 @@ pub const ENV_GATEWAY_URL: &str = "K2_PUSH_GATEWAY_URL";
 pub const ENV_GATEWAY_TOKEN: &str = "K2_PUSH_GATEWAY_TOKEN";
 
 impl K2Cloud {
+    /// Normalize a gateway base URL so `send` can always append
+    /// `/push/dispatch` once.
+    ///
+    /// Accepts either form that ships in the wild:
+    /// - base: `https://push.k2.dev` (docs / `from_parts` tests)
+    /// - full dispatch: `https://push.k2.dev/push/dispatch` (some
+    ///   app/settings writers store the full path)
+    ///
+    /// Without this strip, a full-path setting becomes
+    /// `…/push/dispatch/push/dispatch` → gateway 404, so feedback +
+    /// project-chat pushes silently fail while a hand-crafted POST to
+    /// the correct URL still works.
+    pub fn normalize_gateway_base(url: &str) -> String {
+        let mut u = url.trim().trim_end_matches('/').to_string();
+        // Case-insensitive path suffix (env/settings may vary casing).
+        let lower = u.to_ascii_lowercase();
+        if let Some(stripped) = lower.strip_suffix("/push/dispatch") {
+            let keep = stripped.len();
+            u.truncate(keep);
+            u = u.trim_end_matches('/').to_string();
+        }
+        u
+    }
+
     /// Build from resolved config parts. `None` unless BOTH the
     /// gateway URL and the gateway token are present and non-blank —
     /// the dormancy gate, kept pure so it's directly testable.
     pub fn from_parts(url: Option<String>, token: Option<String>) -> Option<Self> {
-        let url = url.map(|s| s.trim().trim_end_matches('/').to_string())?;
+        let url = url.map(|s| Self::normalize_gateway_base(&s))?;
         let token = token.map(|s| s.trim().to_string())?;
         if url.is_empty() || token.is_empty() {
             return None;
@@ -392,7 +416,7 @@ impl K2Cloud {
         sender: std::sync::Arc<dyn DispatchSender>,
     ) -> Self {
         Self {
-            gateway_url: gateway_url.trim_end_matches('/').to_string(),
+            gateway_url: Self::normalize_gateway_base(gateway_url),
             gateway_token: gateway_token.to_string(),
             sender,
         }
@@ -591,6 +615,33 @@ mod tests {
     }
 
     #[test]
+    fn normalize_gateway_base_accepts_base_or_full_dispatch_url() {
+        assert_eq!(
+            K2Cloud::normalize_gateway_base("https://push.k2.dev"),
+            "https://push.k2.dev"
+        );
+        assert_eq!(
+            K2Cloud::normalize_gateway_base("https://push.k2.dev/"),
+            "https://push.k2.dev"
+        );
+        assert_eq!(
+            K2Cloud::normalize_gateway_base("https://push.k2.dev/push/dispatch"),
+            "https://push.k2.dev"
+        );
+        assert_eq!(
+            K2Cloud::normalize_gateway_base("https://push.k2.dev/push/dispatch/"),
+            "https://push.k2.dev"
+        );
+        // from_parts with full-path setting still builds a clean base.
+        let c = K2Cloud::from_parts(
+            Some("https://push.k2.dev/push/dispatch".into()),
+            Some("tok".into()),
+        )
+        .expect("configured");
+        assert_eq!(c.label(), "K2Cloud(https://push.k2.dev)");
+    }
+
+    #[test]
     fn k2cloud_dispatch_payload_is_content_free() {
         let token = unique_token("shape");
         let device_id = format!("dev-push-shape-{}", uuid::Uuid::new_v4());
@@ -598,7 +649,13 @@ mod tests {
             .expect("register device");
 
         let sender = MockSender::new(serde_json::json!({ "results": [] }));
-        let cloud = K2Cloud::with_sender("https://push.k2.dev/", "gw-secret", sender.clone());
+        // Full-path setting form (matches live ~/.k2/settings.json) must
+        // still POST exactly once to …/push/dispatch, not …/dispatch/push/dispatch.
+        let cloud = K2Cloud::with_sender(
+            "https://push.k2.dev/push/dispatch",
+            "gw-secret",
+            sender.clone(),
+        );
         assert_eq!(cloud.label(), "K2Cloud(https://push.k2.dev)");
 
         cloud

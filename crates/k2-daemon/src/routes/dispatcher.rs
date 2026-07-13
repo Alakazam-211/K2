@@ -574,6 +574,7 @@ async fn handle_one_request(
             | "/cli/mail/address/delete"
             | "/cli/mail/send"
             | "/cli/mail/reply"
+            | "/cli/mail/outbox/cancel"
             | "/cli/mail/approvals/approve"
             | "/cli/mail/approvals/deny"
             // S9 external assistant inboxes (PRD §17.5): owner CRUD
@@ -2483,7 +2484,7 @@ async fn handle_one_request(
         // the same process that owns the live companion runtime.
         // Method gate per feedback_post_only_route_guards memory.
         // Remote-access keys (federationEnabled / allowRemoteInstruct /
-        // apiEnabled / dnsManageEnabled)
+        // apiEnabled / dnsManageEnabled / agentsCanCreateConnections)
         // additionally require owner-or-admin — resolved here via the same
         // `token_is_owner_or_admin` tier the federation management routes
         // use, enforced key-aware inside the handler (a Member touching a
@@ -3071,10 +3072,15 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            // C1: relations create/delete need owner-or-admin OR the
+            // agents_can_create_connections toggle (same bar as
+            // /cli/connections add|remove).
+            let actor_is_privileged =
+                super::http::token_is_owner_or_admin(&query, state.token.as_str());
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                dispatch_connect_gap_post(&p_owned, &body_bytes)
+                dispatch_connect_gap_post(&p_owned, &body_bytes, actor_is_privileged)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -3448,27 +3454,23 @@ async fn handle_one_request(
             let (auth_ok, scoped_principal) =
                 token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
             if !auth_ok {
+                // #34: valid scoped passport on owner surface → owner_only
+                // (exit 3), not opaque "invalid or missing token".
                 let _ = stream.read(&mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"invalid or missing token"}"#,
-                )
-                .await;
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
             if crate::mail_routes::is_owner_level_mutation(p)
                 && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
             {
+                // #34: stable owner_only (exit 3) for non-owner callers
+                // that passed dual-auth (e.g. connect-user).
                 let _ = stream.read(&mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"mail server, domain, config, approval, and doctor actions can only be made by the owner or an admin"}}"#,
-                )
-                .await;
+                let r = crate::mail_routes::owner_only_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -3637,8 +3639,14 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // C2: dual-auth (owner OR scoped) so agent-initiated compose into
+        // another workspace is principal-bound and peer-gated. Compose
+        // TARGET is `project=` — preserve it across stamp_principal
+        // (which otherwise rewrites project to the caller's own path).
         p if is_post && post_allowed && p.starts_with("/cli/inbox/") => {
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -3659,9 +3667,27 @@ async fn handle_one_request(
             for (k, v) in super::http::parse_form_body(&body_bytes) {
                 params.insert(k, v);
             }
+            // Preserve compose TARGET across identity stamp. Stamp rewrites
+            // both keys to the caller's path — restore BOTH to the same
+            // target token so need_project_path cannot prefer a stale
+            // project_path and silently write to the caller's own inbox (#36).
+            let compose_target = params
+                .get("project")
+                .or_else(|| params.get("project_path"))
+                .cloned()
+                .filter(|s| !s.trim().is_empty());
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+                if let Some(t) = compose_target {
+                    params.insert("project".to_string(), t.clone());
+                    params.insert("project_path".to_string(), t);
+                }
+            }
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                crate::inbox_routes::dispatch_post(&p_owned, &params)
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::inbox_routes::dispatch_post(&p_owned, &params)
+                })
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -3679,8 +3705,14 @@ async fn handle_one_request(
         // silently clipped long live messages. Body wins on collision.
         // Runs in spawn_blocking: deliver_live sleeps across its
         // inject/verify/retry windows and must not pin a runtime worker.
+        //
+        // C2 (0.40.45): dual-auth like mail/dns — owner/connect-user via
+        // token_ok (NO principal → peer-gate bypass) OR scoped require_hook
+        // (principal stamped → peer gate enforces local connection).
         p if is_post && p == "/cli/workspace/msg" => {
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -3696,9 +3728,15 @@ async fn handle_one_request(
             for (k, v) in super::http::parse_form_body(&body_bytes) {
                 params.insert(k, v);
             }
+            // Preserve recipient `workspace=` (routing); stamp identity.
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {
-                crate::cli::dispatch(&p_owned, &params)
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -4395,18 +4433,15 @@ async fn handle_one_request(
         p if p == "/cli/mail/approvals/list" => {
             let _ = stream.read(&mut buf).await;
             if !super::http::token_ok(&query, state.token.as_str()) {
-                let r = crate::cli::CliResponse::forbidden();
+                // #34: scoped agent on owner GET → owner_only, not invalid token.
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
             if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"this mail surface requires owner/admin — ask your human"}}"#,
-                )
-                .await;
+                let r = crate::mail_routes::owner_only_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
@@ -4444,34 +4479,60 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
-        // K2 Mail S11 — the unified inbox catalog. The AGENT view
-        // (?project=<ws>) rides a plain workspace token; the OWNER view
-        // (no project — it enumerates ALL inboxes across workspaces) is
-        // owner-or-admin-only, so agents never learn what exists outside
-        // their own access. SQLite-only (no engine dial).
+        // K2 Mail S11 / E1 — the unified inbox catalog. Dual-auth like
+        // every other mail GET: owner/connect-user via token_ok OR a
+        // scoped hook principal via require_hook. Principal is stamped
+        // so the agent view resolves via proven workspace_uuid — never
+        // raw client `project=` as who-you-are when a passport is present.
+        // OWNER view (no principal, no project claim — ALL inboxes) is
+        // owner-or-admin-only so agents never learn what exists outside
+        // their own access. SQLite-only (no engine dial) but still runs
+        // in spawn_blocking so with_request_principal is thread-local
+        // for the handler chain (matches other mail dual-auth arms).
         p if p == "/cli/mail/inboxes" => {
             let _ = stream.read(&mut buf).await;
-            if !super::http::token_ok(&query, state.token.as_str()) {
-                let r = crate::cli::CliResponse::forbidden();
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
-            let params = super::http::parse_params(&path, &query);
-            let agent_view = params
-                .get("project")
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false);
-            if !agent_view && !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+            let mut params = super::http::parse_params(&path, &query);
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            // Owner "all inboxes" view: no scoped principal and no project
+            // claim. Scoped agents always take the agent view for their
+            // stamped workspace (even if stamp cleared project on an
+            // unresolvable principal — handler fails closed).
+            let owner_all_view = scoped_principal.is_none()
+                && params
+                    .get("project")
+                    .map(|s| s.trim().is_empty())
+                    .unwrap_or(true);
+            if owner_all_view
+                && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
+            {
                 super::http::send_response(
                     &mut *stream,
                     "403 Forbidden",
                     "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"listing every inbox requires owner/admin — pass project=<workspace> for the agent view, or ask your human"}}"#,
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"listing every inbox requires owner/admin — present a scoped session for the agent view, or pass project=<workspace> on an owner token, or ask your human"}}"#,
                 )
                 .await;
                 return DispatchOutcome::Done;
             }
-            let resp = crate::cli::dispatch(p, &params);
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
@@ -4482,18 +4543,15 @@ async fn handle_one_request(
         p if p == "/cli/mail/link/oauth/status" => {
             let _ = stream.read(&mut buf).await;
             if !super::http::token_ok(&query, state.token.as_str()) {
-                let r = crate::cli::CliResponse::forbidden();
+                // #34: scoped agent on owner GET → owner_only.
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
             if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"OAuth linking is an owner/admin action — ask your human"}}"#,
-                )
-                .await;
+                let r = crate::mail_routes::owner_only_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
@@ -4510,18 +4568,15 @@ async fn handle_one_request(
         p if p == "/cli/mail/oauth-config" => {
             let _ = stream.read(&mut buf).await;
             if !super::http::token_ok(&query, state.token.as_str()) {
-                let r = crate::cli::CliResponse::forbidden();
+                // #34: scoped agent on owner GET → owner_only.
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
             if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"OAuth client config is an owner/admin surface — ask your human"}}"#,
-                )
-                .await;
+                let r = crate::mail_routes::owner_only_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
                 return DispatchOutcome::Done;
             }
             let params = super::http::parse_params(&path, &query);
@@ -4546,7 +4601,82 @@ async fn handle_one_request(
         // the exact-path `/cli/mail/approvals/list` arm above also
         // stays ahead of this one. Token gate + dispatch chain
         // identical to the /cli/* catch-all below.
+        //
+        // E2: `address/list?all=true` enumerates EVERY hosted address
+        // (Settings→Email table) — owner-or-admin only, same posture as
+        // the owner inboxes view. Agent self-view (`?project=` /
+        // principal) rides any workspace token.
         p if p.starts_with("/cli/mail/") =>
+        {
+            let _ = stream.read(&mut buf).await;
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                // #34: hostmail domain/server/access/… GETs deny scoped
+                // agents via is_agent_verb — teach owner_only (exit 3).
+                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let mut params = super::http::parse_params(&path, &query);
+            if p == "/cli/mail/address/list"
+                && crate::cli::bool_param(&params, "all")
+                && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
+            {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"ok":false,"error":{"code":"forbidden","hint":"listing every hosted address requires owner/admin — pass project=<workspace> for the agent view, or ask your human"}}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            // #38: stamp_principal writes identity into `from=` (agent
+            // address / workspace uuid). Mail `messages` / `wait` treat
+            // `from` as an IMAP/JMAP From: filter — so a scoped agent
+            // silently searched FROM "<principal>" and always got empty
+            // while folder list (no from filter) still worked.
+            // Capture the client filter BEFORE stamp; restore after.
+            // Absent client --from → remove stamp pollution so no filter.
+            let client_from_filter = params
+                .get("from")
+                .cloned()
+                .filter(|s| !s.trim().is_empty());
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+                if p == "/cli/mail/messages" || p == "/cli/mail/wait" {
+                    match client_from_filter {
+                        Some(f) => {
+                            params.insert("from".to_string(), f);
+                        }
+                        None => {
+                            params.remove("from");
+                        }
+                    }
+                }
+            }
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // C2 (0.40.45): dual-auth peer-gated agent comms GETs —
+        // `/cli/workspace/msg` (legacy GET form), `/cli/terminal/read`
+        // (`k2 read <ws>`), and `/cli/inbox/*` reads. Owner/connect-user
+        // via token_ok (no principal → peer bypass); scoped via
+        // require_hook (principal stamped → peer gate).
+        p if p == "/cli/workspace/msg"
+            || p == "/cli/terminal/read"
+            || p.starts_with("/cli/inbox/") =>
         {
             let _ = stream.read(&mut buf).await;
             let (auth_ok, scoped_principal) =
@@ -4557,6 +4687,68 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let mut params = super::http::parse_params(&path, &query);
+            // Inbox GETs use `project=` as the resource path — preserve
+            // both keys as the same target (see #36 compose stamp bug).
+            let resource_target = if p.starts_with("/cli/inbox/") {
+                params
+                    .get("project")
+                    .or_else(|| params.get("project_path"))
+                    .cloned()
+                    .filter(|s| !s.trim().is_empty())
+            } else {
+                None
+            };
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+                if let Some(t) = resource_target {
+                    params.insert("project".to_string(), t.clone());
+                    params.insert("project_path".to_string(), t);
+                }
+            }
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // C1 (0.40.45) — `/cli/connections` dual-auth (owner/connect-user
+        // OR scoped agent hook). Mutate (add/remove) is further gated:
+        // owner-or-admin always; agents need agents_can_create_connections.
+        // List is free for any authenticated principal. Stamps
+        // actor_privileged server-side — never trust the client.
+        p if p == "/cli/connections" => {
+            let _ = stream.read(&mut buf).await;
+            let (auth_ok, scoped_principal) = token_or_scoped_hook_auth(
+                p,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            if !auth_ok {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let mut params = super::http::parse_params(&path, &query);
+            // Scoped agent principal is never privileged for mutate.
+            let privileged = scoped_principal.is_none()
+                && super::http::token_is_owner_or_admin(&query, state.token.as_str());
+            params.insert(
+                "actor_privileged".to_string(),
+                if privileged {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                },
+            );
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
             }
@@ -4713,7 +4905,15 @@ fn dispatch_unit6_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
 /// whichever daemon the renderer is talking to (local OR remote host).
 /// Method gate is upstream (the `is_post && post_allowed` arm guard);
 /// token gate is upstream too. Unknown paths 404.
-fn dispatch_connect_gap_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
+///
+/// `actor_is_privileged` is the dispatcher-resolved owner-or-admin bit
+/// (C1 — gates relations create/delete the same way as connections
+/// add/remove). Other connect-gap routes ignore it.
+fn dispatch_connect_gap_post(
+    path: &str,
+    body: &[u8],
+    actor_is_privileged: bool,
+) -> crate::cli::CliResponse {
     match path {
         // Workspace skill CRUD + canonical opt-in + harness-fanout marker.
         "/cli/skills/create" => crate::skills_routes::handle_create(body),
@@ -4752,9 +4952,14 @@ fn dispatch_connect_gap_post(path: &str, body: &[u8]) -> crate::cli::CliResponse
             crate::heartbeat_routes::handle_set_show_heartbeat_sessions(body)
         }
         // Workspace relations (id-based — mirrors the renderer's
-        // workspace_relations_* Tauri commands 1:1).
-        "/cli/relations/create" => crate::agents_routes::handle_relations_create(body),
-        "/cli/relations/delete" => crate::agents_routes::handle_relations_delete(body),
+        // workspace_relations_* Tauri commands 1:1). C1: gated for
+        // non-privileged actors by agents_can_create_connections.
+        "/cli/relations/create" => {
+            crate::agents_routes::handle_relations_create(body, actor_is_privileged)
+        }
+        "/cli/relations/delete" => {
+            crate::agents_routes::handle_relations_delete(body, actor_is_privileged)
+        }
         _ => crate::cli::CliResponse::not_found(),
     }
 }
@@ -4784,6 +4989,33 @@ fn token_or_scoped_hook_auth(
         Some(v) => (true, Some(v.principal)),
         None => (false, None),
     }
+}
+
+/// Presented bearer for dual-auth failure classification (query token or
+/// Authorization header). Empty when neither is present.
+fn presented_bearer<'a>(query: &'a str, bearer: Option<&'a str>) -> &'a str {
+    bearer
+        .filter(|s| !s.is_empty())
+        .or_else(|| super::http::extract_token(query))
+        .unwrap_or("")
+}
+
+/// #34: when dual-auth fails on a mail route, distinguish a **valid
+/// scoped agent passport on an owner surface** (teaching `owner_only`)
+/// from a missing/bogus credential (`Invalid or missing auth token`).
+fn mail_dual_auth_failure(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+) -> crate::cli_response::CliResponse {
+    let presented = presented_bearer(query, bearer);
+    if !presented.is_empty()
+        && crate::session_token::validate_hook(presented).is_some()
+        && crate::mail_routes::is_mail_owner_surface(path)
+    {
+        return crate::mail_routes::owner_only_response();
+    }
+    crate::cli_response::CliResponse::forbidden()
 }
 
 // Inline unit tests — dispatch sub-helpers

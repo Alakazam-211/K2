@@ -166,6 +166,11 @@ interface Project {
   // 1 = agents may manage DNS records for this workspace. Effective
   // gate is app master OR this flag (`dns_manage_allowed_for_path`).
   dnsManageEnabled: number
+  // C1 (0.40.45) — per-workspace agents-may-create-connections opt-in
+  // (0/1, default 0/OFF). 1 = agents may add/remove connections for
+  // this workspace. Effective gate is app master OR this flag
+  // (`agents_can_create_connections_for_path`). Owner always may.
+  agentsCanCreateConnections: number
   // Agent de-generalization S1 (migration 0063) — per-workspace default
   // agent: an agent_presets preset id (UUID string), though readers must
   // ALSO tolerate a legacy command token like 'claude'. null = inherit

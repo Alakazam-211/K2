@@ -33,8 +33,14 @@ use crate::cli_response::CliResponse;
 /// whole external `/v1` surface the same way. Keys are the camelCase wire
 /// names (`AppSettings` is `rename_all = "camelCase"` with no aliases, so
 /// no other spelling reaches the struct fields).
-const REMOTE_ACCESS_KEYS: &[&str] =
-    &["federationEnabled", "allowRemoteInstruct", "apiEnabled", "dnsManageEnabled"];
+const REMOTE_ACCESS_KEYS: &[&str] = &[
+    "federationEnabled",
+    "allowRemoteInstruct",
+    "apiEnabled",
+    "dnsManageEnabled",
+    // C1 (0.40.45) — agents-may-create-connections app master.
+    "agentsCanCreateConnections",
+];
 
 /// Handler for `GET /cli/settings/get`.
 ///
@@ -256,6 +262,7 @@ mod tests {
                 br#"{"apiEnabled":true}"#.as_slice(),
                 br#"{"apiEnabled":false}"#.as_slice(),
                 br#"{"dnsManageEnabled":true}"#.as_slice(),
+                br#"{"agentsCanCreateConnections":true}"#.as_slice(),
             ] {
                 let r = handle_settings_update(body, cm);
                 assert_eq!(r.status, "403 Forbidden", "got: {}", r.body);
@@ -274,6 +281,10 @@ mod tests {
                 "403 must never sync the /v1 mirror"
             );
             assert!(!s.dns_manage_enabled, "403 must leave the value unchanged");
+            assert!(
+                !s.agents_can_create_connections,
+                "403 must leave the value unchanged"
+            );
         });
     }
 

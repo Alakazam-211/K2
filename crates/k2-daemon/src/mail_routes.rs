@@ -133,8 +133,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/wait" => routes_messages::handle_wait(params),
         "/cli/mail/outbox" => routes_send::handle_outbox(params),
         "/cli/mail/approvals/list" => routes_send::handle_approvals_list(params),
-        // S11: the unified inbox catalog (agent view via ?project=;
-        // owner view — no project — is owner-gated in the dispatcher).
+        // S11/E1: unified inbox catalog (agent view via proven principal
+        // or residual project=; owner view — no identity — is
+        // owner-or-admin-gated in the dispatcher's dual-auth arm).
         "/cli/mail/inboxes" => routes_access::handle_inboxes(params),
         // 0081: list an inbox's folders (can_manage; workspace token).
         "/cli/mail/folder/list" => routes_messages::handle_folder_list(params),
@@ -161,6 +162,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/address/delete"
         | "/cli/mail/send"
         | "/cli/mail/reply"
+        | "/cli/mail/outbox/cancel"
         | "/cli/mail/approvals/approve"
         | "/cli/mail/approvals/deny"
         | "/cli/mail/external/add"
@@ -211,6 +213,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/mail/address/delete" => routes_addresses::handle_address_delete(body),
         "/cli/mail/send" => routes_send::handle_send(body),
         "/cli/mail/reply" => routes_send::handle_reply(body),
+        "/cli/mail/outbox/cancel" => routes_send::handle_outbox_cancel(body),
         "/cli/mail/approvals/approve" => routes_send::handle_approvals_approve(body),
         "/cli/mail/approvals/deny" => routes_send::handle_approvals_deny(body),
         "/cli/mail/external/add" => routes_external::handle_external_add(body),
@@ -280,6 +283,40 @@ pub fn is_owner_level_mutation(path: &str) -> bool {
         || path == "/cli/mail/doctor"
 }
 
+/// Owner/admin hostmail surfaces (POST + GET) that a valid scoped agent
+/// passport must not drive. Broader than [`is_owner_level_mutation`]:
+/// includes read-only owner GETs (`/cli/mail/config`, oauth-config, …)
+/// that match the session_token DENY_PREFIXES for hostmail.
+///
+/// #34: when a valid scoped token hits these paths, answer `owner_only`
+/// exit-3 teaching — not opaque "invalid or missing token".
+pub fn is_mail_owner_surface(path: &str) -> bool {
+    is_owner_level_mutation(path)
+        // GET config / oauth-config (no trailing slash — not covered by
+        // the mutation prefixes that end in `/`).
+        || path == "/cli/mail/config"
+        || path == "/cli/mail/oauth-config"
+        // link/* aliases for external (DENY_PREFIX `/cli/mail/link/`).
+        || path.starts_with("/cli/mail/link/")
+}
+
+/// Stable teaching response for agent tokens on hostmail / mail-owner
+/// surfaces (GH #34). CLI maps `owner_only` + 403 → exit 3.
+pub fn owner_only_response() -> crate::cli_response::CliResponse {
+    crate::cli_response::CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "owner_only",
+                "hint": "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces)",
+            },
+        })
+        .to_string(),
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests — shim wiring
 // ──────────────────────────────────────────────────────────────────────
@@ -287,6 +324,57 @@ pub fn is_owner_level_mutation(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// GH #34: hostmail / access / link / config GETs are owner surfaces
+    /// even when not in the POST-only mutation classifier (no trailing
+    /// slash on config/oauth-config; link/* aliases).
+    #[test]
+    fn is_mail_owner_surface_covers_hostmail_and_access() {
+        for p in [
+            "/cli/mail/domain/list",
+            "/cli/mail/domain/add",
+            "/cli/mail/server/enable",
+            "/cli/mail/config",
+            "/cli/mail/config/set",
+            "/cli/mail/oauth-config",
+            "/cli/mail/approvals/list",
+            "/cli/mail/access/grant",
+            "/cli/mail/link/oauth/start",
+            "/cli/mail/doctor",
+        ] {
+            assert!(
+                is_mail_owner_surface(p),
+                "expected owner surface: {p}"
+            );
+        }
+        // Agent mail verbs stay open (not owner surface).
+        for p in [
+            "/cli/mail/messages",
+            "/cli/mail/inboxes",
+            "/cli/mail/send",
+            "/cli/mail/status",
+            "/cli/mail/read",
+        ] {
+            assert!(
+                !is_mail_owner_surface(p),
+                "must NOT be owner surface: {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn owner_only_response_has_stable_code_and_403() {
+        let r = owner_only_response();
+        assert_eq!(r.status, "403 Forbidden");
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "owner_only");
+        let hint = v["error"]["hint"].as_str().unwrap_or("");
+        assert!(
+            hint.contains("owner") || hint.contains("human"),
+            "hint should teach owner/human: {hint}"
+        );
+    }
 
     /// GET on every POST-only mutation answers an explicit 405 through
     /// the read dispatch chain (feedback_post_only_route_guards), the
@@ -435,6 +523,7 @@ mod tests {
         for route in [
             "/cli/mail/send",
             "/cli/mail/reply",
+            "/cli/mail/outbox/cancel",
             "/cli/mail/approvals/approve",
             "/cli/mail/approvals/deny",
         ] {

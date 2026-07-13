@@ -14,19 +14,13 @@
 // Browser-bound (Canvas2D + getImageData). All the packing MATH
 // lives in atlasLayout.ts, which is pure and unit-tested.
 //
-// NOT YET SYNTHETIC (2026-07): the DOM painter renders box-drawing/
-// block-element cells as painted CSS geometry (syntheticGlyphs.ts)
-// instead of font glyphs; this atlas still rasterizes them with
-// fillText. Porting = in get(), before the fillText, check
-// syntheticGlyphSpec(cp) for single-code-point cells and rasterize
-// procedurally instead: resolveGlyphRects() already yields device-px
-// rects (build GlyphMetrics with dpr=1 against deviceCellW/H, then
-// ctx.fillRect each; white at spec.alpha for the shades — the
-// shader's tint path treats alpha as coverage, so it composes for
-// free), arcs ╭╮╰╯ as a stroked quarter-ellipse path, dashes as
-// segment fillRects. Deferred, not half-built: this path is behind
-// the WebGL flag, has never been feel-tested, and its rasterization
-// is untestable in the node test env (tests stub GlyphSource).
+// SYNTHETIC (2026-07): box-drawing / block-element / sextant cells
+// rasterize procedurally via syntheticRaster.ts (fillRect/stroke of
+// the same device-px rect math the DOM painter uses) instead of
+// fillText, so stacked blocks tile seamlessly and TUI borders stay
+// continuous — DOM-renderer parity. Diagonals ╱╲╳ and powerline PUA
+// stay font glyphs (same exclusions as the DOM). Synthetic entries
+// ignore bold/italic (weight is intrinsic to the code point).
 
 import {
   allocSlot,
@@ -35,20 +29,50 @@ import {
   growLayout,
   type AtlasLayout,
 } from './atlasLayout'
+import { drawSyntheticGlyph, syntheticSpecForCluster } from './syntheticRaster'
+import { EMOJI_FONT_SCALE, isEmojiCp } from '../runCols'
 
 /** 1px transparent border around every slot so LINEAR sampling (or a
  *  half-texel rounding slip) can never bleed a neighbor glyph. */
 const SLOT_PAD = 1
 
+/** Ask WebKit for the same thin grayscale AA the DOM strip gets
+ *  (globals.css sets -webkit-font-smoothing: antialiased): macOS
+ *  otherwise rasterizes canvas text with dilated "smoothed" stems,
+ *  which read as chunkier glyphs than the DOM at the same font.
+ *
+ *  The inline style alone is NOT enough: canvas-text smoothing comes
+ *  from the element's COMPUTED style, and a detached canvas resolves
+ *  none — so the page canvas is also parked in the document, fixed
+ *  far offscreen (never painted, no layout impact), where the style
+ *  actually applies. Engines that still ignore it fall back to the
+ *  shader's coverage-gamma correction (glBackend u_gamma). Pages are
+ *  detached again on atlas dispose/growth. */
+function attachAtlasPage(canvas: HTMLCanvasElement): void {
+  ;(canvas.style as CSSStyleDeclaration & { webkitFontSmoothing?: string })
+    .webkitFontSmoothing = 'antialiased'
+  canvas.style.position = 'fixed'
+  canvas.style.left = '-100000px'
+  canvas.style.top = '0'
+  canvas.setAttribute('aria-hidden', 'true')
+  canvas.setAttribute('data-k2-atlas-page', '')
+  document.body?.appendChild(canvas)
+}
+
 export interface GlyphSlot {
   texX: number
   texY: number
-  /** Quad/texture size in device px (uniform per atlas: widthCells ×
-   *  cell). */
+  /** Quad/texture size in device px. Normally widthCells × cell;
+   *  emoji slots may be WIDER (clip exemption — sized to the emoji
+   *  font's measured advance so the frame can't truncate ink). */
   w: number
   h: number
   /** True ⇒ emoji/multi-color: shader outputs the sample untinted. */
   color: boolean
+  /** Horizontal quad offset in device px (a_geom.x): emoji slots
+   *  wider than their cell box hang the overflow SYMMETRICALLY over
+   *  the neighbors (offsetX = -(overhang/2)); 0/absent otherwise. */
+  offsetX?: number
 }
 
 /** The face packFrame consumes — narrow so tests can stub it with a
@@ -94,6 +118,7 @@ export class GlyphAtlas implements GlyphSource {
     const ctx = this.canvas.getContext('2d', { willReadFrequently: true })
     if (!ctx) throw new Error('canvas 2d context unavailable')
     this.ctx = ctx
+    attachAtlasPage(this.canvas)
     // CSS line-box vertical centering: baseline sits so the font
     // bounding box is centered in the cell — closest match to how
     // the DOM strip (line-height = cellH) places glyphs.
@@ -109,6 +134,13 @@ export class GlyphAtlas implements GlyphSource {
         : Math.round(cfg.deviceCellH * 0.8)
   }
 
+  /** Detach the page canvas parked in the document (see
+   *  attachAtlasPage). Call when the atlas is replaced (font/DPR
+   *  change) or the painter is disposed. */
+  dispose(): void {
+    this.canvas.remove()
+  }
+
   get size(): number {
     return this.layout.size
   }
@@ -117,8 +149,9 @@ export class GlyphAtlas implements GlyphSource {
     return this.glyphs.size
   }
 
-  private fontString(bold: boolean, italic: boolean): string {
-    return `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${this.cfg.fontDevicePx}px ${this.cfg.fontFamily}`
+  private fontString(bold: boolean, italic: boolean, scale = 1): string {
+    const px = Math.round(this.cfg.fontDevicePx * scale)
+    return `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${px}px ${this.cfg.fontFamily}`
   }
 
   /** Pre-rasterize printable ASCII so the first frame never draws
@@ -135,11 +168,39 @@ export class GlyphAtlas implements GlyphSource {
     italic: boolean,
     widthCells: number,
   ): GlyphSlot | null {
-    const key = `${bold ? 'b' : ''}${italic ? 'i' : ''}${widthCells}|${text}`
+    // Synthetic glyphs share one slot across bold/italic — the DOM
+    // painter likewise drops text styles on painted cells.
+    const spec = syntheticSpecForCluster(text)
+    const key = spec
+      ? `s${widthCells}|${text}`
+      : `${bold ? 'b' : ''}${italic ? 'i' : ''}${widthCells}|${text}`
     const hit = this.glyphs.get(key)
     if (hit) return hit
 
-    const w = widthCells * this.cfg.deviceCellW
+    const cellBoxW = widthCells * this.cfg.deviceCellW
+    let w = cellBoxW
+    let offsetX = 0
+    let advance = 0
+    let emoji = false
+    if (!spec) {
+      // Measure BEFORE slot allocation: emoji slots widen to the
+      // emoji font's real advance so the frame can't truncate ink
+      // (clip exemption — DOM counterpart lifts overflow:hidden).
+      // The overflow hangs symmetrically via offsetX → a_geom.x.
+      // Emoji measure AND draw at EMOJI_FONT_SCALE (they render
+      // visibly smaller than text at equal point size).
+      emoji = isEmojiCp(text.codePointAt(0) ?? 0)
+      this.ctx.font = this.fontString(
+        bold,
+        italic,
+        emoji ? EMOJI_FONT_SCALE : 1,
+      )
+      advance = this.ctx.measureText(text).width
+      if (emoji && advance > w) {
+        w = Math.ceil(advance)
+        offsetX = -Math.round((w - cellBoxW) / 2)
+      }
+    }
     const h = this.cfg.deviceCellH
     const slotW = w + SLOT_PAD * 2
     const slotH = h + SLOT_PAD * 2
@@ -158,6 +219,8 @@ export class GlyphAtlas implements GlyphSource {
         const gctx = grown.getContext('2d', { willReadFrequently: true })
         if (!gctx) return null
         gctx.drawImage(this.canvas, 0, 0)
+        this.canvas.remove()
+        attachAtlasPage(grown)
         this.canvas = grown
         this.ctx = gctx
         this.version++
@@ -182,10 +245,28 @@ export class GlyphAtlas implements GlyphSource {
     ctx.beginPath()
     ctx.rect(x, y, w, h)
     ctx.clip()
+
+    if (spec) {
+      // White by construction — skip the getImageData mono-scan.
+      drawSyntheticGlyph(ctx, spec, x, y, w, h)
+      ctx.restore()
+      const slot: GlyphSlot = { texX: x, texY: y, w, h, color: false }
+      this.glyphs.set(key, slot)
+      this.version++
+      return slot
+    }
+
     ctx.fillStyle = '#ffffff'
-    ctx.font = this.fontString(bold, italic)
+    ctx.font = this.fontString(bold, italic, emoji ? EMOJI_FONT_SCALE : 1)
     ctx.textBaseline = 'alphabetic'
-    ctx.fillText(text, x, y + this.baseline)
+    // Center horizontally in the slot: exact-monospace advances
+    // round dx to 0; over-wide fallback glyphs (braille art from a
+    // substituted font) clip symmetrically instead of right-only —
+    // parity with the DOM strip's textAlign:center per-char cells.
+    // (Emoji slots were widened above, so their dx centering never
+    // clips — the slot fits the full advance.)
+    const dx = Math.round((w - advance) / 2)
+    ctx.fillText(text, x + dx, y + this.baseline)
     ctx.restore()
 
     // Monochrome test: white fill ⇒ every covered pixel has r=g=b.
@@ -201,7 +282,7 @@ export class GlyphAtlas implements GlyphSource {
       }
     }
 
-    const slot: GlyphSlot = { texX: x, texY: y, w, h, color }
+    const slot: GlyphSlot = { texX: x, texY: y, w, h, color, offsetX }
     this.glyphs.set(key, slot)
     this.version++
     return slot

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   SCROLL_OVERSCAN_ROWS,
+  anchorScrollPx,
   clampScrollPx,
   computeScrollbarThumb,
   computeStripLayout,
@@ -164,5 +165,27 @@ describe('scrollPxFromThumbTopFrac', () => {
       maxScrollPx(SCROLLBACK, CELL_H),
     )
     expect(scrollPxFromThumbTopFrac(2, heightFrac, SCROLLBACK, CELL_H)).toBe(0)
+  })
+})
+
+describe('anchorScrollPx — pin the view while scrolled up', () => {
+  // cellHeight 20, scrollback 100 rows → max scrollPx 2000.
+  it('at the bottom (scrollPx 0) keeps following live output', () => {
+    expect(anchorScrollPx(0, 5, 100, 20)).toBe(0)
+  })
+
+  it('scrolled up: grows by exactly the appended height', () => {
+    // 3 rows append below the view → +60px keeps the same content
+    // under the cursor.
+    expect(anchorScrollPx(400, 3, 100, 20)).toBe(460)
+  })
+
+  it('clamps to the top of the (grown) scrollback', () => {
+    // Near the top: a large resync backlog cannot push past max.
+    expect(anchorScrollPx(1990, 50, 100, 20)).toBe(2000)
+  })
+
+  it('no growth → no movement', () => {
+    expect(anchorScrollPx(400, 0, 100, 20)).toBe(400)
   })
 })

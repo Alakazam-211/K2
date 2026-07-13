@@ -4643,8 +4643,29 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            // #38: stamp_principal writes identity into `from=` (agent
+            // address / workspace uuid). Mail `messages` / `wait` treat
+            // `from` as an IMAP/JMAP From: filter — so a scoped agent
+            // silently searched FROM "<principal>" and always got empty
+            // while folder list (no from filter) still worked.
+            // Capture the client filter BEFORE stamp; restore after.
+            // Absent client --from → remove stamp pollution so no filter.
+            let client_from_filter = params
+                .get("from")
+                .cloned()
+                .filter(|s| !s.trim().is_empty());
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
+                if p == "/cli/mail/messages" || p == "/cli/mail/wait" {
+                    match client_from_filter {
+                        Some(f) => {
+                            params.insert("from".to_string(), f);
+                        }
+                        None => {
+                            params.remove("from");
+                        }
+                    }
+                }
             }
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {

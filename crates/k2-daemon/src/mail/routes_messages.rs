@@ -168,6 +168,27 @@ fn resolve_linked_password(
     }
 }
 
+/// Client `from` filter for messages/wait — NOT the identity stamp.
+///
+/// Wave 0 / dual-auth `stamp_principal` writes the agent address into
+/// `from=`. Mail list/wait treat `from` as an IMAP/JMAP From: substring
+/// filter. Under a scoped passport that became `FROM "<workspace-uuid>"`
+/// and always returned empty while folder list (no filter) still worked
+/// (#38 agent AKZM retest). Dispatcher restores client --from after stamp;
+/// this belt also drops a remaining stamp when `principal_bound` is set
+/// and `from` equals the stamped `project_id` (common agent_address shape).
+fn mail_from_filter(params: &HashMap<String, String>) -> Option<String> {
+    let from = crate::cli::opt_param(params, "from")?;
+    if params.get("principal_bound").map(|s| s == "1").unwrap_or(false) {
+        if let Some(pid) = params.get("project_id") {
+            if from == *pid {
+                return None;
+            }
+        }
+    }
+    Some(from)
+}
+
 /// §17.5: resolve one address's backend and construct it — the ONLY
 /// place a backend is instantiated. `LocalStalwart` → the production
 /// JMAP client from the `mail_server` row (503 `not_ready` when
@@ -410,7 +431,8 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
     let filter = messages::ListFilter {
         unread_only: crate::cli::bool_param(params, "unread"),
         query: crate::cli::opt_param(params, "query"),
-        from: crate::cli::opt_param(params, "from"),
+        // #38: never treat identity stamp `from=` as a From: filter.
+        from: mail_from_filter(params),
         since_unix: None,
         after_unix,
         before_unix,
@@ -851,7 +873,8 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
         .zip(backends.iter().map(|b| b.as_ref()))
         .collect();
     let filters = messages::WaitFilters {
-        from: crate::cli::opt_param(params, "from"),
+        // #38: same stamp-vs-filter collision as messages.
+        from: mail_from_filter(params),
         subject: crate::cli::opt_param(params, "subject"),
     };
     let mut now = || {
@@ -1361,6 +1384,37 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn mail_from_filter_drops_principal_stamp_collision() {
+        // Identity stamp shape: principal_bound + from == project_id.
+        let p = params(&[
+            ("principal_bound", "1"),
+            ("project_id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            ("from", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        ]);
+        assert_eq!(
+            mail_from_filter(&p),
+            None,
+            "stamped agent uuid must not become IMAP From: filter"
+        );
+        // Real client --from survives.
+        let p = params(&[
+            ("principal_bound", "1"),
+            ("project_id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            ("from", "boss@example.com"),
+        ]);
+        assert_eq!(
+            mail_from_filter(&p).as_deref(),
+            Some("boss@example.com")
+        );
+        // Owner path (no principal_bound): from is always the filter.
+        let p = params(&[("from", "boss@example.com")]);
+        assert_eq!(
+            mail_from_filter(&p).as_deref(),
+            Some("boss@example.com")
+        );
     }
 
     /// These tests assert the no-server 503 — hold the singleton lock

@@ -3671,16 +3671,19 @@ async fn handle_one_request(
             for (k, v) in super::http::parse_form_body(&body_bytes) {
                 params.insert(k, v);
             }
-            // Preserve compose TARGET (`project` / `project_path`) across
-            // identity stamp — stamp rewrites those to the caller's path.
-            let compose_target = params.get("project").cloned();
-            let compose_target_path = params.get("project_path").cloned();
+            // Preserve compose TARGET across identity stamp. Stamp rewrites
+            // both keys to the caller's path — restore BOTH to the same
+            // target token so need_project_path cannot prefer a stale
+            // project_path and silently write to the caller's own inbox (#36).
+            let compose_target = params
+                .get("project")
+                .or_else(|| params.get("project_path"))
+                .cloned()
+                .filter(|s| !s.trim().is_empty());
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
-                if let Some(t) = compose_target.filter(|s| !s.trim().is_empty()) {
-                    params.insert("project".to_string(), t);
-                }
-                if let Some(t) = compose_target_path.filter(|s| !s.trim().is_empty()) {
+                if let Some(t) = compose_target {
+                    params.insert("project".to_string(), t.clone());
                     params.insert("project_path".to_string(), t);
                 }
             }
@@ -4675,18 +4678,21 @@ async fn handle_one_request(
             }
             let mut params = super::http::parse_params(&path, &query);
             // Inbox GETs use `project=` as the resource path — preserve
-            // across stamp (stamp rewrites project to caller's path).
-            let resource_project = params.get("project").cloned();
-            let resource_project_path = params.get("project_path").cloned();
+            // both keys as the same target (see #36 compose stamp bug).
+            let resource_target = if p.starts_with("/cli/inbox/") {
+                params
+                    .get("project")
+                    .or_else(|| params.get("project_path"))
+                    .cloned()
+                    .filter(|s| !s.trim().is_empty())
+            } else {
+                None
+            };
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
-                if p.starts_with("/cli/inbox/") {
-                    if let Some(t) = resource_project.filter(|s| !s.trim().is_empty()) {
-                        params.insert("project".to_string(), t);
-                    }
-                    if let Some(t) = resource_project_path.filter(|s| !s.trim().is_empty()) {
-                        params.insert("project_path".to_string(), t);
-                    }
+                if let Some(t) = resource_target {
+                    params.insert("project".to_string(), t.clone());
+                    params.insert("project_path".to_string(), t);
                 }
             }
             let p_owned = p.to_string();

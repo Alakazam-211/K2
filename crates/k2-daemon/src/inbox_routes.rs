@@ -15,7 +15,12 @@ use crate::cli_response::CliResponse;
 // ── Helpers ────────────────────────────────────────────────────────────
 
 fn need_project_path(params: &HashMap<String, String>) -> Result<PathBuf, CliResponse> {
-    for key in &["project_path", "project"] {
+    // Prefer `project` over `project_path`. Cross-workspace compose
+    // (msg --inbox) restores TARGET into `project=` after stamp_principal
+    // rewrites both keys to the caller's path; if only `project` is restored
+    // and we prefer `project_path`, compose silently writes to the caller's
+    // own inbox and the peer gate always sees same-workspace → OK (#36).
+    for key in &["project", "project_path"] {
         if let Some(v) = params.get(*key) {
             if !v.is_empty() {
                 return Ok(PathBuf::from(v));
@@ -434,5 +439,77 @@ pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliRespons
         "/cli/inbox/respond" => handle_respond_post(params),
         "/cli/inbox/migrate" => handle_migrate_post(params),
         _ => CliResponse::not_found(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_token::HookPrincipal;
+    use std::collections::HashMap;
+
+    /// #36 regression: after stamp forces both keys to the caller path and
+    /// only `project` is restored to the compose target, preferring
+    /// `project_path` would silently target the caller's inbox.
+    #[test]
+    fn need_project_path_prefers_project_over_stale_project_path() {
+        let mut params = HashMap::new();
+        params.insert("project".to_string(), "/tmp/target-ws".to_string());
+        params.insert("project_path".to_string(), "/tmp/caller-ws".to_string());
+        let p = match need_project_path(&params) {
+            Ok(p) => p,
+            Err(_) => panic!("project present"),
+        };
+        assert_eq!(
+            p,
+            PathBuf::from("/tmp/target-ws"),
+            "compose target in `project` must win over stamped `project_path`"
+        );
+    }
+
+    /// Simulate the stamp + restore that cell_server / TCP dispatcher do
+    /// for inbox compose, then assert need_project_path sees the target.
+    #[test]
+    fn stamp_then_restore_both_keys_keeps_compose_target() {
+        let _ = k2_core::db::init_for_tests();
+        let caller_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let caller_path = "/tmp/k2-compose-caller";
+        let target_name = "Sarah";
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+                rusqlite::params![caller_id, caller_path, "Caller"],
+            )
+            .unwrap();
+        }
+        let principal = HookPrincipal {
+            workspace_uuid: caller_id.to_string(),
+            agent_address: caller_id.to_string(),
+        };
+        let mut params = HashMap::new();
+        params.insert("project".to_string(), target_name.to_string());
+        params.insert("title".to_string(), "t".to_string());
+        // Capture target, stamp, restore both (the fixed restore shape).
+        let target = params
+            .get("project")
+            .or_else(|| params.get("project_path"))
+            .cloned()
+            .filter(|s| !s.trim().is_empty());
+        crate::caller_workspace::stamp_principal(&mut params, &principal);
+        if let Some(t) = target {
+            params.insert("project".to_string(), t.clone());
+            params.insert("project_path".to_string(), t);
+        }
+        let p = match need_project_path(&params) {
+            Ok(p) => p,
+            Err(_) => panic!("target restored"),
+        };
+        assert_eq!(p, PathBuf::from(target_name));
+        // Cleanup
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![caller_id]);
     }
 }

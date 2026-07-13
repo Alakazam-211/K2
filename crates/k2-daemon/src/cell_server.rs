@@ -459,24 +459,24 @@ mod unix_impl {
         // C2: inbox routes use `project=` as the TARGET resource (compose
         // into another workspace, list that inbox, …) — preserve across
         // stamp (which rewrites project to the caller's own path).
+        //
+        // #36: restore BOTH keys to the same target token. Leaving
+        // `project_path` as the stamped caller path while only restoring
+        // `project` made need_project_path (which used to prefer
+        // project_path) silently compose into the caller's own inbox.
         let inbox_target = if path.starts_with("/cli/inbox/") {
-            (
-                params.get("project").cloned(),
-                params.get("project_path").cloned(),
-            )
+            params
+                .get("project")
+                .or_else(|| params.get("project_path"))
+                .cloned()
+                .filter(|s| !s.trim().is_empty())
         } else {
-            (None, None)
+            None
         };
         stamp_principal(&mut params, &principal);
-        if let (Some(t), _) = &inbox_target {
-            if !t.trim().is_empty() {
-                params.insert("project".to_string(), t.clone());
-            }
-        }
-        if let (_, Some(t)) = &inbox_target {
-            if !t.trim().is_empty() {
-                params.insert("project_path".to_string(), t.clone());
-            }
+        if let Some(t) = inbox_target {
+            params.insert("project".to_string(), t.clone());
+            params.insert("project_path".to_string(), t);
         }
 
         let path_owned = path.to_string();

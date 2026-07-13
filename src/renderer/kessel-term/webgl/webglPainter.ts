@@ -41,7 +41,11 @@ const PREWARM_BUDGET_MS = 2
  *  AA edges back toward DOM weight. Feel-tunable live without a
  *  rebuild: localStorage.K2SO_WEBGL_TEXT_GAMMA = '1.4' (re-open the
  *  tab to apply); clamped to a sane band. */
-const TEXT_GAMMA_DEFAULT = 1.3
+// 1.3 over-thinned once the atlas font-smoothing fix (attachAtlasPage)
+// removed the dilation it was compensating for — user side-by-side
+// 2026-07-13 read "a teenie tiny margin too thin"; 1.2 adds ~5% edge
+// ink back.
+const TEXT_GAMMA_DEFAULT = 1.2
 function textGammaSetting(): number {
   try {
     const raw = localStorage.getItem('K2SO_WEBGL_TEXT_GAMMA')

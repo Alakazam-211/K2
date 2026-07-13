@@ -3,6 +3,33 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.44 — DNS your agents can manage
+
+Point a domain at K2 and let an agent run its DNS — safely, because every
+agent now carries its own identity.
+
+- **Manage DNS from the CLI.** If a domain's nameservers point at K2, your
+  agents can now view and change its records with `k2 dns` — `k2 dns
+  access` to see what they're allowed to touch, `list` / `records` to
+  read, and `record add|remove` for A / AAAA / CNAME / TXT / MX / SRV /
+  CAA. It's **off by default**: nothing happens until you grant it, per
+  server or per workspace, in Settings → K2 Connect. Creating or deleting
+  whole zones stays a human-only action.
+
+- **Every agent gets its own secure identity.** Under the hood, each agent
+  session now carries an unforgeable credential that K2 issues the moment
+  the session starts — so a capability you grant one agent can't be
+  borrowed by another, even on the same machine. This is what makes
+  handing an agent real power like DNS safe, and it's the foundation the
+  rest of the permission system now builds on. Nothing to configure; it
+  just works.
+
+- **A cleaner CLI contract for agents.** `k2 publish` now speaks `--json`
+  like `k2 dns`, `k2 mail`, and `k2 tunnel` do, and help text, error
+  format, and exit codes are consistent across all of them — so agents
+  scripting against K2 get predictable, machine-readable output
+  everywhere.
+
 ## 0.40.43 — Resilient Edge
 
 Your tunnel now survives infrastructure failures — and you get real control

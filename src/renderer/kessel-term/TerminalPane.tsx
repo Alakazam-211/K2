@@ -2307,16 +2307,22 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // canvas.
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const painterRef = useRef<TerminalPainter | null>(null)
+  // Live WebGL text-weight: store value must participate in the
+  // theme object so lastPaintedRef / layout-effect deps repaint when
+  // the Settings slider moves (no remount required).
+  const textGamma = useTerminalSettingsStore((s) => s.textGamma)
   const painterTheme = useMemo(
     () => ({
       fg: config.colors.foreground,
       bg: config.colors.background,
       selection: config.colors.selection.background,
+      textGamma,
     }),
     [
       config.colors.foreground,
       config.colors.background,
       config.colors.selection.background,
+      textGamma,
     ],
   )
   // ── Vsync scroll pump (LEARNINGS-webgl-scroll.md) ─────────────

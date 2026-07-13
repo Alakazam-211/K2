@@ -28,6 +28,8 @@ import {
   type StyleSelection,
 } from '@/lib/style-resolve'
 import { dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
+import { resolveTextGammaPreset } from '@/lib/text-gamma'
+import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 
 // ── localStorage mirror keys (dotted convention, see index.html) ─────
 export const LS_STYLE = 'k2.style'
@@ -310,6 +312,11 @@ export const useStyleStore = create<StyleState>((set, get) => ({
 
   applyStyle: (partial: Partial<StyleSelection>) => {
     const cur = get()
+    // Resolved identity BEFORE this apply — used to gate the textGamma
+    // preset write so boot / no-op re-apply never clobbers a manual
+    // Settings tweak. Real style switches (incl. schemeMode:auto OS
+    // flips that change the resolved palette) DO overwrite.
+    const prevResolvedKey = `${cur.styleId}\0${cur.resolvedPaletteId}\0${cur.resolvedScheme}`
     const sel: StyleSelection = {
       styleId: partial.styleId ?? cur.styleId,
       paletteId: partial.paletteId ?? cur.paletteId,
@@ -317,6 +324,7 @@ export const useStyleStore = create<StyleState>((set, get) => ({
       gapsPreset: partial.gapsPreset ?? cur.gapsPreset,
     }
     const resolved = resolveStyleSelection(sel, osPrefersLight())
+    const nextResolvedKey = `${sel.styleId}\0${resolved.resolvedPalette.id}\0${resolved.resolvedScheme}`
     set({
       ...sel,
       resolvedScheme: resolved.resolvedScheme,
@@ -324,6 +332,10 @@ export const useStyleStore = create<StyleState>((set, get) => ({
     })
     stampStyleAttributes(sel)
     writeMirror(sel)
+    if (prevResolvedKey !== nextResolvedKey) {
+      const preset = resolveTextGammaPreset(resolved.style, resolved.resolvedPalette)
+      useTerminalSettingsStore.getState().setTextGamma(preset)
+    }
   },
 }))
 

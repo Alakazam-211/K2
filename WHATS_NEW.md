@@ -3,6 +3,27 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.46 — WebGL text weight that matches the style + steadier scrolling
+
+More Kessel polish: text weight follows dark vs light themes, and a few
+scroll/paint edge cases that only showed up under real use are closed.
+
+- **Text weight that fits the theme.** The WebGL painter no longer uses one
+  global gamma for every look. Dark styles get a slightly heavier preset
+  (so light-on-dark doesn’t look skinny); light styles get a lighter one
+  (so dark-on-light doesn’t look chunky). Pick a style and the preset
+  applies; then fine-tune live under **Settings → Terminal → Terminal text
+  weight (WebGL)** — open tabs update as you drag, no new tab required.
+  DOM painting is unchanged.
+
+- **Smoother scroll under pressure.** Prewarm backs off before it can force
+  an atlas clear; wheel paint and scrollbar drag read live geometry; and a
+  resync after a big backlog no longer yanks the view when you’re scrolled
+  up (content seam-match re-anchoring).
+
+- **Slightly richer edges on WebGL text.** Default coverage gamma moves
+  1.3 → 1.2 so glyph edges keep a little more ink after the smoothing fix.
+
 ## 0.40.45 — Safer agent mail, cleaner terminals, smoother painting
 
 Agents get clearer boundaries on mail and messaging — and the terminal

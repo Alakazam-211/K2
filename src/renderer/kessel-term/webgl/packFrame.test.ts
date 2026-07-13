@@ -12,7 +12,7 @@ import type { PainterFrame } from './painterTypes'
 import type { WireCellRun } from '../gridWire'
 import type { GlyphSource } from './glyphAtlas'
 
-const THEME = { fg: 0xe0e0e0, bg: 0x0a0a0a, selection: 0x444444 }
+const THEME = { fg: 0xe0e0e0, bg: 0x0a0a0a, selection: 0x444444, textGamma: 1.2 }
 
 function run(text: string, over: Partial<WireCellRun> = {}): WireCellRun {
   return {

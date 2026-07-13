@@ -478,8 +478,10 @@ export function StylesSection(): React.JSX.Element {
               </button>
             </div>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              Only affects the WebGL painter (Settings → Terminal → Painter).
-              Lower = thicker. Saved for {selectedStyle.name} / {resolvedScheme} on this machine.
+              Only affects the WebGL painter (Settings → Terminal → Painter = WebGL;
+              open a <em>new</em> tab after switching). Lower = thicker. Live — open
+              WebGL terminals repaint as you drag. Saved for {selectedStyle.name} /{' '}
+              {resolvedScheme} on this machine.
             </div>
           </div>
         )}

@@ -853,99 +853,79 @@ function AppRoot(): React.JSX.Element {
     return <div className="h-full w-full bg-[var(--color-bg)]" />
   }
 
-  // Settings overlay — replaces main content
-  if (settingsOpen) {
-    return (
-      <>
-        <PinnedChatRetainer />
-        {/* p-[var(--inset-window)] (0 in Square): inset-aware styles float
-            Settings on the canvas like every other top-level surface. */}
-        <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg-canvas)] p-[var(--inset-window)]">
+  // Workspace shell stays MOUNTED while Settings is open (display:none).
+  // Previously Settings early-returned and unmounted every TerminalPane,
+  // so WebGL text-weight / live style knobs could not paint on-demand and
+  // felt like they "didn't stick" after leaving Settings (full remount).
+  // Settings is a full-viewport overlay on top; terminals keep their
+  // WebGL contexts and re-paint when style-store.textGamma changes.
+  return (
+    <>
+      <PinnedChatRetainer />
+
+      {/* Focus mode: workspace header above sidebar tabs, no primary sidebar */}
+      {focusProjectId ? (
+        <div
+          className="h-full w-full"
+          style={settingsOpen ? { display: 'none' } : undefined}
+          aria-hidden={settingsOpen || undefined}
+        >
+          <FocusModeContent activeProject={activeProject} cwd={cwd} />
+        </div>
+      ) : (
+        <div
+          className="h-full w-full"
+          style={settingsOpen ? { display: 'none' } : undefined}
+          aria-hidden={settingsOpen || undefined}
+        >
+          <Layout
+            sidebar={<Sidebar />}
+            leftPanel={<LeftPanelContent rootPath={activeWorkspace?.worktreePath ?? activeProject?.path} />}
+            rightPanel={<RightPanelContent rootPath={activeWorkspace?.worktreePath ?? activeProject?.path} />}
+            projectName={activeProject?.name}
+            workspaceName={activeWorkspace?.name}
+          >
+            {activeProject && activeWorkspace ? (
+              <TerminalArea cwd={cwd} />
+            ) : (
+              <div className="flex-1 flex items-center justify-center h-full">
+                <div className="text-center">
+                  <h2 className="text-lg font-medium text-[var(--color-text-muted)]">K2</h2>
+                  <p className="text-xs text-[var(--color-text-muted)] mt-2 opacity-60">
+                    Add a workspace to get started
+                  </p>
+                </div>
+              </div>
+            )}
+          </Layout>
+        </div>
+      )}
+
+      {/* Settings overlay — covers the (still-mounted) workspace */}
+      {settingsOpen && (
+        <div className="fixed inset-0 z-[200] flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg-canvas)] p-[var(--inset-window)]">
           {/* Settings renders its OWN top-bar (traffic-light spacer + "K2
-              <Server>" + switcher, #686). No separate empty drag strip here —
-              it stacked a second bar above Settings' top-bar, dropping "K2
-              <Server>" onto a row below the traffic lights instead of beside
-              them. Settings' top-bar is itself a drag region. */}
+              <Server>" + switcher, #686). */}
           <div className="flex-1 min-h-0">
             <Settings />
           </div>
         </div>
-        <GitInitDialog />
-      <AddWorkspaceDialog />
-      <RemoteFolderPicker />
-      <RemoveWorkspaceDialog />
-        <CloneToDialog />
-        <CommandPalette />
-        <ContextMenu />
-        <ConfirmDialog />
-        {/* Settings instance: only opens via the "Read what's new"
-            button in Settings → General. Never auto-fires.
-            TODO(0.39.x): the audit flagged this as a duplicate mount,
-            but Settings/Focus/Default layouts are mutually exclusive
-            so this listener is required while the user is in Settings.
-            Real fix is to hoist WhatsNewModal above the layout switch
-            so a single instance is always mounted; deferred to avoid
-            breaking the Settings → General "Read what's new" button
-            (which dispatches `k2so:show-whats-new` to whichever modal
-            is mounted). */}
-        <WhatsNewModal mode="button-only" />
-        <MemoryWatcher />
-        <UnsavedChangesModalHost />
-        <HeartbeatScheduleDialog />
-      <MergeDialog />
-        <Toast />
-        <TransferProgress />
-        <AssistantBar />
-        <MemoDialog />
-      </>
-    )
-  }
+      )}
 
-  // Focus mode: workspace header above sidebar tabs, no primary sidebar
-  if (focusProjectId) {
-    return (
-      <>
-        <PinnedChatRetainer />
-        <FocusModeContent activeProject={activeProject} cwd={cwd} />
-      </>
-    )
-  }
-
-  return (
-    <>
-      <PinnedChatRetainer />
-      <Layout
-        sidebar={<Sidebar />}
-        leftPanel={<LeftPanelContent rootPath={activeWorkspace?.worktreePath ?? activeProject?.path} />}
-        rightPanel={<RightPanelContent rootPath={activeWorkspace?.worktreePath ?? activeProject?.path} />}
-        projectName={activeProject?.name}
-        workspaceName={activeWorkspace?.name}
-      >
-        {activeProject && activeWorkspace ? (
-          <TerminalArea cwd={cwd} />
-        ) : (
-          <div className="flex-1 flex items-center justify-center h-full">
-            <div className="text-center">
-              <h2 className="text-lg font-medium text-[var(--color-text-muted)]">K2</h2>
-              <p className="text-xs text-[var(--color-text-muted)] mt-2 opacity-60">
-                Add a workspace to get started
-              </p>
-            </div>
-          </div>
-        )}
-      </Layout>
       <GitInitDialog />
       <AddWorkspaceDialog />
       <RemoteFolderPicker />
       <RemoveWorkspaceDialog />
       <CloneToDialog />
       <CommandPalette />
-      <RunningAgentsPanel />
-      <FeedbackPage />
-      <ProjectsPage />
+      {!settingsOpen && <RunningAgentsPanel />}
+      {!settingsOpen && <FeedbackPage />}
+      {!settingsOpen && <ProjectsPage />}
       <ContextMenu />
       <ConfirmDialog />
-      <WhatsNewModal />
+      {/* button-only while Settings is open so General → "Read what's new"
+          still works; full modal elsewhere. */}
+      <WhatsNewModal mode={settingsOpen ? 'button-only' : undefined} />
       <MemoryWatcher />
       <UnsavedChangesModalHost />
       <HeartbeatScheduleDialog />

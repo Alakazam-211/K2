@@ -2426,6 +2426,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     paintWebglRef.current(scrollPxRef.current, snapshot)
   }, [useWebgl, snapshot, scrollPx, painterTheme, cellMetrics, selectionVersion])
 
+  // Text-weight (gamma) is a pure shader uniform — no atlas rebuild —
+  // but force the paint dedupe to treat the frame as dirty so a Settings
+  // slider tick always reaches drawGlyphs even when snapshot/scroll are
+  // unchanged (the common case while parked in Settings).
+  useLayoutEffect(() => {
+    if (!useWebgl) return
+    lastPaintedRef.current.snapshot = null
+    lastPaintedRef.current.theme = null
+    if (snapshotRef.current) {
+      paintWebglRef.current(scrollPxRef.current, snapshotRef.current)
+    }
+  }, [useWebgl, textGamma])
+
   // S5 — subtle read-only hint. Latched when the daemon reports this
   // connection can't drive the terminal (an `input_denied` frame, or a
   // mode ACK with `capable:false`); cleared when a mode ACK confirms a

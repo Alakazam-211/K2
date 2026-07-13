@@ -35,6 +35,18 @@ import { drawSyntheticGlyph, syntheticSpecForCluster } from './syntheticRaster'
  *  half-texel rounding slip) can never bleed a neighbor glyph. */
 const SLOT_PAD = 1
 
+/** Ask WebKit for the same thin grayscale AA the DOM strip gets
+ *  (globals.css sets -webkit-font-smoothing: antialiased): macOS
+ *  otherwise rasterizes canvas text with dilated "smoothed" stems,
+ *  which read as chunkier glyphs than the DOM at the same font.
+ *  Best-effort — engines that ignore the property on canvas (or on
+ *  detached elements) fall back to the shader's coverage-gamma
+ *  correction (glBackend u_gamma). */
+function requestThinFontSmoothing(canvas: HTMLCanvasElement): void {
+  ;(canvas.style as CSSStyleDeclaration & { webkitFontSmoothing?: string })
+    .webkitFontSmoothing = 'antialiased'
+}
+
 export interface GlyphSlot {
   texX: number
   texY: number
@@ -84,6 +96,7 @@ export class GlyphAtlas implements GlyphSource {
   constructor(private cfg: GlyphAtlasConfig) {
     this.layout = createLayout()
     this.canvas = document.createElement('canvas')
+    requestThinFontSmoothing(this.canvas)
     this.canvas.width = this.layout.size
     this.canvas.height = this.layout.size
     const ctx = this.canvas.getContext('2d', { willReadFrequently: true })
@@ -153,6 +166,7 @@ export class GlyphAtlas implements GlyphSource {
         // Double the page, preserving existing pixels at (0,0) so
         // every already-issued coordinate stays valid.
         const grown = document.createElement('canvas')
+        requestThinFontSmoothing(grown)
         grown.width = this.layout.size
         grown.height = this.layout.size
         const gctx = grown.getContext('2d', { willReadFrequently: true })

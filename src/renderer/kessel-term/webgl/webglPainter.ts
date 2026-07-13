@@ -35,6 +35,24 @@ const SANITY_COLOR = 0x3a7b19
 const PREWARM_BAND = 24
 const PREWARM_BUDGET_MS = 2
 
+/** Text-weight tuning ("chonky text" fix): coverage-gamma exponent
+ *  for tinted glyphs. macOS dilates Canvas2D text stems relative to
+ *  the DOM's -webkit-font-smoothing:antialiased rendering; >1 thins
+ *  AA edges back toward DOM weight. Feel-tunable live without a
+ *  rebuild: localStorage.K2SO_WEBGL_TEXT_GAMMA = '1.4' (re-open the
+ *  tab to apply); clamped to a sane band. */
+const TEXT_GAMMA_DEFAULT = 1.3
+function textGammaSetting(): number {
+  try {
+    const raw = localStorage.getItem('K2SO_WEBGL_TEXT_GAMMA')
+    const v = raw === null ? NaN : parseFloat(raw)
+    if (Number.isFinite(v)) return Math.min(3, Math.max(0.5, v))
+  } catch {
+    // localStorage unavailable (tests) — fall through to default.
+  }
+  return TEXT_GAMMA_DEFAULT
+}
+
 export interface WebglPainterDeps {
   /** Test seam: swap the real WebGL2 backend for a stub. */
   createBackend?: (canvas: HTMLCanvasElement) => PainterBackend | null
@@ -64,6 +82,7 @@ export function createWebglPainter(
 
   const cache = new RowCache()
   const buffers = new FrameBuffers()
+  const textGamma = textGammaSetting()
 
   // Diagnostics (owner feel-test aid): localStorage.K2SO_WEBGL_DIAG='1'
   // → one console line per 60 rendered frames with timing + volume.
@@ -131,6 +150,7 @@ export function createWebglPainter(
       scrollY: packed.fractionDevice,
       texW: atlas.size,
       texH: atlas.size,
+      textGamma,
     })
     // Decorations LAST: underline/strikethrough bars draw over their
     // glyphs (pass order per brief §2.2; the block cursor stays a DOM
@@ -150,7 +170,8 @@ export function createWebglPainter(
           `[webgl-diag] frames=${diagFrames} avg=${(diagMs / diagFrames).toFixed(2)}ms ` +
             `glyphInstances=${packed.glyphCount} bgRects=${packed.bg.count} ` +
             `rows=${packed.rowCount} cacheRows=${cache.size} ` +
-            `atlas=${atlas.size}px/${atlas.glyphCount} glyphs`,
+            `atlas=${atlas.size}px/${atlas.glyphCount} glyphs ` +
+            `textGamma=${textGamma}`,
         )
         diagFrames = 0
         diagMs = 0

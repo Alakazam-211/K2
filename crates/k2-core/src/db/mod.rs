@@ -663,6 +663,10 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0083_project_dns_manage_enabled",
             include_str!("../../drizzle_sql/0083_project_dns_manage_enabled.sql"),
         ),
+        (
+            "0084_mail_outbound_scheduled",
+            include_str!("../../drizzle_sql/0084_mail_outbound_scheduled.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

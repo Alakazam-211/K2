@@ -6822,7 +6822,9 @@ cmd_schema() {
         {"name": "--cc", "arg": "addr", "description": "Cc (repeatable / comma-separated)."},
         {"name": "--from", "arg": "owned-addr", "description": "Which of your addresses sends (needed with several)."},
         {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). LINKED inboxes only. Max 10 files, 25MB each / 25MB total."},
-        {"name": "--wait", "arg": null, "description": "Block until DECIDED: approved-and-submitted or denied (approval mode) / accepted-for-delivery (on mode). Exit 2 on timeout — the message is still queued; check the outbox."},
+        {"name": "--at", "arg": "when", "description": "Schedule leave time (HOSTED): RFC3339 with offset. Past times hard-reject exit 2. Max 30d. Mutex with --in."},
+        {"name": "--in", "arg": "duration", "description": "Schedule relative (HOSTED): 30m, 2h, 1d. Max 30d. Mutex with --at."},
+        {"name": "--wait", "arg": null, "description": "Block until DECIDED (not with --at/--in). Exit 2 on timeout — still queued."},
         {"name": "--timeout", "arg": "secs", "description": "With --wait: 1-900 (default 300)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
@@ -6854,7 +6856,7 @@ cmd_schema() {
     },
     {
       "name": "mail outbox",
-      "usage": "k2 mail outbox [<id>] [--limit N] [--json]",
+      "usage": "k2 mail outbox [<id>] [--limit N] [--json] | k2 mail outbox cancel <id> [--json]",
       "description": "Your outbound messages + status (pending_approval / approved / submitted / rejected / failed), newest first. Rejected items carry your human's note inline. A send that carried attachments shows an 'attachments' summary ({count, names} in --json) so you can verify what you attached without opening the recipient inbox. Point lookup by out_... id (ids are stable in --json).",
       "args": [{"name": "id", "required": false}],
       "flags": [
@@ -12731,6 +12733,10 @@ elif verb == "send":
         # Workspace-relative file PATHS — the daemon reads the bytes
         # (CLI stays dumb: no file I/O, no base64 over the wire).
         body["attachments"] = attach
+    if env("M_SEND_AT"):
+        body["sendAt"] = env("M_SEND_AT")
+    if env("M_SEND_IN"):
+        body["sendIn"] = env("M_SEND_IN")
     waiting = env("M_WAIT") == "true"
     t = wait_timeout_secs()
     if waiting:
@@ -12754,6 +12760,14 @@ elif verb == "reply":
             body["timeout"] = int(env("M_TIMEOUT"))
     d = call("POST", "/cli/mail/reply", body=body, timeout=(t + 30) if waiting else 30)
     send_outcome(d, waiting, t)
+
+elif verb == "outbox_cancel":
+    d = call("POST", "/cli/mail/outbox/cancel",
+             body={"project": ws_path, "id": env("M_ID")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print(d.get("hint") or ("cancelled %s" % d.get("id", "")))
 
 elif verb == "outbox":
     params = {"project": ws_path}
@@ -13487,7 +13501,7 @@ cmd_mail_wait() {
 cmd_mail_send() {
     if _wants_help "$@"; then cmd_help_mail_send; exit 0; fi
     local to="" subject="" body="" body_file="" cc="" from="" attach=""
-    local wait=false timeout="" as_json=false
+    local wait=false timeout="" as_json=false send_at="" send_in=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --to)
@@ -13512,6 +13526,12 @@ cmd_mail_send() {
             --attach)
                 [ $# -ge 2 ] || { _mail_err "usage" "--attach requires a file path"; exit 2; }
                 attach="${attach}${attach:+$'\n'}$2"; shift 2 ;;
+            --at)
+                [ $# -ge 2 ] || { _mail_err "usage" "--at requires an RFC3339 timestamp"; exit 2; }
+                send_at="$2"; shift 2 ;;
+            --in)
+                [ $# -ge 2 ] || { _mail_err "usage" "--in requires a duration (e.g. 30m, 2h, 1d)"; exit 2; }
+                send_in="$2"; shift 2 ;;
             --wait) wait=true; shift ;;
             --timeout)
                 [ $# -ge 2 ] || { _mail_err "usage" "--timeout requires a value in seconds (1-900)"; exit 2; }
@@ -13557,9 +13577,17 @@ cmd_mail_send() {
         fi
         _mail_check_timeout "$timeout"
     fi
+    if [ -n "$send_at" ] && [ -n "$send_in" ]; then
+        _mail_err "usage" "pass only one of --at <when> or --in <duration>, not both"
+        exit 2
+    fi
+    if $wait && { [ -n "$send_at" ] || [ -n "$send_in" ]; }; then
+        _mail_err "usage" "--wait cannot combine with --at/--in"
+        exit 2
+    fi
     local M_VERB="send" M_JSON="$as_json" M_TO="$to" M_SUBJECT="$subject" \
           M_BODY="$body" M_CC="$cc" M_FROM="$from" M_ATTACH="$attach" \
-          M_WAIT="$wait" M_TIMEOUT="$timeout"
+          M_WAIT="$wait" M_TIMEOUT="$timeout" M_SEND_AT="$send_at" M_SEND_IN="$send_in"
     _mail_py
 }
 
@@ -13629,6 +13657,21 @@ cmd_mail_reply() {
 
 cmd_mail_outbox() {
     if _wants_help "$@"; then cmd_help_mail_outbox; exit 0; fi
+    if [ "${1:-}" = "cancel" ]; then
+        shift
+        local id="" as_json=false
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --json) as_json=true; shift ;;
+                -*) _mail_err "usage" "usage: k2 mail outbox cancel <id> [--json]"; exit 2 ;;
+                *) if [ -z "$id" ]; then id="$1"; else _mail_err "usage" "one <id> only"; exit 2; fi; shift ;;
+            esac
+        done
+        [ -n "$id" ] || { _mail_err "usage" "outbox cancel requires out_… id"; exit 2; }
+        local M_VERB="outbox_cancel" M_JSON="$as_json" M_ID="$id"
+        _mail_py
+        return
+    fi
     local id="" limit="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in

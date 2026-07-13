@@ -3076,7 +3076,7 @@ pub struct MailOutbound {
     pub subject: String,
     pub body_ref: Option<String>,
     pub attachments_ref: Option<String>,
-    /// `pending` | `approved` | `denied` | `sent` | `failed`.
+    /// `pending` | `approved` | `denied` | `sent` | `failed` | `scheduled`.
     pub status: String,
     pub decided_by: Option<String>,
     pub note: Option<String>,
@@ -3084,6 +3084,8 @@ pub struct MailOutbound {
     pub updated_at: i64,
     pub decided_at: Option<i64>,
     pub sent_at: Option<i64>,
+    /// Unix seconds when the message may leave. None = immediate.
+    pub send_after: Option<i64>,
 }
 
 /// One `mail_doctor_runs` row (PRD §9). `domain_id` is `None` for

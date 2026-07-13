@@ -162,6 +162,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/address/delete"
         | "/cli/mail/send"
         | "/cli/mail/reply"
+        | "/cli/mail/outbox/cancel"
         | "/cli/mail/approvals/approve"
         | "/cli/mail/approvals/deny"
         | "/cli/mail/external/add"
@@ -212,6 +213,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/mail/address/delete" => routes_addresses::handle_address_delete(body),
         "/cli/mail/send" => routes_send::handle_send(body),
         "/cli/mail/reply" => routes_send::handle_reply(body),
+        "/cli/mail/outbox/cancel" => routes_send::handle_outbox_cancel(body),
         "/cli/mail/approvals/approve" => routes_send::handle_approvals_approve(body),
         "/cli/mail/approvals/deny" => routes_send::handle_approvals_deny(body),
         "/cli/mail/external/add" => routes_external::handle_external_add(body),

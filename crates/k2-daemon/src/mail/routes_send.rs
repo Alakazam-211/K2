@@ -249,11 +249,14 @@ fn dispatch_and_respond(
     msg: &OutboundMessage,
     gate: Gate,
     wait_timeout: Option<u64>,
+    send_after: Option<i64>,
 ) -> CliResponse {
     let store = DbOutboundStore::default();
+    let now = now_secs();
+    let future_schedule = send_after.filter(|t| *t > now);
     let engine_client;
-    let backend: Option<&dyn SubmitBackend> = match gate {
-        Gate::On => match domains::engine_from_db() {
+    let backend: Option<&dyn SubmitBackend> = match (gate, future_schedule) {
+        (Gate::On, None) => match domains::engine_from_db() {
             Ok((client, _)) => {
                 engine_client = client;
                 Some(&engine_client)
@@ -262,9 +265,14 @@ fn dispatch_and_respond(
         },
         _ => None,
     };
-    // The wait slot is claimed BEFORE queueing: a fanned-out caller is
-    // refused without consuming queue/audit budget (pre-mortem #10 —
-    // same RAII cap as the S4 wait).
+    if wait_timeout.is_some() && future_schedule.is_some() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "--wait cannot combine with --at/--in — schedule the send, then poll \
+             'k2 mail outbox <id>' (or cancel with 'k2 mail outbox cancel <id>')",
+        );
+    }
     let _slot = if wait_timeout.is_some() && gate == Gate::Approval {
         match WaitSlot::try_acquire(project_id) {
             Some(s) => Some(s),
@@ -287,15 +295,35 @@ fn dispatch_and_respond(
     } else {
         None
     };
-    let req = OutboundRequest { project_id, agent_name, account_id, message: msg };
-    let outcome = match send::gate_and_dispatch(&store, backend, gate, &req, now_secs()) {
+    let req = OutboundRequest {
+        project_id,
+        agent_name,
+        account_id,
+        message: msg,
+        send_after,
+    };
+    let outcome = match send::gate_and_dispatch(&store, backend, gate, &req, now) {
         Ok(o) => o,
         Err(e) => return send_error_response(e),
     };
     match outcome {
-        SendOutcome::Queued { id } => {
-            // Notify the owner (content-free payload — the Approvals
-            // tab refetches; feedback-notification conventions).
+        SendOutcome::Scheduled { id, send_after } => {
+            let when = crate::mail::schedule::format_send_after(send_after);
+            ok_json(serde_json::json!({
+                "ok": true,
+                "queued": true,
+                "scheduled": true,
+                "id": id,
+                "status": "scheduled",
+                "sendAfter": send_after,
+                "sendAfterRfc3339": when,
+                "hint": format!(
+                    "scheduled ({id}) — will leave after {when}; track with \
+                     'k2 mail outbox {id}', cancel with 'k2 mail outbox cancel {id}'"
+                ),
+            }))
+        }
+        SendOutcome::Queued { id, send_after } => {
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::MailSendApprovalRequested,
                 serde_json::json!({
@@ -305,7 +333,7 @@ fn dispatch_and_respond(
                 }),
             );
             let Some(timeout_secs) = wait_timeout else {
-                return ok_json(serde_json::json!({
+                let mut body = serde_json::json!({
                     "ok": true,
                     "queued": true,
                     "id": id,
@@ -314,10 +342,19 @@ fn dispatch_and_respond(
                         "queued for approval ({id}) — your human decides in Settings → \
                          Email → Approvals; track with 'k2 mail outbox {id}'"
                     ),
-                }));
+                });
+                if let Some(after) = send_after {
+                    body["sendAfter"] = serde_json::json!(after);
+                    body["sendAfterRfc3339"] =
+                        serde_json::json!(crate::mail::schedule::format_send_after(after));
+                    body["hint"] = serde_json::json!(format!(
+                        "queued for approval ({id}) — after approve, sends after {}; \
+                         track with 'k2 mail outbox {id}'",
+                        crate::mail::schedule::format_send_after(after)
+                    ));
+                }
+                return ok_json(body);
             };
-            // §11.1.4: block until decided (bounded in-handler poll —
-            // the dispatcher runs this arm in spawn_blocking).
             let mut poll = || -> Result<(String, Option<String>), String> {
                 match store.load(&id)? {
                     Some(row) => Ok((row.status, row.note)),
@@ -341,8 +378,6 @@ fn dispatch_and_respond(
                     "statusNote": send::status_note(&db_status),
                     "note": note,
                 })),
-                // Timeout: the message is STILL QUEUED (exit 2 at the
-                // CLI; §11.1.4 wording).
                 Ok(None) => ok_json(serde_json::json!({
                     "ok": true,
                     "id": id,
@@ -835,9 +870,19 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         );
     }
 
+    let schedule_requested = v["sendAt"].as_str().or_else(|| v["send_at"].as_str()).is_some()
+        || v["sendIn"].as_str().or_else(|| v["send_in"].as_str()).is_some();
+
     match from_inbox.source {
         // ── LINKED: mail_agent_send gate then SMTP (§17.5 / E4) ──
         Source::Linked => {
+            if schedule_requested {
+                return error_response(
+                    "400 Bad Request",
+                    "usage",
+                    "--at/--in scheduling is for hosted K2 mailboxes; linked/BYO sends                      immediately over SMTP (no schedule queue)",
+                );
+            }
             if let Err(resp) = require_linked_send_gate(&path) {
                 return resp;
             }
@@ -912,6 +957,14 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 in_reply_to: None,
                 references: None,
             };
+            let send_after = match crate::mail::schedule::resolve_send_after(
+                v["sendAt"].as_str().or_else(|| v["send_at"].as_str()),
+                v["sendIn"].as_str().or_else(|| v["send_in"].as_str()),
+                now_secs(),
+            ) {
+                Ok(t) => t,
+                Err(e) => return send_error_response(e),
+            };
             dispatch_and_respond(
                 &project_id,
                 &path,
@@ -920,6 +973,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 &msg,
                 gate,
                 wait_timeout,
+                send_after,
             )
         }
     }
@@ -1112,6 +1166,14 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                     ctx.message_id.as_deref(),
                 ),
             };
+            let send_after = match crate::mail::schedule::resolve_send_after(
+                v["sendAt"].as_str().or_else(|| v["send_at"].as_str()),
+                v["sendIn"].as_str().or_else(|| v["send_in"].as_str()),
+                now_secs(),
+            ) {
+                Ok(t) => t,
+                Err(e) => return send_error_response(e),
+            };
             dispatch_and_respond(
                 &project_id,
                 &path,
@@ -1120,6 +1182,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 &msg,
                 gate,
                 wait_timeout,
+                send_after,
             )
         }
     }
@@ -1190,6 +1253,50 @@ pub fn handle_outbox(params: &HashMap<String, String>) -> CliResponse {
         "count": list.len(),
         "outbox": list,
     }))
+}
+
+// ── POST /cli/mail/outbox/cancel ────────────────────────────────────────
+
+pub fn handle_outbox_cancel(body: &[u8]) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let Some(project) = v["project"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'project' (workspace name | path | UUID)",
+        );
+    };
+    let Some(id) = v["id"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'id' — a scheduled outbound id (out_…)",
+        );
+    };
+    let (path, project_id) = match resolve_caller(project) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let agent_name = k2_core::workspace::display::agent_display_name(&path);
+    let store = DbOutboundStore::default();
+    match crate::mail::schedule::cancel_scheduled(
+        &store,
+        id,
+        &project_id,
+        &format!("agent:{agent_name}"),
+        now_secs(),
+    ) {
+        Ok(()) => ok_json(serde_json::json!({
+            "ok": true,
+            "id": id,
+            "status": "rejected",
+            "hint": format!("cancelled scheduled send {id} — it will not leave the box"),
+        })),
+        Err(e) => send_error_response(e),
+    }
 }
 
 // ── GET /cli/mail/approvals/list ────────────────────────────────────────
@@ -1304,6 +1411,19 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
                 "id": id,
                 "status": "submitted",
                 "hint": "approved and accepted-for-delivery",
+            }))
+        }
+        Ok(send::ApproveOutcome::Scheduled { send_after }) => {
+            ok_json(serde_json::json!({
+                "ok": true,
+                "id": id,
+                "status": "scheduled",
+                "sendAfter": send_after,
+                "sendAfterRfc3339": crate::mail::schedule::format_send_after(send_after),
+                "hint": format!(
+                    "approved — held until {} (scheduled)",
+                    crate::mail::schedule::format_send_after(send_after)
+                ),
             }))
         }
         Ok(send::ApproveOutcome::FailedToSubmit(error)) => {
@@ -1984,6 +2104,7 @@ mod tests {
                     status: "pending",
                     decided_by: None,
                     attachment_names: &[],
+                    send_after: None,
                     now,
                 })
                 .expect("seed audit row");
@@ -2132,6 +2253,7 @@ mod tests {
                 status: "pending",
                 decided_by: None,
                 attachment_names: &[],
+                send_after: None,
                 now: now_secs(),
             })
             .expect("seed foreign row");

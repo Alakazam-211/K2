@@ -899,6 +899,9 @@ async fn async_main() {
     // every tick while no mail domains exist (one indexed SELECT).
     let _mail_dns_verify_handle = mail::dns_verify::spawn();
 
+    // Agent-scheduled outbound flusher (mail_outbound status=scheduled).
+    let _mail_scheduled_flusher_handle = mail::schedule::spawn_scheduled_flusher();
+
     // K2 Mail S8 (prd-email-server-v1 §9) — the nightly deliverability
     // doctor: a server-level `k2 mail doctor` run re-taken daily while
     // (and ONLY while) the mail server is `running`, persisted through

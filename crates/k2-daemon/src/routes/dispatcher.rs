@@ -2484,7 +2484,7 @@ async fn handle_one_request(
         // the same process that owns the live companion runtime.
         // Method gate per feedback_post_only_route_guards memory.
         // Remote-access keys (federationEnabled / allowRemoteInstruct /
-        // apiEnabled / dnsManageEnabled)
+        // apiEnabled / dnsManageEnabled / agentsCanCreateConnections)
         // additionally require owner-or-admin — resolved here via the same
         // `token_is_owner_or_admin` tier the federation management routes
         // use, enforced key-aware inside the handler (a Member touching a
@@ -3072,10 +3072,15 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            // C1: relations create/delete need owner-or-admin OR the
+            // agents_can_create_connections toggle (same bar as
+            // /cli/connections add|remove).
+            let actor_is_privileged =
+                super::http::token_is_owner_or_admin(&query, state.token.as_str());
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                dispatch_connect_gap_post(&p_owned, &body_bytes)
+                dispatch_connect_gap_post(&p_owned, &body_bytes, actor_is_privileged)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -4697,6 +4702,53 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // C1 (0.40.45) — `/cli/connections` dual-auth (owner/connect-user
+        // OR scoped agent hook). Mutate (add/remove) is further gated:
+        // owner-or-admin always; agents need agents_can_create_connections.
+        // List is free for any authenticated principal. Stamps
+        // actor_privileged server-side — never trust the client.
+        p if p == "/cli/connections" => {
+            let _ = stream.read(&mut buf).await;
+            let (auth_ok, scoped_principal) = token_or_scoped_hook_auth(
+                p,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            if !auth_ok {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let mut params = super::http::parse_params(&path, &query);
+            // Scoped agent principal is never privileged for mutate.
+            let privileged = scoped_principal.is_none()
+                && super::http::token_is_owner_or_admin(&query, state.token.as_str());
+            params.insert(
+                "actor_privileged".to_string(),
+                if privileged {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                },
+            );
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // Unified /cli/* dispatch. Auth + param validation +
         // per-route handler all live in `crate::cli::dispatch`; main.rs
         // just translates the CliResponse into bytes.
@@ -4837,7 +4889,15 @@ fn dispatch_unit6_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
 /// whichever daemon the renderer is talking to (local OR remote host).
 /// Method gate is upstream (the `is_post && post_allowed` arm guard);
 /// token gate is upstream too. Unknown paths 404.
-fn dispatch_connect_gap_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
+///
+/// `actor_is_privileged` is the dispatcher-resolved owner-or-admin bit
+/// (C1 — gates relations create/delete the same way as connections
+/// add/remove). Other connect-gap routes ignore it.
+fn dispatch_connect_gap_post(
+    path: &str,
+    body: &[u8],
+    actor_is_privileged: bool,
+) -> crate::cli::CliResponse {
     match path {
         // Workspace skill CRUD + canonical opt-in + harness-fanout marker.
         "/cli/skills/create" => crate::skills_routes::handle_create(body),
@@ -4876,9 +4936,14 @@ fn dispatch_connect_gap_post(path: &str, body: &[u8]) -> crate::cli::CliResponse
             crate::heartbeat_routes::handle_set_show_heartbeat_sessions(body)
         }
         // Workspace relations (id-based — mirrors the renderer's
-        // workspace_relations_* Tauri commands 1:1).
-        "/cli/relations/create" => crate::agents_routes::handle_relations_create(body),
-        "/cli/relations/delete" => crate::agents_routes::handle_relations_delete(body),
+        // workspace_relations_* Tauri commands 1:1). C1: gated for
+        // non-privileged actors by agents_can_create_connections.
+        "/cli/relations/create" => {
+            crate::agents_routes::handle_relations_create(body, actor_is_privileged)
+        }
+        "/cli/relations/delete" => {
+            crate::agents_routes::handle_relations_delete(body, actor_is_privileged)
+        }
         _ => crate::cli::CliResponse::not_found(),
     }
 }

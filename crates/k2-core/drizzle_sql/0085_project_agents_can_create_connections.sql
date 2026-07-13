@@ -1,0 +1,22 @@
+-- C1 (0.40.45) — per-workspace agents-may-create-connections opt-in.
+--
+-- Refines the agent connection-mutation gate from an APP-LEVEL flag
+-- (`~/.k2/settings.json` `agentsCanCreateConnections`) to a PER-WORKSPACE
+-- opt-in. The owner enables connection add/remove for SPECIFIC workspaces;
+-- default OFF, fail-closed.
+--
+-- Effective semantics: an agent may add/remove connections for a workspace
+-- iff its per-workspace flag is 1 OR the app-level
+-- `agentsCanCreateConnections` master is on — i.e. the app-level flag
+-- stays a GLOBAL MASTER so enabling it once opts in every workspace.
+-- Unknown/unregistered workspaces fail closed when the master is off.
+--
+-- Owner / Owner-role connect-user always may add/remove (daemon gate
+-- bypasses this column for privileged actors). Agents / non-owners are
+-- gated by the effective OR.
+--
+-- Default 0 (OFF): wiring two workspaces is a high-impact trust decision
+-- (cross-workspace msg + federation remote rows), so a workspace must
+-- never gain the capability until the owner explicitly opts it in.
+-- Existing rows backfill to 0.
+ALTER TABLE projects ADD COLUMN agents_can_create_connections INTEGER NOT NULL DEFAULT 0;

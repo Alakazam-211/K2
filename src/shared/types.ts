@@ -115,6 +115,10 @@ export interface AppSettingsResponse {
   // DEFAULTS OFF (deny-by-default). Optional: older snapshots omit it →
   // readers treat absent as false.
   dnsManageEnabled?: boolean
+  // C1 (0.40.45) — per-host opt-in that lets agents add/remove connections.
+  // DEFAULTS OFF (deny-by-default). Optional: older snapshots omit it →
+  // readers treat absent as false. Owner always may manage connections.
+  agentsCanCreateConnections?: boolean
   // Federation (0.40.14+) — whether cross-server messaging is enabled on
   // this host. Optional: older snapshots omit it → readers treat absent
   // as false (the store reads it with `?? false`).

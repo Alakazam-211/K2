@@ -500,6 +500,11 @@ pub fn is_agent_verb(path: &str) -> bool {
         // filesystem and never shells out. Not under any DENY_PREFIX
         // (`/cli/browser/` is new with this verb).
         "/cli/browser/open-url",
+        // C1 (0.40.45): workspace connections list/add/remove. Mutate is
+        // further gated by agents_can_create_connections_for_path (owner
+        // always bypasses; agents need the effective toggle ON). List is
+        // free for any authenticated agent principal.
+        "/cli/connections",
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
@@ -1128,6 +1133,8 @@ mod tests {
         assert!(is_agent_verb("/cli/dns/records/add"));
         assert!(is_agent_verb("/cli/dns/records/remove"));
         assert!(is_agent_verb("/cli/dns/verify"));
+        // C1 (0.40.45): connections list/add/remove (mutate toggle-gated).
+        assert!(is_agent_verb("/cli/connections"));
     }
 
     #[test]

@@ -1196,6 +1196,46 @@ pub fn handle_session_set_surfaced(body: &[u8]) -> CliResponse {
     }
 }
 
+/// C1 (0.40.45) — gate relations create/delete for non-privileged actors.
+/// Privileged (owner / Owner-Admin connect-user) always allowed. Agents
+/// need `agents_can_create_connections_for_path` for the source workspace.
+fn gate_relations_mutate(
+    source_project_id: &str,
+    actor_is_privileged: bool,
+) -> Result<(), CliResponse> {
+    if actor_is_privileged {
+        return Ok(());
+    }
+    // Resolve source path for the effective toggle (fail-closed if
+    // the project id is unknown → toggle helper returns false).
+    let path: Option<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT path FROM projects WHERE id = ?1",
+            rusqlite::params![source_project_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+    };
+    let path = path.unwrap_or_default();
+    if k2_core::workspace::settings::agents_can_create_connections_for_path(&path) {
+        return Ok(());
+    }
+    Err(CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "agents_create_connections_disabled",
+                "hint": k2_core::connections::CONNECTIONS_MUTATE_DENIED_HINT,
+            }
+        })
+        .to_string(),
+    })
+}
+
 /// Handler for `POST /cli/relations/create`.
 ///
 /// Wraps `k2_core::workspace::relations::workspace_relations_create`.
@@ -1211,7 +1251,11 @@ pub fn handle_session_set_surfaced(body: &[u8]) -> CliResponse {
 /// model + different return shape), this adds an ID-based route that
 /// directly mirrors the Tauri command 1:1 — the lower-risk option. The
 /// path/action `/cli/connections` GET route is left untouched.
-pub fn handle_relations_create(body: &[u8]) -> CliResponse {
+///
+/// C1: `actor_is_privileged` is the dispatcher-resolved owner-or-admin
+/// bit. Agents require the effective agents_can_create_connections
+/// toggle for the source workspace.
+pub fn handle_relations_create(body: &[u8], actor_is_privileged: bool) -> CliResponse {
     let b: RelationCreateBody = match parse_body(body) {
         Ok(b) => b,
         Err(r) => return r,
@@ -1221,6 +1265,9 @@ pub fn handle_relations_create(body: &[u8]) -> CliResponse {
     }
     if b.target_project_id.is_empty() {
         return CliResponse::bad_request("missing target_project_id");
+    }
+    if let Err(r) = gate_relations_mutate(&b.source_project_id, actor_is_privileged) {
+        return r;
     }
     match k2_core::workspace::relations::workspace_relations_create(
         b.source_project_id,
@@ -1239,13 +1286,49 @@ pub fn handle_relations_create(body: &[u8]) -> CliResponse {
 /// Wraps `k2_core::workspace::relations::workspace_relations_delete`.
 /// Mirrors the `workspace_relations_delete(id)` Tauri command. See the
 /// FLAGGED design note on [`handle_relations_create`].
-pub fn handle_relations_delete(body: &[u8]) -> CliResponse {
+///
+/// C1: resolves the row's source project for the toggle gate (same bar
+/// as create / connections remove).
+pub fn handle_relations_delete(body: &[u8], actor_is_privileged: bool) -> CliResponse {
     let b: RelationDeleteBody = match parse_body(body) {
         Ok(b) => b,
         Err(r) => return r,
     };
     if b.id.is_empty() {
         return CliResponse::bad_request("missing id");
+    }
+    // Look up the source project for the toggle gate before delete.
+    let source_id: Option<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT source_project_id FROM workspace_relations WHERE id = ?1",
+            rusqlite::params![b.id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+    };
+    if let Some(ref sid) = source_id {
+        if let Err(r) = gate_relations_mutate(sid, actor_is_privileged) {
+            return r;
+        }
+    } else if !actor_is_privileged {
+        // Unknown row + non-privileged: still deny rather than leak
+        // existence via a different error path after the toggle check.
+        // Privileged callers fall through to the normal delete (which
+        // returns bad_request for missing id).
+        return CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "agents_create_connections_disabled",
+                    "hint": k2_core::connections::CONNECTIONS_MUTATE_DENIED_HINT,
+                }
+            })
+            .to_string(),
+        };
     }
     match k2_core::workspace::relations::workspace_relations_delete(b.id) {
         Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
@@ -1417,16 +1500,32 @@ mod gap_route_tests {
 
     #[test]
     fn relations_create_rejects_missing_target() {
-        let r = handle_relations_create(br#"{"source_project_id":"a"}"#);
+        let r = handle_relations_create(br#"{"source_project_id":"a"}"#, true);
         assert_eq!(r.status, "400 Bad Request");
         assert!(r.body.contains("target_project_id"), "body={}", r.body);
     }
 
     #[test]
     fn relations_delete_rejects_missing_id() {
-        let r = handle_relations_delete(b"{}");
+        let r = handle_relations_delete(b"{}", true);
         assert_eq!(r.status, "400 Bad Request");
         assert!(r.body.contains("id"), "body={}", r.body);
+    }
+
+    /// C1: non-privileged agent is denied relations create when toggle is OFF.
+    #[test]
+    fn relations_create_agent_denied_when_toggle_off() {
+        let r = handle_relations_create(
+            br#"{"source_project_id":"missing-proj","target_project_id":"t"}"#,
+            false,
+        );
+        assert_eq!(r.status, "403 Forbidden", "body={}", r.body);
+        assert!(
+            r.body.contains("agents_create_connections_disabled")
+                || r.body.contains("Allow agents to create connections"),
+            "body={}",
+            r.body
+        );
     }
 
     #[test]

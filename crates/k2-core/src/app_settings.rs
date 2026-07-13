@@ -264,6 +264,22 @@ pub struct AppSettings {
     /// (app master OR per-workspace, fail-closed).
     #[serde(default)]
     pub dns_manage_enabled: bool,
+    /// C1 (0.40.45) — per-host opt-in that lets agents add/remove workspace
+    /// connections (`k2 connections add|remove`, relations create/delete).
+    /// **Defaults OFF** (deny-by-default): wiring workspaces is a high-impact
+    /// trust decision, so a daemon must never grant it until the owner
+    /// explicitly opts this host in. A typed `bool` is required: `AppSettings`
+    /// round-trips through `serde_json::from_value` on every `load`/`update`,
+    /// which silently drops keys with no matching field.
+    ///
+    /// Wire name `agentsCanCreateConnections` (serde camelCase). Per-workspace
+    /// refinement lives on `projects.agents_can_create_connections`
+    /// (migration 0085); effective gate is
+    /// `workspace::settings::agents_can_create_connections_for_path`
+    /// (app master OR per-workspace, fail-closed). Owner / Owner-role
+    /// connect-user always bypass the gate.
+    #[serde(default)]
+    pub agents_can_create_connections: bool,
     /// Cross-server federation master switch (K2 Connect → Enable federation).
     /// Persisted app-level mirror of the `K2_FEDERATION` env var so the owner
     /// can turn federation on/off per-server from the UI without editing a
@@ -607,6 +623,7 @@ impl Default for AppSettings {
             owner_display_name: None,
             allow_remote_instruct: false,
             dns_manage_enabled: false,
+            agents_can_create_connections: false,
             federation_enabled: false,
             api_enabled: false,
             use_llm_hitl_detection: false,
@@ -1032,6 +1049,33 @@ mod tests {
         // reset() returns to the OFF default.
         let after = reset().expect("reset");
         assert!(!after.dns_manage_enabled);
+    }
+
+    /// C1 (0.40.45) — agents-can-create-connections opt-in must default OFF,
+    /// persist through save→load, and ingest camelCase
+    /// `agentsCanCreateConnections` via `update()` deep-merge.
+    #[test]
+    fn agents_can_create_connections_defaults_off_and_round_trips() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        assert!(!load().agents_can_create_connections);
+        assert!(!AppSettings::default().agents_can_create_connections);
+
+        let mut s = AppSettings::default();
+        s.agents_can_create_connections = true;
+        save(&s).expect("save");
+        assert!(load().agents_can_create_connections);
+
+        let merged = update(serde_json::json!({
+            "agentsCanCreateConnections": false
+        }))
+        .expect("update");
+        assert!(!merged.agents_can_create_connections);
+        assert!(!load().agents_can_create_connections);
+
+        let after = reset().expect("reset");
+        assert!(!after.agents_can_create_connections);
     }
 
     /// Federation toggle-topology consolidation (UI-only move of the

@@ -109,6 +109,12 @@ pub struct Project {
     /// = deny. The app-level `dnsManageEnabled` is a global master OR'd
     /// on top. Fail-closed: default 0.
     pub dns_manage_enabled: i64,
+    /// C1 (0.40.45) — per-workspace agents-may-create-connections opt-in
+    /// (migration 0085). 1 = agents may add/remove connections for this
+    /// workspace; 0 (default) = deny. The app-level
+    /// `agentsCanCreateConnections` is a global master OR'd on top.
+    /// Owner / Owner-role always allowed regardless. Fail-closed: default 0.
+    pub agents_can_create_connections: i64,
     /// Agent de-generalization S1 — per-workspace default agent
     /// (migration 0063). An `agent_presets` preset id (UUID string);
     /// readers must also tolerate a legacy command token like "claude".
@@ -131,7 +137,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, default_agent \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -158,7 +164,8 @@ impl Project {
                 heartbeat_last_fire: row.get(19).ok().flatten(),
                 allow_remote_instruct: row.get(20).unwrap_or(0),
                 dns_manage_enabled: row.get(21).unwrap_or(0),
-                default_agent: row.get(22).ok().flatten(),
+                agents_can_create_connections: row.get(22).unwrap_or(0),
+                default_agent: row.get(23).ok().flatten(),
             })
         })?;
         rows.collect()
@@ -169,7 +176,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, default_agent \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -196,7 +203,8 @@ impl Project {
                     heartbeat_last_fire: row.get(19).ok().flatten(),
                     allow_remote_instruct: row.get(20).unwrap_or(0),
                     dns_manage_enabled: row.get(21).unwrap_or(0),
-                    default_agent: row.get(22).ok().flatten(),
+                    agents_can_create_connections: row.get(22).unwrap_or(0),
+                    default_agent: row.get(23).ok().flatten(),
                 })
             },
         )

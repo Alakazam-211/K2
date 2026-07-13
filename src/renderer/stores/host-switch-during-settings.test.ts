@@ -120,6 +120,7 @@ function mkProject(id: string): Record<string, unknown> {
     heartbeatLastFire: null,
     allowRemoteInstruct: 0,
     dnsManageEnabled: 0,
+    agentsCanCreateConnections: 0,
   }
 }
 

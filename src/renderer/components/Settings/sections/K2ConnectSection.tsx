@@ -33,6 +33,7 @@ import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingC
 import { Toggle } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
+import { AgentsCanCreateConnectionsRow } from '../shared/AgentsCanCreateConnectionsRow'
 import { TunnelUrlsPanel } from './TunnelUrlsPanel'
 import {
   signIn as accountSignIn,
@@ -1237,6 +1238,10 @@ export function K2ConnectSection(): React.JSX.Element {
             {/* DNS K1 — agent DNS-mutation master (deny-by-default). Same
                 owner/admin gate as the remote-access keys above. */}
             <DnsManageEnabledRow />
+            {/* C1 — agents-may-create-connections master (deny-by-default).
+                Owner always may add/remove; agents need this or the
+                per-workspace override. */}
+            <AgentsCanCreateConnectionsRow />
           </div>
         )}
 

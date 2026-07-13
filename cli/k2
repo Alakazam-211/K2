@@ -356,6 +356,8 @@ _uds_eligible() {
         /cli/inbox/*|/cli/review-checklist/*) return 0 ;;
         # DNS K1 — cell_server serves /cli/dns/* POSTs + is_agent_verb GETs.
         /cli/dns/*) return 0 ;;
+        # C1 — connections list/add/remove (mutate toggle-gated server-side).
+        /cli/connections) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -4653,6 +4655,8 @@ for c in conns:
             # 0.39.45 (#32): NEVER exit silently. Errors used to go to
             # stderr and then get eaten by a 2>/dev/null on this pipe —
             # a failed add looked identical to success with no output.
+            # C1 (0.40.45): gated agents get exit 3 + JSON teaching
+            # Settings path (agents_create_connections_disabled).
             cli_request "/cli/connections" "action=add&target=$(urlencode "$target")" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
@@ -4661,8 +4665,30 @@ try:
 except Exception:
     sys.stdout.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
     sys.exit(1)
-if 'error' in d:
-    sys.stdout.write('Error: %s\n' % d['error'])
+err = d.get('error')
+if err is not None:
+    code, hint = '', ''
+    if isinstance(err, dict):
+        code = err.get('code') or ''
+        hint = err.get('hint') or json.dumps(err)
+    else:
+        hint = str(err)
+    gated = (
+        code in ('agents_create_connections_disabled', 'gated', 'forbidden')
+        or 'Allow agents to create connections' in hint
+        or \"isn't allowed to create or remove connections\" in hint
+    )
+    if gated:
+        if 'Settings' not in hint:
+            hint = (hint + ' — ' if hint else '') + (
+                \"this agent isn't allowed to create or remove connections — \"
+                'the owner can enable it in Settings \u2192 K2 Connect '
+                '(Allow agents to create connections) or Workspaces \u2192 '
+                '(workspace) \u2192 Allow agents to create connections'
+            )
+        sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')
+        sys.exit(3)
+    sys.stdout.write('Error: %s\n' % hint)
     sys.exit(1)
 if d.get('noop'):
     print('Already connected to %s (%s)' % (d.get('target', '?'), d.get('message', '')))
@@ -4673,6 +4699,7 @@ else:
         remove)
             local target="${1:-}"
             [[ -z "$target" ]] && { echo "Usage: k2 connections remove <workspace-name>" >&2; exit 1; }
+            # C1 (0.40.45): same gated exit-3 teaching as add.
             cli_request "/cli/connections" "action=remove&target=$(urlencode "$target")" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
@@ -4681,8 +4708,30 @@ try:
 except Exception:
     sys.stdout.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
     sys.exit(1)
-if 'error' in d:
-    sys.stdout.write('Error: %s\n' % d['error'])
+err = d.get('error')
+if err is not None:
+    code, hint = '', ''
+    if isinstance(err, dict):
+        code = err.get('code') or ''
+        hint = err.get('hint') or json.dumps(err)
+    else:
+        hint = str(err)
+    gated = (
+        code in ('agents_create_connections_disabled', 'gated', 'forbidden')
+        or 'Allow agents to create connections' in hint
+        or \"isn't allowed to create or remove connections\" in hint
+    )
+    if gated:
+        if 'Settings' not in hint:
+            hint = (hint + ' — ' if hint else '') + (
+                \"this agent isn't allowed to create or remove connections — \"
+                'the owner can enable it in Settings \u2192 K2 Connect '
+                '(Allow agents to create connections) or Workspaces \u2192 '
+                '(workspace) \u2192 Allow agents to create connections'
+            )
+        sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')
+        sys.exit(3)
+    sys.stdout.write('Error: %s\n' % hint)
     sys.exit(1)
 print('Disconnected.')
 "

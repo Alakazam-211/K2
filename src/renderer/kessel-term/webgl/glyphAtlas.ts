@@ -14,19 +14,13 @@
 // Browser-bound (Canvas2D + getImageData). All the packing MATH
 // lives in atlasLayout.ts, which is pure and unit-tested.
 //
-// NOT YET SYNTHETIC (2026-07): the DOM painter renders box-drawing/
-// block-element cells as painted CSS geometry (syntheticGlyphs.ts)
-// instead of font glyphs; this atlas still rasterizes them with
-// fillText. Porting = in get(), before the fillText, check
-// syntheticGlyphSpec(cp) for single-code-point cells and rasterize
-// procedurally instead: resolveGlyphRects() already yields device-px
-// rects (build GlyphMetrics with dpr=1 against deviceCellW/H, then
-// ctx.fillRect each; white at spec.alpha for the shades — the
-// shader's tint path treats alpha as coverage, so it composes for
-// free), arcs ╭╮╰╯ as a stroked quarter-ellipse path, dashes as
-// segment fillRects. Deferred, not half-built: this path is behind
-// the WebGL flag, has never been feel-tested, and its rasterization
-// is untestable in the node test env (tests stub GlyphSource).
+// SYNTHETIC (2026-07): box-drawing / block-element / sextant cells
+// rasterize procedurally via syntheticRaster.ts (fillRect/stroke of
+// the same device-px rect math the DOM painter uses) instead of
+// fillText, so stacked blocks tile seamlessly and TUI borders stay
+// continuous — DOM-renderer parity. Diagonals ╱╲╳ and powerline PUA
+// stay font glyphs (same exclusions as the DOM). Synthetic entries
+// ignore bold/italic (weight is intrinsic to the code point).
 
 import {
   allocSlot,
@@ -35,6 +29,7 @@ import {
   growLayout,
   type AtlasLayout,
 } from './atlasLayout'
+import { drawSyntheticGlyph, syntheticSpecForCluster } from './syntheticRaster'
 
 /** 1px transparent border around every slot so LINEAR sampling (or a
  *  half-texel rounding slip) can never bleed a neighbor glyph. */
@@ -135,7 +130,12 @@ export class GlyphAtlas implements GlyphSource {
     italic: boolean,
     widthCells: number,
   ): GlyphSlot | null {
-    const key = `${bold ? 'b' : ''}${italic ? 'i' : ''}${widthCells}|${text}`
+    // Synthetic glyphs share one slot across bold/italic — the DOM
+    // painter likewise drops text styles on painted cells.
+    const spec = syntheticSpecForCluster(text)
+    const key = spec
+      ? `s${widthCells}|${text}`
+      : `${bold ? 'b' : ''}${italic ? 'i' : ''}${widthCells}|${text}`
     const hit = this.glyphs.get(key)
     if (hit) return hit
 
@@ -182,10 +182,27 @@ export class GlyphAtlas implements GlyphSource {
     ctx.beginPath()
     ctx.rect(x, y, w, h)
     ctx.clip()
+
+    if (spec) {
+      // White by construction — skip the getImageData mono-scan.
+      drawSyntheticGlyph(ctx, spec, x, y, w, h)
+      ctx.restore()
+      const slot: GlyphSlot = { texX: x, texY: y, w, h, color: false }
+      this.glyphs.set(key, slot)
+      this.version++
+      return slot
+    }
+
     ctx.fillStyle = '#ffffff'
     ctx.font = this.fontString(bold, italic)
     ctx.textBaseline = 'alphabetic'
-    ctx.fillText(text, x, y + this.baseline)
+    // Center horizontally in the cell box: exact-monospace advances
+    // round dx to 0; over-wide fallback glyphs (braille art from a
+    // substituted font) clip symmetrically instead of right-only —
+    // parity with the DOM strip's textAlign:center per-char cells.
+    const advance = ctx.measureText(text).width
+    const dx = Math.round((w - advance) / 2)
+    ctx.fillText(text, x + dx, y + this.baseline)
     ctx.restore()
 
     // Monochrome test: white fill ⇒ every covered pixel has r=g=b.

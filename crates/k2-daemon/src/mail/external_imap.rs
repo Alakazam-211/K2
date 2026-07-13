@@ -513,6 +513,7 @@ impl ImapOps for RealImapOps {
         let target = resolve_read_folder(&mut session, &filter.folder)?;
         let mailbox = session.select(&target).map_err(|e| imap_err("SELECT", e))?;
         let uidvalidity = mailbox.uid_validity.unwrap_or(0);
+        let exists = mailbox.exists;
         let mut uids: Vec<u32> = session
             .uid_search(build_search_query(filter))
             .map_err(|e| imap_err("SEARCH", e))?
@@ -523,6 +524,26 @@ impl ImapOps for RealImapOps {
         // merged list by date anyway. `offset` is the pagination cursor:
         // skip that many of the newest before taking a page.
         uids.sort_unstable_by(|a, b| b.cmp(a));
+        // #38: unfiltered page-0 SEARCH returned nothing while SELECT
+        // reported messages — never pretend this is a healthy empty inbox.
+        // (Filtered / offset queries legitimately return empty.)
+        let unfiltered = !filter.unread_only
+            && filter.query.as_ref().map(|s| s.is_empty()).unwrap_or(true)
+            && filter.from.as_ref().map(|s| s.is_empty()).unwrap_or(true)
+            && filter.since_unix.is_none()
+            && filter.after_unix.is_none()
+            && filter.before_unix.is_none()
+            && filter.offset == 0;
+        if uids.is_empty() {
+            let _ = session.logout();
+            if unfiltered && exists > 0 {
+                return Err(ListError::Engine(format!(
+                    "IMAP SEARCH returned no UIDs but SELECT reports {exists} message(s) in '{target}' — \
+                     the list path failed; retry or re-link this inbox if it persists"
+                )));
+            }
+            return Ok(Vec::new());
+        }
         let uids: Vec<u32> = uids.into_iter().skip(filter.offset).take(limit).collect();
         if uids.is_empty() {
             let _ = session.logout();
@@ -536,10 +557,20 @@ impl ImapOps for RealImapOps {
         let fetches = session
             .uid_fetch(set, "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER])")
             .map_err(|e| imap_err("FETCH", e))?;
+        let fetch_count = fetches.len();
         let mut out: Vec<EmailSummary> = fetches
             .iter()
             .filter_map(|f| summary_from_fetch(uidvalidity, f))
             .collect();
+        // #38: UIDs + FETCH rows landed but zero headers parsed → engine
+        // fault, not "empty inbox" (agents must not treat as success).
+        if out.is_empty() && fetch_count > 0 {
+            let _ = session.logout();
+            return Err(ListError::Engine(format!(
+                "IMAP FETCH returned {fetch_count} message(s) but none could be summarized \
+                 (missing/unparseable headers) — retry or re-link this inbox"
+            )));
+        }
         out.sort_by(|a, b| b.received_at.cmp(&a.received_at));
         let _ = session.logout();
         Ok(out)

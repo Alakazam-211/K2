@@ -101,21 +101,33 @@ pub fn handle_search(params: &HashMap<String, String>) -> CliResponse {
 // They're routed through `dispatch_inbox_post` registered in main.rs.
 
 pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
-    let workspace = match need_project_path(params) {
-        Ok(p) => p,
+    // Compose TARGET is `project=` / `project_path` — a workspace name,
+    // absolute path, or UUID (same token contract as `k2 msg <workspace>`).
+    // Resolve to a real registered path before writing; never treat a bare
+    // name as a relative filesystem path (that silently wrote into CWD).
+    let target_token = match need_project_path(params) {
+        Ok(p) => p.to_string_lossy().into_owned(),
         Err(r) => return r,
+    };
+    let Some(resolved_path) = crate::workspace_msg::resolve_workspace(&target_token) else {
+        // Same "unknown workspace" shape as live msg — not a connection
+        // deny. CLI maps this to exit 1 (not exit 3).
+        return crate::workspace_routes::workspace_not_found_response(&target_token);
     };
     // C2: composing into ANOTHER workspace's inbox requires a local
     // connection when the caller is a scoped principal. Owner ambient
-    // (no principal) bypasses. `project=` is the compose TARGET; identity
-    // comes from stamped `project_id` / request principal — not free-text
-    // `--from`.
+    // (no principal) bypasses. Identity comes from stamped principal —
+    // never free-text `--from`.
     let principal = crate::caller_workspace::principal_from_params(params);
-    let target_token = workspace.to_string_lossy();
-    match crate::comms::gate_cross_workspace(principal.as_ref(), &target_token) {
+    // Gate against the resolved path (stable id lookup); teaching hint
+    // still shows the caller's token via gate_cross_workspace display.
+    match crate::comms::gate_cross_workspace(principal.as_ref(), &resolved_path) {
         Ok(()) => {}
         Err(Some(resp)) => return resp,
-        Err(None) => {}
+        Err(None) => {
+            // Path resolved but no projects.id (race / incomplete row).
+            return crate::workspace_routes::workspace_not_found_response(&target_token);
+        }
     }
     let title = str_param(params, "title");
     if title.is_empty() {
@@ -125,6 +137,7 @@ pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
     let priority = opt_param(params, "priority");
     let source = opt_param(params, "source");
     let from = opt_param(params, "from");
+    let workspace = PathBuf::from(&resolved_path);
     match k2_core::inbox::compose(
         &workspace,
         &title,
@@ -268,8 +281,8 @@ const GLOSSARY: &[GlossaryEntry] = &[
     },
     GlossaryEntry {
         term: "connections",
-        summary: "Cross-workspace links: which workspaces can read each other's status",
-        definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, A can read B's `who` / `activity` / inbox presence; B can show up in A's `workspace list`. Used for declaring \"these workspaces work together\" so K2SO surfaces the right context.\n\nManage via: `k2so connections list` / `add <path>` / `remove <path>`. Connections are symmetric (both sides see each other) and persisted per-workspace.\n\nNOT the same as: skill profiles (`k2so skills`), live sessions (`k2so workspace list --running`), or ngrok tunnel state (`k2so daemon companion`).",
+        summary: "Cross-workspace links: local peers for msg/read/inbox + roster",
+        definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, both sides see each other in `k2 connections list`, and agent-initiated `k2 msg` / `k2 msg --inbox` / `k2 read` to that peer is allowed. Without a connection (and outside same-workspace), those verbs return exit 3 with code `not_connected`.\n\nManage via: `k2 connections list` / `add <name|path>` / `remove <name>`. `list --json` is supported. Connections are symmetric and persisted per-workspace.\n\nAgent create/remove is OFF by default: gated agents get exit 3 with code `agents_create_connections_disabled` until the owner enables Settings → K2 Connect → Allow agents to create connections (or the per-workspace toggle). `list` is always allowed.\n\nNOT the same as: skill profiles (`k2 skills`), live sessions (`k2 workspace list --running`), or ngrok tunnel state (`k2 tunnel` / `k2 daemon companion`).",
     },
     GlossaryEntry {
         term: "feedback",

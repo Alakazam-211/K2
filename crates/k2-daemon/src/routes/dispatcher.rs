@@ -994,12 +994,15 @@ async fn handle_one_request(
             }
             let uptime_secs = state.started_at.elapsed().as_secs();
             let pid = std::process::id();
+            // `instanceId` (0.40.48): same per-process id `/boot-status`
+            // reports, for token-holding callers that already poll /status.
             let body = format!(
-                r#"{{"version":"{}","uptime_secs":{},"pid":{},"port":{}}}"#,
+                r#"{{"version":"{}","uptime_secs":{},"pid":{},"port":{},"instanceId":"{}"}}"#,
                 env!("CARGO_PKG_VERSION"),
                 uptime_secs,
                 pid,
                 state.port,
+                crate::boot_status::instance_id(),
             );
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
         }

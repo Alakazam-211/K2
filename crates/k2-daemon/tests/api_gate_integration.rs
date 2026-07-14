@@ -432,6 +432,26 @@ async fn boot_status_reports_api_capability_in_all_gate_combinations() {
         assert_eq!(v["phase"], serde_json::json!("ready"), "{ctx}: body={}", r.body);
         assert!(v["protocol"].is_number(), "{ctx}: protocol intact; body={}", r.body);
 
+        // 0.40.48 connection resilience: the per-process instance id rides
+        // the same unauthenticated handshake so clients can detect a daemon
+        // restart. 16 lowercase hex chars, present in every gate combo, and
+        // stable across requests to the same daemon process.
+        let id = v["instanceId"].as_str().unwrap_or_else(|| {
+            panic!("{ctx}: instanceId missing or not a string; body={}", r.body)
+        });
+        assert_eq!(id.len(), 16, "{ctx}: instanceId must be 16 chars; body={}", r.body);
+        assert!(
+            id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "{ctx}: instanceId must be lowercase hex; got {id:?}"
+        );
+        let r2 = http(d.port, "GET", "/boot-status", None);
+        assert_eq!(r2.status, 200, "{ctx}: second boot-status read; body={}", r2.body);
+        assert_eq!(
+            json(&r2.body)["instanceId"],
+            serde_json::json!(id),
+            "{ctx}: instanceId must be stable across requests to one process"
+        );
+
         drop(env);
     }
 }

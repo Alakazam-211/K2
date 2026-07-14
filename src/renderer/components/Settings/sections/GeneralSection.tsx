@@ -17,6 +17,7 @@ import {
   updatePhaseCopy,
   updateCompleteCopy,
   updateSlowComebackCopy,
+  shouldResolveComeback,
   updateForbiddenCopy,
   isForbiddenError,
   isStaged,
@@ -1184,10 +1185,16 @@ function UpdateHostRow(): React.JSX.Element | null {
     let alive = true
     const expected = check?.latest
     const creds = remoteCreds(activeHost)
+    // Baden false-rollback fix: the OLD daemon answers `ready` until the
+    // moment it's actually replaced, so a `ready` probe alone proves
+    // nothing. Track whether we've seen the host DOWN; resolution requires
+    // version===expected OR sawDown (shouldResolveComeback).
+    let sawDown = false
     setComeback({ kind: 'watching' })
     void (async () => {
       const slowAt = Date.now() + 4 * 60_000
       const giveUpAt = Date.now() + 10 * 60_000
+      let lastReady: { version?: string } | null = null
       while (alive && Date.now() < giveUpAt) {
         // Jittered so many clients watching the same rebooting host don't
         // poll in lockstep (same rationale as the recovery poll).
@@ -1195,8 +1202,17 @@ function UpdateHostRow(): React.JSX.Element | null {
         if (!alive) return
         const s = await hostBootStatus(creds)
         if (!alive) return
-        if (s?.phase === 'ready') {
-          setComeback({ kind: 'back', version: s.version, expected })
+        if (s === null) sawDown = true
+        if (s?.phase === 'ready') lastReady = { version: s.version }
+        if (
+          shouldResolveComeback({
+            phase: s?.phase,
+            version: s?.version,
+            expected,
+            sawDown,
+          })
+        ) {
+          setComeback({ kind: 'back', version: s?.version, expected })
           // Resolve the job UI back to idle: the phase line goes away, the
           // success line below takes over, and the persistent version line
           // reflects what the host ACTUALLY reports (never assume latest).
@@ -1204,13 +1220,23 @@ function UpdateHostRow(): React.JSX.Element | null {
           setStatus(null)
           setApplying(false)
           setCheck((c) =>
-            c ? { ...c, current: s.version ?? c.current, available: false } : c,
+            c ? { ...c, current: s?.version ?? c.current, available: false } : c,
           )
           return
         }
         if (Date.now() >= slowAt) {
           setComeback((k) => (k?.kind === 'watching' ? { kind: 'slow' } : k))
         }
+      }
+      // Hard stop with the host answering `ready` but never seen down and
+      // never on the expected version (e.g. sub-poll-interval restart on a
+      // daemon too old to report a version): resolve honestly with what it
+      // reports rather than abandoning the row on "still watching…".
+      if (alive && lastReady) {
+        setComeback({ kind: 'back', version: lastReady.version, expected })
+        setJobId(null)
+        setStatus(null)
+        setApplying(false)
       }
     })()
     return () => {
@@ -1237,6 +1263,11 @@ function UpdateHostRow(): React.JSX.Element | null {
     setChecking(true)
     setStatus(null)
     setJobId(null)
+    // A fresh check supersedes any resolved comeback verdict — its result
+    // is newer truth than a line computed during the restart window (the
+    // Baden screenshot: a stale "rolled back to v0.40.44" line sitting
+    // under a correct "is on v0.40.47" check result).
+    setComeback(null)
     try {
       const result = await daemonCliPost<UpdateCheckResult>('daemon/update/check', {})
       setCheck(result)

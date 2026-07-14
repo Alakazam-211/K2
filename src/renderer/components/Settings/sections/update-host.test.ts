@@ -24,6 +24,7 @@ import {
   updatePhaseCopy,
   updateCompleteCopy,
   updateSlowComebackCopy,
+  shouldResolveComeback,
   updateForbiddenCopy,
   isForbiddenError,
   isStaged,
@@ -164,6 +165,82 @@ describe('updateSlowComebackCopy — honest past-deadline copy (0.40.48)', () =>
     expect(copy).toContain('AFSROW')
     expect(copy).toContain('longer than expected')
     expect(copy).toContain('Still watching')
+  })
+})
+
+describe('shouldResolveComeback — the Baden false-rollback rule', () => {
+  it('THE BUG: ready + old version + never seen down = the pre-update daemon still running — keep watching', () => {
+    expect(
+      shouldResolveComeback({
+        phase: 'ready',
+        version: '0.40.44',
+        expected: '0.40.47',
+        sawDown: false,
+      }),
+    ).toBe(false)
+  })
+
+  it('ready on the EXPECTED version resolves even without a seen outage (sub-poll restart)', () => {
+    expect(
+      shouldResolveComeback({
+        phase: 'ready',
+        version: '0.40.47',
+        expected: '0.40.47',
+        sawDown: false,
+      }),
+    ).toBe(true)
+  })
+
+  it('seen down + back ready on the OLD version resolves — a REAL rollback must surface', () => {
+    expect(
+      shouldResolveComeback({
+        phase: 'ready',
+        version: '0.40.44',
+        expected: '0.40.47',
+        sawDown: true,
+      }),
+    ).toBe(true)
+  })
+
+  it('seen down + back ready with NO version (old daemon) resolves numberlessly', () => {
+    expect(
+      shouldResolveComeback({
+        phase: 'ready',
+        version: undefined,
+        expected: '0.40.47',
+        sawDown: true,
+      }),
+    ).toBe(true)
+  })
+
+  it('never resolves on a non-ready phase, regardless of anything else', () => {
+    expect(
+      shouldResolveComeback({
+        phase: 'migrating',
+        version: '0.40.47',
+        expected: '0.40.47',
+        sawDown: true,
+      }),
+    ).toBe(false)
+    expect(
+      shouldResolveComeback({
+        phase: undefined,
+        version: undefined,
+        expected: undefined,
+        sawDown: true,
+      }),
+    ).toBe(false)
+  })
+
+  it('no expected version (check state lost) + never seen down: ready alone still does not resolve', () => {
+    expect(
+      shouldResolveComeback({
+        phase: 'ready',
+        version: '0.40.44',
+        expected: undefined,
+        sawDown: false,
+      }),
+    ).toBe(false)
   })
 })
 

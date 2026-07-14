@@ -103,9 +103,9 @@ interface TerminalSettingsState {
    * migrate compatibility.
    */
   textGamma: number
-  /** Line height multiplier of font size → cell height. Live. */
+  /** Line height multiplier of font size → cell height. WebGL only. */
   lineHeightMultiplier: number
-  /** Cell-width multiplier (character tracking). Live. */
+  /** Cell-width multiplier (character tracking). WebGL only. */
   charTracking: number
   incrementFontSize: () => void
   decrementFontSize: () => void

@@ -475,9 +475,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const storeFontSize = useTerminalSettingsStore((s) => s.fontSize)
   const fontSize = props.fontSize ?? storeFontSize
   const linkClickMode = useTerminalSettingsStore((s) => s.linkClickMode)
-  // Global cell spacing (Terminal settings — not per-style). Live;
-  // drives both painters' cell metrics so WebGL can be opened up to
-  // match DOM or tuned denser/looser on demand.
+  // WebGL-only cell spacing (Terminal settings — not per-style, not
+  // applied to the DOM painter). Live: open WebGL panes re-measure
+  // when these change. DOM always uses the measured advance + the
+  // Kessel font lineHeightMultiplier default so side-by-side compare
+  // stays stable.
   const lineHeightMultiplier = useTerminalSettingsStore((s) => s.lineHeightMultiplier)
   const charTracking = useTerminalSettingsStore((s) => s.charTracking)
 
@@ -2295,12 +2297,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // painter must floor to integer device px; quantizing the shared
     // metric keeps the DOM overlays pixel-aligned with the canvas
     // instead of drifting sub-pixel-per-column). DOM path keeps the
-    // fractional measurement byte-identically.
-    // charTracking multiplies the measured advance (opens/tightens
-    // inter-character spacing); re-quantize after for WebGL.
-    const measured = useWebgl ? Math.floor(rect.width * dpr) / dpr : rect.width
+    // fractional measurement byte-identically and ignores the WebGL
+    // spacing knobs (line height + tracking) so DOM stays the stable
+    // reference while tuning WebGL.
+    if (!useWebgl) {
+      setCellMetrics({
+        width: rect.width,
+        height: Math.max(1, Math.ceil(fontSize * config.font.lineHeightMultiplier)),
+      })
+      return
+    }
+    const measured = Math.floor(rect.width * dpr) / dpr
     const tracked = Math.max(0.5, measured * charTracking)
-    const width = useWebgl ? Math.max(1 / dpr, Math.floor(tracked * dpr) / dpr) : tracked
+    const width = Math.max(1 / dpr, Math.floor(tracked * dpr) / dpr)
     setCellMetrics({
       width,
       height: Math.max(1, Math.ceil(fontSize * lineHeightMultiplier)),
@@ -2308,6 +2317,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   }, [
     fontSize,
     config.font.family,
+    config.font.lineHeightMultiplier,
     lineHeightMultiplier,
     charTracking,
     useWebgl,
@@ -4451,31 +4461,38 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
   // ── Styles ────────────────────────────────────────────────────
   const containerStyle: React.CSSProperties = useMemo(
-    () => ({
-      fontFamily: config.font.family,
-      fontSize: `${fontSize}px`,
-      lineHeight: `${Math.max(1, Math.ceil(fontSize * lineHeightMultiplier))}px`,
-      color: `rgb(${(config.colors.foreground >> 16) & 0xff},${(config.colors.foreground >> 8) & 0xff},${config.colors.foreground & 0xff})`,
-      // Seam fill (see `seamBg`): a fullscreen TUI's own bg extends
-      // into the cell-quantization remainder at the right/bottom
-      // edges instead of exposing the theme background as a seam.
-      backgroundColor: hexToCss(seamBg ?? config.colors.background),
-      whiteSpace: 'pre',
-      // Right and bottom edges are padding-free: their space goes to the
-      // column/row math; visual breathing room there comes from the
-      // centered remainder (same treatment the right edge got in 0.40.25).
-      padding: '4px 0 0 4px',
-      position: 'relative',
-      overflow: 'hidden',
-      flex: 1,
-      width: '100%',
-      height: '100%',
-      outline: 'none',
-    }),
+    () => {
+      // DOM uses the fixed Kessel default; WebGL uses the Terminal
+      // settings multiplier (cellMetrics.height already matches).
+      const lhMult = useWebgl ? lineHeightMultiplier : config.font.lineHeightMultiplier
+      return {
+        fontFamily: config.font.family,
+        fontSize: `${fontSize}px`,
+        lineHeight: `${Math.max(1, Math.ceil(fontSize * lhMult))}px`,
+        color: `rgb(${(config.colors.foreground >> 16) & 0xff},${(config.colors.foreground >> 8) & 0xff},${config.colors.foreground & 0xff})`,
+        // Seam fill (see `seamBg`): a fullscreen TUI's own bg extends
+        // into the cell-quantization remainder at the right/bottom
+        // edges instead of exposing the theme background as a seam.
+        backgroundColor: hexToCss(seamBg ?? config.colors.background),
+        whiteSpace: 'pre',
+        // Right and bottom edges are padding-free: their space goes to the
+        // column/row math; visual breathing room there comes from the
+        // centered remainder (same treatment the right edge got in 0.40.25).
+        padding: '4px 0 0 4px',
+        position: 'relative',
+        overflow: 'hidden',
+        flex: 1,
+        width: '100%',
+        height: '100%',
+        outline: 'none',
+      }
+    },
     [
       fontSize,
       config.font.family,
+      config.font.lineHeightMultiplier,
       lineHeightMultiplier,
+      useWebgl,
       config.colors.foreground,
       config.colors.background,
       seamBg,

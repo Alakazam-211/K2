@@ -18,8 +18,8 @@ import type { SettingEntry } from '../searchManifest'
 export const TERMINAL_MANIFEST: SettingEntry[] = [
   { id: 'terminal.font-family', section: 'terminal', label: 'Font Family', description: 'Typeface for terminal text', keywords: ['font', 'typeface'] },
   { id: 'terminal.font-size', section: 'terminal', label: 'Font Size', description: 'Text size in pixels', keywords: ['font', 'size', 'zoom'] },
-  { id: 'terminal.line-height', section: 'terminal', label: 'Line height', description: 'Row spacing as a multiple of font size', keywords: ['line height', 'leading', 'spacing', 'rows', 'dense', 'open'] },
-  { id: 'terminal.char-tracking', section: 'terminal', label: 'Character spacing', description: 'Horizontal spacing between characters (tracking)', keywords: ['tracking', 'letter spacing', 'kerning', 'width', 'cell', 'character', 'open', 'tight'] },
+  { id: 'terminal.line-height', section: 'terminal', label: 'Line height (WebGL)', description: 'WebGL only — row spacing as a multiple of font size', keywords: ['line height', 'leading', 'spacing', 'rows', 'dense', 'open', 'webgl'] },
+  { id: 'terminal.char-tracking', section: 'terminal', label: 'Character spacing (WebGL)', description: 'WebGL only — horizontal spacing between characters (tracking)', keywords: ['tracking', 'letter spacing', 'kerning', 'width', 'cell', 'character', 'open', 'tight', 'webgl'] },
   { id: 'terminal.cursor-style', section: 'terminal', label: 'Cursor Style', description: 'Bar, block, or underline', keywords: ['cursor', 'caret'] },
   { id: 'terminal.scrollback', section: 'terminal', label: 'Scrollback Buffer', description: 'Number of scrollback lines retained', keywords: ['history', 'buffer', 'scroll'] },
   { id: 'terminal.natural-text-editing', section: 'terminal', label: 'Natural Text Editing', description: 'Opt+Arrow word motion, Cmd+Arrow line motion', keywords: ['keyboard', 'edit', 'opt', 'alt'] },
@@ -86,11 +86,10 @@ export function TerminalSection(): React.JSX.Element {
           </div>
         </SettingRow>
 
-        {/* Line height — cell row pitch as × font size. Global (not per-style).
-         *  Live for open tabs; useful to open WebGL up toward DOM feel. */}
+        {/* Line height — WebGL only. DOM keeps the fixed Kessel default. */}
         <SettingRow settingId="terminal.line-height" label={
-          <span title="Vertical space per row as a multiple of font size. Default 1.2. Higher = more open leading. Applies to DOM and WebGL.">
-            Line height
+          <span title="WebGL only. Vertical space per row as a multiple of font size. Default 1.2. Higher = more open leading. DOM painter is unchanged.">
+            Line height (WebGL)
           </span>
         }>
           <div className="flex items-center gap-3 flex-wrap">
@@ -102,6 +101,7 @@ export function TerminalSection(): React.JSX.Element {
               value={lineHeightMultiplier}
               onChange={(e) => setLineHeightMultiplier(parseFloat(e.target.value))}
               className="w-40 no-drag k2so-slider"
+              disabled={painter !== 'webgl'}
             />
             <input
               type="number"
@@ -113,23 +113,29 @@ export function TerminalSection(): React.JSX.Element {
                 const v = parseFloat(e.target.value)
                 if (Number.isFinite(v)) setLineHeightMultiplier(v)
               }}
-              className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
+              disabled={painter !== 'webgl'}
+              className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center disabled:opacity-50"
             />
             <button
               type="button"
               onClick={() => setLineHeightMultiplier(LINE_HEIGHT_MULT_DEFAULT)}
-              className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+              disabled={painter !== 'webgl'}
+              className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Reset
             </button>
           </div>
+          {painter !== 'webgl' && (
+            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">
+              Switch Terminal Painter to WebGL to adjust (DOM is unaffected).
+            </div>
+          )}
         </SettingRow>
 
-        {/* Character tracking — cell width multiplier. Opens WebGL (which
-         *  device-floors advance) toward DOM's slightly wider cells. */}
+        {/* Character tracking — WebGL only. */}
         <SettingRow settingId="terminal.char-tracking" label={
-          <span title="Horizontal spacing between characters (tracking). 1.0 = measured monospace width; higher = more open. Especially useful to match DOM when using the WebGL painter.">
-            Character spacing
+          <span title="WebGL only. Horizontal spacing between characters (tracking). 1.0 = measured monospace width; higher = more open. DOM painter is unchanged.">
+            Character spacing (WebGL)
           </span>
         }>
           <div className="flex items-center gap-3 flex-wrap">
@@ -141,6 +147,7 @@ export function TerminalSection(): React.JSX.Element {
               value={charTracking}
               onChange={(e) => setCharTracking(parseFloat(e.target.value))}
               className="w-40 no-drag k2so-slider"
+              disabled={painter !== 'webgl'}
             />
             <input
               type="number"
@@ -152,16 +159,23 @@ export function TerminalSection(): React.JSX.Element {
                 const v = parseFloat(e.target.value)
                 if (Number.isFinite(v)) setCharTracking(v)
               }}
-              className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
+              disabled={painter !== 'webgl'}
+              className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center disabled:opacity-50"
             />
             <button
               type="button"
               onClick={() => setCharTracking(CHAR_TRACKING_DEFAULT)}
-              className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+              disabled={painter !== 'webgl'}
+              className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Reset
             </button>
           </div>
+          {painter !== 'webgl' && (
+            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">
+              Switch Terminal Painter to WebGL to adjust (DOM is unaffected).
+            </div>
+          )}
         </SettingRow>
 
         {/* Cursor Style */}

@@ -119,7 +119,11 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
 
   const loadHeartbeats = useCallback(async () => {
     try {
-      const list = await invoke<AgentHeartbeat[]>('k2so_heartbeat_list', { projectPath })
+      // 0.40.48 host-aware fix: same as HeartbeatsSection — the preview
+      // must show the ACTIVE host's heartbeats, not this Mac's.
+      const list = await daemonCliGet<AgentHeartbeat[]>('heartbeat/list', {
+        project: projectPath,
+      })
       setHeartbeats(list.filter((h) => h.enabled))
     } catch {
       setHeartbeats([])

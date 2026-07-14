@@ -3,6 +3,52 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.48 — Resilient reconnect
+
+Server reboots and updates are now a non-event. When a host you're
+connected to restarts, K2 notices, waits politely, and reconnects on its
+own — no more infinite "Reconnecting…", no more restarting your app to
+recover.
+
+### Reconnect that actually recovers
+
+- **Restarts self-heal.** When a remote host reboots or updates, K2
+  detects the fresh server instance and quietly reconnects and resyncs.
+  The recovery pill (now square, matching the rest of K2) tells you
+  what's happening and gets out of the way when it's done.
+
+- **The stuck-connection escape hatch.** Some macOS network sessions can
+  keep reusing a dead connection after a server restart (the "works in
+  curl, broken in the app" wedge). K2 now detects this with an
+  out-of-app probe, clears it automatically where possible, and — in the
+  rare case only a restart cures it — says so plainly with a
+  **Restart K2** button instead of spinning forever.
+
+- **No more retry storms.** While a host is recovering, K2 stops hammering
+  it: requests fail fast, retries are spread out, and reconnection happens
+  the moment the host is genuinely back.
+
+### Remote updates you can trust
+
+- **"Updated and reconnected."** After **Update Host**, the status line no
+  longer freezes on "Installing & restarting…" — K2 watches the host come
+  back and confirms the version it actually returned with. If an update
+  rolled back, it tells you that instead of pretending it worked.
+
+- **Servers release their tunnel cleanly.** Daemons now shut down
+  gracefully on restarts and self-updates (including supervisor stops),
+  releasing their tunnel registration immediately — so the offline window
+  during an update is seconds, not minutes.
+
+### Heartbeats
+
+- **Remote heartbeats show up.** The sidebar Heartbeats panel now shows
+  the heartbeats of the server you're connected to — not your local
+  machine's. Live/resumable/scheduled states come straight from the host.
+
+- **Errors surface instead of hiding.** A failed heartbeat load shows the
+  actual error instead of an eternal "Loading…".
+
 ## 0.40.47 — Workspace wiki brain map
 
 Your notes become a living map. Open **View Wiki** on a workspace to explore

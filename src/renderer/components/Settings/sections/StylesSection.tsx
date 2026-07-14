@@ -472,7 +472,7 @@ export function StylesSection(): React.JSX.Element {
                 type="button"
                 onClick={() => resetTextGamma()}
                 className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
-                title="Restore the polarity default for this style (dark ≈ 0.7, light ≈ 1.1)"
+                title="Restore the polarity default for this style (dark ≈ 0.7, light ≈ 1.05)"
               >
                 Reset
               </button>

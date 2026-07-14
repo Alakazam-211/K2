@@ -904,6 +904,19 @@ async fn handle_one_request(
                 "protocol": crate::boot_status::PROTOCOL,
                 "phase": crate::boot_status::phase_str(),
                 "detail": crate::boot_status::detail(),
+                // 0.40.48 connection resilience: per-PROCESS instance id.
+                // The renderer already health-polls this route; comparing
+                // `instanceId` across polls is how it detects a silent
+                // daemon restart (same subdomain, fresh process — e.g. a
+                // self-update) and forces a cold resync instead of
+                // trusting connection continuity. Additive + forward-
+                // compatible (PROTOCOL not bumped); older clients ignore
+                // it, older daemons omit it and clients fall back to the
+                // pre-0.40.48 heuristics. Safe on this UNAUTHENTICATED
+                // route: a random per-boot UUID carries no identity or
+                // fingerprintable state beyond "the process restarted",
+                // which /boot-status already implies via `phase`.
+                "instanceId": crate::boot_status::instance_id(),
                 // 0.39.35: update SHAPE selector. "bundled-app" hosts update
                 // via the co-located Tauri app (Shape A); "standalone" hosts
                 // via the in-daemon binary swap (Shape B). The renderer reads

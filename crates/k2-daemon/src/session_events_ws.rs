@@ -50,6 +50,11 @@ struct HelloEvent {
     kind: &'static str,
     workspace_path: String,
     subscriber_id: u64,
+    /// 0.40.48: per-process daemon instance id (see `boot_status::
+    /// instance_id`). Lets the renderer detect that a WS reconnect
+    /// crossed a daemon restart and force a full re-snapshot instead of
+    /// assuming subscription continuity.
+    instance_id: &'static str,
 }
 
 
@@ -142,6 +147,7 @@ pub async fn serve_session_events_connection(
         kind: "hello",
         workspace_path: workspace_path.clone(),
         subscriber_id,
+        instance_id: crate::boot_status::instance_id(),
     };
     if send_json(&mut write, &hello).await.is_err() {
         return;

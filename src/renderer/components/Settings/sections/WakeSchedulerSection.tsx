@@ -382,7 +382,11 @@ export function WakeSchedulerSection(): React.JSX.Element {
         rows.map((r) => (r.id === row.id ? applyDeliveryTarget(r, next) : r)),
       )
       try {
-        await setHeartbeatSession(row.projectPath, row.name, next)
+        // scope 'local': this system-wide page's roster comes from local
+        // list_all invokes, so the write must stay on the same machine
+        // (0.40.48 — the per-workspace HeartbeatsSection/picker use the
+        // host-aware default instead).
+        await setHeartbeatSession(row.projectPath, row.name, next, { scope: 'local' })
       } catch (err) {
         toast(`Wakeup delivery change failed for ${row.projectName}/${row.name}: ${String(err)}`, 'error')
         setHeartbeats((rows) =>

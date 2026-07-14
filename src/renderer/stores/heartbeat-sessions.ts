@@ -224,7 +224,22 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
     } catch (err) {
       const msg = String(err)
       console.error('[heartbeat-sessions] refresh failed:', msg)
-      set({ loading: false, lastError: msg })
+      // 0.40.48: record WHICH project this (failed) load was for. Leaving
+      // `loadedFor` stale meant HeartbeatsPanel's `showingForLoadedProject`
+      // gate never opened after a failure — the panel sat on "Loading…"
+      // forever and `lastError`'s branch was unreachable (the error was
+      // silently masked). With `loadedFor` set, the panel renders the
+      // error state instead. Rows from a previously-shown project are
+      // cleared so an error can never sit above another workspace's
+      // heartbeats; same-project rows are kept (a transient re-refresh
+      // failure shouldn't wipe good data).
+      set((state) => ({
+        loading: false,
+        lastError: msg,
+        loadedFor: projectPath,
+        active: state.loadedFor === projectPath ? state.active : [],
+        archived: state.loadedFor === projectPath ? state.archived : [],
+      }))
     }
   },
 

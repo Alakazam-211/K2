@@ -54,6 +54,7 @@ import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, daemonWsBase, type Dae
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useStyleStore } from '@/stores/style'
+import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore } from '@/stores/tabs'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import {
@@ -493,6 +494,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const storePainter = useTerminalSettingsStore((s) => s.painter)
   const [painterKind] = useState(storePainter)
   const [painterFatal, setPainterFatal] = useState<string | null>(null)
+  // Prefer WebGL when the user opted in and this pane hasn't permanently
+  // demoted. Actual GL surface lifetime is gated separately on visibility
+  // (see webglSurfaceActive) so hidden tabs / workspace parks don't leave
+  // contexts for WKWebView to reclaim → unrestored → permanent DOM.
   const useWebgl = painterKind === 'webgl' && painterFatal === null
   // Canvas-selection model (webgl only). ALWAYS null in DOM mode, so
   // the shared copy/key handlers can gate on it with zero DOM-path
@@ -2408,14 +2413,38 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       theme,
     })
   }
+  // GL surface is only alive while the pane is user-visible. Hidden tabs,
+  // workspace parks, and Settings (display:none shell) make WKWebView
+  // reclaim contexts; the 3s restore window then expires → permanent
+  // `webgl-context-lost-unrestored` demotion. Dispose cleanly when hidden
+  // and remount on show instead.
+  const settingsOpen = useSettingsStore((s) => s.settingsOpen)
+  const webglSurfaceActive = useWebgl && isTabVisible && !settingsOpen
+
+  // Coming back visible after a demotion from unrestored context loss:
+  // give WebGL another chance (common after workspace switch / Settings).
+  const surfaceWanted = isTabVisible && !settingsOpen
+  const wasSurfaceWantedRef = useRef(surfaceWanted)
+  useEffect(() => {
+    const becameWanted = surfaceWanted && !wasSurfaceWantedRef.current
+    wasSurfaceWantedRef.current = surfaceWanted
+    if (
+      becameWanted &&
+      painterFatal === 'webgl-context-lost-unrestored' &&
+      painterKind === 'webgl'
+    ) {
+      setPainterFatal(null)
+    }
+  }, [surfaceWanted, painterFatal, painterKind])
+
   useLayoutEffect(() => {
-    if (!useWebgl) return
+    if (!webglSurfaceActive) return
     const canvas = webglCanvasRef.current
     if (!canvas) return
     const painter = createWebglPainter()
     painter.onFatal((reason) => {
-      // Permanent per-pane demotion. The canvas unmounts and the DOM
-      // strip (the proven path) takes over on the next render.
+      // Demote THIS pane to the DOM strip. Context-lost-unrestored can
+      // recover on the next show (see effect above); other fatals stick.
       setPainterFatal(reason)
     })
     painter.mount(canvas)
@@ -2425,9 +2454,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       painterRef.current = null
       painter.dispose()
     }
-  }, [useWebgl])
+  }, [webglSurfaceActive])
   useLayoutEffect(() => {
-    if (!useWebgl) return
+    if (!webglSurfaceActive) return
     const painter = painterRef.current
     if (!painter) return
     if (!cellMetrics.width || !cellMetrics.height) return
@@ -2440,9 +2469,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     })
     // New atlas/device grid ⇒ the same frame inputs must repaint.
     lastPaintedRef.current.snapshot = null
-  }, [useWebgl, cellMetrics, config.font.family, fontSize, dpr])
+  }, [webglSurfaceActive, cellMetrics, config.font.family, fontSize, dpr])
   useLayoutEffect(() => {
-    if (!useWebgl) return
+    if (!webglSurfaceActive) return
     if (!snapshot) return
     // Paint the REF position, not the committed `scrollPx` value:
     // during a fast scroll this commit can lag the wheel rAF by a
@@ -2450,20 +2479,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // canvas backwards ("jump back then catch up"). scrollPx stays
     // in the dep array as the trigger; the ref supplies the truth.
     paintWebglRef.current(scrollPxRef.current, snapshot)
-  }, [useWebgl, snapshot, scrollPx, painterTheme, cellMetrics, selectionVersion])
+  }, [webglSurfaceActive, snapshot, scrollPx, painterTheme, cellMetrics, selectionVersion])
 
   // Text-weight (gamma) is a pure shader uniform — no atlas rebuild —
   // but force the paint dedupe to treat the frame as dirty so a Settings
   // slider tick always reaches drawGlyphs even when snapshot/scroll are
   // unchanged (the common case while parked in Settings).
   useLayoutEffect(() => {
-    if (!useWebgl) return
+    if (!webglSurfaceActive) return
     lastPaintedRef.current.snapshot = null
     lastPaintedRef.current.theme = null
     if (snapshotRef.current) {
       paintWebglRef.current(scrollPxRef.current, snapshotRef.current)
     }
-  }, [useWebgl, textGamma])
+  }, [webglSurfaceActive, textGamma])
 
   // S5 — subtle read-only hint. Latched when the daemon reports this
   // connection can't drive the terminal (an `input_denied` frame, or a

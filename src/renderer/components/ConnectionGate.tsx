@@ -51,16 +51,21 @@ import {
   recoveryStatusText,
   type RemoteRecoveryState,
 } from '@/lib/remote-recovery'
+import { jittered } from '@/lib/backoff'
 import { RemoteSignIn } from './RemoteSignIn'
 import { AppErrorBoundary } from './AppErrorBoundary'
 
 /** Shape of the daemon's GET /boot-status response. `detail` is free-text
- *  for the UI only — never branch on it. */
+ *  for the UI only — never branch on it. `instanceId` (0.40.48, optional —
+ *  older daemons omit it) is a per-boot random id: a CHANGE between two
+ *  accepted polls proves the daemon restarted even when the drop window
+ *  fell between health ticks. */
 interface DaemonBootStatus {
   version: string
   protocol: number
   phase: string // 'starting' | 'migrating' | 'ready' | 'error' | future
   detail: string
+  instanceId?: string
 }
 
 /**
@@ -259,12 +264,36 @@ async function getAppVersion(): Promise<string | null> {
   }
 }
 
+/**
+ * The boot probe's outcome, DISCRIMINATED (0.40.48). The old shape — null
+ * for both a non-2xx response AND a network error — conflated the two
+ * failure modes the wedge detector must tell apart:
+ *
+ *   - 'http'    → the transport worked but the response was an HTTP error.
+ *     A genuine reboot barely produces these; a POISONED pooled WKWebView
+ *     connection produces them FOREVER (every request rides the dead
+ *     tunnel-edge route and 404s "no route found" while the socket itself
+ *     stays healthy, so the pool never evicts it).
+ *   - 'network' → fetch threw (refused / DNS / timeout) — the ordinary
+ *     down/mid-restart signal; the throw itself evicts the dead socket.
+ *
+ * Every policy call site folds non-'ok' back to the old null, so gate
+ * behavior is unchanged outside the wedge detector.
+ */
+export type BootProbeResult =
+  | { kind: 'ok'; status: DaemonBootStatus }
+  | { kind: 'http'; httpStatus: number }
+  | { kind: 'network' }
+
 /** Hit the daemon's /boot-status with a per-attempt timeout. Returns the
- *  parsed status, or null on any error / non-2xx (covers a pre-0.39.5
- *  daemon's 404, network error, timeout, missing port file). `timeoutMs`
- *  is looser for a remote health-poll than for a local boot (a tunnel
- *  round-trip is higher-latency — see REMOTE_BOOT_STATUS_TIMEOUT_MS). */
-async function fetchBootStatus(timeoutMs = 2000): Promise<DaemonBootStatus | null> {
+ *  discriminated {@link BootProbeResult}; both failure kinds invalidate the
+ *  cached creds so the next poll re-reads them (covers a kickstart-assigned
+ *  port change / pre-0.39.5 daemon's 404). `timeoutMs` is looser for a
+ *  remote health-poll than for a local boot (a tunnel round-trip is
+ *  higher-latency — see REMOTE_BOOT_STATUS_TIMEOUT_MS). Exported for the
+ *  unit tests (the http-vs-network discrimination is what the wedge
+ *  detector keys on). */
+export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult> {
   try {
     // Host-aware (K2 Connect step #1): polls the ACTIVE host's
     // /boot-status. For 'local' this is byte-identical to before
@@ -274,17 +303,104 @@ async function fetchBootStatus(timeoutMs = 2000): Promise<DaemonBootStatus | nul
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (!resp.ok) {
-      // 404 ⇒ pre-0.39.5 daemon (no /boot-status route). Re-read the port
-      // file next poll in case a kickstart moved it.
+      // 404 ⇒ pre-0.39.5 daemon (no /boot-status route) — OR the wedged
+      // pool's tunnel-edge 404. Re-read the port file next poll in case a
+      // kickstart moved it.
       invalidateDaemonWs()
-      return null
+      return { kind: 'http', httpStatus: resp.status }
     }
-    return (await resp.json()) as DaemonBootStatus
+    return { kind: 'ok', status: (await resp.json()) as DaemonBootStatus }
   } catch {
-    // Network error, timeout, port file missing, etc. — daemon isn't
-    // reachable yet. Invalidate cached port so the next poll re-reads
+    // Network error, timeout, port file missing, unparseable body — daemon
+    // isn't reachable yet. Invalidate cached port so the next poll re-reads
     // ~/.k2so/daemon.port (covers a kickstart-assigned port change).
     invalidateDaemonWs()
+    return { kind: 'network' }
+  }
+}
+
+// ── Wedge detector (0.40.48 connection resilience) ─────────────────────────
+//
+// THE INCIDENT: after a remote server reboot, WKWebView kept reusing a
+// poisoned pooled HTTP/2 connection whose every request failed at the tunnel
+// edge with HTTP 404 ("no route found"). The connection is TRANSPORT-healthy
+// (so the pool never evicts it, and JS has no eviction lever), but
+// HTTP-level dead — the recovery poll itself rode the same pool, so
+// recovery.kind sat on 'reconnecting' forever. Only a full app restart
+// cleared it.
+//
+// THE DETECTOR: a sustained run of {kind:'http'} boot probes (transport
+// works, HTTP fails) is the wedge signature — a genuine reboot produces
+// 'network' errors, or resolves quickly. After WEDGE_PATTERN_MS of it we ask
+// the Rust-side ARBITER (`remote_boot_probe` — a FRESH OS-level reqwest
+// socket, completely outside the webview's pool) for a second opinion. If
+// the arbiter reaches the daemon and sees phase 'ready' while the webview
+// still can't, the pool is PROVEN poisoned → escalate:
+//   step 1 — auto `window.location.reload()` once (guarded by a
+//            sessionStorage flag; a reload tears down the page's fetch
+//            context and usually gets a fresh pool);
+//   step 2 — if the pattern re-establishes after the reload, surface the
+//            'wedged' recovery state: banner copy + a Restart K2 button
+//            (user click only — never an auto-restart).
+
+/** How long the transport-healthy-but-HTTP-failing pattern must persist
+ *  before the out-of-webview arbiter is consulted. */
+export const WEDGE_PATTERN_MS = 60_000
+/** Minimum spacing between arbiter probes while the pattern persists (the
+ *  arbiter is cheap, but there's no point re-proving a wedge every tick). */
+const WEDGE_ARBITER_MIN_INTERVAL_MS = 30_000
+/** sessionStorage flag: the step-1 auto-reload already fired this page
+ *  load for this host. Cleared on a healthy accept, so a NEW wedge months
+ *  later can auto-reload again — but a reload that lands straight back in
+ *  the wedge goes to step 2 instead of loop-reloading. */
+function wedgeReloadFlagKey(hostKey: string): string {
+  return `k2.wedge-reloaded:${hostKey}`
+}
+
+/** Pure rule: has the consecutive-http-failure run lasted long enough to
+ *  consult the arbiter? `httpFailingSince` is the timestamp of the FIRST
+ *  probe in the current uninterrupted {kind:'http'} run (null = no run). */
+export function isWedgePatternEstablished(opts: {
+  httpFailingSince: number | null
+  now: number
+}): boolean {
+  return opts.httpFailingSince !== null && opts.now - opts.httpFailingSince >= WEDGE_PATTERN_MS
+}
+
+/** Pure rule: does the arbiter's out-of-webview /boot-status result prove
+ *  the host healthy? TRUE iff it answered 2xx with a parseable body whose
+ *  `phase` is 'ready' — combined with the webview's own probes still
+ *  failing, that is the poisoned-pool proof. `null` = the arbiter couldn't
+ *  reach the daemon either (genuine outage, NOT a wedge). */
+export function arbiterProvesHostReady(
+  probe: { status: number; body: string } | null,
+): boolean {
+  if (probe === null) return false
+  if (probe.status < 200 || probe.status >= 300) return false
+  try {
+    const parsed = JSON.parse(probe.body) as { phase?: unknown }
+    return parsed !== null && typeof parsed === 'object' && parsed.phase === 'ready'
+  } catch {
+    return false
+  }
+}
+
+/** Run the Rust arbiter probe against a specific remote host. Returns the
+ *  raw {status, body} or null when the probe failed at the network level
+ *  (or we're outside a Tauri context). */
+async function arbiterBootProbe(host: ConnectHost): Promise<{ status: number; body: string } | null> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<{ status: number; body: string }>('remote_boot_probe', {
+      hostname: host.hostname,
+      port: host.port,
+      secure: host.secure,
+    })
+  } catch (err) {
+    // The fresh out-of-webview socket couldn't reach the daemon either —
+    // that's a genuine outage signal, not a wedge. (Also covers non-Tauri
+    // dev contexts where the command doesn't exist.)
+    console.debug('[connection-gate] arbiter boot probe failed:', err)
     return null
   }
 }
@@ -461,6 +577,20 @@ export function ConnectionGate(): React.ReactElement {
     // shouldRefreshCredsOnAccept. Covers the first-poll-errors case too
     // (fetchBootStatus null → wait → flag set → later accept refreshes).
     let sawNonAccept = false
+    // Wedge detector (0.40.48): start of the current uninterrupted run of
+    // {kind:'http'} boot probes (transport healthy, HTTP failing — the
+    // poisoned-pool signature). Reset by any 'ok' or 'network' probe.
+    let httpFailingSince: number | null = null
+    // Throttle for the out-of-webview arbiter probe.
+    let lastArbiterAt = 0
+    // Step 2 latched: the wedge survived the auto-reload; the 'wedged'
+    // recovery state is up and must not be clobbered by the ordinary
+    // reconnecting-banner writes below.
+    let wedgeConfirmed = false
+    // instanceId plumbing (0.40.48): the daemon's per-boot id seen at the
+    // first accept of THIS effect run. A different id on a later accepted
+    // poll proves the server restarted between health ticks.
+    let acceptedInstanceId: string | null = null
 
     // A host switch must re-poll from scratch: drop any prior accept so
     // the overlay shows while the new host is contacted. (The recovery
@@ -499,10 +629,63 @@ export function ConnectionGate(): React.ReactElement {
       const policy = await ensurePolicy()
       // Remote health-polls get a looser timeout (a tunnel round-trip is
       // higher-latency than a localhost hit); local keeps the tight 2s.
-      const status = await fetchBootStatus(
+      const probe = await fetchBootStatus(
         isRemote ? REMOTE_BOOT_STATUS_TIMEOUT_MS : 2000,
       )
       if (cancelled) return
+      // Policies keep their old input shape: any failed probe folds to null.
+      const status = probe.kind === 'ok' ? probe.status : null
+      // Wedge tracking (0.40.48): only a REMOTE host can wedge (the local
+      // loopback daemon has no tunnel edge / shared pooled origin). Track
+      // consecutive transport-healthy-but-HTTP-failing probes; any 'ok' or
+      // 'network' outcome breaks the run.
+      if (isRemote && probe.kind === 'http') {
+        if (httpFailingSince === null) httpFailingSince = Date.now()
+      } else {
+        httpFailingSince = null
+      }
+      if (
+        isRemote &&
+        !wedgeConfirmed &&
+        isWedgePatternEstablished({ httpFailingSince, now: Date.now() }) &&
+        Date.now() - lastArbiterAt >= WEDGE_ARBITER_MIN_INTERVAL_MS
+      ) {
+        lastArbiterAt = Date.now()
+        const active = useConnectHostStore.getState().activeHost
+        if (active !== 'local') {
+          const verdict = await arbiterBootProbe(active)
+          if (cancelled) return
+          if (arbiterProvesHostReady(verdict)) {
+            // PROVEN: a fresh OS-level socket reaches the daemon and it's
+            // 'ready', while the webview's own probes have failed at the
+            // HTTP layer for ≥ WEDGE_PATTERN_MS. The webview pool is
+            // poisoned. Escalate.
+            const flagKey = wedgeReloadFlagKey(hostKey)
+            if (sessionStorage.getItem(flagKey) !== '1') {
+              // Step 1 (once per page load): a reload rebuilds the page's
+              // fetch context, which usually gets a fresh connection pool.
+              console.warn(
+                '[connection-gate] webview connection pool is wedged for',
+                active.hostname,
+                '(arbiter reached the daemon; webview cannot) — auto-reloading to clear it',
+              )
+              sessionStorage.setItem(flagKey, '1')
+              window.location.reload()
+              return
+            }
+            // Step 2: the reload didn't clear it — only an app restart can.
+            // Latch the 'wedged' state; the RecoveryBanner renders the copy
+            // + the Restart K2 button. NEVER auto-restart.
+            console.error(
+              '[connection-gate] wedge persisted through a page reload for',
+              active.hostname,
+              '— surfacing Restart K2',
+            )
+            wedgeConfirmed = true
+            useConnectHostStore.getState().setRecovery({ kind: 'wedged' })
+          }
+        }
+      }
       let next = policy.decide(status)
       // 0.39.36: a REMOTE host's /boot-status accepting only proves the
       // daemon is up + the right protocol — NOT that this client's
@@ -612,6 +795,32 @@ export function ConnectionGate(): React.ReactElement {
         )
       }
       if (next.kind === 'accept') {
+        // instanceId plumbing (0.40.48): the daemon stamps /boot-status with
+        // a per-boot id. If an accepted poll carries a DIFFERENT id than the
+        // one we accepted earlier this effect run, the server restarted
+        // between health ticks (possibly without a single failed poll —
+        // fast reboots + the 4s cadence can hide the gap entirely). Drop the
+        // cached creds and let this same accept flow re-run everything: the
+        // whoami probe / revival path owns the (now wiped) session, and the
+        // WS factories reconnect + re-snapshot via their hello handlers.
+        // Older daemons omit instanceId — every branch below tolerates that.
+        if (status?.instanceId) {
+          if (acceptedInstanceId === null) {
+            acceptedInstanceId = status.instanceId
+          } else if (acceptedInstanceId !== status.instanceId) {
+            console.warn(
+              `[connection-gate] daemon instanceId changed (${acceptedInstanceId} → ${status.instanceId}) — server restarted; refreshing creds`,
+            )
+            invalidateDaemonWs()
+            acceptedInstanceId = status.instanceId
+          }
+        }
+        // A healthy accept ends any wedge episode: clear the tracker, the
+        // step-2 latch, and the step-1 reload flag (so a NEW wedge later in
+        // this app run gets its auto-reload chance again).
+        httpFailingSince = null
+        wedgeConfirmed = false
+        sessionStorage.removeItem(wedgeReloadFlagKey(hostKey))
         // Fix B: a LOCAL accept after any non-accept poll means the daemon
         // restarted under us (upgrade kickstart) — it rotated its boot
         // token and rebound the same port, and /boot-status is public, so
@@ -678,17 +887,23 @@ export function ConnectionGate(): React.ReactElement {
         if (bootingAuthoritative || shouldSurfaceRemoteDrop(consecutiveFails)) {
           setDecision(next)
           useConnectHostStore.getState().setConnectionStatus('connecting')
-          useConnectHostStore.getState().setRecovery(
-            deriveRecovery({
-              bootStatus: bootingAuthoritative
-                ? { reachable: true, phase: status.phase }
-                // A reachable-but-rejected edge (e.g. incompatible protocol
-                // after an update) renders as generic reconnecting, never as
-                // 'connected' — fold it into the unreachable input.
-                : { reachable: false },
-              auth: 'unknown',
-            }),
-          )
+          // A latched 'wedged' state outranks the ordinary reconnecting
+          // banner — the poll keeps running (a surprise recovery still
+          // clears it via the accept branch), but it must not repaint the
+          // banner back to "reconnecting automatically" when it can't.
+          if (!wedgeConfirmed) {
+            useConnectHostStore.getState().setRecovery(
+              deriveRecovery({
+                bootStatus: bootingAuthoritative
+                  ? { reachable: true, phase: status.phase }
+                  // A reachable-but-rejected edge (e.g. incompatible protocol
+                  // after an update) renders as generic reconnecting, never as
+                  // 'connected' — fold it into the unreachable input.
+                  : { reachable: false },
+                auth: 'unknown',
+              }),
+            )
+          }
         }
         // else: below threshold — leave 'connected' + no banner untouched.
       }
@@ -701,9 +916,14 @@ export function ConnectionGate(): React.ReactElement {
       //     recovery / cross the threshold promptly.
       //   - Confirmed 'reconnecting' (banner up): ease off exponentially so
       //     we don't hammer a down/booting host.
-      const backoff = softPoll
-        ? recoveryPollMs(useConnectHostStore.getState().recovery, attemptsLocal)
-        : 500
+      // 0.40.48: jittered at the call site (recoveryPollMs stays pure /
+      // deterministic for its unit tests) so many clients rebooting off the
+      // same host don't re-align into a synchronized poll storm.
+      const backoff = jittered(
+        softPoll
+          ? recoveryPollMs(useConnectHostStore.getState().recovery, attemptsLocal)
+          : 500,
+      )
       timeoutId = setTimeout(() => { void tick() }, backoff)
     }
 
@@ -798,6 +1018,14 @@ export function ConnectionGate(): React.ReactElement {
     return (
       <>
         <ConnectingOverlay decision={decision} attempts={attempts} importFailed={importFailed} />
+        {/* 0.40.48: a wedge that survived the step-1 auto-reload latches
+            BEFORE the app can mount (the poisoned pool blocks the accept),
+            so the wedged banner must also render over the connecting
+            overlay — otherwise the user is back to an unexplained eternal
+            "Connecting…", the exact incident this fixes. */}
+        {recovery.kind === 'wedged' && activeHost !== 'local' && (
+          <RecoveryBanner host={activeHost} recovery={recovery} />
+        )}
         {signInOverlay}
       </>
     )
@@ -834,7 +1062,11 @@ function RecoveryBanner({
   host: ConnectHost
   recovery: RemoteRecoveryState
 }): React.ReactElement {
-  const needsUser = recovery.kind === 'signin-required'
+  // Both states that need the user re-enable pointer events on the pill:
+  // 'signin-required' (Sign in button) and 'wedged' (Restart K2 button —
+  // the webview's connection pool is proven poisoned; only an app restart
+  // clears it, and it is ALWAYS user-initiated, never automatic).
+  const needsUser = recovery.kind === 'signin-required' || recovery.kind === 'wedged'
   return (
     <div
       role="status"
@@ -884,7 +1116,29 @@ function RecoveryBanner({
           }}
         />
         <span>{recoveryStatusText(host.label, recovery)}</span>
-        {needsUser && (
+        {recovery.kind === 'wedged' && (
+          <button
+            onClick={() => {
+              // User-initiated ONLY. restart_app rides the proven
+              // helper-script relaunch (settings.rs) so the .app bundle
+              // reopens cleanly with a fresh WebKit networking process —
+              // the one thing that evicts the poisoned pool.
+              void import('@tauri-apps/api/core').then(({ invoke }) => invoke('restart_app'))
+            }}
+            style={{
+              padding: '0.15rem 0.6rem',
+              fontSize: '0.75rem',
+              borderRadius: '999px',
+              border: '1px solid var(--color-border, rgba(255,255,255,0.25))',
+              background: 'var(--color-accent, #2f6feb)',
+              color: 'var(--color-on-accent)',
+              cursor: 'pointer',
+            }}
+          >
+            Restart K2
+          </button>
+        )}
+        {recovery.kind === 'signin-required' && (
           <button
             onClick={() => {
               // Route straight to the login surface for THIS host — the one

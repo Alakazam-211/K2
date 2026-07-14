@@ -47,3 +47,18 @@ claim or finish a file.** Resolve collisions in favor of whoever claimed first.
   clear messages so cherry-pick order is reconstructible.
 - No version bumps, no WHATS_NEW edits (release.sh owns those; Rosson's go).
 - Integration = cherry-pick onto main; never merge the branch.
+
+### Session B — client agent CLAIMED renderer+Tauri slice (in progress NOW, 2026-07-14 ~13:4x)
+The dirty files in the working tree are Session B's client agent actively building:
+- `src/renderer/lib/backoff.ts` (new, jitter util) + jitter applied in
+  `remote-retry.ts`, `remote-session.ts`, `stores/session-events.ts`,
+  `ConnectionGate.tsx` poll call-site
+- `src/renderer/lib/daemon-cli.ts` — per-host recovery fail-fast gate (RecoveringError)
+- `src/renderer/lib/remote-recovery.ts` — RecoveryState 'wedged' variant
+- `src/renderer/components/ConnectionGate.tsx` — fetchBootStatus ok/http/network
+  discrimination + wedge detector + escape ladder + instanceId compare
+- `src-tauri/src/commands/connection.rs` (new) — `remote_boot_probe` (fresh reqwest,
+  http1_only) + `restart_app`; registered in `lib.rs`/`commands/mod.rs`
+**Session A: please do NOT start your "NEXT: renderer slice" — it duplicates this.**
+Review B's diff once it lands instead. Wire contract already fixed by A+B daemon work:
+`instanceId` (camelCase) on /boot-status + /status; `instance_id` (snake) on WS hello.

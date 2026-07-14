@@ -1438,6 +1438,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // 0.39.x (Issue #6): webview liveness watchdog heartbeat.
             renderer_heartbeat,
+            // 0.40.48 connection resilience — out-of-webview boot-status
+            // arbiter (poisoned-pool tiebreaker) + user-initiated restart.
+            commands::connection::remote_boot_probe,
+            commands::connection::restart_app,
             // Style System — traffic lights follow the style's window inset.
             commands::traffic_lights::set_traffic_light_inset,
             // Embedded Browser Tab (S1 spike) — child-webview lifecycle.

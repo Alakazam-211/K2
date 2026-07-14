@@ -69,7 +69,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   }),
 }))
 
-import { daemonCliGet, daemonCliGetText, daemonCliPost } from './daemon-cli'
+import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError } from './daemon-cli'
 import {
   useConnectHostStore,
   __resetConnectHostStoreForTests,
@@ -365,5 +365,73 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
     await expect(daemonCliGet('projects/list')).rejects.toThrow('bad request')
     expect(fetchMock).toHaveBeenCalledTimes(1) // no retry
     expect(invalidateDaemonWsMock).not.toHaveBeenCalled()
+  })
+})
+
+// 0.40.48 storm killer — while the ACTIVE remote host is recovering
+// (ConnectionGate flipped recovery off 'connected'), every /cli/* call must
+// FAIL FAST with RecoveringError instead of issuing a fetch: during the
+// wedge incident a dozen retry loops stacked ~11 req/s of guaranteed
+// failures through the poisoned pool. Recovery's own traffic (boot-status /
+// whoami / login) never rides daemon-cli, so nothing here can starve it.
+describe('recovery gate — fail-fast while the active remote is recovering', () => {
+  beforeEach(() => {
+    mem.clear()
+    __resetConnectHostStoreForTests()
+    getDaemonWsMock.mockReset()
+    invalidateDaemonWsMock.mockReset()
+  })
+
+  function activateRemote(): void {
+    const host = makeRemoteHost()
+    useConnectHostStore.getState().addHost(host)
+    useConnectHostStore.getState().selectHost(host)
+  }
+
+  it.each([
+    [{ kind: 'reconnecting', bootPhase: null } as const],
+    [{ kind: 'reconnecting', bootPhase: 'migrating' } as const],
+    [{ kind: 'reauthenticating' } as const],
+    [{ kind: 'signin-required' } as const],
+    [{ kind: 'wedged' } as const],
+  ])('active REMOTE in %j → RecoveringError, ZERO network calls', async (recovery) => {
+    activateRemote()
+    getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
+    useConnectHostStore.getState().setRecovery(recovery)
+    const fetchMock = vi.fn(async () => fakeRes({ body: '{}' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(daemonCliGet('projects/list')).rejects.toBeInstanceOf(RecoveringError)
+    await expect(daemonCliPost('workspace/msg', { a: 1 })).rejects.toBeInstanceOf(RecoveringError)
+    await expect(daemonCliGetText('timer/entries-export')).rejects.toBeInstanceOf(RecoveringError)
+    expect(fetchMock).not.toHaveBeenCalled()
+    // The fail-fast must NOT be classified as a connection error, so the
+    // shared retry never burns its backoff on it (a single throw, no timers).
+    expect(invalidateDaemonWsMock).not.toHaveBeenCalled()
+  })
+
+  it('recovery returning to connected immediately unblocks traffic (no restart needed)', async () => {
+    activateRemote()
+    getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
+    useConnectHostStore.getState().setRecovery({ kind: 'reconnecting', bootPhase: null })
+    const fetchMock = vi.fn(async () => fakeRes({ body: JSON.stringify({ ok: 1 }) }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(daemonCliGet('projects/list')).rejects.toBeInstanceOf(RecoveringError)
+    useConnectHostStore.getState().setRecovery({ kind: 'connected' })
+    await expect(daemonCliGet('projects/list')).resolves.toEqual({ ok: 1 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('LOCAL host is NEVER gated — its recovery field is meaningless', async () => {
+    // Active stays 'local'; even a weird lingering recovery state (e.g. left
+    // over from a host switch race) must not block loopback traffic.
+    getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
+    useConnectHostStore.getState().setRecovery({ kind: 'reconnecting', bootPhase: null })
+    const fetchMock = vi.fn(async () => fakeRes({ body: JSON.stringify({ ok: 3 }) }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(daemonCliGet('projects/list')).resolves.toEqual({ ok: 3 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

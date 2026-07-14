@@ -28,6 +28,52 @@ interface CliHttpResult {
 }
 
 /**
+ * 0.40.48 storm killer — thrown by `cliFetch` INSTEAD of issuing a network
+ * request while the active remote host is in a non-'connected' recovery
+ * state (reconnecting / reauthenticating / signin-required / wedged).
+ *
+ * Rationale: during the live wedge incident a dozen independent retry loops
+ * (stores, panes, pollers) each kept firing `/cli/*` requests through the
+ * same poisoned pooled connection — ~11 req/s of guaranteed failures that
+ * also kept the pool warm. While ConnectionGate's recovery machinery owns
+ * the host's fate, everything else fails fast here: no fetch, no retries,
+ * no socket churn. Recovery traffic itself is UNAFFECTED because none of it
+ * rides `cliFetch` — /boot-status polls and the whoami probe use their own
+ * `fetch` in ConnectionGate, and `reviveRemoteSession`'s whoami + login use
+ * their own `fetch` in lib/remote-session — so the gate can never starve
+ * its own escape path (see `recoveryGateAllows`).
+ *
+ * Callers already treat any throw from daemonCli* as a failed call; this
+ * error's message is deliberately NOT connection-level-shaped so
+ * `withRemoteRetry` never burns its backoff on it. Use `instanceof
+ * RecoveringError` to special-case it (e.g. suppress error toasts).
+ */
+export class RecoveringError extends Error {
+  constructor(hostLabel: string, recoveryKind: string) {
+    super(`host "${hostLabel}" is ${recoveryKind} — request skipped until recovery completes`)
+    this.name = 'RecoveringError'
+  }
+}
+
+/**
+ * The per-host gate: `false` when the ACTIVE host is a remote whose
+ * recovery state machine says it's not 'connected'. Local is never gated
+ * (its recovery field is meaningless — stays 'connected'), and a remote in
+ * the healthy baseline passes untouched, so steady-state behavior is
+ * byte-identical to before.
+ *
+ * NOTE this reads the store at CALL time (like getDaemonWs does), so a
+ * recovery that completes between two calls immediately unblocks traffic —
+ * nothing subscribes or spins.
+ */
+function recoveryGateAllows(): { ok: true } | { ok: false; label: string; kind: string } {
+  const s = useConnectHostStore.getState()
+  if (s.activeHost === 'local') return { ok: true }
+  if (s.recovery.kind === 'connected') return { ok: true }
+  return { ok: false, label: s.activeHost.label, kind: s.recovery.kind }
+}
+
+/**
  * Resolve creds → fire ONE request built by `build` → read the body.
  *
  * Stale-session recovery (the runtime half of connect-users #617): a remote
@@ -43,6 +89,12 @@ interface CliHttpResult {
 async function cliFetch(
   build: (creds: DaemonWsAvailable) => { url: string; init?: RequestInit },
 ): Promise<CliHttpResult> {
+  // 0.40.48: while the active REMOTE host is recovering, fail fast instead
+  // of feeding the retry storm (and, in the wedged case, a poisoned pool).
+  // Checked once at entry — the post-revival replay below is exempt by
+  // construction (revival just proved the host reachable + re-authed).
+  const gate = recoveryGateAllows()
+  if (!gate.ok) throw new RecoveringError(gate.label, gate.kind)
   return withConnRetry(async () => {
     const attempt = async (): Promise<CliHttpResult> => {
       const creds = await getDaemonWs()

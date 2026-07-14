@@ -68,6 +68,11 @@ export function hostIndicator(
         return { color: '#d29922', title: 'Re-authenticating…' }
       case 'signin-required':
         return { color: '#f85149', title: 'Sign-in required — select this server to sign in' }
+      case 'wedged':
+        return {
+          color: '#f85149',
+          title: 'Connection is stuck at the system network layer — restart K2 to clear it',
+        }
       case 'connected':
         break // fall through to the plain connection status
     }

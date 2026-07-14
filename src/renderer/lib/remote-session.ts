@@ -38,6 +38,7 @@ import {
 } from '@/stores/connect-host'
 import { invalidateDaemonWs } from '@/kessel/daemon-ws'
 import { deriveRecovery, authSignalFromRevive, type RemoteRecoveryState } from '@/lib/remote-recovery'
+import { jittered } from '@/lib/backoff'
 
 /**
  * Classify an HTTP response as a POSSIBLE stale-session rejection — distinct
@@ -88,9 +89,14 @@ export const REVIVE_BACKOFF_MS = [1000, 4000, 15000, 30000]
  *  ConnectionGate's REMOTE_WHOAMI_TIMEOUT_MS). */
 const WHOAMI_TIMEOUT_MS = 4000
 
-// Single-flight + backoff bookkeeping, keyed by host id.
+// Single-flight + backoff bookkeeping, keyed by host id. `cooldownMs` is the
+// JITTERED gate for the next attempt, computed once when the failure is
+// recorded (0.40.48: fixed backoffs across many clients/loops re-align into
+// a synchronized retry storm after a remote reboot; jittering at record time
+// keeps the pure `reviveBackoffMs` schedule deterministic for tests while
+// decorrelating live retries).
 const inflight = new Map<string, Promise<ReviveOutcome>>()
-const failures = new Map<string, { count: number; lastAt: number }>()
+const failures = new Map<string, { count: number; lastAt: number; cooldownMs: number }>()
 
 /** `<scheme>://<host>[:<port>]` — same rule as connect-host's hostBaseUrl /
  *  host-ops' remoteCreds (secure+443 omits the port). Inlined so this lib
@@ -147,11 +153,7 @@ export function reviveRemoteSession(
   const existing = inflight.get(hostId)
   if (existing) return existing
   const failed = failures.get(hostId)
-  if (
-    !opts?.force &&
-    failed &&
-    Date.now() - failed.lastAt < reviveBackoffMs(failed.count)
-  ) {
+  if (!opts?.force && failed && Date.now() - failed.lastAt < failed.cooldownMs) {
     return Promise.resolve('cooldown')
   }
   // Recovery surface (owner contract, lib/remote-recovery.ts): while THIS
@@ -170,7 +172,14 @@ export function reviveRemoteSession(
         failures.delete(hostId)
       } else if (outcome !== 'not-applicable') {
         const prev = failures.get(hostId)
-        failures.set(hostId, { count: (prev?.count ?? 0) + 1, lastAt: Date.now() })
+        const count = (prev?.count ?? 0) + 1
+        failures.set(hostId, {
+          count,
+          lastAt: Date.now(),
+          // Jitter the cooldown once, at record time (never above the pure
+          // schedule's value, so the 30s cap holds).
+          cooldownMs: jittered(reviveBackoffMs(count)),
+        })
       }
       if (outcome !== 'not-applicable') {
         setRecoveryIfActive(

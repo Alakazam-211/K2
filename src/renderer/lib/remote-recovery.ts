@@ -34,12 +34,22 @@ import type { ReviveOutcome } from '@/lib/remote-session'
 
 /** The healthy baseline + the three recovery states. `bootPhase` carries the
  *  host's /boot-status phase when it answered but isn't 'ready' (e.g.
- *  'migrating' during an update) so the UI can say WHY it's waiting. */
+ *  'migrating' during an update) so the UI can say WHY it's waiting.
+ *
+ *  0.40.48 adds a fourth, terminal state, 'wedged': the webview's pooled
+ *  HTTP connection for this host is PROVEN poisoned — an out-of-webview
+ *  probe (the Tauri `remote_boot_probe` arbiter, a fresh OS-level socket)
+ *  reached the daemon and saw phase 'ready' while the webview's own probes
+ *  kept failing with HTTP errors, and an automatic page reload already
+ *  failed to clear it. JS cannot evict the connection from WKWebView's
+ *  pool, so the only remaining fix is restarting the app — the state
+ *  surfaces exactly that (a Restart K2 button; never auto-restarted). */
 export type RemoteRecoveryState =
   | { kind: 'connected' }
   | { kind: 'reconnecting'; bootPhase: string | null }
   | { kind: 'reauthenticating' }
   | { kind: 'signin-required' }
+  | { kind: 'wedged' }
 
 /** What the last /boot-status poll said. `reachable: false` = network-level
  *  failure (down / mid-restart / tunnel gap); otherwise the daemon's
@@ -117,7 +127,9 @@ export const RECOVERY_RECONNECT_MAX_MS = 8000
  *                         host answered /boot-status pre-'ready' — the
  *                         "still booting back up" affordance)
  *    - reauthenticating → the silent re-login is in flight
- *    - signin-required  → the ONLY state that asks the user */
+ *    - signin-required  → the ONLY state that asks the user
+ *    - wedged           → the pool is proven poisoned; asks for an app
+ *                         restart (the one thing that clears it) */
 export function recoveryStatusText(label: string, recovery: RemoteRecoveryState): string {
   switch (recovery.kind) {
     case 'connected':
@@ -130,6 +142,8 @@ export function recoveryStatusText(label: string, recovery: RemoteRecoveryState)
       return `Re-authenticating with ${label}…`
     case 'signin-required':
       return `${label} needs you to sign in again.`
+    case 'wedged':
+      return `Connection to ${label} is stuck at the system network layer. Restart K2 to clear it.`
   }
 }
 
@@ -143,6 +157,12 @@ export function recoveryStatusText(label: string, recovery: RemoteRecoveryState)
 export function recoveryPollMs(state: RemoteRecoveryState, attempt: number): number {
   if (state.kind === 'reconnecting') {
     return Math.min(RECOVERY_RECONNECT_MAX_MS, 500 * 2 ** Math.min(Math.max(attempt, 0), 5))
+  }
+  if (state.kind === 'wedged') {
+    // The pool is proven poisoned — webview polls can't succeed until the
+    // user restarts the app, so hold the slowest cadence (we keep polling
+    // only so a surprise recovery still clears the banner).
+    return RECOVERY_RECONNECT_MAX_MS
   }
   return RECOVERY_HEALTH_POLL_MS
 }

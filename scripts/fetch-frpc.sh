@@ -30,16 +30,26 @@
 set -euo pipefail
 
 # Pinned frp release for the download path. MUST match the version of
-# the maintainer-staged macOS binary (frpc-aarch64-apple-darwin reports
-# 0.61.1 via `frpc -v`) so every platform ships the same frp.
+# the maintainer-staged macOS binary reports 0.61.1 via `frpc -v`) so
+# every platform ships the same frp.
 FRP_VERSION="0.61.1"
 
 # Resolve the Rust target triple. Explicit FRPC_TARGET_TRIPLE wins;
-# otherwise detect Linux hosts, and default to aarch64-apple-darwin
-# (Apple Silicon, the historical default) everywhere else.
+# otherwise detect the native macOS or Linux host architecture.
 TRIPLE="${FRPC_TARGET_TRIPLE:-}"
 if [ -z "$TRIPLE" ]; then
     case "$(uname -s)" in
+        Darwin)
+            case "$(uname -m)" in
+                x86_64 | amd64)  TRIPLE="x86_64-apple-darwin" ;;
+                aarch64 | arm64) TRIPLE="aarch64-apple-darwin" ;;
+                *)
+                    echo "fetch-frpc: FATAL — unsupported macOS arch $(uname -m)" >&2
+                    echo "  Set FRPC_TARGET_TRIPLE + FRPC_SRC explicitly." >&2
+                    exit 1
+                    ;;
+            esac
+            ;;
         Linux)
             case "$(uname -m)" in
                 x86_64)          TRIPLE="x86_64-unknown-linux-gnu" ;;
@@ -52,7 +62,9 @@ if [ -z "$TRIPLE" ]; then
             esac
             ;;
         *)
-            TRIPLE="aarch64-apple-darwin"
+            echo "fetch-frpc: FATAL — unsupported OS $(uname -s)" >&2
+            echo "  Set FRPC_TARGET_TRIPLE + FRPC_SRC explicitly." >&2
+            exit 1
             ;;
     esac
 fi

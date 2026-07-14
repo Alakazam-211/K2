@@ -1,7 +1,19 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+fn is_version_arg(args: &[std::ffi::OsString]) -> bool {
+    args.len() == 2 && args[1] == std::ffi::OsStr::new("--version")
+}
+
 fn main() {
+    // `--version` is also the signed-build AMFI smoke check. Exit before
+    // Tauri startup so this probe can never install or reload launchd agents.
+    let args: Vec<_> = std::env::args_os().collect();
+    if is_version_arg(&args) {
+        println!("K2 {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     // 0.37.9 — raise RLIMIT_NOFILE so the Tauri process can hold
     // enough fds for many concurrent PTYs / WS sockets / watchers.
     // launchd-launched apps inherit a 256/1024 soft limit by default,
@@ -27,4 +39,24 @@ fn main() {
     k2_lib::warm_http_pool_async();
 
     k2_lib::run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_version_arg;
+    use std::ffi::OsString;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn version_flag_is_exact() {
+        assert!(is_version_arg(&args(&["k2", "--version"])));
+        assert!(!is_version_arg(&args(&["k2", "version"])));
+        assert!(!is_version_arg(&args(&[
+            "k2", "--version", "extra",
+        ])));
+        assert!(!is_version_arg(&args(&["k2"])));
+    }
 }

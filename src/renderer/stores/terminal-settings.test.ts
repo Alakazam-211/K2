@@ -104,7 +104,7 @@ describe('line height + char tracking clamps', () => {
   it('clamps charTracking', () => {
     useTerminalSettingsStore.getState().setCharTracking(0.5)
     expect(useTerminalSettingsStore.getState().charTracking).toBe(CHAR_TRACKING_MIN)
-    useTerminalSettingsStore.getState().setCharTracking(2)
+    useTerminalSettingsStore.getState().setCharTracking(3)
     expect(useTerminalSettingsStore.getState().charTracking).toBe(CHAR_TRACKING_MAX)
     useTerminalSettingsStore.getState().setCharTracking(1.03)
     expect(useTerminalSettingsStore.getState().charTracking).toBe(1.03)

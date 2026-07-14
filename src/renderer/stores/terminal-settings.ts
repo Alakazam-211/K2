@@ -78,7 +78,7 @@ export const LINE_HEIGHT_MULT_MAX = 1.6
  *  wider than device-floored WebGL). Global across styles. */
 export const CHAR_TRACKING_DEFAULT = 1.0
 export const CHAR_TRACKING_MIN = 0.9
-export const CHAR_TRACKING_MAX = 1.2
+export const CHAR_TRACKING_MAX = 1.4
 
 export function clampLineHeightMult(v: number): number {
   if (!Number.isFinite(v)) return LINE_HEIGHT_MULT_DEFAULT

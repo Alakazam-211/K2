@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost, RecoveringError } from '@/lib/daemon-cli'
+import { jittered } from '@/lib/backoff'
 import { agentDisplayName } from '@/lib/workspace-agent'
 import { terminalKill } from '@/lib/terminal-daemon'
 import type { MosaicNode, MosaicDirection } from 'react-mosaic-component'
@@ -26,6 +27,7 @@ import {
   subscribeToWorkspaceTabEvents,
   onSessionAddedApp,
   onOpenUrl,
+  onceRecovered,
   type SessionAddedEvent,
   type SessionRemovedEvent,
   type TabTitleChangedEvent,
@@ -1083,6 +1085,10 @@ interface TabsState {
   // reaping now (daemon-canonical-active.md §4.5). Do not re-introduce a
   // renderer reap — it would race the daemon's canonical decision.
   persistActiveWorkspace: () => void
+  /** 0.40.48: cancel the autosave debounce and save the active workspace
+   *  layout NOW. For structural mutations that must hold across a remote
+   *  round-trip (column split/unsplit). */
+  flushLayoutPersist: () => void
   /** Add a tab to a workspace without switching to it. If the workspace is active,
    *  adds directly. If background/stashed, saves to DB session so it's there when restored.
    *  Returns the terminal ID (paneGroupId) so the caller can spawn a background PTY. */
@@ -1355,6 +1361,89 @@ function serializeSnapshot(snapshot: WorkspaceTabSnapshot): SerializedLayout {
 
 /** Debounce timer for auto-saving the active workspace. */
 let persistDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+// ── Layout-save durability (0.40.48 — the remote split-columns bug) ──────
+//
+// The canonical layout save was a debounced, SINGLE-SHOT, fire-and-forget
+// POST: any failure was console.error'd and the layout change was simply
+// gone from the server. Locally that never bites (the loopback save can't
+// fail), but against a remote host one dropped save — a tunnel blip during
+// the 1s debounce, a transient non-2xx, or the 0.40.48 recovery gate
+// failing fast with RecoveringError — meant a just-clicked column split
+// never reached the remote DB, and the NEXT layout read (host switch,
+// remote-reorder refetch, reconnect re-restore) clobbered the live
+// `splitCount` back to the stale server copy: "the split doesn't hold."
+//
+// The re-arm below makes the save durable: a RecoveringError parks on the
+// recovery signal and flushes the moment the host is back; other failures
+// retry on a jittered timer with a consecutive-failure cap (each retry
+// re-serializes CURRENT state, so collapsing bursts is correct —
+// last-write-wins). One pending re-arm at a time.
+let layoutSaveRetryTimer: ReturnType<typeof setTimeout> | null = null
+let layoutSaveRecoveryWait: (() => void) | null = null
+let layoutSaveConsecutiveFailures = 0
+const LAYOUT_SAVE_RETRY_BASE_MS = 3000
+const LAYOUT_SAVE_MAX_BLIND_RETRIES = 3
+
+function rearmLayoutSave(err: unknown): void {
+  if (layoutSaveRetryTimer !== null || layoutSaveRecoveryWait !== null) return
+  if (err instanceof RecoveringError) {
+    // The gate dropped the save before sending — the host is recovering.
+    // Flush as soon as it's genuinely back (push-style, nothing polls).
+    layoutSaveRecoveryWait = onceRecovered(() => {
+      layoutSaveRecoveryWait = null
+      useTabsStore.getState().persistActiveWorkspace()
+    })
+    return
+  }
+  layoutSaveConsecutiveFailures += 1
+  if (layoutSaveConsecutiveFailures > LAYOUT_SAVE_MAX_BLIND_RETRIES) {
+    // Persistent non-recovery failure — stop churning; the next structural
+    // change (or recovery flip) re-triggers a save naturally.
+    return
+  }
+  layoutSaveRetryTimer = setTimeout(() => {
+    layoutSaveRetryTimer = null
+    useTabsStore.getState().persistActiveWorkspace()
+  }, jittered(LAYOUT_SAVE_RETRY_BASE_MS))
+}
+
+/** A save landed — clear the failure streak. */
+function layoutSaveSucceeded(): void {
+  layoutSaveConsecutiveFailures = 0
+}
+
+/** The (former) debounce body of `persistActiveWorkspace`, extracted so
+ *  `flushLayoutPersist` can run it immediately for mutations that must
+ *  hold (0.40.48 — column split/unsplit). Serializes CURRENT state at
+ *  call time; failures re-arm via `rearmLayoutSave`. */
+function saveActiveWorkspaceLayoutNow(): void {
+  if (isLayoutSaveSuppressed()) return
+  const state = useTabsStore.getState()
+  if (!state.activeWorkspaceKey) return
+  if (state.tabs.length === 0 && state.extraGroups.length === 0) return
+
+  const layout = state.serializeCurrentLayout()
+  const key = state.activeWorkspaceKey
+  const [projectId, workspaceId] = key.split(':')
+  if (projectId && workspaceId) {
+    const save = daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
+      projectId,
+      workspaceId,
+      layoutJson: JSON.stringify(layout),
+    }).then((res) => {
+      layoutSaveSucceeded()
+      recordLayoutRevision(key, res?.revision)
+    })
+    // Same self-echo guard as saveLayoutForWorkspace: the broadcast
+    // handler settles this before treating a revision as remote.
+    trackPendingLayoutSave(key, save)
+    save.catch((err) => {
+      console.error('[tabs] Auto-save failed:', err)
+      rearmLayoutSave(err)
+    })
+  }
+}
 
 /** Cancel a pending debounced autosave (see `persistActiveWorkspace`). Used by
  *  the silent remote-reorder adoption path (#676/#677) so a pre-adoption save
@@ -3180,6 +3269,11 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       extraGroups: newGroups,
       activeGroupIndex: state.splitCount  // focus the new group
     })
+    // 0.40.48: a split must HOLD against a remote host — save immediately
+    // instead of riding the 1s debounce, so a competing TabOrderChanged
+    // can't refetch the pre-split layout while the save is still queued
+    // (and a failed save re-arms instead of silently dropping).
+    get().flushLayoutPersist()
   },
 
   unsplitTerminalArea: () => {
@@ -3214,6 +3308,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         activeGroupIndex: Math.min(state.activeGroupIndex, state.splitCount - 2)
       })
     }
+    // 0.40.48: same immediate-save rationale as splitTerminalArea.
+    get().flushLayoutPersist()
   },
 
   setActiveGroup: (index: number) => {
@@ -3747,8 +3843,12 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // Registered BEFORE the daemon can broadcast the save's
     // `TabOrderChanged`, so the handler's settle step always sees it.
     trackPendingLayoutSave(key, save)
-    save.catch((err) => {
+    save.then(layoutSaveSucceeded).catch((err) => {
       console.error('[tabs] Failed to persist workspace layout:', err)
+      // 0.40.48 durability: a dropped save (recovery gate / tunnel blip)
+      // otherwise leaves the server on a stale layout that the next read
+      // clobbers the live state with. Re-arm like the autosave path.
+      rearmLayoutSave(err)
     })
   },
 
@@ -4449,26 +4549,21 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // Debounced save of the active workspace to DB
     if (persistDebounceTimer) clearTimeout(persistDebounceTimer)
     persistDebounceTimer = setTimeout(() => {
-      if (isLayoutSaveSuppressed()) return
-      const state = get()
-      if (!state.activeWorkspaceKey) return
-      if (state.tabs.length === 0 && state.extraGroups.length === 0) return
-
-      const layout = state.serializeCurrentLayout()
-      const key = state.activeWorkspaceKey
-      const [projectId, workspaceId] = key.split(':')
-      if (projectId && workspaceId) {
-        const save = daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
-          projectId,
-          workspaceId,
-          layoutJson: JSON.stringify(layout),
-        }).then((res) => recordLayoutRevision(key, res?.revision))
-        // Same self-echo guard as saveLayoutForWorkspace: the broadcast
-        // handler settles this before treating a revision as remote.
-        trackPendingLayoutSave(key, save)
-        save.catch((err) => console.error('[tabs] Auto-save failed:', err))
-      }
+      persistDebounceTimer = null
+      saveActiveWorkspaceLayoutNow()
     }, 1000)
+  },
+
+  flushLayoutPersist: () => {
+    // 0.40.48: structural mutations that MUST hold (column split/unsplit)
+    // save immediately instead of riding the 1s debounce — closes the
+    // window where a competing remote `TabOrderChanged` finds no pending
+    // save to settle against and rebuilds from the pre-mutation layout.
+    if (persistDebounceTimer) {
+      clearTimeout(persistDebounceTimer)
+      persistDebounceTimer = null
+    }
+    saveActiveWorkspaceLayoutNow()
   },
 
   addTabToWorkspace: (workspaceKey: string, cwd: string, options: { title: string; command: string; args: string[] }): string | null => {

@@ -383,8 +383,12 @@ function remoteRecoveryBlocked(): boolean {
  * completed between the caller's `remoteRecoveryBlocked()` check and this
  * subscription (setRecovery dedupes same-kind writes, so a missed flip
  * would otherwise never re-notify). Returns a cancel fn.
+ *
+ * Exported (0.40.48): the tabs store's layout-save durability re-arm parks
+ * on the same signal, so a split/reorder saved during a recovery window
+ * flushes the moment the host is back instead of being silently dropped.
  */
-function onceRecovered(onRecovered: () => void): () => void {
+export function onceRecovered(onRecovered: () => void): () => void {
   let done = false
   const fire = (): void => {
     if (done) return

@@ -46,8 +46,19 @@ recover.
   the heartbeats of the server you're connected to — not your local
   machine's. Live/resumable/scheduled states come straight from the host.
 
+- **Settings audits the right machine.** The workspace Settings →
+  Heartbeats page (roster, fire history, session picker) now manages the
+  connected host's heartbeats too — everything you see and change lands
+  on the server you're looking at.
+
 - **Errors surface instead of hiding.** A failed heartbeat load shows the
   actual error instead of an eternal "Loading…".
+
+### Layout
+
+- **Column splits stick on remote hosts.** Splitting the tab area into
+  columns now saves immediately and survives connection blips — no more
+  splits quietly reverting when you're connected to a server.
 
 ## 0.40.47 — Workspace wiki brain map
 

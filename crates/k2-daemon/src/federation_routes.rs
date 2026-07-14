@@ -21,8 +21,9 @@
 //!     the renderer calls: list pinned peers, and fetch a paired peer's roster
 //!     (the local daemon dials the peer's signed roster GET).
 //!
-//! The dispatcher owns method/auth gating (POST-only via `require_post`; owner
-//! token via `require_owner` on confirm/send; the inbound route is
+//! The dispatcher owns method/auth gating (POST-only via `require_post`;
+//! owner-or-admin on pair/confirm/outbox/pubkey; dual-auth owner-or-admin OR
+//! scoped passport on peers/peer-roster/send — PR1; the inbound route is
 //! authenticated by the ENVELOPE itself, not a token — DECISION-2).
 
 use std::path::Path;
@@ -277,23 +278,20 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
         }
     };
 
-    // Sender attribution `<sender-agent>@<peer-host>`. The host is derived
-    // from the VERIFIED peer (looked up by the AUTHENTICATED fingerprint the
-    // gate returned), never from request plaintext.
+    // Sender attribution `<sender-agent>::<peer-host>` — always `::`, never
+    // `@`. Using `@` made receiving agents reach for `k2 mail` instead of
+    // `k2 msg` (GH #47). Host comes from the VERIFIED peer pin (AUTHENTICATED
+    // fingerprint), never request plaintext. Both sides lowercase.
     let host = store
         .get(&ingested.peer_fingerprint)
         .map(|p| peer_host(&p.subdomain))
         .unwrap_or_default();
     let sender_agent = match &signal.from {
-        AgentAddress::Agent { name, .. } => name.clone(),
-        AgentAddress::Workspace { workspace } => workspace.0.clone(),
-        _ => "peer".to_string(),
+        AgentAddress::Agent { name, .. } => name.as_str(),
+        AgentAddress::Workspace { workspace } => workspace.0.as_str(),
+        _ => "peer",
     };
-    let from_label = if host.is_empty() {
-        sender_agent
-    } else {
-        format!("{sender_agent}@{host}")
-    };
+    let from_label = federated_from_label(sender_agent, &host);
 
     // The deliverable text (federation sends `Msg`; render any other kind
     // so nothing is silently lost).
@@ -359,6 +357,26 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
     }
 }
 
+/// Canonical federated `[from …]` attribution shown in the recipient chat.
+///
+/// **Always** `agent::host` (lowercase). Never `@` — that sigil made
+/// receiving agents treat the handle as mail and call `k2 mail` instead of
+/// `k2 msg` (GH #47). Empty host → bare agent; empty agent → `"peer"`.
+fn federated_from_label(sender_agent: &str, host: &str) -> String {
+    let agent = sender_agent.trim().to_ascii_lowercase();
+    let host = host.trim().to_ascii_lowercase();
+    let agent = if agent.is_empty() {
+        "peer".to_string()
+    } else {
+        agent
+    };
+    if host.is_empty() {
+        agent
+    } else {
+        format!("{agent}::{host}")
+    }
+}
+
 /// Look up `projects.path` by `projects.id` — the addressed workspace UUID
 /// carried in the verified `to` address. `None` when no project matches
 /// (the addressed workspace isn't on this server).
@@ -377,12 +395,17 @@ fn resolve_project_path_by_id(workspace_id: &str) -> Option<String> {
 // P4 — outbound send
 // ─────────────────────────────────────────────────────────────────────
 
-/// `POST /cli/federation/send` — OWNER-gated (dispatcher enforces). Body:
-/// `{"to":"<peer>::<workspace>::<agent>","text":"..."}`. Seals an
-/// `AgentSignal`, enqueues it durably, then dials the peer and POSTs to its
-/// `/cli/federation/inbound`. On a confirmed delivery the queued copy is
-/// removed; otherwise it stays for the retry loop. Blocking (network I/O) —
-/// the dispatcher runs it on a blocking worker.
+/// `POST /cli/federation/send` — dual-auth (dispatcher enforces owner-or-admin
+/// OR scoped passport). Body: `{"to":"<peer>::<workspace>::<agent>","text":"..."}`.
+/// Seals an `AgentSignal`, enqueues it durably, then dials the peer and POSTs
+/// to its `/cli/federation/inbound`. On a confirmed delivery the queued copy
+/// is removed; otherwise it stays for the retry loop. Blocking (network I/O)
+/// — the dispatcher runs it on a blocking worker.
+///
+/// **PR1 principal bind (Wave 0 PR-C):** when a scoped principal is installed
+/// via [`crate::caller_workspace::with_request_principal`], `from_workspace`
+/// is forced from `principal.workspace_uuid` (body claim ignored). Owner path
+/// (no principal) keeps optional body `from_workspace`.
 pub fn handle_send(body: &[u8]) -> CliResponse {
     #[derive(serde::Deserialize)]
     struct Req {
@@ -390,11 +413,13 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         text: String,
         /// GAP #3: the SOURCE workspace (filesystem path) the calling
         /// agent is in. When present, the cross-daemon send is GATED on
-        /// `is_remote_connection(from_workspace, "<agent>@<host>")` —
+        /// `is_remote_connection(from_workspace, "<agent>::<host>")` —
         /// an agent may only message a peer its workspace is connected
         /// to. Absent ⇒ the connection gate is skipped (owner-remote
         /// `k2 talk` and legacy owner sends are a different, ungated
         /// path); the `peer.trust == Trusted` check still always runs.
+        /// With a scoped principal this field is **ignored** — identity
+        /// comes from the passport only.
         #[serde(default)]
         from_workspace: Option<String>,
     }
@@ -402,6 +427,39 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         Ok(r) => r,
         Err(e) => return CliResponse::bad_request(format!("bad send body: {e}")),
     };
+
+    // Resolve effective source workspace: principal wins over body.
+    let from_workspace: Option<String> =
+        match crate::caller_workspace::request_principal() {
+            Some(principal) => {
+                match crate::caller_workspace::resolve_caller_workspace(
+                    Some(&principal),
+                    None,
+                ) {
+                    Ok(ws) => Some(ws.path),
+                    Err(e) => {
+                        return CliResponse {
+                            status: "403 Forbidden",
+                            content_type: "application/json",
+                            body: serde_json::json!({
+                                "ok": false,
+                                "error": {
+                                    "code": "forbidden",
+                                    "hint": e.hint(),
+                                },
+                            })
+                            .to_string(),
+                        };
+                    }
+                }
+            }
+            None => req
+                .from_workspace
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
+        };
 
     // Parse `<peer>::<workspace>::<agent>`.
     let parts: Vec<&str> = req.to.split("::").collect();
@@ -430,16 +488,18 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         );
     }
 
-    // GAP #3 — the CROSS-DAEMON CONNECTION GATE (fail-closed). When the
-    // caller supplies `from_workspace` (an agent-initiated send), the
-    // send is allowed ONLY IF that source workspace is connected to the
-    // target `<agent>@<host>`. This is IN ADDITION to the trust check
-    // above — trust says "I've paired with this peer"; the connection
-    // says "THIS workspace is allowed to message THIS remote agent".
-    // INTRA-daemon sends never reach here; owner-remote `k2 talk` is a
-    // different, ungated code path (it never sets `from_workspace`).
-    if let Some(from_ws) = req.from_workspace.as_deref().filter(|s| !s.is_empty()) {
-        let remote_addr = format!("{agent}@{}", peer_host(&peer.subdomain));
+    // GAP #3 — the CROSS-DAEMON CONNECTION GATE (fail-closed). When
+    // `from_workspace` is set (agent-initiated send, or owner body claim),
+    // the send is allowed ONLY IF that source workspace is connected to the
+    // target `<agent>::<host>` (PR2 canonical; gate also matches legacy `@`
+    // rows). This is IN ADDITION to the trust check above — trust says
+    // "I've paired with this peer"; the connection says "THIS workspace is
+    // allowed to message THIS remote agent". Scoped principals always have
+    // from_workspace forced, so the gate always runs for agents.
+    // Owner-remote `k2 talk` (no principal, no body from_workspace) is the
+    // ungated path; Trusted peer check still always runs.
+    if let Some(from_ws) = from_workspace.as_deref() {
+        let remote_addr = format!("{agent}::{}", peer_host(&peer.subdomain));
         if !k2_core::connections::is_remote_connection(from_ws, &remote_addr) {
             // C2 teaching shape parity with local not_connected (mail/dns):
             // stable code + hint so CLI exit-3 mappers recognize it.
@@ -469,30 +529,30 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     let local_fp = federation::local_fingerprint().unwrap_or_default();
 
     // `from` carries the SENDER AGENT IDENTITY so the recipient's chat can
-    // render `[from <agent>@<host>]` and reply with `k2 msg <agent>@<host>`.
+    // render `[from <agent>::<host>]` and reply with `k2 msg <agent>::<host>`.
     // In the workspace==agent model the agent name is the source workspace's
     // AUTHORITATIVE agent name — persona/display `name:` first, folder
     // basename fallback — resolved via `resolve_agent_name`. Using the
     // resolved name (not the bare basename) keeps the `[from]` attribution +
     // reply target consistent with what the recipient's roster sees, so a
-    // reply to `<agent>@<host>` matches the connection row (Part 1's gate is
-    // case-insensitive, so we don't force-lowercase here). Owner-remote sends
+    // reply to `<agent>::<host>` matches the connection row (gate is
+    // case-insensitive + separator-normalized). Owner-remote sends
     // (`k2 talk`, no `from_workspace`) carry no source agent → attributed to
     // `owner`. The whole signal is signed end-to-end, so this identity is
     // AUTHENTICATED to the verified peer (no forgeable plaintext `[from]`,
     // Risk C1).
-    let from = match req.from_workspace.as_deref().filter(|s| !s.is_empty()) {
+    let from = match from_workspace.as_deref() {
         Some(src) => AgentAddress::Agent {
             workspace: WorkspaceId(src.to_string()),
             name: k2_core::workspace::agent_identity::resolve_agent_name(src)
-                .map(|n| n.trim().to_string())
+                .map(|n| n.trim().to_ascii_lowercase())
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| {
                     Path::new(src)
                         .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
+                        .map(|s| s.to_string_lossy().to_ascii_lowercase())
                         .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| src.to_string())
+                        .unwrap_or_else(|| src.to_ascii_lowercase())
                 }),
         },
         None => AgentAddress::Agent {
@@ -571,7 +631,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("declined_by_peer");
-                let target = format!("{agent}@{}", peer_host(&peer.subdomain));
+                let target = format!("{agent}::{}", peer_host(&peer.subdomain));
                 CliResponse::ok_json(
                     serde_json::json!({
                         "status": "declined",
@@ -612,21 +672,36 @@ pub(crate) fn peer_base_url(subdomain: &str) -> String {
             return base.trim().trim_end_matches('/').to_string();
         }
     }
-    format!("https://{subdomain}.k2.dev")
+    // PR3: avoid `https://rpm.k2.dev.k2.dev` when the peer row already
+    // stores a full host (or a doubled zone). Collapse then ensure a
+    // single trailing `.k2.dev`.
+    let host = {
+        let n = k2_core::connections::normalize_remote_host(subdomain);
+        if n.ends_with(".k2.dev") {
+            n
+        } else if n.is_empty() {
+            n
+        } else {
+            format!("{n}.k2.dev")
+        }
+    };
+    format!("https://{host}")
 }
 
 /// The peer's full HOST (no scheme/path) — the right-hand side of the
-/// `<agent>@<host>` connection address. Derived from the SAME source as
+/// `<agent>::<host>` connection address. Derived from the SAME source as
 /// the dial target ([`peer_base_url`]) so the gate's reconstructed
-/// `<agent>@<host>` matches what the operator typed into
+/// `<agent>::<host>` matches what the operator typed into
 /// `k2 connections add` (canonically `<subdomain>.k2.dev`; the
 /// `K2_FEDERATION_INBOUND_BASE` override host for local/loopback tests).
 fn peer_host(subdomain: &str) -> String {
     let base = peer_base_url(subdomain);
-    base.trim_start_matches("https://")
+    let host = base
+        .trim_start_matches("https://")
         .trim_start_matches("http://")
         .trim_end_matches('/')
-        .to_string()
+        .to_string();
+    k2_core::connections::normalize_remote_host(&host)
 }
 
 /// POST a sealed envelope to `<base>/cli/federation/inbound`. Blocking
@@ -969,7 +1044,8 @@ mod tests {
         key
     }
 
-    /// Seal `text` from `cortana@<peer>` addressed to agent `bob` in `ws_id`.
+    /// Seal `text` from `cortana` (peer-attributed at inbound as
+    /// `cortana::<host>`) addressed to agent `bob` in `ws_id`.
     fn seal_msg_to(ws_id: &str, key: &rcgen::KeyPair, subdomain: &str, text: &str) -> Vec<u8> {
         let signal = AgentSignal::new(
             AgentAddress::Agent {
@@ -1313,10 +1389,10 @@ mod tests {
     }
 
     // ── P4 send: the SENDER AGENT IDENTITY is carried in `from` so the
-    //    recipient can render `[from <agent>@<host>]` and reply. Regression
+    //    recipient can render `[from <agent>::<host>]` and reply. Regression
     //    lock for the dropped-identity bug (`from` used to be a bare
     //    `peer:<fp>` Workspace address). `from.name` = source workspace
-    //    folder basename (workspace==agent).
+    //    agent name (lowercased at inbound attribution).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_sets_from_agent_identity_from_source_basename() {
         let _home = crate::test_support::TempHome::new();
@@ -1469,12 +1545,30 @@ mod tests {
         match signal.from {
             AgentAddress::Agent { name, .. } => {
                 assert_eq!(
-                    name, "Aria",
-                    "from.name must be the RESOLVED persona name, not the folder basename"
+                    name, "aria",
+                    "from.name must be the RESOLVED persona name (lowercased), not the folder basename"
                 );
             }
             other => panic!("from must carry the sender agent identity, got {other:?}"),
         }
+    }
+
+    // GH #47 — inbound `[from …]` must use `::`, never `@`, so the receiving
+    // agent routes replies through `k2 msg` rather than `k2 mail`.
+    #[test]
+    fn federated_from_label_uses_double_colon_never_at() {
+        assert_eq!(
+            federated_from_label("Cortana", "Z3thon.k2.dev"),
+            "cortana::z3thon.k2.dev"
+        );
+        assert_eq!(
+            federated_from_label("  argus  ", "  Peer.K2.DEV  "),
+            "argus::peer.k2.dev"
+        );
+        assert_eq!(federated_from_label("cortana", ""), "cortana");
+        assert_eq!(federated_from_label("", "host.k2.dev"), "peer::host.k2.dev");
+        // Regression: the old `@` form must never reappear.
+        assert!(!federated_from_label("a", "b.k2.dev").contains('@'));
     }
 
     // ── P5 roster: peer-authenticated GET + local owner helpers ──
@@ -1535,6 +1629,14 @@ mod tests {
                 .unwrap();
                 id
             };
+            // Roster contact filter: master remote may be off in tests —
+            // opt this workspace into federated contact via Remote Access.
+            k2_core::workspace::settings::update_project_setting(
+                &ws_path,
+                "allow_remote_instruct",
+                "1",
+            )
+            .expect("opt workspace into remote contact for roster");
 
             // Pin the calling peer Trusted + roster, then sign a valid request.
             let key = peer_key();
@@ -1740,5 +1842,190 @@ mod tests {
             1,
             "the durable outbox must retain the message for retry"
         );
+    }
+
+    // ── PR1: dual-auth under passports — principal-bound from_workspace ──
+    //
+    // A5.1 Scoped + trusted peer + connection → send ok/queued
+    // A5.2 Scoped + no connection → not_connected
+    // A5.4 Spoofed from_workspace ignored with principal
+    // (A5.3 scoped cannot pair/confirm lives in session_token allowlist tests;
+    //  A5.5 owner send still works = existing tests above.)
+
+    /// Register a projects row and return (path, uuid) for a scoped principal.
+    fn register_src_workspace(label: &str) -> (String, String) {
+        let src_path = std::env::temp_dir().join(format!(
+            "k2-pr1-src-{}-{}-{}",
+            label,
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let src_path = src_path.to_string_lossy().into_owned();
+        let uuid = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![uuid, format!("pr1-{label}"), src_path],
+            )
+            .unwrap();
+        }
+        (src_path, uuid)
+    }
+
+    fn pin_trusted_peer_for_send(subdomain: &str) -> String {
+        let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut store = PeerStore::default();
+        let fp = store.upsert(
+            FederationPeer::pin("teammate", subdomain, peer_key.public_key_pem()).unwrap(),
+        );
+        store.set_trust(&fp, PeerTrust::Trusted);
+        store.grant(&fp, "inbound");
+        store.save().unwrap();
+        fp
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pr1_scoped_principal_send_with_connection_queues() {
+        // A5.1: principal present + trusted peer + remote connection → gate
+        // opens; dead-port dial → queued.
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (src_path, ws_uuid) = register_src_workspace("ok");
+        let _fp = pin_trusted_peer_for_send("peer");
+        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+        k2_core::connections::connections(
+            &src_path,
+            "add",
+            Some("bob@127.0.0.1:1"),
+            None,
+        )
+        .expect("add remote connection");
+
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: ws_uuid,
+            agent_address: "src-agent".into(),
+        };
+        // Body omits from_workspace — principal supplies it.
+        let send_body = body(serde_json::json!({
+            "to": "peer::ws::bob",
+            "text": "passport send",
+        }));
+        let resp = tokio::task::spawn_blocking(move || {
+            crate::caller_workspace::with_request_principal(Some(principal), || {
+                handle_send(&send_body)
+            })
+        })
+        .await
+        .unwrap();
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        assert_eq!(
+            resp.status, "200 OK",
+            "scoped principal with connection must send: {}",
+            resp.body
+        );
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["status"], "queued", "dead-port dial → queued: {}", resp.body);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pr1_scoped_principal_send_without_connection_is_not_connected() {
+        // A5.2: principal present + trusted peer + NO connection → not_connected.
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (_src_path, ws_uuid) = register_src_workspace("noconnect");
+        let _fp = pin_trusted_peer_for_send("peer");
+        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: ws_uuid,
+            agent_address: "src-agent".into(),
+        };
+        let send_body = body(serde_json::json!({
+            "to": "peer::ws::bob",
+            "text": "blocked",
+        }));
+        let resp = tokio::task::spawn_blocking(move || {
+            crate::caller_workspace::with_request_principal(Some(principal), || {
+                handle_send(&send_body)
+            })
+        })
+        .await
+        .unwrap();
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        assert_eq!(resp.status, "403 Forbidden", "must fail closed: {}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(
+            v["error"]["code"], "not_connected",
+            "stable not_connected code for CLI exit 3: {}",
+            resp.body
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pr1_scoped_principal_ignores_spoofed_from_workspace() {
+        // A5.4: body claims a DIFFERENT workspace that HAS a connection;
+        // principal binds the real workspace which does NOT — spoof ignored
+        // → not_connected on the principal workspace.
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (_real_path, real_uuid) = register_src_workspace("real");
+        let (spoof_path, _spoof_uuid) = register_src_workspace("spoof");
+        let _fp = pin_trusted_peer_for_send("peer");
+        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+
+        // Only the spoofed workspace is connected — if body won, send would queue.
+        k2_core::connections::connections(
+            &spoof_path,
+            "add",
+            Some("bob@127.0.0.1:1"),
+            None,
+        )
+        .expect("add spoof connection");
+
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: real_uuid,
+            agent_address: "real-agent".into(),
+        };
+        let send_body = body(serde_json::json!({
+            "to": "peer::ws::bob",
+            "text": "spoof attempt",
+            "from_workspace": spoof_path,
+        }));
+        let resp = tokio::task::spawn_blocking(move || {
+            crate::caller_workspace::with_request_principal(Some(principal), || {
+                handle_send(&send_body)
+            })
+        })
+        .await
+        .unwrap();
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        assert_eq!(
+            resp.status, "403 Forbidden",
+            "spoofed from_workspace must be ignored; principal workspace has no connection: {}",
+            resp.body
+        );
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(
+            v["error"]["code"], "not_connected",
+            "must gate on principal workspace, not body spoof: {}",
+            resp.body
+        );
+    }
+
+    #[test]
+    fn pr1_scoped_allowlist_admits_send_surface_not_pair_confirm() {
+        // A5.3: scoped cannot pair/confirm (allowlist); peers/roster/send ok.
+        use crate::session_token::is_agent_verb;
+        assert!(is_agent_verb("/cli/federation/peers"));
+        assert!(is_agent_verb("/cli/federation/peer-roster"));
+        assert!(is_agent_verb("/cli/federation/send"));
+        assert!(!is_agent_verb("/cli/federation/pair/confirm"));
+        assert!(!is_agent_verb("/cli/federation/pair/request"));
+        assert!(!is_agent_verb("/cli/federation/outbox"));
     }
 }

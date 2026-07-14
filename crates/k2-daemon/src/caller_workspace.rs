@@ -193,32 +193,83 @@ pub const PRINCIPAL_BOUND_KEY: &str = "principal_bound";
 ///
 /// Shared by the cell UDS server and the HTTP mail/DNS arms so identity
 /// stamping is not unix-only.
+///
+/// **`from` is the chat display name**, not the passport key.
+/// Canonical agent sessions mint with `agent_address == projects.id`
+/// (bare UUID). That UUID must stay on `project_id` for peer gates and
+/// grants; stamping it into `from` made recipients see
+/// `[from <uuid>]` instead of `[from ProposalWriter]`. Resolve the
+/// persona/workspace display name when the principal's path is known.
 pub fn stamp_principal(
     params: &mut std::collections::HashMap<String, String>,
     principal: &HookPrincipal,
 ) {
-    params.insert("from".to_string(), principal.agent_address.clone());
     params.insert("project_id".to_string(), principal.workspace_uuid.clone());
     params.insert(PRINCIPAL_BOUND_KEY.to_string(), "1".to_string());
 
     let uuid = principal.workspace_uuid.trim();
     if uuid.is_empty() {
+        params.insert(
+            "from".to_string(),
+            display_from_for_principal(principal, None),
+        );
         params.remove("project");
         params.remove("project_path");
         return;
     }
     match crate::workspace_msg::resolve_workspace(uuid) {
         Some(path) => {
+            params.insert(
+                "from".to_string(),
+                display_from_for_principal(principal, Some(&path)),
+            );
             params.insert("project".to_string(), path.clone());
             params.insert("project_path".to_string(), path);
         }
         None => {
             // Fail closed: never let a body-supplied operand survive an
-            // unresolvable principal.
+            // unresolvable principal. Still stamp a non-UUID `from` so
+            // chat attribution does not fall through as a passport id.
+            params.insert(
+                "from".to_string(),
+                display_from_for_principal(principal, None),
+            );
             params.remove("project");
             params.remove("project_path");
         }
     }
+}
+
+/// Chat/display `from` for a stamped principal.
+///
+/// Prefer the workspace's agent display name (`display_name:` → `name:`
+/// → `projects.name`). Fall back to `agent_address` only when it is a
+/// non-empty, non-UUID label (legacy / ad-hoc mints). Never prefer a
+/// bare UUID — that is the passport key, not the human name.
+fn display_from_for_principal(principal: &HookPrincipal, path: Option<&str>) -> String {
+    if let Some(path) = path {
+        let name = k2_core::workspace::display::agent_display_name(path);
+        if !name.trim().is_empty() {
+            return name;
+        }
+    }
+    let addr = principal.agent_address.trim();
+    if !addr.is_empty() && !is_uuid_shape(addr) {
+        return addr.to_string();
+    }
+    "agent".to_string()
+}
+
+fn is_uuid_shape(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b[8] == b'-'
+        && b[13] == b'-'
+        && b[18] == b'-'
+        && b[23] == b'-'
+        && s.bytes()
+            .enumerate()
+            .all(|(i, c)| matches!(i, 8 | 13 | 18 | 23) || c.is_ascii_hexdigit())
 }
 
 /// Build a principal from a stamped param map (`principal_bound=1` +
@@ -410,5 +461,59 @@ mod tests {
 
         cleanup(a_id);
         cleanup(b_id);
+    }
+
+    #[test]
+    fn stamp_from_uses_display_name_not_passport_uuid() {
+        // Canonical agent mints agent_address == projects.id (passport key).
+        // Chat `[from …]` must show the human name (projects.name / persona).
+        let _ = k2_core::db::init_for_tests();
+        let id = "56565656-5656-5656-5656-565656565656";
+        let path = "/tmp/k2-caller-ws-ProposalWriter";
+        seed_project(id, path, "ProposalWriter");
+
+        let principal = HookPrincipal {
+            workspace_uuid: id.to_string(),
+            // The live bug shape: agent_address is the bare project UUID.
+            agent_address: id.to_string(),
+        };
+        let mut params = HashMap::new();
+        params.insert("from".to_string(), "FORGED".to_string());
+        params.insert("workspace".to_string(), "Cortana".to_string());
+        stamp_principal(&mut params, &principal);
+
+        assert_eq!(
+            params.get("from").map(String::as_str),
+            Some("ProposalWriter"),
+            "chat from must be display name, not passport uuid"
+        );
+        assert_eq!(
+            params.get("project_id").map(String::as_str),
+            Some(id),
+            "passport/workspace uuid stays on project_id for gates"
+        );
+        assert_eq!(
+            params.get("workspace").map(String::as_str),
+            Some("Cortana"),
+            "recipient routing untouched"
+        );
+
+        cleanup(id);
+    }
+
+    #[test]
+    fn stamp_from_falls_back_to_non_uuid_agent_address() {
+        let _ = k2_core::db::init_for_tests();
+        let principal = HookPrincipal {
+            workspace_uuid: "00000000-0000-0000-0000-000000000099".to_string(),
+            agent_address: "sms-bridge".to_string(),
+        };
+        let mut params = HashMap::new();
+        stamp_principal(&mut params, &principal);
+        assert_eq!(
+            params.get("from").map(String::as_str),
+            Some("sms-bridge"),
+            "unresolvable principal with a label keeps the label"
+        );
     }
 }

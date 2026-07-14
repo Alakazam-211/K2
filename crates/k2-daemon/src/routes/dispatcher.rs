@@ -772,8 +772,9 @@ async fn handle_one_request(
             // arm below 404s every `/cli/federation/*` path unless
             // K2_FEDERATION is on, so listing them here is inert in a shipped
             // build. `pair/request` is UNAUTH (creates only Pending);
-            // `pair/confirm`/`send` are owner-gated; `inbound` is authenticated
-            // by the signed envelope itself (require_peer), NOT a token. Method-
+            // `pair/confirm` is owner-or-admin; `send` is dual-auth
+            // (owner-or-admin OR scoped passport, PR1); `inbound` is
+            // envelope-authenticated (require_peer), NOT a token. Method-
             // gated per-handler below (require_post). The `roster` read is a GET.
             | "/cli/federation/pair/request"
             | "/cli/federation/pair/confirm"
@@ -4244,13 +4245,11 @@ async fn handle_one_request(
         // path here 404s exactly as if the routes didn't exist — zero behavior
         // change. Routes: pair/request (UNAUTH → creates only Pending),
         // pair/confirm (owner SAS confirm → Trusted), inbound (envelope-
-        // authenticated ingress → deliver to INBOX ONLY), send (owner-gated
-        // outbound seal+dial), roster (GET stub). Each mutating route starts
-        // with `if !is_post { 405 }` via require_post (the top-level dispatch
-        // lets a GET through on POST-allowlisted routes; see
-        // feedback_post_only_route_guards). Auth model is DECISION-2: inbound is
-        // authenticated by the SIGNED ENVELOPE (require_peer inside the
-        // handler), never a token; confirm/send take the owner token.
+        // authenticated ingress), send / peers / peer-roster (PR1 dual-auth:
+        // owner-or-admin OR scoped passport), roster (peer signed challenge).
+        // Auth model is DECISION-2: inbound is authenticated by the SIGNED
+        // ENVELOPE (require_peer inside the handler), never a token.
+        // pair/confirm/outbox/pubkey stay owner-or-admin only.
         p if p.starts_with("/cli/federation/") => {
             if !k2_core::federation::enabled() {
                 let _ = stream.read(&mut buf).await;
@@ -4281,6 +4280,7 @@ async fn handle_one_request(
                     }
                     // Owner-or-admin gated: a remote owner/admin connect-user
                     // session may confirm peers; a Member session must NOT.
+                    // Scoped passports are NOT admitted (R5 / PR1 non-goal).
                     if !super::http::require_owner_or_admin(
                         &mut *stream,
                         &mut buf,
@@ -4317,23 +4317,33 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    // Local actor initiates outbound → owner-or-admin required
-                    // (a remote owner/admin connect-user may send; a Member may
-                    // not).
-                    if !super::http::require_owner_or_admin(
-                        &mut *stream,
-                        &mut buf,
+                    // PR1 dual-auth: owner-or-admin OR scoped passport (agent
+                    // verbs allowlist). Member connect-users stay barred.
+                    // Principal is installed so handle_send forces
+                    // from_workspace (Wave 0 PR-C binding).
+                    let (auth_ok, scoped_principal) = owner_or_admin_or_scoped_hook_auth(
+                        p,
                         &query,
+                        bearer_token.as_deref(),
                         state.token.as_str(),
-                    )
-                    .await
-                    {
+                    );
+                    if !auth_ok {
+                        let _ = stream.read(&mut buf).await;
+                        super::http::send_response(
+                            &mut *stream,
+                            "403 Forbidden",
+                            "application/json",
+                            r#"{"error":"invalid or missing token"}"#,
+                        )
+                        .await;
                         return DispatchOutcome::Done;
                     }
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     // Blocking: seal + durable enqueue + network dial.
                     tokio::task::spawn_blocking(move || {
-                        crate::federation_routes::handle_send(&body)
+                        crate::caller_workspace::with_request_principal(scoped_principal, || {
+                            crate::federation_routes::handle_send(&body)
+                        })
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
@@ -4374,11 +4384,17 @@ async fn handle_one_request(
                     }
                 }
                 "/cli/federation/peers" => {
-                    // GET, OWNER-or-ADMIN-gated (local convenience for the
-                    // renderer's cross-server picker). A Member connect-user
-                    // session must NOT see the pinned-peer list.
+                    // GET, dual-auth (PR1): owner-or-admin OR scoped passport
+                    // so agents can resolve peers for k2 msg <agent>@host.
+                    // Member connect-users stay barred (not token_ok).
                     let _ = stream.read(&mut buf).await;
-                    if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                    let (auth_ok, _) = owner_or_admin_or_scoped_hook_auth(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    );
+                    if !auth_ok {
                         crate::cli_response::CliResponse::forbidden()
                     } else {
                         tokio::task::spawn_blocking(crate::federation_routes::handle_peers)
@@ -4401,12 +4417,17 @@ async fn handle_one_request(
                     }
                 }
                 "/cli/federation/peer-roster" => {
-                    // GET, OWNER-gated. The LOCAL daemon dials a PAIRED peer's
-                    // signed roster GET and returns its agent projection so the
-                    // renderer can populate the dropdown. Blocking (network).
-                    // OWNER-or-ADMIN-gated; a Member session must NOT.
+                    // GET, dual-auth (PR1): owner-or-admin OR scoped passport
+                    // so agents can resolve workspace_id for federation send.
+                    // Member connect-users stay barred.
                     let _ = stream.read(&mut buf).await;
-                    if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                    let (auth_ok, _) = owner_or_admin_or_scoped_hook_auth(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    );
+                    if !auth_ok {
                         crate::cli_response::CliResponse::forbidden()
                     } else {
                         let params = super::http::parse_params(&path, &query);
@@ -4978,6 +4999,32 @@ fn token_or_scoped_hook_auth(
     if super::http::token_ok(query, owner_token) {
         return (true, None);
     }
+    scoped_hook_auth(path, query, bearer)
+}
+
+/// PR1 federation dual-auth: **owner-or-admin** OR a scoped passport on an
+/// agent-verb path. Stricter than [`token_or_scoped_hook_auth`] — Member
+/// connect-user sessions do NOT pass (pair/peers/send historically barred
+/// Members; passport path is the agent restoration, not a Member widen).
+fn owner_or_admin_or_scoped_hook_auth(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+    owner_token: &str,
+) -> (bool, Option<crate::session_token::HookPrincipal>) {
+    if super::http::token_is_owner_or_admin(query, owner_token) {
+        return (true, None);
+    }
+    scoped_hook_auth(path, query, bearer)
+}
+
+/// Shared scoped-passport arm of dual-auth helpers: Bearer header or
+/// `?token=` must pass [`session_token::require_hook`] for `path`.
+fn scoped_hook_auth(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+) -> (bool, Option<crate::session_token::HookPrincipal>) {
     let presented = bearer
         .filter(|s| !s.is_empty())
         .or_else(|| super::http::extract_token(query))

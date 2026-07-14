@@ -358,6 +358,9 @@ _uds_eligible() {
         /cli/dns/*) return 0 ;;
         # C1 — connections list/add/remove (mutate toggle-gated server-side).
         /cli/connections) return 0 ;;
+        # PR1 federation dual-auth — peers/peer-roster/send under passport.
+        # pair/confirm stay TCP owner-or-admin only (not here).
+        /cli/federation/peers|/cli/federation/peer-roster|/cli/federation/send) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -456,29 +459,76 @@ cmd_respond() {
 # reachable over the tunnel with the owner token.
 _REMOTE_HOST=""
 _BARE_TARGET=""
-# Split `<target>[@<host>]` into the globals _BARE_TARGET (workspace[/agent],
-# @host stripped) and _REMOTE_HOST (the host, or "" when local). Sets GLOBALS
-# rather than echoing — callers MUST invoke it directly (NOT in a "$(...)"
-# command substitution, which runs in a subshell and would drop the global).
-# Split on the LAST '@' so `ai@ws@host` still peels the host cleanly.
+# PR2 addressing flags (set by _split_remote_target):
+#   _IS_WIRE_FORM=1   → 3-part fp::ws::agent (fed send only)
+#   _USED_LEGACY_AT=1 → peeled via legacy agent@host
+_IS_WIRE_FORM=0
+_USED_LEGACY_AT=0
+# One-shot stderr hint when agents use @ federated form (prefer ::).
+_FED_AT_HINT_SHOWN=0
+# Split a remote user address into globals:
+#   _BARE_TARGET  — agent/workspace token (host stripped)
+#   _REMOTE_HOST  — host, or "" when local
+#   _IS_WIRE_FORM / _USED_LEGACY_AT — see above
+# Callers MUST invoke it directly (NOT in a "$(...)" subshell).
+#
+# Grammar (PR2 / GH #47):
+#   agent::host.k2.dev  → user remote (2-part ::, host looks like host)
+#   agent@host          → legacy user remote
+#   fp::ws::agent       → wire form (3-part; not peeled as user remote)
+#   bare name           → local
 _split_remote_target() {
     local raw="$1"
+    _REMOTE_HOST=""
+    _BARE_TARGET="$raw"
+    _IS_WIRE_FORM=0
+    _USED_LEGACY_AT=0
+
+    # 3+ part wire form: at least two '::' separators.
+    if [[ "$raw" == *::*::* ]]; then
+        _IS_WIRE_FORM=1
+        return
+    fi
+
+    # 2-part user form agent::host (RHS must look like a host).
+    if [[ "$raw" == *::* ]]; then
+        local left="${raw%%::*}"
+        local right="${raw#*::}"
+        if [ -n "$left" ] && [ -n "$right" ] && { [[ "$right" == *.* ]] || [[ "$right" == *.k2.dev ]] || [[ "$right" == *.K2.DEV ]]; }; then
+            _BARE_TARGET="$left"
+            _REMOTE_HOST="$right"
+            return
+        fi
+        # Not host-like → leave as bare local token.
+        return
+    fi
+
+    # Legacy agent@host (split on LAST '@').
     case "$raw" in
-        *@*) _REMOTE_HOST="${raw##*@}"; _BARE_TARGET="${raw%@*}" ;;
-        *)   _REMOTE_HOST="";           _BARE_TARGET="$raw" ;;
+        *@*)
+            _REMOTE_HOST="${raw##*@}"
+            _BARE_TARGET="${raw%@*}"
+            _USED_LEGACY_AT=1
+            ;;
     esac
 }
 
 # ── Cross-server agent msg over FEDERATION ────────────────────────────
-# `k2 msg <agent>@<host> "text"` routes a CONNECTED cross-server peer over
-# federation — the SAME verb agents use for a local peer. This is the
-# federation send-surface (gated on `is_remote_connection`), NOT the
-# owner-remote drive-the-box path that `k2 talk <ws>@<host>` uses.
+# `k2 msg <agent>::<host> "text"` (canonical) or legacy `agent@host` routes a
+# CONNECTED cross-server peer over federation — the SAME verb agents use for
+# a local peer. This is the federation send-surface (gated on
+# `is_remote_connection`), NOT the owner-remote drive-the-box path that
+# `k2 talk <ws>@<host>` uses.
+#
+# PR1: uses scoped passport via cli_send (UDS when eligible, else TCP with
+# TOKEN which for msg/ID is SCOPED_TOKEN — never disk-owner inversion).
+# Daemon forces from_workspace from principal when scoped.
+# PR2: prefer agent::host; wire form fp::ws::agent stays on `k2 fed send`.
 #
 # Args: <agent> <host> <text> <from_project>. Returns:
 #   0  delivered ("sent") or durably queued ("queued")
-#   2  actionable user error (fed off, no peer, not trusted, no agent,
-#      daemon "not a connection" 403/404)
+#   3  not_connected / forbidden (mail/C2 teaching parity)
+#   2  actionable user error (fed off, no peer, not trusted, no agent)
 #   1  unexpected/unparseable daemon response
 #
 # Steps: resolve the peer by matching "<subdomain>.k2.dev" == <host> in
@@ -490,44 +540,96 @@ _send_remote_msg() {
     local agent="$1" host="$2" text="$3" from_project="$4"
 
     if [ -z "$agent" ]; then
-        echo "k2 msg: empty agent name in '<agent>@<host>' target." >&2
+        echo "k2 msg: empty agent name in '<agent>::<host>' target." >&2
         return 2
     fi
     if [ -z "$host" ]; then
-        echo "k2 msg: empty host in '<agent>@<host>' target." >&2
+        echo "k2 msg: empty host in '<agent>::<host>' target." >&2
         return 2
     fi
 
+    # Optional one-shot compat hint when the caller used legacy @ form.
+    if [ "${_USED_LEGACY_AT:-0}" = "1" ] && [ "${_FED_AT_HINT_SHOWN:-0}" = "0" ]; then
+        echo "hint: prefer \`k2 msg ${agent}::${host}\` — '@' federated addresses are legacy compat (not email)." >&2
+        _FED_AT_HINT_SHOWN=1
+    fi
+
     # 1. Resolve the peer by host (subdomain.k2.dev == host) → fingerprint.
+    # cli_send: prefer cell UDS + scoped Bearer when present.
     local peers_json
-    peers_json=$(cli_request "/cli/federation/peers")
+    peers_json=$(cli_send cli_request "/cli/federation/peers")
     local pmatch
     pmatch=$(printf '%s' "$peers_json" | python3 -c '
 import json, sys
-host = sys.argv[1]
+host = (sys.argv[1] or "").strip().lower()
+# Accept bare subdomain or full host.k2.dev (and collapse accidental doubles).
+def bare(h):
+    h = (h or "").strip().lower()
+    while h.endswith(".k2.dev.k2.dev"):
+        h = h[: -len(".k2.dev")]
+    if h.endswith(".k2.dev"):
+        h = h[: -len(".k2.dev")]
+    return h
+want = bare(host)
 try:
     d = json.load(sys.stdin)
 except Exception:
     print("ERR\tparse"); sys.exit(0)
 if not isinstance(d, dict) or not isinstance(d.get("peers"), list):
     # federation off (404 {"error":...}) or unexpected shape
+    err = d.get("error") if isinstance(d, dict) else None
+    if isinstance(err, dict) and err.get("code") in ("forbidden", "not_connected"):
+        print("FORBIDDEN\t%s" % (err.get("hint") or err.get("code") or ""))
+        sys.exit(0)
+    if isinstance(d, dict) and d.get("error"):
+        print("NOFED\t%s" % (d.get("error") if not isinstance(d.get("error"), dict) else d["error"].get("hint") or d["error"]))
+        sys.exit(0)
     print("NOFED"); sys.exit(0)
 for p in d["peers"]:
     sub = p.get("subdomain") or ""
-    if sub and (sub + ".k2.dev") == host:
+    label = p.get("label") or ""
+    if want and bare(sub) == want:
         print("OK\t%s\t%s" % (p.get("fingerprint", ""), p.get("trust", "")))
         sys.exit(0)
-print("NONE")
+    # Also match full host forms stored as subdomain
+    if host and sub and sub.lower() in (host, host + ".k2.dev", want + ".k2.dev"):
+        print("OK\t%s\t%s" % (p.get("fingerprint", ""), p.get("trust", "")))
+        sys.exit(0)
+    if want and bare(label) == want:
+        print("OK\t%s\t%s" % (p.get("fingerprint", ""), p.get("trust", "")))
+        sys.exit(0)
+# List known peer hosts so the NONE error is actionable (GH #48).
+known = []
+for p in d["peers"]:
+    sub = (p.get("subdomain") or "").strip()
+    if sub:
+        known.append(sub if sub.endswith(".k2.dev") else sub + ".k2.dev")
+    elif p.get("label"):
+        known.append(str(p.get("label")))
+print("NONE\t%s" % (", ".join(known) if known else ""))
 ' "$host")
 
     local pkind fp trust
     IFS=$'\t' read -r pkind fp trust <<<"$pmatch"
     case "$pkind" in
+        FORBIDDEN)
+            # Scoped token rejected (should not happen post-PR1) or other gate.
+            printf '%s\n' "${fp:-forbidden}" >&2
+            return 3 ;;
         NOFED|ERR)
             echo "federation is off or unreachable on $host — enable it and pair first (k2 fed enable / k2 fed pair-request)." >&2
+            [ -n "$fp" ] && [ "$pkind" = "NOFED" ] && echo "detail: $fp" >&2
             return 2 ;;
         NONE)
-            echo "no paired peer for $host — pair it first (k2 fed pair-request / confirm), or check the host." >&2
+            # GH #48: inbound may have landed while this side never stored a
+            # return pin, or the host string doesn't match the peer's subdomain.
+            if [ -n "$fp" ]; then
+                echo "no paired peer matching $host — known peers: $fp" >&2
+                echo "hint: run \`k2 fed peers\` to inspect trust; if you received a message from this host but have no pin, complete pairing (k2 fed pair-request / confirm) so replies can go back." >&2
+            else
+                echo "no paired peer for $host — pair it first (k2 fed pair-request / confirm), or check the host." >&2
+                echo "hint: run \`k2 fed peers\` to list trusted servers on this machine." >&2
+            fi
             return 2 ;;
         OK) ;;
         *)
@@ -548,7 +650,7 @@ print("NONE")
 
     # 2. Resolve the agent's workspace_id from that peer's roster.
     local roster_json
-    roster_json=$(cli_request "/cli/federation/peer-roster" "peer=$(urlencode "$fp")")
+    roster_json=$(cli_send cli_request "/cli/federation/peer-roster" "peer=$(urlencode "$fp")")
     local rres
     rres=$(printf '%s' "$roster_json" | python3 -c '
 import json, sys
@@ -560,10 +662,16 @@ except Exception:
 if not isinstance(d, dict):
     print("ERR\t"); sys.exit(0)
 if "error" in d:
-    print("ERR\t%s" % d.get("error", "")); sys.exit(0)
+    err = d.get("error")
+    if isinstance(err, dict) and err.get("code") in ("forbidden", "not_connected"):
+        print("FORBIDDEN\t%s" % (err.get("hint") or err.get("code") or ""))
+        sys.exit(0)
+    print("ERR\t%s" % (err if not isinstance(err, dict) else err.get("hint") or err.get("code") or err))
+    sys.exit(0)
 roster = d.get("roster") or {}
 agents = roster.get("agents") or []
-matches = [a for a in agents if a.get("agent") == agent]
+agent_lc = (agent or "").strip().lower()
+matches = [a for a in agents if (a.get("agent") or "").strip().lower() == agent_lc]
 if not matches:
     names = ", ".join(a.get("agent", "?") for a in agents)
     print("NONE\t%s" % names); sys.exit(0)
@@ -578,6 +686,14 @@ print("OK\t%s" % (matches[0].get("workspace_id", "") or ""))
     rdetail="${rres#*$'\t'}"
     [ "$rdetail" = "$rres" ] && rdetail=""
     case "$rkind" in
+        FORBIDDEN)
+            # Teaching JSON shape parity with local msg/read exit 3.
+            python3 -c 'import json,sys
+hint=sys.argv[1] or "forbidden"
+sys.stderr.write(json.dumps({"error":{"code":"forbidden","hint":hint}},
+                            ensure_ascii=False,separators=(",",":"))+"\n")
+' "$rdetail" 2>/dev/null || echo "${rdetail:-forbidden}" >&2
+            return 3 ;;
         ERR)
             echo "could not reach $host's roster: ${rdetail:-$roster_json}" >&2
             return 2 ;;
@@ -603,12 +719,15 @@ print("OK\t%s" % (matches[0].get("workspace_id", "") or ""))
     fi
 
     # 3. Send. Build the body safely with python3 (mirrors cmd_fed send).
+    # from_workspace is best-effort for owner path; scoped principal forces it
+    # server-side from the passport (body spoof ignored).
     local body resp
     body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' \
         "${fp}::${wsid}::${agent}" "$text" "$from_project")
-    resp=$(cli_post_json "/cli/federation/send" "$body")
+    resp=$(cli_send cli_post_json "/cli/federation/send" "$body")
 
     # 4. Surface the response.
+    # not_connected / forbidden → exit 3 + teaching (mail/C2 parity).
     local sres skind sdetail
     sres=$(printf '%s' "$resp" | python3 -c '
 import json, sys
@@ -618,13 +737,23 @@ except Exception:
     print("RAW"); sys.exit(0)
 if not isinstance(d, dict):
     print("RAW"); sys.exit(0)
-if "error" in d:
-    print("ERROR\t%s" % d.get("error", "")); sys.exit(0)
+err = d.get("error")
+if isinstance(err, dict):
+    code = err.get("code") or ""
+    hint = err.get("hint") or code
+    if code in ("not_connected", "gated", "forbidden"):
+        # Emit teaching JSON on stderr via GATE line; CLI maps to exit 3.
+        print("GATE\t%s\t%s" % (code, hint)); sys.exit(0)
+    print("ERROR\t%s" % (hint or code or err)); sys.exit(0)
+if err is not None and not isinstance(err, dict):
+    print("ERROR\t%s" % err); sys.exit(0)
 st = d.get("status", "")
 if st == "sent":
     print("SENT"); sys.exit(0)
 if st == "queued":
     print("QUEUED\t%s" % (d.get("hint", "") or "")); sys.exit(0)
+if st == "declined":
+    print("ERROR\t%s" % (d.get("reason") or "declined by peer")); sys.exit(0)
 print("OTHER")
 ')
     skind="${sres%%$'\t'*}"
@@ -632,11 +761,23 @@ print("OTHER")
     [ "$sdetail" = "$sres" ] && sdetail=""
     case "$skind" in
         SENT)
-            echo "delivered to ${agent}@${host} (federation)"
+            echo "delivered to ${agent}::${host} (federation)"
             return 0 ;;
         QUEUED)
-            echo "${sdetail:-queued for ${agent}@${host} — peer briefly unreachable, will deliver when it reconnects (federation)}" >&2
+            echo "${sdetail:-queued for ${agent}::${host} — peer briefly unreachable, will deliver when it reconnects (federation)}" >&2
             return 0 ;;
+        GATE)
+            # sdetail is "code\thint" after first tab split above left "code\thint"
+            local gcode ghint
+            gcode="${sdetail%%$'\t'*}"
+            ghint="${sdetail#*$'\t'}"
+            [ "$ghint" = "$sdetail" ] && ghint="$gcode"
+            python3 -c 'import json,sys
+code,hint=sys.argv[1],sys.argv[2]
+sys.stderr.write(json.dumps({"error":{"code":code,"hint":hint}},
+                            ensure_ascii=False,separators=(",",":"))+"\n")
+' "$gcode" "$ghint"
+            return 3 ;;
         ERROR)
             echo "${sdetail:-$resp}" >&2
             return 2 ;;
@@ -3925,12 +4066,19 @@ cmd_msg() {
         exit 1
     }
 
-    # Cross-server peer: `k2 msg <agent>@<host> "text"` routes a CONNECTED
-    # remote peer over federation (same verb as a local peer). Only the
-    # @host form diverts here; the local-workspace path below is untouched
-    # when _REMOTE_HOST is empty. (cmd_talk's @host is a different,
-    # owner-remote path and is intentionally NOT unified here.)
+    # Cross-server peer: `k2 msg <agent>::<host> "text"` (or legacy @)
+    # routes a CONNECTED remote peer over federation (same verb as a local
+    # peer). Wire form `fp::ws::agent` is for `k2 fed send` only — teach.
+    # Local-workspace path below is untouched when _REMOTE_HOST is empty.
+    # (cmd_talk's @host is a different, owner-remote path and is
+    # intentionally NOT unified here.)
     _split_remote_target "$target"
+    if [ "${_IS_WIRE_FORM:-0}" = "1" ]; then
+        echo "k2 msg: '${target}' looks like federation wire form (<fp>::<workspace>::<agent>)." >&2
+        echo "  For agents use the user form:  k2 msg <agent>::<host> \"text\"" >&2
+        echo "  Wire form is for:              k2 fed send <fp>::<ws>::<agent> \"text\"" >&2
+        return 2
+    fi
     if [ -n "$_REMOTE_HOST" ]; then
         _send_remote_msg "$_BARE_TARGET" "$_REMOTE_HOST" "$text" "$PROJECT"
         return $?
@@ -3947,11 +4095,26 @@ cmd_msg() {
     # empty string, so the recipient PTY always sees a [from ...] prefix.
     local from="$explicit_from"
     if [[ -z "$from" ]]; then
+        # Prefer the agent display name (persona / projects.name) so the
+        # recipient sees [from ProposalWriter], never a passport UUID.
+        # Scoped UDS stamps also rewrite server-side; this covers TCP /
+        # owner-token fallbacks and keeps CLI self-attribution correct.
         local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
         if [[ -n "$sender_path" ]]; then
             local sender_name
-            sender_name=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$sender_path")" 2>/dev/null \
-                | python3 -c 'import json,sys,os
+            sender_name=$(cli_request "/cli/workspace/agent-display-name" \
+                "project=$(urlencode "$sender_path")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    name = (d.get("display_name") or "").strip()
+    if name:
+        print(name)
+except Exception:
+    pass' 2>/dev/null)
+            if [[ -z "$sender_name" ]]; then
+                sender_name=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$sender_path")" 2>/dev/null \
+                    | python3 -c 'import json,sys,os
 try:
     data = json.load(sys.stdin)
     path = data.get("path","")
@@ -3959,6 +4122,7 @@ try:
         print(os.path.basename(path.rstrip("/")))
 except Exception:
     pass' 2>/dev/null)
+            fi
             from="${sender_name:-external}"
         else
             from="external"
@@ -4666,7 +4830,7 @@ if as_json:
     }
     for c in conns:
         if c.get('remote'):
-            addr = c.get('address') or ('%s@%s' % (c.get('agent', '?'), c.get('host', '?')))
+            addr = c.get('address') or ('%s::%s' % (c.get('agent', '?'), c.get('host', '?')))
             out['connections'].append({
                 'name': addr,
                 'kind': 'remote',
@@ -4689,7 +4853,7 @@ if not conns:
     print('  (none)')
 for c in conns:
     if c.get('remote'):
-        addr = c.get('address') or ('%s@%s' % (c.get('agent', '?'), c.get('host', '?')))
+        addr = c.get('address') or ('%s::%s' % (c.get('agent', '?'), c.get('host', '?')))
         print('  - %s   (remote)' % addr)
     else:
         flag = '' if c.get('reachable', True) else '  [UNREACHABLE — project missing or path gone]'
@@ -6221,7 +6385,7 @@ cmd_help() {
 
 cmd_help_msg() {
     cat <<'EOF'
-k2 msg <workspace> "text" [--from <name>] [--command "<text>"] [--no-wake]
+k2 msg <workspace|agent::host> "text" [--from <name>] [--command "<text>"] [--no-wake]
 
 Deliver a message to a workspace's agent, live. By DEFAULT msg AUTO-WAKES
 a dormant canonical session: if the agent's session is asleep, msg
@@ -6232,8 +6396,12 @@ configured agent returns `no_agent_mode` and is never spawned. Returns
 success only when the message has landed in the agent's session.
 
 ARGUMENTS
-  <workspace>    Workspace name (preferred — see `k2 connections list`).
-                 Absolute path or project UUID also accepted.
+  <workspace>    Local workspace name (preferred — see `k2 connections
+                 list`), absolute path, or project UUID.
+  <agent>::<host>
+                 Federated peer (GH #47). Example: ProposalWriter::box.k2.dev
+                 Legacy agent@host still works temporarily (not email).
+                 Wire form fp::ws::agent is for `k2 fed send` only.
   "text"         The message body. Wrap in quotes if it has spaces.
 
 OPTIONS
@@ -6311,6 +6479,7 @@ EXAMPLES
   k2 msg scout_v3 "keep going" --command "/loop"
   k2 msg scout_v3 "wake up and check in" --wake
   k2 msg /Users/me/work/MyApp "deploy completed"
+  k2 msg peer::other.k2.dev "ping from federation"
 EOF
 }
 
@@ -6522,9 +6691,9 @@ cmd_schema() {
   "commands": [
     {
       "name": "msg",
-      "usage": "k2 msg <workspace> \"text\" [--from <name>] [--command \"<text>\"]",
-      "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; use --inbox for long content.",
-      "args": [{"name": "workspace", "required": true}, {"name": "text", "required": true}],
+      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"]",
+      "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; use --inbox for long content. Federated peers: agent::host (prefer) or legacy agent@host — never mail. Wire form fp::ws::agent is k2 fed send only.",
+      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or federated agent::host"}, {"name": "text", "required": true}],
       "flags": [
         {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
         {"name": "--command", "arg": "text", "description": "Prepend text (e.g. a slash-command) at the very front of the delivered line."},
@@ -7924,7 +8093,8 @@ k2 connections [list|add|remove] [workspace-name] [--json]
 Manage this workspace's connections to other workspaces (agents).
 
   list [--json]     List connections for this workspace (exit 0)
-  add <name>        Connect to another workspace (name, path, or <agent>@<host>)
+  add <name>        Connect to another workspace (name, path, or <agent>::<host>)
+                    Legacy <agent>@<host> still accepted.
   remove <name>     Disconnect from a workspace
 
 AGENT GATE (create / remove)
@@ -7944,6 +8114,7 @@ EXAMPLES
   k2 connections list
   k2 connections list --json
   k2 connections add "QA Bot"
+  k2 connections add peer::other.k2.dev
   k2 connections remove scout
 EOF
 }
@@ -10224,11 +10395,12 @@ with one shared chat + one PoC agent (see PROJECTS below).
 
 TALK TO OTHERS
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
+  msg <agent>::<host> "text"            Federated peer (prefer ::; legacy agent@host ok; not email)
   msg <workspace> "text" --inbox        Drop in their inbox (email — async, no length limit)
   msg <workspace> --signal <kind> ...   Emit a typed signal (advanced)
   read <workspace> [--lines N]          Read their live terminal (peek before you inject)
   connections list [--json]             Connected workspaces (bidirectional)
-  connections add <path>                Connect (agent: gated; exit 3 when disabled)
+  connections add <path|agent::host>    Connect (agent: gated; exit 3 when disabled)
   connections remove <name>             Disconnect (same agent create/remove gate)
 
 YOUR INBOX
@@ -10648,7 +10820,7 @@ cmd_fed() {
             # GAP #3: carry the SOURCE workspace ($PROJECT, resolved at the
             # top of this script from K2_PROJECT_PATH/CWD — same source
             # cmd_connections uses). The daemon GATES the cross-daemon send
-            # on `is_remote_connection(from_workspace, <agent>@<host>)`:
+            # on `is_remote_connection(from_workspace, <agent>::<host>)`:
             # an agent may only message a peer its workspace is connected
             # to. (Owner-remote `k2 talk` is a different, ungated path.)
             local body
@@ -10755,6 +10927,39 @@ try:
 except Exception:
     sys.stderr.write('k2 fed status: unexpected response from /cli/settings/get\n'); sys.exit(1)"
             ;;
+        peers)
+            # GH #48 — list pinned federation peers so asymmetric trust is
+            # visible (and k2 msg can name hosts that match). Dual-auth:
+            # owner token or agent passport via cli_send.
+            cli_send cli_request "/cli/federation/peers" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.stderr.write('k2 fed peers: could not parse response\n'); sys.exit(1)
+if isinstance(d, dict) and d.get('error'):
+    err = d['error']
+    if isinstance(err, dict):
+        sys.stderr.write('k2 fed peers: %s\n' % (err.get('hint') or err.get('code') or err))
+    else:
+        sys.stderr.write('k2 fed peers: %s\n' % err)
+    sys.exit(1)
+peers = d.get('peers', []) if isinstance(d, dict) else []
+if not peers:
+    print('No federation peers pinned on this server.')
+    print('Pair with: k2 fed pair-request / k2 fed confirm (or Settings → Connections auto-pair).')
+    sys.exit(0)
+print('Peers (%d):' % len(peers))
+for p in peers:
+    sub = (p.get('subdomain') or '').strip()
+    host = (sub + '.k2.dev') if sub and not sub.endswith('.k2.dev') else (sub or '—')
+    label = p.get('label') or ''
+    trust = p.get('trust') or '?'
+    fp = (p.get('fingerprint') or '')[:16]
+    extra = ('  label=%s' % label) if label else ''
+    print('  %s  trust=%s  fp=%s…%s' % (host, trust, fp, extra))
+"
+            ;;
         outbox)
             # The truthful surface for the outbox drain: per peer, how many
             # cross-server messages are still QUEUED (waiting for the peer to
@@ -10790,8 +10995,9 @@ for p in peers:
 print(f\"total queued: {d.get('total_queued',0)}\")"
             ;;
         *)
-            echo "usage: k2 fed <enable|disable|status|pubkey|send|outbox|pair-request|confirm> ..." >&2
+            echo "usage: k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-request|confirm> ..." >&2
             echo "  enable/disable/status: flip the persisted federation switch (headless-friendly)" >&2
+            echo "  peers: list pinned servers (use their host with k2 msg agent::host)" >&2
             echo "  send/outbox/pair-request/confirm need federation ON; pubkey works anytime" >&2
             echo "  outbox: queued + dead-lettered cross-server messages per peer" >&2
             exit 2

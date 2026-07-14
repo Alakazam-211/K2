@@ -20,7 +20,7 @@
 //! phase A4.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use k2_core::log_debug;
 use k2_core::session::SessionId;
@@ -707,9 +707,28 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     // REJECTION) ships separately. Socket bound + served AFTER spawn below.
     {
         let pane_id = session_id_for_response.to_string();
+        // Chat attribution (`[from …]`) reads agent_address via stamp.
+        // Canonical sessions use bare project UUID as agent_name — that
+        // must NOT become the chat label. Mint the human display name
+        // (persona / projects.name / folder basename) when we can.
+        let workspace_uuid = scoped_principal_workspace(&req.agent_name, &req.cwd);
+        let agent_address = {
+            let display = k2_core::workspace::display::agent_display_name(&req.cwd);
+            if !display.trim().is_empty() && !is_uuid_shape(display.trim()) {
+                display
+            } else if !req.agent_name.is_empty() && !is_uuid_shape(&req.agent_name) {
+                req.agent_name.clone()
+            } else {
+                Path::new(&req.cwd)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .filter(|s| !s.trim().is_empty() && !is_uuid_shape(s.trim()))
+                    .unwrap_or_else(|| "agent".to_string())
+            }
+        };
         let principal = crate::session_token::HookPrincipal {
-            workspace_uuid: scoped_principal_workspace(&req.agent_name, &req.cwd),
-            agent_address: req.agent_name.clone(),
+            workspace_uuid,
+            agent_address,
         };
         // B3a — resolve the credential mode + per-workspace key HOST-SIDE.
         // The cell NEVER chooses its mode/key. ApiKey is the only built mode

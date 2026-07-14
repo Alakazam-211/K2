@@ -7,8 +7,13 @@ import {
   addRemoteConnection,
   removeRemoteConnection,
   listRemoteConnections,
-  parseAgentAtHost,
+  listFederationPeers,
+  trustedPeers,
+  fetchPeerRoster,
+  formatAgentHost,
   type RemoteConnectionEntry,
+  type FederationPeer,
+  type RosterAgent,
 } from '@/lib/federation'
 import { agentDisplayName, setAgentDisplayName } from '@/lib/workspace-agent'
 import { useSettingsStore } from '@/stores/settings'
@@ -2689,17 +2694,21 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
   const [relations, setRelations] = useState<WorkspaceRelation[]>([])
   const [incoming, setIncoming] = useState<WorkspaceRelation[]>([])
   const [loading, setLoading] = useState(true)
-  const [showAdd, setShowAdd] = useState(false)
   const [adding, setAdding] = useState(false)
   const [search, setSearch] = useState('')
-  // GAP #3: REMOTE (cross-daemon) connections for this source workspace +
-  // any error surfaced from the owner-driven auto-pair/add flow.
+  const [showLocalAdd, setShowLocalAdd] = useState(false)
+  const [showFedAdd, setShowFedAdd] = useState(false)
+  // Federated add wizard: pick trusted server → pick agent from their roster
+  const [fedPeers, setFedPeers] = useState<FederationPeer[]>([])
+  const [fedPeersAvailable, setFedPeersAvailable] = useState(true)
+  const [selectedPeerFp, setSelectedPeerFp] = useState('')
+  const [rosterAgents, setRosterAgents] = useState<RosterAgent[]>([])
+  const [rosterLoading, setRosterLoading] = useState(false)
   const [remoteConns, setRemoteConns] = useState<RemoteConnectionEntry[]>([])
   const [remoteError, setRemoteError] = useState<string | null>(null)
+  const [localError, setLocalError] = useState<string | null>(null)
   const projects = useProjectsStore((s) => s.projects)
 
-  // The source workspace's filesystem PATH — the key the `/cli/connections`
-  // remote API addresses (it stores remote rows per source workspace path).
   const sourcePath = useMemo(
     () => projects.find((p) => p.id === projectId)?.path ?? '',
     [projects, projectId],
@@ -2708,14 +2717,8 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
   const fetchRelations = useCallback(async () => {
     try {
       const [outgoing, inc, remote] = await Promise.all([
-        // Host-aware: read through the daemon so the "Connected Workspaces"
-        // panel works when driving a remote K2 Connect host (the LOCAL
-        // Tauri invoke misfired against a remote daemon). Mirrors the
-        // host-aware relations/create + relations/delete writes.
         daemonCliGet<WorkspaceRelation[]>('relations/list', { project_id: projectId }),
         daemonCliGet<WorkspaceRelation[]>('relations/list-incoming', { project_id: projectId }),
-        // GAP #3: remote (`<agent>@<host>`) connections live in a separate
-        // store keyed by the source workspace PATH — best-effort, [] on fail.
         listRemoteConnections(sourcePath),
       ])
       setRelations(outgoing)
@@ -2734,276 +2737,244 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
     fetchRelations()
   }, [fetchRelations])
 
-  // Projects available for connecting (exclude self and already-connected, sorted alphabetically)
-  const connectedIds = useMemo(() => new Set(relations.map((r) => r.targetProjectId)), [relations])
-  const availableProjects = useMemo(
-    () => projects
-      .filter((p) => p.id !== projectId && !connectedIds.has(p.id))
-      .sort((a, b) => a.name.localeCompare(b.name)),
-    [projects, projectId, connectedIds]
-  )
-  const filteredProjects = useMemo(
-    () => search.trim()
-      ? availableProjects.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()))
-      : availableProjects,
-    [availableProjects, search]
-  )
-
-  const handleAdd = useCallback(async (targetProjectId: string) => {
-    setAdding(true)
-    try {
-      await daemonCliPost('relations/create', { source_project_id: projectId, target_project_id: targetProjectId })
-      setShowAdd(false)
-      await fetchRelations()
-    } catch (e) {
-      console.error('[connected-workspaces] Create failed:', e)
-    } finally {
-      setAdding(false)
+  // Load trusted federation peers when the federated-add panel opens
+  useEffect(() => {
+    if (!showFedAdd) return
+    let cancelled = false
+    void (async () => {
+      const res = await listFederationPeers()
+      if (cancelled) return
+      setFedPeersAvailable(res.available)
+      setFedPeers(res.available ? trustedPeers(res.data) : [])
+    })()
+    return () => {
+      cancelled = true
     }
-  }, [projectId, fetchRelations])
+  }, [showFedAdd])
 
-  const handleRemove = useCallback(async (id: string) => {
-    try {
-      await daemonCliPost('relations/delete', { id })
-      await fetchRelations()
-    } catch (e) {
-      console.error('[connected-workspaces] Delete failed:', e)
-    }
-  }, [fetchRelations])
-
-  // GAP #3: when the typed search looks like `<agent>@<host>` it's a REMOTE
-  // agent, not a local workspace — surface an explicit "add remote" affordance
-  // instead of "no matching workspaces". Owner-only on the daemon side
-  // (pubkey/pair-confirm are owner-gated) — no readily-available client role
-  // signal here, so we rely on the daemon's owner-gating + fail loud.
-  const remoteTarget = useMemo(() => {
-    const parsed = parseAgentAtHost(search)
-    return parsed ? `${parsed.agent}@${parsed.host}` : null
-  }, [search])
-
-  const handleAddRemote = useCallback(async () => {
-    if (!remoteTarget) return
-    if (!sourcePath) {
-      setRemoteError('This workspace has no resolved path on the active server.')
+  // When a peer server is selected, fetch its agent roster (permission-filtered server-side)
+  useEffect(() => {
+    if (!selectedPeerFp) {
+      setRosterAgents([])
       return
     }
-    setAdding(true)
-    setRemoteError(null)
-    try {
-      // Auto-pairs both daemons (owner authority on each) then records the
-      // connection on the source side. Fails loud — surface the message.
-      // The forward connection succeeded if this resolves; `reverseWarning`
-      // (if any) is a soft note that the reverse/back-messaging row wasn't wired.
-      const { reverseWarning } = await addRemoteConnection(sourcePath, remoteTarget)
-      setShowAdd(false)
-      setSearch('')
-      await fetchRelations()
-      if (reverseWarning) setRemoteError(reverseWarning)
-    } catch (e) {
-      setRemoteError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setAdding(false)
+    let cancelled = false
+    setRosterLoading(true)
+    void (async () => {
+      const res = await fetchPeerRoster(selectedPeerFp)
+      if (cancelled) return
+      setRosterAgents(res.available ? res.data : [])
+      setRosterLoading(false)
+    })()
+    return () => {
+      cancelled = true
     }
-  }, [remoteTarget, sourcePath, fetchRelations])
+  }, [selectedPeerFp])
 
-  const handleRemoveRemote = useCallback(async (address: string) => {
-    try {
-      await removeRemoteConnection(sourcePath, address)
-      await fetchRelations()
-    } catch (e) {
-      console.error('[connected-workspaces] Remote disconnect failed:', e)
-    }
-  }, [sourcePath, fetchRelations])
+  const selectedPeer = useMemo(
+    () => fedPeers.find((p) => p.fingerprint === selectedPeerFp) ?? null,
+    [fedPeers, selectedPeerFp],
+  )
 
-  // Resolve target project details
+  const connectedIds = useMemo(() => new Set(relations.map((r) => r.targetProjectId)), [relations])
+  const availableProjects = useMemo(
+    () =>
+      projects
+        .filter((p) => p.id !== projectId && !connectedIds.has(p.id))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [projects, projectId, connectedIds],
+  )
+  const filteredProjects = useMemo(
+    () =>
+      search.trim()
+        ? availableProjects.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()))
+        : availableProjects,
+    [availableProjects, search],
+  )
+
+  // Agents already linked as federated connections (by agent::host)
+  const linkedRemoteAddrs = useMemo(
+    () => new Set(remoteConns.map((r) => r.address.toLowerCase())),
+    [remoteConns],
+  )
+
+  const availableRosterAgents = useMemo(() => {
+    if (!selectedPeer) return []
+    const host = selectedPeer.subdomain
+      ? `${selectedPeer.subdomain}.k2.dev`
+      : ''
+    if (!host) return rosterAgents
+    return rosterAgents.filter((a) => {
+      const addr = formatAgentHost(a.agent, host).toLowerCase()
+      return !linkedRemoteAddrs.has(addr)
+    })
+  }, [rosterAgents, selectedPeer, linkedRemoteAddrs])
+
+  const handleAddLocal = useCallback(
+    async (targetProjectId: string) => {
+      setAdding(true)
+      setLocalError(null)
+      try {
+        await daemonCliPost('relations/create', {
+          source_project_id: projectId,
+          target_project_id: targetProjectId,
+        })
+        setShowLocalAdd(false)
+        setSearch('')
+        await fetchRelations()
+      } catch (e) {
+        setLocalError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setAdding(false)
+      }
+    },
+    [projectId, fetchRelations],
+  )
+
+  const handleRemoveLocal = useCallback(
+    async (id: string) => {
+      setLocalError(null)
+      try {
+        await daemonCliPost('relations/delete', { id })
+        await fetchRelations()
+      } catch (e) {
+        setLocalError(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [fetchRelations],
+  )
+
+  const handleAddFederated = useCallback(
+    async (agent: RosterAgent) => {
+      if (!sourcePath || !selectedPeer?.subdomain) {
+        setRemoteError('Missing workspace path or peer subdomain — cannot add federated connection.')
+        return
+      }
+      const target = formatAgentHost(agent.agent, `${selectedPeer.subdomain}.k2.dev`)
+      setAdding(true)
+      setRemoteError(null)
+      try {
+        const { reverseWarning } = await addRemoteConnection(sourcePath, target)
+        setShowFedAdd(false)
+        setSelectedPeerFp('')
+        setRosterAgents([])
+        await fetchRelations()
+        if (reverseWarning) setRemoteError(reverseWarning)
+      } catch (e) {
+        setRemoteError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setAdding(false)
+      }
+    },
+    [sourcePath, selectedPeer, fetchRelations],
+  )
+
+  const handleRemoveRemote = useCallback(
+    async (address: string) => {
+      if (!sourcePath) {
+        setRemoteError(
+          'This workspace has no resolved path on the active server — cannot remove the remote connection.',
+        )
+        return
+      }
+      setRemoteError(null)
+      try {
+        await removeRemoteConnection(sourcePath, address)
+        await fetchRelations()
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        console.error('[connected-workspaces] Remote disconnect failed:', e)
+        setRemoteError(msg || 'Failed to remove remote connection')
+      }
+    },
+    [sourcePath, fetchRelations],
+  )
+
   const projectsById = useMemo(() => {
-    const map = new Map<string, typeof projects[number]>()
+    const map = new Map<string, (typeof projects)[number]>()
     for (const p of projects) map.set(p.id, p)
     return map
   }, [projects])
 
+  const peerLabel = (p: FederationPeer) => p.label || p.subdomain || p.fingerprint.slice(0, 12)
+
   return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
-        <div>
-          <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Connected Workspaces</h3>
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-            Connect other workspaces so this agent can oversee or interact with them.
-          </p>
-        </div>
-        {/* GAP #3: always available — the add box also accepts a remote
-            `<agent>@<host>` even when there are no local workspaces left. */}
-        <button
-          onClick={() => { setShowAdd(!showAdd); setSearch(''); setRemoteError(null) }}
-          title="Add connection"
-          className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
-        >
-          +
-        </button>
-      </div>
-
-      {/* Add connection dropdown with search */}
-      {showAdd && (
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
-          <div className="px-3 py-1.5 border-b border-[var(--color-border)]">
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setRemoteError(null) }}
-              placeholder="Search workspaces, or type agent@host…"
-              autoFocus
-              className="w-full bg-transparent text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none"
-            />
+    <div className="space-y-5">
+      {/* ── Local Connections ─────────────────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Local Connections</h3>
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+              Workspaces on this server that this agent can message.
+            </p>
           </div>
-          {/* GAP #3 discoverability: persistent hint that a full `agent@host`
-              address connects a workspace on another server (not just local). */}
-          <div className="px-3 py-1.5 text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
-            Tip: to connect a workspace on another server, type its full address — agent@server.k2.dev
-          </div>
-          <div className="max-h-[200px] overflow-y-auto">
-            {/* GAP #3: a `<agent>@<host>` input is a REMOTE agent — offer an
-                explicit add affordance (and surface auto-pair errors). */}
-            {remoteTarget && (
-              <>
-                <button
-                  onClick={handleAddRemote}
-                  disabled={adding}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.06] transition-colors no-drag cursor-pointer disabled:opacity-50 border-b border-[var(--color-border)]"
-                >
-                  <span className="w-2 h-2 flex-shrink-0 rounded-full bg-[var(--color-accent)]" />
-                  <span className="text-xs text-[var(--color-text-primary)] truncate">
-                    {adding ? 'Connecting…' : `Add remote agent: ${remoteTarget}`}
-                  </span>
-                  <span className="text-[9px] text-[var(--color-text-muted)] ml-auto flex-shrink-0 uppercase tracking-wider">
-                    remote
-                  </span>
-                </button>
-                {remoteError && (
-                  <div className="px-3 py-2 text-[10px] text-[var(--color-status-error-soft)] border-b border-[var(--color-border)]">
-                    {remoteError}
-                  </div>
-                )}
-              </>
-            )}
-            {filteredProjects.length === 0 ? (
-              remoteTarget ? null : (
-                <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
-                  {search.trim() ? 'No matching workspaces.' : 'No more workspaces available to connect.'}
-                </div>
-              )
-            ) : (
-              filteredProjects.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => { handleAdd(p.id); setSearch('') }}
-                  disabled={adding}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.06] transition-colors no-drag cursor-pointer disabled:opacity-50 border-b border-[var(--color-border)] last:border-b-0"
-                >
-                  <span
-                    className="w-2 h-2 flex-shrink-0 rounded-full"
-                    style={{ backgroundColor: p.color || 'var(--color-neutral)' }}
-                  />
-                  <span className="text-xs text-[var(--color-text-primary)] truncate">{p.name}</span>
-                  {p.agentMode && p.agentMode !== 'off' && (
-                    <span className="text-[9px] text-[var(--color-text-muted)] ml-auto flex-shrink-0">
-                      {p.agentMode === 'custom' ? 'Custom' : p.agentMode === 'agent' ? 'K2' : 'Manager'}
-                    </span>
-                  )}
-                </button>
-              ))
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setShowLocalAdd(!showLocalAdd)
+              setShowFedAdd(false)
+              setSearch('')
+              setLocalError(null)
+            }}
+            title="Add local connection"
+            className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
+          >
+            +
+          </button>
         </div>
-      )}
 
-      {/* Connected workspaces list */}
-      {loading ? (
-        <div className="text-[10px] text-[var(--color-text-muted)]">Loading...</div>
-      ) : relations.length === 0 && remoteConns.length === 0 ? (
-        <div className="text-[10px] text-[var(--color-text-muted)]">
-          No connected workspaces yet.
-        </div>
-      ) : relations.length === 0 ? null : (
-        <div className="border border-[var(--color-border)]">
-          {relations.map((rel) => {
-            const target = projectsById.get(rel.targetProjectId)
-            return (
-              <div
-                key={rel.id}
-                className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
-              >
-                <span
-                  className="w-2 h-2 flex-shrink-0 rounded-full"
-                  style={{ backgroundColor: target?.color || 'var(--color-neutral)' }}
-                />
-                <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">
-                  {target?.name || 'Unknown workspace'}
-                </span>
-                {target?.agentMode && target.agentMode !== 'off' && (
-                  <span className="text-[9px] text-[var(--color-text-muted)]">
-                    {target.agentMode === 'custom' ? 'Custom' : target.agentMode === 'agent' ? 'K2' : 'Manager'}
-                  </span>
-                )}
-                <button
-                  onClick={() => handleRemove(rel.id)}
-                  className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
-                  title="Remove connection"
-                >
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <line x1="1" y1="1" x2="7" y2="7" />
-                    <line x1="7" y1="1" x2="1" y2="7" />
-                  </svg>
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {/* GAP #3: remote (cross-daemon) connections — agents on OTHER servers
-          this workspace is connected to. Marked with a clear "remote" badge
-          and shown by their `<agent>@<host>` address. */}
-      {!loading && remoteConns.length > 0 && (
-        <div className="border border-[var(--color-border)] mt-1">
-          {remoteConns.map((rc) => (
-            <div
-              key={rc.address}
-              className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
-            >
-              <span className="w-2 h-2 flex-shrink-0 rounded-full bg-[var(--color-accent)]" />
-              <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate" title={rc.address}>
-                {rc.address}
-              </span>
-              <span className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">
-                remote
-              </span>
-              <button
-                onClick={() => handleRemoveRemote(rc.address)}
-                className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
-                title="Remove remote connection"
-              >
-                <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <line x1="1" y1="1" x2="7" y2="7" />
-                  <line x1="7" y1="1" x2="1" y2="7" />
-                </svg>
-              </button>
+        {showLocalAdd && (
+          <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)] mb-2">
+            <div className="px-3 py-1.5 border-b border-[var(--color-border)]">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value)
+                  setLocalError(null)
+                }}
+                placeholder="Search local workspaces…"
+                autoFocus
+                className="w-full bg-transparent text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none"
+              />
             </div>
-          ))}
-        </div>
-      )}
+            <div className="max-h-[200px] overflow-y-auto">
+              {filteredProjects.length === 0 ? (
+                <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
+                  {search.trim() ? 'No matching workspaces.' : 'No more local workspaces to connect.'}
+                </div>
+              ) : (
+                filteredProjects.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => void handleAddLocal(p.id)}
+                    disabled={adding}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.06] transition-colors no-drag cursor-pointer disabled:opacity-50 border-b border-[var(--color-border)] last:border-b-0"
+                  >
+                    <span
+                      className="w-2 h-2 flex-shrink-0 rounded-full"
+                      style={{ backgroundColor: p.color || 'var(--color-neutral)' }}
+                    />
+                    <span className="text-xs text-[var(--color-text-primary)] truncate">{p.name}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        )}
 
-      {/* Incoming connections (workspaces that connect TO this one) */}
-      {!loading && incoming.length > 0 && (
-        <>
-          <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mt-4">
-            Connected Agents
-          </h3>
-          <p className="text-[10px] text-[var(--color-text-muted)]">
-            These agent workspaces have access to communicate with this workspace.
-          </p>
+        {loading ? (
+          <div className="text-[10px] text-[var(--color-text-muted)]">Loading…</div>
+        ) : relations.length === 0 ? (
+          <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
+            No local connections yet.
+          </div>
+        ) : (
           <div className="border border-[var(--color-border)]">
-            {incoming.map((rel) => {
-              const source = projectsById.get(rel.sourceProjectId)
+            {relations.map((rel) => {
+              const target = projectsById.get(rel.targetProjectId)
               return (
                 <div
                   key={rel.id}
@@ -3011,22 +2982,199 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
                 >
                   <span
                     className="w-2 h-2 flex-shrink-0 rounded-full"
-                    style={{ backgroundColor: source?.color || 'var(--color-neutral)' }}
+                    style={{ backgroundColor: target?.color || 'var(--color-neutral)' }}
                   />
                   <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">
-                    {source?.name || 'Unknown workspace'}
+                    {target?.name || 'Unknown workspace'}
                   </span>
-                  {source?.agentMode && source.agentMode !== 'off' && (
-                    <span className="text-[9px] text-[var(--color-text-muted)]">
-                      {source.agentMode === 'custom' ? 'Custom' : source.agentMode === 'agent' ? 'K2' : 'Manager'}
-                    </span>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => void handleRemoveLocal(rel.id)}
+                    className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
+                    title="Remove local connection"
+                  >
+                    <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <line x1="1" y1="1" x2="7" y2="7" />
+                      <line x1="7" y1="1" x2="1" y2="7" />
+                    </svg>
+                  </button>
                 </div>
               )
             })}
           </div>
-        </>
-      )}
+        )}
+        {localError && (
+          <div className="mt-1 px-3 py-2 text-[10px] text-[var(--color-status-error-soft)] border border-[var(--color-border)]">
+            {localError}
+          </div>
+        )}
+
+        {!loading && incoming.length > 0 && (
+          <>
+            <h4 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mt-3">
+              Connected to this workspace
+            </h4>
+            <div className="border border-[var(--color-border)]">
+              {incoming.map((rel) => {
+                const source = projectsById.get(rel.sourceProjectId)
+                return (
+                  <div
+                    key={rel.id}
+                    className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
+                  >
+                    <span
+                      className="w-2 h-2 flex-shrink-0 rounded-full"
+                      style={{ backgroundColor: source?.color || 'var(--color-neutral)' }}
+                    />
+                    <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">
+                      {source?.name || 'Unknown workspace'}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Federated Connections ────────────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Federated Connections</h3>
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+              Agents on paired servers. Pick a federated server, then an agent they expose.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setShowFedAdd(!showFedAdd)
+              setShowLocalAdd(false)
+              setSelectedPeerFp('')
+              setRosterAgents([])
+              setRemoteError(null)
+            }}
+            title="Add federated connection"
+            className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
+          >
+            +
+          </button>
+        </div>
+
+        {showFedAdd && (
+          <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)] mb-2">
+            <div className="px-3 py-2 border-b border-[var(--color-border)] space-y-2">
+              <label className="block text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider">
+                Federated server
+              </label>
+              {!fedPeersAvailable ? (
+                <p className="text-[10px] text-[var(--color-text-muted)]">
+                  Federation is off or unavailable. Enable it under Settings → K2 Connect.
+                </p>
+              ) : fedPeers.length === 0 ? (
+                <p className="text-[10px] text-[var(--color-text-muted)]">
+                  No trusted federated servers yet. Pair a server first (connect + enable federation on both sides).
+                </p>
+              ) : (
+                <SettingDropdown
+                  value={selectedPeerFp}
+                  placeholder="Select a server…"
+                  menuAlign="left"
+                  fullWidth
+                  options={fedPeers.map((p) => ({
+                    value: p.fingerprint,
+                    label: p.subdomain
+                      ? `${peerLabel(p)} (${p.subdomain}.k2.dev)`
+                      : peerLabel(p),
+                  }))}
+                  onChange={(fp) => {
+                    setSelectedPeerFp(fp)
+                    setRemoteError(null)
+                  }}
+                />
+              )}
+            </div>
+
+            {selectedPeerFp && (
+              <div className="max-h-[220px] overflow-y-auto">
+                <div className="px-3 py-1.5 text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
+                  Agents on {selectedPeer ? peerLabel(selectedPeer) : 'server'} you can connect to
+                  {selectedPeer?.subdomain ? ` · ${selectedPeer.subdomain}.k2.dev` : ''}
+                </div>
+                {rosterLoading ? (
+                  <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">Loading agents…</div>
+                ) : availableRosterAgents.length === 0 ? (
+                  <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
+                    No connectable agents on this server. On their side: turn on &quot;Let remote users message
+                    agents&quot;, or per-workspace Remote Access / allow agents to create connections.
+                  </div>
+                ) : (
+                  availableRosterAgents.map((a) => (
+                    <button
+                      key={`${a.workspace_id}:${a.agent}`}
+                      type="button"
+                      disabled={adding || !selectedPeer?.subdomain}
+                      onClick={() => void handleAddFederated(a)}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.06] transition-colors no-drag cursor-pointer disabled:opacity-50 border-b border-[var(--color-border)] last:border-b-0"
+                    >
+                      <span className="w-2 h-2 flex-shrink-0 rounded-full bg-[var(--color-accent)]" />
+                      <span className="text-xs text-[var(--color-text-primary)] truncate">{a.agent}</span>
+                      <span className="text-[10px] text-[var(--color-text-muted)] truncate ml-auto">
+                        {a.workspace_name}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+            {remoteError && showFedAdd && (
+              <div className="px-3 py-2 text-[10px] text-[var(--color-status-error-soft)] border-t border-[var(--color-border)]">
+                {remoteError}
+              </div>
+            )}
+          </div>
+        )}
+
+        {loading ? null : remoteConns.length === 0 ? (
+          <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
+            No federated connections yet.
+          </div>
+        ) : (
+          <div className="border border-[var(--color-border)]">
+            {remoteConns.map((rc) => (
+              <div
+                key={rc.address}
+                className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
+              >
+                <span className="w-2 h-2 flex-shrink-0 rounded-full bg-[var(--color-accent)]" />
+                <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate" title={rc.address}>
+                  {rc.address}
+                </span>
+                <span className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">
+                  federated
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleRemoveRemote(rc.address)}
+                  className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
+                  title="Remove federated connection"
+                >
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <line x1="1" y1="1" x2="7" y2="7" />
+                    <line x1="7" y1="1" x2="1" y2="7" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {!showFedAdd && remoteError && (
+          <div className="mt-1 px-3 py-2 text-[10px] text-[var(--color-status-error-soft)] border border-[var(--color-border)]">
+            {remoteError}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

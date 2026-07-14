@@ -315,12 +315,11 @@ pub fn resolve_workspace(token: &str) -> Option<String> {
 /// - Empty `from` defaults to `external` (defense in depth; CLI should
 ///   already do this auto-derive, but we never let an empty prefix
 ///   reach the recipient).
+/// - UUID-shaped `from` (passport / `projects.id`) is rewritten to the
+///   agent display name before framing — last-mile guard so `k2 msg` /
+///   `k2 talk` never inject `[from <uuid>]` into a chat.
 pub fn format_message(from: &str, text: &str, command: &str) -> String {
-    let sender = if from.trim().is_empty() {
-        "external"
-    } else {
-        from
-    };
+    let sender = humanize_chat_from(from, "external");
     let command = command.trim();
     if command.is_empty() {
         format!("[from {sender}] {text}")
@@ -342,8 +341,50 @@ pub fn format_message(from: &str, text: &str, command: &str) -> String {
 /// - It has no `command` slash-prefix branch (the composer never sends
 ///   slash-commands; that surface is `k2 msg`/`--command` only).
 pub fn format_message_user(from: &str, text: &str) -> String {
-    let sender = if from.trim().is_empty() { "owner" } else { from };
+    let sender = humanize_chat_from(from, "owner");
     format!("[from {sender}] {text}")
+}
+
+/// Last-mile chat attribution: never put a bare project/passport UUID
+/// into the `[from …]` prefix. `k2 msg` / `k2 talk` (and any other
+/// caller) may still hand us a UUID from a scoped stamp or CLI
+/// mis-derive — resolve it to the agent display name when possible.
+fn humanize_chat_from(from: &str, empty_fallback: &str) -> String {
+    let trimmed = from.trim();
+    if trimmed.is_empty() {
+        return empty_fallback.to_string();
+    }
+    if !is_uuid_shape(trimmed) {
+        return trimmed.to_string();
+    }
+    // Passport / projects.id → human label.
+    if let Some(path) = resolve_workspace(trimmed) {
+        let name = k2_core::workspace::display::agent_display_name(&path);
+        if !name.trim().is_empty() && !is_uuid_shape(name.trim()) {
+            return name;
+        }
+        if let Some(base) = Path::new(&path)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.trim().is_empty() && !is_uuid_shape(s.trim()))
+        {
+            return base;
+        }
+    }
+    // Unresolvable passport — still never emit the raw UUID into chat.
+    empty_fallback.to_string()
+}
+
+fn is_uuid_shape(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b[8] == b'-'
+        && b[13] == b'-'
+        && b[18] == b'-'
+        && b[23] == b'-'
+        && s.bytes()
+            .enumerate()
+            .all(|(i, c)| matches!(i, 8 | 13 | 18 | 23) || c.is_ascii_hexdigit())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1613,6 +1654,22 @@ mod tests {
         assert_eq!(
             format_message("sms-bridge", "ping", ""),
             "[from sms-bridge] ping"
+        );
+    }
+
+    #[test]
+    fn format_message_never_emits_raw_passport_uuid() {
+        // Even when callers stamp projects.id as `from`, chat must not
+        // show the UUID. Unresolvable ids fall back to "external".
+        let uuid = "ee29d27a-4240-4f19-9433-6ed98da6f5a5";
+        let out = format_message(uuid, "hello", "");
+        assert!(
+            !out.contains(uuid),
+            "must not put passport uuid in chat prefix: {out}"
+        );
+        assert!(
+            out.starts_with("[from "),
+            "must still frame a from prefix: {out}"
         );
     }
 

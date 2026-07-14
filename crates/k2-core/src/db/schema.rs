@@ -2437,13 +2437,38 @@ impl WorkspaceRelation {
 pub struct WorkspaceRemoteConnection {
     pub id: String,
     pub source_project_id: String,
-    /// Canonical `<agent>@<host>` address.
+    /// Canonical `<agent>::<host>` address (legacy rows may still hold `@`).
     pub remote_addr: String,
     pub host: String,
     pub agent: String,
     /// Paired peer's fingerprint when known; `None` until resolved.
     pub peer_fingerprint: Option<String>,
     pub created_at: i64,
+}
+
+/// Loose split of a remote user address into `(agent, host)` for gate match.
+/// Accepts legacy `@` (last `@`) and 2-part `::`. Does **not** accept the
+/// 3-part wire form. Kept local so schema matching does not depend on
+/// `connections::parse_remote_addr` (and avoids a circular module edge).
+fn split_remote_user_addr(addr: &str) -> Option<(String, String)> {
+    let addr = addr.trim();
+    if addr.is_empty() {
+        return None;
+    }
+    if addr.contains("::") {
+        let parts: Vec<&str> = addr.split("::").collect();
+        if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+            return Some((parts[0].to_string(), parts[1].to_string()));
+        }
+        return None;
+    }
+    let at = addr.rfind('@')?;
+    let agent = &addr[..at];
+    let host = &addr[at + 1..];
+    if agent.is_empty() || host.is_empty() {
+        return None;
+    }
+    Some((agent.to_string(), host.to_string()))
 }
 
 impl WorkspaceRemoteConnection {
@@ -2496,13 +2521,26 @@ impl WorkspaceRemoteConnection {
     /// Backs the cross-daemon send gate — keep it cheap (COUNT, no row
     /// materialization).
     ///
-    /// The `remote_addr` (`<agent>@<host>`) match is CASE-INSENSITIVE
-    /// (`LOWER(...) = LOWER(...)`): hostnames are case-insensitive, and the
-    /// agent token can differ in case between the folder-basename-derived
-    /// reverse row (e.g. `Cortana@host`) and the agent's real display name
-    /// (`cortana@host`). New rows are stored lowercased; pre-existing capital
-    /// rows still match here with no migration needed.
+    /// Match is on **agent + host columns** (case-insensitive), not the
+    /// raw `remote_addr` string, so:
+    /// - new rows stored as `agent::host` open the gate for lookups with
+    ///   either `::` or legacy `@`
+    /// - pre-existing capital / `@` rows still match with no migration
+    /// - hostnames and agent tokens are case-insensitive
+    ///
+    /// When `remote_addr` cannot be split into agent/host, falls back to
+    /// a case-insensitive string compare on `remote_addr`.
     pub fn exists(conn: &Connection, source_project_id: &str, remote_addr: &str) -> Result<bool> {
+        if let Some((agent, host)) = split_remote_user_addr(remote_addr) {
+            return conn.query_row(
+                "SELECT COUNT(*) > 0 FROM workspace_remote_connections \
+                 WHERE source_project_id = ?1 \
+                   AND LOWER(agent) = LOWER(?2) \
+                   AND LOWER(host) = LOWER(?3)",
+                params![source_project_id, agent, host],
+                |row| row.get(0),
+            );
+        }
         conn.query_row(
             "SELECT COUNT(*) > 0 FROM workspace_remote_connections \
              WHERE source_project_id = ?1 AND LOWER(remote_addr) = LOWER(?2)",
@@ -2512,17 +2550,40 @@ impl WorkspaceRemoteConnection {
     }
 
     /// Delete the `(source_project_id, remote_addr)` connection. Returns the
-    /// number of rows removed (0 when there was nothing to remove). The
-    /// `remote_addr` match is CASE-INSENSITIVE, matching [`exists`](Self::exists).
+    /// number of rows removed (0 when there was nothing to remove). Matching
+    /// rules mirror [`exists`](Self::exists) (agent+host, then string fallback).
     pub fn delete(
         conn: &Connection,
         source_project_id: &str,
         remote_addr: &str,
     ) -> Result<usize> {
+        if let Some((agent, host)) = split_remote_user_addr(remote_addr) {
+            return conn.execute(
+                "DELETE FROM workspace_remote_connections \
+                 WHERE source_project_id = ?1 \
+                   AND LOWER(agent) = LOWER(?2) \
+                   AND LOWER(host) = LOWER(?3)",
+                params![source_project_id, agent, host],
+            );
+        }
         conn.execute(
             "DELETE FROM workspace_remote_connections \
              WHERE source_project_id = ?1 AND LOWER(remote_addr) = LOWER(?2)",
             params![source_project_id, remote_addr],
+        )
+    }
+
+    /// PR3 / GH #13: bind (or clear) `peer_fingerprint` on an existing remote
+    /// connection row. Used on create-time bind, list soft-reconcile, and
+    /// re-add noop when a Trusted peer is later available for the host.
+    pub fn set_peer_fingerprint(
+        conn: &Connection,
+        id: &str,
+        peer_fingerprint: Option<&str>,
+    ) -> Result<usize> {
+        conn.execute(
+            "UPDATE workspace_remote_connections SET peer_fingerprint = ?1 WHERE id = ?2",
+            params![peer_fingerprint, id],
         )
     }
 }

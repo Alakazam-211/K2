@@ -6,7 +6,7 @@
 //   1. Federated servers   — the daemon's pinned federation peers (the servers
 //                            it can exchange messages / cross-agent connects
 //                            with). `GET /cli/federation/peers`.
-//   2. Cross-agent links   — every `agent@host` connection configured across
+//   2. Cross-agent links   — every `agent::host` connection configured across
 //                            the daemon's workspaces. Walks projects/list +
 //                            /cli/connections.
 //
@@ -129,7 +129,7 @@ export function FederationOverview(): React.JSX.Element {
       <div>
         <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Cross-agent connections</h3>
         <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
-          Remote agents this server&apos;s workspaces are connected to (<code>agent@host</code>).
+          Remote agents this server&apos;s workspaces are connected to (<code>agent::host</code>).
         </p>
         {loading ? (
           <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">Loading…</div>

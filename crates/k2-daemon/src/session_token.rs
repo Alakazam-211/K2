@@ -505,6 +505,13 @@ pub fn is_agent_verb(path: &str) -> bool {
         // always bypasses; agents need the effective toggle ON). List is
         // free for any authenticated agent principal.
         "/cli/connections",
+        // PR1 federation dual-auth under passports: agents may list peers,
+        // pull a paired peer's roster, and send. pair/confirm/outbox/pubkey
+        // stay owner-or-admin only (not on this allowlist). send forces
+        // from_workspace from HookPrincipal (Wave 0 PR-C).
+        "/cli/federation/peers",
+        "/cli/federation/peer-roster",
+        "/cli/federation/send",
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
@@ -1135,6 +1142,26 @@ mod tests {
         assert!(is_agent_verb("/cli/dns/verify"));
         // C1 (0.40.45): connections list/add/remove (mutate toggle-gated).
         assert!(is_agent_verb("/cli/connections"));
+        // PR1: federation agent send surface under passports.
+        assert!(is_agent_verb("/cli/federation/peers"));
+        assert!(is_agent_verb("/cli/federation/peer-roster"));
+        assert!(is_agent_verb("/cli/federation/send"));
+    }
+
+    #[test]
+    fn is_agent_verb_denies_federation_owner_surfaces() {
+        // pair/confirm stay owner-or-admin; outbox/pubkey stay owner-gated.
+        // inbound is envelope-auth (not a scoped verb either).
+        for p in [
+            "/cli/federation/pair/request",
+            "/cli/federation/pair/confirm",
+            "/cli/federation/outbox",
+            "/cli/federation/pubkey",
+            "/cli/federation/inbound",
+            "/cli/federation/roster",
+        ] {
+            assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
+        }
     }
 
     #[test]

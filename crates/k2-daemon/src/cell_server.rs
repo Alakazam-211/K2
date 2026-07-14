@@ -192,12 +192,23 @@ mod unix_impl {
                     serde_json::Value::String(principal.workspace_uuid.clone()),
                 );
             }
-            // `name` only exists on the Agent scope.
+            // `name` only exists on the Agent scope — human display name,
+            // not the passport / agent_address (often the bare project UUID).
             if scope == "agent" {
-                from.insert(
-                    "name".to_string(),
-                    serde_json::Value::String(principal.agent_address.clone()),
-                );
+                let name = crate::workspace_msg::resolve_workspace(
+                    principal.workspace_uuid.trim(),
+                )
+                .map(|path| k2_core::workspace::display::agent_display_name(&path))
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| {
+                    let addr = principal.agent_address.trim();
+                    if !addr.is_empty() {
+                        addr.to_string()
+                    } else {
+                        "agent".to_string()
+                    }
+                });
+                from.insert("name".to_string(), serde_json::Value::String(name));
             }
         }
         serde_json::to_vec(&v).unwrap_or_else(|_| body.to_vec())
@@ -605,6 +616,36 @@ mod unix_impl {
             p if p.starts_with("/cli/dns/") && is_post => {
                 from_cli(crate::dns_routes::dispatch_post(p, body))
             }
+            // PR1 federation dual-auth: peers / peer-roster / send over the
+            // cell UDS. Dark when federation is off (same 404 as TCP). Principal
+            // already installed by the outer with_request_principal so send
+            // forces from_workspace. pair/confirm stay off is_agent_verb.
+            p if p.starts_with("/cli/federation/") => {
+                if !k2_core::federation::enabled() {
+                    return (
+                        "404 Not Found".to_string(),
+                        "application/json",
+                        r#"{"error":"not found"}"#.to_string(),
+                    );
+                }
+                match p {
+                    "/cli/federation/send" if is_post => {
+                        from_cli(crate::federation_routes::handle_send(body))
+                    }
+                    "/cli/federation/peers" if !is_post => {
+                        from_cli(crate::federation_routes::handle_peers())
+                    }
+                    "/cli/federation/peer-roster" if !is_post => {
+                        let peer = params.get("peer").cloned().unwrap_or_default();
+                        from_cli(crate::federation_routes::handle_peer_roster(&peer))
+                    }
+                    _ => (
+                        "404 Not Found".to_string(),
+                        "application/json",
+                        r#"{"error":"route not served on cell socket"}"#.to_string(),
+                    ),
+                }
+            }
             p if crate::session_token::is_agent_verb(p) && !is_post => {
                 from_cli(crate::cli::dispatch(p, params))
             }
@@ -946,7 +987,9 @@ mod unix_impl {
                 Some(ws_path),
                 "body `project_path` must be FORCED to the principal's own workspace"
             );
-            assert_eq!(params.get("from").map(String::as_str), Some("agent-W"));
+            // Chat attribution uses display name (projects.name here), not
+            // the technical agent_address / passport key.
+            assert_eq!(params.get("from").map(String::as_str), Some("W"));
 
             // Fail-closed: an unresolvable principal REMOVES both keys even
             // when the body supplied them.

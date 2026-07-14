@@ -3,26 +3,51 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
-## 0.40.46 — WebGL text weight that matches the style + steadier scrolling
+## 0.40.46 — Cross-server agents that actually talk + WebGL polish
 
-More Kessel polish: text weight follows dark vs light themes, and a few
-scroll/paint edge cases that only showed up under real use are closed.
+Federated agents get reliable pair-and-message, clearer addresses, and a
+daemon that restarts when you replace the app. Terminal WebGL keeps getting
+steadier under real use.
 
-- **Text weight that fits the theme.** The WebGL painter no longer uses one
-  global gamma for every look. Dark styles get a slightly heavier preset
-  (so light-on-dark doesn’t look skinny); light styles get a lighter one
-  (so dark-on-light doesn’t look chunky). Pick a style and the preset
-  applies; then fine-tune live under **Settings → Terminal → Terminal text
-  weight (WebGL)** — open tabs update as you drag, no new tab required.
-  DOM painting is unchanged.
+- **Connect a remote agent in one gesture.** On a workspace’s **Federated
+  Connections**, pick a paired server and an agent it exposes — K2
+  auto-pairs both daemons (mutual trust, no codes) and records the link
+  **both ways**, so either agent can `k2 msg` the other. The **X** removes
+  that agent link (and the reverse when it can). Use the peer pickers —
+  no guessing free-typed names.
 
-- **Smoother scroll under pressure.** Prewarm backs off before it can force
-  an atlas clear; wheel paint and scrollbar drag read live geometry; and a
-  resync after a big backlog no longer yanks the view when you’re scrolled
-  up (content seam-match re-anchoring).
+- **`agent::host`, not mail.** Federated addresses use double-colon
+  (`cortana::rosson.k2.dev`). Inbound chat shows
+  `[from agent::host]`, so agents reach for **`k2 msg`** instead of
+  **`k2 mail`**. Legacy `agent@host` still works on the way in.
 
-- **Slightly richer edges on WebGL text.** Default coverage gamma moves
-  1.3 → 1.2 so glyph edges keep a little more ink after the smoothing fix.
+- **Both servers must be on the same build — and the daemon restarts with
+  the app.** After an AirDrop/install, the app used to keep the *old*
+  launchd daemon running (same version number, new binary on disk). It now
+  detects a replaced `k2-daemon` and kickstarts it so federation fixes
+  actually take effect. Install **0.40.46 on both machines**, open the app
+  once so the daemon refreshes, then pair.
+
+- **Clearer federation CLI.** `k2 fed peers` lists pinned servers and
+  trust; failed `k2 msg agent::host` names known peers and hints when a
+  reply path isn’t paired yet. Errors say **k2**, not the old k2so name.
+
+- **Roster only shows contactable agents.** Remote agent lists respect
+  Remote Access / contact permission so you don’t pick agents that won’t
+  accept federated messages.
+
+- **Text weight that fits the theme.** WebGL no longer uses one global
+  gamma for every look. Dark styles get a slightly heavier preset; light
+  styles a lighter one. Fine-tune under **Settings → Terminal → Terminal
+  text weight (WebGL)** — open tabs update live.
+
+- **Smoother scroll under pressure.** Prewarm backs off before it can
+  force an atlas clear; wheel paint and scrollbar drag read live
+  geometry; resync after a big backlog no longer yanks the view when
+  you’re scrolled up.
+
+- **Richer edges on WebGL text.** Default coverage gamma 1.3 → 1.2 so
+  glyph edges keep a little more ink.
 
 ## 0.40.45 — Safer agent mail, cleaner terminals, smoother painting
 

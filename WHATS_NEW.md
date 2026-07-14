@@ -3,51 +3,68 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
-## 0.40.46 — Cross-server agents that actually talk + WebGL polish
+## 0.40.46 — Cross-server agents + WebGL terminal you can tune
 
-Federated agents get reliable pair-and-message, clearer addresses, and a
-daemon that restarts when you replace the app. Terminal WebGL keeps getting
-steadier under real use.
+Two big tracks since 0.40.45: **federated agent messaging that actually
+pairs and talks**, and **Kessel WebGL** spacing, weight, scroll, and
+recovery after workspace switches.
+
+### Cross-server agents
 
 - **Connect a remote agent in one gesture.** On a workspace’s **Federated
-  Connections**, pick a paired server and an agent it exposes — K2
+  Connections**, pick a paired server and an agent it exposes. K2
   auto-pairs both daemons (mutual trust, no codes) and records the link
-  **both ways**, so either agent can `k2 msg` the other. The **X** removes
-  that agent link (and the reverse when it can). Use the peer pickers —
-  no guessing free-typed names.
+  **both ways**, so either side can message the other. **X** removes that
+  agent link (and the reverse when it can). Peer pickers only — no
+  free-typed hostnames.
 
 - **`agent::host`, not mail.** Federated addresses use double-colon
-  (`cortana::rosson.k2.dev`). Inbound chat shows
-  `[from agent::host]`, so agents reach for **`k2 msg`** instead of
-  **`k2 mail`**. Legacy `agent@host` still works on the way in.
+  (`cortana::rosson.k2.dev`). Inbound chat shows `[from agent::host]`, so
+  agents use **`k2 msg`** instead of **`k2 mail`**. Legacy `agent@host`
+  still works on the way in.
 
-- **Both servers must be on the same build — and the daemon restarts with
-  the app.** After an AirDrop/install, the app used to keep the *old*
-  launchd daemon running (same version number, new binary on disk). It now
-  detects a replaced `k2-daemon` and kickstarts it so federation fixes
-  actually take effect. Install **0.40.46 on both machines**, open the app
-  once so the daemon refreshes, then pair.
+- **Install on both machines — the daemon restarts with the app.** A
+  same-version AirDrop used to leave the *old* launchd daemon running
+  (version matched, binary on disk was new). The app now detects a
+  replaced `k2-daemon` and kickstarts it. Open the app once after install
+  so federation fixes load.
 
 - **Clearer federation CLI.** `k2 fed peers` lists pinned servers and
-  trust; failed `k2 msg agent::host` names known peers and hints when a
-  reply path isn’t paired yet. Errors say **k2**, not the old k2so name.
+  trust. Failed `k2 msg agent::host` names known peers and hints when a
+  reply path isn’t paired yet. Error copy says **k2**, not the old k2so
+  name.
 
 - **Roster only shows contactable agents.** Remote agent lists respect
   Remote Access / contact permission so you don’t pick agents that won’t
   accept federated messages.
 
-- **Text weight that fits the theme.** WebGL no longer uses one global
-  gamma for every look. Dark styles get a slightly heavier preset; light
-  styles a lighter one. Fine-tune under **Settings → Terminal → Terminal
-  text weight (WebGL)** — open tabs update live.
+- **Passport dual-auth on send.** Agents can send across servers under
+  their scoped credential when the connection and trust gates pass —
+  without elevating to disk-owner for every hop.
+
+### Terminal (WebGL painter)
+
+- **Per-style text weight.** Dark styles preset heavier; light styles
+  thinner. Override under **Settings → Styles → Terminal text weight
+  (WebGL)** — saved **per style and scheme**, live on open tabs. Switching
+  styles restores that style’s weight.
+
+- **Line height & character spacing.** Global knobs under
+  **Settings → Terminal** (WebGL only): line height (default 1.2× font
+  size) and character spacing/tracking. Same values across themes; open
+  tabs update live. DOM painter is unchanged.
 
 - **Smoother scroll under pressure.** Prewarm backs off before it can
-  force an atlas clear; wheel paint and scrollbar drag read live
-  geometry; resync after a big backlog no longer yanks the view when
-  you’re scrolled up.
+  force an atlas clear; wheel paint and scrollbar drag use live geometry;
+  resync after a big backlog no longer yanks the view when you’re
+  scrolled up (content seam-match re-anchoring).
 
-- **Richer edges on WebGL text.** Default coverage gamma 1.3 → 1.2 so
-  glyph edges keep a little more ink.
+- **WebGL recovers after workspace switches.** Hiding a tab or opening
+  Settings used to lose the GL context for good. The painter remounts when
+  the surface is shown again instead of permanently falling back to DOM.
+
+- **Richer glyph edges.** Default coverage gamma moves so edges keep a
+  little more ink after smoothing.
 
 ## 0.40.45 — Safer agent mail, cleaner terminals, smoother painting
 

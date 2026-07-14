@@ -13,9 +13,8 @@ import { HeartbeatEntryRow } from './HeartbeatEntry'
 
 /**
  * Heartbeats section — workspace-scoped audit surface for scheduled
- * heartbeat chat sessions. Mounted inside `WorkspacePanel` directly
- * beneath the State row, since workspace state limits/enables which
- * heartbeats are allowed to fire (they share fate).
+ * heartbeat chat sessions. Mounted inside `WorkspacePanel` for the
+ * active workspace when agent mode is not off.
  *
  * Sections:
  *   - Live      : PTY currently running (braille spinner indicator)

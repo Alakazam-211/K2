@@ -54,7 +54,7 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         "heartbeat_enabled",
         "agent_enabled",
         "pinned",
-        "tier_id",
+        // tier_id (Workspace States) retired — no longer writable via settings.
         // 0.34.0 Session Stream opt-in (Phase 2). Values: 'on' | 'off'.
         "use_session_stream",
         // #67 — per-workspace remote-instruct opt-in. Values: '1' | '0'
@@ -239,7 +239,7 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
         "SELECT agent_mode, worktree_mode, \
                 (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
                 agent_enabled, \
-                pinned, name, tier_id, use_session_stream, allow_remote_instruct, \
+                pinned, name, use_session_stream, allow_remote_instruct, \
                 dns_manage_enabled, agents_can_create_connections \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
@@ -248,7 +248,7 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
             // default 'off'; expose as a bool for React consumers
             // (matching every other toggle shape in this struct).
             let uss_raw = row
-                .get::<_, Option<String>>(7)
+                .get::<_, Option<String>>(6)
                 .unwrap_or(None)
                 .unwrap_or_else(|| "off".to_string());
             Ok(serde_json::json!({
@@ -258,14 +258,14 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "agentEnabled": row.get::<_, i64>(3).unwrap_or(0) == 1,
                 "pinned": row.get::<_, i64>(4).unwrap_or(0) == 1,
                 "name": row.get::<_, String>(5).unwrap_or_default(),
-                "stateId": row.get::<_, Option<String>>(6).unwrap_or(None),
+                // Workspace States retired — stateId no longer exposed.
                 "useSessionStream": uss_raw == "on",
                 // #67 — per-workspace remote-instruct opt-in (default 0/OFF).
-                "allowRemoteInstruct": row.get::<_, i64>(8).unwrap_or(0) == 1,
+                "allowRemoteInstruct": row.get::<_, i64>(7).unwrap_or(0) == 1,
                 // DNS K1 — per-workspace DNS-manage opt-in (default 0/OFF).
-                "dnsManageEnabled": row.get::<_, i64>(9).unwrap_or(0) == 1,
+                "dnsManageEnabled": row.get::<_, i64>(8).unwrap_or(0) == 1,
                 // C1 — per-workspace agents-may-create-connections (default 0/OFF).
-                "agentsCanCreateConnections": row.get::<_, i64>(10).unwrap_or(0) == 1,
+                "agentsCanCreateConnections": row.get::<_, i64>(9).unwrap_or(0) == 1,
             }))
         },
     )

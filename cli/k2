@@ -120,6 +120,7 @@ _cli_tool_id_for_verb() {
         skills) echo "skills" ;;
         msg|talk) echo "msg" ;;
         inbox) echo "inbox" ;;
+        wiki) echo "wiki" ;;
         respond) echo "respond" ;;
         connections|reserve|release|roster|who) echo "connections" ;;
         heartbeat) echo "heartbeat" ;;
@@ -141,7 +142,7 @@ _cli_tool_id_for_verb() {
 # Locked production tools are always id (cannot be Open in the catalog).
 _cli_tool_default_mode() {
     case "${1:-}" in
-        help|schema|whats-new|checkin|activity|read|skills|tools-policy|"") echo "open" ;;
+        help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat) echo "id" ;;
         mail|dns|publish|sessions-spawn|fs|daemon-admin|users-admin|api-key) echo "id" ;;
         browser-open|settings) echo "id" ;;
@@ -914,8 +915,8 @@ cmd_terminal_spawn() {
 # 0.39.0f Phase 2.1b: cmd_agentic / cmd_state / cmd_delegate removed.
 # The dispatch arms for `agentic`, `state`, `delegate` already
 # fail_deprecated; the function bodies were dead code carried over
-# from 2.1a. The settings surface (`k2 settings --agentic`,
-# `k2 settings --state`) owns these knobs now.
+# from 2.1a. `k2 settings --agentic` owns the agentic toggle.
+# Workspace States (`state` / `--state`) retired entirely.
 
 cmd_commit() {
     local message=""
@@ -3467,10 +3468,8 @@ except: pass
 }
 
 cmd_agent_complete() {
-    # Sub-agent completion command:
-    # Reads workspace state capability for the work item's source type
-    # Auto mode: commit, merge, clean up, notify manager
-    # Gated mode: commit, move to done, notify manager for review
+    # Sub-agent completion: moves active work to done for human review
+    # (Workspace States / auto-merge-by-source retired).
     local agent="" file=""
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -5940,6 +5939,779 @@ print("Removed %s" % (d.get("removed") or "(subdomain)"))
     esac
 }
 
+# ── Workspace Knowledge Base (brain map) — k2 wiki ────────────────────
+# Thin wrappers over daemon /cli/wiki/* (indexer + optional localhost serve).
+# Publish reuses k2 publish subdomain create/point/rm (K4 in PRD).
+# See .k2/prds/prd-workspace-kb-brain-map-and-publish.md.
+
+_wiki_usage() {
+    cat <<'EOF' >&2
+k2 wiki — per-workspace knowledge base (brain map)
+
+Vault lives at <workspace>/.k2/wiki/ (Markdown + [[wikilinks]]).
+
+USAGE
+  k2 wiki status [--json] [project]
+  k2 wiki index [--json] [project]
+  k2 wiki note <id> [--json] [project]
+  k2 wiki seed [project]
+  k2 wiki serve on|off [--port N] [project]
+  k2 wiki publish [--label LABEL] [project]
+  k2 wiki unpublish [project]
+
+COMMANDS
+  status     Serve + publish state (port, url, published label)
+  index      Graph index (nodes + links)
+  note       One note body by id (e.g. Home.md)
+  seed       Create Home.md + _Index.md if missing
+  serve      Start/stop read-only localhost site (127.0.0.1 only)
+  publish    Serve on + nest a subdomain (or print create instructions)
+  unpublish  Serve off + hint to remove the nested subdomain
+
+FLAGS
+  --json                 Machine-readable stdout (status/index/note)
+  --port N               Preferred port for serve on (daemon may reassign)
+  --label LABEL          Nested subdomain label for publish (default: workspace basename slug)
+  --workspace|--project  Alias for trailing [project] (path, name, or uuid)
+
+EXIT CODES
+  0 ok
+  1 error (daemon / not found / control plane)
+  2 bad usage
+EOF
+}
+
+_wiki_err() {
+    local code="$1" hint="$2"
+    if [ "${AS_JSON:-false}" = "true" ] || [ "${as_json:-false}" = "true" ]; then
+        python3 -c 'import json,sys; print(json.dumps({"error":{"code":sys.argv[1],"hint":sys.argv[2]}}), file=sys.stderr)' \
+            "$code" "$hint" 2>/dev/null || echo "{\"error\":{\"code\":\"$code\",\"hint\":\"$hint\"}}" >&2
+    else
+        echo "Error: $hint" >&2
+    fi
+}
+
+# Resolve optional workspace selector into global PROJECT (path preferred).
+# Accepts absolute/relative dir, workspace name, or uuid (via daemon resolve).
+_wiki_apply_project() {
+    local sel="${1:-}"
+    [ -z "$sel" ] && return 0
+    if [ -d "$sel" ]; then
+        PROJECT="$(cd "$sel" && pwd)"
+        return 0
+    fi
+    local resolved=""
+    if [ -n "${PORT:-}" ] && [ -n "${TOKEN:-}" ]; then
+        resolved=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$sel")" 2>/dev/null \
+            | python3 -c '
+import json,sys
+try:
+    d=json.loads(sys.stdin.read() or "{}")
+except Exception:
+    d={}
+if isinstance(d, dict):
+    print(d.get("path") or d.get("projectPath") or d.get("project_path") or "")
+else:
+    print("")
+' 2>/dev/null || true)
+    fi
+    if [ -n "$resolved" ]; then
+        PROJECT="$resolved"
+        return 0
+    fi
+    # Pass through; daemon /cli/wiki/* also resolves project= tokens.
+    PROJECT="$sel"
+}
+
+# Default nested label for wiki publish: workspace folder basename, slugified.
+_wiki_default_label() {
+    local base
+    base="$(basename "$PROJECT" 2>/dev/null || echo brain)"
+    printf '%s' "$base" | python3 -c '
+import re,sys
+s=sys.stdin.read().strip().lower()
+s=re.sub(r"[^a-z0-9]+","-",s).strip("-")
+print((s or "brain")[:48])
+' 2>/dev/null || echo "brain"
+}
+
+# Parse shared wiki flags. Sets: as_json, project_sel, port, label.
+# Remaining positionals go into wiki_pos array.
+# Usage: _wiki_parse_args [--need-pos] "$@" then inspect wiki_pos.
+_wiki_parse_args() {
+    as_json=false
+    project_sel=""
+    port=""
+    label=""
+    wiki_pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --port)
+                port="${2:-}"
+                if [ -z "$port" ]; then
+                    _wiki_err "usage" "--port requires a value"
+                    exit 2
+                fi
+                shift 2
+                ;;
+            --port=*) port="${1#--port=}"; shift ;;
+            --label)
+                label="${2:-}"
+                if [ -z "$label" ]; then
+                    _wiki_err "usage" "--label requires a value"
+                    exit 2
+                fi
+                shift 2
+                ;;
+            --label=*) label="${1#--label=}"; shift ;;
+            --workspace|--project)
+                project_sel="${2:-}"
+                if [ -z "$project_sel" ]; then
+                    _wiki_err "usage" "$1 requires a workspace path/name"
+                    exit 2
+                fi
+                shift 2
+                ;;
+            --workspace=*|--project=*)
+                project_sel="${1#*=}"; shift
+                ;;
+            --help|-h)
+                return 99
+                ;;
+            --)
+                shift
+                while [ $# -gt 0 ]; do wiki_pos+=("$1"); shift; done
+                break
+                ;;
+            -*)
+                _wiki_err "usage" "unknown flag '$1'"
+                exit 2
+                ;;
+            *)
+                wiki_pos+=("$1"); shift
+                ;;
+        esac
+    done
+    # Trailing bare project when no --workspace given: last positional that
+    # is not consumed as a required arg is applied by the caller.
+    return 0
+}
+
+cmd_wiki() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        status)     cmd_wiki_status "$@" ;;
+        index)      cmd_wiki_index "$@" ;;
+        note)       cmd_wiki_note "$@" ;;
+        seed)       cmd_wiki_seed "$@" ;;
+        serve)      cmd_wiki_serve "$@" ;;
+        publish)    cmd_wiki_publish "$@" ;;
+        unpublish)  cmd_wiki_unpublish "$@" ;;
+        ""|help|--help|-h)
+            cmd_help_wiki
+            exit 0
+            ;;
+        *)
+            echo "Unknown 'k2 wiki' subcommand: $sub" >&2
+            _wiki_usage
+            exit 1
+            ;;
+    esac
+}
+
+cmd_help_wiki() {
+    cat <<'EOF'
+k2 wiki — per-workspace knowledge base (brain map)
+
+Vault: <workspace>/.k2/wiki/  (Markdown + YAML frontmatter + [[wikilinks]])
+Index + optional localhost site live in the daemon (headless-safe).
+Publish reuses k2 publish subdomain (nested label.user.k2.dev → 127.0.0.1:port).
+
+USAGE
+  k2 wiki status [--json] [project]
+  k2 wiki index [--json] [project]
+  k2 wiki note <id> [--json] [project]
+  k2 wiki seed [project]
+  k2 wiki serve on|off [--port N] [project]
+  k2 wiki publish [--label LABEL] [project]
+  k2 wiki unpublish [project]
+
+COMMANDS
+  status     Local serve state + published label (if any)
+  index      Full graph index (nodes, links, noteCount)
+  note       Fetch one note body by stable id (wiki-relative path, e.g. Home.md)
+  seed       Create seed notes Home.md + _Index.md when missing
+  serve      Toggle read-only localhost SPA (binds 127.0.0.1 only)
+  publish    Turn serve ON, then create/point a nested subdomain (or print the command)
+  unpublish  Turn serve OFF and print how to remove the nested subdomain
+
+PROJECT
+  Optional [project] / --workspace / --project: workspace path, name, or uuid.
+  Default: current workspace (K2_PROJECT_PATH / walk-up from CWD).
+
+EXAMPLES
+  k2 wiki seed
+  k2 wiki index --json
+  k2 wiki note Home.md
+  k2 wiki serve on --port 7420
+  k2 wiki publish --label brain
+  k2 wiki status --json
+  k2 wiki unpublish
+
+SEE ALSO
+  k2 publish subdomain create <label> --target 127.0.0.1:<port>
+  k2 publish subdomain rm <label>
+  k2 publish --help
+EOF
+}
+
+cmd_wiki_status() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    # Optional trailing project
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local raw
+    raw=$(cli_request "/cli/wiki/serve/status")
+    # Enrich with index noteCount when human or when status alone is thin
+    local idx_raw=""
+    idx_raw=$(cli_request "/cli/wiki/index" 2>/dev/null || true)
+
+    AS_JSON="$as_json" STATUS_RAW="$raw" INDEX_RAW="$idx_raw" PROJECT_PATH="$PROJECT" python3 -c '
+import json, os, sys
+as_json = os.environ.get("AS_JSON") == "true"
+project = os.environ.get("PROJECT_PATH") or ""
+raw = os.environ.get("STATUS_RAW") or ""
+idx_raw = os.environ.get("INDEX_RAW") or ""
+
+def load(s):
+    try:
+        return json.loads(s) if s.strip() else {}
+    except Exception:
+        return {}
+
+d = load(raw)
+if not raw.strip():
+    print("Error: no response from daemon (wiki routes missing?)", file=sys.stderr)
+    sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err = d["error"]
+    if as_json:
+        print(json.dumps({"error": err if isinstance(err, dict) else {"code": "daemon", "hint": str(err)}}, separators=(",", ":")))
+    else:
+        print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+
+idx = load(idx_raw)
+if isinstance(idx, dict) and idx.get("error") is not None:
+    idx = {}
+
+note_count = idx.get("noteCount")
+if note_count is None and isinstance(idx.get("nodes"), list):
+    note_count = sum(1 for n in idx["nodes"] if n.get("exists", True))
+wiki_rel = idx.get("wikiRel") or ".k2/wiki"
+ws_path = idx.get("workspacePath") or project
+enabled = bool(d.get("enabled") or d.get("serving"))
+port = d.get("port")
+url = d.get("url") or (("http://127.0.0.1:%s" % port) if port else None)
+pub = d.get("publishedLabel") or d.get("published_label") or d.get("label")
+generated = idx.get("generatedAt") or d.get("generatedAt")
+
+out = {
+    "workspacePath": ws_path,
+    "wikiRel": wiki_rel,
+    "enabled": enabled,
+    "serving": enabled,
+    "port": port,
+    "url": url,
+    "publishedLabel": pub,
+    "noteCount": note_count,
+    "generatedAt": generated,
+}
+# Preserve extra daemon fields
+for k, v in (d.items() if isinstance(d, dict) else []):
+    if k not in out:
+        out[k] = v
+
+if as_json:
+    print(json.dumps(out, separators=(",", ":")))
+    sys.exit(0)
+
+print("Wiki  %s/%s" % (ws_path or "?", wiki_rel))
+print("  Notes:      %s" % (note_count if note_count is not None else "?"))
+if enabled:
+    print("  Serving:    yes  %s" % (url or ("port %s" % (port or "?"))))
+else:
+    print("  Serving:    no")
+if pub:
+    print("  Published:  %s  (nested subdomain label)" % pub)
+else:
+    print("  Published:  —")
+if generated:
+    print("  Indexed:    %s" % generated)
+'
+}
+
+cmd_wiki_index() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local raw
+    raw=$(cli_request "/cli/wiki/index")
+    if [ "$as_json" = "true" ]; then
+        AS_JSON=true python3 -c '
+import json,sys,os
+raw=sys.stdin.read()
+if not raw.strip():
+    print(json.dumps({"error":{"code":"no_response","hint":"no response from daemon"}}), file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception:
+    print(json.dumps({"error":{"code":"bad_json","hint":raw[:200]}}), file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print(json.dumps({"error": err if isinstance(err, dict) else {"code":"daemon","hint":str(err)}})); sys.exit(1)
+print(json.dumps(d, separators=(",", ":")))
+' <<<"$raw"
+        return 0
+    fi
+    printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+nodes = d.get("nodes") or []
+links = d.get("links") or []
+exists = [n for n in nodes if n.get("exists", True)]
+missing = [n for n in nodes if not n.get("exists", True)]
+print("Wiki index  %s" % (d.get("workspacePath") or d.get("wikiRel") or ""))
+print("  Generated:  %s" % (d.get("generatedAt") or "—"))
+print("  Notes:      %s  (+ %s missing stubs)" % (len(exists), len(missing)))
+print("  Links:      %s" % len(links))
+if not exists:
+    print("")
+    print("  Empty vault. Seed with: k2 wiki seed")
+    print("  Or drop Markdown under .k2/wiki/")
+    sys.exit(0)
+print("")
+print("  %-28s  %s" % ("ID", "TITLE"))
+for n in sorted(exists, key=lambda x: (x.get("title") or x.get("id") or "").lower())[:50]:
+    print("  %-28s  %s" % ((n.get("id") or "")[:28], n.get("title") or ""))
+if len(exists) > 50:
+    print("  … %d more (use --json)" % (len(exists) - 50))
+'
+}
+
+cmd_wiki_note() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    local note_id=""
+    # First positional is note id; optional second is project.
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --workspace|--project)
+                project_sel="${2:-}"; [ -z "$project_sel" ] && { _wiki_err "usage" "$1 requires a value"; exit 2; }
+                shift 2 ;;
+            --workspace=*|--project=*) project_sel="${1#*=}"; shift ;;
+            --help|-h) cmd_help_wiki; exit 0 ;;
+            -*)
+                _wiki_err "usage" "unknown flag '$1' — usage: k2 wiki note <id> [--json] [project]"
+                exit 2 ;;
+            *)
+                if [ -z "$note_id" ]; then note_id="$1"
+                elif [ -z "$project_sel" ]; then project_sel="$1"
+                else
+                    _wiki_err "usage" "unexpected argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$note_id" ]; then
+        _wiki_err "usage" "usage: k2 wiki note <id> [--json] [project]"
+        exit 2
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local raw
+    raw=$(cli_request "/cli/wiki/note" "id=$(urlencode "$note_id")")
+    if [ "$as_json" = "true" ]; then
+        printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print(json.dumps({"error":{"code":"no_response","hint":"no response from daemon"}}), file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception:
+    print(json.dumps({"error":{"code":"bad_json","hint":raw[:200]}}), file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print(json.dumps({"error": err if isinstance(err, dict) else {"code":"daemon","hint":str(err)}})); sys.exit(1)
+print(json.dumps(d, separators=(",", ":")))
+'
+        return 0
+    fi
+    printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+title = d.get("title") or d.get("id") or "?"
+print("# %s" % title)
+tags = d.get("tags") or []
+if tags:
+    print("tags: %s" % ", ".join(tags))
+print("")
+body = d.get("body")
+if body is None:
+    body = d.get("content") or d.get("markdown") or ""
+sys.stdout.write(body if body.endswith("\n") else body + "\n")
+'
+}
+
+cmd_wiki_seed() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    # POST form (daemon: project on query via cli_post_form; body optional).
+    local raw=""
+    raw=$(cli_post_form "/cli/wiki/seed")
+    printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+created = d.get("created") or d.get("files") or []
+if isinstance(created, str):
+    created = [created]
+if created:
+    print("Seeded wiki:")
+    for f in created:
+        print("  + %s" % f)
+else:
+    print("Wiki already seeded (Home.md / _Index.md present).")
+wiki = d.get("wikiRel") or d.get("path") or ".k2/wiki"
+print("  Vault: %s" % wiki)
+print("  View:  k2 wiki index   or open View Wiki in the app")
+'
+}
+
+cmd_wiki_serve() {
+    local mode="${1:-}"
+    shift || true
+    case "$mode" in
+        on|off|start|stop|true|false|1|0) ;;
+        --help|-h|help|"")
+            cat <<'EOF'
+Usage: k2 wiki serve on|off [--port N] [project]
+
+  on|start    Bind read-only localhost site (127.0.0.1)
+  off|stop    Drop the listener (in-app wiki still works)
+
+  --port N    Preferred port when turning on (optional)
+EOF
+            [ -z "$mode" ] && exit 2 || exit 0
+            ;;
+        *)
+            _wiki_err "usage" "usage: k2 wiki serve on|off [--port N] [project]"
+            exit 2
+            ;;
+    esac
+
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local enabled="false"
+    case "$mode" in
+        on|start|true|1) enabled="true" ;;
+        off|stop|false|0) enabled="false" ;;
+    esac
+
+    # Daemon accepts form: enabled=true|false&port=N (project on query).
+    local raw
+    if [ -n "$port" ]; then
+        raw=$(cli_post_form "/cli/wiki/serve" "enabled=${enabled}" "port=$(urlencode "$port")")
+    else
+        raw=$(cli_post_form "/cli/wiki/serve" "enabled=${enabled}")
+    fi
+    printf '%s' "$raw" | ENABLED="$enabled" python3 -c '
+import json,sys,os
+raw=sys.stdin.read()
+want = os.environ.get("ENABLED") == "true"
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+enabled = bool(d.get("enabled") if "enabled" in d else d.get("serving", want))
+port = d.get("port")
+url = d.get("url") or (("http://127.0.0.1:%s" % port) if port else None)
+if enabled:
+    print("Wiki serve ON  %s" % (url or ("port %s" % (port or "?"))))
+    print("  Bind is 127.0.0.1 only (read-only). Publish with: k2 wiki publish [--label LABEL]")
+else:
+    print("Wiki serve OFF")
+    if d.get("publishedLabel") or d.get("published_label"):
+        print("  Note: nested subdomain may still point here — run k2 wiki unpublish or")
+        print("  k2 publish subdomain rm %s" % (d.get("publishedLabel") or d.get("published_label")))
+'
+}
+
+cmd_wiki_publish() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    if [ -z "$label" ]; then
+        label="$(_wiki_default_label)"
+    fi
+
+    # 1) Ensure local serve is on (and capture port/url).
+    local serve_raw status_raw
+    if [ -n "$port" ]; then
+        serve_raw=$(cli_post_form "/cli/wiki/serve" "enabled=true" "port=$(urlencode "$port")" 2>/dev/null || true)
+    else
+        serve_raw=$(cli_post_form "/cli/wiki/serve" "enabled=true" 2>/dev/null || true)
+    fi
+    # No dedicated /cli/wiki/publish on daemon V1 — serve + subdomain is enough.
+    local pub_raw=""
+
+    status_raw=$(cli_request "/cli/wiki/serve/status" 2>/dev/null || true)
+    # Prefer serve response, then publish convenience, then status.
+    local port_num url
+    port_num=$(STATUS="$status_raw" SERVE="$serve_raw" PUB="$pub_raw" python3 -c '
+import json,os,sys
+def load(s):
+    try: return json.loads(s) if (s or "").strip() else {}
+    except Exception: return {}
+for s in (os.environ.get("PUB"), os.environ.get("SERVE"), os.environ.get("STATUS")):
+    d=load(s)
+    if isinstance(d, dict) and d.get("error"): continue
+    p=d.get("port")
+    if p is not None:
+        print(p); sys.exit(0)
+print("")
+')
+    url=$(STATUS="$status_raw" SERVE="$serve_raw" PUB="$pub_raw" python3 -c '
+import json,os,sys
+def load(s):
+    try: return json.loads(s) if (s or "").strip() else {}
+    except Exception: return {}
+for s in (os.environ.get("PUB"), os.environ.get("SERVE"), os.environ.get("STATUS")):
+    d=load(s)
+    if isinstance(d, dict) and d.get("error"): continue
+    u=d.get("url")
+    if u:
+        print(u); sys.exit(0)
+    p=d.get("port")
+    if p is not None:
+        print("http://127.0.0.1:%s" % p); sys.exit(0)
+print("")
+')
+
+    if [ -z "$port_num" ]; then
+        _wiki_err "serve_failed" "could not start wiki serve or read port from daemon status"
+        echo "  Check: k2 wiki serve on && k2 wiki status" >&2
+        exit 1
+    fi
+
+    local target="127.0.0.1:${port_num}"
+    echo "Wiki local site: ${url:-http://127.0.0.1:${port_num}}"
+    echo "  target for publish: $target"
+    echo "  label:              $label"
+    echo ""
+
+    # 2) Try automated subdomain create when Connect token is present.
+    local created=0
+    if [ -n "$(_connect_bearer_token 2>/dev/null || true)" ]; then
+        local cp_body cp_raw
+        cp_body="$(python3 -c 'import json,sys; print(json.dumps({"label": sys.argv[1], "target": sys.argv[2]}))' "$label" "$target")"
+        # Prefer create; on "already exists" style errors, try point.
+        if cp_raw=$(_connect_curl POST "/subdomains" "$cp_body" 2>/dev/null); then
+            local http_code
+            http_code=$(printf '%s' "$cp_raw" | head -1 | tr -d '[:space:]')
+            if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+                printf '%s' "$cp_raw" | _connect_subdomain_render '
+host = d.get("host") or (str(d.get("label","?")) + ".k2.dev")
+print("Published %s" % host)
+print("  target:    %s" % d.get("target","?"))
+print("  status:    %s" % d.get("status","?"))
+print("  effective: %s" % d.get("effective","?"))
+' 2>/dev/null && created=1 || true
+                if [ "$created" = "1" ]; then
+                    _stamp_subdomain_attrib claim "$label" || true
+                    _nudge_subdomain_refresh || true
+                fi
+            fi
+        fi
+        if [ "$created" != "1" ]; then
+            # Point (repoint existing label).
+            local point_body
+            point_body="$(python3 -c 'import json,sys; print(json.dumps({"target": sys.argv[1]}))' "$target")"
+            if cp_raw=$(_connect_curl PUT "/subdomains/$(urlencode "$label")" "$point_body" 2>/dev/null); then
+                http_code=$(printf '%s' "$cp_raw" | head -1 | tr -d '[:space:]')
+                if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+                    printf '%s' "$cp_raw" | _connect_subdomain_render '
+host = d.get("host") or (str(d.get("label","?")) + ".k2.dev")
+print("Repointed %s -> %s" % (host, d.get("target","?")))
+' 2>/dev/null && created=1 || true
+                    if [ "$created" = "1" ]; then
+                        _stamp_subdomain_attrib claim "$label" || true
+                        _nudge_subdomain_refresh || true
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+    if [ "$created" != "1" ]; then
+        echo "To expose this brain on your K2 Connect host (Pro nested subdomain):"
+        echo ""
+        echo "  k2 publish subdomain create $label --target $target"
+        echo ""
+        echo "If the label already exists:"
+        echo "  k2 publish subdomain point $label --target $target"
+        echo ""
+        echo "Requires: tunnel up (k2 tunnel start) + Pro plan for nested subdomains."
+        echo "Unpublish later: k2 wiki unpublish"
+    else
+        echo ""
+        echo "Live map is on the tunnel target above. Unpublish: k2 wiki unpublish"
+    fi
+
+    if [ "$as_json" = "true" ]; then
+        python3 -c '
+import json,sys
+print(json.dumps({
+  "ok": True,
+  "label": sys.argv[1],
+  "target": sys.argv[2],
+  "url": sys.argv[3] or None,
+  "port": int(sys.argv[4]) if sys.argv[4].isdigit() else sys.argv[4],
+  "subdomainCreated": sys.argv[5] == "1",
+}, separators=(",", ":")))
+' "$label" "$target" "${url:-}" "$port_num" "$created"
+    fi
+}
+
+cmd_wiki_unpublish() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    # Optional bare label? Spec is unpublish [project] only — if user
+    # passed --label, use it for the rm hint.
+    _wiki_apply_project "$project_sel"
+
+    local status_raw pub_label
+    status_raw=$(cli_request "/cli/wiki/serve/status" 2>/dev/null || true)
+    pub_label=$(printf '%s' "$status_raw" | python3 -c '
+import json,sys
+try: d=json.loads(sys.stdin.read() or "{}")
+except Exception: d={}
+print(d.get("publishedLabel") or d.get("published_label") or d.get("label") or "")
+' 2>/dev/null || true)
+    if [ -n "$label" ]; then
+        pub_label="$label"
+    fi
+
+    local raw
+    raw=$(cli_post_form "/cli/wiki/serve" "enabled=false")
+    printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print("Wiki serve: (no daemon response — continuing)")
+    sys.exit(0)
+try: d=json.loads(raw)
+except Exception:
+    print("Wiki serve: (unparseable daemon response — continuing)")
+    sys.exit(0)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Warning: serve off failed: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err)), file=sys.stderr)
+    sys.exit(0)
+print("Wiki serve OFF")
+' || true
+
+    echo ""
+    if [ -n "$pub_label" ]; then
+        echo "To remove the nested subdomain advertisement:"
+        echo "  k2 publish subdomain rm $pub_label"
+        echo "  k2 publish subdomain unclaim $pub_label   # drop workspace attribution"
+    else
+        echo "If you created a nested subdomain for this brain, remove it with:"
+        echo "  k2 publish subdomain list"
+        echo "  k2 publish subdomain rm <label>"
+    fi
+    echo ""
+    echo "Notes under .k2/wiki/ are kept (unpublish does not delete the vault)."
+
+    if [ "$as_json" = "true" ]; then
+        python3 -c '
+import json,sys
+print(json.dumps({
+  "ok": True,
+  "serving": False,
+  "publishedLabel": sys.argv[1] or None,
+  "hint": ("k2 publish subdomain rm %s" % sys.argv[1]) if sys.argv[1] else "k2 publish subdomain list",
+}, separators=(",", ":")))
+' "${pub_label:-}"
+    fi
+}
+
 cmd_skills() {
     local subcmd="${1:-list}"
     shift || true
@@ -6349,7 +7121,6 @@ print('Workspace Settings:')
 print(f\"  Name:      {d.get('name', '?')}\")
 print(f\"  Mode:      {d.get('mode', 'off')}\")
 print(f\"  Heartbeat: {'on' if d.get('heartbeatEnabled') else 'off'}\")
-print(f\"  State:     {d.get('stateId', '(none)')}\")
 print(f\"  Pinned:    {'yes' if d.get('pinned') else 'no'}\")
 " 2>/dev/null || cli_request "/cli/settings"
 }
@@ -6377,6 +7148,8 @@ cmd_help() {
         skills)                   cmd_help_skills ;;
         settings)                 cmd_help_settings ;;
         heartbeat)                cmd_help_heartbeat ;;
+        wiki)                     cmd_help_wiki ;;
+        publish)                  _publish_usage ;;
         deprecated|--deprecated)  cmd_help_deprecated ;;
         '')                       cmd_help_v2_daily ;;
         *)                        cmd_help_v2_daily ;;
@@ -7485,6 +8258,71 @@ cmd_schema() {
       "flags": []
     },
     {
+      "name": "wiki",
+      "usage": "k2 wiki <status|index|note|seed|serve|publish|unpublish> ...",
+      "description": "Per-workspace knowledge base (brain map) under .k2/wiki/: index graph, read notes, seed Home/_Index, localhost serve, publish via nested subdomain.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output where supported (status/index/note/publish/unpublish)."},
+        {"name": "--port", "arg": "N", "description": "Preferred localhost port for serve on / publish."},
+        {"name": "--label", "arg": "LABEL", "description": "Nested subdomain label for publish (default: workspace basename slug)."},
+        {"name": "--workspace", "arg": "project", "description": "Workspace path/name/uuid (alias: --project or trailing [project])."}
+      ]
+    },
+    {
+      "name": "wiki status",
+      "usage": "k2 wiki status [--json] [project]",
+      "description": "Local serve state (enabled/port/url) + published label + note count.",
+      "args": [{"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable object."}]
+    },
+    {
+      "name": "wiki index",
+      "usage": "k2 wiki index [--json] [project]",
+      "description": "Full wiki graph index (nodes + wikilinks) from the daemon indexer.",
+      "args": [{"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw WikiIndex JSON."}]
+    },
+    {
+      "name": "wiki note",
+      "usage": "k2 wiki note <id> [--json] [project]",
+      "description": "Fetch one note body by stable id (wiki-relative path, e.g. Home.md).",
+      "args": [{"name": "id", "required": true}, {"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Full note object including body."}]
+    },
+    {
+      "name": "wiki seed",
+      "usage": "k2 wiki seed [project]",
+      "description": "Create seed Home.md + _Index.md under .k2/wiki/ when missing.",
+      "args": [{"name": "project", "required": false}],
+      "flags": []
+    },
+    {
+      "name": "wiki serve",
+      "usage": "k2 wiki serve on|off [--port N] [project]",
+      "description": "Start/stop the read-only localhost wiki site (binds 127.0.0.1 only).",
+      "args": [{"name": "on|off", "required": true}, {"name": "project", "required": false}],
+      "flags": [{"name": "--port", "arg": "N", "description": "Preferred port when turning on."}]
+    },
+    {
+      "name": "wiki publish",
+      "usage": "k2 wiki publish [--label LABEL] [project]",
+      "description": "Turn serve ON and create/point a nested subdomain to 127.0.0.1:port (or print the k2 publish subdomain command).",
+      "args": [{"name": "project", "required": false}],
+      "flags": [
+        {"name": "--label", "arg": "LABEL", "description": "Nested subdomain label (default: workspace basename slug)."},
+        {"name": "--port", "arg": "N", "description": "Preferred local port before publish."},
+        {"name": "--json", "arg": null, "description": "JSON summary of label/target/port."}
+      ]
+    },
+    {
+      "name": "wiki unpublish",
+      "usage": "k2 wiki unpublish [project]",
+      "description": "Turn serve OFF and print how to remove the nested subdomain (notes are kept).",
+      "args": [{"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON summary with rm hint."}]
+    },
+    {
       "name": "skills",
       "usage": "k2 skills <list|create|remove|profile|...> [...]",
       "description": "Manage skill profiles (SKILL.md) for workspaces/agents.",
@@ -7493,7 +8331,7 @@ cmd_schema() {
     },
     {
       "name": "settings",
-      "usage": "k2 settings [--agentic <on|off>] [--state <id>] [...]",
+      "usage": "k2 settings [--mode <off|agent|manager>] [...]",
       "description": "Read/update daemon + workspace settings.",
       "args": [],
       "flags": []
@@ -10030,11 +10868,6 @@ WORKSPACE MODE
                             agent: workspace has a primary agent
                             manager: workspace coordinates other workspaces
 
-WORKSPACE STATE (capability tier)
-  --state <build|managed|maintenance|locked>
-                            Drives which actions the agent can take
-                            autonomously. See `k2 glossary state`.
-
 GLOBAL TOGGLES
   --agentic <on|off>        Enable/disable all background agent systems
 
@@ -10045,7 +10878,6 @@ COMPANION (mobile + remote-desktop access)
 EXAMPLES
   k2 settings                              # show current
   k2 settings --mode manager
-  k2 settings --state managed
   k2 settings --agentic off
   k2 settings --companion on
 EOF
@@ -10122,7 +10954,7 @@ K2SO retired verbs → new equivalents
 HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
 
   agentic on|off                  → settings --agentic <on|off>
-  state list|get|set              → settings --state <id>
+  state list|get|set              → (removed — Workspace States retired)
   mode off|agent|manager          → settings --mode <value>
   app-update                      → update --app
   commit-merge                    → commit --merge
@@ -10549,11 +11381,19 @@ PUBLISH (nested label.user.k2.dev; control plane — not zone DNS)
   publish --help                                OUTPUT CONTRACT + product boundary
   (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)
 
+WIKI (per-workspace brain map under .k2/wiki/)
+  wiki status [--json] [project]                Serve + publish state
+  wiki index [--json] [project]                 Graph index (nodes + links)
+  wiki note <id> [--json] [project]             One note body (e.g. Home.md)
+  wiki seed [project]                           Create Home.md + _Index.md if missing
+  wiki serve on|off [--port N] [project]        Localhost read-only site (127.0.0.1)
+  wiki publish [--label L] [project]            Serve on + subdomain create/point (or print cmd)
+  wiki unpublish [project]                      Serve off + hint to rm subdomain
+  wiki --help                                   Full wiki help
+
 SETTINGS
   settings                                      Show current settings
   settings --mode <off|agent|manager>           Workspace mode
-  settings --state <build|managed|maintenance|locked>
-                                                Workspace capability tier
   settings --agentic <on|off>                   Global agentic systems toggle
   settings --companion <on|off>                 Enable/disable companion tunnel
   settings --companion-password "<pw>"          Rotate companion password
@@ -16894,8 +17734,8 @@ case "${1:-help}" in
         fail_deprecated "agentic" "k2 settings --agentic <on|off>"
         ;;
     state)
-        # Phase 2.1: hard-deprecated. Forward users to settings --state.
-        fail_deprecated "state" "k2 settings --state <id>"
+        # Workspace States product feature retired entirely.
+        fail_deprecated "state" "(removed — Workspace States no longer exist)"
         ;;
     delegate)
         # Phase 2.1 A23: hard-deprecated. Modern harnesses (Claude Code,
@@ -17239,6 +18079,16 @@ EOF
         # K2 Connect account/Pro-subdomain management (calls the hosted
         # control plane directly, not the local daemon).
         shift; cmd_publish "$@"
+        ;;
+    wiki)
+        # Workspace knowledge base (brain map): index / note / seed /
+        # localhost serve / publish via nested subdomain. Daemon
+        # /cli/wiki/*; publish reuses k2 publish subdomain.
+        if _wants_help "${@:2}"; then
+            cmd_help_wiki
+            exit 0
+        fi
+        shift; cmd_wiki "$@"
         ;;
     connect)
         # 0.40.41 BREAKING: `k2 connect` was renamed to `k2 publish`

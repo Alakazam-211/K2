@@ -26,7 +26,7 @@ use std::path::Path;
 #[allow(deprecated)]
 use crate::deprecated::delegate::strip_worktree_from_frontmatter;
 use crate::workspace::agent_identity::parse_frontmatter;
-use crate::workspace::scheduler::{agent_work_dir, get_workspace_state};
+use crate::workspace::scheduler::agent_work_dir;
 use crate::workspace::session::{k2so_agents_unlock, simple_date};
 use crate::workspace::work_item::{atomic_write, read_work_item, WorkItem};
 
@@ -352,11 +352,11 @@ pub fn review_request_changes(
     Ok(())
 }
 
-/// Sub-agent completion. Reads the work item's frontmatter, consults
-/// the workspace state's capability for the item's `source`, and
-/// either auto-merges (`auto` mode — delegates to [`review_approve`])
-/// or moves the file from `active/` to `done/` for human review
-/// (`gated` mode). Returns JSON the CLI echoes back.
+/// Sub-agent completion. Workspace States (capability tiers) retired —
+/// completion always moves the work item from `active/` to `done/` for
+/// human review (formerly the default when no state was set / gated).
+/// Auto-merge-by-source is gone; use `k2so review approve` explicitly.
+/// Returns JSON the CLI echoes back.
 pub fn agent_complete(
     project_path: String,
     agent_name: String,
@@ -369,45 +369,21 @@ pub fn agent_complete(
     }
     let content = fs::read_to_string(&item_path).unwrap_or_default();
     let fm = parse_frontmatter(&content);
-    let source = fm
-        .get("source")
-        .cloned()
-        .unwrap_or_else(|| "manual".to_string());
-
-    let capability = if let Some(ws_state) = get_workspace_state(&project_path) {
-        ws_state.capability_for_source(&source).to_string()
-    } else {
-        "gated".to_string()
-    };
-
     let branch = fm.get("branch").cloned().unwrap_or_default();
 
-    if capability == "auto" && !branch.is_empty() {
-        match review_approve(project_path.clone(), branch.clone(), agent_name.clone()) {
-            Ok(_) => Ok(serde_json::json!({
-                "mode": "auto",
-                "action": "merged",
-                "branch": branch,
-                "agent": agent_name,
-            })
-            .to_string()),
-            Err(e) => Err(format!("Auto-merge failed: {}", e)),
-        }
-    } else {
-        let done_dir = agent_work_dir(&project_path, &agent_name, "done");
-        fs::create_dir_all(&done_dir).ok();
-        let dest = done_dir.join(&filename);
-        fs::rename(&item_path, &dest).map_err(|e| format!("Failed to move to done: {}", e))?;
+    let done_dir = agent_work_dir(&project_path, &agent_name, "done");
+    fs::create_dir_all(&done_dir).ok();
+    let dest = done_dir.join(&filename);
+    fs::rename(&item_path, &dest).map_err(|e| format!("Failed to move to done: {}", e))?;
 
-        Ok(serde_json::json!({
-            "mode": "gated",
-            "action": "moved_to_done",
-            "branch": branch,
-            "agent": agent_name,
-            "file": filename,
-        })
-        .to_string())
-    }
+    Ok(serde_json::json!({
+        "mode": "gated",
+        "action": "moved_to_done",
+        "branch": branch,
+        "agent": agent_name,
+        "file": filename,
+    })
+    .to_string())
 }
 
 #[cfg(test)]

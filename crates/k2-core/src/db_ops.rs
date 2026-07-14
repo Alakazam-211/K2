@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::db;
 use crate::db::schema::{
-    AgentPreset, FocusGroup, Project, TimeEntry, Workspace, WorkspaceSection, WorkspaceState,
+    AgentPreset, FocusGroup, Project, TimeEntry, Workspace, WorkspaceSection,
 };
 use crate::project_config;
 
@@ -46,87 +46,8 @@ const BUILT_IN_PRESETS: &[(&str, &str, &str, &str, i64)] = &[
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 12),
 ];
 
-// ── States (workspace states) ──────────────────────────────────────────
-
-pub fn states_list() -> Result<Vec<WorkspaceState>, String> {
-    let db = db::shared();
-    let conn = db.lock();
-    WorkspaceState::list(&conn).map_err(|e| e.to_string())
-}
-
-pub fn states_get(id: &str) -> Result<WorkspaceState, String> {
-    let db = db::shared();
-    let conn = db.lock();
-    WorkspaceState::get(&conn, id).map_err(|e| e.to_string())
-}
-
-pub fn states_create(
-    name: &str,
-    description: Option<&str>,
-    cap_features: &str,
-    cap_issues: &str,
-    cap_crashes: &str,
-    cap_security: &str,
-    cap_audits: &str,
-    heartbeat: bool,
-) -> Result<WorkspaceState, String> {
-    let db = db::shared();
-    let conn = db.lock();
-    let id = format!(
-        "state-{}",
-        Uuid::new_v4().to_string().split('-').next().unwrap_or("custom")
-    );
-    WorkspaceState::create(
-        &conn,
-        &id,
-        name,
-        description,
-        cap_features,
-        cap_issues,
-        cap_crashes,
-        cap_security,
-        cap_audits,
-        heartbeat,
-    )
-    .map_err(|e| e.to_string())?;
-    WorkspaceState::get(&conn, &id).map_err(|e| e.to_string())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn states_update(
-    id: &str,
-    name: Option<&str>,
-    description: Option<&str>,
-    cap_features: Option<&str>,
-    cap_issues: Option<&str>,
-    cap_crashes: Option<&str>,
-    cap_security: Option<&str>,
-    cap_audits: Option<&str>,
-    heartbeat: Option<bool>,
-) -> Result<WorkspaceState, String> {
-    let db = db::shared();
-    let conn = db.lock();
-    WorkspaceState::update(
-        &conn,
-        id,
-        name,
-        description,
-        cap_features,
-        cap_issues,
-        cap_crashes,
-        cap_security,
-        cap_audits,
-        heartbeat,
-    )
-    .map_err(|e| e.to_string())?;
-    WorkspaceState::get(&conn, id).map_err(|e| e.to_string())
-}
-
-pub fn states_delete(id: &str) -> Result<(), String> {
-    let db = db::shared();
-    let conn = db.lock();
-    WorkspaceState::delete(&conn, id).map_err(|e| e.to_string())
-}
+// Workspace States ops retired with the product feature. Schema layer
+// (`WorkspaceState` + `workspace_states` table) retained for migrations.
 
 // ── Workspaces ─────────────────────────────────────────────────────────
 

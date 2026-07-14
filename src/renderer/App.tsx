@@ -46,6 +46,7 @@ import { useRunningAgentsStore } from './stores/running-agents'
 import RunningAgentsPanel from './components/RunningAgentsPanel/RunningAgentsPanel'
 import FeedbackPage from './components/Feedback/FeedbackPage'
 import ProjectsPage from './components/Projects/ProjectsPage'
+import WikiPage from './components/Wiki/WikiPage'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
 import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs } from './stores/tabs'
@@ -219,6 +220,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
       <RunningAgentsPanel />
       <FeedbackPage />
       <ProjectsPage />
+      <WikiPage />
       <ContextMenu />
       <ConfirmDialog />
       <WhatsNewModal />
@@ -921,6 +923,7 @@ function AppRoot(): React.JSX.Element {
       {!settingsOpen && <RunningAgentsPanel />}
       {!settingsOpen && <FeedbackPage />}
       {!settingsOpen && <ProjectsPage />}
+      {!settingsOpen && <WikiPage />}
       <ContextMenu />
       <ConfirmDialog />
       {/* button-only while Settings is open so General → "Read what's new"

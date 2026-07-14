@@ -100,6 +100,8 @@ pub mod heartbeats;
 pub mod workspace;
 pub mod hook_config;
 pub mod inbox;
+/// Per-workspace knowledge base (brain map) under `.k2/wiki/`.
+pub mod wiki;
 // Phase 2.5c: historical migration helpers (one-shot, sentinel-gated).
 pub mod migrations;
 pub mod llm;

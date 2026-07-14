@@ -34,7 +34,7 @@ interface Props {
 
 const LOCKED_LAYERS: Record<SkillTier, string[]> = {
   manager: [
-    'Identity + Workspace State',
+    'Identity',
     'Connected Workspaces',
     'Team Roster',
     'Standing Orders',
@@ -56,14 +56,13 @@ const LOCKED_LAYERS: Record<SkillTier, string[]> = {
 }
 
 const LOCKED_LAYER_DESCRIPTIONS: Record<string, string> = {
-  'Identity + Workspace State': '**Auto-generated per workspace.** Workspace name, current mode (Build/Managed/Maintenance/Locked), and mode description.',
+  'Identity': '**Auto-generated per workspace/agent.** Workspace or agent name and role.',
   'Connected Workspaces': '**Auto-generated.** Workspaces connected via workspace relations — outgoing and incoming.',
   'Team Roster': '**Auto-generated.** All agent templates in this workspace with their roles. Used to decide delegation targets.',
   'Standing Orders': '**Auto-generated.** 9-step wake checklist: `k2so checkin` → triage messages → triage work by priority → handle simple / delegate complex → check active agents → review completed work → update status → mark done.',
-  'Decision Framework': '**Auto-generated.** Complexity (Simple vs Complex) × workspace mode (Build / Managed / Maintenance / Locked).',
-  'Delegation + Review': '**Auto-generated.** Delegation: choose agent → create work item → `k2so delegate` → agent works in worktree. Review: `k2so review approve/reject/feedback`.',
+  'Decision Framework': '**Auto-generated.** Complexity (Simple vs Complex) guides whether to work in main or hand off to a harness sub-agent/worktree.',
+  'Delegation + Review': '**Auto-generated.** Delegation: choose agent → create work item → harness worktree/spawn. Review: `k2so review approve/reject/feedback`.',
   'Communication Commands': '**Auto-generated.** `k2so checkin`, `status`, `done`, `msg`, `reserve`, `release`.',
-  'Identity': '**Auto-generated per agent.** Agent name + workspace it belongs to.',
   'Check In + Status + Done': '**Auto-generated.** `k2so checkin` (wake briefing), `k2so status "msg"` (report), `k2so done` / `k2so done --blocked "reason"`.',
   'File Reservations': '**Auto-generated.** `k2so reserve <paths>` (claim), `k2so release`.',
   'Cross-Workspace Messaging': '**Auto-generated.** `k2so msg <workspace>:inbox "text"`, `k2so msg --wake` for urgent delivery.',

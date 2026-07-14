@@ -457,37 +457,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             Err(r) => r,
         },
 
-        // ── Workspace states ────────────────────────────────────────
-        "/cli/states/list" => {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            match k2_core::db::schema::WorkspaceState::list(&conn) {
-                Ok(rows) => CliResponse::ok_json(
-                    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()),
-                ),
-                Err(e) => CliResponse::bad_request(e.to_string()),
-            }
-        }
-        "/cli/states/set" => match need_project(params) {
-            Ok(p) => {
-                let state_id = str_param(params, "state_id");
-                match k2_core::workspace::settings::update_project_setting(&p, "tier_id", &state_id)
-                {
-                    Ok(()) => {
-                        k2_core::agent_hooks::emit(
-                            k2_core::agent_hooks::HookEvent::SyncProjects,
-                            serde_json::Value::Null,
-                        );
-                        CliResponse::ok_json(
-                            serde_json::json!({"success": true, "stateId": state_id})
-                                .to_string(),
-                        )
-                    }
-                    Err(e) => CliResponse::bad_request(e),
-                }
-            }
-            Err(r) => r,
-        },
+        // Workspace States product surface retired: `/cli/states/*` routes
+        // removed. `workspace_states` table + `projects.tier_id` remain in
+        // the schema for migration/history only (no read/write product path).
 
         // ── Agent channel ops (status / done / reserve / release) ──
         "/cli/status" => match need_project(params) {
@@ -1111,11 +1083,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // generic GET dispatch.
         "/cli/claude-auth/status" => crate::claude_auth_host::handle_status(),
 
-        // ── Phase 2 Unit 4: states / workspaces / focus-groups / sections /
+        // ── Phase 2 Unit 4: workspaces / focus-groups / sections /
         //                    layouts / timer / presets / window-state /
         //                    projects / git (GET endpoints) ─────────────
-        // `/cli/states/{list,get,set}` already exist above — Unit 4 only
-        // adds the POST mutations (`create`/`update`/`delete`).
+        // Workspace States routes retired (product feature removed).
         "/cli/workspaces/list" => crate::db_routes::handle_workspaces_list(params),
         "/cli/focus-groups/list" => crate::db_routes::handle_focus_groups_list(),
         "/cli/sections/list" => crate::db_routes::handle_sections_list(params),
@@ -1159,6 +1130,16 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/inbox/read" => crate::inbox_routes::handle_read(params),
         "/cli/inbox/folders" => crate::inbox_routes::handle_folders(params),
         "/cli/inbox/search" => crate::inbox_routes::handle_search(params),
+
+        // ── Workspace knowledge base / brain map (read endpoints) ─
+        // Index + note body + localhost-serve status. Mutations
+        // (seed / serve on|off) are POST — see wiki_routes +
+        // dispatcher post_allowed.
+        "/cli/wiki/index" => crate::wiki_routes::handle_index(params),
+        "/cli/wiki/note" => crate::wiki_routes::handle_note(params),
+        "/cli/wiki/serve/status" | "/cli/wiki/status" => {
+            crate::wiki_routes::handle_serve_status(params)
+        }
 
         // ── Phase 2.1: Glossary ──────────────────────────────────
         "/cli/glossary" | "/cli/glossary/list" => crate::inbox_routes::handle_glossary_list(),

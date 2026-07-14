@@ -35,7 +35,6 @@ import remarkGfm from 'remark-gfm'
 import { CodeEditor } from '@/components/FileViewerPane/CodeEditor'
 import { CustomThemeCreator } from '../CustomThemeCreator'
 import { SettingsGroup, SettingDropdown } from '../controls/SettingControls'
-import { CAP_LABELS, CAP_COLORS, CAPABILITIES, type StateData } from '@shared/constants/capabilities'
 import { showContextMenu } from '@/lib/context-menu'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import type { SettingEntry } from '../searchManifest'
@@ -1563,11 +1562,6 @@ function ProjectDetail({
             />
           </div>
 
-          {/* State selector — only when a mode is active */}
-          {(project.agentMode || 'off') !== 'off' && (
-            <StateSelector projectId={project.id} currentStateId={project.stateId} />
-          )}
-
           {/* Heartbeats moved to the right column (next to History +
               Context Layers) so the wake-related surfaces live together
               and the main settings column stays focused on workspace
@@ -2102,75 +2096,6 @@ function AgentKebabMenu({ onSettings, onDelete }: { onSettings: () => void; onDe
   )
 }
 
-// ── State Selector (per-workspace dropdown) ──────────────────────────────
-
-function StateSelector({ projectId, currentStateId }: { projectId: string; currentStateId?: string | null }): React.JSX.Element {
-  const [states, setStates] = useState<StateData[]>([])
-  const [selectedId, setSelectedId] = useState(currentStateId || '')
-
-  useEffect(() => {
-    daemonCliGet<StateData[]>('states/list').then(setStates).catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    setSelectedId(currentStateId || '')
-  }, [currentStateId])
-
-  const handleChange = async (stateId: string) => {
-    setSelectedId(stateId)
-    try {
-      await daemonCliPost('projects/update', { id: projectId, stateId: stateId || '' })
-      emitProjectsChanged()
-      const store = useProjectsStore.getState()
-      const updated = store.projects.map((p) =>
-        p.id === projectId ? { ...p, stateId: stateId || null } : p
-      )
-      useProjectsStore.setState({ projects: updated })
-    } catch (err) {
-      console.error('[state-selector] Update failed:', err)
-    }
-  }
-
-  if (states.length === 0) return <></>
-
-  const activeState = states.find((t) => t.id === selectedId)
-
-  return (
-    <div className="pt-3 pb-1 border-t border-[var(--color-border)]">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-[var(--color-text-primary)]">State</span>
-        <SettingDropdown
-          value={selectedId || ''}
-          options={[
-            { value: '', label: 'No state' },
-            ...states.map((t) => ({ value: t.id, label: t.name })),
-          ]}
-          onChange={handleChange}
-        />
-      </div>
-      {activeState?.description && (
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5 leading-relaxed">{activeState.description}</p>
-      )}
-      {activeState && (
-        <div className="flex flex-wrap gap-x-1.5 gap-y-1 mt-2">
-          {CAPABILITIES.map((cap) => {
-            const val = activeState[cap.key] as string
-            return (
-              <span
-                key={cap.key}
-                className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] border border-[var(--color-border)] bg-[var(--color-bg)]`}
-              >
-                <span className="text-[var(--color-text-muted)]">{cap.label}</span>
-                <span className={CAP_COLORS[val] || 'text-[var(--color-text-muted)]'}>{CAP_LABELS[val]}</span>
-              </span>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ── Default Agent Selector (per-workspace dropdown, migration 0063) ──────
 //
 // Agent de-generalization Slice 1: the per-workspace default-agent
@@ -2180,9 +2105,8 @@ function StateSelector({ projectId, currentStateId }: { projectId: string; curre
 // (Slice 0's tolerant matching). ''/null = inherit the global
 // Settings → Editors & Agents default at resolve time.
 //
-// Same shape as StateSelector above: local component, optimistic store
-// update, POST `projects/update` (empty string clears the column back to
-// NULL — the stateId convention).
+// Local component with optimistic store update. POST `projects/update`
+// (empty string clears the column back to NULL).
 
 function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: string; currentDefaultAgent?: string | null }): React.JSX.Element {
   const presets = usePresetsStore((s) => s.presets)

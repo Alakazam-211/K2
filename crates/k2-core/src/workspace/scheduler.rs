@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use crate::workspace::agent_identity::{
     agent_dir, agents_dir, parse_frontmatter, resolve_agent_name, resolve_project_id,
 };
-use crate::db::schema::{WorkspaceSession, HeartbeatFire, WorkspaceState};
+use crate::db::schema::{WorkspaceSession, HeartbeatFire};
 use crate::scheduler::should_project_fire;
 
 // ── Path helpers private to the scheduler path ──────────────────────────
@@ -96,21 +96,10 @@ pub fn is_agent_locked(project_path: &str, agent_name: &str) -> bool {
 // `agent_heartbeats` DB table (see `db/schema.rs::AgentHeartbeat` +
 // `crate::heartbeats`) are the only heartbeat system.
 
-// ── Workspace state + inbox priority ───────────────────────────────────
-
-pub fn get_workspace_state(project_path: &str) -> Option<WorkspaceState> {
-    let db = crate::db::shared();
-    let conn = db.lock();
-    let state_id: Option<String> = conn
-        .query_row(
-            "SELECT tier_id FROM projects WHERE path = ?1",
-            rusqlite::params![project_path],
-            |row| row.get(0),
-        )
-        .ok()?;
-    let sid = state_id?;
-    WorkspaceState::get(&conn, &sid).ok()
-}
+// ── Inbox priority ─────────────────────────────────────────────────────
+//
+// Workspace States (capability tiers / `get_workspace_state`) retired.
+// Heartbeat firing is no longer gated by a workspace state row.
 
 /// Priority rank (lower = higher priority). Matches the frontend's
 /// priority ordering for inbox sorting.
@@ -209,21 +198,17 @@ pub fn k2so_agents_scheduler_tick(project_path: String) -> Result<Vec<String>, S
         .map(|r| r.1.clone())
         .unwrap_or_else(|| "heartbeat".to_string());
 
-    // Gate 1: workspace-level state. Locked workspaces halt all agents.
+    // Gate 1 was workspace-state.heartbeat (Locked state halted agents).
+    // Workspace States retired — heartbeat schedules fire regardless of
+    // the historical `projects.tier_id` column.
     //
-    // Audit hygiene (reliability overhaul): the three routine gate
-    // skips below no longer write per-tick `skipped_locked` /
-    // `skipped_schedule` audit rows — at the 60s tick cadence a locked
-    // or mode-off workspace produced 1,440 identical no-op rows a day
-    // and real fires drowned. The gates themselves are unchanged; only
-    // decisions that carry information reach `heartbeat_fires` now.
-    if let Some(ws_state) = get_workspace_state(&project_path) {
-        if ws_state.heartbeat == 0 {
-            return Ok(vec![]);
-        }
-    }
+    // Audit hygiene (reliability overhaul): routine gate skips no longer
+    // write per-tick `skipped_locked` / `skipped_schedule` audit rows —
+    // at the 60s tick cadence a mode-off workspace produced 1,440
+    // identical no-op rows a day and real fires drowned. Only decisions
+    // that carry information reach `heartbeat_fires` now.
 
-    // Gate 2: project-level schedule (Lane A — the legacy project-level
+    // Gate 1: project-level schedule (Lane A — the legacy project-level
     // `heartbeat_mode`/`heartbeat_schedule` columns; deliberately still
     // on the calendar-position evaluator. Folding this lane into
     // `workspace_heartbeats` rows is deferred — misfire study, owner

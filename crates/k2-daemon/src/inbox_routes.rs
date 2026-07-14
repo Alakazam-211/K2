@@ -380,11 +380,6 @@ const GLOSSARY: &[GlossaryEntry] = &[
         definition: "Post-Phase-2.5b: any existing skill at `.k2/skills/<name>/` can serve as a template for a new one. The former `.k2/agent-templates/<role>/` namespace was consolidated into the unified `.k2/skills/` home at first daemon boot. Create new skills from a seed via `k2so skills create <name> --template <existing-skill>`.",
     },
     GlossaryEntry {
-        term: "state",
-        summary: "Workspace capability tier (build/managed/maintenance/locked)",
-        definition: "A workspace's capability tier (build / managed / maintenance / locked) that gates which actions the agent can take autonomously. Configure via `k2so settings --state <id>`.",
-    },
-    GlossaryEntry {
         term: "workspace",
         summary: "A folder K2SO manages (has exactly one primary agent)",
         definition: "A folder that K2SO manages. Has at most one primary agent, plus heartbeats, settings, and inbox. List all with `k2so workspace list`.\n\nNot to be confused with a *project*: a project is a named GROUP of workspaces sharing one chat + one PoC agent (see `k2so glossary project`). `k2 msg` takes a workspace name, never a project name.",

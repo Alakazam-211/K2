@@ -27,7 +27,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::workspace::agent_identity::{agents_dir, parse_frontmatter, resolve_agent_name};
-use crate::workspace::scheduler::{agent_work_dir, get_workspace_state, is_agent_locked};
+use crate::workspace::scheduler::{agent_work_dir, is_agent_locked};
 use crate::workspace::work_item::{read_work_item, WorkItem};
 use crate::inbox::{list_folder as inbox_list_folder, InboxItem};
 
@@ -35,25 +35,15 @@ use crate::inbox::{list_folder as inbox_list_folder, InboxItem};
 /// `.k2so/inbox/` (root-level untriaged arrivals) on disk (no DB
 /// access) and renders a human-readable report.
 ///
-/// Workspace-state capability gating:
-/// - `off`  → items in that source category are silently omitted.
-/// - `gated` → items appear with a `[NEEDS APPROVAL]` tag.
-/// - `auto` → plain listing.
-/// Missing workspace state = "auto" everywhere (permissive).
+/// Workspace States (capability gating by source type) retired — every
+/// inbox item is listed without omit/gated labels.
 pub fn triage_summary(project_path: &str) -> Result<String, String> {
     let dir = agents_dir(project_path);
     if !dir.exists() {
         return Ok("No agents configured.".to_string());
     }
 
-    let ws_state = get_workspace_state(project_path);
-    let state_name = ws_state
-        .as_ref()
-        .map(|t| t.name.as_str())
-        .unwrap_or("(no state set)");
-
     let mut summary = String::new();
-    summary.push_str(&format!("Workspace state: {}\n\n", state_name));
     let entries = fs::read_dir(&dir).map_err(|e| e.to_string())?;
 
     for entry in entries.flatten() {
@@ -130,21 +120,9 @@ pub fn triage_summary(project_path: &str) -> Result<String, String> {
             ));
         }
         for item in &inbox_items {
-            let cap_status = ws_state
-                .as_ref()
-                .map(|t| t.capability_for_source(&item.source).to_string())
-                .unwrap_or_else(|| "auto".to_string());
-            if cap_status == "off" {
-                continue;
-            }
-            let gate_label = if cap_status == "gated" {
-                " [NEEDS APPROVAL]"
-            } else {
-                ""
-            };
             summary.push_str(&format!(
-                "  Inbox: \"{}\" (priority: {}, type: {}, source: {}{})\n",
-                item.title, item.priority, item.item_type, item.source, gate_label
+                "  Inbox: \"{}\" (priority: {}, type: {}, source: {})\n",
+                item.title, item.priority, item.item_type, item.source
             ));
         }
         summary.push('\n');
@@ -167,24 +145,12 @@ pub fn triage_summary(project_path: &str) -> Result<String, String> {
             summary.push_str("  Coordinator: LOCKED (active session running)\n");
         }
         for item in &ws_items {
-            let cap_status = ws_state
-                .as_ref()
-                .map(|t| t.capability_for_source(&item.source).to_string())
-                .unwrap_or_else(|| "auto".to_string());
-            if cap_status == "off" {
-                continue;
-            }
-            let gate_label = if cap_status == "gated" {
-                " [NEEDS APPROVAL]"
-            } else {
-                ""
-            };
             // `type` field dropped in the WorkItem → InboxItem
             // migration (no analogue on the new shape). `source` is
             // preserved and now does double duty.
             summary.push_str(&format!(
-                "  \"{}\" (priority: {}, source: {}{})\n",
-                item.title, item.priority, item.source, gate_label
+                "  \"{}\" (priority: {}, source: {})\n",
+                item.title, item.priority, item.source
             ));
         }
         summary.push('\n');

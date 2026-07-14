@@ -24,9 +24,9 @@ use std::path::PathBuf;
 
 use crate::skills::version::ensure_skill_up_to_date;
 use crate::workspace::agent_identity::{
-    agent_dir, agents_dir, parse_frontmatter, resolve_project_id,
+    agent_dir, agents_dir, parse_frontmatter,
 };
-use crate::workspace::scheduler::{agent_work_dir, get_workspace_state};
+use crate::workspace::scheduler::agent_work_dir;
 use crate::workspace::wake_prompts::strip_frontmatter;
 use crate::workspace::work_item::{safe_read_to_string, WorkItem};
 use crate::fs_atomic::{atomic_write_str, log_if_err};
@@ -83,16 +83,6 @@ k2so checkin --done                                 # signal task completion
 k2so done                                           # shortcut for `checkin --done`
 ```
 "#;
-
-/// Format a capability state for display in CLAUDE.md.
-pub fn format_cap(cap: &str) -> &str {
-    match cap {
-        "auto" => "auto (build + merge)",
-        "gated" => "gated (build PR, wait for approval)",
-        "off" => "off (do not act)",
-        _ => cap,
-    }
-}
 
 /// Extract a named section from markdown content (## Heading through next ## or end).
 /// Returns the body text (without the heading itself), or None if the section is empty/absent.
@@ -223,26 +213,6 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
     // ── Organic role-integration directive (PRD §3.2/§3.3) ──
     skill.push_str(&organic_role_integration_section("Workspace Manager"));
 
-    // Read workspace state from DB
-    {
-        let db = crate::db::shared();
-        let conn = db.lock();
-        if let Some(project_id) = resolve_project_id(&conn, project_path) {
-            // Get workspace state
-            let state_info: Option<(String, String)> = conn.query_row(
-                "SELECT ws.name, ws.description FROM workspace_states ws \
-                 JOIN projects p ON p.tier_id = ws.id WHERE p.id = ?1",
-                rusqlite::params![project_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            ).ok();
-
-            if let Some((state_name, state_desc)) = state_info {
-                skill.push_str(&format!("**Mode: {}** — {}\n\n", state_name, state_desc));
-            }
-
-        }
-    }
-
     // ── 2. Team — Connected Workspaces ──
     //
     // 0.39.0 directive (workspace==agent model): the team is the set
@@ -312,14 +282,6 @@ On each wake, run through this in order:
 ### By Task Complexity
 - **Simple** (typo, config, single-file fix): work directly in the main branch.
 - **Complex** (multi-file feature, refactor, new system): hand off to your harness's sub-agent / worktree feature. Load a skill profile (`k2so skills profile <name>`) into the spawned session's context so the sub-agent has the right persona. K2SO no longer spawns agents — your harness does.
-
-### By Workspace State
-- **Build**: full autonomy. Triage, file, merge, ship. No human sign-off needed.
-- **Managed**: features and audits need human approval before merge. Crashes and security auto-ship.
-- **Maintenance**: no new features. Fix bugs and security only. Issues and audits need approval.
-- **Locked**: no agent activity. Do not act.
-
-(Run `k2so glossary state` if these terms are unfamiliar.)
 
 "#);
 
@@ -822,16 +784,15 @@ Skills are documents the harness loads when spawning sub-agents — K2SO no long
 ## Settings + diagnostics
 
 ```
-k2so settings                                # current mode, state, agentic toggle, companion
+k2so settings                                # current mode, agentic toggle, companion
 k2so settings --mode <off|agent|manager>
-k2so settings --state <build|managed|maintenance|locked>
 k2so settings --agentic <on|off>
 k2so hooks status                            # verify CLI-LLM hook wiring is live
 ```
 
 ## Glossary
 
-Run `k2so glossary <term>` for definitions of K2SO-specific terms (workspace, skill, inbox, heartbeat, state, …). The full daily-verb surface is in `k2so help`; power-user verbs in `k2so help --advanced`.
+Run `k2so glossary <term>` for definitions of K2SO-specific terms (workspace, skill, inbox, heartbeat, …). The full daily-verb surface is in `k2so help`; power-user verbs in `k2so help --advanced`.
 "#);
     skill
 }
@@ -1251,22 +1212,6 @@ pub fn compose_agent_wake_context(
         }
     }
 
-    // Add workspace state constraints
-    if let Some(ws_state) = get_workspace_state(project_path) {
-        md.push_str("## Workspace State Constraints\n\n");
-        md.push_str(&format!("This workspace operates under the **{}** state.\n\n", ws_state.name));
-        if let Some(ref desc) = ws_state.description {
-            md.push_str(&format!("{}\n\n", desc));
-        }
-        md.push_str("| Source Type | Permission |\n|---|---|\n");
-        md.push_str(&format!("| Features | {} |\n", format_cap(&ws_state.cap_features)));
-        md.push_str(&format!("| Issues | {} |\n", format_cap(&ws_state.cap_issues)));
-        md.push_str(&format!("| Crashes | {} |\n", format_cap(&ws_state.cap_crashes)));
-        md.push_str(&format!("| Security | {} |\n", format_cap(&ws_state.cap_security)));
-        md.push_str(&format!("| Audits | {} |\n", format_cap(&ws_state.cap_audits)));
-        md.push_str("\n**auto** = build and merge automatically. **gated** = build PR but wait for human approval. **off** = do not act.\n\n");
-    }
-
     // Write the SKILL.md file alongside the CLAUDE.md.
     // SKILL.md is harness-agnostic — works with Claude Code, Pi, Aider, etc.
     // CLAUDE.md contains identity + task context only. SKILL.md has the CLI protocol.
@@ -1389,10 +1334,9 @@ mod tests {
 
     #[test]
     fn manager_skill_content_is_non_empty_and_includes_tier_headers() {
-        // generate_manager_skill_content hits the DB (workspace_states +
-        // workspace_relations); use a unique unregistered path so the
-        // DB lookups return None and the template falls through to its
-        // baseline body.
+        // generate_manager_skill_content hits the DB for peer relations;
+        // use a unique unregistered path so DB lookups return None and
+        // the template falls through to its baseline body.
         let project_path = format!("/tmp/manager-skill-{}", Uuid::new_v4());
         let body = generate_manager_skill_content(&project_path, "TestWorkspace");
 

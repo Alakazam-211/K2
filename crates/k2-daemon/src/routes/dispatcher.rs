@@ -11,7 +11,7 @@
 //!
 //! `/cli/*` POST routes use `super::http::require_post` to enforce
 //! method gating per [[feedback_post_only_route_guards]] memory; the
-//! starts_with arms (`/cli/git/`, `/cli/states/`, `/cli/workspaces/`,
+//! starts_with arms (`/cli/git/`, `/cli/workspaces/`,
 //! `/cli/focus-groups/`, `/cli/sections/`, `/cli/workspace-layouts/`,
 //! `/cli/timer/`, `/cli/presets/`, `/cli/window-state/`,
 //! `/cli/projects/`, `/cli/fs/`, `/cli/chat/`, `/cli/themes/`,
@@ -495,14 +495,14 @@ async fn handle_one_request(
             | "/cli/heartbeat/uninstall-launchd"
             | "/cli/heartbeat/apply-wake-scheduler"
             | "/cli/agents/archive-orphans"
-            // Phase 2 Unit 4 — DB-writing routes (states / workspaces /
+            // Phase 2 Unit 4 — DB-writing routes (workspaces /
             // focus-groups / sections / workspace-layouts / timer /
             // presets / window-state / projects / git). JSON-bodied
             // writes — implicit method gate via the `starts_with`
             // dispatch arm in handle_connection that runs Unit 4's
             // POST dispatch. Listed explicitly here so the top-level
             // 405 guard never short-circuits them.
-            | "/cli/states/create" | "/cli/states/update" | "/cli/states/delete"
+            // Workspace States POST routes retired with the product feature.
             | "/cli/workspaces/create" | "/cli/workspaces/delete" | "/cli/workspaces/set-nav-visible"
             | "/cli/focus-groups/create" | "/cli/focus-groups/update" | "/cli/focus-groups/delete"
             | "/cli/focus-groups/assign" | "/cli/focus-groups/reconcile"
@@ -674,6 +674,13 @@ async fn handle_one_request(
             | "/cli/inbox/delete"
             | "/cli/inbox/respond"
             | "/cli/inbox/migrate"
+            // Workspace knowledge base (brain map) — seed notes +
+            // localhost serve on/off. Query/form POSTs; token_ok.
+            // Reads (index/note/status) are GETs via crate::cli::dispatch.
+            | "/cli/wiki/seed"
+            | "/cli/wiki/serve"
+            | "/cli/wiki/serve/on"
+            | "/cli/wiki/serve/off"
             // K2 Connect host-awareness GAP — workspace skill / agent /
             // session / relations / heartbeat-flag / onboarding writes.
             // The renderer previously fired these via LOCAL Tauri
@@ -3152,8 +3159,7 @@ async fn handle_one_request(
         // (`/cli/presets/*` mutations moved to the owner/admin arm
         // above — W6.)
         p if is_post && post_allowed && (
-            p.starts_with("/cli/states/")
-                || p.starts_with("/cli/workspaces/")
+            p.starts_with("/cli/workspaces/")
                 || p.starts_with("/cli/focus-groups/")
                 || p.starts_with("/cli/sections/")
                 || p.starts_with("/cli/workspace-layouts/")
@@ -3698,6 +3704,61 @@ async fn handle_one_request(
                     .to_string(),
             });
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body).await;
+        }
+        // Workspace knowledge base — seed + localhost serve on/off.
+        // token_ok (owner OR connect-user), same tier as fs/inbox reads.
+        // spawn_blocking so serve start can Handle::block_on bind without
+        // pinning an async worker; the accept loop is then tokio::spawn'd.
+        p if is_post && post_allowed && p.starts_with("/cli/wiki/") => {
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let mut params = super::http::parse_params(&path, &query);
+            for (k, v) in super::http::parse_form_body(&body_bytes) {
+                params.insert(k, v);
+            }
+            // JSON body optional: { "enabled": true, "port": 0, "project": "..." }
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                if let Some(obj) = v.as_object() {
+                    for (k, val) in obj {
+                        let s = match val {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Bool(b) => b.to_string(),
+                            serde_json::Value::Number(n) => n.to_string(),
+                            _ => continue,
+                        };
+                        if !s.is_empty() {
+                            params.insert(k.clone(), s);
+                        }
+                    }
+                }
+            }
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::wiki_routes::dispatch_post(&p_owned, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(
+                &mut *stream,
+                result.status,
+                result.content_type,
+                &result.body,
+            )
+            .await;
         }
         // 0.39.45 (#35/#37/#29) — live-msg POST form. Same handler as
         // the GET form (crate::cli::dispatch → workspace_routes), but

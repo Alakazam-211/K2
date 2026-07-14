@@ -1235,7 +1235,6 @@ fi
 SECTIONS=(
     "GeneralSection:GENERAL_MANIFEST"
     "ProjectsSection:PROJECTS_MANIFEST"
-    "WorkspaceStatesSection:WORKSPACE_STATES_MANIFEST"
     "AgentSkillsSection:AGENT_SKILLS_MANIFEST"
     "TerminalSection:TERMINAL_MANIFEST"
     "CodeEditorSettingsSection:CODE_EDITOR_MANIFEST"

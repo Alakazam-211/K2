@@ -28,7 +28,7 @@ use std::path::PathBuf;
 
 use crate::skills::content::generate_agent_claude_md_content;
 use crate::workspace::agent_identity::agent_dir;
-use crate::workspace::scheduler::{agent_work_dir, get_workspace_state};
+use crate::workspace::scheduler::agent_work_dir;
 use crate::workspace::work_item::{atomic_write, read_work_item};
 
 /// Shorten a slug to a maximum length, breaking at word boundaries.
@@ -236,36 +236,18 @@ pub fn k2so_agents_delegate(
     atomic_write(&claude_md_path, &claude_md)?;
 
     // 4. Build the launch command for the frontend.
-    let source_type = &item.source;
-    let capability = if let Some(ws_state) = get_workspace_state(&project_path) {
-        ws_state.capability_for_source(source_type).to_string()
-    } else {
-        "gated".to_string()
-    };
-
-    let completion_protocol = if capability == "auto" {
-        format!(
-            "When done:\n\
-            1. Commit all your changes to branch `{branch}`\n\
-            2. Run: `k2so agent complete --agent {agent} --file {filename}`\n\
-            This will automatically merge your branch into main and clean up the worktree.\n\
-            3. Notify the workspace manager that you're done:\n\
-            Run `k2so agents running` to find the manager's terminal ID (look for `.k2so/agents/manager` in the CWD),\n\
-            then run: `k2so terminal write <manager-terminal-id> \"Completed: {title}. Branch {branch} merged.\"`",
-            agent = target_agent, branch = worktree.branch, filename = item.filename, title = item.title,
-        )
-    } else {
-        format!(
-            "When done:\n\
-            1. Commit all your changes to branch `{branch}`\n\
-            2. Run: `k2so agent complete --agent {agent} --file {filename}`\n\
-            This will move your work to done and flag it for human review.\n\
-            3. Notify the workspace manager that your work is ready for review:\n\
-            Run `k2so agents running` to find the manager's terminal ID (look for `.k2so/agents/manager` in the CWD),\n\
-            then run: `k2so terminal write <manager-terminal-id> \"Ready for review: {title}. Branch: {branch}\"`",
-            agent = target_agent, branch = worktree.branch, filename = item.filename, title = item.title,
-        )
-    };
+    // Workspace States retired — completion always goes to human review
+    // (formerly gated default when no state was set).
+    let completion_protocol = format!(
+        "When done:\n\
+        1. Commit all your changes to branch `{branch}`\n\
+        2. Run: `k2so agent complete --agent {agent} --file {filename}`\n\
+        This will move your work to done and flag it for human review.\n\
+        3. Notify the workspace manager that your work is ready for review:\n\
+        Run `k2so agents running` to find the manager's terminal ID (look for `.k2so/agents/manager` in the CWD),\n\
+        then run: `k2so terminal write <manager-terminal-id> \"Ready for review: {title}. Branch: {branch}\"`",
+        agent = target_agent, branch = worktree.branch, filename = item.filename, title = item.title,
+    );
 
     let task_instructions = format!(
         "\n\n## Your Current Assignment\n\n\

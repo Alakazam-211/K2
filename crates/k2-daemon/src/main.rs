@@ -66,6 +66,7 @@ mod heartbeat_launch;
 mod heartbeat_monitor;
 mod heartbeat_routes;
 mod inbox_routes;
+mod wiki_routes;
 mod llm_host;
 mod llm_routes;
 // K2 Mail foundation (prd-email-server-v1) — Stalwart-sidecar mail

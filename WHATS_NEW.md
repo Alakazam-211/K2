@@ -3,6 +3,52 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.47 — Workspace wiki brain map
+
+Your notes become a living map. Open **View Wiki** on a workspace to explore
+`[[wikilinks]]` as a force graph, read articles side-by-side, and zoom out to
+every brain on the machine.
+
+### Workspace knowledge base
+
+- **View Wiki.** From the workspace panel: a full-page map of
+  `.k2/wiki/` Markdown notes. Click a node to read it; wikilinks in the
+  article jump to other notes. **Hide article** collapses the reader so
+  the graph uses the full width.
+
+- **Search + Articles count.** Filter notes by title, tags, or aliases.
+  **Articles** shows how many real notes match the current scope and
+  search (not phantom missing links).
+
+- **Global / Local.** Global is the whole workspace brain. Local zooms to
+  the neighborhood of the selected note (depth 1–2). Home stays lightly
+  blue when not selected so you can always find it.
+
+- **Seed & Serve.** One click creates Home + Index under `.k2/wiki/`.
+  Serve a read-only localhost site when you want to share or browse in a
+  browser. CLI: `k2 wiki status|index|note|seed|serve`.
+
+### K2 fleet map
+
+- **K2 tab.** See every workspace brain registered on this host
+  (`~/.k2/wiki`). Workspace hubs connect into each brain without polluting
+  per-workspace notes.
+
+- **Projects | Groups.** Two fleet lenses in their own tab strip:
+  - **Projects** — project squares link to member workspace hubs. Filter
+    with the same workspace/project dropdown used on Feedback.
+  - **Groups** — focus-group squares link to hubs when focus groups are
+    on. Filter with a focus-group menu (All / Ungrouped / each group).
+
+- **Membership ≠ wikilinks.** Dashed edges are organizational (project or
+  focus group). Solid edges inside a brain are real `[[wikilinks]]`.
+
+### Cleanup
+
+- **State is gone product-wide.** Workspace States settings and related
+  surface area are removed so the model stays simpler: workspaces,
+  projects, and agents.
+
 ## 0.40.46 — Cross-server agents + WebGL terminal you can tune
 
 Two big tracks since 0.40.45: **federated agent messaging that actually

@@ -197,47 +197,18 @@ fi
 run agentic on > /dev/null
 
 # ═══════════════════════════════════════════════════════════════════════
-section "3. Workspace States"
+section "3. Workspace States (retired)"
 # ═══════════════════════════════════════════════════════════════════════
 
-OUTPUT=$(run state list)
-if echo "$OUTPUT" | grep -q "Build"; then
-    pass "state list shows default Build state"
+OUTPUT=$(run state list 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "deprecated\|removed\|no longer"; then
+    pass "state list hard-deprecated"
 else
-    fail "state list" "Expected 'Build' in output: $OUTPUT"
-fi
-
-if echo "$OUTPUT" | grep -q "Maintenance"; then
-    pass "state list shows Maintenance state"
-else
-    fail "state list Maintenance" "Expected 'Maintenance' in output: $OUTPUT"
-fi
-
-if echo "$OUTPUT" | grep -q "Locked"; then
-    pass "state list shows Locked state"
-else
-    fail "state list Locked" "Expected 'Locked' in output: $OUTPUT"
-fi
-
-if [ "$PROJECT_REGISTERED" = true ]; then
-    OUTPUT=$(run state set state-build)
-    if echo "$OUTPUT" | grep -q "state-build"; then
-        pass "state set assigns Build state to workspace"
+    if echo "$OUTPUT" | grep -qE 'Build|Maintenance|Locked'; then
+        fail "state list retired" "Expected deprecation, got: $OUTPUT"
     else
-        fail "state set" "Expected 'state-build' in output: $OUTPUT"
+        pass "state list not serving states"
     fi
-
-    OUTPUT=$(run settings)
-    if echo "$OUTPUT" | grep -q "state-build"; then
-        pass "settings shows assigned state"
-    else
-        fail "settings state" "Expected 'state-build' in settings: $OUTPUT"
-    fi
-
-    run state set "" > /dev/null
-else
-    skip "state set (project not in DB)"
-    skip "settings shows assigned state (project not in DB)"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -438,21 +409,18 @@ fi
 run work move --agent test-backend --file test-bug-fix.md --from active --to inbox > /dev/null 2>&1 || true
 
 # ═══════════════════════════════════════════════════════════════════════
-section "6b. State Get"
+section "6b. State Get (retired)"
 # ═══════════════════════════════════════════════════════════════════════
 
-OUTPUT=$(run state get state-build)
-if echo "$OUTPUT" | grep -q "Build\|auto\|capFeatures"; then
-    pass "state get returns state details"
+OUTPUT=$(run state get state-build 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "deprecated\|removed\|no longer"; then
+    pass "state get hard-deprecated"
 else
-    fail "state get" "Expected state details in output: $OUTPUT"
-fi
-
-OUTPUT=$(run state get state-maintenance)
-if echo "$OUTPUT" | grep -q "Maintenance\|gated"; then
-    pass "state get maintenance state"
-else
-    fail "state get maintenance" "Output: $OUTPUT"
+    if echo "$OUTPUT" | grep -q "capFeatures\|Build"; then
+        fail "state get retired" "Expected deprecation, got: $OUTPUT"
+    else
+        pass "state get not serving state details"
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════

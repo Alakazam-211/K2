@@ -74,9 +74,9 @@ export const LINE_HEIGHT_MULT_MIN = 1.0
 export const LINE_HEIGHT_MULT_MAX = 1.6
 
 /** Character tracking: multiplies measured monospace cell width.
- *  1.0 = measured advance; >1 opens spacing (DOM often reads a hair
- *  wider than device-floored WebGL). Global across styles. */
-export const CHAR_TRACKING_DEFAULT = 1.0
+ *  WebGL default 1.2 opens device-floored advance toward DOM feel.
+ *  1.0 = measured advance. WebGL-only knob. */
+export const CHAR_TRACKING_DEFAULT = 1.2
 export const CHAR_TRACKING_MIN = 0.9
 export const CHAR_TRACKING_MAX = 1.4
 

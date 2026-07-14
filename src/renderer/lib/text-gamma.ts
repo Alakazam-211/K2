@@ -3,7 +3,7 @@
 // The WebGL painter thins/fattens glyph edges with `pow(coverage, gamma)`
 // in the fragment shader. The right value depends on polarity:
 //   - dark terminal bg  → ~0.7 (fatten; light-on-dark reads thin)
-//   - light terminal bg → ~1.2 (thin; dark-on-light reads bold)
+//   - light terminal bg → ~1.1 (thin; dark-on-light reads bold)
 //
 // User overrides are PER-STYLE / PER-SCHEME (like style dials), stored
 // under localStorage `k2.textGamma.<styleId>.<scheme>`. The Styles
@@ -19,10 +19,10 @@
 
 import type { StyleMeta, StylePaletteMeta, StyleScheme } from '@/styles.generated'
 
-/** Dark-theme preset (fatten). */
+/** Dark-theme preset (fatten). Not the clamp floor (0.5) — 0.7 is the feel default. */
 export const TEXT_GAMMA_DARK = 0.7
 /** Light-theme preset (thin). */
-export const TEXT_GAMMA_LIGHT = 1.2
+export const TEXT_GAMMA_LIGHT = 1.1
 /** Inclusive clamp for store writes and paint-time resolution. */
 export const TEXT_GAMMA_MIN = 0.5
 export const TEXT_GAMMA_MAX = 3
@@ -111,7 +111,7 @@ export function relativeLuminance(bg: string | number): number {
   return 0.2126 * lin(r8) + 0.7152 * lin(g8) + 0.0722 * lin(b8)
 }
 
-/** Rosson's calibration: dark bg → 0.7, light bg → 1.2. */
+/** Rosson's calibration: dark bg → 0.7, light bg → 1.1. */
 export function defaultTextGammaFor(bg: string | number): number {
   return relativeLuminance(bg) < 0.5 ? TEXT_GAMMA_DARK : TEXT_GAMMA_LIGHT
 }

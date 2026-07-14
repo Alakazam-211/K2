@@ -29,7 +29,7 @@ import {
 import { TEXT_GAMMA_LIGHT, TEXT_GAMMA_MIN, TEXT_GAMMA_MAX } from '@/lib/text-gamma'
 
 describe('migrateTerminalSettings v5 → v6 (textGamma)', () => {
-  it('stamps textGamma: 1.2 on a v5 blob without the field', () => {
+  it('stamps light-preset textGamma on a v5 blob without the field', () => {
     const out = migrateTerminalSettings(
       { renderer: 'kessel', painter: 'webgl', fontSize: 14 },
       5,

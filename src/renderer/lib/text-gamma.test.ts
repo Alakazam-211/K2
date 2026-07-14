@@ -49,7 +49,7 @@ describe('relativeLuminance / defaultTextGammaFor', () => {
     expect(defaultTextGammaFor(0x000000)).toBe(TEXT_GAMMA_DARK)
     expect(defaultTextGammaFor('#000')).toBe(TEXT_GAMMA_DARK)
   })
-  it('classifies pure white as light → 1.2', () => {
+  it('classifies pure white as light → light preset', () => {
     expect(relativeLuminance(0xffffff)).toBeCloseTo(1, 5)
     expect(defaultTextGammaFor(0xffffff)).toBe(TEXT_GAMMA_LIGHT)
     expect(defaultTextGammaFor('#ffffff')).toBe(TEXT_GAMMA_LIGHT)

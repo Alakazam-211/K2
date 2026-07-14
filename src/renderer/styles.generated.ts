@@ -51,7 +51,7 @@ export interface StyleMeta {
   palettes: readonly StylePaletteMeta[]
   /** Optional WebGL text-weight gamma override. When absent, derived
    *  from the resolved palette's terminal background luminance
-   *  (dark → 0.7, light → 1.2). See src/renderer/lib/text-gamma.ts. */
+   *  (dark → 0.7, light → 1.1). See src/renderer/lib/text-gamma.ts. */
   terminalTextGamma?: number
 }
 

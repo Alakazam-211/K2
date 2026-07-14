@@ -143,6 +143,38 @@ export function updatePhaseCopy(
   }
 }
 
+/**
+ * Copy for the comeback watcher's RESOLVED state (0.40.48 remote-update
+ * ergonomics). `restarting` used to be a dead end: the status poll stops
+ * (the host is going away) and the row said "Installing & restarting …
+ * it'll reconnect automatically." FOREVER — even long after the reconnect
+ * succeeded. The row now polls the host's public /boot-status after
+ * `restarting`/`done` and lands here when `phase === 'ready'`:
+ *   - back on the EXPECTED version → plain success;
+ *   - back on a DIFFERENT version → says so (the update may have rolled
+ *     back server-side — never claim success we didn't verify);
+ *   - version unreadable (older daemon omits it) → success without a number.
+ */
+export function updateCompleteCopy(
+  hostLabel: string,
+  expected: string | undefined,
+  bootVersion: string | undefined,
+): string {
+  if (bootVersion && expected && bootVersion !== expected) {
+    return `${hostLabel} is back — but on v${bootVersion}, not v${expected}. The update may have rolled back.`
+  }
+  const v = bootVersion ?? expected
+  return v
+    ? `${hostLabel} updated to v${v} and reconnected.`
+    : `${hostLabel} is back and reconnected.`
+}
+
+/** Copy while the comeback watcher has waited past its soft deadline —
+ *  honest "still working on it", not a spinner and not a false failure. */
+export function updateSlowComebackCopy(hostLabel: string): string {
+  return `${hostLabel} is taking longer than expected to come back — it may still be installing. Still watching…`
+}
+
 /** Copy for the "Update available — <current> → <latest>" banner once a
  *  check reports `available`. NAMES the host. */
 export function updateAvailableCopy(

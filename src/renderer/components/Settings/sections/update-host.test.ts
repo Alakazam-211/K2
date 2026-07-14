@@ -22,6 +22,8 @@ import {
   hostVersionCopy,
   newerNoArtifactCopy,
   updatePhaseCopy,
+  updateCompleteCopy,
+  updateSlowComebackCopy,
   updateForbiddenCopy,
   isForbiddenError,
   isStaged,
@@ -126,6 +128,42 @@ describe('updatePhaseCopy — host-named phase lines', () => {
 
   it('restarting copy promises auto-reconnect', () => {
     expect(updatePhaseCopy('restarting', 'box')).toContain('reconnect automatically')
+  })
+})
+
+describe('updateCompleteCopy — the comeback watcher resolution (0.40.48)', () => {
+  it('verified success when the host is back on the expected version', () => {
+    const copy = updateCompleteCopy('AFSROW', '0.40.47', '0.40.47')
+    expect(copy).toContain('AFSROW')
+    expect(copy).toContain('v0.40.47')
+    expect(copy).toContain('reconnected')
+  })
+
+  it('never claims success on a version mismatch — surfaces a possible rollback', () => {
+    const copy = updateCompleteCopy('AFSROW', '0.40.48', '0.40.47')
+    expect(copy).toContain('v0.40.47')
+    expect(copy).toContain('v0.40.48')
+    expect(copy).toContain('rolled back')
+    expect(copy).not.toContain('updated to')
+  })
+
+  it('older daemons omit version — success without a number, still host-named', () => {
+    const copy = updateCompleteCopy('box', undefined, undefined)
+    expect(copy).toContain('box')
+    expect(copy).toContain('reconnected')
+  })
+
+  it('boot version alone is enough (check state was reset mid-watch)', () => {
+    expect(updateCompleteCopy('box', undefined, '0.40.47')).toContain('v0.40.47')
+  })
+})
+
+describe('updateSlowComebackCopy — honest past-deadline copy (0.40.48)', () => {
+  it('names the host and admits the wait without claiming failure', () => {
+    const copy = updateSlowComebackCopy('AFSROW')
+    expect(copy).toContain('AFSROW')
+    expect(copy).toContain('longer than expected')
+    expect(copy).toContain('Still watching')
   })
 })
 

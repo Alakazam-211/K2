@@ -1091,7 +1091,9 @@ function RecoveryBanner({
           alignItems: 'center',
           gap: '0.5rem',
           padding: '0.4rem 0.85rem',
-          borderRadius: '999px',
+          // Square by default like the rest of K2 (--radius-box is 0px in
+          // the stock theme); Styles that round boxes round this too.
+          borderRadius: 'var(--radius-box, 0px)',
           background: 'rgba(20,20,20,0.92)',
           border: '1px solid var(--color-border, rgba(255,255,255,0.12))',
           boxShadow: '0 2px 12px rgba(0,0,0,0.35)',
@@ -1128,7 +1130,7 @@ function RecoveryBanner({
             style={{
               padding: '0.15rem 0.6rem',
               fontSize: '0.75rem',
-              borderRadius: '999px',
+              borderRadius: 'var(--radius-field, 0px)',
               border: '1px solid var(--color-border, rgba(255,255,255,0.25))',
               background: 'var(--color-accent, #2f6feb)',
               color: 'var(--color-on-accent)',
@@ -1148,7 +1150,7 @@ function RecoveryBanner({
             style={{
               padding: '0.15rem 0.6rem',
               fontSize: '0.75rem',
-              borderRadius: '999px',
+              borderRadius: 'var(--radius-field, 0px)',
               border: '1px solid var(--color-border, rgba(255,255,255,0.25))',
               background: 'var(--color-accent, #2f6feb)',
               color: 'var(--color-on-accent)',

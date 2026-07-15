@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
-import { daemonCliGet, daemonCliPost, RecoveringError } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError } from '@/lib/daemon-cli'
 import { jittered } from '@/lib/backoff'
 import { agentDisplayName } from '@/lib/workspace-agent'
 import { terminalKill } from '@/lib/terminal-daemon'
@@ -2189,8 +2189,13 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       isV2: boolean
     } | null = null
     try {
-      const raw = await invoke<string>('k2so_heartbeat_active_session', {
-        projectPath,
+      // 0.40.48 host-aware: resolve the live PTY on the ACTIVE host (the
+      // pre-existing /cli/heartbeat/active-session route). The old Tauri
+      // bridge asked THIS Mac's daemon, so clicking a LIVE remote
+      // heartbeat silently fell through to the spawn-fresh path and
+      // opened a duplicate session instead of attaching.
+      const raw = await daemonCliGetText('heartbeat/active-session', {
+        project: projectPath,
         name: heartbeatName,
       })
       active = JSON.parse(raw)
@@ -2240,10 +2245,13 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       // needed.
       let agentName: string | null = null
       try {
-        const agents = await invoke<Array<{
+        // 0.40.48 host-aware: the primary agent must come from the same
+        // host the live PTY runs on (same core fn as the old Tauri
+        // bridge, via the pre-existing /cli/agents/list route).
+        const agents = await daemonCliGet<Array<{
           name: string
           agentType: string
-        }>>('k2so_agents_list', { projectPath }).catch(() => [])
+        }>>('agents/list', { project: projectPath }).catch(() => [])
         agentName = agents.find((a) =>
           a.agentType === 'custom' || a.agentType === 'manager' || a.agentType === 'k2so'
         )?.name ?? agents[0]?.name ?? null

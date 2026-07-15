@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { daemonCliGet } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useToastStore } from '@/stores/toast'
 // Phase 2 Unit 7a — settings live in the daemon.
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
@@ -292,7 +292,12 @@ export function WakeSchedulerSection(): React.JSX.Element {
   const refreshHeartbeats = useCallback(async () => {
     setHeartbeatsLoading(true)
     try {
-      const rows = await invoke<SystemHeartbeatRow[]>('k2so_heartbeat_list_all')
+      // 0.40.48 host-aware: the cross-project roster comes from the
+      // ACTIVE host (new /cli/heartbeat/list-all route) — this page is
+      // the fleet-audit surface, so it must show the machine you're
+      // connected to, not this Mac. Scheduler-status/enable already
+      // targeted the active host; the lists were the last local reads.
+      const rows = await daemonCliGet<SystemHeartbeatRow[]>('heartbeat/list-all')
       const sorted = [...rows].sort((a, b) => {
         const byProj = a.projectName.toLowerCase().localeCompare(b.projectName.toLowerCase())
         if (byProj !== 0) return byProj
@@ -318,7 +323,9 @@ export function WakeSchedulerSection(): React.JSX.Element {
     let cancelled = false
     const tick = async (): Promise<void> => {
       try {
-        const rows = await invoke<SystemFireRow[]>('k2so_heartbeat_fires_list_all', { limit: 100 })
+        // 0.40.48 host-aware: audit the ACTIVE host's fires (new
+        // /cli/heartbeat/fires-list-all route).
+        const rows = await daemonCliGet<SystemFireRow[]>('heartbeat/fires-list-all', { limit: 100 })
         if (!cancelled) setFires(rows)
       } catch {
         // Silent — the audit log is a read-only convenience; a transient
@@ -382,11 +389,10 @@ export function WakeSchedulerSection(): React.JSX.Element {
         rows.map((r) => (r.id === row.id ? applyDeliveryTarget(r, next) : r)),
       )
       try {
-        // scope 'local': this system-wide page's roster comes from local
-        // list_all invokes, so the write must stay on the same machine
-        // (0.40.48 — the per-workspace HeartbeatsSection/picker use the
-        // host-aware default instead).
-        await setHeartbeatSession(row.projectPath, row.name, next, { scope: 'local' })
+        // Host-aware default (0.40.48): this page's roster now comes from
+        // the ACTIVE host's list-all route, so delivery-target writes go
+        // to the same host the rows came from.
+        await setHeartbeatSession(row.projectPath, row.name, next)
       } catch (err) {
         toast(`Wakeup delivery change failed for ${row.projectName}/${row.name}: ${String(err)}`, 'error')
         setHeartbeats((rows) =>
@@ -411,8 +417,20 @@ export function WakeSchedulerSection(): React.JSX.Element {
           wakeSystem: settings.wakeSystem,
         },
       })
-      const msg = await invoke<string>('k2so_agents_apply_wake_scheduler')
-      toast(msg, 'success')
+      // 0.40.48 host-aware: settingsUpdate above already writes the
+      // wake-scheduler config to the ACTIVE host — the apply must land on
+      // the same machine (the old Tauri invoke applied THIS Mac's local
+      // settings to THIS Mac's scheduler, silently diverging from the
+      // remote config the page displays). Same POST route the bridge used.
+      const resp = await daemonCliPost<{ success?: boolean; message?: string }>(
+        'heartbeat/apply-wake-scheduler',
+        {
+          mode: settings.mode,
+          interval_minutes: settings.intervalMinutes,
+          wake_system: settings.wakeSystem,
+        },
+      )
+      toast(resp?.message ?? 'Wake scheduler applied.', 'success')
       // Snapshot the just-persisted shape. Any subsequent edit that
       // happens to bring `settings` back to this value clears the
       // dirty indicator — the previous boolean-flag implementation

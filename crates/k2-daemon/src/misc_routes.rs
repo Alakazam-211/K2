@@ -753,6 +753,31 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             )
         }
 
+        // 0.40.48 host-aware Wake-Scheduler page: cross-project roster +
+        // fires audit, daemon-wide (no project param — must precede the
+        // project-scoped catch-all arm below, like scheduler-status).
+        // These expose the same core functions the Tauri commands
+        // `k2so_heartbeat_list_all` / `k2so_heartbeat_fires_list_all`
+        // call in-process, so a remote client's Settings page can audit
+        // THIS host's heartbeats instead of its own machine's. Read-only.
+        "/cli/heartbeat/list-all" => {
+            match k2_core::heartbeats::k2so_heartbeat_list_all() {
+                Ok(rows) => CliResponse::ok_json(
+                    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()),
+                ),
+                Err(e) => CliResponse::bad_request(e),
+            }
+        }
+        "/cli/heartbeat/fires-list-all" => {
+            let limit = params.get("limit").and_then(|s| s.parse::<i64>().ok());
+            match k2_core::heartbeats::k2so_heartbeat_fires_list_all(limit) {
+                Ok(rows) => CliResponse::ok_json(
+                    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()),
+                ),
+                Err(e) => CliResponse::bad_request(e),
+            }
+        }
+
         // ── Heartbeat CRUD + fires ──────────────────────────────────
         p if p.starts_with("/cli/heartbeat/") || p == "/cli/heartbeat-log" => {
             match need_project(params) {

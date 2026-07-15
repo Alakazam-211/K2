@@ -234,6 +234,14 @@ const _titlePermissionPanes = new Set<string>()
 
 /** Track agent start times for launch failure detection (paneId → timestamp) */
 const _agentStartTimes = new Map<string, number>()
+/** Panes that have proven they can run (survived a healthy launch — a
+ *  stop ≥ threshold after the launch stamp, or an interactive permission
+ *  prompt). The launch-failure heuristic never re-diagnoses a proven
+ *  pane: the daemon buckets EVERY UserPromptSubmit/PostToolUse hook as
+ *  'start', so mid-conversation turns that end shortly after their last
+ *  tool call (nearly every agent-to-agent `k2 msg` turn) would otherwise
+ *  read as sub-5s "failed launches" and fire the retry toast. */
+const _provenPanes = new Set<string>()
 /** Track failed launches to avoid infinite retry loops (paneId → retry count) */
 const _launchRetries = new Map<string, number>()
 /** Track pending retry timeouts so they can be cancelled on cleanup */
@@ -631,7 +639,13 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       // F4 — the pane is active again: anchor the spawn grace, cancel a
       // pending done-debounce, clear any lingering unseen-done mark.
       notePaneActive(paneId)
-      _agentStartTimes.set(paneId, Date.now())
+      // Launch-clock stamp is ONCE per launch attempt, and only for
+      // unproven panes: 'start' arrives for every prompt-submit and
+      // post-tool-use hook, and re-stamping on each would make any turn
+      // that ends <5s after its last tool call look like a dead launch.
+      if (!_provenPanes.has(paneId) && !_agentStartTimes.has(paneId)) {
+        _agentStartTimes.set(paneId, Date.now())
+      }
       // Record which project this pane belongs to
       const ps = useProjectsStore.getState()
       if (ps.activeProjectId) {
@@ -647,6 +661,10 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       newStatuses.set(paneId, 'permission')
       // F4 — permission counts as active (the agent isn't done).
       notePaneActive(paneId)
+      // An interactive permission prompt can only come from a running
+      // agent — the launch didn't fail. Proven.
+      _provenPanes.add(paneId)
+      _agentStartTimes.delete(paneId)
       if (currentStatus === 'permission') {
         set({ paneStatuses: newStatuses })
         return
@@ -720,11 +738,20 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
 
     set({ paneStatuses: newStatuses })
 
-    // Launch failure detection: if agent stopped within 5s of starting, retry once
+    // Launch failure detection: if an UNPROVEN pane's first lifecycle
+    // cycle stopped within 5s of the launch stamp, retry once. Proven
+    // panes (healthy prior cycle or a permission prompt) never re-enter
+    // this path — their short turns are just short turns.
     if (eventType === 'stop') {
       const startTime = _agentStartTimes.get(paneId)
       _agentStartTimes.delete(paneId)
-      if (startTime && (Date.now() - startTime) < LAUNCH_FAILURE_THRESHOLD_MS) {
+      if (_provenPanes.has(paneId)) {
+        _launchRetries.delete(paneId)
+      } else if (startTime && (Date.now() - startTime) >= LAUNCH_FAILURE_THRESHOLD_MS) {
+        // Survived past the threshold — a real launch. Proven from here on.
+        _provenPanes.add(paneId)
+        _launchRetries.delete(paneId)
+      } else if (startTime && (Date.now() - startTime) < LAUNCH_FAILURE_THRESHOLD_MS) {
         const retries = _launchRetries.get(paneId) || 0
         if (retries < MAX_LAUNCH_RETRIES) {
           _launchRetries.set(paneId, retries + 1)
@@ -1672,6 +1699,7 @@ export function stopAgentPolling(): void {
   _retryTimeouts.clear()
   _agentStartTimes.clear()
   _launchRetries.clear()
+  _provenPanes.clear()
   // F4 — cancel pending done-debounces so a fire can't land after teardown.
   for (const timer of _unseenDoneTimers.values()) {
     clearTimeout(timer)
@@ -1704,6 +1732,7 @@ export function __resetAgentStateForHostSwitch(): void {
   _hookEventAt.clear()
   _agentStartTimes.clear()
   _launchRetries.clear()
+  _provenPanes.clear()
   _titlePermissionPanes.clear()
   // F4 — unseen-done marks/timers are keyed by the LOCAL host's paneIds.
   for (const timer of _unseenDoneTimers.values()) {

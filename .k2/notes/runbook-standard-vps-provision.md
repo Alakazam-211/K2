@@ -42,6 +42,15 @@ Cloud-init automation: `scripts/cloud-init-k2-server.yaml.tpl`.
    against `daemon-latest.json`), installed to `/home/k2/.local/bin`,
    with `K2_NO_SERVICE=1` — we supervise with a SYSTEM unit instead.
 5. `k2` CLI → `/usr/local/bin/k2` (bash script; needs curl/python3/openssl).
+   **⚠ MUST be `chown`ed to the DAEMON USER** (provision script does this
+   as of 2026-07-15). The daemon self-stages the embedded CLI at every
+   boot (`cli_stage`, 0.40.41+) so updates carry the CLI forward — a
+   root-owned file makes that a silent per-boot `Permission denied` WARN
+   and the CLI freezes at provision-day version while the daemon keeps
+   updating (bit nsi at 0.40.41 + rpmavs; found 2026-07-15). Verify after
+   any provision/migration: `ls -la /usr/local/bin/k2` owner == daemon
+   user, and `grep K2_CLI_VERSION /usr/local/bin/k2` == daemon version.
+   (0.40.50+ daemon also falls back to `~/.local/bin/k2` on EACCES.)
 6. `~/.k2/tunnel.json` (0600, owner k2): `{token, subdomain,
    auto_start: true}` — written BEFORE first start so boot auto-dials;
    `server_addr`/`server_port` ride the compiled defaults

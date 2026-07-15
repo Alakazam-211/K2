@@ -3,6 +3,18 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.50
+
+### Server updates
+
+- **The `k2` CLI can no longer fall behind the daemon.** On Linux
+  servers, the daemon refreshes the `k2` command alongside itself on
+  every update. If the system-wide install at `/usr/local/bin/k2` isn't
+  writable by the daemon's user (a common setup/migration artifact), the
+  daemon now stages the current CLI at `~/.local/bin/k2` instead of
+  silently leaving the old version in place. Server provisioning also
+  installs the CLI daemon-writable from the start.
+
 ## 0.40.49 — Pair as federated peer
 
 Cross-server agents needed one more obvious step: **trust**. Turning on

@@ -3,7 +3,10 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
-## 0.40.50
+## 0.40.50 — CLI stays current on Linux servers
+
+Server updates no longer leave the `k2` command stuck on an old version
+while the daemon moves ahead.
 
 ### Server updates
 

@@ -311,7 +311,24 @@ export function WakeSchedulerSection(): React.JSX.Element {
       })
       setHeartbeats(sorted)
     } catch (err) {
-      toast(`Failed to load heartbeats: ${String(err)}`, 'error')
+      // Older-host signature: a pre-0.40.48 daemon has no list-all route,
+      // so the request falls into its project-scoped catch-all and answers
+      // "Missing 'project' (or project_path) parameter" — which reads like
+      // a client bug. Translate it into what it actually means.
+      const s = useConnectHostStore.getState()
+      const oldHost =
+        s.activeHost !== 'local' && /missing '?project/i.test(String(err))
+      if (oldHost) {
+        const v = s.serverVersion ? ` (it's on v${s.serverVersion})` : ''
+        toast(
+          `Auditing this host's heartbeats from here needs K2 0.40.48+ on the host${v}. ` +
+            `Update the host, then reopen this page.`,
+          'info',
+          10000,
+        )
+      } else {
+        toast(`Failed to load heartbeats: ${String(err)}`, 'error')
+      }
       setHeartbeats([])
     } finally {
       setHeartbeatsLoading(false)

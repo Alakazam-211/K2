@@ -80,6 +80,14 @@ struct ReaperSignal {
     /// Drained by the reaper on each pass; an entry persists in the
     /// armed-timer map until it fires or the workspace re-activates.
     pending_dismiss: Mutex<HashSet<String>>,
+    /// Project ids whose live session is under an armed dismiss-grace.
+    /// The broadcast's live-session union skips these so a dismissed
+    /// tile leaves the Active Bar immediately instead of lingering the
+    /// 15s until the reap fires. Maintained by `arm_dismiss_grace`
+    /// (insert) and each reconcile pass (rebuilt from the forced
+    /// timers); a wake/re-activation clears it eagerly via
+    /// [`clear_dismiss_suppression`].
+    dismiss_suppressed: Mutex<HashSet<String>>,
     notify: Notify,
 }
 
@@ -88,6 +96,7 @@ static SIGNAL: OnceLock<ReaperSignal> = OnceLock::new();
 fn signal() -> &'static ReaperSignal {
     SIGNAL.get_or_init(|| ReaperSignal {
         pending_dismiss: Mutex::new(HashSet::new()),
+        dismiss_suppressed: Mutex::new(HashSet::new()),
         notify: Notify::new(),
     })
 }
@@ -104,7 +113,26 @@ pub fn arm_dismiss_grace(project_id: &str) {
         .lock()
         .unwrap()
         .insert(project_id.to_string());
+    // Suppress the live-session union for this workspace so the tile
+    // leaves the bar on the very next broadcast (the dismiss handler
+    // recomputes immediately after this call) rather than lingering
+    // until the grace fires.
+    sig.dismiss_suppressed
+        .lock()
+        .unwrap()
+        .insert(project_id.to_string());
     sig.notify.notify_one();
+}
+
+/// Eagerly lift a dismiss: a wake/re-activation of the workspace means
+/// the user (or a peer's message) wants it back — un-queue a pending
+/// dismiss and un-suppress the live-session union so the workspace
+/// re-enters the broadcast immediately (the reaper's own pass also
+/// cancels the armed forced timer via the interaction-advanced check).
+pub fn clear_dismiss_suppression(project_id: &str) {
+    let sig = signal();
+    sig.pending_dismiss.lock().unwrap().remove(project_id);
+    sig.dismiss_suppressed.lock().unwrap().remove(project_id);
 }
 
 /// Test/diagnostic hook: is `project_id` currently in the pending-dismiss
@@ -144,8 +172,23 @@ pub fn recompute_and_broadcast_active() {
     let now_ms = unix_now_ms();
     match k2_core::projects_ops::compute_active_project_ids(now_ms, window) {
         Ok(ids) => {
+            // Membership rule: a workspace with a LIVE terminal session
+            // IS Active — presence is the detection method, not message
+            // or interaction bookkeeping. Union the live-session
+            // workspaces into the window/pin set, minus any workspace
+            // under an armed dismiss-grace (an explicit Dismiss must
+            // leave the bar NOW, not 15s later when the reap fires).
+            // The interaction window remains the REAPER's aging input —
+            // once it closes an idle session, presence naturally drops
+            // the workspace from this broadcast.
+            let mut set: HashSet<String> = ids.into_iter().collect();
+            set.extend(live_session_project_ids());
+            {
+                let suppressed = signal().dismiss_suppressed.lock().unwrap();
+                set.retain(|pid| !suppressed.contains(pid));
+            }
             let _ = session_events::emit(SessionEvent::ActiveChanged {
-                active_project_ids: ids,
+                active_project_ids: set.into_iter().collect(),
                 active_window_hours: window,
             });
         }
@@ -153,6 +196,24 @@ pub fn recompute_and_broadcast_active() {
             log_debug!("[active-reaper] recompute_and_broadcast failed: {e}");
         }
     }
+}
+
+/// Project ids owning at least one live v2 PTY, resolved by cwd — the
+/// same resolution [`collect_snapshot`] uses for the reaper's own view.
+fn live_session_project_ids() -> HashSet<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut out = HashSet::new();
+    for (_agent, session) in v2_session_map::snapshot() {
+        let cwd = match session.cwd.as_ref() {
+            Some(p) => p.to_string_lossy().into_owned(),
+            None => continue,
+        };
+        if let Some(id) = k2_core::workspace::agent_identity::resolve_project_id(&conn, &cwd) {
+            out.insert(id);
+        }
+    }
+    out
 }
 
 /// Did the workspace's `last_interaction_at` advance since the timer
@@ -368,6 +429,22 @@ async fn reconcile_pass(armed: &mut HashMap<String, ArmState>, grace_dur: Durati
     let live_pids: HashSet<&String> =
         snapshot.live_chats.iter().map(|c| &c.project_id).collect();
     armed.retain(|pid, _| live_pids.contains(pid));
+
+    // Reconcile the broadcast's dismiss-suppression set with the armed
+    // FORCED timers: a cancelled/pruned dismiss un-suppresses (the
+    // workspace may re-enter via the live-session union), while armed
+    // ones stay hidden until the reap fires. Entries that fire below
+    // stay suppressed one extra pass — harmless, their session is gone.
+    {
+        let forced: HashSet<String> = armed
+            .iter()
+            .filter(|(_, s)| s.forced)
+            .map(|(pid, _)| pid.clone())
+            .collect();
+        let pending = signal().pending_dismiss.lock().unwrap().clone();
+        let mut suppressed = signal().dismiss_suppressed.lock().unwrap();
+        suppressed.retain(|pid| forced.contains(pid) || pending.contains(pid));
+    }
 
     if to_fire.is_empty() {
         return;

@@ -36,6 +36,8 @@ import {
   removeRemoteConnection,
   listRemoteConnections,
   getPubkey,
+  peerMatchesHostname,
+  type FederationPeer,
 } from '@/lib/federation'
 
 const REMOTE_BASE = 'https://rpm.k2.dev' // secure + port 443 → no :port
@@ -153,6 +155,35 @@ describe('parseAgentAtHost', () => {
     expect(parseAgentAtHost('   ')).toBeNull()
     expect(parseAgentAtHost('agent::localname')).toBeNull()
     expect(parseAgentAtHost('fp::ws-uuid::agent')).toBeNull()
+  })
+})
+
+describe('peerMatchesHostname', () => {
+  const peer = (partial: Partial<FederationPeer>): FederationPeer => ({
+    fingerprint: 'abc',
+    label: '',
+    subdomain: '',
+    trust: 'trusted',
+    capabilities: [],
+    ...partial,
+  })
+
+  it('matches subdomain.k2.dev and bare subdomain', () => {
+    const p = peer({ subdomain: 'rpm' })
+    expect(peerMatchesHostname(p, 'rpm.k2.dev')).toBe(true)
+    expect(peerMatchesHostname(p, 'rpm')).toBe(true)
+    expect(peerMatchesHostname(p, 'RPM.K2.DEV')).toBe(true)
+  })
+
+  it('ignores unrelated hosts', () => {
+    const p = peer({ subdomain: 'rpm' })
+    expect(peerMatchesHostname(p, 'other.k2.dev')).toBe(false)
+    expect(peerMatchesHostname(p, '')).toBe(false)
+  })
+
+  it('matches label when subdomain is empty', () => {
+    const p = peer({ label: 'my-box.example.com', subdomain: '' })
+    expect(peerMatchesHostname(p, 'my-box.example.com')).toBe(true)
   })
 })
 

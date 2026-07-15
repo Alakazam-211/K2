@@ -2998,7 +2998,9 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
                 </p>
               ) : fedPeers.length === 0 ? (
                 <p className="text-[10px] text-[var(--color-text-muted)]">
-                  No trusted federated servers yet. Pair a server first (connect + enable federation on both sides).
+                  No trusted federated servers yet. Under Settings → Connections, open a saved
+                  server and click <span className="text-[var(--color-text-secondary)]">Pair as federated peer</span>
+                  {' '}(enable federation on both sides first).
                 </p>
               ) : (
                 <SettingDropdown

@@ -3,6 +3,28 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.49 — Pair as federated peer
+
+Cross-server agents needed one more obvious step: **trust**. Turning on
+federation and signing into a server was never enough by itself — the two
+daemons still had to pin each other as peers. That step is now a button.
+
+### Federated peer pairing
+
+- **Pair as federated peer.** On Settings → Connections, each signed-in
+  server tile has a **Pair as federated peer** button. One click establishes
+  mutual trust between this Mac and that server (owner on both sides). When
+  it works, the tile shows **Peer: trusted**.
+
+- **No more chicken-and-egg.** Workspace Federated Connections used to ask
+  you to pick a federated server before any peer existed — and there was no
+  UI path to create the first one. Pair from Connections first; then the
+  server shows up in Federated Connections so you can link agents.
+
+- **Clear empty states.** Federated servers and Federated Connections empty
+  lists now point you at the Pair button instead of a vague "pair first"
+  hint.
+
 ## 0.40.48 — Resilient reconnect
 
 Server reboots and updates are now a non-event. When a host you're

@@ -40,7 +40,12 @@ function peerLabel(p: FederationPeer): string {
   return p.label || p.subdomain || p.fingerprint.slice(0, 12)
 }
 
-export function FederationOverview(): React.JSX.Element {
+export function FederationOverview({
+  /** Bump after pairing from a host tile so the peer list reloads. */
+  refreshKey = 0,
+}: {
+  refreshKey?: number
+} = {}): React.JSX.Element {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const isLocal = activeHost === 'local'
   const hostKey = isLocal ? 'local' : activeHost.id
@@ -67,7 +72,7 @@ export function FederationOverview(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [hostKey])
+  }, [hostKey, refreshKey])
 
   return (
     <div className="mt-6 space-y-4" data-settings-id="connections.federation-overview">
@@ -90,7 +95,9 @@ export function FederationOverview(): React.JSX.Element {
           </div>
         ) : peers.length === 0 ? (
           <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
-            No federated servers yet.
+            No federated servers yet. On a saved server tile above, click{' '}
+            <span className="text-[var(--color-text-secondary)]">Pair as federated peer</span>
+            {' '}(federation must be on for this Mac and that server).
           </div>
         ) : (
           <div className="space-y-2">

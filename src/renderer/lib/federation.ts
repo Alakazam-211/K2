@@ -78,6 +78,41 @@ export function trustedPeers(peers: FederationPeer[]): FederationPeer[] {
 }
 
 /**
+ * Whether a pinned peer routes to the given Connect-host hostname
+ * (e.g. `rpm.k2.dev`, `rpm`, or `rpm.k2.dev:443`). Matching is by subdomain
+ * zone or bare subdomain — not by fingerprint (the address book doesn't
+ * store fingerprints).
+ */
+export function peerMatchesHostname(peer: FederationPeer, hostname: string): boolean {
+  const raw = hostname.trim().toLowerCase()
+  if (!raw) return false
+  // Drop :port if the ConnectHost stored a non-443 URL as host:port elsewhere.
+  const hostOnly = raw.split('/')[0]?.split(':')[0] ?? raw
+  if (!hostOnly) return false
+  const sub = (peer.subdomain || '').trim().toLowerCase()
+  if (sub) {
+    if (hostOnly === sub) return true
+    if (hostOnly === `${sub}.k2.dev`) return true
+  }
+  const label = (peer.label || '').trim().toLowerCase()
+  if (label && label === hostOnly) return true
+  return false
+}
+
+/**
+ * True when the ACTIVE daemon already has a **Trusted** pin that routes to
+ * `hostname`. Used by the Connections tile "Peer: trusted" badge / to hide
+ * the Pair button after a successful pair. Fail-soft: federation off or
+ * unreachable → false (tile still offers Pair so the operator can try).
+ */
+export async function isTrustedPeerHost(hostname: string): Promise<boolean> {
+  if (!hostname.trim()) return false
+  const res = await listFederationPeers()
+  if (!res.available) return false
+  return trustedPeers(res.data).some((p) => peerMatchesHostname(p, hostname))
+}
+
+/**
  * Fetch a paired peer's agent roster via the LOCAL daemon's owner-gated
  * `federation/peer-roster` seam (the daemon dials the peer's signed roster
  * GET). `peerSelector` is a fingerprint, label, or subdomain. Returns

@@ -67,6 +67,30 @@ recover.
   columns now saves immediately and survives connection blips — no more
   splits quietly reverting when you're connected to a server.
 
+### Agent messaging
+
+- **Messages to sleeping agents actually arrive.** Waking a dormant
+  agent with `k2 msg`/`k2 talk` used to report success while the message
+  silently vanished — the injection raced the resumed session's redraw.
+  Delivery now waits for the woken terminal to settle before typing, so
+  the message lands every time.
+
+- **No more false "Agent launch failed" popups.** The old launch-failure
+  guess fired on healthy agent-to-agent messaging (and could quietly
+  spawn duplicate sessions via its auto-retry). It's gone; the daemon
+  owns spawn health.
+
+### Active area
+
+- **Active means alive.** A workspace now appears in the Active area
+  exactly when it has a live terminal session (or is pinned). An agent
+  woken by a message pops back in the moment its session exists — on
+  every connected client.
+
+- **Dismiss works again.** Right-click → Dismiss removes the workspace
+  from the Active area immediately; its session is put to sleep a few
+  seconds later.
+
 ## 0.40.47 — Workspace wiki brain map
 
 Your notes become a living map. Open **View Wiki** on a workspace to explore

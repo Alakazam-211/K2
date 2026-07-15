@@ -1396,6 +1396,12 @@ function rearmLayoutSave(err: unknown): void {
     })
     return
   }
+  // Blind (non-recovery) retries are REMOTE-ONLY: a loopback save can't
+  // blip — a local failure is deterministic (bug/broken env), and
+  // retrying it just churns timers (and pollutes unit-test envs, where
+  // every save fails by construction). The remote tunnel path is where
+  // transient drops actually happen.
+  if (useConnectHostStore.getState().activeHost === 'local') return
   layoutSaveConsecutiveFailures += 1
   if (layoutSaveConsecutiveFailures > LAYOUT_SAVE_MAX_BLIND_RETRIES) {
     // Persistent non-recovery failure — stop churning; the next structural

@@ -493,6 +493,13 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// Minimal live SPA: list + simple force graph, no CDN deps. Polls /api/index.
+///
+/// Stability notes (0.40.47+):
+/// - Do **not** rebuild the sim when `generatedAt` changes — that timestamp
+///   is regenerated every poll even when the graph is unchanged, which used
+///   to re-scatter nodes every 2s.
+/// - Merge by node id so positions survive polls; only reheat on structure
+///   change. Simulation cools down so layout settles instead of thrashing.
 const SITE_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -500,187 +507,628 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>K2 Wiki</title>
 <style>
-  :root { color-scheme: dark light; --bg:#0f1115; --panel:#171a21; --fg:#e8eaed; --muted:#9aa0a6; --accent:#7aa2f7; --edge:#3a4050; --miss:#e06c75; }
+  /* K2 dark system tokens (mirrors app --color-* defaults) */
+  :root {
+    color-scheme: dark;
+    --bg: #0a0a0a;
+    --panel: #141414;
+    --elevated: #1e1e1e;
+    --fg: #e4e4e7;
+    --secondary: #a1a1aa;
+    --muted: #71717a;
+    --accent: #3b82f6;
+    --accent-soft: #93c5fd;
+    --border: #2a2a2a;
+    --miss: #f87171;
+    --node: #e4e4e7;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.45 system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--fg); height:100vh; display:flex; flex-direction:column; }
-  header { display:flex; gap:12px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--edge); background:var(--panel); }
-  header h1 { font-size:15px; margin:0; font-weight:600; }
-  header .meta { color:var(--muted); font-size:12px; }
-  input[type=search] { flex:1; max-width:280px; padding:6px 10px; border-radius:6px; border:1px solid var(--edge); background:var(--bg); color:var(--fg); }
-  main { flex:1; display:grid; grid-template-columns: 1fr 360px; min-height:0; }
-  #graph-wrap { position:relative; min-height:0; border-right:1px solid var(--edge); }
-  canvas { width:100%; height:100%; display:block; cursor:grab; }
-  #reader { overflow:auto; padding:14px 16px; background:var(--panel); }
-  #reader h2 { margin:0 0 8px; font-size:18px; }
-  #reader .tags { color:var(--muted); font-size:12px; margin-bottom:12px; }
-  #reader pre { white-space:pre-wrap; word-break:break-word; font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin:0; }
-  #reader a.wiki { color:var(--accent); cursor:pointer; text-decoration:underline; }
-  #reader .empty { color:var(--muted); }
-  #list { position:absolute; left:10px; top:10px; max-height:40%; overflow:auto; background:rgba(23,26,33,.92); border:1px solid var(--edge); border-radius:8px; padding:6px; min-width:160px; max-width:240px; }
-  #list button { display:block; width:100%; text-align:left; background:transparent; border:0; color:var(--fg); padding:4px 6px; border-radius:4px; cursor:pointer; font:inherit; }
-  #list button:hover, #list button.active { background:rgba(122,162,247,.18); }
-  #list button.missing { color:var(--miss); opacity:.85; }
-  @media (max-width:800px) { main { grid-template-columns:1fr; grid-template-rows:1fr 1fr; } #graph-wrap { border-right:0; border-bottom:1px solid var(--edge); } }
+  html, body { height:100%; }
+  body {
+    margin:0;
+    font: 13px/1.45 ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    background:var(--bg); color:var(--fg);
+    height:100vh; display:flex; flex-direction:column; overflow:hidden;
+  }
+  header {
+    display:flex; gap:12px; align-items:center;
+    padding:8px 12px; border-bottom:1px solid var(--border);
+    background:var(--panel); flex-shrink:0;
+  }
+  header h1 {
+    font-size:11px; margin:0; font-weight:700;
+    letter-spacing:0.12em; text-transform:uppercase; color:var(--muted);
+    flex-shrink:0;
+  }
+  header .search-wrap { display:flex; align-items:center; gap:10px; flex:1; min-width:0; max-width:520px; }
+  input[type=search] {
+    flex:1; min-width:120px; max-width:280px; padding:6px 10px;
+    border:1px solid var(--border); background:var(--elevated); color:var(--fg);
+    outline:none; font:inherit;
+  }
+  input[type=search]:focus { border-color:var(--accent); }
+  header .meta {
+    display:flex; align-items:center; gap:8px; flex-shrink:0;
+    color:var(--muted); font-size:11px; white-space:nowrap;
+  }
+  header .meta .count-tag {
+    display:inline-flex; align-items:center; min-width:1.25rem;
+    padding:2px 6px; border:1px solid var(--border); background:rgba(255,255,255,.06);
+    color:var(--secondary); font-variant-numeric:tabular-nums; font-size:10px; font-weight:600;
+  }
+  header .meta .live {
+    color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.06em;
+  }
+  header .meta .live::before {
+    content:''; display:inline-block; width:6px; height:6px; border-radius:50%;
+    background:#4ade80; margin-right:5px; vertical-align:middle;
+  }
+  header .spacer { flex:1; }
+  header button#toggle-reader {
+    flex-shrink:0; display:inline-flex; align-items:center; gap:5px;
+    padding:5px 9px; font:10px/1 inherit; font-weight:600;
+    color:var(--secondary); background:transparent;
+    border:1px solid var(--border); cursor:pointer;
+  }
+  header button#toggle-reader:hover { color:var(--fg); border-color:var(--muted); }
+  header button#toggle-reader.collapsed {
+    border-color:rgba(59,130,246,.5); background:rgba(59,130,246,.12); color:var(--fg);
+  }
+  header button#toggle-reader svg { width:10px; height:10px; transition:transform .15s linear; }
+  header button#toggle-reader:not(.collapsed) svg { transform:rotate(180deg); }
+  main { flex:1; display:grid; grid-template-columns: 1fr minmax(280px, 0.9fr); min-height:0; min-width:0; }
+  main.reader-collapsed { grid-template-columns: 1fr; }
+  main.reader-collapsed #reader { display:none; }
+  main.reader-collapsed #graph-wrap { border-right:0; }
+  #graph-wrap { position:relative; min-height:0; min-width:0; height:100%; border-right:1px solid var(--border); overflow:hidden; background:var(--bg); }
+  canvas { position:absolute; inset:0; width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+  canvas:active { cursor:grabbing; }
+  #reader { overflow:auto; padding:14px 16px; background:var(--panel); min-height:0; }
+  #reader > h2.title { margin:0 0 8px; font-size:14px; font-weight:600; color:var(--fg); }
+  #reader .tags { color:var(--muted); font-size:10px; margin-bottom:12px; text-transform:uppercase; letter-spacing:0.06em; }
+  #reader .md { font:12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color:var(--secondary); }
+  #reader .md > :first-child { margin-top:0; }
+  #reader .md h1 { font-size:18px; font-weight:700; color:var(--fg); margin:1.1em 0 0.45em; border-bottom:1px solid var(--border); padding-bottom:0.25em; }
+  #reader .md h2 { font-size:15px; font-weight:650; color:var(--fg); margin:1em 0 0.4em; }
+  #reader .md h3 { font-size:13px; font-weight:650; color:var(--fg); margin:0.9em 0 0.35em; }
+  #reader .md h4, #reader .md h5, #reader .md h6 { font-size:12px; font-weight:600; color:var(--fg); margin:0.8em 0 0.3em; }
+  #reader .md p { margin:0.55em 0; }
+  #reader .md ul, #reader .md ol { margin:0.45em 0; padding-left:1.35em; }
+  #reader .md li { margin:0.2em 0; }
+  #reader .md blockquote {
+    margin:0.6em 0; padding:0.35em 0 0.35em 0.85em;
+    border-left:2px solid var(--border); color:var(--muted);
+  }
+  #reader .md hr { border:0; border-top:1px solid var(--border); margin:1em 0; }
+  #reader .md a { color:var(--accent); text-decoration:underline; text-decoration-color:rgba(59,130,246,.4); }
+  #reader .md a:hover { text-decoration-color:var(--accent); }
+  #reader .md a.wiki { cursor:pointer; }
+  #reader .md code {
+    font:0.92em/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background:rgba(255,255,255,.06); border:1px solid var(--border);
+    padding:0.1em 0.35em; color:var(--accent-soft);
+  }
+  #reader .md pre {
+    margin:0.7em 0; padding:10px 12px; overflow:auto;
+    background:var(--bg); border:1px solid var(--border);
+    color:var(--fg); line-height:1.45;
+  }
+  #reader .md pre code { background:none; border:0; padding:0; color:inherit; font-size:11.5px; }
+  #reader .md table { border-collapse:collapse; margin:0.7em 0; width:100%; font-size:11.5px; }
+  #reader .md th, #reader .md td { border:1px solid var(--border); padding:5px 8px; text-align:left; }
+  #reader .md th { background:rgba(255,255,255,.04); color:var(--fg); font-weight:600; }
+  #reader .md strong { color:var(--fg); font-weight:650; }
+  #reader .empty { color:var(--muted); font-size:11px; }
+  #hint {
+    position:absolute; right:10px; bottom:10px; z-index:2;
+    font-size:10px; color:var(--muted);
+    background:rgba(20,20,20,.85); border:1px solid var(--border);
+    padding:4px 8px; pointer-events:none;
+  }
+  @media (max-width:800px) {
+    main:not(.reader-collapsed) { grid-template-columns:1fr; grid-template-rows:1fr 1fr; }
+    main:not(.reader-collapsed) #graph-wrap { border-right:0; border-bottom:1px solid var(--border); }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>K2 Wiki</h1>
-  <span class="meta" id="meta">loading…</span>
-  <input type="search" id="q" placeholder="Search notes…" />
+  <div class="search-wrap">
+    <input type="search" id="q" placeholder="Search notes…" />
+    <div class="meta" id="meta">
+      <span>Articles</span>
+      <span class="count-tag" id="note-count">—</span>
+      <span class="live" id="live-pill">live</span>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <button type="button" id="toggle-reader" title="Collapse article viewer">
+    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M4 2 L8 6 L4 10" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span id="toggle-reader-label">Hide article</span>
+  </button>
 </header>
-<main>
+<main id="layout">
   <div id="graph-wrap">
     <canvas id="c"></canvas>
-    <div id="list"></div>
+    <div id="hint">scroll = pan · pinch = zoom · drag node</div>
   </div>
   <aside id="reader"><p class="empty">Select a note.</p></aside>
 </main>
 <script>
 (function(){
   const canvas = document.getElementById('c');
+  const wrap = document.getElementById('graph-wrap');
+  const layout = document.getElementById('layout');
   const ctx = canvas.getContext('2d');
-  const listEl = document.getElementById('list');
   const reader = document.getElementById('reader');
   const meta = document.getElementById('meta');
+  const noteCountEl = document.getElementById('note-count');
+  const livePill = document.getElementById('live-pill');
   const q = document.getElementById('q');
+  const toggleReaderBtn = document.getElementById('toggle-reader');
+  const toggleReaderLabel = document.getElementById('toggle-reader-label');
   let index = { nodes: [], links: [], generatedAt: '', noteCount: 0 };
   let selected = null;
-  let nodes = []; // sim nodes
+  let readerCollapsed = false;
+  let nodes = []; // sim nodes (stable identity by id)
   let links = [];
   let drag = null;
-  let lastGen = '';
+  let lastFp = '';
+  /** Force "temperature" — cools to 0 so layout settles instead of thrashing. */
+  let alpha = 1;
+  let viewW = 600, viewH = 400;
+  // Camera: world point (camX, camY) sits at canvas center; camK is zoom.
+  let camX = 300, camY = 200, camK = 1;
+  // Multi-touch state for pinch + two-finger pan
+  const pointers = new Map(); // id -> {x,y} canvas coords
+  let pinch0 = null; // {dist, camK, midWx, midWy, camX, camY}
+
+  function fingerprint(idx){
+    const ns = (idx.nodes || []).map(n =>
+      n.id + '\t' + (n.title||'') + '\t' + (n.exists?1:0) + '\t' + (n.tags||[]).join(',')
+    ).sort().join('\n');
+    const ls = (idx.links || []).map(l =>
+      l.source + '\t' + l.target + '\t' + (l.missing?1:0)
+    ).sort().join('\n');
+    return (idx.noteCount||0) + '\n' + ns + '\n' + ls;
+  }
+
+  function screenToWorld(sx, sy){
+    return {
+      x: (sx - viewW/2) / camK + camX,
+      y: (sy - viewH/2) / camK + camY,
+    };
+  }
+
+  function canvasCoords(e){
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
 
   function resize(){
-    const r = canvas.parentElement.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(1, r.width * dpr);
-    canvas.height = Math.max(1, r.height * dpr);
-    canvas.style.width = r.width + 'px';
-    canvas.style.height = r.height + 'px';
-    ctx.setTransform(dpr,0,0,dpr,0,0);
+    const r = wrap.getBoundingClientRect();
+    const w = Math.max(1, Math.floor(r.width));
+    const h = Math.max(1, Math.floor(r.height));
+    if (w < 2 || h < 2) return;
+    const prevW = viewW, prevH = viewH;
+    const first = !nodes.length && viewW === 600 && viewH === 400;
+    viewW = w; viewH = h;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const bw = Math.max(1, Math.floor(w * dpr));
+    const bh = Math.max(1, Math.floor(h * dpr));
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw;
+      canvas.height = bh;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // First layout: aim camera at sim center.
+    if (first || (camX === 300 && camY === 200 && !nodes.length)) {
+      camX = w/2; camY = h/2;
+    }
+    // Proportional reflow of sim positions only (camera stays put).
+    if (nodes.length && prevW > 2 && prevH > 2 && (prevW !== w || prevH !== h)) {
+      const sx = w / prevW, sy = h / prevH;
+      for (const n of nodes) {
+        n.x *= sx; n.y *= sy;
+        n.vx = 0; n.vy = 0;
+      }
+      camX *= sx; camY *= sy;
+    }
+  }
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => resize()).observe(wrap);
   }
   window.addEventListener('resize', resize);
   resize();
 
-  function buildSim(idx){
-    const W = canvas.clientWidth || 600, H = canvas.clientHeight || 400;
+  /** Merge index into sim: keep x/y for known ids; place newcomers nearby. */
+  function mergeSim(idx){
+    const W = viewW, H = viewH;
+    const prev = new Map(nodes.map(n => [n.id, n]));
     const map = new Map();
-    nodes = (idx.nodes || []).map((n,i) => {
-      const angle = (i / Math.max(1, idx.nodes.length)) * Math.PI * 2;
-      const rad = Math.min(W,H) * 0.28;
-      const o = {
-        id: n.id, title: n.title || n.id, exists: !!n.exists,
-        tags: n.tags || [],
-        x: W/2 + Math.cos(angle)*rad + (Math.random()-0.5)*20,
-        y: H/2 + Math.sin(angle)*rad + (Math.random()-0.5)*20,
-        vx:0, vy:0
-      };
+    const next = [];
+    const list = idx.nodes || [];
+    list.forEach((n, i) => {
+      const old = prev.get(n.id);
+      let o;
+      if (old) {
+        o = old;
+        o.title = n.title || n.id;
+        o.exists = !!n.exists;
+        o.tags = n.tags || [];
+      } else {
+        const angle = (i / Math.max(1, list.length)) * Math.PI * 2;
+        const rad = Math.min(W, H) * 0.28;
+        o = {
+          id: n.id, title: n.title || n.id, exists: !!n.exists,
+          tags: n.tags || [],
+          x: W/2 + Math.cos(angle)*rad,
+          y: H/2 + Math.sin(angle)*rad,
+          vx:0, vy:0
+        };
+      }
       map.set(n.id, o);
-      return o;
+      next.push(o);
     });
+    nodes = next;
     links = (idx.links || []).map(l => ({
       source: map.get(l.source), target: map.get(l.target), missing: !!l.missing
     })).filter(l => l.source && l.target);
+    alpha = Math.max(alpha, 0.55);
   }
 
   function step(){
-    const W = canvas.clientWidth || 600, H = canvas.clientHeight || 400;
-    // repulsion
+    if (alpha < 0.01) return;
+    const W = viewW, H = viewH;
+    const a = alpha;
     for (let i=0;i<nodes.length;i++){
       for (let j=i+1;j<nodes.length;j++){
         let dx = nodes[j].x - nodes[i].x;
         let dy = nodes[j].y - nodes[i].y;
         let d2 = dx*dx + dy*dy + 0.01;
-        let f = 800 / d2;
+        let f = (600 * a) / d2;
         let d = Math.sqrt(d2);
         dx/=d; dy/=d;
         nodes[i].vx -= f*dx; nodes[i].vy -= f*dy;
         nodes[j].vx += f*dx; nodes[j].vy += f*dy;
       }
     }
-    // springs
     for (const l of links){
       let dx = l.target.x - l.source.x;
       let dy = l.target.y - l.source.y;
       let d = Math.sqrt(dx*dx+dy*dy) || 1;
-      let f = (d - 90) * 0.02;
+      let f = (d - 90) * 0.015 * a;
       dx/=d; dy/=d;
       l.source.vx += f*dx; l.source.vy += f*dy;
       l.target.vx -= f*dx; l.target.vy -= f*dy;
     }
-    // center + integrate
+    // Layout gravity toward world origin of the sim (view center at spawn).
+    // Do NOT clamp to viewport — camera pans freely over the world.
     for (const n of nodes){
       if (drag === n) continue;
-      n.vx += (W/2 - n.x) * 0.002;
-      n.vy += (H/2 - n.y) * 0.002;
-      n.vx *= 0.85; n.vy *= 0.85;
+      n.vx += (W/2 - n.x) * 0.0015 * a;
+      n.vy += (H/2 - n.y) * 0.0015 * a;
+      n.vx *= 0.82; n.vy *= 0.82;
       n.x += n.vx; n.y += n.vy;
-      n.x = Math.max(20, Math.min(W-20, n.x));
-      n.y = Math.max(20, Math.min(H-20, n.y));
     }
+    alpha *= 0.985;
+    if (alpha < 0.01) alpha = 0;
+  }
+
+  // Match in-app WikiGraph label visibility (pixel diameter of the node).
+  const NODE_R = 5;
+  const NODE_R_SEL = 6.5;
+  const LABEL_FADE_START_PX = 20; // labels start fading in
+  const LABEL_MIN_PX = 25;        // full opacity
+  /** Soft blue for Home when not selected (matches app HOME_SOFT_BLUE). */
+  const HOME_SOFT = '#8fa8ff';
+
+  function labelOpacityForDiameter(diameterPx){
+    if (diameterPx <= LABEL_FADE_START_PX) return 0;
+    if (diameterPx >= LABEL_MIN_PX) return 1;
+    const t = (diameterPx - LABEL_FADE_START_PX) / (LABEL_MIN_PX - LABEL_FADE_START_PX);
+    return t * t * (3 - 2 * t); // smoothstep
+  }
+
+  /** Match app isWikiHomeNode — real Home note, not missing stubs. */
+  function isHomeNode(n){
+    if (!n || !n.exists) return false;
+    const id = String(n.id || '');
+    const title = String(n.title || '').trim().toLowerCase();
+    const bare = id.includes('::') ? (id.split('::').pop() || id) : id;
+    if (bare.toLowerCase() === 'home.md') return true;
+    if (title === 'home') return true;
+    return false;
   }
 
   function draw(){
-    const W = canvas.clientWidth || 600, H = canvas.clientHeight || 400;
+    const W = viewW, H = viewH;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0,0,W,H);
+    ctx.save();
+    // Camera: world (camX,camY) → canvas center, scaled by camK
+    ctx.translate(W/2, H/2);
+    ctx.scale(camK, camK);
+    ctx.translate(-camX, -camY);
+
     for (const l of links){
       ctx.beginPath();
-      ctx.strokeStyle = l.missing ? 'rgba(224,108,117,.45)' : 'rgba(154,160,166,.35)';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = l.missing ? 'rgba(248,113,113,.4)' : 'rgba(42,42,42,.95)';
+      ctx.lineWidth = 1 / camK;
       ctx.moveTo(l.source.x, l.source.y);
       ctx.lineTo(l.target.x, l.target.y);
       ctx.stroke();
     }
+    // On-screen diameter of a default node at current zoom (matches app math:
+    // 2 * r_graph * globalScale).
+    const diameterPx = 2 * NODE_R * camK;
+    const zoomLabelA = labelOpacityForDiameter(diameterPx);
     const qq = (q.value || '').toLowerCase();
     for (const n of nodes){
-      if (qq && !n.title.toLowerCase().includes(qq) && !n.id.toLowerCase().includes(qq)) continue;
+      if (qq && !n.title.toLowerCase().includes(qq) && !n.id.toLowerCase().includes(qq)
+          && !(n.tags||[]).some(t => String(t).toLowerCase().includes(qq))) continue;
       const sel = selected === n.id;
+      const home = isHomeNode(n);
+      const r = sel ? NODE_R_SEL : NODE_R;
       ctx.beginPath();
-      ctx.fillStyle = !n.exists ? '#e06c75' : (sel ? '#7aa2f7' : '#c0caf5');
-      ctx.arc(n.x, n.y, sel ? 8 : 5.5, 0, Math.PI*2);
+      if (!n.exists) {
+        ctx.fillStyle = '#f87171';
+        ctx.globalAlpha = 0.55;
+      } else if (sel) {
+        ctx.fillStyle = '#3b82f6';
+        ctx.globalAlpha = 1;
+      } else if (home) {
+        // Deselected Home stays findable as a lighter blue (in-app UX).
+        ctx.fillStyle = HOME_SOFT;
+        ctx.globalAlpha = 0.9;
+      } else {
+        ctx.fillStyle = '#e4e4e7';
+        ctx.globalAlpha = 0.88;
+      }
+      ctx.arc(n.x, n.y, r, 0, Math.PI*2);
       ctx.fill();
-      ctx.fillStyle = '#e8eaed';
-      ctx.font = '12px system-ui,sans-serif';
-      ctx.fillText(n.title, n.x + 9, n.y + 4);
+      ctx.globalAlpha = 1;
+      if (sel || home) {
+        ctx.strokeStyle = sel ? '#3b82f6' : HOME_SOFT;
+        ctx.lineWidth = (sel ? 1.5 : 1.1) / camK;
+        ctx.globalAlpha = sel ? 1 : 0.65;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r + 3/camK, 0, Math.PI*2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      // Labels: always on for selection + Home; otherwise fade by zoom.
+      const labelA = (sel || home) ? 1 : zoomLabelA;
+      if (labelA <= 0.01) continue;
+      ctx.fillStyle = sel ? '#93c5fd' : (home ? HOME_SOFT : '#a1a1aa');
+      // Keep label roughly constant on-screen (world font = screen_px / camK).
+      const fontPx = Math.max(11 / camK, 2.8 / camK);
+      ctx.font = fontPx + 'px ui-monospace, Menlo, monospace';
+      ctx.globalAlpha = (sel || home ? 1 : 0.9) * labelA * (!n.exists ? 0.55 : 1);
+      ctx.fillText(n.title, n.x + r + 4/camK, n.y + 3/camK);
+      ctx.globalAlpha = 1;
     }
+    ctx.restore();
   }
 
   function loop(){ step(); draw(); requestAnimationFrame(loop); }
   requestAnimationFrame(loop);
 
-  function renderList(){
-    const qq = (q.value || '').toLowerCase();
-    const items = (index.nodes || []).filter(n => {
-      if (!qq) return true;
-      return (n.title||'').toLowerCase().includes(qq) || (n.id||'').toLowerCase().includes(qq)
-        || (n.tags||[]).some(t => String(t).toLowerCase().includes(qq));
-    });
-    listEl.innerHTML = items.map(n => {
-      const cls = [selected===n.id?'active':'', n.exists?'':'missing'].filter(Boolean).join(' ');
-      return `<button class="${cls}" data-id="${encodeURIComponent(n.id)}">${escapeHtml(n.title||n.id)}</button>`;
-    }).join('') || '<div style="padding:6px;color:var(--muted)">No notes</div>';
-    listEl.querySelectorAll('button').forEach(b => {
-      b.onclick = () => selectNote(decodeURIComponent(b.dataset.id));
-    });
+  // ── Pan / pinch (match in-app WikiGraph: wheel=pan, ctrl+wheel=zoom) ──
+  wrap.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const { x: sx, y: sy } = canvasCoords(e);
+    if (e.ctrlKey || e.metaKey) {
+      // Pinch (browsers synthesize ctrl+wheel)
+      const world = screenToWorld(sx, sy);
+      const factor = Math.exp(-e.deltaY * 0.01);
+      const next = Math.min(8, Math.max(0.15, camK * factor));
+      camK = next;
+      camX = world.x - (sx - viewW/2) / camK;
+      camY = world.y - (sy - viewH/2) / camK;
+      return;
+    }
+    // Two-finger trackpad / mouse wheel → pan in world space
+    camX += e.deltaX / camK;
+    camY += e.deltaY / camK;
+  }, { passive: false });
+
+  function setReaderCollapsed(collapsed){
+    readerCollapsed = !!collapsed;
+    layout.classList.toggle('reader-collapsed', readerCollapsed);
+    toggleReaderBtn.classList.toggle('collapsed', readerCollapsed);
+    toggleReaderLabel.textContent = readerCollapsed ? 'Show article' : 'Hide article';
+    toggleReaderBtn.title = readerCollapsed ? 'Show article viewer' : 'Collapse article viewer';
+    // Let layout settle, then remeasure canvas.
+    requestAnimationFrame(() => { resize(); });
   }
+  toggleReaderBtn.addEventListener('click', () => setReaderCollapsed(!readerCollapsed));
 
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
-  function linkify(body){
-    return escapeHtml(body).replace(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g, (_, t) => {
-      const title = t.trim();
-      return `<a class="wiki" data-title="${escapeHtml(title)}">[[${escapeHtml(title)}]]</a>`;
+  /** Lightweight Markdown → HTML (no CDN). Supports common GFM-ish bits + [[wikilinks]]. */
+  function renderMarkdown(src){
+    let text = String(src || '').replace(/\r\n/g, '\n');
+    // Protect fenced code blocks
+    const fences = [];
+    text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
+      const i = fences.length;
+      fences.push({ lang: lang || '', code });
+      return `\u0000FENCE${i}\u0000`;
+    });
+    // Protect inline code
+    const inlines = [];
+    text = text.replace(/`([^`\n]+)`/g, (_, code) => {
+      const i = inlines.length;
+      inlines.push(code);
+      return `\u0000CODE${i}\u0000`;
+    });
+
+    const lines = text.split('\n');
+    const out = [];
+    let i = 0;
+    let inUl = false, inOl = false, inBq = false;
+
+    function closeLists(){
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (inOl) { out.push('</ol>'); inOl = false; }
+    }
+    function closeBq(){
+      if (inBq) { out.push('</blockquote>'); inBq = false; }
+    }
+    function inlineFmt(s){
+      let t = escapeHtml(s);
+      // [[wikilink]] or [[title|alias]]
+      t = t.replace(/\[\[([^\]|#]+)(?:\|([^\]]+))?\]\]/g, (_, target, label) => {
+        const title = target.trim();
+        const lab = (label || title).trim();
+        return `<a class="wiki" data-title="${escapeHtml(title)}">${escapeHtml(lab)}</a>`;
+      });
+      // [text](url)
+      t = t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_, lab, url) =>
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${lab}</a>`
+      );
+      // bold / italic (bold first; no lookbehind for older engines)
+      t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+      t = t.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      t = t.replace(/_([^_]+)_/g, '<em>$1</em>');
+      // restore inline code
+      t = t.replace(/\u0000CODE(\d+)\u0000/g, (_, n) =>
+        `<code>${escapeHtml(inlines[Number(n)])}</code>`
+      );
+      return t;
+    }
+
+    while (i < lines.length) {
+      const line = lines[i];
+      // table block
+      if (/^\s*\|.+\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[i+1])) {
+        closeLists(); closeBq();
+        const rows = [];
+        while (i < lines.length && /^\s*\|/.test(lines[i])) {
+          rows.push(lines[i]);
+          i++;
+        }
+        // drop separator row
+        const bodyRows = rows.filter((r, idx) => idx === 0 || !/^\s*\|?\s*:?-{3,}/.test(r));
+        const cells = (r) => r.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
+        if (bodyRows.length) {
+          out.push('<table><thead><tr>');
+          cells(bodyRows[0]).forEach(c => out.push(`<th>${inlineFmt(c)}</th>`));
+          out.push('</tr></thead><tbody>');
+          for (let r = 1; r < bodyRows.length; r++) {
+            out.push('<tr>');
+            cells(bodyRows[r]).forEach(c => out.push(`<td>${inlineFmt(c)}</td>`));
+            out.push('</tr>');
+          }
+          out.push('</tbody></table>');
+        }
+        continue;
+      }
+      // fence placeholder alone
+      const fenceM = line.match(/^\u0000FENCE(\d+)\u0000$/);
+      if (fenceM) {
+        closeLists(); closeBq();
+        const f = fences[Number(fenceM[1])];
+        out.push(`<pre><code>${escapeHtml(f.code.replace(/\n$/, ''))}</code></pre>`);
+        i++; continue;
+      }
+      if (/^\s*---+\s*$/.test(line) || /^\s*\*\*\*+\s*$/.test(line)) {
+        closeLists(); closeBq();
+        out.push('<hr/>'); i++; continue;
+      }
+      const hm = line.match(/^(#{1,6})\s+(.+)$/);
+      if (hm) {
+        closeLists(); closeBq();
+        const lvl = hm[1].length;
+        out.push(`<h${lvl}>${inlineFmt(hm[2].trim())}</h${lvl}>`);
+        i++; continue;
+      }
+      const bq = line.match(/^\s*>\s?(.*)$/);
+      if (bq) {
+        closeLists();
+        if (!inBq) { out.push('<blockquote>'); inBq = true; }
+        out.push(`<p>${inlineFmt(bq[1])}</p>`);
+        i++; continue;
+      } else {
+        closeBq();
+      }
+      const ul = line.match(/^\s*[-*+]\s+(.+)$/);
+      if (ul) {
+        closeBq();
+        if (inOl) { out.push('</ol>'); inOl = false; }
+        if (!inUl) { out.push('<ul>'); inUl = true; }
+        out.push(`<li>${inlineFmt(ul[1])}</li>`);
+        i++; continue;
+      }
+      const ol = line.match(/^\s*\d+\.\s+(.+)$/);
+      if (ol) {
+        closeBq();
+        if (inUl) { out.push('</ul>'); inUl = false; }
+        if (!inOl) { out.push('<ol>'); inOl = true; }
+        out.push(`<li>${inlineFmt(ol[1])}</li>`);
+        i++; continue;
+      }
+      if (/^\s*$/.test(line)) {
+        closeLists(); closeBq();
+        i++; continue;
+      }
+      closeLists(); closeBq();
+      // paragraph — merge soft-wrapped lines
+      let para = line;
+      while (i + 1 < lines.length && !/^\s*$/.test(lines[i+1])
+        && !/^(#{1,6})\s/.test(lines[i+1])
+        && !/^\s*[-*+]\s/.test(lines[i+1])
+        && !/^\s*\d+\.\s/.test(lines[i+1])
+        && !/^\s*>/.test(lines[i+1])
+        && !/^\u0000FENCE/.test(lines[i+1])
+        && !/^\s*\|/.test(lines[i+1])
+        && !/^\s*---+\s*$/.test(lines[i+1])) {
+        i++;
+        para += ' ' + lines[i].trim();
+      }
+      out.push(`<p>${inlineFmt(para)}</p>`);
+      i++;
+    }
+    closeLists(); closeBq();
+    // any leftover fence tokens in paragraphs
+    let html = out.join('\n');
+    html = html.replace(/\u0000FENCE(\d+)\u0000/g, (_, n) => {
+      const f = fences[Number(n)];
+      return `<pre><code>${escapeHtml(f.code.replace(/\n$/, ''))}</code></pre>`;
+    });
+    return html;
+  }
+
+  function wireWikiLinks(root){
+    root.querySelectorAll('a.wiki').forEach(a => {
+      a.onclick = (e) => {
+        e.preventDefault();
+        const title = a.dataset.title;
+        const hit = (index.nodes||[]).find(n =>
+          (n.title||'').toLowerCase() === title.toLowerCase()
+          || (n.id||'').toLowerCase() === title.toLowerCase()
+          || (n.aliases||[]).some(x => String(x).toLowerCase() === title.toLowerCase())
+        );
+        if (hit) selectNote(hit.id);
+        else selectNote('missing:' + title);
+      };
     });
   }
 
   async function selectNote(id){
     selected = id;
-    renderList();
+    // If the reader was collapsed, keep it collapsed — selection still works on the map.
     if (String(id).startsWith('missing:')) {
-      reader.innerHTML = `<h2>${escapeHtml(id.slice(8))}</h2><p class="empty">Note does not exist yet.</p>`;
+      reader.innerHTML = `<h2 class="title">${escapeHtml(id.slice(8))}</h2><p class="empty">Note does not exist yet.</p>`;
       return;
     }
     try {
@@ -691,74 +1139,107 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
         return;
       }
       const tags = (j.tags||[]).map(t => '#'+t).join(' ');
-      reader.innerHTML = `<h2>${escapeHtml(j.title||j.id)}</h2><div class="tags">${escapeHtml(tags)}</div><pre>${linkify(j.body||'')}</pre>`;
-      reader.querySelectorAll('a.wiki').forEach(a => {
-        a.onclick = (e) => {
-          e.preventDefault();
-          const title = a.dataset.title;
-          const hit = (index.nodes||[]).find(n =>
-            (n.title||'').toLowerCase() === title.toLowerCase()
-            || (n.id||'').toLowerCase() === title.toLowerCase()
-            || (n.aliases||[]).some(x => String(x).toLowerCase() === title.toLowerCase())
-          );
-          if (hit) selectNote(hit.id);
-          else selectNote('missing:' + title);
-        };
-      });
+      reader.innerHTML =
+        `<h2 class="title">${escapeHtml(j.title||j.id)}</h2>` +
+        (tags ? `<div class="tags">${escapeHtml(tags)}</div>` : '') +
+        `<div class="md">${renderMarkdown(j.body||'')}</div>`;
+      wireWikiLinks(reader);
     } catch (e) {
       reader.innerHTML = `<p class="empty">${escapeHtml(String(e))}</p>`;
     }
   }
 
-  canvas.addEventListener('pointerdown', e => {
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left, y = e.clientY - rect.top;
-    let best = null, bd = 16;
+  function hitNode(sx, sy){
+    const w = screenToWorld(sx, sy);
+    let best = null, bd = 14 / camK;
     for (const n of nodes){
-      const d = Math.hypot(n.x-x, n.y-y);
+      const d = Math.hypot(n.x - w.x, n.y - w.y);
       if (d < bd) { bd = d; best = n; }
     }
-    if (best) {
-      drag = best;
-      selectNote(best.id);
-      canvas.setPointerCapture(e.pointerId);
+    return best;
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    const { x: sx, y: sy } = canvasCoords(e);
+    pointers.set(e.pointerId, { x: sx, y: sy });
+    if (pointers.size === 2) {
+      // Start pinch / two-finger pan
+      drag = null;
+      const pts = [...pointers.values()];
+      const dx = pts[1].x - pts[0].x, dy = pts[1].y - pts[0].y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const mid = { x: (pts[0].x + pts[1].x)/2, y: (pts[0].y + pts[1].y)/2 };
+      const world = screenToWorld(mid.x, mid.y);
+      pinch0 = { dist, camK, midWx: world.x, midWy: world.y, camX, camY };
+      return;
+    }
+    if (pointers.size === 1) {
+      const best = hitNode(sx, sy);
+      if (best) {
+        drag = best;
+        selectNote(best.id);
+        canvas.setPointerCapture(e.pointerId);
+      }
     }
   });
   canvas.addEventListener('pointermove', e => {
-    if (!drag) return;
-    const rect = canvas.getBoundingClientRect();
-    drag.x = e.clientX - rect.left;
-    drag.y = e.clientY - rect.top;
-    drag.vx = drag.vy = 0;
+    if (!pointers.has(e.pointerId)) return;
+    const { x: sx, y: sy } = canvasCoords(e);
+    pointers.set(e.pointerId, { x: sx, y: sy });
+    if (pointers.size >= 2 && pinch0) {
+      const pts = [...pointers.values()];
+      const dx = pts[1].x - pts[0].x, dy = pts[1].y - pts[0].y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const mid = { x: (pts[0].x + pts[1].x)/2, y: (pts[0].y + pts[1].y)/2 };
+      const nextK = Math.min(8, Math.max(0.15, pinch0.camK * (dist / pinch0.dist)));
+      camK = nextK;
+      // Keep midpoint world point under the fingers; also allow pan via mid movement
+      camX = pinch0.midWx - (mid.x - viewW/2) / camK;
+      camY = pinch0.midWy - (mid.y - viewH/2) / camK;
+      return;
+    }
+    if (drag && pointers.size === 1) {
+      const w = screenToWorld(sx, sy);
+      drag.x = w.x; drag.y = w.y;
+      drag.vx = drag.vy = 0;
+    }
   });
-  canvas.addEventListener('pointerup', () => { drag = null; });
+  function endPointer(e){
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch0 = null;
+    if (pointers.size === 0) drag = null;
+  }
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
 
-  q.addEventListener('input', () => { renderList(); });
+  // Search filters which labels/nodes are drawn (see draw()).
+  q.addEventListener('input', () => { /* redraw uses q.value live */ });
 
   async function refresh(){
     try {
       const r = await fetch('/api/index');
       const j = await r.json();
-      if (j.error) { meta.textContent = j.error; return; }
+      if (j.error) { if (meta) meta.title = j.error; return; }
       index = j;
-      meta.textContent = (j.noteCount||0) + ' notes · live · gen ' + (j.generatedAt||'');
-      if (j.generatedAt !== lastGen) {
-        lastGen = j.generatedAt;
-        buildSim(j);
-        renderList();
+      if (noteCountEl) noteCountEl.textContent = String(j.noteCount || 0);
+      if (livePill) livePill.style.opacity = '1';
+      const fp = fingerprint(j);
+      if (fp !== lastFp) {
+        lastFp = fp;
+        mergeSim(j);
         if (!selected) {
           const first = (j.nodes||[]).find(n => n.exists);
           if (first) selectNote(first.id);
         }
-      } else {
-        renderList();
       }
     } catch (e) {
-      meta.textContent = 'offline: ' + e;
+      if (noteCountEl) noteCountEl.textContent = '—';
+      if (livePill) { livePill.textContent = 'offline'; livePill.style.opacity = '0.6'; }
+      if (meta) meta.title = String(e);
     }
   }
   refresh();
-  setInterval(refresh, 2000);
+  setInterval(refresh, 3000);
 })();
 </script>
 </body>

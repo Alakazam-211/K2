@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { useConnectHostStore } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
 // Phase 2 Unit 7a — settings live in the daemon.
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
@@ -292,12 +293,17 @@ export function WakeSchedulerSection(): React.JSX.Element {
   const refreshHeartbeats = useCallback(async () => {
     setHeartbeatsLoading(true)
     try {
-      // 0.40.48 host-aware: the cross-project roster comes from the
-      // ACTIVE host (new /cli/heartbeat/list-all route) — this page is
-      // the fleet-audit surface, so it must show the machine you're
-      // connected to, not this Mac. Scheduler-status/enable already
-      // targeted the active host; the lists were the last local reads.
-      const rows = await daemonCliGet<SystemHeartbeatRow[]>('heartbeat/list-all')
+      // 0.40.48 host-aware: connected to a REMOTE host, the cross-project
+      // roster comes from ITS new /cli/heartbeat/list-all route — this
+      // page is the fleet-audit surface, so it must show the machine
+      // you're connected to (needs the host on >=0.40.48; older hosts
+      // error honestly instead of silently showing the wrong machine).
+      // LOCAL keeps the in-process command: same machine, same DB, and
+      // no dependency on the local daemon having the new route.
+      const rows =
+        useConnectHostStore.getState().activeHost !== 'local'
+          ? await daemonCliGet<SystemHeartbeatRow[]>('heartbeat/list-all')
+          : await invoke<SystemHeartbeatRow[]>('k2so_heartbeat_list_all')
       const sorted = [...rows].sort((a, b) => {
         const byProj = a.projectName.toLowerCase().localeCompare(b.projectName.toLowerCase())
         if (byProj !== 0) return byProj
@@ -324,8 +330,11 @@ export function WakeSchedulerSection(): React.JSX.Element {
     const tick = async (): Promise<void> => {
       try {
         // 0.40.48 host-aware: audit the ACTIVE host's fires (new
-        // /cli/heartbeat/fires-list-all route).
-        const rows = await daemonCliGet<SystemFireRow[]>('heartbeat/fires-list-all', { limit: 100 })
+        // /cli/heartbeat/fires-list-all route); local keeps in-process.
+        const rows =
+          useConnectHostStore.getState().activeHost !== 'local'
+            ? await daemonCliGet<SystemFireRow[]>('heartbeat/fires-list-all', { limit: 100 })
+            : await invoke<SystemFireRow[]>('k2so_heartbeat_fires_list_all', { limit: 100 })
         if (!cancelled) setFires(rows)
       } catch {
         // Silent — the audit log is a read-only convenience; a transient

@@ -550,6 +550,20 @@ const WAKE_MIN_SETTLE: Duration = Duration::from_millis(400);
 /// ready.
 const WAKE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Post-wake quiescence: poll cadence for the "screen stopped changing"
+/// settle that runs AFTER the bracketed-paste ready signal, before the
+/// inject.
+const WAKE_QUIESCE_POLL: Duration = Duration::from_millis(120);
+
+/// Post-wake quiescence: how long the visible grid must stay unchanged
+/// before we treat the woken TUI as settled (resumed-transcript replay
+/// AND composer repaint both done). claude flips `?2004h` while it is
+/// still finalizing a resumed conversation's render, so the ready signal
+/// alone lands the paste in a pre-final frame that the repaint then wipes
+/// — an idle composer's grid is stable, a mid-replay one is not, so a
+/// short stability window distinguishes them.
+const WAKE_QUIESCE_STABLE: Duration = Duration::from_millis(360);
+
 // ─────────────────────────────────────────────────────────────────────
 // Public entry — `deliver_live` (retry-wrapped)
 // ─────────────────────────────────────────────────────────────────────
@@ -1358,10 +1372,81 @@ fn deliver_post_wake(
         // Non-polling provider: the settle above WAS the readiness wait.
         return InjectOutcome::PtyDied;
     }
+
+    // Quiescence gate. The bracketed-paste ready signal (`?2004h`) is set
+    // by claude WHILE it is still finalizing a resumed transcript's render:
+    // a resume of a large conversation flips it early, then repaints the
+    // composer and discards any text pasted into that pre-final frame — the
+    // message was reported Delivered but silently dropped (dormant-wake
+    // delivery black hole, confirmed via grid capture: 0/45 frames + never
+    // in the recipient's transcript). Before injecting, wait for the woken
+    // TUI's visible grid to stop changing, so the replay + repaint are both
+    // done and the paste lands in the same settled, idle input box that live
+    // delivery injects into successfully. A child that exits while we wait
+    // is a real `pty_died`; a stable screen OR the wake_timeout ceiling both
+    // proceed to inject.
+    if let InjectOutcome::PtyDied = wait_for_screen_quiescence(live, start, wake_timeout) {
+        return InjectOutcome::PtyDied;
+    }
+
     // D7: post-wake delivery funnels through the SAME locked
     // `inject_and_submit` as live sends, so the just-woken session's
     // injection serializes against a concurrent human composer.
     inject_and_submit(live, payload)
+}
+
+/// Block until the just-woken TUI's visible grid stops changing — the
+/// resumed-transcript stream has ended AND the composer has repainted —
+/// so a subsequent inject lands in a stable idle input box rather than a
+/// pre-final frame a repaint will wipe (see [`deliver_post_wake`]).
+///
+/// Returns [`InjectOutcome::PtyDied`] if the child exits while waiting.
+/// Otherwise returns [`InjectOutcome::Delivered`] purely as a "safe to
+/// inject now" signal (screen settled, or the `wake_timeout` ceiling hit) —
+/// the caller performs the real injection next in either case.
+///
+/// An idle claude composer's grid is static (verified: 45 identical frames
+/// across ~14s of idle), so the stability window reliably fires shortly
+/// after the replay ends; a still-streaming screen keeps resetting it.
+fn wait_for_screen_quiescence(
+    live: &session_lookup::LiveSession,
+    start: std::time::Instant,
+    wake_timeout: Duration,
+) -> InjectOutcome {
+    let mut last: Option<Vec<String>> = None;
+    let mut stable_since: Option<std::time::Instant> = None;
+    loop {
+        if !live.is_child_alive() {
+            return InjectOutcome::PtyDied;
+        }
+        let rows = live.visible_text_rows();
+        let now = std::time::Instant::now();
+        match &last {
+            // Unchanged since the last poll — has it been quiet long enough?
+            Some(prev) if *prev == rows => {
+                let quiet_for = stable_since
+                    .map(|s| now.duration_since(s))
+                    .unwrap_or_default();
+                if quiet_for >= WAKE_QUIESCE_STABLE {
+                    return InjectOutcome::Delivered;
+                }
+            }
+            // Changed (still streaming/repainting) — reset the stability clock.
+            _ => {
+                stable_since = Some(now);
+                last = Some(rows);
+            }
+        }
+        if start.elapsed() >= wake_timeout {
+            log_debug!(
+                "[msg/wake] session={} quiescence wait hit {}ms ceiling — injecting best-effort",
+                live.session_id(),
+                wake_timeout.as_millis()
+            );
+            return InjectOutcome::Delivered;
+        }
+        std::thread::sleep(WAKE_QUIESCE_POLL);
+    }
 }
 
 /// Issue #9 wake (branches 2+3), Slice-3b rewired. Spawns the

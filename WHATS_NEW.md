@@ -47,9 +47,16 @@ recover.
   machine's. Live/resumable/scheduled states come straight from the host.
 
 - **Settings audits the right machine.** The workspace Settings →
-  Heartbeats page (roster, fire history, session picker) now manages the
-  connected host's heartbeats too — everything you see and change lands
-  on the server you're looking at.
+  Heartbeats page (roster, fire history, session picker, delivery
+  target) now manages the connected host's heartbeats too — everything
+  you see and change lands on the server you're looking at.
+
+- **The fleet Heartbeats page follows your connection.** The system-wide
+  Heartbeats page (every workspace's heartbeats + the fires audit log +
+  wake-scheduler apply) now shows and manages the host you're connected
+  to. Requires the host to also run 0.40.48+ for the cross-workspace
+  lists; older hosts show an honest error instead of silently showing
+  the wrong machine.
 
 - **Errors surface instead of hiding.** A failed heartbeat load shows the
   actual error instead of an eternal "Loading…".

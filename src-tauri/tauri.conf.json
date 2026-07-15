@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicolo-ribaudo/tauri-v2-schema/main/schemas/desktop-schema.json",
   "productName": "K2",
-  "version": "0.40.49",
+  "version": "0.40.50",
   "identifier": "dev.k2.app",
   "build": {
     "frontendDist": "../out/renderer",

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { daemonCliGetText } from '@/lib/daemon-cli'
 import {
   type HeartbeatEntry,
   useHeartbeatSessionsStore,
@@ -73,13 +73,17 @@ export function HeartbeatEntryRow({
     setBusy(true)
     const toast = useToastStore.getState()
     try {
-      // Single thin invoke into the daemon. The smart-launch decision
-      // tree (fresh-fire / inject-into-live / resume-and-fire) lives
-      // in `crates/k2so-daemon/src/heartbeat_launch.rs` so the cron
-      // tick, the CLI, and this Launch button all converge on the
-      // same path. Tauri being open is no longer a precondition.
-      const resp = await invoke<string>('k2so_heartbeat_smart_launch', {
-        projectPath,
+      // The smart-launch decision tree (fresh-fire / inject-into-live /
+      // resume-and-fire) lives in `crates/k2-daemon/src/heartbeat_launch.rs`
+      // so the cron tick, the CLI, and this Launch button all converge on
+      // the same path. 0.40.48 host-aware: launch on the ACTIVE host — the
+      // old Tauri bridge pointed at THIS Mac's daemon, so launching a
+      // remote workspace's heartbeat failed with "project not found" and
+      // the wakeup never reached the host's session. Same /cli route the
+      // CLI's `fire` verb uses (present on every supported daemon), so
+      // local behavior is unchanged.
+      const resp = await daemonCliGetText('heartbeat/launch', {
+        project: projectPath,
         name: entry.row.name,
       })
       // Daemon returns a JSON string mirroring the heartbeat_fires

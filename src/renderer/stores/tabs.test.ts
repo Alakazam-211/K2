@@ -13,9 +13,16 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 /** Flush the setTimeout(…,0) + awaited invoke chain inside
- *  ensurePinnedAgentTabForMode. */
+ *  ensurePinnedAgentTabForMode.
+ *
+ *  16 ticks, not the historical 6: the resolution races other store
+ *  machinery's microtasks (e.g. 0.40.48's synchronous layout flush issues
+ *  a fetch attempt whose rejection chain shares these ticks), and under
+ *  full-suite CPU load 6 was observed to flake ~1/15 runs. The guard
+ *  tests' NEGATIVE assertions are unaffected — waiting longer only gives
+ *  a dropped resolution more chances to (correctly) not stamp. */
 async function flushPinnedTabResolution(): Promise<void> {
-  for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0))
+  for (let i = 0; i < 16; i++) await new Promise((r) => setTimeout(r, 0))
 }
 
 /**

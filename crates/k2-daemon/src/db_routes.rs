@@ -988,6 +988,16 @@ pub fn handle_projects_dismiss(body: &[u8]) -> CliResponse {
     if let Err(e) = pops::projects_set_manually_active(&b.project_id, false) {
         return CliResponse::bad_request(e);
     }
+    // Dismiss = "remove from Active NOW". Clearing the pin alone is not
+    // enough: the Active set is pin OR interacted-within-window, and a
+    // workspace being dismissed from the bar always has fresh interaction
+    // — so without this clear the recompute below re-adds it immediately
+    // and the tile never leaves (the legacy renderer path called
+    // touch-interaction-clear for exactly this reason; the canonical
+    // handler must too).
+    if let Err(e) = pops::projects_touch_interaction_clear(&b.project_id) {
+        return CliResponse::bad_request(e);
+    }
     // Arm the daemon reaper's grace immediately (PRD §4.2) — the chat is
     // reap-eligible now, gated only by `!heartbeat` + the 15s grace +
     // the fire-time re-check; re-activating within the grace cancels it.

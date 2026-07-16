@@ -59,6 +59,9 @@ pub mod connect_users;
 // digests + an optional BYO Anthropic cred; resolves a presented key to an
 // `ApiPrincipal` for the P3b policy-resolver. See module docs.
 pub mod api_keys;
+// Phase 1 (prd-wiki-public-chat-api-loopback-v1): daemon-held host_sessions
+// API key for public wiki chat (`~/.k2/wiki-public-chat/`). See module docs.
+pub mod wiki_public_chat;
 // Headless-friendly daemon lifecycle abstractions (label, plist
 // generation, launchctl arg vectors). Shared between Tauri's
 // `daemon_install` / `daemon_restart` commands and K2 Connect's

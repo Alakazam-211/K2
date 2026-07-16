@@ -33,6 +33,7 @@ import {
   absoluteWikiNotePath,
   seedWiki,
   setWikiServe,
+  setWikiPublicChat,
   wikiIndexFingerprint,
   countVisibleWikiArticles,
   findWikiHomeNode,
@@ -77,6 +78,7 @@ export default function WikiPage(): React.JSX.Element | null {
   const [projectFilter, setProjectFilter] = useState<string>('all')
   const [serve, setServe] = useState<WikiServeStatus | null>(null)
   const [serveBusy, setServeBusy] = useState(false)
+  const [chatBusy, setChatBusy] = useState(false)
   const [seedBusy, setSeedBusy] = useState(false)
   /** Collapse the right-hand note reader so the graph can use full width. */
   const [readerCollapsed, setReaderCollapsed] = useState(false)
@@ -331,6 +333,46 @@ export default function WikiPage(): React.JSX.Element | null {
         .addToast(`Serve toggle failed: ${e instanceof Error ? e.message : String(e)}`, 'error')
     } finally {
       setServeBusy(false)
+    }
+  }
+
+  const onTogglePublicChat = async (): Promise<void> => {
+    if (!projectPath || chatBusy) return
+    const next = !(serve?.publicChatEnabled)
+    setChatBusy(true)
+    try {
+      const st = await setWikiPublicChat(projectPath, next)
+      setServe(st)
+      if (next) {
+        if (st.publicChatReady) {
+          useToastStore
+            .getState()
+            .addToast(
+              'Public chat on — visitors with the wiki URL can ask this workspace agent',
+              'success',
+            )
+        } else {
+          useToastStore
+            .getState()
+            .addToast(
+              st.publicChatError
+                ? `Public chat enabled but not ready: ${st.publicChatError}`
+                : 'Public chat enabled but not ready — check API is on',
+              'error',
+            )
+        }
+      } else {
+        useToastStore.getState().addToast('Public chat off', 'success')
+      }
+    } catch (e) {
+      useToastStore
+        .getState()
+        .addToast(
+          `Public chat toggle failed: ${e instanceof Error ? e.message : String(e)}`,
+          'error',
+        )
+    } finally {
+      setChatBusy(false)
     }
   }
 
@@ -608,6 +650,34 @@ export default function WikiPage(): React.JSX.Element | null {
           title={serve?.enabled ? `Stop local server (${serve.url ?? 'on'})` : 'Serve read-only site on localhost'}
         >
           {serveBusy ? '…' : serve?.enabled ? 'Serve: ON' : 'Serve: OFF'}
+        </button>
+
+        <button
+          type="button"
+          disabled={chatBusy || !projectPath}
+          onClick={() => void onTogglePublicChat()}
+          className={`px-2 py-1 text-[10px] font-medium border transition-colors cursor-pointer disabled:opacity-50 ${
+            serve?.publicChatEnabled
+              ? serve.publicChatReady
+                ? 'border-[var(--color-status-ok-soft)] text-[var(--color-status-ok-soft)] bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)]'
+                : 'border-[var(--color-status-warn-soft,var(--color-border))] text-[var(--color-status-warn-soft,var(--color-text-secondary))] bg-[color-mix(in_srgb,var(--color-status-warn-soft,var(--color-border))_10%,transparent)]'
+              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+          }`}
+          title={
+            serve?.publicChatEnabled
+              ? serve.publicChatReady
+                ? 'Public chat on — visitors with the wiki URL can ask this workspace agent. Click to disable.'
+                : `Public chat enabled but not ready: ${serve.publicChatError ?? 'check API is on'}`
+              : 'Allow public chat: visitors with the served/published wiki URL can ask this workspace agent (default off)'
+          }
+        >
+          {chatBusy
+            ? '…'
+            : serve?.publicChatEnabled
+              ? serve.publicChatReady
+                ? 'Public chat: ON'
+                : 'Public chat: …'
+              : 'Public chat: OFF'}
         </button>
 
         {serve?.enabled && serve.url && (

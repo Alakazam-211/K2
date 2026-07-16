@@ -105,6 +105,10 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // message-live; callers cannot set it from the request body.
         // See `get_api_guest_policy` / `DEFAULT_API_GUEST_POLICY`.
         "api_guest_policy",
+        // Phase 1 (prd-wiki-public-chat-api-loopback-v1) — per-workspace
+        // public wiki chat opt-in. Values: '1' | '0' (default 0/OFF).
+        // Serve alone never enables chat (D6). See `get_wiki_public_chat`.
+        "wiki_public_chat",
     ]
 }
 
@@ -184,6 +188,13 @@ pub fn update_project_setting(
             "api_skip_permissions must be '0' or '1', got {value:?}"
         ));
     }
+    // Phase 1 — public wiki chat opt-in (migration 0088). Security-adjacent
+    // exposure flag; reject non 0/1 so a typo never leaves an undefined gate.
+    if field == "wiki_public_chat" && value != "0" && value != "1" {
+        return Err(format!(
+            "wiki_public_chat must be '0' or '1', got {value:?}"
+        ));
+    }
     // Validate value for the new enum-like setting so a typo doesn't
     // silently leave a project in a broken half-state. Existing fields
     // keep their bare string/int semantics for back-compat.
@@ -257,7 +268,7 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 agent_enabled, \
                 pinned, name, use_session_stream, allow_remote_instruct, \
                 dns_manage_enabled, agents_can_create_connections, \
-                api_guest_policy \
+                api_guest_policy, wiki_public_chat \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| {
@@ -295,6 +306,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "agentsCanCreateConnections": row.get::<_, i64>(9).unwrap_or(0) == 1,
                 // Phase 0b — effective API guest policy (platform default if unset).
                 "apiGuestPolicy": api_guest_policy,
+                // Phase 1 — public wiki chat opt-in (default OFF).
+                "wikiPublicChat": row.get::<_, i64>(11).unwrap_or(0) == 1,
             }))
         },
     )
@@ -451,6 +464,24 @@ pub fn get_api_guest_policy_raw(project_path: &str) -> Option<String> {
             Some(s)
         }
     })
+}
+
+/// Phase 1 — read the PER-WORKSPACE public wiki chat opt-in for `project_path`.
+///
+/// Returns `false` (fail-closed) when the project isn't registered or the
+/// column reads NULL. Default OFF (D6): serve alone never enables chat.
+/// Orthogonal to serve state — chat can be opted in while serve is off;
+/// Phase 2 gateway still requires serve + this flag.
+pub fn get_wiki_public_chat(project_path: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT wiki_public_chat FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
 }
 
 /// #67 — the EFFECTIVE remote-instruct gate decision for `project_path`.
@@ -1062,6 +1093,51 @@ mod tests {
         let path = unique_path("api-guest-missing");
         assert_eq!(get_api_guest_policy(&path), DEFAULT_API_GUEST_POLICY);
         assert_eq!(get_api_guest_policy_raw(&path), None);
+    }
+
+    // ── Phase 1 per-workspace public wiki chat ──────────────────────
+
+    /// Fresh row defaults OFF; 0/1 round-trips; settings JSON exposes
+    /// `wikiPublicChat`; unknown path fails closed.
+    #[test]
+    fn wiki_public_chat_defaults_off_and_round_trips() {
+        let path = unique_path("wiki-public-chat");
+        let _pid = insert_project(&path);
+
+        assert!(
+            !get_wiki_public_chat(&path),
+            "wiki_public_chat must default OFF (D6)",
+        );
+        let settings = get_project_settings(&path).expect("read default");
+        assert_eq!(settings["wikiPublicChat"], false);
+
+        update_project_setting(&path, "wiki_public_chat", "1").expect("opt in");
+        assert!(get_wiki_public_chat(&path));
+        let settings = get_project_settings(&path).expect("read on");
+        assert_eq!(settings["wikiPublicChat"], true);
+
+        update_project_setting(&path, "wiki_public_chat", "0").expect("opt out");
+        assert!(!get_wiki_public_chat(&path));
+        let settings = get_project_settings(&path).expect("read off");
+        assert_eq!(settings["wikiPublicChat"], false);
+    }
+
+    #[test]
+    fn wiki_public_chat_rejects_bad_value() {
+        let path = unique_path("wiki-public-chat-bad");
+        let _pid = insert_project(&path);
+        let err = update_project_setting(&path, "wiki_public_chat", "true")
+            .expect_err("non 0/1 value must be rejected");
+        assert!(
+            err.contains("wiki_public_chat"),
+            "error should reference the field, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn get_wiki_public_chat_fails_closed_for_unknown_path() {
+        let path = unique_path("wiki-public-chat-missing");
+        assert!(!get_wiki_public_chat(&path));
     }
 
     /// Effective gate OR semantics (same as dns_manage / remote_instruct):

@@ -106,6 +106,12 @@ export type WikiServeStatus = {
   enabled: boolean
   port?: number | null
   url?: string | null
+  /** Phase 1 — durable owner opt-in for public wiki chat (default OFF). */
+  publicChatEnabled?: boolean
+  /** Phase 1 — enabled + API on + daemon-held host_sessions key usable. */
+  publicChatReady?: boolean
+  /** Phase 1 — human reason when enabled but not ready. */
+  publicChatError?: string | null
 }
 
 export async function fetchWikiIndex(
@@ -149,6 +155,17 @@ export async function setWikiServe(
     project,
     enabled,
     ...(port !== undefined ? { port } : {}),
+  })
+}
+
+/** Phase 1 — enable/disable public wiki chat (daemon holds the API key). */
+export async function setWikiPublicChat(
+  project: string,
+  enabled: boolean,
+): Promise<WikiServeStatus> {
+  return daemonCliPost<WikiServeStatus>('wiki/chat', {
+    project,
+    enabled,
   })
 }
 

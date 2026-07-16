@@ -691,6 +691,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0087_project_api_guest_policy",
             include_str!("../../drizzle_sql/0087_project_api_guest_policy.sql"),
         ),
+        // 0088 (Phase 1, prd-wiki-public-chat-api-loopback-v1): per-workspace
+        // public wiki chat opt-in. DEFAULT 0 (OFF) — serve alone never enables
+        // chat (D6). Additive.
+        (
+            "0088_project_wiki_public_chat",
+            include_str!("../../drizzle_sql/0088_project_wiki_public_chat.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

@@ -681,6 +681,9 @@ async fn handle_one_request(
             | "/cli/wiki/serve"
             | "/cli/wiki/serve/on"
             | "/cli/wiki/serve/off"
+            | "/cli/wiki/chat"
+            | "/cli/wiki/chat/on"
+            | "/cli/wiki/chat/off"
             // K2 Connect host-awareness GAP — workspace skill / agent /
             // session / relations / heartbeat-flag / onboarding writes.
             // The renderer previously fired these via LOCAL Tauri

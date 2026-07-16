@@ -6165,15 +6165,17 @@ USAGE
   k2 wiki note <id> [--json] [project]
   k2 wiki seed [project]
   k2 wiki serve on|off [--port N] [project]
+  k2 wiki chat on|off [project]
   k2 wiki publish [--label LABEL] [project]
   k2 wiki unpublish [project]
 
 COMMANDS
-  status     Serve + publish state (port, url, published label)
+  status     Serve + publish + public-chat state (port, url, publicChat*)
   index      Graph index (nodes + links)
   note       One note body by id (e.g. Home.md)
   seed       Create Home.md + _Index.md if missing
   serve      Start/stop read-only localhost site (127.0.0.1 only)
+  chat       Allow public chat on the served/published wiki (default OFF)
   publish    Serve on + nest a subdomain (or print create instructions)
   unpublish  Serve off + hint to remove the nested subdomain
 
@@ -6316,6 +6318,7 @@ cmd_wiki() {
         note)       cmd_wiki_note "$@" ;;
         seed)       cmd_wiki_seed "$@" ;;
         serve)      cmd_wiki_serve "$@" ;;
+        chat)       cmd_wiki_chat "$@" ;;
         publish)    cmd_wiki_publish "$@" ;;
         unpublish)  cmd_wiki_unpublish "$@" ;;
         ""|help|--help|-h)
@@ -6344,15 +6347,18 @@ USAGE
   k2 wiki note <id> [--json] [project]
   k2 wiki seed [project]
   k2 wiki serve on|off [--port N] [project]
+  k2 wiki chat on|off [project]
   k2 wiki publish [--label LABEL] [project]
   k2 wiki unpublish [project]
 
 COMMANDS
-  status     Local serve state + published label (if any)
+  status     Local serve state + public chat + published label (if any)
   index      Full graph index (nodes, links, noteCount)
   note       Fetch one note body by stable id (wiki-relative path, e.g. Home.md)
   seed       Create seed notes Home.md + _Index.md when missing
   serve      Toggle read-only localhost SPA (binds 127.0.0.1 only)
+  chat       Allow visitors with the wiki URL to ask this workspace's agent
+             (default OFF; requires API on + daemon-held host_sessions key)
   publish    Turn serve ON, then create/point a nested subdomain (or print the command)
   unpublish  Turn serve OFF and print how to remove the nested subdomain
 
@@ -6365,11 +6371,14 @@ EXAMPLES
   k2 wiki index --json
   k2 wiki note Home.md
   k2 wiki serve on --port 7420
+  k2 wiki chat on
   k2 wiki publish --label brain
   k2 wiki status --json
   k2 wiki unpublish
 
 SEE ALSO
+  k2 api on
+  k2 workspace api-guest-policy get|set
   k2 publish subdomain create <label> --target 127.0.0.1:<port>
   k2 publish subdomain rm <label>
   k2 publish --help
@@ -6458,6 +6467,16 @@ if enabled:
     print("  Serving:    yes  %s" % (url or ("port %s" % (port or "?"))))
 else:
     print("  Serving:    no")
+chat_on = bool(d.get("publicChatEnabled"))
+chat_ready = bool(d.get("publicChatReady"))
+chat_err = d.get("publicChatError") or d.get("public_chat_error")
+if chat_on:
+    if chat_ready:
+        print("  Public chat: yes (ready — visitors can ask this workspace agent)")
+    else:
+        print("  Public chat: yes (not ready%s)" % ((" — %s" % chat_err) if chat_err else ""))
+else:
+    print("  Public chat: no  (enable with: k2 wiki chat on)")
 if pub:
     print("  Published:  %s  (nested subdomain label)" % pub)
 else:
@@ -6704,11 +6723,93 @@ url = d.get("url") or (("http://127.0.0.1:%s" % port) if port else None)
 if enabled:
     print("Wiki serve ON  %s" % (url or ("port %s" % (port or "?"))))
     print("  Bind is 127.0.0.1 only (read-only). Publish with: k2 wiki publish [--label LABEL]")
+    if d.get("publicChatEnabled"):
+        if d.get("publicChatReady"):
+            print("  Public chat: ON (ready)")
+        else:
+            err = d.get("publicChatError") or "not ready"
+            print("  Public chat: ON (%s)" % err)
+    else:
+        print("  Public chat: OFF (visitors cannot ask the agent; k2 wiki chat on)")
 else:
     print("Wiki serve OFF")
     if d.get("publishedLabel") or d.get("published_label"):
         print("  Note: nested subdomain may still point here — run k2 wiki unpublish or")
         print("  k2 publish subdomain rm %s" % (d.get("publishedLabel") or d.get("published_label")))
+'
+}
+
+# Phase 1 (prd-wiki-public-chat-api-loopback-v1) — opt-in public wiki chat.
+# Default OFF. When ON, daemon mints/stores a host_sessions-only API key
+# under ~/.k2/wiki-public-chat/ (never printed). Visitors need serve/publish
+# + API on for the chat gateway to answer.
+cmd_wiki_chat() {
+    local mode="${1:-}"
+    shift || true
+    case "$mode" in
+        on|off|enable|disable|true|false|1|0) ;;
+        --help|-h|help|"")
+            cat <<'EOF'
+Usage: k2 wiki chat on|off [project]
+
+  on|enable   Allow visitors with the wiki URL to ask this workspace's agent
+  off|disable Turn public chat off (serve can stay on; notes still public)
+
+Default is OFF — serve alone never enables chat.
+Requires the public API (`k2 api on`) for chat to be ready.
+The daemon auto-mints a host_sessions-only key; the secret is never printed.
+EOF
+            [ -z "$mode" ] && exit 2 || exit 0
+            ;;
+        *)
+            _wiki_err "usage" "usage: k2 wiki chat on|off [project]"
+            exit 2
+            ;;
+    esac
+
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local enabled="false"
+    case "$mode" in
+        on|enable|true|1) enabled="true" ;;
+        off|disable|false|0) enabled="false" ;;
+    esac
+
+    local raw
+    raw=$(cli_post_form "/cli/wiki/chat" "enabled=${enabled}")
+    printf '%s' "$raw" | ENABLED="$enabled" python3 -c '
+import json,sys,os
+raw=sys.stdin.read()
+want = os.environ.get("ENABLED") == "true"
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+on = bool(d.get("publicChatEnabled") if "publicChatEnabled" in d else want)
+ready = bool(d.get("publicChatReady"))
+err = d.get("publicChatError")
+if on:
+    print("Wiki public chat ON")
+    print("  Visitors with the served/published wiki URL can ask this workspace agent.")
+    if ready:
+        print("  Status: ready (API on + daemon chat key available)")
+    else:
+        print("  Status: not ready — %s" % (err or "check `k2 api on` and `k2 wiki status`"))
+    print("  Secret key is daemon-held only (never shown). Guest policy: k2 workspace api-guest-policy")
+else:
+    print("Wiki public chat OFF")
+    print("  Serve/publish can stay on; only the Ask-this-wiki path is closed.")
 '
 }
 
@@ -8468,8 +8569,8 @@ cmd_schema() {
     },
     {
       "name": "wiki",
-      "usage": "k2 wiki <status|index|note|seed|serve|publish|unpublish> ...",
-      "description": "Per-workspace knowledge base (brain map) under .k2/wiki/: index graph, read notes, seed Home/_Index, localhost serve, publish via nested subdomain.",
+      "usage": "k2 wiki <status|index|note|seed|serve|chat|publish|unpublish> ...",
+      "description": "Per-workspace knowledge base (brain map) under .k2/wiki/: index graph, read notes, seed Home/_Index, localhost serve, public chat opt-in, publish via nested subdomain.",
       "args": [],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output where supported (status/index/note/publish/unpublish)."},
@@ -8481,7 +8582,7 @@ cmd_schema() {
     {
       "name": "wiki status",
       "usage": "k2 wiki status [--json] [project]",
-      "description": "Local serve state (enabled/port/url) + published label + note count.",
+      "description": "Local serve state (enabled/port/url) + publicChatEnabled/Ready/Error + published label + note count.",
       "args": [{"name": "project", "required": false}],
       "flags": [{"name": "--json", "arg": null, "description": "Machine-readable object."}]
     },
@@ -8512,6 +8613,13 @@ cmd_schema() {
       "description": "Start/stop the read-only localhost wiki site (binds 127.0.0.1 only).",
       "args": [{"name": "on|off", "required": true}, {"name": "project", "required": false}],
       "flags": [{"name": "--port", "arg": "N", "description": "Preferred port when turning on."}]
+    },
+    {
+      "name": "wiki chat",
+      "usage": "k2 wiki chat on|off [project]",
+      "description": "Allow public chat on the served/published wiki (default OFF). Visitors can ask this workspace's agent; daemon holds a host_sessions-only API key (never printed).",
+      "args": [{"name": "on|off", "required": true}, {"name": "project", "required": false}],
+      "flags": []
     },
     {
       "name": "wiki publish",
@@ -11599,11 +11707,12 @@ PUBLISH (nested label.user.k2.dev; control plane — not zone DNS)
   (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)
 
 WIKI (per-workspace brain map under .k2/wiki/)
-  wiki status [--json] [project]                Serve + publish state
+  wiki status [--json] [project]                Serve + public chat + publish state
   wiki index [--json] [project]                 Graph index (nodes + links)
   wiki note <id> [--json] [project]             One note body (e.g. Home.md)
   wiki seed [project]                           Create Home.md + _Index.md if missing
   wiki serve on|off [--port N] [project]        Localhost read-only site (127.0.0.1)
+  wiki chat on|off [project]                    Allow public chat (visitors ask agent; default OFF)
   wiki publish [--label L] [project]            Serve on + subdomain create/point (or print cmd)
   wiki unpublish [project]                      Serve off + hint to rm subdomain
   wiki --help                                   Full wiki help

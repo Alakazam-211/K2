@@ -59,7 +59,7 @@ pub mod policy;
 use std::time::Duration;
 
 use crate::cli_response::CliResponse;
-use crate::routes::http::V1Principal;
+use crate::routes::http::{V1Capability, V1Principal};
 use crate::v1_sandboxes::{
     decode_and_validate_segment, resolve_authorized_workspace, session_is_canonical,
     uniform_ws_404,
@@ -96,7 +96,28 @@ fn spawn_prompt_ready_timeout() -> Duration {
 /// ([`deliver_into_live`]: message-live and resume-of-live) — the contract
 /// was already delivered in-session and repeating it would pollute every
 /// turn.
+///
+/// Injection stack (Phase 0b):
+/// ```text
+/// [Platform] API_SPAWN_PREAMBLE     — spawn-only (this const)
+/// [Owner]    api_guest_policy      — every turn (spawn + message-live)
+/// [Caller]   prompt                — untrusted
+/// ```
 pub const API_SPAWN_PREAMBLE: &str = "[K2 API] You were invoked through the K2 API. Report progress and results back to the caller by running: k2 respond '<your message>' — and send your final answer with: k2 respond --final '<your answer>'. The caller cannot see your terminal; only k2 respond output reaches them.";
+
+/// Compose the spawn-time inject payload: frozen preamble, then owner guest
+/// policy, then the untrusted caller prompt. Pure — host-resolved policy
+/// only; never takes a body field for the middle layer.
+pub fn compose_spawn_inject(guest_policy: &str, caller_prompt: &str) -> String {
+    format!("{API_SPAWN_PREAMBLE}\n\n{guest_policy}\n\n{caller_prompt}")
+}
+
+/// Compose a follow-up (message-live / resume-of-live) inject payload:
+/// re-assert owner guest policy, then the untrusted caller prompt. Does
+/// NOT re-send [`API_SPAWN_PREAMBLE`] (already briefed once per process).
+pub fn compose_followup_inject(guest_policy: &str, caller_prompt: &str) -> String {
+    format!("{guest_policy}\n\n{caller_prompt}")
+}
 
 /// How long the deferred adoption probe waits before reading the provider's
 /// on-disk session store — same ~5s window as the wake path's
@@ -292,13 +313,24 @@ fn host_session_resumable(ws_path: &str, session_id: &str) -> bool {
 /// providers, the ADOPTED provider-minted id for self-minting ones (echoing
 /// the daemon-internal id there would hand back a handle no other route
 /// resolves).
-fn deliver_into_live(sid: &SessionId, echo_sid: &str, prompt: &str) -> CliResponse {
+///
+/// Phase 0b: when `prompt` is non-empty, the workspace's owner guest
+/// policy is prepended ([`compose_followup_inject`]) — never taken from
+/// the request body. Empty prompt = reaper re-arm only (no inject).
+fn deliver_into_live(
+    sid: &SessionId,
+    echo_sid: &str,
+    prompt: &str,
+    ws_path: &str,
+) -> CliResponse {
     crate::sandbox_reaper::stamp(sid);
     let delivered = if prompt.is_empty() {
         // Nothing to inject — the touch (reaper re-arm) is the whole effect.
         true
     } else {
-        crate::workspace_msg::inject_raw_into_session(sid, prompt, Duration::ZERO)
+        let guest = k2_core::workspace::settings::get_api_guest_policy(ws_path);
+        let payload = compose_followup_inject(&guest, prompt);
+        crate::workspace_msg::inject_raw_into_session(sid, &payload, Duration::ZERO)
     };
     CliResponse::ok_json(
         serde_json::json!({
@@ -310,10 +342,23 @@ fn deliver_into_live(sid: &SessionId, echo_sid: &str, prompt: &str) -> CliRespon
     )
 }
 
+/// Phase 0 capability gate for the host-sessions family. Missing cap → the
+/// same uniform workspace 404 as an ungranted key (no existence oracle).
+fn require_host_sessions(principal: &V1Principal) -> Result<(), CliResponse> {
+    if principal.has_capability(V1Capability::HostSessions) {
+        Ok(())
+    } else {
+        Err(uniform_ws_404())
+    }
+}
+
 /// `POST /v1/w/<ws>/host-sessions` — spawn a fresh NON-SANDBOXED host session
 /// in the granted workspace (or RESUME one of this family's own prior
 /// sessions when the body carries `{"session": <id>}`).
 pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
+    if let Err(resp) = require_host_sessions(principal) {
+        return resp;
+    }
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -357,7 +402,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     if let Some(target) = resume_target.as_deref() {
         if let Some(live) = lookup_live_host_session(&ws_path, target) {
             let prompt = req.prompt.as_deref().unwrap_or("").trim().to_string();
-            return deliver_into_live(&live.session_id, target, &prompt);
+            return deliver_into_live(&live.session_id, target, &prompt, &ws_path);
         }
     }
 
@@ -466,14 +511,16 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     // response must not wait). Best-effort by design: the caller confirms
     // via `GET .../messages` / the grid stream. Value never logged.
     //
-    // The INITIAL prompt is wrapped with [`API_SPAWN_PREAMBLE`] — this is
-    // the fresh process's one and only briefing on the `k2 respond`
-    // read-back contract. Both paths through here are fresh processes
-    // (plain spawn, and resume-of-a-DEAD-session which re-spawns), so both
-    // carry it; follow-ups via [`deliver_into_live`] stay raw.
+    // Injection stack (Phase 0b): frozen [`API_SPAWN_PREAMBLE`] (spawn-only
+    // respond contract) + owner `api_guest_policy` (every turn) + caller
+    // prompt. Guest policy is host-resolved from workspace settings — never
+    // from the request body. Both fresh-process paths (plain spawn and
+    // resume-of-a-DEAD-session) carry the full stack; follow-ups via
+    // [`deliver_into_live`] re-assert guest policy without the preamble.
     let prompt = req.prompt.as_deref().unwrap_or("").trim().to_string();
     if !prompt.is_empty() {
-        let payload = format!("{API_SPAWN_PREAMBLE}\n\n{prompt}");
+        let guest = k2_core::workspace::settings::get_api_guest_policy(&ws_path);
+        let payload = compose_spawn_inject(&guest, &prompt);
         let sid_for_inject = sid;
         let ready_timeout = spawn_prompt_ready_timeout();
         // W4: the spawned agent's readiness dialect via the ONE shared
@@ -527,6 +574,9 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
 /// no-adapter presets never appear here — their rows stay `session_id=NULL`
 /// by honest necessity (nothing K2 can list would be resumable).
 pub(crate) fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
+    if let Err(resp) = require_host_sessions(principal) {
+        return resp;
+    }
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -593,6 +643,9 @@ pub(crate) fn handle_v1_host_message(
     sid_raw: &str,
     body: &[u8],
 ) -> CliResponse {
+    if let Err(resp) = require_host_sessions(principal) {
+        return resp;
+    }
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -632,11 +685,13 @@ pub(crate) fn handle_v1_host_message(
         return uniform_ws_404();
     }
 
+    // Only `prompt` is taken from the body. Guest policy is host-resolved
+    // (never accept `api_guest_policy` / similar from the caller).
     let prompt = serde_json::from_slice::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v.get("prompt").and_then(|x| x.as_str()).map(str::to_string))
         .unwrap_or_default();
-    deliver_into_live(&live.session_id, &sid_seg, prompt.trim())
+    deliver_into_live(&live.session_id, &sid_seg, prompt.trim(), &ws_path)
 }
 
 /// `GET /v1/w/<ws>/host-sessions/<id>/messages?since=<seq>` — drain the
@@ -650,6 +705,9 @@ pub(crate) fn handle_v1_host_messages(
     sid_raw: &str,
     since: u64,
 ) -> CliResponse {
+    if let Err(resp) = require_host_sessions(principal) {
+        return resp;
+    }
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -673,6 +731,14 @@ mod tests {
     // keep these rows disjoint from every other module's tests.
 
     fn apik(id: &str, grant: Option<&str>) -> V1Principal {
+        apik_caps(id, grant, k2_core::api_keys::ApiCapabilities::all())
+    }
+
+    fn apik_caps(
+        id: &str,
+        grant: Option<&str>,
+        capabilities: k2_core::api_keys::ApiCapabilities,
+    ) -> V1Principal {
         V1Principal::Api(k2_core::api_keys::ApiPrincipal {
             id: id.to_string(),
             anthropic_key: None,
@@ -680,6 +746,7 @@ mod tests {
             base_url: None,
             scope: "owner".to_string(),
             allowed_workspaces: grant.map(str::to_string),
+            capabilities,
         })
     }
 
@@ -733,6 +800,124 @@ mod tests {
         );
     }
 
+    /// Phase 0b inject ORDERING: spawn = preamble → guest policy → caller;
+    /// follow-up = guest policy → caller (no preamble). Pure compose helpers.
+    #[test]
+    fn inject_compose_orders_preamble_guest_then_caller() {
+        let guest = "GUEST-POLICY-MARKER";
+        let caller = "CALLER-PROMPT-MARKER";
+        let spawn = compose_spawn_inject(guest, caller);
+        assert_eq!(
+            spawn,
+            format!("{API_SPAWN_PREAMBLE}\n\n{guest}\n\n{caller}"),
+            "spawn stack must be preamble, blank, guest, blank, caller"
+        );
+        assert!(
+            spawn.find(API_SPAWN_PREAMBLE).unwrap() < spawn.find(guest).unwrap(),
+            "preamble before guest"
+        );
+        assert!(
+            spawn.find(guest).unwrap() < spawn.find(caller).unwrap(),
+            "guest before caller"
+        );
+
+        let follow = compose_followup_inject(guest, caller);
+        assert_eq!(
+            follow,
+            format!("{guest}\n\n{caller}"),
+            "follow-up is guest then caller only"
+        );
+        assert!(
+            !follow.contains(API_SPAWN_PREAMBLE),
+            "follow-up must NOT re-send the frozen spawn preamble"
+        );
+        assert!(
+            follow.find(guest).unwrap() < follow.find(caller).unwrap(),
+            "guest before caller on follow-up"
+        );
+    }
+
+    /// Phase 0b: request body cannot carry/override guest policy —
+    /// `ApiHostSessionRequest` has no such field; unknown keys are ignored
+    /// by serde, and the host always reads policy from workspace settings.
+    #[test]
+    fn request_body_cannot_set_or_override_guest_policy() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-guest-override";
+        insert_project("v1host-guest-override", ws);
+
+        // Owner-configured policy in settings.
+        k2_core::workspace::settings::update_project_setting(
+            ws,
+            "api_guest_policy",
+            "OWNER-CONFIGURED-GUEST-POLICY",
+        )
+        .expect("set owner guest policy");
+        assert_eq!(
+            k2_core::workspace::settings::get_api_guest_policy(ws),
+            "OWNER-CONFIGURED-GUEST-POLICY"
+        );
+
+        // Body that *tries* to smuggle a different policy + a prompt.
+        let body = br#"{
+            "prompt": "hi",
+            "api_guest_policy": "ATTACKER-POLICY",
+            "apiGuestPolicy": "ATTACKER-POLICY",
+            "guest_policy": "ATTACKER-POLICY"
+        }"#;
+        let req = match parse_body(body) {
+            Ok(r) => r,
+            Err(e) => panic!("body must parse (unknown fields ignored); status={}", e.status),
+        };
+        assert_eq!(req.prompt.as_deref(), Some("hi"));
+        // No guest-policy field exists on the request type — only these hints.
+        let _ = (
+            &req.prompt,
+            &req.cols,
+            &req.rows,
+            &req.timeout_secs,
+            &req.session,
+        );
+
+        // Host-resolved policy is still the owner's, never the body.
+        let resolved = k2_core::workspace::settings::get_api_guest_policy(ws);
+        assert_eq!(resolved, "OWNER-CONFIGURED-GUEST-POLICY");
+        assert!(!resolved.contains("ATTACKER"));
+
+        let spawn = compose_spawn_inject(&resolved, req.prompt.as_deref().unwrap_or(""));
+        assert!(spawn.contains("OWNER-CONFIGURED-GUEST-POLICY"));
+        assert!(!spawn.contains("ATTACKER-POLICY"));
+        assert!(spawn.contains(API_SPAWN_PREAMBLE));
+
+        let follow = compose_followup_inject(&resolved, "follow-up");
+        assert!(follow.contains("OWNER-CONFIGURED-GUEST-POLICY"));
+        assert!(!follow.contains("ATTACKER-POLICY"));
+        assert!(!follow.contains(API_SPAWN_PREAMBLE));
+    }
+
+    /// Empty/NULL workspace setting falls through to the platform default.
+    #[test]
+    fn guest_policy_defaults_when_unset() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-guest-default";
+        insert_project("v1host-guest-default", ws);
+        assert_eq!(
+            k2_core::workspace::settings::get_api_guest_policy(ws),
+            k2_core::workspace::settings::DEFAULT_API_GUEST_POLICY,
+        );
+        assert_eq!(
+            k2_core::workspace::settings::get_api_guest_policy_raw(ws),
+            None,
+        );
+        // Empty string also → default.
+        k2_core::workspace::settings::update_project_setting(ws, "api_guest_policy", "")
+            .expect("clear");
+        assert_eq!(
+            k2_core::workspace::settings::get_api_guest_policy(ws),
+            k2_core::workspace::settings::DEFAULT_API_GUEST_POLICY,
+        );
+    }
+
     /// Every door-block case returns the UNIFORM 404 ("no such workspace"):
     /// malformed slug, unknown slug, ungranted key — before any spawn work.
     #[test]
@@ -753,6 +938,41 @@ mod tests {
         let r = handle_v1_host_new(&ungranted, "v1host-new-door", b"{}");
         assert_eq!(r.status, "404 Not Found");
         assert!(r.body.contains("no such workspace"));
+    }
+
+    /// Phase 0 — a key missing `host_sessions` gets the same uniform 404 as
+    /// an ungranted key (no existence oracle), even with a full grant.
+    #[test]
+    fn host_sessions_require_capability() {
+        k2_core::db::init_for_tests();
+        insert_project("v1host-cap-deny", "/tmp/k2-v1host-cap-deny");
+        let no_host = apik_caps(
+            "k-hs-no-cap",
+            Some("*"),
+            k2_core::api_keys::ApiCapabilities {
+                host_sessions: false,
+                canonical_message: true,
+                sandboxes: true,
+            },
+        );
+        for call in [
+            handle_v1_host_new(&no_host, "v1host-cap-deny", b"{}"),
+            handle_v1_host_list(&no_host, "v1host-cap-deny"),
+            handle_v1_host_message(&no_host, "v1host-cap-deny", "any-sid", b"{}"),
+            handle_v1_host_messages(&no_host, "v1host-cap-deny", "any-sid", 0),
+        ] {
+            assert_eq!(call.status, "404 Not Found", "body={}", call.body);
+            assert!(
+                call.body.contains("no such workspace"),
+                "uniform body: {}",
+                call.body
+            );
+        }
+        // Owner always has the capability (reaches past the cap gate — may
+        // still 404 for other reasons, but not with a missing-cap path alone
+        // when the workspace is known: list is a 200 empty).
+        let list = handle_v1_host_list(&V1Principal::Owner, "v1host-cap-deny");
+        assert_eq!(list.status, "200 OK", "owner list body={}", list.body);
     }
 
     /// Malformed JSON body → 400 (never a spawn).

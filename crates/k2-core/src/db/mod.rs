@@ -675,6 +675,22 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0085_project_agents_can_create_connections",
             include_str!("../../drizzle_sql/0085_project_agents_can_create_connections.sql"),
         ),
+        // 0086 (Phase 0, prd-wiki-public-chat-api-loopback-v1): per-key
+        // capability flags on `api_keys` — host_sessions / canonical_message
+        // / sandboxes. DEFAULT 1 backfills EXISTING rows to all-doors-on
+        // (today's behavior); new mints write host-only via create_api_key.
+        // Additive.
+        (
+            "0086_api_key_capabilities",
+            include_str!("../../drizzle_sql/0086_api_key_capabilities.sql"),
+        ),
+        // 0087 (Phase 0b, prd-wiki-public-chat-api-loopback-v1): per-workspace
+        // owner API guest policy text. NULL/empty → platform default; daemon
+        // injects on every host-session spawn + message-live. Additive.
+        (
+            "0087_project_api_guest_policy",
+            include_str!("../../drizzle_sql/0087_project_api_guest_policy.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

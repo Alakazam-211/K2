@@ -52,6 +52,11 @@ use crate::v2_spawn::SpawnRequest;
 
 /// The UNTRUSTED public request body for `POST /v1/w/<ws>/host-sessions`.
 /// Every field is a HINT, never a trust input. Absent/empty body → defaults.
+///
+/// Deliberately has NO guest-policy / system-prompt field (Phase 0b): the
+/// owner `api_guest_policy` and frozen `API_SPAWN_PREAMBLE` are host-only.
+/// Unknown JSON keys (including attacker-supplied `api_guest_policy`) are
+/// ignored by serde.
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct ApiHostSessionRequest {
     /// Optional initial prompt. Delivered into the spawned agent's PTY once
@@ -374,6 +379,7 @@ mod tests {
             base_url: base_url.map(str::to_string),
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
+            capabilities: k2_core::api_keys::ApiCapabilities::all(),
         })
     }
 

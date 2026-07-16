@@ -4168,20 +4168,26 @@ async fn handle_one_request(
                 // arm matches the prefix+suffix and parses the id + `since`.
                 _ if p.starts_with("/v1/sandboxes/") && p.ends_with("/messages") => {
                     let _ = stream.read(&mut buf).await;
-                    let id = p
-                        .strip_prefix("/v1/sandboxes/")
-                        .and_then(|s| s.strip_suffix("/messages"))
-                        .unwrap_or("");
-                    let since = super::http::parse_params(&path, &query)
-                        .get("since")
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0);
-                    // A multi-segment / empty id is never a real session id —
-                    // 404 without an ownership probe.
-                    if id.is_empty() || id.contains('/') {
-                        crate::cli_response::CliResponse::not_found()
+                    // Phase 0: sandboxes capability (shared drain is also used
+                    // by host-sessions; only THIS entry point is sandbox-gated).
+                    if let Err(resp) = crate::v1_sandboxes::require_sandboxes(&principal) {
+                        resp
                     } else {
-                        crate::v1_sandboxes::handle_messages(&principal, id, since)
+                        let id = p
+                            .strip_prefix("/v1/sandboxes/")
+                            .and_then(|s| s.strip_suffix("/messages"))
+                            .unwrap_or("");
+                        let since = super::http::parse_params(&path, &query)
+                            .get("since")
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        // A multi-segment / empty id is never a real session id —
+                        // 404 without an ownership probe.
+                        if id.is_empty() || id.contains('/') {
+                            crate::cli_response::CliResponse::not_found()
+                        } else {
+                            crate::v1_sandboxes::handle_messages(&principal, id, since)
+                        }
                     }
                 }
                 // ── Sandbox v2 (PRD §A) — WORKSPACE-SCOPED session front door:

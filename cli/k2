@@ -3610,6 +3610,163 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
 }
 
+# Phase 0b (prd-wiki-public-chat-api-loopback-v1) — per-workspace owner API
+# guest policy. Re-injected by the daemon on every /v1 host-session spawn and
+# message-live so external callers are framed as non-owners. Callers cannot
+# set/override this from the request body.
+#
+#   k2 workspace api-guest-policy get <ws>
+#   k2 workspace api-guest-policy set <ws> <text…>
+#   k2 workspace api-guest-policy set <ws> --file <path>
+#   k2 workspace api-guest-policy set <ws> --default   # clear → platform default
+#
+# Storage: projects.api_guest_policy via POST /cli/workspace/set.
+# Empty/NULL → platform default (settings::DEFAULT_API_GUEST_POLICY).
+cmd_workspace_api_guest_policy() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        get)
+            local target="${1:-}"
+            [[ -z "$target" ]] && {
+                echo "Usage: k2 workspace api-guest-policy get <workspace>" >&2
+                exit 2
+            }
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            cli_request "/cli/settings" "project=$(urlencode "$resolved_path")" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if isinstance(d, dict) and d.get("error"):
+    err = d["error"]
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % err, file=sys.stderr)
+    sys.exit(1)
+policy = d.get("apiGuestPolicy")
+if policy is None:
+    print("Error: settings response missing apiGuestPolicy", file=sys.stderr)
+    sys.exit(1)
+sys.stdout.write(policy if policy.endswith("\n") else policy + "\n")
+'
+            ;;
+        set)
+            local target="${1:-}"
+            [[ -z "$target" ]] && {
+                echo "Usage: k2 workspace api-guest-policy set <workspace> <text|--file PATH|--default>" >&2
+                exit 2
+            }
+            shift
+            local text=""
+            if [[ "${1:-}" == "--default" || "${1:-}" == "--clear" ]]; then
+                text=""
+            elif [[ "${1:-}" == "--file" ]]; then
+                local fpath="${2:-}"
+                [[ -z "$fpath" ]] && {
+                    echo "Usage: k2 workspace api-guest-policy set <workspace> --file <path>" >&2
+                    exit 2
+                }
+                if [[ "$fpath" == "-" ]]; then
+                    text=$(cat)
+                else
+                    [[ -f "$fpath" ]] || {
+                        echo "Error: file not found: $fpath" >&2
+                        exit 1
+                    }
+                    text=$(cat "$fpath")
+                fi
+            elif [[ $# -eq 0 ]]; then
+                echo "Usage: k2 workspace api-guest-policy set <workspace> <text|--file PATH|--default>" >&2
+                echo "  (or pipe text: k2 workspace api-guest-policy set <ws> --file -)" >&2
+                exit 2
+            else
+                # Remaining args joined as the policy text.
+                text="$*"
+            fi
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            local body
+            body=$(K2_AGP_PATH="$resolved_path" K2_AGP_TEXT="$text" python3 -c 'import json,os
+print(json.dumps({
+    "project": os.environ["K2_AGP_PATH"],
+    "fields": {"api_guest_policy": os.environ.get("K2_AGP_TEXT", "")},
+}))')
+            cli_post_json "/cli/workspace/set" "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if d.get("error") or d.get("ok") is False:
+    err = d.get("error")
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % (err or raw[:200]), file=sys.stderr)
+    sys.exit(1)
+val = ""
+for a in d.get("actions") or []:
+    if a.get("field") == "api_guest_policy":
+        val = a.get("value") or ""
+        st = a.get("status")
+        if st == "skipped":
+            print("API guest policy already set (unchanged).")
+            sys.exit(0)
+if not val.strip():
+    print("API guest policy cleared (platform default will be used on inject).")
+else:
+    print("API guest policy set (%d chars)." % len(val))
+'
+            ;;
+        ""|-h|--help|help)
+            cat <<'EOF' >&2
+Usage: k2 workspace api-guest-policy get|set <workspace> [text|--file PATH|--default]
+
+Per-workspace owner policy re-injected on every /v1 host-session turn so
+external API clients are framed as non-owners. Callers cannot set this.
+
+  get <ws>                      Print effective policy (platform default if unset)
+  set <ws> <text…>              Set custom policy text
+  set <ws> --file <path>        Set policy from a file (use - for stdin)
+  set <ws> --default            Clear custom text → platform default
+
+Also writable via: k2 agent set / POST /cli/workspace/set field api_guest_policy
+EOF
+            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
+            exit 2
+            ;;
+        *)
+            echo "Unknown api-guest-policy subcommand: $sub" >&2
+            echo "Usage: k2 workspace api-guest-policy get|set <workspace> …" >&2
+            exit 2
+            ;;
+    esac
+}
+
 # B3a (sandbox) — set/clear the PER-WORKSPACE Anthropic API key (BYO key).
 # Owner-only daemon route (`/cli/workspace/api-key`, POST). The key rides the
 # JSON BODY (never the URL/query) so it isn't logged by intermediaries. An
@@ -3717,7 +3874,9 @@ PY
 # the external /v1/* surface. Subcommands:
 #   k2 api-key create [--label L] [--anthropic-key K | --llm-key K] \
 #                     [--provider anthropic|openai|google|xai] [--base-url U] \
-#                     [--workspaces '*'|ws1,ws2,...]
+#                     [--workspaces '*'|ws1,ws2,...] \
+#                     [--allow host-sessions,canonical-message,sandboxes] \
+#                     [--deny  host-sessions,canonical-message,sandboxes]
 #   k2 api-key list
 #   k2 api-key revoke <id>
 # --workspaces is the per-key WORKSPACE GRANT (PRD §G2 #4): '*' = every
@@ -3727,6 +3886,19 @@ PY
 # this field since 0.40.21; the flag was simply never exposed here, which
 # made every CLI-minted key dead on arrival for /v1 — found on rpmavs
 # 2026-07-07).
+# --allow / --deny (Phase 0, wiki public chat): per-key CAPABILITIES that gate
+# which /v1 doors the key may open (orthogonal to the workspace grant):
+#   host-sessions      (aliases: host)      → /v1/w/<ws>/host-sessions*
+#   canonical-message  (aliases: canonical, message) → POST /v1/w/<ws>/message
+#   sandboxes          (alias: sandbox)     → /v1/sandboxes* + /v1/w/<ws>/sessions*
+# Defaults for NEW keys: host-sessions ON, canonical-message OFF, sandboxes OFF
+# (the wiki-chat recipe). --allow REPLACES the default set with only the listed
+# doors; --deny turns listed doors OFF on top of the result.
+# Wiki public-chat mint recipe:
+#   k2 api on
+#   k2 api-key create --label wiki-public-chat \
+#     --workspaces '<wiki-ws-slug>' \
+#     --allow host-sessions
 # The RAW key is printed exactly ONCE on create ("store it now, not shown
 # again"); it is never re-printed. The associated LLM credential (BYO cred;
 # --llm-key is the provider-neutral alias for --anthropic-key) is never echoed
@@ -3740,7 +3912,7 @@ cmd_api_key() {
     shift || true
     case "$sub" in
         create)
-            local label="" anthropic="" provider="" base_url="" workspaces=""
+            local label="" anthropic="" provider="" base_url="" workspaces="" allow="" deny=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --label)        label="${2:-}"; shift 2 ;;
@@ -3750,13 +3922,15 @@ cmd_api_key() {
                     --provider)     provider="${2:-}"; shift 2 ;;
                     --base-url)     base_url="${2:-}"; shift 2 ;;
                     --workspaces)   workspaces="${2:-}"; shift 2 ;;
+                    --allow)        allow="${2:-}"; shift 2 ;;
+                    --deny)         deny="${2:-}"; shift 2 ;;
                     *)              echo "Unknown flag: $1" >&2; exit 1 ;;
                 esac
             done
             # Build the JSON body via python3 so the (secret) LLM key is
             # escaped correctly and never interpolated into a shell/URL context.
             local body
-            body=$(K2_AK_LABEL="$label" K2_AK_ANTH="$anthropic" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" K2_AK_WORKSPACES="$workspaces" python3 -c 'import json,os
+            body=$(K2_AK_LABEL="$label" K2_AK_ANTH="$anthropic" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" K2_AK_WORKSPACES="$workspaces" K2_AK_ALLOW="$allow" K2_AK_DENY="$deny" python3 -c 'import json,os
 b={"label": os.environ.get("K2_AK_LABEL","")}
 k=os.environ.get("K2_AK_ANTH","")
 if k.strip(): b["anthropicKey"]=k
@@ -3772,6 +3946,13 @@ if w == "*": b["workspaces"]="*"
 elif w:
     slugs=[s.strip() for s in w.split(",") if s.strip()]
     if slugs: b["workspaces"]=slugs
+# Phase 0 capabilities: comma-separated --allow / --deny lists.
+a=os.environ.get("K2_AK_ALLOW","").strip()
+if a:
+    b["allow"]=[s.strip() for s in a.split(",") if s.strip()]
+d=os.environ.get("K2_AK_DENY","").strip()
+if d:
+    b["deny"]=[s.strip() for s in d.split(",") if s.strip()]
 print(json.dumps(b))')
             cli_post_json "/cli/api-keys/create" "$body" \
                 | K2_AK_WORKSPACES="$workspaces" python3 -c 'import json,os,sys
@@ -3780,6 +3961,12 @@ try:
     if "error" in d:
         print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
     print("API key created (id: %s)." % d.get("id",""))
+    caps=d.get("capabilities") or {}
+    if caps:
+        on=[n for n,v in (("host-sessions",caps.get("hostSessions")),
+                          ("canonical-message",caps.get("canonicalMessage")),
+                          ("sandboxes",caps.get("sandboxes"))) if v]
+        print("Capabilities: %s" % (", ".join(on) if on else "(none)"))
     print("")
     print("  %s" % d.get("key",""))
     print("")
@@ -3808,6 +3995,11 @@ try:
         cred=("%s-key" % prov) if k.get("anthropicKeySet") else "no-llm-key"
         line="%s  [%s]  %s  %s  scope=%s" % (k.get("id",""), state, (k.get("label") or "-"), cred, k.get("scope",""))
         if k.get("baseUrl"): line += "  base-url=%s" % k["baseUrl"]
+        caps=k.get("capabilities") or {}
+        on=[n for n,v in (("host-sessions",caps.get("hostSessions")),
+                          ("canonical-message",caps.get("canonicalMessage")),
+                          ("sandboxes",caps.get("sandboxes"))) if v]
+        line += "  caps=%s" % (",".join(on) if on else "none")
         print(line)
 except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
@@ -3828,7 +4020,24 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
             ;;
         *)
-            echo "Usage: k2 api-key <create [--label L] [--anthropic-key K]|list|revoke <id>>" >&2
+            echo "Usage: k2 api-key <create|list|revoke>" >&2
+            echo "" >&2
+            echo "  create  [--label L] [--anthropic-key K | --llm-key K]" >&2
+            echo "          [--provider anthropic|openai|google|xai] [--base-url U]" >&2
+            echo "          [--workspaces '*'|ws1,ws2,...]" >&2
+            echo "          [--allow host-sessions,canonical-message,sandboxes]" >&2
+            echo "          [--deny  host-sessions,canonical-message,sandboxes]" >&2
+            echo "  list" >&2
+            echo "  revoke  <id>" >&2
+            echo "" >&2
+            echo "Capabilities (Phase 0) gate which /v1 doors a key may open:" >&2
+            echo "  host-sessions      → /v1/w/<ws>/host-sessions*   (default ON for new keys)" >&2
+            echo "  canonical-message  → POST /v1/w/<ws>/message     (default OFF)" >&2
+            echo "  sandboxes          → /v1/sandboxes* + sessions*  (default OFF)" >&2
+            echo "" >&2
+            echo "Wiki public-chat recipe:" >&2
+            echo "  k2 api-key create --label wiki-public-chat \\" >&2
+            echo "    --workspaces '<wiki-ws-slug>' --allow host-sessions" >&2
             exit 1 ;;
     esac
 }
@@ -8913,6 +9122,12 @@ LIFECYCLE (less common)
   remove <path>                     Deregister (files stay)
   triage                            Plain-text summary of pending work
 
+API / HOST-SESSIONS
+  api-guest-policy get <ws>         Show owner guest policy (default if unset)
+  api-guest-policy set <ws> <text>  Set policy re-injected every /v1 turn
+  api-guest-policy set <ws> --file <path>
+  api-guest-policy set <ws> --default   Clear → platform default
+
 `<path>` defaults to K2SO_PROJECT_PATH or PWD.
 
 EXAMPLES
@@ -8921,6 +9136,8 @@ EXAMPLES
   k2 workspace launch /Users/me/Projects/k2so
   k2 workspace profile
   k2 workspace update --field role --value "frontend lead"
+  k2 workspace api-guest-policy get my-wiki
+  k2 workspace api-guest-policy set my-wiki "Read-only; use k2 respond --final"
 EOF
 }
 
@@ -17802,7 +18019,9 @@ EOF
             resume-chat-args)  shift 2; cmd_workspace_resume_chat_args "$@" ;;
             # B3a (sandbox) — set/clear the per-workspace Anthropic API key.
             api-key)           shift 2; cmd_workspace_set_api_key "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|...> [args]" >&2; exit 1 ;;
+            # Phase 0b — owner API guest policy (host-session inject every turn).
+            api-guest-policy)  shift 2; cmd_workspace_api_guest_policy "$@" ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|api-guest-policy|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

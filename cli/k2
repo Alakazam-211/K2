@@ -362,6 +362,11 @@ _uds_eligible() {
         # PR1 federation dual-auth — peers/peer-roster/send under passport.
         # pair/confirm stay TCP owner-or-admin only (not here).
         /cli/federation/peers|/cli/federation/peer-roster|/cli/federation/send) return 0 ;;
+        # Named heartbeat schedule CRUD + fire/status (agent-owned workspace
+        # schedules). OS tick install + fleet-wide list stay TCP owner-only.
+        /cli/heartbeat/install-launchd|/cli/heartbeat/uninstall-launchd|/cli/heartbeat/apply-wake-scheduler) return 1 ;;
+        /cli/heartbeat/list-all|/cli/heartbeat/fires-list-all|/cli/heartbeat/set-show-sessions) return 1 ;;
+        /cli/heartbeat/*|/cli/heartbeat-log) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -957,6 +962,38 @@ cmd_commit_merge() {
 # replacements and rejects unknowns with exit 2.
 
 # ── Multi-heartbeat (agent_heartbeats) CRUD ────────────────────────────
+# Shared error formatter for heartbeat daemon responses. Maps structured
+# owner_only / forbidden teaching (exit 3) so agents never treat a valid
+# passport as "invalid token" on owner-only surfaces.
+_hb_print_err() {
+    # stdin: raw JSON body (or empty). Exits 1/2/3.
+    python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw:
+    print("Error: empty response from daemon (is it running?)", file=sys.stderr)
+    sys.exit(1)
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: " + raw[:200], file=sys.stderr)
+    sys.exit(1)
+err = d.get("error", d) if isinstance(d, dict) else raw
+if isinstance(err, dict):
+    code = err.get("code") or "error"
+    hint = err.get("hint") or err.get("message") or code
+    if code in ("owner_only", "forbidden", "gated") and "ask your human" not in hint:
+        hint = (hint + " — " if hint else "") + "requires owner/admin — ask your human"
+    print("Error: " + hint, file=sys.stderr)
+    sys.exit(3 if code in ("owner_only", "forbidden", "gated") else 2 if code == "usage" else 1)
+print("Error: " + str(err), file=sys.stderr)
+# Classic string "Invalid or missing auth token" → treat as auth failure
+if isinstance(err, str) and "token" in err.lower():
+    sys.exit(3)
+sys.exit(1)
+'
+}
+
 # Parse frequency/day/time flags into spec JSON that matches the scheduler
 # logic in should_project_fire.
 #   --daily --time 07:00
@@ -1092,17 +1129,17 @@ cmd_heartbeat_add() {
     freq=$(echo "$spec_output" | grep '^FREQ:' | sed 's/^FREQ://')
     local params="name=$(urlencode "$name")&frequency=$freq&spec=$(urlencode "$spec_json")"
     local resp
-    resp=$(cli_request "/cli/heartbeat/add" "$params")
+    resp=$(cli_send cli_request "/cli/heartbeat/add" "$params")
     local wakeup_abs
+    if printf '%s' "$resp" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); sys.exit(0 if isinstance(d,dict) and 'error' in d else 1)" 2>/dev/null; then
+        printf '%s' "$resp" | _hb_print_err
+        return $?
+    fi
     wakeup_abs=$(printf '%s' "$resp" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
-    if 'error' in d:
-        print(f'Error: {d[\"error\"]}', file=sys.stderr); sys.exit(1)
     print(d.get('wakeupAbs') or '')
-except SystemExit:
-    raise
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
 ")
@@ -1124,7 +1161,7 @@ except Exception as e:
 # user walk away from a heartbeat that can never fire. Best-effort —
 # never fails the command it follows.
 hb_warn_if_transport_down() {
-    cli_request "/cli/heartbeat/scheduler-status" 2>/dev/null | python3 -c "
+    cli_send cli_request "/cli/heartbeat/scheduler-status" 2>/dev/null | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1164,10 +1201,10 @@ cmd_heartbeat_list() {
         return
     fi
     if [ "$as_json" = "1" ]; then
-        cli_request "/cli/heartbeat/list"
+        cli_send cli_request "/cli/heartbeat/list"
         return
     fi
-    cli_request "/cli/heartbeat/list" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/list" | python3 -c "
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1175,7 +1212,16 @@ try:
         # Daemon error object, not a row list (e.g. unregistered
         # workspace, missing route on an older daemon) — GH#23 asked
         # for a real message here instead of a parser crash.
-        print(f\"Error: {rows.get('error', rows)}\", file=sys.stderr)
+        # owner_only / forbidden → exit 3 teaching (not fake invalid token).
+        err = rows.get('error', rows)
+        if isinstance(err, dict):
+            code = err.get('code') or 'error'
+            hint = err.get('hint') or err.get('message') or code
+            if code in ('owner_only', 'forbidden', 'gated') and 'ask your human' not in hint:
+                hint = (hint + ' — ' if hint else '') + 'requires owner/admin — ask your human'
+            print(f'Error: {hint}', file=sys.stderr)
+            sys.exit(3 if code in ('owner_only', 'forbidden', 'gated') else 1)
+        print(f'Error: {err}', file=sys.stderr)
         sys.exit(1)
     if not rows:
         print('No heartbeats configured for this workspace.'); sys.exit(0)
@@ -1223,7 +1269,7 @@ cmd_heartbeat_remove() {
     [ -z "$name" ] && { echo "Usage: k2 heartbeat remove <name> [--purge]" >&2; exit 1; }
 
     if $purge; then
-        cli_request "/cli/heartbeat/remove" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+        cli_send cli_request "/cli/heartbeat/remove" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1238,7 +1284,7 @@ except Exception as e:
         # Stops firing on schedule, hidden from `heartbeat list`, but
         # the WAKEUP.md and chat history stay readable via
         # `heartbeat list-archived` and the sidebar's Archived section.
-        cli_request "/cli/heartbeat/archive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+        cli_send cli_request "/cli/heartbeat/archive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1254,7 +1300,7 @@ except Exception as e:
 cmd_heartbeat_unarchive() {
     local name="${1:-}"
     [ -z "$name" ] && { echo "Usage: k2 heartbeat unarchive <name>" >&2; exit 1; }
-    cli_request "/cli/heartbeat/unarchive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+    cli_send cli_request "/cli/heartbeat/unarchive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1276,10 +1322,10 @@ cmd_heartbeat_list_archived() {
         esac
     done
     if [ "$as_json" = "1" ]; then
-        cli_request "/cli/heartbeat/list-archived"
+        cli_send cli_request "/cli/heartbeat/list-archived"
         return
     fi
-    cli_request "/cli/heartbeat/list-archived" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/list-archived" | python3 -c "
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1316,7 +1362,7 @@ cmd_heartbeat_fire() {
     [ -z "$name" ] && { echo "Usage: k2 heartbeat signal fire <name> [--force]" >&2; exit 1; }
     local params="name=$(urlencode "$name")"
     [ "$force" = "1" ] && params="${params}&force=1"
-    cli_request "/cli/heartbeat/fire" "$params" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/fire" "$params" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1351,7 +1397,7 @@ cmd_heartbeat_enable_disable() {
     # Enabled/Disabled like a human would.
     local verb="Enabled"
     [ "$enabled" = "false" ] && verb="Disabled"
-    cli_request "/cli/heartbeat/enable" "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/enable" "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1372,7 +1418,7 @@ cmd_heartbeat_use_pinned_session() {
     local enabled="$1"; shift
     local name="${1:-}"
     [ -z "$name" ] && { echo "Usage: k2 heartbeat use-pinned-session [on|off] <name>" >&2; exit 1; }
-    cli_request "/cli/heartbeat/set-use-workspace-session" \
+    cli_send cli_request "/cli/heartbeat/set-use-workspace-session" \
         "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
 import json, sys
 try:
@@ -1417,7 +1463,7 @@ cmd_heartbeat_session() {
 
     if [ -z "$mode" ]; then
         # Read-only: print the current delivery target.
-        cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+        cli_send cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
 import json, sys, os
 name = os.environ['NAME']
 try:
@@ -1446,7 +1492,7 @@ else:
         echo "--provider only applies with --set <session-id>" >&2; exit 1
     fi
 
-    cli_request "/cli/heartbeat/set-session" \
+    cli_send cli_request "/cli/heartbeat/set-session" \
         "name=$(urlencode "$name")&mode=$mode&session_id=$(urlencode "$session_id")&provider=$(urlencode "$provider")" \
         | NAME="$name" python3 -c "
 import json, sys, os
@@ -1474,7 +1520,7 @@ cmd_heartbeat_rename() {
         echo "Usage: k2 heartbeat rename <old-name> <new-name>" >&2
         exit 1
     fi
-    cli_request "/cli/heartbeat/rename" "from=$(urlencode "$from")&to=$(urlencode "$to")" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/rename" "from=$(urlencode "$from")&to=$(urlencode "$to")" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1524,7 +1570,7 @@ cmd_heartbeat_edit() {
         local freq
         freq=$(echo "$spec_output" | grep '^FREQ:' | sed 's/^FREQ://')
         local params="name=$(urlencode "$name")&frequency=$freq&spec=$(urlencode "$spec_json")"
-        cli_request "/cli/heartbeat/edit" "$params" | python3 -c "
+        cli_send cli_request "/cli/heartbeat/edit" "$params" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1542,7 +1588,7 @@ except Exception as e:
         # workspace base. Written only AFTER a successful schedule edit
         # (a failed edit above already exited non-zero).
         local rel_path
-        rel_path=$(cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+        rel_path=$(cli_send cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1582,7 +1628,7 @@ cmd_heartbeat_show() {
         esac
     done
     [ -z "$name" ] && { echo "Usage: k2 heartbeat show <name> [--json]" >&2; exit 1; }
-    cli_request "/cli/heartbeat/list" | NAME="$name" AS_JSON="$as_json" python3 -c "
+    cli_send cli_request "/cli/heartbeat/list" | NAME="$name" AS_JSON="$as_json" python3 -c "
 import json, os, sys
 name = os.environ['NAME']
 as_json = os.environ['AS_JSON'] == '1'
@@ -1638,7 +1684,7 @@ cmd_heartbeat_wakeup() {
     [ -z "$name" ] && { echo "Usage: k2 heartbeat wakeup <name> [--path-only|--edit]" >&2; exit 1; }
 
     local rel_path
-    rel_path=$(cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+    rel_path=$(cli_send cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1694,7 +1740,7 @@ cmd_heartbeat_status() {
     # GH#27: an unknown name used to print 'No fire history ... yet',
     # implying the heartbeat exists. Check existence first (same message
     # shape as `heartbeat show`).
-    cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+    cli_send cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1706,7 +1752,7 @@ if not any(r.get('name') == os.environ['NAME'] for r in rows):
     print(f'No heartbeat named \"{os.environ[\"NAME\"]}\" in this workspace.', file=sys.stderr)
     sys.exit(1)
 " || exit 1
-    cli_request "/cli/heartbeat/status" "name=$(urlencode "$name")&limit=$limit" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/status" "name=$(urlencode "$name")&limit=$limit" | python3 -c "
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1735,7 +1781,7 @@ cmd_heartbeat_log() {
             *) shift ;;
         esac
     done
-    cli_request "/cli/heartbeat-log" "limit=$limit" | python3 -c "
+    cli_send cli_request "/cli/heartbeat-log" "limit=$limit" | python3 -c "
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -8768,7 +8814,9 @@ cmd_update() {
 
     # Extract the version from the remote script
     local remote_version
-    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | sed 's/K2_CLI_VERSION="0.40.50"//')
+    # Parse K2_CLI_VERSION="x.y.z" without embedding the local version in
+    # the sed pattern (release bumps of K2_CLI_VERSION= used to rewrite this).
+    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | sed -E 's/^K2_CLI_VERSION="//; s/"$//')
     if [ -z "$remote_version" ]; then
         echo "Error: Could not parse remote version." >&2
         exit 1

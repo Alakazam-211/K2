@@ -4825,6 +4825,57 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // Heartbeat schedule family — dual-auth for agent-owned verbs
+        // (add/list/edit/fire/…); OS tick install + fleet-wide list stay
+        // owner-only and teach `owner_only` (never opaque "invalid token")
+        // when a valid scoped passport hits them. Scoped callers are
+        // stamped to their own workspace so they cannot schedule into
+        // another project's heartbeats.
+        p if p.starts_with("/cli/heartbeat/") || p == "/cli/heartbeat-log" => {
+            let _ = stream.read(&mut buf).await;
+            if crate::session_token::is_agent_verb(p) {
+                let (auth_ok, scoped_principal) = token_or_scoped_hook_auth(
+                    p,
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                );
+                if !auth_ok {
+                    let r = crate::cli::CliResponse::forbidden();
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                        .await;
+                    return DispatchOutcome::Done;
+                }
+                let mut params = super::http::parse_params(&path, &query);
+                if let Some(ref principal) = scoped_principal {
+                    crate::caller_workspace::stamp_principal(&mut params, principal);
+                }
+                let p_owned = p.to_string();
+                let resp = tokio::task::spawn_blocking(move || {
+                    crate::caller_workspace::with_request_principal(scoped_principal, || {
+                        crate::cli::dispatch(&p_owned, &params)
+                    })
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+                });
+                super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                    .await;
+            } else {
+                // Owner-only heartbeat surfaces (install-launchd, list-all, …).
+                if !super::http::token_ok(&query, state.token.as_str()) {
+                    let r = auth_scope_failure(p, &query, bearer_token.as_deref());
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                        .await;
+                    return DispatchOutcome::Done;
+                }
+                let params = super::http::parse_params(&path, &query);
+                let resp = crate::cli::dispatch(p, &params);
+                super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                    .await;
+            }
+        }
         // C1 (0.40.45) — `/cli/connections` dual-auth (owner/connect-user
         // OR scoped agent hook). Mutate (add/remove) is further gated:
         // owner-or-admin always; agents need agents_can_create_connections.
@@ -5151,12 +5202,83 @@ fn mail_dual_auth_failure(
     crate::cli_response::CliResponse::forbidden()
 }
 
+/// When auth fails on a dual-auth family (heartbeat, …): if the caller
+/// presented a **valid scoped agent passport** on an owner-only path,
+/// teach `owner_only` (exit 3) instead of the opaque
+/// "Invalid or missing auth token" that made agents think their
+/// passport was broken. Missing/garbage credentials still get classic
+/// forbidden.
+fn auth_scope_failure(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+) -> crate::cli_response::CliResponse {
+    let presented = presented_bearer(query, bearer);
+    if !presented.is_empty() && crate::session_token::validate_hook(presented).is_some() {
+        // Valid passport, wrong surface — never pretend the token is invalid.
+        if path.starts_with("/cli/heartbeat/") || path == "/cli/heartbeat-log" {
+            return crate::cli_response::CliResponse {
+                status: "403 Forbidden",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "ok": false,
+                    "error": {
+                        "code": "owner_only",
+                        "hint": "requires owner/admin — ask your human (OS schedule install, fleet-wide heartbeat list, and set-show-sessions are owner surfaces; use k2 heartbeat schedule/list/fire for workspace schedules)",
+                    },
+                })
+                .to_string(),
+            };
+        }
+        return crate::cli_response::CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "owner_only",
+                    "hint": "requires owner/admin — ask your human",
+                },
+            })
+            .to_string(),
+        };
+    }
+    crate::cli_response::CliResponse::forbidden()
+}
+
 // Inline unit tests — dispatch sub-helpers
 // ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_scope_failure_missing_token_is_classic_forbidden() {
+        let r = auth_scope_failure("/cli/heartbeat/install-launchd", "", None);
+        assert_eq!(r.status, "403 Forbidden");
+        assert!(
+            r.body.contains("Invalid or missing auth token"),
+            "missing credential must stay classic forbidden: {}",
+            r.body
+        );
+        assert!(!r.body.contains("owner_only"));
+    }
+
+    #[test]
+    fn auth_scope_failure_garbage_token_is_classic_forbidden() {
+        let r = auth_scope_failure(
+            "/cli/heartbeat/list-all",
+            "token=not-a-real-passport",
+            None,
+        );
+        assert_eq!(r.status, "403 Forbidden");
+        assert!(
+            r.body.contains("Invalid or missing auth token"),
+            "garbage credential must stay classic forbidden: {}",
+            r.body
+        );
+    }
 
     #[test]
     fn dispatch_unit6_post_unknown_path_returns_404() {

@@ -531,12 +531,27 @@ fn apply_public_chat_param(
 
 /// Persist opt-in + ensure daemon-held key when turning ON.
 /// Never returns the raw key. Disabling only flips the setting (key kept).
+///
+/// Enabling public chat also opts the workspace into
+/// [`api_skip_permissions`](k2_core::workspace::settings::get_api_skip_permissions):
+/// host-session spawns otherwise **strip** the agent preset's
+/// `--dangerously-skip-permissions` / yolo flags (default safety for
+/// attended API use). Public chat is unattended — without that opt-in the
+/// visitor's first turn dies on HITL. Disabling chat does **not** clear
+/// skip-permissions (owner may still want API keys unattended).
 fn set_public_chat(workspace: &Path, enabled: bool) -> Result<(), String> {
     let key = workspace_key(workspace);
     let project_path = resolve_project_path_for_settings(&key);
     let value = if enabled { "1" } else { "0" };
     k2_core::workspace::settings::update_project_setting(&project_path, "wiki_public_chat", value)?;
     if enabled {
+        // Unattended public chat needs the agent preset's auto-approve flags
+        // preserved on host-session spawn (see v1_host_sessions::policy).
+        k2_core::workspace::settings::update_project_setting(
+            &project_path,
+            "api_skip_permissions",
+            "1",
+        )?;
         k2_core::wiki_public_chat::ensure_chat_key(&project_path)?;
     }
     Ok(())

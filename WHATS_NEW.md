@@ -3,6 +3,43 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.51 — Public wiki chat + agents control heartbeats
+
+Wiki visitors can talk to a workspace agent in the site itself, and agents
+can manage their own heartbeat schedules without fake “invalid token”
+errors.
+
+### Public wiki chat
+
+- **Ask this wiki.** Workspaces can turn on public chat for a published
+  wiki (default off). Visitors get a third-column chat panel on the live
+  site; messages run through the same host-session API as external keys,
+  with the chat key held only on the daemon (never in HTML or browser
+  responses).
+
+- **Unattended from the first turn.** Enabling public chat opts the
+  workspace into skip-permissions for host sessions so the visitor’s
+  first message isn’t stuck on a human approval prompt. First-message
+  inject also waits for screen quiescence so the paste isn’t wiped by
+  the agent’s startup repaint.
+
+- **Guest policy.** Owner-set guest framing still applies on every turn
+  (read-only preference + `k2 respond`), same as other API host sessions.
+
+### Agents own heartbeat schedules
+
+- **`k2 heartbeat` works from agent sessions.** Agents can list, add,
+  edit, enable/disable, and fire workspace schedules with their session
+  passport (UDS when in-cell, TCP dual-auth otherwise). The daemon stamps
+  the caller’s workspace so one agent can’t schedule into another’s
+  project.
+
+- **Clear owner-only teaching.** OS tick install, fleet-wide lists, and
+  similar owner surfaces no longer say “Invalid or missing auth token”
+  when an agent passport is presented — they return `owner_only` with a
+  hint to ask the human. Agents stop chasing a “broken token” that was
+  really a scope boundary.
+
 ## 0.40.50 — CLI stays current on Linux servers
 
 Server updates no longer leave the `k2` command stuck on an old version

@@ -130,6 +130,44 @@ fn strip_danger_flags(args: Vec<String>, declared: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Ensure unattended auto-approve flags are present when the workspace has
+/// opted in (`api_skip_permissions` / public wiki chat). Strip only *keeps*
+/// flags the preset already had — if the resolved argv lost them (or the
+/// preset never declared them), an unattended host-session still HITLs.
+/// Prepend missing flags from the preset's declared list, else the
+/// command-matched floor (claude → `--dangerously-skip-permissions`, …).
+fn ensure_danger_flags(mut args: Vec<String>, declared: &[String], command: &str) -> Vec<String> {
+    let cmd = command.rsplit('/').next().unwrap_or(command).to_ascii_lowercase();
+    let needed: Vec<String> = if !declared.is_empty() {
+        declared.to_vec()
+    } else {
+        let mut v = Vec::new();
+        if cmd.contains("claude") {
+            v.push("--dangerously-skip-permissions".into());
+        }
+        if cmd.contains("codex") {
+            v.push("--dangerously-bypass-approvals-and-sandbox".into());
+        }
+        if cmd.contains("gemini") {
+            v.push("--yolo".into());
+        }
+        if cmd.contains("grok") {
+            v.push("--always-approve".into());
+        }
+        if cmd.contains("copilot") {
+            v.push("--allow-all".into());
+        }
+        // Unknown binary: no safe auto-flag to invent.
+        v
+    };
+    for flag in needed.into_iter().rev() {
+        if !args.iter().any(|a| a == &flag) {
+            args.insert(0, flag);
+        }
+    }
+    args
+}
+
 /// W4 (0.40.30) — resolve the READINESS dialect of the workspace's
 /// configured agent for the post-spawn initial-prompt injector, through
 /// the ONE shared precedence chain
@@ -212,30 +250,45 @@ pub(crate) fn resolve_host_spawn(
     // warning so the operator can declare the flags on the preset row
     // (or accept the residual); we deliberately do NOT guess-strip
     // unknown args (a false positive would break the agent's argv).
+    // Unattended host sessions (API + public wiki chat) need skip-permissions
+    // every spawn. Opt-in via api_skip_permissions OR durable wiki_public_chat
+    // (enabling public chat sets the former; both checked so chat works even
+    // if skip was cleared by hand).
     let skip_permissions_opt_in =
-        k2_core::workspace::settings::get_api_skip_permissions(ws_path);
+        k2_core::workspace::settings::get_api_skip_permissions(ws_path)
+            || k2_core::workspace::settings::get_wiki_public_chat(ws_path);
+    let declared_owned: Vec<String> = resolved.danger_flags.clone().unwrap_or_default();
+    let declared: &[String] = declared_owned.as_slice();
     if !skip_permissions_opt_in {
-        let declared: &[String] = match resolved.danger_flags.as_deref() {
-            Some(flags) => flags,
-            None => {
-                log_debug!(
-                    "[v1-host] WARNING event=danger_flags_unknown ws={} preset_id={:?} command={}: \
-                     resolved agent declares no danger_flags metadata; only the hardcoded floor is \
-                     stripped — the agent's own auto-approve flags (if any) cannot be known and \
-                     would survive into the host spawn",
-                    ws_path,
-                    resolved.preset_id,
-                    command,
-                );
-                &[]
-            }
-        };
+        if resolved.danger_flags.is_none() {
+            log_debug!(
+                "[v1-host] WARNING event=danger_flags_unknown ws={} preset_id={:?} command={}: \
+                 resolved agent declares no danger_flags metadata; only the hardcoded floor is \
+                 stripped — the agent's own auto-approve flags (if any) cannot be known and \
+                 would survive into the host spawn",
+                ws_path,
+                resolved.preset_id,
+                command,
+            );
+        }
         let before = args.len();
         args = strip_danger_flags(args, declared);
         if args.len() != before {
             log_debug!(
                 "[v1-host] stripped auto-approve flag(s) from resolved agent args for ws={} (api_skip_permissions is OFF)",
                 ws_path
+            );
+        }
+    } else {
+        // Opt-in: do not strip, and ENSURE auto-approve flags are present so
+        // every host-session spawn is unattended (visitor chat / API keys).
+        let before = args.clone();
+        args = ensure_danger_flags(args, declared, &command);
+        if args != before {
+            log_debug!(
+                "[v1-host] ensured auto-approve flag(s) on host-session spawn for ws={} (api_skip_permissions/public chat ON) args={:?}",
+                ws_path,
+                args
             );
         }
     }

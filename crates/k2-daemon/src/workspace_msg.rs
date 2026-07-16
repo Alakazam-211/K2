@@ -1192,6 +1192,14 @@ pub fn inject_raw_into_session(
 ///
 /// `wait_ready == 0` injects immediately regardless of profile (the
 /// session is already interactive — message-live / resume-of-live).
+///
+/// When `wait_ready > 0` (fresh host-session / post-spawn), this mirrors
+/// [`deliver_post_wake`]: min settle → readiness dialect → **screen
+/// quiescence** → inject. Claude (and similar) can advertise bracketed
+/// paste (`?2004h`) while the first frame is still painting; without the
+/// quiescence gate the paste is reported `Delivered` then wiped by the
+/// next repaint — the wiki-public-chat "session spawned but first message
+/// never landed" failure mode.
 pub fn inject_raw_into_session_with_profile(
     session_id: &SessionId,
     payload: &str,
@@ -1202,8 +1210,15 @@ pub fn inject_raw_into_session_with_profile(
         return false;
     };
     if !wait_ready.is_zero() {
+        let start = std::time::Instant::now();
+        // Minimum settle even if paste mode flips immediately (first-frame
+        // guard — same floor as deliver_post_wake).
+        let min_settle = profile.post_spawn_settle.max(WAKE_MIN_SETTLE).min(wait_ready);
+        std::thread::sleep(min_settle);
+        if !live.is_child_alive() {
+            return false;
+        }
         if profile.ready_via_bracketed_paste {
-            let start = std::time::Instant::now();
             loop {
                 if !live.is_child_alive() {
                     return false;
@@ -1224,13 +1239,12 @@ pub fn inject_raw_into_session_with_profile(
                 }
                 std::thread::sleep(WAKE_POLL_INTERVAL);
             }
-        } else {
-            // Non-polling profile: the settle floor IS the readiness wait
-            // (deliver_post_wake parity), bounded by the caller's ceiling.
-            std::thread::sleep(profile.post_spawn_settle.min(wait_ready));
-            if !live.is_child_alive() {
-                return false;
-            }
+        }
+        // Quiescence: wait until the visible grid stops changing so the
+        // paste lands in a settled idle composer (not a frame a repaint
+        // will discard). Same gate as deliver_post_wake.
+        if let InjectOutcome::PtyDied = wait_for_screen_quiescence(&live, start, wait_ready) {
+            return false;
         }
     }
     matches!(inject_and_submit(&live, payload), InjectOutcome::Delivered)

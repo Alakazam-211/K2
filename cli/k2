@@ -9,7 +9,7 @@
 # either layout (`.k2/` preferred, `.k2so/` fallback) via `_ws_dot_dir()`, so
 # agents should read/write `<workspace>/.k2/...` going forward.
 
-K2_CLI_VERSION="0.40.50"
+K2_CLI_VERSION="0.40.51"
 
 set -euo pipefail
 
@@ -8812,11 +8812,11 @@ cmd_update() {
         exit 1
     fi
 
-    # Extract the version from the remote script
+    # Extract the version from the remote script.
+    # Use cut/tr — never a sed that matches K2_CLI_VERSION="…" (release.sh
+    # rewrites every occurrence of that form when bumping the version).
     local remote_version
-    # Parse K2_CLI_VERSION="x.y.z" without embedding the local version in
-    # the sed pattern (release bumps of K2_CLI_VERSION= used to rewrite this).
-    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | sed -E 's/^K2_CLI_VERSION="//; s/"$//')
+    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | cut -d'"' -f2)
     if [ -z "$remote_version" ]; then
         echo "Error: Could not parse remote version." >&2
         exit 1

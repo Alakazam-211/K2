@@ -98,6 +98,12 @@ fi
 if [ -r "${K2_HOME}/heartbeat.token" ]; then
     DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
 fi
+# Fresh headless boxes always get daemon.token; heartbeat.token is the
+# same secret written alongside. Prefer heartbeat (CLI convention) but
+# accept daemon.token so external owner ops work when only one is present.
+if [ -z "$DISK_OWNER_TOKEN" ] && [ -r "${K2_HOME}/daemon.token" ]; then
+    DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+fi
 if [ -z "$TOKEN" ] && [ -n "$DISK_OWNER_TOKEN" ]; then
     TOKEN="$DISK_OWNER_TOKEN"
 fi
@@ -126,7 +132,11 @@ _cli_tool_id_for_verb() {
         heartbeat) echo "heartbeat" ;;
         mail|hostmail) echo "mail" ;;
         dns) echo "dns" ;;
-        publish|connect) echo "publish" ;;
+        publish) echo "publish" ;;
+        # Headless Connect account pairing (login/status/logout). Distinct
+        # from publish (nested-subdomain control plane) so login is not
+        # always attributed as the publish tool.
+        connect) echo "connect-account" ;;
         sessions|terminal) echo "sessions-spawn" ;;
         fs) echo "fs" ;;
         daemon) echo "daemon-admin" ;;
@@ -144,7 +154,7 @@ _cli_tool_default_mode() {
     case "${1:-}" in
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat) echo "id" ;;
-        mail|dns|publish|sessions-spawn|fs|daemon-admin|users-admin|api-key) echo "id" ;;
+        mail|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key) echo "id" ;;
         browser-open|settings) echo "id" ;;
         *) echo "open" ;;
     esac
@@ -153,7 +163,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|dns|publish|sessions-spawn|fs|daemon-admin|users-admin|api-key) return 0 ;;
+        mail|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -220,14 +230,16 @@ _skip_conn_gate=0
 # PORT/TOKEN themselves: stamps degrade to a warning, claim/unclaim
 # fail loud.)
 [ "${1:-}" = "publish" ] && _skip_conn_gate=1
-# 0.40.41 BREAKING: `connect` was renamed to `publish`. The router's
-# did-you-mean arm below must fire even with no daemon running (and
-# before any HTTP), so the retired verb skips the gate too.
+# Headless Connect account commands: login talks to Supabase first
+# (no daemon needed for the account step); status/logout can run from
+# disk alone. Daemon-touching steps (tunnel/config + start) check
+# PORT/TOKEN themselves and fail loud with a start-daemon hint.
 [ "${1:-}" = "connect" ] && _skip_conn_gate=1
 # `k2 --schema` (GH#8 #4) prints a STATIC command-surface manifest — it
 # talks to nothing, so it must work even with no daemon running (its whole
 # point is letting an agent load the CLI surface in one call).
 [ "${1:-}" = "--schema" ] && _skip_conn_gate=1
+[ "${1:-}" = "schema" ] && _skip_conn_gate=1
 
 if [ "$_skip_conn_gate" != "1" ] && { [ -z "$PORT" ] || [ -z "$TOKEN" ]; }; then
     echo "Error: Cannot connect to K2SO." >&2
@@ -6194,6 +6206,895 @@ print("Removed %s" % (d.get("removed") or "(subdomain)"))
     esac
 }
 
+# ── Headless Connect users (local daemon accounts) ────────────────────
+# PRD: prd-headless-connect-onboarding-v1.md R2.
+# These manage /cli/users/* on the LOCAL daemon (owner-token root of
+# trust for the first owner; afterwards Owner/Admin session as gated
+# server-side). Never put a password on argv — interactive getpass or
+# --password-stdin only.
+
+_users_usage() {
+    cat <<'EOF' >&2
+k2 users — local daemon connect-user accounts
+
+USAGE
+  k2 users                      List accounts (username, role, disabled)
+  k2 users list                 Same as above
+  k2 users add <username> [--role owner|admin|member|viewer]
+                                Create an account; prompts for password
+                                (hidden) + confirm. Default role is member;
+                                --role always calls set-role after add.
+
+FLAGS
+  --role <r>                    owner | admin | member | viewer
+  --password-stdin              Read password from stdin (automation; no echo)
+  --help, -h                    This help
+
+SECURITY
+  Password is NEVER accepted on the command line (no --password flag).
+  First owner is bootstrapped via the on-box daemon/owner token.
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage
+EOF
+}
+
+# Read a password without echo. Interactive: getpass + confirm.
+# Automation: --password-stdin (single line from stdin).
+# Echoes the password on stdout (caller captures into a local var);
+# never logs it. Empty password → non-zero.
+_users_read_password() {
+    local from_stdin="${1:-0}"
+    if [ "$from_stdin" = "1" ]; then
+        python3 -c '
+import sys
+pw = sys.stdin.readline()
+if pw.endswith("\n"):
+    pw = pw[:-1]
+if pw.endswith("\r"):
+    pw = pw[:-1]
+if not pw:
+    sys.stderr.write("Error: empty password on stdin.\n")
+    sys.exit(1)
+sys.stdout.write(pw)
+'
+        return $?
+    fi
+    python3 -c '
+import getpass, sys
+try:
+    a = getpass.getpass("Password: ")
+    b = getpass.getpass("Confirm password: ")
+except (EOFError, KeyboardInterrupt):
+    sys.stderr.write("\nError: password prompt cancelled.\n")
+    sys.exit(1)
+if not a:
+    sys.stderr.write("Error: password must not be empty.\n")
+    sys.exit(1)
+if a != b:
+    sys.stderr.write("Error: passwords do not match.\n")
+    sys.exit(1)
+sys.stdout.write(a)
+'
+}
+
+cmd_users() {
+    local sub="${1:-list}"
+    case "$sub" in
+        --help|-h|help)
+            _users_usage
+            return 0
+            ;;
+        list|"")
+            # Accept bare `k2 users` and `k2 users list`.
+            if [ "$sub" = "list" ]; then shift || true; fi
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --help|-h) _users_usage; return 0 ;;
+                    *) echo "Usage: k2 users list" >&2; return 2 ;;
+                esac
+            done
+            local raw
+            raw=$(cli_send cli_request "/cli/users") || raw=""
+            printf '%s' "$raw" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: daemon returned an unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.stderr.write("Error: unexpected response from /cli/users\n"); sys.exit(1)
+err = d.get("error")
+if err is not None:
+    if isinstance(err, dict):
+        sys.stderr.write("Error: %s\n" % (err.get("hint") or err.get("code") or err))
+    else:
+        sys.stderr.write("Error: %s\n" % err)
+    sys.exit(1)
+users = d.get("users") or []
+if not users:
+    print("No connect users yet.")
+    print("Create the first owner: k2 users add <username> --role owner")
+    sys.exit(0)
+# Table: USERNAME  ROLE  DISABLED  CREATED
+rows = []
+for u in users:
+    if not isinstance(u, dict):
+        continue
+    rows.append((
+        str(u.get("username") or "?"),
+        str(u.get("role") or "member"),
+        "yes" if u.get("disabled") else "no",
+        str(u.get("createdAt") or u.get("created_at") or "-"),
+    ))
+if not rows:
+    print("No connect users yet.")
+    sys.exit(0)
+w_user = max([len(r[0]) for r in rows] + [len("USERNAME")])
+w_role = max([len(r[1]) for r in rows] + [len("ROLE")])
+w_dis = max([len(r[2]) for r in rows] + [len("DISABLED")])
+print("%-*s  %-*s  %-*s  %s" % (w_user, "USERNAME", w_role, "ROLE", w_dis, "DISABLED", "CREATED"))
+for u, role, dis, created in rows:
+    print("%-*s  %-*s  %-*s  %s" % (w_user, u, w_role, role, w_dis, dis, created))
+'
+            ;;
+        add)
+            shift || true
+            local username="" role="" password_stdin=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --role)
+                        role="${2:-}"; shift 2 || { echo "Error: --role needs a value" >&2; return 2; } ;;
+                    --role=*)
+                        role="${1#--role=}"; shift ;;
+                    --password-stdin)
+                        password_stdin=1; shift ;;
+                    --password|--pass)
+                        echo "Error: passwords must not be passed on the command line." >&2
+                        echo "Use an interactive prompt or --password-stdin." >&2
+                        return 2
+                        ;;
+                    --help|-h)
+                        _users_usage; return 0 ;;
+                    -*)
+                        echo "Error: unknown flag '$1'" >&2
+                        _users_usage
+                        return 2
+                        ;;
+                    *)
+                        if [ -z "$username" ]; then
+                            username="$1"; shift
+                        else
+                            echo "Error: unexpected argument '$1'" >&2
+                            return 2
+                        fi
+                        ;;
+                esac
+            done
+            if [ -z "$username" ]; then
+                echo "Usage: k2 users add <username> [--role owner|admin|member|viewer] [--password-stdin]" >&2
+                return 2
+            fi
+            if [ -n "$role" ]; then
+                case "$role" in
+                    owner|admin|member|viewer) ;;
+                    *)
+                        echo "Error: invalid role '$role' (expected owner|admin|member|viewer)" >&2
+                        return 2
+                        ;;
+                esac
+            fi
+            local password
+            password="$(_users_read_password "$password_stdin")" || return 1
+            local body resp
+            body=$(USERNAME="$username" PASSWORD="$password" python3 -c '
+import json, os
+print(json.dumps({"username": os.environ["USERNAME"], "password": os.environ["PASSWORD"]}))
+')
+            # Drop password from the environment as soon as the body is built.
+            unset password
+            resp=$(cli_send cli_post_json "/cli/users/add" "$body") || resp=""
+            unset body
+            printf '%s' "$resp" | USERNAME="$username" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+username = os.environ.get("USERNAME", "?")
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: daemon returned an unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None:
+    hint = err.get("hint") if isinstance(err, dict) else err
+    sys.stderr.write("Error: %s\n" % hint)
+    sys.exit(1)
+if not (isinstance(d, dict) and d.get("success")):
+    sys.stderr.write("Error: users/add failed: %s\n" % (raw[:200] or "empty response"))
+    sys.exit(1)
+print("Created user %s." % username)
+'
+            # Always call set-role when --role is given (default after add is
+            # member server-side; owner/admin/viewer need the explicit write).
+            if [ -n "$role" ]; then
+                local role_body role_resp
+                role_body=$(USERNAME="$username" ROLE="$role" python3 -c '
+import json, os
+print(json.dumps({"username": os.environ["USERNAME"], "role": os.environ["ROLE"]}))
+')
+                role_resp=$(cli_send cli_post_json "/cli/users/set-role" "$role_body") || role_resp=""
+                printf '%s' "$role_resp" | USERNAME="$username" ROLE="$role" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: set-role returned unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None:
+    hint = err.get("hint") if isinstance(err, dict) else err
+    sys.stderr.write("Error setting role: %s\n" % hint)
+    sys.exit(1)
+if not (isinstance(d, dict) and d.get("success")):
+    sys.stderr.write("Error: set-role failed: %s\n" % (raw[:200] or "empty response"))
+    sys.exit(1)
+print("Role set to %s for %s." % (os.environ.get("ROLE", "?"), os.environ.get("USERNAME", "?")))
+'
+            fi
+            ;;
+        *)
+            echo "Unknown 'k2 users' subcommand: $sub" >&2
+            _users_usage
+            return 2
+            ;;
+    esac
+}
+
+# ── Headless Connect account pairing — k2 connect login|status|logout ─
+# PRD: prd-headless-connect-onboarding-v1.md R1.
+# Mirrors desktop src/renderer/components/Settings/lib/k2-account.ts:
+# Supabase email/password (or --token JWT) → list purchased subdomains →
+# bind tunnel token via POST /cli/tunnel/config → start tunnel.
+# Account session lives in ~/.k2/connect-account.json (0600); password
+# is never stored. Nested-subdomain Pro verbs stay under `k2 publish`.
+
+# Public Supabase project values (same as the desktop client — anon role
+# only; RLS scopes every row to the signed-in caller).
+_K2_SUPABASE_URL="https://ttgcalfrzzgkxnfepkiu.supabase.co"
+_K2_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z2NhbGZyenpna3huZmVwa2l1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDIyMzksImV4cCI6MjA5NjA3ODIzOX0.L28xgtYkPEj5eCNDGO5Zf5xxhdKQLxKD8c1CJRHNqI8"
+
+_connect_account_file() { echo "${K2_HOME}/connect-account.json"; }
+
+_connect_usage() {
+    cat <<'EOF' >&2
+k2 connect — pair a purchased k2.dev subdomain to this device
+
+USAGE
+  k2 connect login [--email <e>] [--token <jwt>] [--subdomain <label>]
+  k2 connect status
+  k2 connect logout
+
+COMMANDS
+  login     Sign in to k2.dev (email+password or --token JWT), pick a
+            purchased subdomain, write tunnel config, start the tunnel.
+  status    Show paired subdomain + tunnel/account state.
+  logout    Clear the saved account session (~/.k2/connect-account.json).
+            Does not unpair the tunnel (see: k2 tunnel release --confirm).
+
+FLAGS (login)
+  --email <e>         Account email (prompted if omitted with password flow)
+  --token <jwt>       Use an access JWT instead of email/password (scripted)
+  --subdomain <label> Skip the interactive picker
+  --help, -h          This help
+
+Nested Pro subdomains / plan status live under `k2 publish` (not here).
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage
+EOF
+}
+
+# Require a live local daemon for tunnel bind/start. Fail loud with a
+# start-daemon hint — account login may already have succeeded.
+_connect_require_daemon() {
+    if [ -z "${PORT:-}" ] || [ -z "${TOKEN:-}" ]; then
+        # Re-discover in case the gate was skipped and files appeared late.
+        if [ -f "${K2_HOME}/heartbeat.port" ]; then
+            PORT="${PORT:-$(cat "${K2_HOME}/heartbeat.port" 2>/dev/null)}"
+        fi
+        if [ -z "${PORT:-}" ] && [ -f "${K2_HOME}/daemon.port" ]; then
+            PORT="$(cat "${K2_HOME}/daemon.port" 2>/dev/null)"
+        fi
+        if [ -z "${TOKEN:-}" ]; then
+            if [ -n "${DISK_OWNER_TOKEN:-}" ]; then
+                TOKEN="$DISK_OWNER_TOKEN"
+            elif [ -r "${K2_HOME}/heartbeat.token" ]; then
+                TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+            elif [ -r "${K2_HOME}/daemon.token" ]; then
+                TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+            fi
+        fi
+        BASE_URL="http://127.0.0.1:${PORT}"
+    fi
+    if [ -z "${PORT:-}" ] || [ -z "${TOKEN:-}" ]; then
+        echo "Error: local K2 daemon is not reachable (need ~/.k2/heartbeat.port + token)." >&2
+        echo "Start it first, then re-run: k2 connect login" >&2
+        echo "  k2 daemon start     # or: k2 daemon install  (fresh headless box)" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Persist account session as 0600 JSON. Password is never written.
+_connect_account_save() {
+    local access="$1" refresh="$2" email="$3"
+    local path
+    path="$(_connect_account_file)"
+    ACCESS="$access" REFRESH="$refresh" EMAIL="$email" PATH_OUT="$path" python3 -c '
+import json, os, stat
+path = os.environ["PATH_OUT"]
+data = {
+    "access_token": os.environ.get("ACCESS") or "",
+    "refresh_token": os.environ.get("REFRESH") or "",
+    "email": os.environ.get("EMAIL") or "",
+}
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, separators=(",", ":"))
+os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+os.replace(tmp, path)
+'
+}
+
+_connect_account_load() {
+    # Prints access_token\nrefresh_token\nemail or empty on miss.
+    python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+print((d.get("access_token") or "").strip())
+print((d.get("refresh_token") or "").strip())
+print((d.get("email") or "").strip())
+' "$(_connect_account_file)" 2>/dev/null || true
+}
+
+_connect_account_clear() {
+    local path
+    path="$(_connect_account_file)"
+    [ -f "$path" ] && rm -f "$path"
+    return 0
+}
+
+# Stable per-install device id for subdomain claim/lease. Prefer the
+# value already stored in tunnel.json; else generate a UUID and keep it
+# for the bind step (daemon persists it via /cli/tunnel/config).
+_connect_device_id() {
+    python3 -c '
+import json, os, sys, uuid
+path = os.path.join(os.environ.get("K2_HOME_FOR_DEVICE") or os.path.expanduser("~/.k2"), "tunnel.json")
+try:
+    d = json.load(open(path))
+    did = (d.get("device_id") or d.get("deviceId") or "").strip()
+    if did:
+        print(did); raise SystemExit(0)
+except SystemExit:
+    raise
+except Exception:
+    pass
+print(str(uuid.uuid4()))
+' 2>/dev/null
+}
+
+_connect_device_label() {
+    # Cosmetic holder label — hostname is good enough for headless.
+    hostname 2>/dev/null || echo "k2-cli"
+}
+
+# Supabase password grant → access_token / refresh_token / email.
+# Prints the three fields one-per-line on success; errors on stderr.
+_connect_supabase_sign_in() {
+    local email="$1" password="$2"
+    EMAIL="$email" PASSWORD="$password" \
+    SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+import json, os, sys, urllib.request, urllib.error
+url = os.environ["SUPA_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
+body = json.dumps({"email": os.environ["EMAIL"], "password": os.environ["PASSWORD"]}).encode()
+req = urllib.request.Request(url, data=body, method="POST", headers={
+    "apikey": os.environ["SUPA_KEY"],
+    "Content-Type": "application/json",
+})
+try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read().decode()
+        status = resp.status
+except urllib.error.HTTPError as e:
+    raw = e.read().decode() if e.fp else ""
+    status = e.code
+except Exception as e:
+    sys.stderr.write("Error: could not reach k2.dev account service: %s\n" % e)
+    sys.exit(1)
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    d = {}
+if status < 200 or status >= 300 or not d.get("access_token"):
+    msg = (
+        d.get("error_description") or d.get("msg") or d.get("message")
+        or (d.get("error") if isinstance(d.get("error"), str) else None)
+        or ("Request failed (%s)" % status)
+    )
+    sys.stderr.write("Error: sign-in failed: %s\n" % msg)
+    sys.exit(1)
+user = d.get("user") or {}
+email = (user.get("email") if isinstance(user, dict) else None) or os.environ["EMAIL"]
+print(d["access_token"])
+print(d.get("refresh_token") or "")
+print(email)
+'
+}
+
+# List purchased subdomains for the access token. Prints JSON array.
+_connect_list_subdomains() {
+    local access="$1"
+    ACCESS="$access" SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+import json, os, sys, urllib.request, urllib.error
+url = (
+    os.environ["SUPA_URL"].rstrip("/")
+    + "/rest/v1/subdomains?select=label,status,tunnel_token,claimed_by,claimed_at,claimed_label"
+)
+req = urllib.request.Request(url, method="GET", headers={
+    "apikey": os.environ["SUPA_KEY"],
+    "Authorization": "Bearer " + os.environ["ACCESS"],
+})
+try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read().decode()
+        status = resp.status
+except urllib.error.HTTPError as e:
+    raw = e.read().decode() if e.fp else ""
+    status = e.code
+except Exception as e:
+    sys.stderr.write("Error: could not list subdomains: %s\n" % e)
+    sys.exit(1)
+if status < 200 or status >= 300:
+    try:
+        d = json.loads(raw) if raw.strip() else {}
+    except Exception:
+        d = {}
+    msg = d.get("message") or d.get("msg") or d.get("error_description") or raw[:200] or ("HTTP %s" % status)
+    sys.stderr.write("Error: list subdomains failed: %s\n" % msg)
+    sys.exit(1)
+try:
+    rows = json.loads(raw) if raw.strip() else []
+except Exception:
+    rows = []
+if not isinstance(rows, list):
+    rows = []
+print(json.dumps(rows))
+'
+}
+
+# Best-effort claim_subdomain RPC (desktop parity). Non-zero only on
+# hard "held by another device"; soft failures warn and continue.
+_connect_claim_subdomain() {
+    local access="$1" label="$2" device_id="$3" device_label="$4"
+    ACCESS="$access" LABEL="$label" DID="$device_id" DLBL="$device_label" \
+    SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+import json, os, sys, urllib.request, urllib.error
+url = os.environ["SUPA_URL"].rstrip("/") + "/rest/v1/rpc/claim_subdomain"
+body = json.dumps({
+    "p_label": os.environ["LABEL"],
+    "p_device_id": os.environ["DID"],
+    "p_device_label": os.environ.get("DLBL") or None,
+}).encode()
+req = urllib.request.Request(url, data=body, method="POST", headers={
+    "apikey": os.environ["SUPA_KEY"],
+    "Authorization": "Bearer " + os.environ["ACCESS"],
+    "Content-Type": "application/json",
+})
+try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read().decode()
+        status = resp.status
+except urllib.error.HTTPError as e:
+    raw = e.read().decode() if e.fp else ""
+    status = e.code
+except Exception as e:
+    sys.stderr.write("Warning: claim_subdomain failed (%s) — continuing bind.\n" % e)
+    sys.exit(0)
+if status < 200 or status >= 300:
+    sys.stderr.write("Warning: claim_subdomain HTTP %s — continuing bind.\n" % status)
+    sys.exit(0)
+try:
+    rows = json.loads(raw) if raw.strip() else []
+except Exception:
+    rows = []
+row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else {})
+if not isinstance(row, dict):
+    sys.exit(0)
+if row.get("claimed"):
+    sys.exit(0)
+holder = row.get("holder")
+if holder and holder != os.environ["DID"]:
+    label = os.environ["LABEL"]
+    hl = row.get("holder_label") or holder
+    sys.stderr.write(
+        "Error: %s.k2.dev is in use on another device (%s) — stop it there first.\n" % (label, hl)
+    )
+    sys.exit(1)
+'
+}
+
+cmd_connect_login() {
+    local email="" token="" subdomain="" password=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --email)
+                email="${2:-}"; shift 2 || { echo "Error: --email needs a value" >&2; return 2; } ;;
+            --email=*)
+                email="${1#--email=}"; shift ;;
+            --token)
+                token="${2:-}"; shift 2 || { echo "Error: --token needs a value" >&2; return 2; } ;;
+            --token=*)
+                token="${1#--token=}"; shift ;;
+            --subdomain)
+                subdomain="${2:-}"; shift 2 || { echo "Error: --subdomain needs a value" >&2; return 2; } ;;
+            --subdomain=*)
+                subdomain="${1#--subdomain=}"; shift ;;
+            --password|--pass)
+                echo "Error: passwords must not be passed on the command line." >&2
+                echo "Use the interactive prompt, or --token <access_jwt> for scripting." >&2
+                return 2
+                ;;
+            --help|-h)
+                _connect_usage; return 0 ;;
+            -*)
+                echo "Error: unknown flag '$1'" >&2
+                _connect_usage
+                return 2
+                ;;
+            *)
+                echo "Error: unexpected argument '$1'" >&2
+                _connect_usage
+                return 2
+                ;;
+        esac
+    done
+
+    local access_token="" refresh_token="" account_email=""
+    if [ -n "$token" ]; then
+        access_token="$token"
+        account_email="${email}"
+        refresh_token=""
+        # Optional: if we already have a saved session for display, ignore.
+        if [ -z "$account_email" ]; then
+            local _loaded
+            _loaded="$(_connect_account_load)"
+            account_email="$(printf '%s\n' "$_loaded" | sed -n '3p')"
+        fi
+        [ -z "$account_email" ] && account_email="(token)"
+    else
+        if [ -z "$email" ]; then
+            printf "k2.dev email: " >&2
+            IFS= read -r email || true
+        fi
+        if [ -z "$email" ]; then
+            echo "Error: email is required (or pass --token <access_jwt>)." >&2
+            return 2
+        fi
+        password="$(python3 -c '
+import getpass, sys
+try:
+    pw = getpass.getpass("k2.dev password: ")
+except (EOFError, KeyboardInterrupt):
+    sys.stderr.write("\nError: password prompt cancelled.\n")
+    sys.exit(1)
+if not pw:
+    sys.stderr.write("Error: password must not be empty.\n")
+    sys.exit(1)
+sys.stdout.write(pw)
+')" || return 1
+        local sign_out
+        sign_out="$(_connect_supabase_sign_in "$email" "$password")" || {
+            unset password
+            return 1
+        }
+        unset password
+        access_token="$(printf '%s\n' "$sign_out" | sed -n '1p')"
+        refresh_token="$(printf '%s\n' "$sign_out" | sed -n '2p')"
+        account_email="$(printf '%s\n' "$sign_out" | sed -n '3p')"
+        [ -z "$account_email" ] && account_email="$email"
+    fi
+
+    # Persist account session BEFORE daemon steps so a later re-run can
+    # skip re-typing credentials once the daemon is up.
+    _connect_account_save "$access_token" "$refresh_token" "$account_email"
+    echo "Signed in as ${account_email}." >&2
+
+    local subs_json
+    subs_json="$(_connect_list_subdomains "$access_token")" || return 1
+
+    # Pick subdomain (interactive numbered list, or --subdomain).
+    local pick_json
+    pick_json=$(SUBS_JSON="$subs_json" WANT="$subdomain" python3 -c '
+import json, os, sys
+rows = json.loads(os.environ.get("SUBS_JSON") or "[]")
+want = (os.environ.get("WANT") or "").strip().lower()
+if not rows:
+    sys.stderr.write(
+        "Error: this account has no purchased subdomains.\n"
+        "Buy one at https://k2.dev/dashboard then re-run: k2 connect login\n"
+    )
+    sys.exit(1)
+# Normalize
+norm = []
+for r in rows:
+    if not isinstance(r, dict):
+        continue
+    label = (r.get("label") or "").strip()
+    if not label:
+        continue
+    norm.append(r)
+if not norm:
+    sys.stderr.write(
+        "Error: this account has no purchased subdomains.\n"
+        "Buy one at https://k2.dev/dashboard then re-run: k2 connect login\n"
+    )
+    sys.exit(1)
+chosen = None
+if want:
+    for r in norm:
+        if (r.get("label") or "").strip().lower() == want:
+            chosen = r; break
+    if chosen is None:
+        sys.stderr.write("Error: subdomain %r is not in your account.\n" % want)
+        sys.stderr.write("Available: %s\n" % ", ".join((r.get("label") or "?") for r in norm))
+        sys.exit(1)
+else:
+    if len(norm) == 1:
+        chosen = norm[0]
+        sys.stderr.write("Using only subdomain: %s.k2.dev\n" % (chosen.get("label") or "?"))
+    else:
+        sys.stderr.write("Your subdomains:\n")
+        for i, r in enumerate(norm, 1):
+            st = (r.get("status") or "").strip()
+            extra = (" (%s)" % st) if st and st != "active" else ""
+            sys.stderr.write("  %d) %s.k2.dev%s\n" % (i, r.get("label") or "?", extra))
+        sys.stderr.write("Pick a number [1-%d]: " % len(norm))
+        sys.stderr.flush()
+        try:
+            line = sys.stdin.readline()
+        except Exception:
+            line = ""
+        try:
+            n = int((line or "").strip())
+        except Exception:
+            sys.stderr.write("Error: invalid selection.\n"); sys.exit(1)
+        if n < 1 or n > len(norm):
+            sys.stderr.write("Error: selection out of range.\n"); sys.exit(1)
+        chosen = norm[n - 1]
+label = (chosen.get("label") or "").strip()
+tok = (chosen.get("tunnel_token") or "").strip()
+if not label or not tok:
+    sys.stderr.write("Error: selected subdomain is missing label or tunnel_token.\n")
+    sys.exit(1)
+print(json.dumps({"label": label, "tunnel_token": tok, "status": chosen.get("status") or ""}))
+') || return 1
+
+    local label tunnel_token
+    label=$(printf '%s' "$pick_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["label"])')
+    tunnel_token=$(printf '%s' "$pick_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tunnel_token"])')
+
+    # Daemon required for bind + start.
+    _connect_require_daemon || return 1
+    export K2_HOME_FOR_DEVICE="$K2_HOME"
+    local device_id device_label
+    device_id="$(_connect_device_id)"
+    device_label="$(_connect_device_label)"
+
+    # Best-effort claim (nice-to-have); hard-fail only if held by other device.
+    _connect_claim_subdomain "$access_token" "$label" "$device_id" "$device_label" || return 1
+
+    local cfg_body cfg_resp
+    cfg_body=$(LABEL="$label" TOK="$tunnel_token" DID="$device_id" DLBL="$device_label" python3 -c '
+import json, os
+print(json.dumps({
+    "subdomain": os.environ["LABEL"],
+    "token": os.environ["TOK"],
+    "deviceId": os.environ["DID"],
+    "deviceLabel": os.environ.get("DLBL") or "",
+    "autoStart": True,
+}))
+')
+    # Owner-auth via TOKEN (external: disk owner; in-cell: passport — ID tool).
+    cfg_resp=$(cli_send cli_post_json "/cli/tunnel/config" "$cfg_body") || cfg_resp=""
+    printf '%s' "$cfg_resp" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: tunnel/config returned unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None:
+    hint = err.get("hint") if isinstance(err, dict) else err
+    sys.stderr.write("Error binding tunnel config: %s\n" % hint)
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.stderr.write("Error: tunnel/config failed: %s\n" % (raw[:200] or "empty"))
+    sys.exit(1)
+# success = redacted view with tokenSet / subdomain
+if d.get("tokenSet") is False and not d.get("subdomain"):
+    sys.stderr.write("Error: tunnel/config did not accept the token.\n")
+    sys.exit(1)
+' || return 1
+
+    local start_resp
+    start_resp=$(cli_send cli_post "/cli/tunnel/start" "subdomain=$(urlencode "$label")") || start_resp=""
+    printf '%s' "$start_resp" | LABEL="$label" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+label = os.environ.get("LABEL") or "?"
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: tunnel/start returned unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None:
+    hint = err.get("hint") if isinstance(err, dict) else err
+    sys.stderr.write("Error starting tunnel: %s\n" % hint)
+    sys.exit(1)
+url = (d.get("public_url") if isinstance(d, dict) else None) or ("https://%s.k2.dev" % label)
+print("✓ live at %s" % url)
+' || return 1
+}
+
+cmd_connect_status() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h) _connect_usage; return 0 ;;
+            *) echo "Usage: k2 connect status" >&2; return 2 ;;
+        esac
+    done
+    local acc_email="" acc_present="no"
+    if [ -f "$(_connect_account_file)" ]; then
+        acc_present="yes"
+        acc_email="$(printf '%s\n' "$(_connect_account_load)" | sed -n '3p')"
+    fi
+    local sub="" token_set="no"
+    if [ -f "${K2_HOME}/tunnel.json" ]; then
+        eval "$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+sub = (d.get("subdomain") or "").strip()
+tok = (d.get("token") or "").strip()
+print("sub=%r" % sub)
+print("token_set=%r" % ("yes" if tok else "no"))
+' "${K2_HOME}/tunnel.json" 2>/dev/null)"
+    fi
+    echo "K2 Connect account"
+    echo "  Account session: $acc_present$([ -n "$acc_email" ] && echo "  ($acc_email)")"
+    echo "  Paired subdomain: ${sub:-'(none)'}$([ -n "$sub" ] && echo " → https://${sub}.k2.dev")"
+    echo "  Tunnel token:     $token_set"
+
+    # Tunnel live status when the daemon is up.
+    if _connect_require_daemon 2>/dev/null; then
+        local raw
+        raw=$(cli_send cli_request "/cli/tunnel/status") || raw=""
+        printf '%s' "$raw" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    print("  Tunnel status:   (unparseable daemon response)")
+    raise SystemExit(0)
+if not isinstance(d, dict) or d.get("error"):
+    err = d.get("error") if isinstance(d, dict) else None
+    print("  Tunnel status:   (error: %s)" % (err or "unknown"))
+    raise SystemExit(0)
+running = "yes" if d.get("running") else "no"
+print("  Tunnel running:  %s" % running)
+if d.get("running"):
+    print("  Public URL:      %s" % (d.get("public_url") or "(assigned by server)"))
+elif d.get("released"):
+    print("  State:           RELEASED — re-pair with: k2 connect login")
+elif d.get("enabled") is False:
+    print("  State:           DISABLED — re-enable with: k2 tunnel enable")
+else:
+    print("  State:           stopped")
+' 2>/dev/null || echo "  Tunnel status:   (daemon unreachable)"
+    else
+        echo "  Tunnel status:   (daemon not running — start with: k2 daemon start)"
+    fi
+}
+
+cmd_connect_logout() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h) _connect_usage; return 0 ;;
+            *) echo "Usage: k2 connect logout" >&2; return 2 ;;
+        esac
+    done
+    # Best-effort server-side logout when we still have an access token.
+    local loaded access
+    loaded="$(_connect_account_load)"
+    access="$(printf '%s\n' "$loaded" | sed -n '1p')"
+    if [ -n "$access" ]; then
+        ACCESS="$access" SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+import os, urllib.request
+url = os.environ["SUPA_URL"].rstrip("/") + "/auth/v1/logout"
+req = urllib.request.Request(url, data=b"", method="POST", headers={
+    "apikey": os.environ["SUPA_KEY"],
+    "Authorization": "Bearer " + os.environ["ACCESS"],
+})
+try:
+    urllib.request.urlopen(req, timeout=10)
+except Exception:
+    pass
+' 2>/dev/null || true
+    fi
+    _connect_account_clear
+    echo "Logged out of k2.dev account (cleared ~/.k2/connect-account.json)."
+    echo "Tunnel pairing is unchanged. To unpair this device: k2 tunnel release --confirm"
+}
+
+cmd_connect() {
+    local sub="${1:-}"
+    shift 2>/dev/null || true
+    case "$sub" in
+        login)
+            cmd_connect_login "$@"
+            ;;
+        status)
+            cmd_connect_status "$@"
+            ;;
+        logout)
+            cmd_connect_logout "$@"
+            ;;
+        ""|help|--help|-h)
+            _connect_usage
+            # Bare `k2 connect` without a subcommand is usage, exit 2.
+            [ -n "$sub" ] && [ "$sub" != "" ] && return 0
+            # help/-h exit 0; bare empty exits 2 so scripts detect missing subcommand.
+            if [ -z "$sub" ]; then return 2; fi
+            return 0
+            ;;
+        # Former `k2 connect` → publish surface (0.40.41). Point people over.
+        subdomain|publish)
+            echo "Nested subdomains moved to: k2 publish ${sub}${*:+ $*}" >&2
+            echo "  e.g. k2 publish subdomain list" >&2
+            echo "  e.g. k2 publish status" >&2
+            echo "Account pairing is now: k2 connect login | status | logout" >&2
+            return 2
+            ;;
+        *)
+            # Heuristic: anything that looks like an old publish verb.
+            case "$sub" in
+                create|list|point|rm|claim|unclaim)
+                    echo "Unknown 'k2 connect' subcommand: $sub" >&2
+                    echo "Did you mean: k2 publish subdomain $sub … ?" >&2
+                    echo "Account pairing: k2 connect login | status | logout" >&2
+                    return 2
+                    ;;
+            esac
+            echo "Unknown 'k2 connect' subcommand: $sub" >&2
+            _connect_usage
+            return 2
+            ;;
+    esac
+}
+
 # ── Workspace Knowledge Base (brain map) — k2 wiki ────────────────────
 # Thin wrappers over daemon /cli/wiki/* (indexer + optional localhost serve).
 # Publish reuses k2 publish subdomain create/point/rm (K4 in PRD).
@@ -7506,6 +8407,8 @@ cmd_help() {
         heartbeat)                cmd_help_heartbeat ;;
         wiki)                     cmd_help_wiki ;;
         publish)                  _publish_usage ;;
+        connect)                  _connect_usage ;;
+        users)                    _users_usage ;;
         deprecated|--deprecated)  cmd_help_deprecated ;;
         '')                       cmd_help_v2_daily ;;
         *)                        cmd_help_v2_daily ;;
@@ -8612,6 +9515,55 @@ cmd_schema() {
       "description": "Adopt an existing nested subdomain label for the CURRENT workspace (daemon-local attribution; 'unclaim' drops it). create/point/rm stamp attribution automatically.",
       "args": [{"name": "label", "required": true}],
       "flags": []
+    },
+    {
+      "name": "connect",
+      "usage": "k2 connect <login|status|logout> ...",
+      "description": "Pair a purchased k2.dev subdomain to this device: account login (Supabase email/password or --token JWT), pick subdomain, write tunnel config, start tunnel. Nested Pro subdomains stay under k2 publish.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "connect login",
+      "usage": "k2 connect login [--email <e>] [--token <jwt>] [--subdomain <label>]",
+      "description": "Sign in to k2.dev, list purchased subdomains, bind tunnel token via POST /cli/tunnel/config, start tunnel. Password is never stored (only ~/.k2/connect-account.json access/refresh tokens, 0600).",
+      "args": [],
+      "flags": [
+        {"name": "--email", "arg": "e", "description": "Account email (prompted if omitted)."},
+        {"name": "--token", "arg": "jwt", "description": "Access JWT instead of email/password (scripted)."},
+        {"name": "--subdomain", "arg": "label", "description": "Skip the interactive picker."}
+      ]
+    },
+    {
+      "name": "connect status",
+      "usage": "k2 connect status",
+      "description": "Show account session + paired subdomain + live tunnel status when the daemon is up.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "connect logout",
+      "usage": "k2 connect logout",
+      "description": "Clear ~/.k2/connect-account.json. Does not unpair the tunnel (use k2 tunnel release --confirm).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "users",
+      "usage": "k2 users [list|add] ...",
+      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin, then optional --role set-role.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "users add",
+      "usage": "k2 users add <username> [--role owner|admin|member|viewer] [--password-stdin]",
+      "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. --role calls set-role after add (default member server-side).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--role", "arg": "role", "description": "owner | admin | member | viewer"},
+        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."}
+      ]
     },
     {
       "name": "wiki",
@@ -11753,6 +12705,17 @@ PUBLISH (nested label.user.k2.dev; control plane — not zone DNS)
   publish subdomain unclaim <label>             Drop a label's workspace attribution (daemon-local)
   publish --help                                OUTPUT CONTRACT + product boundary
   (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)
+
+CONNECT (pair purchased k2.dev subdomain — headless account login)
+  connect login [--email e] [--token jwt] [--subdomain label]
+                                                Sign in → pick subdomain → start tunnel
+  connect status                                Paired subdomain + tunnel/account state
+  connect logout                                Clear ~/.k2/connect-account.json (not tunnel)
+
+USERS (local daemon connect-user accounts)
+  users | users list                            List accounts (username, role, disabled)
+  users add <username> [--role owner|admin|member|viewer] [--password-stdin]
+                                                Create account (password via prompt or stdin)
 
 WIKI (per-workspace brain map under .k2/wiki/)
   wiki status [--json] [project]                Serve + public chat + publish state
@@ -18452,9 +19415,18 @@ EOF
         shift; cmd_api_key "$@"
         ;;
     publish)
-        # K2 Connect account/Pro-subdomain management (calls the hosted
+        # K2 Connect Pro nested-subdomain management (calls the hosted
         # control plane directly, not the local daemon).
         shift; cmd_publish "$@"
+        ;;
+    users)
+        # Local daemon connect-user accounts (list / add). Owner-token
+        # bootstrap for the first owner; gated thereafter server-side.
+        if _wants_help "${@:2}"; then
+            _users_usage
+            exit 0
+        fi
+        shift; cmd_users "$@"
         ;;
     wiki)
         # Workspace knowledge base (brain map): index / note / seed /
@@ -18467,12 +19439,13 @@ EOF
         shift; cmd_wiki "$@"
         ;;
     connect)
-        # 0.40.41 BREAKING: `k2 connect` was renamed to `k2 publish`
-        # (the CLI verb only — the K2 Connect product/Settings branding
-        # is unchanged). No alias, no forwarding: fail loud with a
-        # one-line pointer, before any HTTP.
-        echo "Unknown command: connect — did you mean 'k2 publish'?" >&2
-        exit 1
+        # Headless Connect account pairing (login → pick subdomain →
+        # tunnel bind/start). Nested Pro verbs live under `k2 publish`.
+        if _wants_help "${@:2}"; then
+            _connect_usage
+            exit 0
+        fi
+        shift; cmd_connect "$@"
         ;;
     companion)
         # Phase 2.1: hard-deprecated. Companion is daemon-owned.

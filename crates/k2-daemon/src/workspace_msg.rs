@@ -1153,15 +1153,14 @@ pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgR
 /// composer/`k2 msg` and can never splice keystrokes (D1/D2/D5) or land on an
 /// open grok permission gate.
 ///
-/// `wait_ready > 0` polls the bracketed-paste readiness signal (the same one
-/// [`deliver_post_wake`] uses) up to the deadline before injecting —
-/// best-effort past the ceiling, never dropped. Zero means "the session is
-/// already interactive, inject now" (the message-live route). Returns `true`
-/// iff the payload was delivered into a live PTY.
+/// `wait_ready > 0` uses the same path as `k2 msg` post-wake
+/// ([`deliver_post_wake`] via [`inject_raw_into_session_with_profile`]).
+/// Zero means inject immediately (no settle/quiescence).
 ///
-/// Readiness dialect: the claude-shaped default (poll bracketed paste).
-/// Spawn-path callers that know the spawned agent's profile use
-/// [`inject_raw_into_session_with_profile`] instead.
+/// Default profile = claude-shaped. Prefer
+/// [`inject_raw_into_session_with_profile`] when the workspace agent is known
+/// (host-sessions always does).
+#[allow(dead_code)] // public host-inject API; in-tree callers use with_profile
 pub fn inject_raw_into_session(
     session_id: &SessionId,
     payload: &str,
@@ -1179,27 +1178,17 @@ pub fn inject_raw_into_session(
 /// [`k2_core::workspace::provider_resume::InjectionProfile`], resolved by
 /// the caller through the ONE shared precedence chain
 /// (`provider_resume::resolve_injection_profile`: preset-declared
-/// `readiness` metadata → static provider table → default):
+/// `readiness` metadata → static provider table → default).
 ///
-/// - `ready_via_bracketed_paste == true` — today's behavior exactly: poll
-///   `bracketed_paste_active()` up to `wait_ready`, then inject
-///   best-effort (claude/grok/cursor + every unknown agent).
-/// - `ready_via_bracketed_paste == false` — ?2004h LIES for this agent
-///   (codex/gemini/pi/hermes assert it while their startup dialogs still
-///   EAT injected text): skip the poll and wait the profile's settle
-///   floor instead, CAPPED by the `wait_ready` ceiling (the caller's
-///   env-tunable deadline governs either dialect).
+/// **Same shape as `k2 msg` dormant-wake** ([`deliver_post_wake`]): when
+/// `wait_ready > 0` this is a thin lookup + call into that path —
+/// min settle → readiness dialect → **screen quiescence** → locked
+/// inject. Do not re-implement readiness here; wake-path fixes (e.g.
+/// quiescence for early `?2004h`) must land once.
 ///
-/// `wait_ready == 0` injects immediately regardless of profile (the
-/// session is already interactive — message-live / resume-of-live).
-///
-/// When `wait_ready > 0` (fresh host-session / post-spawn), this mirrors
-/// [`deliver_post_wake`]: min settle → readiness dialect → **screen
-/// quiescence** → inject. Claude (and similar) can advertise bracketed
-/// paste (`?2004h`) while the first frame is still painting; without the
-/// quiescence gate the paste is reported `Delivered` then wiped by the
-/// next repaint — the wiki-public-chat "session spawned but first message
-/// never landed" failure mode.
+/// `wait_ready == 0` injects immediately (legacy "already interactive"
+/// shortcut). Prefer a non-zero ceiling for host-session follow-ups so
+/// mid-turn / mid-repaint pastes still go through quiescence.
 pub fn inject_raw_into_session_with_profile(
     session_id: &SessionId,
     payload: &str,
@@ -1209,45 +1198,14 @@ pub fn inject_raw_into_session_with_profile(
     let Some(live) = session_lookup::lookup_by_session_id(session_id) else {
         return false;
     };
-    if !wait_ready.is_zero() {
-        let start = std::time::Instant::now();
-        // Minimum settle even if paste mode flips immediately (first-frame
-        // guard — same floor as deliver_post_wake).
-        let min_settle = profile.post_spawn_settle.max(WAKE_MIN_SETTLE).min(wait_ready);
-        std::thread::sleep(min_settle);
-        if !live.is_child_alive() {
-            return false;
-        }
-        if profile.ready_via_bracketed_paste {
-            loop {
-                if !live.is_child_alive() {
-                    return false;
-                }
-                if live.bracketed_paste_active() {
-                    break;
-                }
-                if start.elapsed() >= wait_ready {
-                    // Best-effort past the ceiling (bounded, never blocks
-                    // forever) rather than dropping the prompt —
-                    // deliver_post_wake parity.
-                    log_debug!(
-                        "[v1-host/inject] session={} readiness wait hit {}ms ceiling — injecting best-effort",
-                        session_id,
-                        wait_ready.as_millis()
-                    );
-                    break;
-                }
-                std::thread::sleep(WAKE_POLL_INTERVAL);
-            }
-        }
-        // Quiescence: wait until the visible grid stops changing so the
-        // paste lands in a settled idle composer (not a frame a repaint
-        // will discard). Same gate as deliver_post_wake.
-        if let InjectOutcome::PtyDied = wait_for_screen_quiescence(&live, start, wait_ready) {
-            return false;
-        }
+    if wait_ready.is_zero() {
+        return matches!(inject_and_submit(&live, payload), InjectOutcome::Delivered);
     }
-    matches!(inject_and_submit(&live, payload), InjectOutcome::Delivered)
+    // Single chokepoint with k2 msg post-wake (Issue #9 + d8f80db quiescence).
+    matches!(
+        deliver_post_wake(&live, payload, wait_ready, profile),
+        InjectOutcome::Delivered
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────

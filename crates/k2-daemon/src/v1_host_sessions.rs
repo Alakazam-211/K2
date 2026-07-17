@@ -75,8 +75,15 @@ use policy::ApiHostSessionRequest;
 /// come ready before injecting best-effort (background thread — never blocks
 /// the API response). Env-overridable (`K2_HOST_SESSION_READY_TIMEOUT_SECS`)
 /// so the integration suite can clamp the ceiling for shim agents that never
-/// advertise readiness — mirrors the wake path's test seam.
-const SPAWN_PROMPT_READY_TIMEOUT_SECS: u64 = 15;
+/// advertise readiness — mirrors the wake path's
+/// [`crate::workspace_msg::DEFAULT_WAKE_TIMEOUT`] (20s).
+const SPAWN_PROMPT_READY_TIMEOUT_SECS: u64 = 20;
+
+/// Follow-up inject into an already-live host session: same readiness shape
+/// as post-wake (`deliver_post_wake` via `inject_raw_…_with_profile`) but a
+/// shorter ceiling so an idle composer still settles quickly (~settle +
+/// quiescence) without blocking chat for a full cold-start window.
+const HOST_FOLLOWUP_INJECT_TIMEOUT_SECS: u64 = 10;
 
 fn spawn_prompt_ready_timeout() -> Duration {
     let secs = std::env::var("K2_HOST_SESSION_READY_TIMEOUT_SECS")
@@ -317,6 +324,11 @@ fn host_session_resumable(ws_path: &str, session_id: &str) -> bool {
 /// Phase 0b: when `prompt` is non-empty, the workspace's owner guest
 /// policy is prepended ([`compose_followup_inject`]) — never taken from
 /// the request body. Empty prompt = reaper re-arm only (no inject).
+///
+/// Inject shape matches `k2 msg` post-wake ([`workspace_msg::deliver_post_wake`]
+/// via profile-aware inject): settle → readiness dialect → screen
+/// quiescence → paste. `wait_ready = 0` was a mid-turn black hole (paste
+/// into a still-streaming Grok/Claude frame).
 fn deliver_into_live(
     sid: &SessionId,
     echo_sid: &str,
@@ -330,7 +342,20 @@ fn deliver_into_live(
     } else {
         let guest = k2_core::workspace::settings::get_api_guest_policy(ws_path);
         let payload = compose_followup_inject(&guest, prompt);
-        crate::workspace_msg::inject_raw_into_session(sid, &payload, Duration::ZERO)
+        let inject_profile = policy::resolve_host_injection_profile(ws_path);
+        let ok = crate::workspace_msg::inject_raw_into_session_with_profile(
+            sid,
+            &payload,
+            Duration::from_secs(HOST_FOLLOWUP_INJECT_TIMEOUT_SECS),
+            &inject_profile,
+        );
+        if !ok {
+            log_debug!(
+                "[v1-host] follow-up inject session={} delivered=false (pty gone, gate, or wait failed)",
+                sid
+            );
+        }
+        ok
     };
     CliResponse::ok_json(
         serde_json::json!({

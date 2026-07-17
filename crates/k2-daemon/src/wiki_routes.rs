@@ -938,10 +938,22 @@ async fn handle_public_chat_post(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    // Cursor of messages the SPA already showed. Follow-ups MUST pass this so
+    // we don't re-return the previous turn's final and falsely mark `done`
+    // (which stops the client poll and swallows the new answer).
+    let since: u64 = req
+        .get("since")
+        .and_then(|v| v.as_u64())
+        .or_else(|| {
+            req.get("since")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(0);
 
     let ws = workspace.to_path_buf();
     let result = tokio::task::spawn_blocking(move || {
-        proxy_host_session_chat(&ws, &text, session_id.as_deref())
+        proxy_host_session_chat(&ws, &text, session_id.as_deref(), since)
     })
     .await;
 
@@ -1000,10 +1012,15 @@ async fn handle_public_chat_messages(workspace: &Path, query: &str) -> (&'static
 
 /// In-process host-sessions spawn/continue. Only visitor `prompt` is passed;
 /// guest policy + frozen preamble are applied by v1_host_sessions.
+///
+/// `since` is the SPA's message cursor: only `k2 respond` lines with seq > since
+/// are returned. Using 0 on every follow-up re-emits the previous final, marks
+/// `done`, and the client never polls for the new turn.
 fn proxy_host_session_chat(
     workspace: &Path,
     text: &str,
     session_id: Option<&str>,
+    since: u64,
 ) -> Result<String, (&'static str, String)> {
     let (_raw, slug, principal) = ensure_chat_key(workspace).map_err(|e| {
         (
@@ -1015,6 +1032,8 @@ fn proxy_host_session_chat(
     let mut body = serde_json::json!({
         "prompt": text,
         // Public chat turns can run longer than the default idle reaper.
+        // (Host-session idle reap; 600s keeps visitor sessions warm across
+        // multi-turn wiki chat. Floor is sandbox_reaper MIN 30.)
         "timeout_secs": 600,
     });
     if let Some(sid) = session_id {
@@ -1061,9 +1080,10 @@ fn proxy_host_session_chat(
         return Err(("502 Bad Gateway", "no sessionId from host-sessions".into()));
     }
 
-    // Best-effort immediate drain (usually empty until agent responds).
-    let drain = crate::v1_host_sessions::handle_v1_host_messages(&principal, &slug, &sid, 0);
-    let (messages, latest_seq, done) = parse_messages_drain(&drain.body);
+    // Best-effort immediate drain of NEW lines only (agent usually still thinking).
+    let drain =
+        crate::v1_host_sessions::handle_v1_host_messages(&principal, &slug, &sid, since);
+    let (messages, latest_seq, done) = parse_messages_drain(&drain.body, since);
 
     Ok(serde_json::json!({
         "sessionId": sid,
@@ -1103,7 +1123,7 @@ fn proxy_host_session_messages(
         };
         return Err((status, err));
     }
-    let (messages, latest_seq, done) = parse_messages_drain(&drain.body);
+    let (messages, latest_seq, done) = parse_messages_drain(&drain.body, since);
     Ok(serde_json::json!({
         "sessionId": session_id,
         "messages": messages,
@@ -1113,20 +1133,36 @@ fn proxy_host_session_messages(
     .to_string())
 }
 
-fn parse_messages_drain(body: &str) -> (Vec<serde_json::Value>, u64, bool) {
+/// Parse a host-sessions / sandbox messages drain body.
+/// `since` is the caller's cursor: `done` is true only when a **new** line
+/// (seq > since) carries `final: true`. Historical finals must not stop a
+/// follow-up turn's poll.
+fn parse_messages_drain(body: &str, since: u64) -> (Vec<serde_json::Value>, u64, bool) {
     let v: serde_json::Value = match serde_json::from_str(body) {
         Ok(v) => v,
-        Err(_) => return (vec![], 0, false),
+        Err(_) => return (vec![], since, false),
     };
-    let messages = v
+    let raw = v
         .get("messages")
         .and_then(|m| m.as_array())
         .cloned()
         .unwrap_or_default();
-    let latest_seq = v
-        .get("latest_seq")
-        .and_then(|x| x.as_u64())
-        .unwrap_or(0);
+    // Defense in depth: only seq > since (drain already filters; re-apply).
+    let messages: Vec<serde_json::Value> = raw
+        .into_iter()
+        .filter(|m| {
+            m.get("seq")
+                .and_then(|s| s.as_u64())
+                .map(|seq| seq > since)
+                .unwrap_or(true)
+        })
+        .collect();
+    let latest_seq = messages
+        .iter()
+        .filter_map(|m| m.get("seq").and_then(|s| s.as_u64()))
+        .max()
+        .or_else(|| v.get("latest_seq").and_then(|x| x.as_u64()))
+        .unwrap_or(since);
     let done = messages.iter().any(|m| {
         m.get("final")
             .and_then(|f| f.as_bool())
@@ -2051,6 +2087,9 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
 
   // ── Public chat (Ask this wiki) — only when /api/chat/status says enabled ──
   // Never receives or stores API keys / owner tokens; same-origin /api/chat* only.
+  // Visitor continuity: localStorage keeps host-session id + UI transcript so a
+  // return visit rewakes the same terminal (while idle reaper hasn't killed it)
+  // without any login. Cleared by "New conversation".
   const toggleChatBtn = document.getElementById('toggle-chat');
   const chatLog = document.getElementById('chat-log');
   const chatForm = document.getElementById('chat-form');
@@ -2064,6 +2103,46 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
   let chatSince = 0;
   let chatBusy = false;
   let chatPollTimer = null;
+  // In-memory mirror of cached bubbles (role/text/cls) for persist.
+  let chatHistory = [];
+  const CHAT_CACHE_VERSION = 1;
+  const CHAT_HISTORY_MAX = 80;
+  // Keyed by origin so each published wiki host keeps its own visitor session.
+  const CHAT_CACHE_KEY = 'k2-wiki-chat-v' + CHAT_CACHE_VERSION + ':' + (location.origin || '');
+
+  function chatCacheLoad(){
+    try {
+      const raw = localStorage.getItem(CHAT_CACHE_KEY);
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      if (!o || typeof o !== 'object') return null;
+      return o;
+    } catch (_) { return null; }
+  }
+
+  function chatCacheSave(){
+    try {
+      if (!chatSessionId && chatHistory.length === 0) {
+        localStorage.removeItem(CHAT_CACHE_KEY);
+        return;
+      }
+      const payload = {
+        v: CHAT_CACHE_VERSION,
+        sessionId: chatSessionId || null,
+        since: chatSince || 0,
+        history: chatHistory.slice(-CHAT_HISTORY_MAX),
+        updatedAt: Date.now(),
+      };
+      localStorage.setItem(CHAT_CACHE_KEY, JSON.stringify(payload));
+    } catch (_) { /* private mode / quota — continuity is best-effort */ }
+  }
+
+  function chatCacheClear(){
+    chatSessionId = null;
+    chatSince = 0;
+    chatHistory = [];
+    try { localStorage.removeItem(CHAT_CACHE_KEY); } catch (_) {}
+  }
 
   function setChatCollapsed(collapsed){
     chatCollapsed = !!collapsed;
@@ -2084,9 +2163,12 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
     if (!chatEnabled) {
       setChatCollapsed(true);
       stopChatPoll();
-    } else if (!layout.classList.contains('chat-collapsed') && !chatCollapsed) {
-      // default open when first enabled
-      setChatCollapsed(false);
+    } else {
+      // Restore visitor session + bubbles once chrome appears (reload / return).
+      restoreChatFromCache();
+      if (!layout.classList.contains('chat-collapsed') && !chatCollapsed) {
+        setChatCollapsed(false);
+      }
     }
     requestAnimationFrame(() => { resize(); });
   }
@@ -2098,8 +2180,9 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
     if (chatStatus) chatStatus.textContent = msg || (chatBusy ? 'Thinking…' : '');
   }
 
-  function appendChatBubble(role, text, extraClass){
+  function appendChatBubble(role, text, extraClass, opts){
     if (!chatLog) return;
+    const skipPersist = opts && opts.skipPersist;
     const div = document.createElement('div');
     div.className = 'bubble ' + role + (extraClass ? ' ' + extraClass : '');
     const label = role === 'user' ? 'You' : (role === 'agent' ? 'Wiki agent' : '');
@@ -2123,22 +2206,73 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
     }
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
+    if (!skipPersist) {
+      // Skip ephemeral "thinking" progress lines in cache; keep user + finals + errors.
+      if (role === 'user' || role === 'meta' || (role === 'agent' && extraClass === 'final')) {
+        chatHistory.push({ role: role, text: String(text), cls: extraClass || '' });
+        if (chatHistory.length > CHAT_HISTORY_MAX) {
+          chatHistory = chatHistory.slice(-CHAT_HISTORY_MAX);
+        }
+        chatCacheSave();
+      }
+    }
+  }
+
+  function restoreChatFromCache(){
+    const o = chatCacheLoad();
+    if (!o) return;
+    if (o.sessionId && typeof o.sessionId === 'string') chatSessionId = o.sessionId;
+    if (typeof o.since === 'number' && o.since >= 0) chatSince = o.since;
+    const hist = Array.isArray(o.history) ? o.history : [];
+    if (hist.length && chatLog && chatLog.children.length === 0) {
+      chatHistory = [];
+      hist.forEach(h => {
+        if (!h || !h.text) return;
+        const role = h.role === 'user' || h.role === 'agent' || h.role === 'meta' ? h.role : 'meta';
+        const cls = h.cls ? String(h.cls) : '';
+        chatHistory.push({ role: role, text: String(h.text), cls: cls });
+        appendChatBubble(role, String(h.text), cls, { skipPersist: true });
+      });
+      if (chatSessionId && chatStatus) {
+        chatStatus.textContent = 'Resuming conversation…';
+      }
+    } else if (hist.length) {
+      chatHistory = hist.filter(h => h && h.text).map(h => ({
+        role: h.role === 'user' || h.role === 'agent' || h.role === 'meta' ? h.role : 'meta',
+        text: String(h.text),
+        cls: h.cls ? String(h.cls) : '',
+      }));
+    }
   }
 
   function stopChatPoll(){
     if (chatPollTimer) { clearInterval(chatPollTimer); chatPollTimer = null; }
   }
 
+  // Ingest only NEW agent lines (seq > chatSince). Never re-paint prior turns.
+  // `done` = a new line with final:true (not a historical final from since=0).
   function ingestChatMessages(msgs, doneFlag){
-    let sawFinal = !!doneFlag;
+    let sawFinal = false;
     (msgs || []).forEach(m => {
-      if (m && typeof m.seq === 'number' && m.seq > chatSince) chatSince = m.seq;
-      const text = (m && m.text) ? String(m.text) : '';
-      if (!text) return;
-      const isFinal = !!(m && m.final);
+      if (!m) return;
+      const seq = (typeof m.seq === 'number') ? m.seq : null;
+      if (seq !== null && seq <= chatSince) return; // already shown
+      const text = m.text ? String(m.text) : '';
+      if (!text) {
+        if (seq !== null && seq > chatSince) chatSince = seq;
+        return;
+      }
+      const isFinal = !!m.final;
       appendChatBubble('agent', text, isFinal ? 'final' : 'meta');
+      if (seq !== null && seq > chatSince) chatSince = seq;
       if (isFinal) sawFinal = true;
     });
+    // Server may report done only when a new final is in this slice.
+    if (doneFlag && sawFinal) { /* keep */ }
+    else if (doneFlag && !(msgs && msgs.length)) {
+      // Empty slice + done:true is nonsense for follow-ups; ignore.
+    }
+    chatCacheSave();
     return sawFinal;
   }
 
@@ -2148,11 +2282,20 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
       const r = await fetch('/api/chat/messages?session=' + encodeURIComponent(chatSessionId) + '&since=' + chatSince);
       const j = await r.json();
       if (!r.ok) {
+        // Dead/expired session → drop cache so next send starts clean.
+        if (r.status === 404) {
+          chatCacheClear();
+          setChatBusy(false, 'Previous session ended — send again to start a new one.');
+          return true;
+        }
         setChatBusy(false, (j && j.error) ? j.error : ('HTTP ' + r.status));
         return true;
       }
       const done = ingestChatMessages(j.messages, j.done);
-      if (typeof j.latest_seq === 'number' && j.latest_seq > chatSince) chatSince = j.latest_seq;
+      if (typeof j.latest_seq === 'number' && j.latest_seq > chatSince) {
+        chatSince = j.latest_seq;
+        chatCacheSave();
+      }
       if (done) {
         setChatBusy(false, '');
         return true;
@@ -2179,7 +2322,10 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
   }
 
   async function sendChat(text){
-    const payload = { text: text };
+    // Snapshot cursor BEFORE the turn so we only wait for *new* finals and
+    // tell the gateway not to re-emit prior respond lines.
+    const sinceBefore = chatSince || 0;
+    const payload = { text: text, since: sinceBefore };
     if (chatSessionId) payload.sessionId = chatSessionId;
     setChatBusy(true, 'Sending…');
     appendChatBubble('user', text);
@@ -2191,13 +2337,22 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
       });
       const j = await r.json();
       if (!r.ok) {
+        // Stale session id (reaped + not resumable) → clear and surface error.
+        if (r.status === 404 && chatSessionId) {
+          chatCacheClear();
+          setChatBusy(false, 'Previous session ended — send again to start a new one.');
+          appendChatBubble('meta', 'Previous session ended. Send your message again.');
+          return;
+        }
         setChatBusy(false, (j && j.error) ? j.error : ('HTTP ' + r.status));
         appendChatBubble('meta', (j && j.error) ? j.error : 'Request failed');
         return;
       }
       if (j.sessionId) chatSessionId = j.sessionId;
-      if (typeof j.latest_seq === 'number') chatSince = j.latest_seq;
+      // Do NOT jump chatSince to latest_seq before ingest — that skipped
+      // painting and, with a stale drain, marked the turn done on the old final.
       const done = ingestChatMessages(j.messages, j.done);
+      chatCacheSave();
       if (done) {
         setChatBusy(false, '');
       } else {
@@ -2219,8 +2374,7 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
   if (chatNew) {
     chatNew.addEventListener('click', () => {
       stopChatPoll();
-      chatSessionId = null;
-      chatSince = 0;
+      chatCacheClear();
       setChatBusy(false, 'New conversation');
       if (chatLog) {
         chatLog.innerHTML = '';
@@ -2401,6 +2555,11 @@ mod tests {
         assert!(SITE_HTML.contains("/api/chat/status"));
         assert!(SITE_HTML.contains("/api/chat"));
         assert!(SITE_HTML.contains("/api/chat/messages"));
+        // Visitor continuity without login: session + transcript in localStorage.
+        assert!(SITE_HTML.contains("localStorage"));
+        assert!(SITE_HTML.contains("k2-wiki-chat-v"));
+        assert!(SITE_HTML.contains("chatCacheSave"));
+        assert!(SITE_HTML.contains("restoreChatFromCache"));
         assert!(!SITE_HTML.contains("k2sk_"), "SITE_HTML must never embed API keys");
         assert!(
             !SITE_HTML.contains("Authorization"),
@@ -2428,11 +2587,31 @@ mod tests {
     #[test]
     fn parse_messages_drain_detects_final() {
         let body = r#"{"messages":[{"seq":1,"text":"hi","ts":1,"final":false},{"seq":2,"text":"bye","ts":2,"final":true}],"latest_seq":2}"#;
-        let (msgs, latest, done) = parse_messages_drain(body);
+        let (msgs, latest, done) = parse_messages_drain(body, 0);
         assert_eq!(msgs.len(), 2);
         assert_eq!(latest, 2);
         assert!(done);
-        assert!(!parse_messages_drain("{}").2);
+        assert!(!parse_messages_drain("{}", 0).2);
+    }
+
+    #[test]
+    fn parse_messages_drain_followup_ignores_prior_final() {
+        // SPA already has seq 2 (previous final). Drain wrongly returning it
+        // must not mark done when since=2 filters it out.
+        let body = r#"{"messages":[{"seq":2,"text":"old final","ts":1,"final":true}],"latest_seq":2}"#;
+        let (msgs, latest, done) = parse_messages_drain(body, 2);
+        assert!(msgs.is_empty(), "seq==since must not re-emit");
+        assert_eq!(latest, 2);
+        assert!(!done, "stale final must not stop the next turn's poll");
+    }
+
+    #[test]
+    fn parse_messages_drain_new_final_after_cursor() {
+        let body = r#"{"messages":[{"seq":3,"text":"new answer","ts":2,"final":true}],"latest_seq":3}"#;
+        let (msgs, latest, done) = parse_messages_drain(body, 2);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(latest, 3);
+        assert!(done);
     }
 
     #[test]

@@ -65,6 +65,7 @@ vi.mock('./session-events', () => ({
   subscribeToWorkspaceSessionEvents: vi.fn(() => () => undefined),
   subscribeToWorkspaceTabEvents: vi.fn(() => () => undefined),
   onSessionAddedApp: vi.fn(() => () => undefined),
+  onSessionRemovedApp: vi.fn(() => () => undefined),
 }))
 
 // Record every fetch — the A6 close is a raw fetch (not daemonCliPost),

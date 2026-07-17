@@ -78,6 +78,7 @@ vi.mock('@/stores/session-events', () => ({
   subscribeToWorkspaceSessionEvents: vi.fn(() => () => undefined),
   subscribeToWorkspaceTabEvents: vi.fn(() => () => undefined),
   onSessionAddedApp: vi.fn(() => () => undefined),
+  onSessionRemovedApp: vi.fn(() => () => undefined),
   onProjectsChanged: vi.fn(() => () => undefined),
 }))
 

@@ -26,6 +26,7 @@ import {
   subscribeToWorkspaceSessionEvents,
   subscribeToWorkspaceTabEvents,
   onSessionAddedApp,
+  onSessionRemovedApp,
   onOpenUrl,
   onceRecovered,
   type SessionAddedEvent,
@@ -5094,27 +5095,34 @@ function tearDownActiveWorkspaceSubscription(): void {
   }
 }
 
-// ── P3c (D2) — generic API-spawned-sandbox tab adoption ───────────────────
+// ── P3c (D2) — generic API-spawned tab adoption + reaper close ────────────
 //
 // The workspace-scoped `subscribeForActiveWorkspace.onAdded` consumer above
 // only adopts `tab-<paneGroupId>` sessions whose cwd lives under the ACTIVE
-// workspace path. An API-spawned sandbox cell (POST /v1/sandboxes) registers
-// under a host-minted `api-<principal>-<uuid>` agent_name with an EPHEMERAL
-// cwd (`~/.k2/sandbox-sessions/<uuid>`) that matches no registered workspace —
-// so it never reaches that consumer. The daemon DOES forward any absolute-cwd
-// `SessionAdded` to the APP-LEVEL (empty `?path=`) subscriber, which dispatches
-// to the `onSessionAddedApp` registry. This consumer rides that registry so an
-// externally-spawned cell surfaces as an orange cockpit tab in EVERY attached
-// window, regardless of which workspace is in view.
+// workspace path. An API-spawned cell (POST /v1/sandboxes OR host-sessions)
+// registers under a host-minted `api-<principal>-<uuid>` agent_name. Sandbox
+// cells use an EPHEMERAL cwd that matches no registered workspace; host
+// sessions sit in a real workspace path but still use the `api-` namespace
+// (so the `tab-` gate above ignores them). The daemon forwards absolute-cwd
+// `SessionAdded`/`SessionRemoved` to the APP-LEVEL subscriber, which
+// dispatches to `onSessionAddedApp` / `onSessionRemovedApp`.
 //
-// Scope gate: act ONLY on events carrying a real `sandbox_backend` (D1). That
-// keeps this default-OFF and parity-safe — a non-sandbox `SessionAdded` carries
-// `sandbox_backend: undefined` and is ignored here, so normal locally-spawned
-// tabs are untouched (the workspace consumer still owns `tab-` adoption).
+// Scope gate (add): act ONLY on events carrying a `sandbox_backend` label.
+// The daemon stamps that for real sandboxes (`microvm`) AND for the host-
+// sessions family (`host` — see v2_session_map's api- namespace OR). Bare
+// `SessionAdded` with no backend stays default-OFF (workspace consumer owns
+// `tab-` adoption).
+//
+// Scope gate (remove): act ONLY on `api-…` agent names. When the idle
+// sandbox-reaper (or any other path) kills the PTY, ChildExit unregisters
+// the v2 session and emits SessionRemoved. Closing the audit tab here is
+// what makes post-reap resume open a *new* tab: resume reuses the caller's
+// stored session id, and the de-dupe below keys on sessionId — a leftover
+// zombie tab would swallow the new SessionAdded.
 
 /** True when a terminal item attached to (or spawned as) `agentName`, or
  *  carrying `sessionId`, is ALREADY surfaced in any tab across all groups.
- *  The de-dupe guard for API-sandbox adoption: the window that already adopted
+ *  The de-dupe guard for API-spawned adoption: the window that already adopted
  *  this cell (or a re-delivered event) must NOT create a second tab. Mirrors
  *  the AgentChatPane remount-guard's identity check (session_id) + the
  *  `isPaneGroupSurfaced` "already represented" check, matched on the attach
@@ -5142,22 +5150,41 @@ function isApiSandboxSessionSurfaced(
   return false
 }
 
-/** P3c (D2) — adopt an API-spawned sandbox session into a new cockpit tab.
- *  Returns true when a tab was adopted, false when ignored (not a real
- *  sandbox, or already surfaced — the de-dupe). Exported for unit testing.
+/** True when removing the tab is safe under the API-session reaper path.
+ *  Skip pinned/system tabs and any tab that isn't a pure attach to this
+ *  `api-…` agent (splits / agent panes / file viewers keep their own
+ *  lifecycle — same invariant as `tabIsDropCandidateForSessionRemoval`). */
+function tabIsDropCandidateForApiSessionRemoval(tab: Tab, agentName: string): boolean {
+  if (tab.isSystemAgent) return false
+  if (tab.paneGroups.size !== 1) return false
+  const pg = [...tab.paneGroups.values()][0]
+  if (!pg) return false
+  if (pg.items.length === 0) return false
+  for (const item of pg.items) {
+    if (item.type !== 'terminal') return false
+    const d = item.data as TerminalItemData
+    if (d.attachAgentName !== agentName) return false
+  }
+  return true
+}
+
+/** P3c (D2) + host-sessions — adopt an API-spawned session into a new cockpit
+ *  tab. Returns true when a tab was adopted, false when ignored (no backend
+ *  label, or already surfaced — the de-dupe). Exported for unit testing.
  *
  *  The tab carries `attachAgentName = event.agent_name` so when its
  *  `TerminalPane` mounts and issues the idempotent v2/spawn, find-or-spawn
  *  returns the EXISTING daemon session (reused:true) — it ATTACHES via the
- *  grid WS, it does NOT mint a duplicate PTY. `sandbox: true` asks the daemon
- *  to re-echo the backend (belt-and-suspenders), and `sandboxBackend` is
- *  stamped from the event so TabBar lights the D9 orange marker immediately.
- *  The tab is appended WITHOUT switching the active tab — surfacing an
- *  externally-spawned cell must never yank the user off their current tab. */
+ *  grid WS, it does NOT mint a duplicate PTY. Real sandboxes set
+ *  `sandbox: true` (daemon re-echoes the backend); host sessions
+ *  (`sandbox_backend: "host"`) attach without requesting a jail.
+ *  `sandboxBackend` is stamped from the event so TabBar can light the D9
+ *  orange marker for microvm cells. The tab is appended WITHOUT switching
+ *  the active tab — surfacing an externally-spawned cell must never yank
+ *  the user off their current tab. */
 export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
-  // Scope: only adopt REAL sandbox cells. Non-sandbox sessions carry no
-  // `sandbox_backend` and are owned by the workspace-scoped consumer (for
-  // `tab-` sessions) or simply not surfaced — parity-safe default-OFF.
+  // Scope: only adopt API-labelled cells. Daemon stamps sandbox_backend for
+  // real sandboxes (`microvm`) and host-sessions (`host`); bare PTYs omit it.
   const backend = event.sandbox_backend
   if (!backend) return false
   const agentName = event.agent_name
@@ -5165,13 +5192,19 @@ export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
 
   const state = useTabsStore.getState()
   // De-dupe: the spawning/owning window (or a re-delivered event) already has
-  // it — do nothing. Prevents the double-adopt the PRD calls out.
+  // it — do nothing. Prevents the double-adopt the PRD calls out. Post-reap
+  // resume mints a fresh agent_name but reuses the caller's session id; the
+  // reaper-close path below must have dropped the zombie tab first, or this
+  // sessionId match would swallow the new audit surface.
   if (isApiSandboxSessionSurfaced(state, agentName, event.session_id)) return false
 
   // Use a fresh local paneGroup/terminal id — the cell is keyed daemon-side by
   // `attachAgentName`, not by a `tab-`-shaped id, so the local id is purely the
   // pane's own identity for the grid WS attach.
   const paneGroupId = crypto.randomUUID()
+  // `"host"` is the API label for non-sandboxed host sessions — never ask the
+  // daemon to provision a jail on attach. Real backends (e.g. microvm) do.
+  const isRealSandbox = backend !== 'host'
   const tab = buildAdoptedTerminalTab({
     paneGroupId,
     cwd: event.workspace_path || '',
@@ -5179,7 +5212,7 @@ export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
     args: event.args.length > 0 ? event.args : undefined,
     sessionId: event.session_id,
     attachAgentName: agentName,
-    sandbox: true,
+    sandbox: isRealSandbox,
     sandboxBackend: backend,
   })
   // Kessel is the daemon-owned renderer; makeTerminalPaneGroup stamps the
@@ -5190,25 +5223,91 @@ export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
     (firstItem.data as TerminalItemData).renderer = 'kessel'
   }
   console.warn(
-    `[tabs] api-sandbox adoption — surfacing cell agent=${agentName} backend=${backend} as a new tab`,
+    `[tabs] api-session adoption — surfacing agent=${agentName} backend=${backend} as a new tab`,
   )
   useTabsStore.setState((s) => ({ tabs: [...s.tabs, tab] }))
   return true
 }
 
-/** Wire the app-level API-sandbox adoption consumer. Call ONCE at app boot.
- *  Returns an unsubscribe fn. The `onSessionAddedApp` registry is module-level
- *  and survives host switches, so a single registration covers the app
- *  lifetime; on a host switch the new host's app-level WS feeds the same
- *  registry. */
+/** Close cockpit tabs that were surfacing an API-spawned session after the
+ *  daemon reaped / unregistered it. Returns true when at least one tab was
+ *  dropped. Exported for unit testing.
+ *
+ *  Does NOT issue v2/close — the PTY is already dead (reaper `kill()` →
+ *  ChildExit → unregister). Mirrors the workspace-scoped `onRemoved` path
+ *  that only filters tab state. Leaving the zombie tab would block post-reap
+ *  resume adoption (de-dupe keys on sessionId) and strand the user on a dead
+ *  pane while the revived PTY lives under a new `api-…` agent_name. */
+export function dropApiSpawnedSession(event: SessionRemovedEvent): boolean {
+  const agentName = event.agent_name
+  // Scope: only the host-minted `api-…` namespace (sandbox cells + host
+  // sessions). Workspace `tab-` removals stay on the workspace consumer.
+  if (!agentName || !agentName.startsWith('api-')) return false
+
+  const state = useTabsStore.getState()
+  const droppedFromMain = state.tabs.filter(
+    (t) => !tabIsDropCandidateForApiSessionRemoval(t, agentName),
+  )
+  const newExtraGroups = state.extraGroups.map((g) => ({
+    tabs: g.tabs.filter((t) => !tabIsDropCandidateForApiSessionRemoval(t, agentName)),
+    activeTabId: g.activeTabId,
+  }))
+  const mainDelta = state.tabs.length - droppedFromMain.length
+  const extraDelta = state.extraGroups.reduce(
+    (n, g, i) => n + (g.tabs.length - newExtraGroups[i].tabs.length),
+    0,
+  )
+  if (mainDelta === 0 && extraDelta === 0) return false
+
+  let newActiveId = state.activeTabId
+  if (newActiveId && !droppedFromMain.find((t) => t.id === newActiveId)) {
+    const stillExists = newExtraGroups.some((g) =>
+      g.tabs.find((t) => t.id === newActiveId),
+    )
+    if (!stillExists) {
+      newActiveId = droppedFromMain[0]?.id ?? null
+    }
+  }
+  console.warn(
+    `[tabs] api-session removed — closed ${mainDelta + extraDelta} audit tab(s) for agent=${agentName}`,
+  )
+  useTabsStore.setState({
+    tabs: droppedFromMain,
+    activeTabId: newActiveId,
+    extraGroups: newExtraGroups.map((g) => ({
+      tabs: g.tabs,
+      activeTabId: g.tabs.find((t) => t.id === g.activeTabId)
+        ? g.activeTabId
+        : g.tabs[0]?.id ?? null,
+    })),
+  })
+  return true
+}
+
+/** Wire the app-level API-session adoption + reaper-close consumers. Call
+ *  ONCE at app boot. Returns an unsubscribe fn. The registries are
+ *  module-level and survive host switches, so a single registration covers
+ *  the app lifetime; on a host switch the new host's app-level WS feeds the
+ *  same registries. */
 export function initApiSandboxTabAdoption(): UnsubscribeFn {
-  return onSessionAddedApp((event) => {
+  const offAdded = onSessionAddedApp((event) => {
     try {
       adoptApiSandboxSession(event)
     } catch (err) {
-      console.warn('[tabs] api-sandbox adoption failed:', err)
+      console.warn('[tabs] api-session adoption failed:', err)
     }
   })
+  const offRemoved = onSessionRemovedApp((event) => {
+    try {
+      dropApiSpawnedSession(event)
+    } catch (err) {
+      console.warn('[tabs] api-session drop failed:', err)
+    }
+  })
+  return () => {
+    offAdded()
+    offRemoved()
+  }
 }
 
 /** Browser-pane arc (0.40.34) — wire the app-level `open_url` consumer:

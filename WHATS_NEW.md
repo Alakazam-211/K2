@@ -3,6 +3,39 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.52 — Headless Connect CLI + wiki session revive
+
+Provision a Linux box from the shell, and public-wiki chat sessions recover
+cleanly after idle reaping.
+
+### Headless K2 Connect onboarding
+
+- **`k2 users add`.** Create the first owner (or more Connect users) on a
+  headless daemon: hidden password prompt or `--password-stdin`, then
+  `--role owner|admin|member|viewer`. Uses the daemon owner token on the
+  box (external setup works without a session passport); in-cell agents
+  stay on their scoped passport and cannot elevate.
+
+- **`k2 connect login`.** Pair a purchased k2.dev subdomain from the CLI:
+  account email/password (or `--token` access JWT) → pick a subdomain →
+  write tunnel config → start tunnel → print the live URL. Session stored
+  in `~/.k2/connect-account.json` (0600); password is never written.
+  `k2 connect status` / `k2 connect logout` for check and re-auth.
+  Manual `K2_TUNNEL_TOKEN` remains the automation fallback.
+
+### Public wiki session lifecycle
+
+- **Close audit tabs when reaped.** Idle host-session PTYs no longer leave
+  a dead terminal open in the app.
+
+- **Resume opens a new audit tab.** After reaper kill, waking the same
+  session (stored session id) surfaces a fresh tab so the inject is visible
+  again.
+
+- **Cold inject path aligned with `k2 msg --wake`.** Host-session first
+  message uses settle + readiness + screen quiescence so Grok (and peers)
+  don’t lose the paste during first paint.
+
 ## 0.40.51 — Public wiki chat + agents control heartbeats
 
 Wiki visitors can talk to a workspace agent in the site itself, and agents

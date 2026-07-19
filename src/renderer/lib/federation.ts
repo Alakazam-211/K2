@@ -78,6 +78,41 @@ export function trustedPeers(peers: FederationPeer[]): FederationPeer[] {
 }
 
 /**
+ * Whether a pinned peer routes to the given Connect-host hostname
+ * (e.g. `rpm.k2.dev`, `rpm`, or `rpm.k2.dev:443`). Matching is by subdomain
+ * zone or bare subdomain — not by fingerprint (the address book doesn't
+ * store fingerprints).
+ */
+export function peerMatchesHostname(peer: FederationPeer, hostname: string): boolean {
+  const raw = hostname.trim().toLowerCase()
+  if (!raw) return false
+  // Drop :port if the ConnectHost stored a non-443 URL as host:port elsewhere.
+  const hostOnly = raw.split('/')[0]?.split(':')[0] ?? raw
+  if (!hostOnly) return false
+  const sub = (peer.subdomain || '').trim().toLowerCase()
+  if (sub) {
+    if (hostOnly === sub) return true
+    if (hostOnly === `${sub}.k2.dev`) return true
+  }
+  const label = (peer.label || '').trim().toLowerCase()
+  if (label && label === hostOnly) return true
+  return false
+}
+
+/**
+ * True when the ACTIVE daemon already has a **Trusted** pin that routes to
+ * `hostname`. Used by the Connections tile "Peer: trusted" badge / to hide
+ * the Pair button after a successful pair. Fail-soft: federation off or
+ * unreachable → false (tile still offers Pair so the operator can try).
+ */
+export async function isTrustedPeerHost(hostname: string): Promise<boolean> {
+  if (!hostname.trim()) return false
+  const res = await listFederationPeers()
+  if (!res.available) return false
+  return trustedPeers(res.data).some((p) => peerMatchesHostname(p, hostname))
+}
+
+/**
  * Fetch a paired peer's agent roster via the LOCAL daemon's owner-gated
  * `federation/peer-roster` seam (the daemon dials the peer's signed roster
  * GET). `peerSelector` is a fingerprint, label, or subdomain. Returns
@@ -280,14 +315,21 @@ async function pairAndConfirm(
 
 /** A peer's pinned subdomain such that `<subdomain>.k2.dev === host`. Deriving
  *  it from the typed host (strip the `.k2.dev` zone) keeps the daemon-side
- *  send-gate — which reconstructs `<agent>@<subdomain>.k2.dev` — matching the
- *  literal `agent@host` we record. Off-zone hosts fall back to the daemon's
+ *  send-gate — which reconstructs `<agent>::<subdomain>.k2.dev` — matching the
+ *  literal `agent::host` we record. Off-zone hosts fall back to the daemon's
  *  self-reported subdomain (then the raw host). */
 function subdomainForHost(host: string, reported: string): string {
   const SUFFIX = '.k2.dev'
   const h = host.trim()
   if (h.toLowerCase().endsWith(SUFFIX)) return h.slice(0, h.length - SUFFIX.length)
   return reported || h
+}
+
+/** Whether the RHS of a 2-part `::` address looks like a network host. */
+function looksLikeHost(host: string): boolean {
+  const h = host.trim()
+  if (!h) return false
+  return h.includes('.') || h.toLowerCase().endsWith('.k2.dev')
 }
 
 /**
@@ -342,21 +384,47 @@ export async function autoPairWithHost(host: string): Promise<void> {
   }
 }
 
-/** Split `<agent>@<host>` on the LAST `@`; both sides must be non-empty. */
+/**
+ * Parse a remote **user** address into `{ agent, host }`.
+ *
+ * Accepts:
+ * - canonical `agent::host` (host must look like a host)
+ * - legacy `agent@host` (split on the LAST `@`)
+ *
+ * Rejects 3-part wire form `fp::ws::agent` and non-addresses.
+ */
 export function parseAgentAtHost(target: string): { agent: string; host: string } | null {
   const t = target.trim()
+  if (!t) return null
+  // 3-part wire form (two or more '::') — not a user connection address.
+  if ((t.match(/::/g) || []).length >= 2) return null
+  const colon = t.indexOf('::')
+  if (colon > 0) {
+    const agent = t.slice(0, colon).trim().toLowerCase()
+    const host = t.slice(colon + 2).trim().toLowerCase()
+    if (agent && host && looksLikeHost(host)) return { agent, host }
+    return null
+  }
   const at = t.lastIndexOf('@')
   if (at <= 0 || at >= t.length - 1) return null
-  return { agent: t.slice(0, at), host: t.slice(at + 1) }
+  return {
+    agent: t.slice(0, at).trim().toLowerCase(),
+    host: t.slice(at + 1).trim().toLowerCase(),
+  }
+}
+
+/** Canonical user form `agent::host` — both sides lowercase (PRD storage/display). */
+export function formatAgentHost(agent: string, host: string): string {
+  return `${agent.trim().toLowerCase()}::${host.trim().toLowerCase()}`
 }
 
 /** Workspace folder basename (the source agent's default name). Splits on / and \\. */
 function workspaceBasename(path: string): string {
   const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/)
-  return parts[parts.length - 1] ?? ''
+  return (parts[parts.length - 1] ?? '').toLowerCase()
 }
 
-/** Resolve a remote `agent@host`'s workspace FILESYSTEM PATH on the peer, by
+/** Resolve a remote `agent::host`'s workspace FILESYSTEM PATH on the peer, by
  *  joining the peer roster (agent→workspace UUID, via the LOCAL peer-roster seam)
  *  with the peer's projects/list (UUID→path). Never throws; returns {error} when
  *  it can't resolve unambiguously. */
@@ -366,7 +434,8 @@ async function resolveRemoteWorkspacePath(
   const rosterBody = await cliGet<{ roster?: { agents?: RosterAgent[] } }>(
     localC, 'federation/peer-roster', { peer: remoteFp })
   const agents = rosterBody?.roster?.agents ?? []
-  const matches = agents.filter((a) => a.agent === remoteAgent)
+  const want = remoteAgent.trim().toLowerCase()
+  const matches = agents.filter((a) => a.agent.trim().toLowerCase() === want)
   if (matches.length === 0) return { error: `no workspace on the peer exposes agent "${remoteAgent}"` }
   if (matches.length > 1) return { error: `agent "${remoteAgent}" is ambiguous on the peer (${matches.length} workspaces)` }
   const wsId = matches[0].workspace_id
@@ -385,12 +454,29 @@ async function tryAddReverseConnection(
     const remoteC = await remoteCreds(host)
     const [localPub, remotePub] = await Promise.all([getPubkeyFor(localC), getPubkeyFor(remoteC)])
     if (!localPub.subdomain) return 'Reverse connection skipped: this server has no tunnel subdomain (the peer could not reach it back).'
+    // Always lowercase — federated handles are case-insensitive and stored
+    // as `agent::host` (canonical). Capitalized basenames like "Cortana"
+    // used to produce Cortana::z3thon.k2.dev and break older remotes that
+    // only treated `@` as remote, and mismatched gates that lowercased.
     const sourceAgent = workspaceBasename(sourceWorkspacePath)
     if (!sourceAgent) return 'Reverse connection skipped: could not derive this workspace’s agent name.'
-    const resolved = await resolveRemoteWorkspacePath(localC, remoteC, remotePub.fingerprint, remoteAgent)
+    const resolved = await resolveRemoteWorkspacePath(
+      localC, remoteC, remotePub.fingerprint, remoteAgent.trim().toLowerCase(),
+    )
     if ('error' in resolved) return `Reverse connection skipped: ${resolved.error}.`
-    const reverseTarget = `${sourceAgent}@${localPub.subdomain}.k2.dev`
-    await cliGet(remoteC, 'connections', { project: resolved.path, action: 'add', target: reverseTarget })
+    const reverseTarget = formatAgentHost(sourceAgent, `${localPub.subdomain}.k2.dev`)
+    const reverseLegacy = `${sourceAgent}@${localPub.subdomain.toLowerCase()}.k2.dev`
+    try {
+      await cliGet(remoteC, 'connections', { project: resolved.path, action: 'add', target: reverseTarget })
+    } catch (e) {
+      // Older peer daemons only recognized agent@host as remote.
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg.includes('not found') || msg.includes('Workspace')) {
+        await cliGet(remoteC, 'connections', { project: resolved.path, action: 'add', target: reverseLegacy })
+      } else {
+        throw e
+      }
+    }
     return null
   } catch (e) {
     return `Reverse connection skipped: ${e instanceof Error ? e.message : String(e)}`
@@ -398,14 +484,14 @@ async function tryAddReverseConnection(
 }
 
 /**
- * Add a REMOTE (cross-daemon) connection `<agent>@<host>` for `sourceWorkspacePath`:
+ * Add a REMOTE (cross-daemon) connection `<agent>::<host>` for `sourceWorkspacePath`:
  * auto-pair the two daemons if needed, record the connection on the LOCAL
  * (active) daemon for the source workspace, then best-effort record the REVERSE
- * row on `host`.
+ * row on `host`. Accepts legacy `agent@host` on input; writes canonical `::`.
  *
  * The forward (local→remote) direction is the one the local daemon's send-gate
  * checks. The reverse row lets the remote agent message back: on `host`, for the
- * workspace exposing `<agent>`, it records `<sourceBasename>@<localSubdomain>.k2.dev`
+ * workspace exposing `<agent>`, it records `<sourceBasename>::<localSubdomain>.k2.dev`
  * (source agent name = source workspace folder basename; local subdomain from the
  * active daemon's federation pubkey). The reverse is FAIL-SOFT — it NEVER breaks
  * the forward connection or pairing; on any soft failure it returns a human
@@ -417,37 +503,80 @@ export async function addRemoteConnection(
 ): Promise<{ reverseWarning: string | null }> {
   const parsed = parseAgentAtHost(target)
   if (!parsed) {
-    throw new Error(`"${target}" is not a valid remote agent address (expected <agent>@<host>).`)
+    throw new Error(
+      `"${target}" is not a valid remote agent address (expected <agent>::<host>).`,
+    )
   }
+  const canonical = formatAgentHost(parsed.agent, parsed.host)
+  const legacy = `${parsed.agent}@${parsed.host}`
   // 1. Federation must be enabled on both + a mutual trust pin must exist.
   await autoPairWithHost(parsed.host)
   // 2. Record the connection on the local (active) side for the source ws.
+  // Prefer `::`; fall back to legacy `@` for older peer daemons that only
+  // recognized `agent@host` as remote (pre-PR2).
   const localC = await activeCreds()
-  await cliGet(localC, 'connections', {
-    project: sourceWorkspacePath,
-    action: 'add',
-    target,
-  })
+  try {
+    await cliGet(localC, 'connections', {
+      project: sourceWorkspacePath,
+      action: 'add',
+      target: canonical,
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (msg.includes('not found') || msg.includes('Workspace')) {
+      await cliGet(localC, 'connections', {
+        project: sourceWorkspacePath,
+        action: 'add',
+        target: legacy,
+      })
+    } else {
+      throw e
+    }
+  }
   // 3. Best-effort reverse row (never throws — soft warning only).
   const reverseWarning = await tryAddReverseConnection(sourceWorkspacePath, parsed.agent, parsed.host)
   return { reverseWarning }
 }
 
-/** Remove a REMOTE connection `<agent>@<host>` for `sourceWorkspacePath` from
+/** Remove a REMOTE connection `<agent>::<host>` for `sourceWorkspacePath` from
  *  the local (active) daemon, then best-effort remove the mirrored REVERSE row
- *  on `host`. (Trust pins are left intact.) The forward removal is authoritative;
- *  a remote failure in the reverse cleanup never rejects. */
+ *  on `host`. Accepts legacy `@` on input. (Trust pins are left intact.) The
+ *  forward removal is authoritative; a remote failure in the reverse cleanup
+ *  never rejects. */
 export async function removeRemoteConnection(
   sourceWorkspacePath: string,
   target: string,
 ): Promise<void> {
-  const localC = await activeCreds()
-  await cliGet(localC, 'connections', {
-    project: sourceWorkspacePath,
-    action: 'remove',
-    target,
-  })
   const parsed = parseAgentAtHost(target)
+  const canonical = parsed ? formatAgentHost(parsed.agent, parsed.host) : target
+  // Also try legacy `@` if the row was stored before `::` normalization
+  // (older daemons / pre-PR2 rows).
+  const legacy =
+    parsed && !target.includes('@')
+      ? `${parsed.agent}@${parsed.host}`
+      : target.includes('@')
+        ? target
+        : null
+  const localC = await activeCreds()
+  const tryRemove = async (t: string) =>
+    cliGet(localC, 'connections', {
+      project: sourceWorkspacePath,
+      action: 'remove',
+      target: t,
+    })
+  try {
+    await tryRemove(canonical)
+  } catch (first) {
+    if (legacy && legacy !== canonical) {
+      try {
+        await tryRemove(legacy)
+      } catch {
+        throw first
+      }
+    } else {
+      throw first
+    }
+  }
   if (!parsed) return
   try {
     const remoteC = await remoteCreds(parsed.host)
@@ -455,9 +584,17 @@ export async function removeRemoteConnection(
     if (!localPub.subdomain) return
     const resolved = await resolveRemoteWorkspacePath(await activeCreds(), remoteC, remotePub.fingerprint, parsed.agent)
     if ('error' in resolved) return
-    const reverseTarget = `${workspaceBasename(sourceWorkspacePath)}@${localPub.subdomain}.k2.dev`
-    await cliGet(remoteC, 'connections', { project: resolved.path, action: 'remove', target: reverseTarget })
-  } catch { /* best-effort */ }
+    const reverseTarget = formatAgentHost(
+      workspaceBasename(sourceWorkspacePath),
+      `${localPub.subdomain}.k2.dev`,
+    )
+    const reverseLegacy = `${workspaceBasename(sourceWorkspacePath)}@${localPub.subdomain}.k2.dev`
+    try {
+      await cliGet(remoteC, 'connections', { project: resolved.path, action: 'remove', target: reverseTarget })
+    } catch {
+      await cliGet(remoteC, 'connections', { project: resolved.path, action: 'remove', target: reverseLegacy }).catch(() => {})
+    }
+  } catch { /* best-effort reverse cleanup */ }
 }
 
 /** A remote connection row as the `/cli/connections` list returns it. */
@@ -478,7 +615,7 @@ export interface AggregatedRemoteConnection extends RemoteConnectionEntry {
 }
 
 /**
- * List EVERY cross-daemon `agent@host` connection configured on the ACTIVE
+ * List EVERY cross-daemon `agent::host` connection configured on the ACTIVE
  * daemon, across all of its workspaces — the daemon-global view for the K2
  * Connect overview. Host-aware: returns the connections of whichever daemon is
  * active (local or remote). Walks `projects/list` then each workspace's

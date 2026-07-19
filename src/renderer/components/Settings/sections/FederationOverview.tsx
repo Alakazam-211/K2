@@ -6,7 +6,7 @@
 //   1. Federated servers   — the daemon's pinned federation peers (the servers
 //                            it can exchange messages / cross-agent connects
 //                            with). `GET /cli/federation/peers`.
-//   2. Cross-agent links   — every `agent@host` connection configured across
+//   2. Cross-agent links   — every `agent::host` connection configured across
 //                            the daemon's workspaces. Walks projects/list +
 //                            /cli/connections.
 //
@@ -40,7 +40,12 @@ function peerLabel(p: FederationPeer): string {
   return p.label || p.subdomain || p.fingerprint.slice(0, 12)
 }
 
-export function FederationOverview(): React.JSX.Element {
+export function FederationOverview({
+  /** Bump after pairing from a host tile so the peer list reloads. */
+  refreshKey = 0,
+}: {
+  refreshKey?: number
+} = {}): React.JSX.Element {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const isLocal = activeHost === 'local'
   const hostKey = isLocal ? 'local' : activeHost.id
@@ -67,7 +72,7 @@ export function FederationOverview(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [hostKey])
+  }, [hostKey, refreshKey])
 
   return (
     <div className="mt-6 space-y-4" data-settings-id="connections.federation-overview">
@@ -90,7 +95,9 @@ export function FederationOverview(): React.JSX.Element {
           </div>
         ) : peers.length === 0 ? (
           <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
-            No federated servers yet.
+            No federated servers yet. On a saved server tile above, click{' '}
+            <span className="text-[var(--color-text-secondary)]">Pair as federated peer</span>
+            {' '}(federation must be on for this Mac and that server).
           </div>
         ) : (
           <div className="space-y-2">
@@ -129,7 +136,7 @@ export function FederationOverview(): React.JSX.Element {
       <div>
         <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Cross-agent connections</h3>
         <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
-          Remote agents this server&apos;s workspaces are connected to (<code>agent@host</code>).
+          Remote agents this server&apos;s workspaces are connected to (<code>agent::host</code>).
         </p>
         {loading ? (
           <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">Loading…</div>

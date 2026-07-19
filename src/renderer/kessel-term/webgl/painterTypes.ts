@@ -21,6 +21,14 @@ export interface PainterTheme {
   bg: number
   /** Selection rect tint; drawn translucent over the bg pass. */
   selection: number
+  /**
+   * Coverage-gamma exponent for tinted glyphs (`pow(coverage, gamma)`).
+   * Live from the style store (per-style / per-scheme; Settings →
+   * Styles) so the slider updates open WebGL tabs without remount.
+   * Dev override `localStorage.K2SO_WEBGL_TEXT_GAMMA` still wins at
+   * paint time.
+   */
+  textGamma: number
 }
 
 /** CSS-space font/cell measurements. The painter derives its own

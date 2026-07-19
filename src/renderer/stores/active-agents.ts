@@ -232,14 +232,17 @@ const OUTPUT_TRUST_GRACE_MS = 3_000
  *  (see `handleLifecycleEvent`), so the hook always wins. */
 const _titlePermissionPanes = new Set<string>()
 
-/** Track agent start times for launch failure detection (paneId → timestamp) */
-const _agentStartTimes = new Map<string, number>()
-/** Track failed launches to avoid infinite retry loops (paneId → retry count) */
-const _launchRetries = new Map<string, number>()
-/** Track pending retry timeouts so they can be cancelled on cleanup */
-const _retryTimeouts = new Set<ReturnType<typeof setTimeout>>()
-const LAUNCH_FAILURE_THRESHOLD_MS = 5000
-const MAX_LAUNCH_RETRIES = 1
+// RETIRED 0.40.48 — renderer launch-failure heuristic ("Agent launch
+// failed — retrying in 30s" toast + 30s triage_decide auto-retry).
+//
+// It inferred launch health from hook TIMING (a 'stop' within 5s of a
+// 'start' stamp = dead launch), but the daemon buckets every
+// UserPromptSubmit/PostToolUse as 'start' and real wake flows include
+// daemon-retried infant deaths — so healthy agent-to-agent messaging
+// false-positived constantly, and the auto-retry could spawn duplicate
+// sessions. Launch health is the DAEMON's knowledge (it observes real
+// ChildExit codes and already retries wakes); a renderer timing guess is
+// the wrong layer. A genuinely dead spawn is visible in its own pane.
 
 /** A terminal that needs to be briefly mounted off-screen to spawn its PTY */
 export interface BackgroundSpawn {
@@ -631,7 +634,6 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       // F4 — the pane is active again: anchor the spawn grace, cancel a
       // pending done-debounce, clear any lingering unseen-done mark.
       notePaneActive(paneId)
-      _agentStartTimes.set(paneId, Date.now())
       // Record which project this pane belongs to
       const ps = useProjectsStore.getState()
       if (ps.activeProjectId) {
@@ -720,37 +722,9 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
 
     set({ paneStatuses: newStatuses })
 
-    // Launch failure detection: if agent stopped within 5s of starting, retry once
-    if (eventType === 'stop') {
-      const startTime = _agentStartTimes.get(paneId)
-      _agentStartTimes.delete(paneId)
-      if (startTime && (Date.now() - startTime) < LAUNCH_FAILURE_THRESHOLD_MS) {
-        const retries = _launchRetries.get(paneId) || 0
-        if (retries < MAX_LAUNCH_RETRIES) {
-          _launchRetries.set(paneId, retries + 1)
-          const projectId = get().paneProjectMap.get(paneId)
-          if (projectId) {
-            const project = useProjectsStore.getState().projects.find(p => p.id === projectId)
-            if (project) {
-              console.warn(`[agent-launch] Agent in ${project.name} failed within ${LAUNCH_FAILURE_THRESHOLD_MS}ms — retrying in 30s (attempt ${retries + 1})`)
-              toast.addToast('Agent launch failed — retrying in 30s', 'warning', 5000)
-              const retryTimer = setTimeout(() => {
-                _retryTimeouts.delete(retryTimer)
-                invoke('k2so_agents_triage_decide', { projectPath: project.path }).catch(() => {})
-              }, 30000)
-              _retryTimeouts.add(retryTimer)
-            }
-          }
-          return // Don't proceed to normal retriage
-        } else {
-          _launchRetries.delete(paneId)
-          console.error(`[agent-launch] Agent launch failed after ${MAX_LAUNCH_RETRIES} retries`)
-          toast.addToast('Agent launch failed — check agent configuration', 'error', 8000)
-        }
-      } else {
-        _launchRetries.delete(paneId)
-      }
-    }
+    // Launch-failure detection RETIRED 0.40.48 — see the note at the
+    // top of the module. The daemon owns spawn health; no renderer
+    // timing guess, no toast, no 30s auto-retriage.
 
     // RETIRED 0.36.3 — legacy auto-retriage loop.
     //
@@ -1665,13 +1639,6 @@ export function stopAgentPolling(): void {
     hookUnlisten()
     hookUnlisten = null
   }
-  // Cancel any pending retry timeouts to prevent ghost launches
-  for (const timer of _retryTimeouts) {
-    clearTimeout(timer)
-  }
-  _retryTimeouts.clear()
-  _agentStartTimes.clear()
-  _launchRetries.clear()
   // F4 — cancel pending done-debounces so a fire can't land after teardown.
   for (const timer of _unseenDoneTimers.values()) {
     clearTimeout(timer)
@@ -1683,7 +1650,7 @@ export function stopAgentPolling(): void {
 // ── #625: host-switch reset of agent pane state ─────────────────────────
 //
 // `paneStatuses` / `paneProjectMap` / `agents` / `outputTimestamps` (store)
-// and `_hookEventAt` / `_agentStartTimes` / `_launchRetries` (module Maps)
+// and `_hookEventAt` (module Map)
 // are keyed by pane/terminal IDs that belong to the LOCAL machine's
 // workspaces (paneProjectMap maps pane → LOCAL projectId). As store/module
 // singletons they survive the `<App key={hostKey}>` remount on a host
@@ -1693,17 +1660,9 @@ export function stopAgentPolling(): void {
 // Active Bar `paneStatuses` read against the wrong host.
 //
 // On a real host CHANGE, wipe all of it: the new host's own polling +
-// lifecycle hooks repopulate it for the remote's panes. Pending local
-// retry timers are cancelled so a queued local triage can't fire against
-// the remote.
+// lifecycle hooks repopulate it for the remote's panes.
 export function __resetAgentStateForHostSwitch(): void {
-  for (const timer of _retryTimeouts) {
-    clearTimeout(timer)
-  }
-  _retryTimeouts.clear()
   _hookEventAt.clear()
-  _agentStartTimes.clear()
-  _launchRetries.clear()
   _titlePermissionPanes.clear()
   // F4 — unseen-done marks/timers are keyed by the LOCAL host's paneIds.
   for (const timer of _unseenDoneTimers.values()) {

@@ -49,6 +49,10 @@ export interface StyleMeta {
   gapPresets: readonly string[]
   dials: readonly StyleDialMeta[]
   palettes: readonly StylePaletteMeta[]
+  /** Optional WebGL text-weight gamma override. When absent, derived
+   *  from the resolved palette's terminal background luminance
+   *  (dark → 0.7, light → 1.05). See src/renderer/lib/text-gamma.ts. */
+  terminalTextGamma?: number
 }
 
 export const DEFAULT_STYLE_ID = "square"

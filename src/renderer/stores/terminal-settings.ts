@@ -5,6 +5,10 @@ import {
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_DEFAULT
 } from '../../shared/constants'
+import {
+  TEXT_GAMMA_LIGHT,
+  clampTextGamma,
+} from '../lib/text-gamma'
 
 export type LinkClickMode = 'click' | 'cmd-click'
 export type ShortcutModifierLayout = 'cmd-active-cmdshift-pinned' | 'cmd-pinned-cmdshift-active'
@@ -63,6 +67,29 @@ export type TerminalRenderer = 'alacritty' | 'alacritty-v2' | 'kessel'
  */
 export type TerminalPainterKind = 'dom' | 'webgl'
 
+/** Cell line-height as a multiple of font size (matches prior Kessel
+ *  default of 1.2). Global across styles — Terminal settings, not Styles. */
+export const LINE_HEIGHT_MULT_DEFAULT = 1.2
+export const LINE_HEIGHT_MULT_MIN = 1.0
+export const LINE_HEIGHT_MULT_MAX = 1.6
+
+/** Character tracking: multiplies measured monospace cell width.
+ *  WebGL default 1.2 opens device-floored advance toward DOM feel.
+ *  1.0 = measured advance. WebGL-only knob. */
+export const CHAR_TRACKING_DEFAULT = 1.2
+export const CHAR_TRACKING_MIN = 0.9
+export const CHAR_TRACKING_MAX = 1.4
+
+export function clampLineHeightMult(v: number): number {
+  if (!Number.isFinite(v)) return LINE_HEIGHT_MULT_DEFAULT
+  return Math.min(LINE_HEIGHT_MULT_MAX, Math.max(LINE_HEIGHT_MULT_MIN, v))
+}
+
+export function clampCharTracking(v: number): number {
+  if (!Number.isFinite(v)) return CHAR_TRACKING_DEFAULT
+  return Math.min(CHAR_TRACKING_MAX, Math.max(CHAR_TRACKING_MIN, v))
+}
+
 interface TerminalSettingsState {
   fontSize: number
   linkClickMode: LinkClickMode
@@ -70,6 +97,16 @@ interface TerminalSettingsState {
   shortcutLayout: ShortcutModifierLayout
   renderer: TerminalRenderer
   painter: TerminalPainterKind
+  /**
+   * WebGL coverage-gamma for glyph edges (legacy channel; live gamma
+   * is owned by the style store — Settings → Styles). Kept for
+   * migrate compatibility.
+   */
+  textGamma: number
+  /** Line height multiplier of font size → cell height. WebGL only. */
+  lineHeightMultiplier: number
+  /** Cell-width multiplier (character tracking). WebGL only. */
+  charTracking: number
   incrementFontSize: () => void
   decrementFontSize: () => void
   resetFontSize: () => void
@@ -78,6 +115,51 @@ interface TerminalSettingsState {
   setShortcutLayout: (layout: ShortcutModifierLayout) => void
   setRenderer: (renderer: TerminalRenderer) => void
   setPainter: (painter: TerminalPainterKind) => void
+  setTextGamma: (v: number) => void
+  setLineHeightMultiplier: (v: number) => void
+  setCharTracking: (v: number) => void
+}
+
+/** Persist migrate for k2so-terminal-settings. Exported for unit tests. */
+export function migrateTerminalSettings(
+  persisted: unknown,
+  version: number,
+): Partial<TerminalSettingsState> {
+  if (persisted && typeof persisted === 'object') {
+    let ps = persisted as {
+      renderer?: string
+      painter?: string
+      textGamma?: number
+      lineHeightMultiplier?: number
+      charTracking?: number
+    }
+    if (version < 2 && ps.renderer === 'alacritty') {
+      ps = { ...ps, renderer: 'alacritty-v2' }
+    }
+    if (version < 3 && ps.renderer === 'kessel') {
+      ps = { ...ps, renderer: 'alacritty-v2' }
+    }
+    if (version < 4 && ps.painter === undefined) {
+      ps = { ...ps, painter: 'dom' }
+    }
+    if (version < 5 && (ps.renderer === 'alacritty' || ps.renderer === 'alacritty-v2')) {
+      ps = { ...ps, renderer: 'kessel' }
+    }
+    if (version < 6 && (ps.textGamma === undefined || !Number.isFinite(ps.textGamma))) {
+      ps = { ...ps, textGamma: TEXT_GAMMA_LIGHT }
+    }
+    if (
+      version < 7 &&
+      (ps.lineHeightMultiplier === undefined || !Number.isFinite(ps.lineHeightMultiplier))
+    ) {
+      ps = { ...ps, lineHeightMultiplier: LINE_HEIGHT_MULT_DEFAULT }
+    }
+    if (version < 7 && (ps.charTracking === undefined || !Number.isFinite(ps.charTracking))) {
+      ps = { ...ps, charTracking: CHAR_TRACKING_DEFAULT }
+    }
+    return ps as Partial<TerminalSettingsState>
+  }
+  return persisted as Partial<TerminalSettingsState>
 }
 
 // Persisted via zustand's persist middleware so the user's
@@ -101,6 +183,11 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       // WebGL painter is opt-in (experimental); `dom` is the proven
       // default and the permanent fallback path.
       painter: 'dom' as TerminalPainterKind,
+      // Light-theme preset; dark styles overwrite via applyStyle.
+      // Matches the previous hard-coded WebGL default (c2e634c 1.2).
+      textGamma: TEXT_GAMMA_LIGHT,
+      lineHeightMultiplier: LINE_HEIGHT_MULT_DEFAULT,
+      charTracking: CHAR_TRACKING_DEFAULT,
 
       incrementFontSize: () => {
         set((state) => ({
@@ -149,7 +236,19 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
         // value (hand-edited localStorage, stale future flag) snaps
         // back to the safe default.
         set({ painter: painter === 'webgl' ? 'webgl' : 'dom' })
-      }
+      },
+
+      setTextGamma: (v: number) => {
+        set({ textGamma: clampTextGamma(v) })
+      },
+
+      setLineHeightMultiplier: (v: number) => {
+        set({ lineHeightMultiplier: clampLineHeightMult(v) })
+      },
+
+      setCharTracking: (v: number) => {
+        set({ charTracking: clampCharTracking(v) })
+      },
     }),
     {
       name: 'k2so-terminal-settings',
@@ -163,8 +262,11 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
         shortcutLayout: state.shortcutLayout,
         renderer: state.renderer,
         painter: state.painter,
+        textGamma: state.textGamma,
+        lineHeightMultiplier: state.lineHeightMultiplier,
+        charTracking: state.charTracking,
       }),
-      version: 5,
+      version: 7,
       // 0.37.0 (v1 → v2): force-migrate users who had the persisted
       // renderer set to 'alacritty' (Legacy) onto 'alacritty-v2'.
       // The legacy option is removed from the Settings UI and the
@@ -187,25 +289,13 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       // 'alacritty-v2') forward. The steps compose: a pre-v3 'kessel'
       // (JSON-stream beta) blob flows v3 → 'alacritty-v2' → v5 →
       // 'kessel', landing on the daemon-hosted stack either way.
-      migrate: (persisted: unknown, version: number) => {
-        if (persisted && typeof persisted === 'object') {
-          let ps = persisted as { renderer?: string; painter?: string }
-          if (version < 2 && ps.renderer === 'alacritty') {
-            ps = { ...ps, renderer: 'alacritty-v2' }
-          }
-          if (version < 3 && ps.renderer === 'kessel') {
-            ps = { ...ps, renderer: 'alacritty-v2' }
-          }
-          if (version < 4 && ps.painter === undefined) {
-            ps = { ...ps, painter: 'dom' }
-          }
-          if (version < 5 && (ps.renderer === 'alacritty' || ps.renderer === 'alacritty-v2')) {
-            ps = { ...ps, renderer: 'kessel' }
-          }
-          return ps as Partial<TerminalSettingsState>
-        }
-        return persisted as Partial<TerminalSettingsState>
-      },
+      // 0.40.46 (v5 → v6): WebGL text-weight gamma. Pre-v6 blobs lack
+      // the key; stamp the light-theme default (1.2). Style selection
+      // overwrites with the dark (0.7) / light (1.2) preset on the
+      // next explicit style change.
+      // 0.40.47 (v6 → v7): cell line-height multiplier + character
+      // tracking (global Terminal knobs for WebGL/DOM spacing parity).
+      migrate: migrateTerminalSettings,
     },
   ),
 )

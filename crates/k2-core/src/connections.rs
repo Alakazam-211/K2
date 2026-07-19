@@ -1,7 +1,7 @@
 //! Workspace connections — thin dispatch over `WorkspaceRelation` +
 //! `log_activity`.
 //!
-//! Powers `k2so connections list/add/remove`. A connection is a row
+//! Powers `k2 connections list/add/remove`. A connection is a row
 //! in `workspace_relations` linking two projects (`source_project_id`
 //! → `target_project_id`) so cross-workspace `k2so msg` can verify
 //! the sender is actually allowed to post.
@@ -144,11 +144,11 @@ fn resolve_target_project_id(
     })
     .map_err(|_| match suggest_project_name(conn, token) {
         Some(s) => format!(
-            "Workspace '{}' not found — did you mean '{}'? Run `k2so connections list` for registered names, or pass a full path.",
+            "Workspace '{}' not found — did you mean '{}'? Run `k2 connections list` for registered names, or pass a full path. For a cross-server agent use agent::host.k2.dev (or legacy agent@host.k2.dev).",
             token, s
         ),
         None => format!(
-            "Workspace '{}' not found. Run `k2so connections list` for registered names, or pass a full path.",
+            "Workspace '{}' not found. Run `k2 connections list` for registered names, or pass a full path. For a cross-server agent use agent::host.k2.dev (or legacy agent@host.k2.dev).",
             token
         ),
     })
@@ -249,7 +249,7 @@ pub fn list_peers(project_path: &str) -> Result<Vec<Peer>, String> {
 #[serde(rename_all = "camelCase")]
 pub struct ConfPeer {
     /// Peer workspace display name (`projects.name`), or the remote
-    /// `<agent>@<host>` address for cross-daemon edges.
+    /// `<agent>::<host>` address for cross-daemon edges.
     pub peer: String,
     /// `true` for every local edge (one row per pair = mutual
     /// awareness); `false` only for cross-daemon edges.
@@ -261,7 +261,7 @@ pub struct ConfPeer {
 
 /// Conf-shaped peer list for `project_path`: LOCAL edges from
 /// `workspace_relations` (deduped per peer, always bidirectional) plus
-/// REMOTE (`<agent>@<host>`) edges from `workspace_remote_connections`.
+/// REMOTE (`<agent>::<host>`) edges from `workspace_remote_connections`.
 /// Sorted by peer name for stable rendering. Errors when the workspace
 /// isn't registered.
 pub fn list_conf_peers(project_path: &str) -> Result<Vec<ConfPeer>, String> {
@@ -298,11 +298,12 @@ pub fn list_conf_peers(project_path: &str) -> Result<Vec<ConfPeer>, String> {
         .collect();
 
     // Cross-daemon edges (GAP #3 rows). Stored only on this daemon —
-    // the one genuinely non-mutual shape conf can surface.
+    // the one genuinely non-mutual shape conf can surface. Display as
+    // canonical `agent::host` (normalize-on-read for old `@` rows).
     if let Ok(remotes) = WorkspaceRemoteConnection::list_for_source(&conn, &project_id) {
         for r in remotes {
             out.push(ConfPeer {
-                peer: r.remote_addr,
+                peer: display_remote_addr(&r.agent, &r.host),
                 bidirectional: false,
                 remote: true,
             });
@@ -315,66 +316,204 @@ pub fn list_conf_peers(project_path: &str) -> Result<Vec<ConfPeer>, String> {
 
 // ── GAP #3: cross-daemon (remote) connections ───────────────────────
 //
-// A target token containing `@` is a REMOTE connection: `<agent>@<host>`
-// (e.g. `ai@rpm.k2.dev`). It lives on a DIFFERENT daemon, so it can't be
-// a `workspace_relations` row (the peer has no local `projects` row).
-// `add`/`remove`/`list` branch on the `@` and persist these in
-// `workspace_remote_connections` instead. `is_remote_connection` is the
-// gate `federation::handle_send` consults before dialing a peer.
+// A REMOTE connection addresses an agent on a DIFFERENT daemon:
+//   • Canonical user form:  `<agent>::<host>`   (e.g. `ai::rpm.k2.dev`)
+//   • Legacy user form:     `<agent>@<host>`    (compat; still accepted)
+//   • Wire form (NOT here): `<fp>::<ws_uuid>::<agent>` — federation send body
+//
+// Remote edges live in `workspace_remote_connections` (not
+// `workspace_relations` — the peer has no local `projects` row).
+// `is_remote_connection` is the gate `federation::handle_send` consults
+// before dialing a peer. Storage is canonical lowercase `agent::host`;
+// gates match on agent+host so old `@` rows keep working.
 
-/// Whether `target` is a REMOTE (cross-daemon) address — i.e. it carries
-/// an `@`. Local workspace names/paths never contain `@`.
+/// Whether the right-hand side of a 2-part `::` address looks like a network
+/// host (user form), not a workspace uuid or other opaque token.
+///
+/// PRD B1: contains `.` and/or ends with `.k2.dev`. Dotted hosts cover the
+/// canonical zone (`rpm.k2.dev`), DNS names, and loopback test hosts
+/// (`127.0.0.1:1`).
+pub fn looks_like_host(host: &str) -> bool {
+    let h = host.trim();
+    if h.is_empty() {
+        return false;
+    }
+    let lower = h.to_ascii_lowercase();
+    h.contains('.') || lower.ends_with(".k2.dev")
+}
+
+/// Whether `target` is a REMOTE (cross-daemon) **user** address.
+///
+/// True for:
+/// - legacy `<agent>@<host>`
+/// - 2-part `<agent>::<host>` where host looks like a host
+///
+/// False for bare local names, paths, and the 3-part wire form
+/// `<fp>::<ws>::<agent>` (that is `k2 fed send` only).
 pub fn is_remote_target(target: &str) -> bool {
-    target.contains('@')
+    let t = target.trim();
+    // Legacy user form — always remote (split on last `@` elsewhere).
+    if t.contains('@') {
+        return true;
+    }
+    // Canonical user form `agent::host` OR accidental URL-encoded form
+    // if a caller forgot to decode (`agent%3A%3Ahost` still contains no
+    // raw `::`). Prefer decoded callers; also accept percent-encoded `::`.
+    let decoded = if t.contains("%3A%3A") || t.contains("%3a%3a") {
+        crate::agent_hooks::urldecode(t)
+    } else {
+        t.to_string()
+    };
+    let d = decoded.as_str();
+    if d.contains("::") {
+        let parts: Vec<&str> = d.split("::").collect();
+        // 2-part user form only; 3-part is federation wire (`k2 fed send`).
+        return parts.len() == 2
+            && !parts[0].is_empty()
+            && !parts[1].is_empty()
+            && looks_like_host(parts[1]);
+    }
+    false
+}
+
+/// K2 Connect zone suffix (canonical remote hosts are `<subdomain>.k2.dev`).
+const K2_ZONE: &str = ".k2.dev";
+
+/// Normalize a remote host for storage/matching.
+///
+/// - trim + lowercase
+/// - collapse accidental double zone (`rpm.k2.dev.k2.dev` → `rpm.k2.dev`)
+///
+/// Does **not** invent a zone for off-zone hosts (`peer.example.com` stays).
+pub fn normalize_remote_host(host: &str) -> String {
+    let mut h = host.trim().to_lowercase();
+    // Collapse repeated `.k2.dev` suffixes down to a single trailing zone.
+    while h.ends_with(".k2.dev.k2.dev") {
+        h.truncate(h.len() - K2_ZONE.len());
+    }
+    h
+}
+
+/// Bare routing label for host/subdomain compare: strip one trailing
+/// `.k2.dev` (after [`normalize_remote_host`]) so `rpm` matches `rpm.k2.dev`
+/// and a doubled zone still matches after collapse. Off-zone hosts keep
+/// their full form (`peer.example.com` → itself).
+fn bare_routing_label(host_or_sub: &str) -> String {
+    let n = normalize_remote_host(host_or_sub);
+    n.strip_suffix(K2_ZONE).unwrap_or(&n).to_string()
+}
+
+/// Whether `host` (right-hand side of a remote user address) matches a peer's
+/// `subdomain` routing hint. Accepts bare subdomain, full `.k2.dev` host,
+/// peer pinned with full host, and collapsed double-zone hosts.
+fn host_matches_peer_subdomain(host: &str, subdomain: &str) -> bool {
+    let host_label = bare_routing_label(host);
+    let sub_label = bare_routing_label(subdomain);
+    !host_label.is_empty() && !sub_label.is_empty() && host_label == sub_label
 }
 
 /// 0.40.21: whether a **Trusted** federation peer is pinned that ROUTES to
-/// `host` (the right-hand side of a `<agent>@<host>` remote connection).
+/// `host` (the right-hand side of a remote connection address).
 ///
 /// A remote connection row with NO matching trusted peer is a half-state: the
 /// connection exists but every cross-daemon send 404s at dial time because no
-/// peer resolves/routes for the host (the exact `ai@rpm.k2.dev` failure this
+/// peer resolves/routes for the host (the exact `ai::rpm.k2.dev` failure this
 /// surfaces). A peer's routing hint is its `subdomain` → `<subdomain>.k2.dev`,
 /// so a host matches a peer when `host == <subdomain>.k2.dev` (the canonical
 /// case) or `host == subdomain` (a peer pinned with the full host). Comparison
-/// is case-insensitive, mirroring the `<agent>@<host>` gate. Fails CLOSED — an
+/// is case-insensitive, mirroring the remote-addr gate. Fails CLOSED — an
 /// unreadable peer store yields `false` so the operator is WARNED rather than
 /// told (wrongly) that the connection is wired.
 pub fn host_has_trusted_peer(host: &str) -> bool {
+    trusted_peer_fingerprint_for_host(host).is_some()
+}
+
+/// Fingerprint of the **Trusted** peer whose subdomain routes to `host`, if
+/// any. Used to bind `workspace_remote_connections.peer_fingerprint` on
+/// create / reconcile (GH #13). Fails CLOSED on unreadable peer store.
+pub fn trusted_peer_fingerprint_for_host(host: &str) -> Option<String> {
     use crate::federation::{PeerStore, PeerTrust};
-    let host_lc = host.trim().to_lowercase();
-    if host_lc.is_empty() {
-        return false;
+    if normalize_remote_host(host).is_empty() {
+        return None;
     }
-    let store = match PeerStore::load() {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    store.list().iter().any(|p| {
+    let store = PeerStore::load().ok()?;
+    store.list().iter().find_map(|p| {
         if p.trust != PeerTrust::Trusted {
-            return false;
+            return None;
         }
-        let sub = p.subdomain.trim().to_lowercase();
-        !sub.is_empty() && (sub == host_lc || format!("{sub}.k2.dev") == host_lc)
+        if host_matches_peer_subdomain(host, &p.subdomain) {
+            Some(p.fingerprint.clone())
+        } else {
+            None
+        }
     })
 }
 
-/// Parse `<agent>@<host>` by splitting on the LAST `@` (so an agent token
-/// may itself contain `@`, though that's unusual). Returns
-/// `(agent, host)`. Both sides must be non-empty.
+/// Parse a remote **user** address into `(agent, host)`.
+///
+/// Accepts:
+/// - `<agent>::<host>` when host looks like a host (canonical)
+/// - `<agent>@<host>` (legacy; split on the LAST `@` so an agent token may
+///   itself contain `@`)
+///
+/// Rejects the 3-part wire form and non-addresses. Host is returned as typed
+/// (caller should run [`normalize_remote_host`] for storage).
 pub fn parse_remote_addr(addr: &str) -> Result<(String, String), String> {
-    let at = addr
-        .rfind('@')
-        .ok_or_else(|| format!("'{}' is not a remote address (expected <agent>@<host>)", addr))?;
+    let addr = addr.trim();
+    if addr.contains("::") {
+        let parts: Vec<&str> = addr.split("::").collect();
+        if parts.len() == 3 {
+            return Err(format!(
+                "'{addr}' is federation wire form (<fp>::<workspace>::<agent>) — \
+                 use <agent>::<host> for connections / k2 msg"
+            ));
+        }
+        if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+            if !looks_like_host(parts[1]) {
+                return Err(format!(
+                    "remote address '{addr}' right-hand side does not look like a host \
+                     (expected <agent>::<host> with a dotted host, e.g. agent::box.k2.dev)"
+                ));
+            }
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+        return Err(format!(
+            "remote address '{addr}' must be <agent>::<host> (or legacy <agent>@<host>)"
+        ));
+    }
+    let at = addr.rfind('@').ok_or_else(|| {
+        format!("'{addr}' is not a remote address (expected <agent>::<host> or <agent>@<host>)")
+    })?;
     let agent = &addr[..at];
     let host = &addr[at + 1..];
     if agent.is_empty() || host.is_empty() {
         return Err(format!(
-            "remote address '{}' must be <agent>@<host> (both sides non-empty)",
-            addr
+            "remote address '{addr}' must be <agent>::<host> (or legacy <agent>@<host>; both sides non-empty)"
         ));
     }
     Ok((agent.to_string(), host.to_string()))
+}
+
+/// Canonical storage / display key: lowercase `agent::host`.
+///
+/// Accepts `@` or `::` on input. Host is collapsed via
+/// [`normalize_remote_host`]. Gates match on agent+host columns so
+/// pre-existing `@` rows keep working without migration.
+pub fn normalize_remote_addr(addr: &str) -> Result<String, String> {
+    let (agent, host) = parse_remote_addr(addr)?;
+    let agent = agent.to_ascii_lowercase();
+    let host = normalize_remote_host(&host);
+    Ok(format!("{agent}::{host}"))
+}
+
+/// User-facing display form `agent::host` from stored agent/host columns
+/// (normalize-on-read for old `@` rows; always lowercase).
+pub fn display_remote_addr(agent: &str, host: &str) -> String {
+    format!(
+        "{}::{}",
+        agent.trim().to_ascii_lowercase(),
+        normalize_remote_host(host)
+    )
 }
 
 /// Resolve a source workspace selector (a filesystem PATH, or — as a
@@ -396,16 +535,22 @@ fn resolve_source_project_id(conn: &rusqlite::Connection, path_or_id: &str) -> O
 
 /// THE CROSS-DAEMON SEND GATE. Returns `true` iff the source workspace
 /// (a path or project id) has a `workspace_remote_connections` row for
-/// `remote_addr` (`<agent>@<host>`). Fails CLOSED — an unresolvable
-/// source workspace or any DB error yields `false`, so no connection ⇒
-/// no cross-daemon send. Consulted by `federation::handle_send`.
+/// `remote_addr` (`agent::host` or legacy `agent@host`). Fails CLOSED —
+/// an unresolvable source workspace or any DB error yields `false`, so no
+/// connection ⇒ no cross-daemon send. Consulted by `federation::handle_send`.
+///
+/// Lookup normalizes separator + case; pre-existing `@` rows still match.
 pub fn is_remote_connection(source_project_path_or_id: &str, remote_addr: &str) -> bool {
     let db = crate::db::shared();
     let conn = db.lock();
     let Some(source_id) = resolve_source_project_id(&conn, source_project_path_or_id) else {
         return false;
     };
-    WorkspaceRemoteConnection::exists(&conn, &source_id, remote_addr).unwrap_or(false)
+    // Prefer canonical form when parse succeeds so `@`/`::` and case variants
+    // all hit the same agent+host match in `exists`.
+    let key = normalize_remote_addr(remote_addr)
+        .unwrap_or_else(|_| remote_addr.trim().to_string());
+    WorkspaceRemoteConnection::exists(&conn, &source_id, &key).unwrap_or(false)
 }
 
 /// C2 (0.40.45) — THE LOCAL SAME-DAEMON PEER GATE.
@@ -553,15 +698,49 @@ pub fn connections_for_actor(
                 // 404. (`reachable` keeps its prior meaning — the row exists —
                 // so existing parsers are unchanged; `paired` is the new
                 // routing-readiness signal.)
-                let paired = host_has_trusted_peer(&r.host);
+                //
+                // PR3 / GH #13: surface `peerFingerprint` + `unbound` when the
+                // row has no fingerprint yet. Soft-reconcile: if a Trusted
+                // peer now matches the host, bind the fingerprint in-place so
+                // pre-existing unbound rows heal without a re-add.
+                let mut peer_fp = r
+                    .peer_fingerprint
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
+                if peer_fp.is_none() {
+                    if let Some(fp) = trusted_peer_fingerprint_for_host(&r.host) {
+                        // Never soft-bind the local fingerprint as a "remote"
+                        // peer (self-peer hygiene; same gate as add).
+                        let is_self = crate::federation::local_fingerprint()
+                            .ok()
+                            .is_some_and(|local| local == fp);
+                        if !is_self {
+                            let db = crate::db::shared();
+                            let conn = db.lock();
+                            let _ = WorkspaceRemoteConnection::set_peer_fingerprint(
+                                &conn, &r.id, Some(&fp),
+                            );
+                            peer_fp = Some(fp);
+                        }
+                    }
+                }
+                let paired = peer_fp.is_some() || host_has_trusted_peer(&r.host);
+                let unbound = peer_fp.is_none();
+                // PR2: always surface the user form `agent::host` (normalize
+                // on read so pre-existing `@` rows list canonically).
+                let address = display_remote_addr(&r.agent, &r.host);
                 connections.push(serde_json::json!({
                     "remote": true,
-                    "address": r.remote_addr,
+                    "address": address,
                     "host": r.host,
                     "agent": r.agent,
-                    "projectName": r.remote_addr,
+                    "projectName": address,
                     "reachable": true,
                     "paired": paired,
+                    "peerFingerprint": peer_fp,
+                    "unbound": unbound,
                     "relationTypes": [],
                 }));
             }
@@ -581,28 +760,70 @@ pub fn connections_for_actor(
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| "Missing 'target' parameter (workspace name or path)".to_string())?;
 
-            // GAP #3: a target with `@` is a REMOTE (cross-daemon)
-            // connection (`<agent>@<host>`). Persist it in
+            // GAP #3: a REMOTE (cross-daemon) user address
+            // (`agent::host` or legacy `agent@host`). Persist it in
             // `workspace_remote_connections` instead of `workspace_relations`
             // — the peer has no local `projects` row to point at. Idempotent:
-            // re-adding the same source+remote_addr is a no-op.
+            // re-adding the same source+agent+host is a no-op.
             if is_remote_target(target_name) {
-                // Normalize the routing key: `<agent>@<host>` is
-                // case-insensitive (hostnames already are; the agent token
-                // must not break on folder-case-vs-display-case — see
-                // `WorkspaceRemoteConnection::exists`). Store lowercased so
-                // new rows match the case-insensitive gate and `connections
-                // list` renders a canonical form.
-                let remote_addr = target_name.trim().to_lowercase();
+                // PR2: canonical store is lowercase `agent::host`. Accept
+                // `@` or `::` on write. Host collapse strips accidental
+                // `host.k2.dev.k2.dev` (PR3). Case-insensitive agent+host
+                // match (see `WorkspaceRemoteConnection::exists`) keeps
+                // folder-case-vs-display-case and old `@` rows working.
+                let remote_addr = normalize_remote_addr(target_name.trim())?;
                 let (agent, host) = parse_remote_addr(&remote_addr)?;
+                // PR3: bind peer_fingerprint from the Trusted peer that
+                // routes to this host (GH #13). Fail soft when unpaired —
+                // still create the row + warn (auto-pair may land later).
+                let peer_fp = trusted_peer_fingerprint_for_host(&host);
+                // Reject self-peer: a "remote" whose fingerprint is THIS
+                // daemon's identity is not a cross-server peer.
+                if let Some(ref fp) = peer_fp {
+                    if let Ok(local_fp) = crate::federation::local_fingerprint() {
+                        if fp == &local_fp {
+                            return Err(format!(
+                                "cannot add remote connection '{remote_addr}': peer fingerprint \
+                                 matches this server (self-peer) — use a different host"
+                            ));
+                        }
+                    }
+                }
                 if WorkspaceRemoteConnection::exists(&conn, &project_id, &remote_addr)
                     .map_err(|e| e.to_string())?
                 {
+                    // Soft-reconcile: fill an empty peer_fingerprint if a
+                    // Trusted peer is now available for this host.
+                    if let Some(ref fp) = peer_fp {
+                        if let Ok(rows) =
+                            WorkspaceRemoteConnection::list_for_source(&conn, &project_id)
+                        {
+                            if let Some(row) = rows.iter().find(|r| {
+                                r.agent.eq_ignore_ascii_case(&agent)
+                                    && r.host.eq_ignore_ascii_case(&host)
+                            }) {
+                                let empty = row
+                                    .peer_fingerprint
+                                    .as_deref()
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                    .is_none();
+                                if empty {
+                                    let _ = WorkspaceRemoteConnection::set_peer_fingerprint(
+                                        &conn, &row.id, Some(fp),
+                                    );
+                                }
+                            }
+                        }
+                    }
                     return Ok(serde_json::json!({
                         "success": true,
                         "target": remote_addr,
                         "remote": true,
                         "noop": true,
+                        "paired": peer_fp.is_some(),
+                        "peerFingerprint": peer_fp,
+                        "unbound": peer_fp.is_none(),
                         "message": format!("already connected to {}", remote_addr),
                     })
                     .to_string());
@@ -615,7 +836,7 @@ pub fn connections_for_actor(
                     &remote_addr,
                     &host,
                     &agent,
-                    None,
+                    peer_fp.as_deref(),
                 )
                 .map_err(|e| e.to_string())?;
                 log_activity(
@@ -634,19 +855,21 @@ pub fn connections_for_actor(
                 // instead of letting the operator discover it as a silent
                 // send-time failure. Advisory only: the row is still created
                 // (auto-pair may add the connection BEFORE the SAS confirm).
-                let paired = host_has_trusted_peer(&host);
+                let paired = peer_fp.is_some();
                 let mut resp = serde_json::json!({
                     "success": true,
                     "id": id,
                     "target": remote_addr,
                     "remote": true,
                     "paired": paired,
+                    "peerFingerprint": peer_fp,
+                    "unbound": !paired,
                 });
                 if !paired {
                     let warning = format!(
                         "connection '{}' added but no trusted federation peer is paired for \
                          host '{}' — pair it (cockpit add-remote / auto-pair) or messages to \
-                         it will fail to route",
+                         it will fail to route (peer_fingerprint unbound)",
                         remote_addr, host
                     );
                     eprintln!("[connections] WARNING: {warning}");
@@ -737,13 +960,12 @@ pub fn connections_for_actor(
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| "Missing 'target' parameter".to_string())?;
 
-            // GAP #3: remote (`<agent>@<host>`) removal — delete the
-            // `workspace_remote_connections` row for this source+addr.
+            // GAP #3: remote (`agent::host` / legacy `agent@host`) removal —
+            // delete the `workspace_remote_connections` row for this source.
             if is_remote_target(target_name) {
-                // Same case-insensitive normalization as `add` so a remove
-                // matches both new lowercased rows AND pre-existing capital
-                // rows (delete also compares via LOWER(...)).
-                let remote_addr = target_name.trim().to_lowercase();
+                // Same normalize as `add` so remove matches `@`/`::` and case
+                // variants (delete matches on agent+host columns).
+                let remote_addr = normalize_remote_addr(target_name.trim())?;
                 let removed = WorkspaceRemoteConnection::delete(&conn, &project_id, &remote_addr)
                     .map_err(|e| e.to_string())?;
                 if removed == 0 {
@@ -1517,27 +1739,80 @@ mod tests {
     // ── GAP #3: remote (cross-daemon) connections ────────────────────
 
     #[test]
-    fn parse_remote_addr_splits_on_last_at() {
+    fn parse_remote_addr_matrix_colon_at_wire() {
+        // Canonical :: user form.
+        assert_eq!(
+            parse_remote_addr("ai::rpm.k2.dev").unwrap(),
+            ("ai".to_string(), "rpm.k2.dev".to_string())
+        );
+        // Legacy @ form (split on LAST '@').
         assert_eq!(
             parse_remote_addr("ai@rpm.k2.dev").unwrap(),
             ("ai".to_string(), "rpm.k2.dev".to_string())
         );
-        // Split on the LAST '@' — an agent token may itself contain '@'.
         assert_eq!(
             parse_remote_addr("a@b@host.example").unwrap(),
             ("a@b".to_string(), "host.example".to_string())
         );
-        // Both sides must be non-empty.
+        // Loopback test host (dotted).
+        assert_eq!(
+            parse_remote_addr("bob::127.0.0.1:1").unwrap(),
+            ("bob".to_string(), "127.0.0.1:1".to_string())
+        );
+        // 3-part wire form rejected for user parse.
+        let wire_err = parse_remote_addr("fpdeadbeef::ws-uuid::agent").unwrap_err();
+        assert!(
+            wire_err.contains("wire form"),
+            "3-part must be rejected as wire form; got {wire_err}"
+        );
+        // Both sides must be non-empty / host-like.
         assert!(parse_remote_addr("@host").is_err());
         assert!(parse_remote_addr("agent@").is_err());
         assert!(parse_remote_addr("no-at-sign").is_err());
+        assert!(parse_remote_addr("agent::").is_err());
+        assert!(parse_remote_addr("::host.k2.dev").is_err());
+        // 2-part :: with non-host RHS rejected.
+        assert!(parse_remote_addr("agent::localname").is_err());
     }
 
     #[test]
-    fn is_remote_target_detects_at() {
+    fn normalize_remote_addr_canonical_colon_lowercase() {
+        assert_eq!(
+            normalize_remote_addr("Ai@RPM.K2.DEV").unwrap(),
+            "ai::rpm.k2.dev"
+        );
+        assert_eq!(
+            normalize_remote_addr("Ai::RPM.K2.DEV").unwrap(),
+            "ai::rpm.k2.dev"
+        );
+        // Double zone collapse (PR3 host normalize).
+        assert_eq!(
+            normalize_remote_addr("ai::rpm.k2.dev.k2.dev").unwrap(),
+            "ai::rpm.k2.dev"
+        );
+    }
+
+    #[test]
+    fn is_remote_target_detects_at_and_colon() {
         assert!(is_remote_target("ai@rpm.k2.dev"));
+        assert!(is_remote_target("ai::rpm.k2.dev"));
+        assert!(is_remote_target("bob::127.0.0.1:9"));
         assert!(!is_remote_target("LocalWorkspace"));
         assert!(!is_remote_target("/tmp/some/path"));
+        // 3-part wire is NOT a remote *connection* target.
+        assert!(!is_remote_target("fp::ws-uuid::agent"));
+        // 2-part :: without host-looking RHS is not a remote target.
+        assert!(!is_remote_target("agent::localname"));
+    }
+
+    #[test]
+    fn looks_like_host_matrix() {
+        assert!(looks_like_host("rpm.k2.dev"));
+        assert!(looks_like_host("127.0.0.1:1"));
+        assert!(looks_like_host("peer.example.com"));
+        assert!(!looks_like_host("localname"));
+        assert!(!looks_like_host(""));
+        assert!(!looks_like_host("   "));
     }
 
     #[test]
@@ -1558,21 +1833,40 @@ mod tests {
             let conn = db.lock();
             let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
             assert_eq!(rows.len(), 1, "remote add must persist exactly one row");
-            assert_eq!(rows[0].remote_addr, addr);
+            // PR2: canonical storage is agent::host (legacy @ accepted on write).
+            assert_eq!(rows[0].remote_addr, "ai::rpm.k2.dev");
             assert_eq!(rows[0].host, "rpm.k2.dev");
             assert_eq!(rows[0].agent, "ai");
         }
 
-        // Second add of the SAME addr → idempotent no-op, still one row.
+        // Second add of the SAME addr (and :: spelling) → idempotent no-op.
         let resp2 = connections(&src_path, "add", Some(addr), None).expect("remote re-add ok");
         let parsed2: serde_json::Value = serde_json::from_str(&resp2).expect("valid JSON");
         assert_eq!(parsed2["noop"], serde_json::json!(true), "re-add must report noop");
+        let resp3 = connections(&src_path, "add", Some("ai::rpm.k2.dev"), None)
+            .expect("colon re-add ok");
+        let parsed3: serde_json::Value = serde_json::from_str(&resp3).expect("valid JSON");
+        assert_eq!(parsed3["noop"], serde_json::json!(true), "colon re-add must no-op");
         {
             let db = crate::db::shared();
             let conn = db.lock();
             let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
             assert_eq!(rows.len(), 1, "idempotent re-add must not create a duplicate");
         }
+    }
+
+    #[test]
+    fn add_colon_form_and_gate_matches_both_spellings() {
+        let (src_path, _src_id) = make_project("ColonAddSrc");
+        let resp = connections(&src_path, "add", Some("ops::peer.example.com"), None)
+            .expect("colon add ok");
+        let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
+        assert_eq!(parsed["target"], serde_json::json!("ops::peer.example.com"));
+
+        assert!(is_remote_connection(&src_path, "ops::peer.example.com"));
+        assert!(is_remote_connection(&src_path, "ops@peer.example.com"));
+        assert!(is_remote_connection(&src_path, "OPS::PEER.EXAMPLE.COM"));
+        assert!(!is_remote_connection(&src_path, "ops::other.example.com"));
     }
 
     #[test]
@@ -1640,10 +1934,11 @@ mod tests {
             .iter()
             .find(|c| c["remote"] == serde_json::json!(true))
             .expect("remote entry present");
-        assert_eq!(remote["address"], serde_json::json!("ai@rpm.k2.dev"));
+        // PR2: list surfaces canonical agent::host (even when added via @).
+        assert_eq!(remote["address"], serde_json::json!("ai::rpm.k2.dev"));
         assert_eq!(remote["host"], serde_json::json!("rpm.k2.dev"));
         assert_eq!(remote["agent"], serde_json::json!("ai"));
-        assert_eq!(remote["projectName"], serde_json::json!("ai@rpm.k2.dev"));
+        assert_eq!(remote["projectName"], serde_json::json!("ai::rpm.k2.dev"));
         assert_eq!(remote["reachable"], serde_json::json!(true));
     }
 
@@ -1672,10 +1967,15 @@ mod tests {
             .unwrap();
         }
 
-        // Lowercase reply target matches the capital stored row.
+        // Lowercase @ lookup matches the capital stored row.
         assert!(
             is_remote_connection(&src_path, "cortana@z3thon.k2.dev"),
-            "lowercase lookup must match a pre-existing capital row"
+            "lowercase @ lookup must match a pre-existing capital row"
+        );
+        // Canonical :: lookup also matches old @ storage.
+        assert!(
+            is_remote_connection(&src_path, "cortana::z3thon.k2.dev"),
+            "colon form must match a pre-existing @ row"
         );
         // Upper-case lookup also matches (fully case-insensitive).
         assert!(
@@ -1710,8 +2010,8 @@ mod tests {
         assert_eq!(parsed["success"], serde_json::json!(true));
         assert_eq!(parsed["remote"], serde_json::json!(true));
         assert_eq!(
-            parsed["target"], serde_json::json!("cortana@z3thon.k2.dev"),
-            "stored target must be normalized to lowercase"
+            parsed["target"], serde_json::json!("cortana::z3thon.k2.dev"),
+            "stored target must be normalized to lowercase agent::host"
         );
 
         {
@@ -1719,15 +2019,16 @@ mod tests {
             let conn = db.lock();
             let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
             assert_eq!(rows.len(), 1, "exactly one row persisted");
-            assert_eq!(rows[0].remote_addr, "cortana@z3thon.k2.dev");
+            assert_eq!(rows[0].remote_addr, "cortana::z3thon.k2.dev");
             assert_eq!(rows[0].agent, "cortana");
             assert_eq!(rows[0].host, "z3thon.k2.dev");
         }
 
-        // Gate opens for any casing of the same addr.
+        // Gate opens for any casing / separator of the same addr.
         assert!(is_remote_connection(&src_path, "cortana@z3thon.k2.dev"));
+        assert!(is_remote_connection(&src_path, "cortana::z3thon.k2.dev"));
         assert!(is_remote_connection(&src_path, "Cortana@Z3thon.K2.Dev"));
-        assert!(is_remote_connection(&src_path, "CORTANA@Z3THON.K2.DEV"));
+        assert!(is_remote_connection(&src_path, "CORTANA::Z3THON.K2.DEV"));
 
         // Re-adding a differently-cased form is an idempotent no-op (matches
         // the normalized row), so no duplicate is created.
@@ -1742,8 +2043,8 @@ mod tests {
             assert_eq!(rows.len(), 1, "case-variant re-add must not duplicate");
         }
 
-        // Remove with yet another casing must delete the row.
-        let resp3 = connections(&src_path, "remove", Some("CoRtAnA@Z3THON.k2.dev"), None)
+        // Remove with yet another casing / :: must delete the row.
+        let resp3 = connections(&src_path, "remove", Some("CoRtAnA::Z3THON.k2.dev"), None)
             .expect("remote remove ok");
         let parsed3: serde_json::Value = serde_json::from_str(&resp3).expect("valid JSON");
         assert_eq!(parsed3["success"], serde_json::json!(true));
@@ -1768,10 +2069,14 @@ mod tests {
 
         connections(&src_path, "add", Some(addr), None).expect("remote add ok");
 
-        // After adding → true.
+        // After adding → true for both spellings.
         assert!(
             is_remote_connection(&src_path, addr),
-            "gate must open for the exact added <agent>@<host>"
+            "gate must open for the added address (@ form)"
+        );
+        assert!(
+            is_remote_connection(&src_path, "ai::gate.k2.dev"),
+            "gate must open for the added address (:: form)"
         );
         // A DIFFERENT addr for the same source stays closed.
         assert!(
@@ -1877,9 +2182,239 @@ mod tests {
             store.save().unwrap();
             assert!(host_has_trusted_peer("rpm.k2.dev"));
             assert!(host_has_trusted_peer("RPM.K2.DEV"));
+            // Bare subdomain and doubled-zone host also match after normalize.
+            assert!(host_has_trusted_peer("rpm"));
+            assert!(host_has_trusted_peer("rpm.k2.dev.k2.dev"));
             // A different host stays unrouted.
             assert!(!host_has_trusted_peer("other.k2.dev"));
             assert!(!host_has_trusted_peer(""));
+        });
+    }
+
+    // ── PR3 / GH #13: peer_fingerprint bind + self-peer + host normalize ──
+
+    #[test]
+    fn normalize_remote_host_collapses_double_k2_zone() {
+        assert_eq!(normalize_remote_host("RPM.K2.DEV"), "rpm.k2.dev");
+        assert_eq!(
+            normalize_remote_host("rpm.k2.dev.k2.dev"),
+            "rpm.k2.dev",
+            "double zone must collapse to a single trailing .k2.dev"
+        );
+        assert_eq!(
+            normalize_remote_host("  rpm.k2.dev.k2.dev.k2.dev  "),
+            "rpm.k2.dev"
+        );
+        assert_eq!(
+            normalize_remote_host("peer.example.com"),
+            "peer.example.com",
+            "off-zone hosts must not grow a .k2.dev suffix"
+        );
+        assert_eq!(normalize_remote_host(""), "");
+    }
+
+    #[test]
+    fn add_remote_binds_peer_fingerprint_when_trusted_peer_matches_host() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            use crate::federation::{FederationPeer, PeerStore, PeerTrust};
+            let (src_path, src_id) = make_project("BindFpSrc");
+
+            let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let mut store = PeerStore::default();
+            let fp =
+                store.upsert(FederationPeer::pin("rpm-box", "rpm", key.public_key_pem()).unwrap());
+            store.set_trust(&fp, PeerTrust::Trusted);
+            store.save().unwrap();
+
+            let resp =
+                connections(&src_path, "add", Some("ai@rpm.k2.dev"), None).expect("remote add ok");
+            let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
+            assert_eq!(parsed["success"], serde_json::json!(true));
+            assert_eq!(parsed["paired"], serde_json::json!(true));
+            assert_eq!(parsed["unbound"], serde_json::json!(false));
+            assert_eq!(
+                parsed["peerFingerprint"].as_str(),
+                Some(fp.as_str()),
+                "add response must surface the bound peer fingerprint"
+            );
+
+            {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
+                assert_eq!(rows.len(), 1);
+                assert_eq!(
+                    rows[0].peer_fingerprint.as_deref(),
+                    Some(fp.as_str()),
+                    "row must persist peer_fingerprint on create"
+                );
+            }
+
+            // list surfaces fingerprint + unbound:false
+            let listed = connections(&src_path, "list", None, None).expect("list ok");
+            let lv: serde_json::Value = serde_json::from_str(&listed).expect("valid JSON");
+            let remote = lv["connections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["remote"] == serde_json::json!(true))
+                .expect("remote entry");
+            assert_eq!(remote["peerFingerprint"].as_str(), Some(fp.as_str()));
+            assert_eq!(remote["unbound"], serde_json::json!(false));
+            assert_eq!(remote["paired"], serde_json::json!(true));
+        });
+    }
+
+    #[test]
+    fn add_remote_unbound_when_no_trusted_peer_and_list_flags_unbound() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let (src_path, src_id) = make_project("UnboundFpSrc");
+            let resp =
+                connections(&src_path, "add", Some("ai@orphan.k2.dev"), None).expect("add ok");
+            let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
+            assert_eq!(parsed["paired"], serde_json::json!(false));
+            assert_eq!(parsed["unbound"], serde_json::json!(true));
+            assert!(parsed["peerFingerprint"].is_null());
+            assert!(
+                parsed["warning"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("unbound")
+                    || parsed["warning"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("no trusted federation peer"),
+                "unpaired add must warn; got {parsed}"
+            );
+
+            {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
+                assert_eq!(rows[0].peer_fingerprint, None);
+            }
+
+            let listed = connections(&src_path, "list", None, None).expect("list ok");
+            let lv: serde_json::Value = serde_json::from_str(&listed).expect("valid JSON");
+            let remote = lv["connections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["remote"] == serde_json::json!(true))
+                .expect("remote entry");
+            assert_eq!(remote["unbound"], serde_json::json!(true));
+            assert!(remote["peerFingerprint"].is_null());
+        });
+    }
+
+    #[test]
+    fn add_remote_rejects_self_peer_when_trusted_fp_is_local() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            use crate::federation::{local_fingerprint, FederationPeer, PeerStore, PeerTrust};
+            let (src_path, _src_id) = make_project("SelfPeerSrc");
+
+            // Ensure local key material exists, then pin THAT key as a
+            // "trusted peer" for host self.k2.dev — connecting to it must
+            // fail closed as self-peer.
+            let local_fp = local_fingerprint().expect("local fp");
+            let local_pem = crate::tunnel::tls::load_or_generate_keypair()
+                .expect("local key")
+                .public_key_pem();
+            let mut store = PeerStore::default();
+            let fp = store
+                .upsert(FederationPeer::pin("myself", "self", local_pem).unwrap());
+            assert_eq!(fp, local_fp, "pinned key must be the local fingerprint");
+            store.set_trust(&fp, PeerTrust::Trusted);
+            store.save().unwrap();
+
+            let err = connections(&src_path, "add", Some("agent@self.k2.dev"), None)
+                .expect_err("self-peer remote connection must be rejected");
+            assert!(
+                err.contains("self-peer") || err.contains("this server"),
+                "error must name self-peer; got {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn list_soft_reconciles_empty_peer_fingerprint_from_trusted_peer() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            use crate::federation::{FederationPeer, PeerStore, PeerTrust};
+            let (src_path, src_id) = make_project("ReconcileFpSrc");
+
+            // Pre-existing unbound row (as shipped before PR3).
+            {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                WorkspaceRemoteConnection::create(
+                    &conn,
+                    &Uuid::new_v4().to_string(),
+                    &src_id,
+                    "ai@rpm.k2.dev",
+                    "rpm.k2.dev",
+                    "ai",
+                    None,
+                )
+                .unwrap();
+            }
+
+            // Later: peer becomes Trusted for rpm.
+            let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let mut store = PeerStore::default();
+            let fp =
+                store.upsert(FederationPeer::pin("rpm-box", "rpm", key.public_key_pem()).unwrap());
+            store.set_trust(&fp, PeerTrust::Trusted);
+            store.save().unwrap();
+
+            let listed = connections(&src_path, "list", None, None).expect("list ok");
+            let lv: serde_json::Value = serde_json::from_str(&listed).expect("valid JSON");
+            let remote = lv["connections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["remote"] == serde_json::json!(true))
+                .expect("remote entry");
+            assert_eq!(
+                remote["peerFingerprint"].as_str(),
+                Some(fp.as_str()),
+                "list must soft-bind fingerprint from trusted peer"
+            );
+            assert_eq!(remote["unbound"], serde_json::json!(false));
+
+            // Persisted, not just response-only.
+            {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
+                assert_eq!(rows[0].peer_fingerprint.as_deref(), Some(fp.as_str()));
+            }
+        });
+    }
+
+    #[test]
+    fn add_remote_normalizes_double_zone_host_on_store() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let (src_path, src_id) = make_project("DoubleZoneSrc");
+            let resp = connections(
+                &src_path,
+                "add",
+                Some("ai@rpm.k2.dev.k2.dev"),
+                None,
+            )
+            .expect("add ok");
+            let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
+            assert_eq!(
+                parsed["target"],
+                serde_json::json!("ai::rpm.k2.dev"),
+                "stored target must collapse double .k2.dev into canonical agent::host"
+            );
+            {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
+                assert_eq!(rows[0].host, "rpm.k2.dev");
+                assert_eq!(rows[0].remote_addr, "ai::rpm.k2.dev");
+            }
         });
     }
 

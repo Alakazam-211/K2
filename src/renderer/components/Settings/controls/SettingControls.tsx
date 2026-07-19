@@ -58,6 +58,7 @@ export function SettingDropdown({
   className,
   placeholder,
   menuAlign = 'right',
+  fullWidth = false,
 }: {
   value: string
   options: { value: string; label: string; disabled?: boolean }[]
@@ -80,6 +81,8 @@ export function SettingDropdown({
    * a real, distinct state the user must resolve.
    */
   placeholder?: string
+  /** Stretch the trigger across the container (federated server picker, etc.). */
+  fullWidth?: boolean
 }): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -99,10 +102,13 @@ export function SettingDropdown({
   }, [isOpen])
 
   return (
-    <div ref={containerRef} className={`relative no-drag ${className ?? ''}`}>
+    <div ref={containerRef} className={`relative no-drag ${fullWidth ? 'w-full' : ''} ${className ?? ''}`}>
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] text-[var(--color-text-primary)] transition-colors cursor-pointer"
+        className={`flex items-center gap-2 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] text-[var(--color-text-primary)] transition-colors cursor-pointer ${
+          fullWidth ? 'w-full justify-between' : ''
+        }`}
       >
         <span className={`truncate ${selected ? '' : 'text-[var(--color-text-muted)]'}`}>
           {selected?.label ?? placeholder ?? ''}

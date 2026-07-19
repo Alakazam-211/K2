@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError } from '@/lib/daemon-cli'
+import { jittered } from '@/lib/backoff'
 import { agentDisplayName } from '@/lib/workspace-agent'
 import { terminalKill } from '@/lib/terminal-daemon'
 import type { MosaicNode, MosaicDirection } from 'react-mosaic-component'
@@ -25,7 +26,9 @@ import {
   subscribeToWorkspaceSessionEvents,
   subscribeToWorkspaceTabEvents,
   onSessionAddedApp,
+  onSessionRemovedApp,
   onOpenUrl,
+  onceRecovered,
   type SessionAddedEvent,
   type SessionRemovedEvent,
   type TabTitleChangedEvent,
@@ -1083,6 +1086,10 @@ interface TabsState {
   // reaping now (daemon-canonical-active.md §4.5). Do not re-introduce a
   // renderer reap — it would race the daemon's canonical decision.
   persistActiveWorkspace: () => void
+  /** 0.40.48: cancel the autosave debounce and save the active workspace
+   *  layout NOW. For structural mutations that must hold across a remote
+   *  round-trip (column split/unsplit). */
+  flushLayoutPersist: () => void
   /** Add a tab to a workspace without switching to it. If the workspace is active,
    *  adds directly. If background/stashed, saves to DB session so it's there when restored.
    *  Returns the terminal ID (paneGroupId) so the caller can spawn a background PTY. */
@@ -1355,6 +1362,95 @@ function serializeSnapshot(snapshot: WorkspaceTabSnapshot): SerializedLayout {
 
 /** Debounce timer for auto-saving the active workspace. */
 let persistDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+// ── Layout-save durability (0.40.48 — the remote split-columns bug) ──────
+//
+// The canonical layout save was a debounced, SINGLE-SHOT, fire-and-forget
+// POST: any failure was console.error'd and the layout change was simply
+// gone from the server. Locally that never bites (the loopback save can't
+// fail), but against a remote host one dropped save — a tunnel blip during
+// the 1s debounce, a transient non-2xx, or the 0.40.48 recovery gate
+// failing fast with RecoveringError — meant a just-clicked column split
+// never reached the remote DB, and the NEXT layout read (host switch,
+// remote-reorder refetch, reconnect re-restore) clobbered the live
+// `splitCount` back to the stale server copy: "the split doesn't hold."
+//
+// The re-arm below makes the save durable: a RecoveringError parks on the
+// recovery signal and flushes the moment the host is back; other failures
+// retry on a jittered timer with a consecutive-failure cap (each retry
+// re-serializes CURRENT state, so collapsing bursts is correct —
+// last-write-wins). One pending re-arm at a time.
+let layoutSaveRetryTimer: ReturnType<typeof setTimeout> | null = null
+let layoutSaveRecoveryWait: (() => void) | null = null
+let layoutSaveConsecutiveFailures = 0
+const LAYOUT_SAVE_RETRY_BASE_MS = 3000
+const LAYOUT_SAVE_MAX_BLIND_RETRIES = 3
+
+function rearmLayoutSave(err: unknown): void {
+  if (layoutSaveRetryTimer !== null || layoutSaveRecoveryWait !== null) return
+  if (err instanceof RecoveringError) {
+    // The gate dropped the save before sending — the host is recovering.
+    // Flush as soon as it's genuinely back (push-style, nothing polls).
+    layoutSaveRecoveryWait = onceRecovered(() => {
+      layoutSaveRecoveryWait = null
+      useTabsStore.getState().persistActiveWorkspace()
+    })
+    return
+  }
+  // Blind (non-recovery) retries are REMOTE-ONLY: a loopback save can't
+  // blip — a local failure is deterministic (bug/broken env), and
+  // retrying it just churns timers (and pollutes unit-test envs, where
+  // every save fails by construction). The remote tunnel path is where
+  // transient drops actually happen.
+  if (useConnectHostStore.getState().activeHost === 'local') return
+  layoutSaveConsecutiveFailures += 1
+  if (layoutSaveConsecutiveFailures > LAYOUT_SAVE_MAX_BLIND_RETRIES) {
+    // Persistent non-recovery failure — stop churning; the next structural
+    // change (or recovery flip) re-triggers a save naturally.
+    return
+  }
+  layoutSaveRetryTimer = setTimeout(() => {
+    layoutSaveRetryTimer = null
+    useTabsStore.getState().persistActiveWorkspace()
+  }, jittered(LAYOUT_SAVE_RETRY_BASE_MS))
+}
+
+/** A save landed — clear the failure streak. */
+function layoutSaveSucceeded(): void {
+  layoutSaveConsecutiveFailures = 0
+}
+
+/** The (former) debounce body of `persistActiveWorkspace`, extracted so
+ *  `flushLayoutPersist` can run it immediately for mutations that must
+ *  hold (0.40.48 — column split/unsplit). Serializes CURRENT state at
+ *  call time; failures re-arm via `rearmLayoutSave`. */
+function saveActiveWorkspaceLayoutNow(): void {
+  if (isLayoutSaveSuppressed()) return
+  const state = useTabsStore.getState()
+  if (!state.activeWorkspaceKey) return
+  if (state.tabs.length === 0 && state.extraGroups.length === 0) return
+
+  const layout = state.serializeCurrentLayout()
+  const key = state.activeWorkspaceKey
+  const [projectId, workspaceId] = key.split(':')
+  if (projectId && workspaceId) {
+    const save = daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
+      projectId,
+      workspaceId,
+      layoutJson: JSON.stringify(layout),
+    }).then((res) => {
+      layoutSaveSucceeded()
+      recordLayoutRevision(key, res?.revision)
+    })
+    // Same self-echo guard as saveLayoutForWorkspace: the broadcast
+    // handler settles this before treating a revision as remote.
+    trackPendingLayoutSave(key, save)
+    save.catch((err) => {
+      console.error('[tabs] Auto-save failed:', err)
+      rearmLayoutSave(err)
+    })
+  }
+}
 
 /** Cancel a pending debounced autosave (see `persistActiveWorkspace`). Used by
  *  the silent remote-reorder adoption path (#676/#677) so a pre-adoption save
@@ -2094,8 +2190,13 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       isV2: boolean
     } | null = null
     try {
-      const raw = await invoke<string>('k2so_heartbeat_active_session', {
-        projectPath,
+      // 0.40.48 host-aware: resolve the live PTY on the ACTIVE host (the
+      // pre-existing /cli/heartbeat/active-session route). The old Tauri
+      // bridge asked THIS Mac's daemon, so clicking a LIVE remote
+      // heartbeat silently fell through to the spawn-fresh path and
+      // opened a duplicate session instead of attaching.
+      const raw = await daemonCliGetText('heartbeat/active-session', {
+        project: projectPath,
         name: heartbeatName,
       })
       active = JSON.parse(raw)
@@ -2145,10 +2246,13 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       // needed.
       let agentName: string | null = null
       try {
-        const agents = await invoke<Array<{
+        // 0.40.48 host-aware: the primary agent must come from the same
+        // host the live PTY runs on (same core fn as the old Tauri
+        // bridge, via the pre-existing /cli/agents/list route).
+        const agents = await daemonCliGet<Array<{
           name: string
           agentType: string
-        }>>('k2so_agents_list', { projectPath }).catch(() => [])
+        }>>('agents/list', { project: projectPath }).catch(() => [])
         agentName = agents.find((a) =>
           a.agentType === 'custom' || a.agentType === 'manager' || a.agentType === 'k2so'
         )?.name ?? agents[0]?.name ?? null
@@ -3180,6 +3284,11 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       extraGroups: newGroups,
       activeGroupIndex: state.splitCount  // focus the new group
     })
+    // 0.40.48: a split must HOLD against a remote host — save immediately
+    // instead of riding the 1s debounce, so a competing TabOrderChanged
+    // can't refetch the pre-split layout while the save is still queued
+    // (and a failed save re-arms instead of silently dropping).
+    get().flushLayoutPersist()
   },
 
   unsplitTerminalArea: () => {
@@ -3214,6 +3323,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         activeGroupIndex: Math.min(state.activeGroupIndex, state.splitCount - 2)
       })
     }
+    // 0.40.48: same immediate-save rationale as splitTerminalArea.
+    get().flushLayoutPersist()
   },
 
   setActiveGroup: (index: number) => {
@@ -3747,8 +3858,12 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // Registered BEFORE the daemon can broadcast the save's
     // `TabOrderChanged`, so the handler's settle step always sees it.
     trackPendingLayoutSave(key, save)
-    save.catch((err) => {
+    save.then(layoutSaveSucceeded).catch((err) => {
       console.error('[tabs] Failed to persist workspace layout:', err)
+      // 0.40.48 durability: a dropped save (recovery gate / tunnel blip)
+      // otherwise leaves the server on a stale layout that the next read
+      // clobbers the live state with. Re-arm like the autosave path.
+      rearmLayoutSave(err)
     })
   },
 
@@ -4449,26 +4564,21 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // Debounced save of the active workspace to DB
     if (persistDebounceTimer) clearTimeout(persistDebounceTimer)
     persistDebounceTimer = setTimeout(() => {
-      if (isLayoutSaveSuppressed()) return
-      const state = get()
-      if (!state.activeWorkspaceKey) return
-      if (state.tabs.length === 0 && state.extraGroups.length === 0) return
-
-      const layout = state.serializeCurrentLayout()
-      const key = state.activeWorkspaceKey
-      const [projectId, workspaceId] = key.split(':')
-      if (projectId && workspaceId) {
-        const save = daemonCliPost<{ success?: boolean; revision?: number }>('workspace-layouts/save', {
-          projectId,
-          workspaceId,
-          layoutJson: JSON.stringify(layout),
-        }).then((res) => recordLayoutRevision(key, res?.revision))
-        // Same self-echo guard as saveLayoutForWorkspace: the broadcast
-        // handler settles this before treating a revision as remote.
-        trackPendingLayoutSave(key, save)
-        save.catch((err) => console.error('[tabs] Auto-save failed:', err))
-      }
+      persistDebounceTimer = null
+      saveActiveWorkspaceLayoutNow()
     }, 1000)
+  },
+
+  flushLayoutPersist: () => {
+    // 0.40.48: structural mutations that MUST hold (column split/unsplit)
+    // save immediately instead of riding the 1s debounce — closes the
+    // window where a competing remote `TabOrderChanged` finds no pending
+    // save to settle against and rebuilds from the pre-mutation layout.
+    if (persistDebounceTimer) {
+      clearTimeout(persistDebounceTimer)
+      persistDebounceTimer = null
+    }
+    saveActiveWorkspaceLayoutNow()
   },
 
   addTabToWorkspace: (workspaceKey: string, cwd: string, options: { title: string; command: string; args: string[] }): string | null => {
@@ -4985,27 +5095,34 @@ function tearDownActiveWorkspaceSubscription(): void {
   }
 }
 
-// ── P3c (D2) — generic API-spawned-sandbox tab adoption ───────────────────
+// ── P3c (D2) — generic API-spawned tab adoption + reaper close ────────────
 //
 // The workspace-scoped `subscribeForActiveWorkspace.onAdded` consumer above
 // only adopts `tab-<paneGroupId>` sessions whose cwd lives under the ACTIVE
-// workspace path. An API-spawned sandbox cell (POST /v1/sandboxes) registers
-// under a host-minted `api-<principal>-<uuid>` agent_name with an EPHEMERAL
-// cwd (`~/.k2/sandbox-sessions/<uuid>`) that matches no registered workspace —
-// so it never reaches that consumer. The daemon DOES forward any absolute-cwd
-// `SessionAdded` to the APP-LEVEL (empty `?path=`) subscriber, which dispatches
-// to the `onSessionAddedApp` registry. This consumer rides that registry so an
-// externally-spawned cell surfaces as an orange cockpit tab in EVERY attached
-// window, regardless of which workspace is in view.
+// workspace path. An API-spawned cell (POST /v1/sandboxes OR host-sessions)
+// registers under a host-minted `api-<principal>-<uuid>` agent_name. Sandbox
+// cells use an EPHEMERAL cwd that matches no registered workspace; host
+// sessions sit in a real workspace path but still use the `api-` namespace
+// (so the `tab-` gate above ignores them). The daemon forwards absolute-cwd
+// `SessionAdded`/`SessionRemoved` to the APP-LEVEL subscriber, which
+// dispatches to `onSessionAddedApp` / `onSessionRemovedApp`.
 //
-// Scope gate: act ONLY on events carrying a real `sandbox_backend` (D1). That
-// keeps this default-OFF and parity-safe — a non-sandbox `SessionAdded` carries
-// `sandbox_backend: undefined` and is ignored here, so normal locally-spawned
-// tabs are untouched (the workspace consumer still owns `tab-` adoption).
+// Scope gate (add): act ONLY on events carrying a `sandbox_backend` label.
+// The daemon stamps that for real sandboxes (`microvm`) AND for the host-
+// sessions family (`host` — see v2_session_map's api- namespace OR). Bare
+// `SessionAdded` with no backend stays default-OFF (workspace consumer owns
+// `tab-` adoption).
+//
+// Scope gate (remove): act ONLY on `api-…` agent names. When the idle
+// sandbox-reaper (or any other path) kills the PTY, ChildExit unregisters
+// the v2 session and emits SessionRemoved. Closing the audit tab here is
+// what makes post-reap resume open a *new* tab: resume reuses the caller's
+// stored session id, and the de-dupe below keys on sessionId — a leftover
+// zombie tab would swallow the new SessionAdded.
 
 /** True when a terminal item attached to (or spawned as) `agentName`, or
  *  carrying `sessionId`, is ALREADY surfaced in any tab across all groups.
- *  The de-dupe guard for API-sandbox adoption: the window that already adopted
+ *  The de-dupe guard for API-spawned adoption: the window that already adopted
  *  this cell (or a re-delivered event) must NOT create a second tab. Mirrors
  *  the AgentChatPane remount-guard's identity check (session_id) + the
  *  `isPaneGroupSurfaced` "already represented" check, matched on the attach
@@ -5033,22 +5150,41 @@ function isApiSandboxSessionSurfaced(
   return false
 }
 
-/** P3c (D2) — adopt an API-spawned sandbox session into a new cockpit tab.
- *  Returns true when a tab was adopted, false when ignored (not a real
- *  sandbox, or already surfaced — the de-dupe). Exported for unit testing.
+/** True when removing the tab is safe under the API-session reaper path.
+ *  Skip pinned/system tabs and any tab that isn't a pure attach to this
+ *  `api-…` agent (splits / agent panes / file viewers keep their own
+ *  lifecycle — same invariant as `tabIsDropCandidateForSessionRemoval`). */
+function tabIsDropCandidateForApiSessionRemoval(tab: Tab, agentName: string): boolean {
+  if (tab.isSystemAgent) return false
+  if (tab.paneGroups.size !== 1) return false
+  const pg = [...tab.paneGroups.values()][0]
+  if (!pg) return false
+  if (pg.items.length === 0) return false
+  for (const item of pg.items) {
+    if (item.type !== 'terminal') return false
+    const d = item.data as TerminalItemData
+    if (d.attachAgentName !== agentName) return false
+  }
+  return true
+}
+
+/** P3c (D2) + host-sessions — adopt an API-spawned session into a new cockpit
+ *  tab. Returns true when a tab was adopted, false when ignored (no backend
+ *  label, or already surfaced — the de-dupe). Exported for unit testing.
  *
  *  The tab carries `attachAgentName = event.agent_name` so when its
  *  `TerminalPane` mounts and issues the idempotent v2/spawn, find-or-spawn
  *  returns the EXISTING daemon session (reused:true) — it ATTACHES via the
- *  grid WS, it does NOT mint a duplicate PTY. `sandbox: true` asks the daemon
- *  to re-echo the backend (belt-and-suspenders), and `sandboxBackend` is
- *  stamped from the event so TabBar lights the D9 orange marker immediately.
- *  The tab is appended WITHOUT switching the active tab — surfacing an
- *  externally-spawned cell must never yank the user off their current tab. */
+ *  grid WS, it does NOT mint a duplicate PTY. Real sandboxes set
+ *  `sandbox: true` (daemon re-echoes the backend); host sessions
+ *  (`sandbox_backend: "host"`) attach without requesting a jail.
+ *  `sandboxBackend` is stamped from the event so TabBar can light the D9
+ *  orange marker for microvm cells. The tab is appended WITHOUT switching
+ *  the active tab — surfacing an externally-spawned cell must never yank
+ *  the user off their current tab. */
 export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
-  // Scope: only adopt REAL sandbox cells. Non-sandbox sessions carry no
-  // `sandbox_backend` and are owned by the workspace-scoped consumer (for
-  // `tab-` sessions) or simply not surfaced — parity-safe default-OFF.
+  // Scope: only adopt API-labelled cells. Daemon stamps sandbox_backend for
+  // real sandboxes (`microvm`) and host-sessions (`host`); bare PTYs omit it.
   const backend = event.sandbox_backend
   if (!backend) return false
   const agentName = event.agent_name
@@ -5056,13 +5192,19 @@ export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
 
   const state = useTabsStore.getState()
   // De-dupe: the spawning/owning window (or a re-delivered event) already has
-  // it — do nothing. Prevents the double-adopt the PRD calls out.
+  // it — do nothing. Prevents the double-adopt the PRD calls out. Post-reap
+  // resume mints a fresh agent_name but reuses the caller's session id; the
+  // reaper-close path below must have dropped the zombie tab first, or this
+  // sessionId match would swallow the new audit surface.
   if (isApiSandboxSessionSurfaced(state, agentName, event.session_id)) return false
 
   // Use a fresh local paneGroup/terminal id — the cell is keyed daemon-side by
   // `attachAgentName`, not by a `tab-`-shaped id, so the local id is purely the
   // pane's own identity for the grid WS attach.
   const paneGroupId = crypto.randomUUID()
+  // `"host"` is the API label for non-sandboxed host sessions — never ask the
+  // daemon to provision a jail on attach. Real backends (e.g. microvm) do.
+  const isRealSandbox = backend !== 'host'
   const tab = buildAdoptedTerminalTab({
     paneGroupId,
     cwd: event.workspace_path || '',
@@ -5070,7 +5212,7 @@ export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
     args: event.args.length > 0 ? event.args : undefined,
     sessionId: event.session_id,
     attachAgentName: agentName,
-    sandbox: true,
+    sandbox: isRealSandbox,
     sandboxBackend: backend,
   })
   // Kessel is the daemon-owned renderer; makeTerminalPaneGroup stamps the
@@ -5081,25 +5223,91 @@ export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
     (firstItem.data as TerminalItemData).renderer = 'kessel'
   }
   console.warn(
-    `[tabs] api-sandbox adoption — surfacing cell agent=${agentName} backend=${backend} as a new tab`,
+    `[tabs] api-session adoption — surfacing agent=${agentName} backend=${backend} as a new tab`,
   )
   useTabsStore.setState((s) => ({ tabs: [...s.tabs, tab] }))
   return true
 }
 
-/** Wire the app-level API-sandbox adoption consumer. Call ONCE at app boot.
- *  Returns an unsubscribe fn. The `onSessionAddedApp` registry is module-level
- *  and survives host switches, so a single registration covers the app
- *  lifetime; on a host switch the new host's app-level WS feeds the same
- *  registry. */
+/** Close cockpit tabs that were surfacing an API-spawned session after the
+ *  daemon reaped / unregistered it. Returns true when at least one tab was
+ *  dropped. Exported for unit testing.
+ *
+ *  Does NOT issue v2/close — the PTY is already dead (reaper `kill()` →
+ *  ChildExit → unregister). Mirrors the workspace-scoped `onRemoved` path
+ *  that only filters tab state. Leaving the zombie tab would block post-reap
+ *  resume adoption (de-dupe keys on sessionId) and strand the user on a dead
+ *  pane while the revived PTY lives under a new `api-…` agent_name. */
+export function dropApiSpawnedSession(event: SessionRemovedEvent): boolean {
+  const agentName = event.agent_name
+  // Scope: only the host-minted `api-…` namespace (sandbox cells + host
+  // sessions). Workspace `tab-` removals stay on the workspace consumer.
+  if (!agentName || !agentName.startsWith('api-')) return false
+
+  const state = useTabsStore.getState()
+  const droppedFromMain = state.tabs.filter(
+    (t) => !tabIsDropCandidateForApiSessionRemoval(t, agentName),
+  )
+  const newExtraGroups = state.extraGroups.map((g) => ({
+    tabs: g.tabs.filter((t) => !tabIsDropCandidateForApiSessionRemoval(t, agentName)),
+    activeTabId: g.activeTabId,
+  }))
+  const mainDelta = state.tabs.length - droppedFromMain.length
+  const extraDelta = state.extraGroups.reduce(
+    (n, g, i) => n + (g.tabs.length - newExtraGroups[i].tabs.length),
+    0,
+  )
+  if (mainDelta === 0 && extraDelta === 0) return false
+
+  let newActiveId = state.activeTabId
+  if (newActiveId && !droppedFromMain.find((t) => t.id === newActiveId)) {
+    const stillExists = newExtraGroups.some((g) =>
+      g.tabs.find((t) => t.id === newActiveId),
+    )
+    if (!stillExists) {
+      newActiveId = droppedFromMain[0]?.id ?? null
+    }
+  }
+  console.warn(
+    `[tabs] api-session removed — closed ${mainDelta + extraDelta} audit tab(s) for agent=${agentName}`,
+  )
+  useTabsStore.setState({
+    tabs: droppedFromMain,
+    activeTabId: newActiveId,
+    extraGroups: newExtraGroups.map((g) => ({
+      tabs: g.tabs,
+      activeTabId: g.tabs.find((t) => t.id === g.activeTabId)
+        ? g.activeTabId
+        : g.tabs[0]?.id ?? null,
+    })),
+  })
+  return true
+}
+
+/** Wire the app-level API-session adoption + reaper-close consumers. Call
+ *  ONCE at app boot. Returns an unsubscribe fn. The registries are
+ *  module-level and survive host switches, so a single registration covers
+ *  the app lifetime; on a host switch the new host's app-level WS feeds the
+ *  same registries. */
 export function initApiSandboxTabAdoption(): UnsubscribeFn {
-  return onSessionAddedApp((event) => {
+  const offAdded = onSessionAddedApp((event) => {
     try {
       adoptApiSandboxSession(event)
     } catch (err) {
-      console.warn('[tabs] api-sandbox adoption failed:', err)
+      console.warn('[tabs] api-session adoption failed:', err)
     }
   })
+  const offRemoved = onSessionRemovedApp((event) => {
+    try {
+      dropApiSpawnedSession(event)
+    } catch (err) {
+      console.warn('[tabs] api-session drop failed:', err)
+    }
+  })
+  return () => {
+    offAdded()
+    offRemoved()
+  }
 }
 
 /** Browser-pane arc (0.40.34) — wire the app-level `open_url` consumer:

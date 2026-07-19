@@ -25,6 +25,8 @@ import { getDaemonWs, invalidateDaemonWs, daemonWsBase, type DaemonWsAvailable }
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { useActiveStore } from '@/stores/active'
 import { serverSupports } from '@/lib/server-capabilities'
+import { useConnectHostStore } from '@/stores/connect-host'
+import { jittered } from '@/lib/backoff'
 
 // ── Wire types ───────────────────────────────────────────────────────────
 
@@ -69,6 +71,13 @@ export interface HelloEvent {
   kind: 'hello'
   workspace_path: string
   subscriber_id: number
+  /** 0.40.48 (optional — older daemons omit it): the daemon's per-boot
+   *  instance id, snake_case on the WS wire (`instance_id`; the HTTP
+   *  /boot-status carries the camelCase `instanceId`). Restart DETECTION
+   *  is owned by ConnectionGate's boot-status health poll — consumers here
+   *  already re-snapshot on every hello, which covers the restart case —
+   *  so this is currently informational/wire-documenting only. */
+  instance_id?: string
 }
 
 /**
@@ -348,6 +357,56 @@ export type UnsubscribeFn = () => void
 const INITIAL_BACKOFF_MS = 500
 const MAX_BACKOFF_MS = 5_000
 
+// ── Remote-recovery hold (0.40.48) ──────────────────────────────────────
+//
+// While the ACTIVE remote host is in a non-'connected' recovery state
+// (ConnectionGate's health poll owns that verdict — down / booting /
+// re-authing / wedged pool), a timed WS reconnect attempt CANNOT succeed;
+// it just adds to the retry storm that hammered the tunnel edge in the
+// 0.40.48 incident (three reconnect loops × un-jittered backoff). Instead
+// of a timer, the factories below park on a store subscription and
+// reconnect IMMEDIATELY when recovery lands back on 'connected' (the gate
+// flips it after a confirmed-healthy /boot-status + session probe, so the
+// daemon is genuinely ready for the WS upgrade). Local host: never blocked
+// — `recovery` is meaningless while activeHost === 'local'.
+
+/** Is the active host a remote that ConnectionGate says is recovering? */
+function remoteRecoveryBlocked(): boolean {
+  const s = useConnectHostStore.getState()
+  return s.activeHost !== 'local' && s.recovery.kind !== 'connected'
+}
+
+/**
+ * Fire `onRecovered` ONCE, as soon as the active host is no longer a
+ * recovering remote (push-style — a store subscription, nothing polls or
+ * spins). Also re-checks synchronously to cover the race where recovery
+ * completed between the caller's `remoteRecoveryBlocked()` check and this
+ * subscription (setRecovery dedupes same-kind writes, so a missed flip
+ * would otherwise never re-notify). Returns a cancel fn.
+ *
+ * Exported (0.40.48): the tabs store's layout-save durability re-arm parks
+ * on the same signal, so a split/reorder saved during a recovery window
+ * flushes the moment the host is back instead of being silently dropped.
+ */
+export function onceRecovered(onRecovered: () => void): () => void {
+  let done = false
+  const fire = (): void => {
+    if (done) return
+    done = true
+    unsub()
+    onRecovered()
+  }
+  const check = (s: ReturnType<typeof useConnectHostStore.getState>): void => {
+    if (s.activeHost === 'local' || s.recovery.kind === 'connected') fire()
+  }
+  const unsub = useConnectHostStore.subscribe(check)
+  check(useConnectHostStore.getState())
+  return () => {
+    done = true
+    unsub()
+  }
+}
+
 // ── Public API ───────────────────────────────────────────────────────────
 
 /** Subscribe to daemon session lifecycle events for one workspace.
@@ -364,6 +423,8 @@ export function subscribeToWorkspaceSessionEvents(
 ): UnsubscribeFn {
   let socket: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  // 0.40.48: cancel fn for a pending recovery-hold (see onceRecovered).
+  let recoveryWait: (() => void) | null = null
   let backoffMs = INITIAL_BACKOFF_MS
   let stopped = false
 
@@ -372,12 +433,30 @@ export function subscribeToWorkspaceSessionEvents(
       clearTimeout(reconnectTimer)
       reconnectTimer = null
     }
+    if (recoveryWait !== null) {
+      recoveryWait()
+      recoveryWait = null
+    }
   }
 
   const scheduleReconnect = (): void => {
     if (stopped) return
     clearReconnect()
-    const delay = backoffMs
+    // 0.40.48: a recovering remote can't accept the upgrade — park on the
+    // recovery state instead of burning timed attempts, and reconnect
+    // immediately (fresh backoff) the moment the gate says 'connected'.
+    if (remoteRecoveryBlocked()) {
+      recoveryWait = onceRecovered(() => {
+        recoveryWait = null
+        if (stopped) return
+        backoffMs = INITIAL_BACKOFF_MS
+        void openSocket()
+      })
+      return
+    }
+    // Jitter (0.40.48): decorrelate the reconnect loops so parallel
+    // subscribers don't retry in lockstep after a shared drop.
+    const delay = jittered(backoffMs)
     backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS)
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
@@ -404,7 +483,9 @@ export function subscribeToWorkspaceSessionEvents(
    */
   const triggerReconnect = (): void => {
     if (stopped) return
-    if (reconnectTimer !== null) return
+    // Idempotent: a pending timer OR a pending recovery-hold means a
+    // reconnect is already on its way (the onerror→onclose double-fire).
+    if (reconnectTimer !== null || recoveryWait !== null) return
     scheduleReconnect()
   }
 
@@ -835,6 +916,8 @@ function dispatchAppEvent(msg: SessionEventMessage): void {
 export function subscribeToActiveState(): UnsubscribeFn {
   let socket: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  // 0.40.48: cancel fn for a pending recovery-hold (see onceRecovered).
+  let recoveryWait: (() => void) | null = null
   let backoffMs = INITIAL_BACKOFF_MS
   let stopped = false
 
@@ -843,12 +926,30 @@ export function subscribeToActiveState(): UnsubscribeFn {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
     }
+    if (recoveryWait !== null) {
+      recoveryWait()
+      recoveryWait = null
+    }
   }
 
   const scheduleReconnect = (): void => {
     if (stopped) return
     clearReconnect()
-    const delay = backoffMs
+    // 0.40.48: a recovering remote can't accept the upgrade — park on the
+    // recovery state instead of burning timed attempts, and reconnect
+    // immediately (fresh backoff) the moment the gate says 'connected'.
+    if (remoteRecoveryBlocked()) {
+      recoveryWait = onceRecovered(() => {
+        recoveryWait = null
+        if (stopped) return
+        backoffMs = INITIAL_BACKOFF_MS
+        void openSocket()
+      })
+      return
+    }
+    // Jitter (0.40.48): decorrelate the reconnect loops so parallel
+    // subscribers don't retry in lockstep after a shared drop.
+    const delay = jittered(backoffMs)
     backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS)
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
@@ -858,7 +959,9 @@ export function subscribeToActiveState(): UnsubscribeFn {
 
   const triggerReconnect = (): void => {
     if (stopped) return
-    if (reconnectTimer !== null) return
+    // Idempotent: a pending timer OR a pending recovery-hold means a
+    // reconnect is already on its way (the onerror→onclose double-fire).
+    if (reconnectTimer !== null || recoveryWait !== null) return
     scheduleReconnect()
   }
 
@@ -1024,6 +1127,8 @@ export function subscribeToWorkspaceTabEvents(
 ): UnsubscribeFn {
   let socket: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  // 0.40.48: cancel fn for a pending recovery-hold (see onceRecovered).
+  let recoveryWait: (() => void) | null = null
   let backoffMs = INITIAL_BACKOFF_MS
   let stopped = false
 
@@ -1032,12 +1137,30 @@ export function subscribeToWorkspaceTabEvents(
       clearTimeout(reconnectTimer)
       reconnectTimer = null
     }
+    if (recoveryWait !== null) {
+      recoveryWait()
+      recoveryWait = null
+    }
   }
 
   const scheduleReconnect = (): void => {
     if (stopped) return
     clearReconnect()
-    const delay = backoffMs
+    // 0.40.48: a recovering remote can't accept the upgrade — park on the
+    // recovery state instead of burning timed attempts, and reconnect
+    // immediately (fresh backoff) the moment the gate says 'connected'.
+    if (remoteRecoveryBlocked()) {
+      recoveryWait = onceRecovered(() => {
+        recoveryWait = null
+        if (stopped) return
+        backoffMs = INITIAL_BACKOFF_MS
+        void openSocket()
+      })
+      return
+    }
+    // Jitter (0.40.48): decorrelate the reconnect loops so parallel
+    // subscribers don't retry in lockstep after a shared drop.
+    const delay = jittered(backoffMs)
     backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS)
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
@@ -1047,7 +1170,9 @@ export function subscribeToWorkspaceTabEvents(
 
   const triggerReconnect = (): void => {
     if (stopped) return
-    if (reconnectTimer !== null) return
+    // Idempotent: a pending timer OR a pending recovery-hold means a
+    // reconnect is already on its way (the onerror→onclose double-fire).
+    if (reconnectTimer !== null || recoveryWait !== null) return
     scheduleReconnect()
   }
 

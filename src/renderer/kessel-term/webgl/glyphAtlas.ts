@@ -82,6 +82,13 @@ export interface GlyphSource {
    *  row slabs referencing old coordinates must be dropped. Growth
    *  does NOT bump it (coordinates survive re-blitting). */
   readonly epoch: number
+  /** True when the page can no longer GROW — the next overflow
+   *  CLEARS it (epoch bump, every cached slab invalidated).
+   *  Speculative work (prewarm) checks this and stops rasterizing
+   *  new glyphs rather than risk wiping the live window's slabs
+   *  (audit finding: prewarm-induced clear = self-inflicted
+   *  full-window rebuild on the next paint). */
+  readonly nearCapacity?: boolean
   get(
     text: string,
     bold: boolean,
@@ -143,6 +150,10 @@ export class GlyphAtlas implements GlyphSource {
 
   get size(): number {
     return this.layout.size
+  }
+
+  get nearCapacity(): boolean {
+    return this.layout.size >= ATLAS_MAX_SIZE
   }
 
   get glyphCount(): number {

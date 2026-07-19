@@ -71,20 +71,40 @@ pub struct LocalRoster {
 }
 
 /// Build the local roster projection: every registered workspace that has a
-/// CONFIGURED agent. Read-only (DB + name resolution); spawns nothing.
+/// CONFIGURED agent **and** is willing to accept federated contact.
 ///
-/// Fail-closed exposure: a workspace whose agent does not resolve
-/// ([`resolve_agent_name`](crate::workspace::agent_identity::resolve_agent_name)
-/// → `None`) is simply NOT listed — discovery is opt-in by configuration.
+/// Exposure rules (fail-closed):
+/// 1. Workspace must have a resolvable agent name (configuration opt-in).
+/// 2. Contact permission:
+///    - App master **"Let remote users message agents"** ON → all configured
+///      agents are listed; OR
+///    - Master OFF → only workspaces with **per-workspace Remote Access**
+///      (`allow_remote_instruct`) OR **Allow agents to create connections**
+///      for this workspace (`agents_can_create_connections`) ON.
+///
+/// Read-only (DB + name resolution); spawns nothing.
 pub fn build_local_roster() -> LocalRoster {
     let mut agents = Vec::new();
+    let master_remote = crate::app_settings::load().allow_remote_instruct;
     let projects = crate::projects_ops::projects_list().unwrap_or_default();
     for p in projects {
+        if !master_remote {
+            let ws_remote =
+                crate::workspace::settings::get_allow_remote_instruct(&p.path);
+            let ws_conn =
+                crate::workspace::settings::agents_can_create_connections_for_path(&p.path);
+            if !ws_remote && !ws_conn {
+                continue;
+            }
+        }
         if let Some(agent) = crate::workspace::agent_identity::resolve_agent_name(&p.path) {
             let agent = agent.trim().to_string();
             if agent.is_empty() {
                 continue;
             }
+            // Agent label is lowercased so federated handles stay
+            // canonical (`argus::host`, never `Argus::host`).
+            let agent = agent.to_ascii_lowercase();
             agents.push(RosterAgent {
                 address: format!("{}::{}", p.id, agent),
                 workspace_id: p.id,
@@ -248,8 +268,16 @@ mod tests {
     fn build_local_roster_lists_configured_agents_only() {
         crate::db::init_for_tests();
         // A configured workspace (agent_enabled=1) and an unconfigured one.
+        // Per-workspace Remote Access opts the configured one into the roster
+        // (master allow_remote_instruct may be off in tests).
         let conf_path = unique_ws_path("conf");
         let conf_id = insert_project("roster-conf", &conf_path, 1);
+        crate::workspace::settings::update_project_setting(
+            &conf_path,
+            "allow_remote_instruct",
+            "1",
+        )
+        .expect("opt conf into remote contact");
         let bare_path = unique_ws_path("bare");
         let bare_id = insert_project("roster-bare", &bare_path, 0);
 
@@ -264,8 +292,8 @@ mod tests {
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .into_owned();
-        assert_eq!(conf.agent, expected_agent);
+            .to_ascii_lowercase();
+        assert_eq!(conf.agent, expected_agent.to_ascii_lowercase());
         assert_eq!(conf.address, format!("{conf_id}::{expected_agent}"));
         assert_eq!(conf.workspace_name, "roster-conf");
         // The unconfigured workspace is NOT exposed (opt-in by configuration).
@@ -273,6 +301,23 @@ mod tests {
             roster.agents.iter().all(|a| a.workspace_id != bare_id),
             "an unconfigured workspace must not appear in the roster"
         );
+    }
+
+    #[test]
+    fn build_local_roster_hides_agents_without_contact_permission() {
+        // Isolate HOME so a developer's real ~/.k2/settings.json
+        // (which may have allow_remote_instruct on) can't leak into the filter.
+        with_temp_home(|| {
+            crate::db::init_for_tests();
+            let conf_path = unique_ws_path("noremote");
+            let conf_id = insert_project("roster-noremote", &conf_path, 1);
+            // Master default off; no per-workspace flags → must be hidden.
+            let roster = build_local_roster();
+            assert!(
+                roster.agents.iter().all(|a| a.workspace_id != conf_id),
+                "workspace without remote contact permission must be hidden"
+            );
+        });
     }
 
     // ── peer-authenticated GET ────────────────────────────────────────

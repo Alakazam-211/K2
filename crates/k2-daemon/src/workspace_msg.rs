@@ -315,12 +315,11 @@ pub fn resolve_workspace(token: &str) -> Option<String> {
 /// - Empty `from` defaults to `external` (defense in depth; CLI should
 ///   already do this auto-derive, but we never let an empty prefix
 ///   reach the recipient).
+/// - UUID-shaped `from` (passport / `projects.id`) is rewritten to the
+///   agent display name before framing — last-mile guard so `k2 msg` /
+///   `k2 talk` never inject `[from <uuid>]` into a chat.
 pub fn format_message(from: &str, text: &str, command: &str) -> String {
-    let sender = if from.trim().is_empty() {
-        "external"
-    } else {
-        from
-    };
+    let sender = humanize_chat_from(from, "external");
     let command = command.trim();
     if command.is_empty() {
         format!("[from {sender}] {text}")
@@ -342,8 +341,50 @@ pub fn format_message(from: &str, text: &str, command: &str) -> String {
 /// - It has no `command` slash-prefix branch (the composer never sends
 ///   slash-commands; that surface is `k2 msg`/`--command` only).
 pub fn format_message_user(from: &str, text: &str) -> String {
-    let sender = if from.trim().is_empty() { "owner" } else { from };
+    let sender = humanize_chat_from(from, "owner");
     format!("[from {sender}] {text}")
+}
+
+/// Last-mile chat attribution: never put a bare project/passport UUID
+/// into the `[from …]` prefix. `k2 msg` / `k2 talk` (and any other
+/// caller) may still hand us a UUID from a scoped stamp or CLI
+/// mis-derive — resolve it to the agent display name when possible.
+fn humanize_chat_from(from: &str, empty_fallback: &str) -> String {
+    let trimmed = from.trim();
+    if trimmed.is_empty() {
+        return empty_fallback.to_string();
+    }
+    if !is_uuid_shape(trimmed) {
+        return trimmed.to_string();
+    }
+    // Passport / projects.id → human label.
+    if let Some(path) = resolve_workspace(trimmed) {
+        let name = k2_core::workspace::display::agent_display_name(&path);
+        if !name.trim().is_empty() && !is_uuid_shape(name.trim()) {
+            return name;
+        }
+        if let Some(base) = Path::new(&path)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.trim().is_empty() && !is_uuid_shape(s.trim()))
+        {
+            return base;
+        }
+    }
+    // Unresolvable passport — still never emit the raw UUID into chat.
+    empty_fallback.to_string()
+}
+
+fn is_uuid_shape(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b[8] == b'-'
+        && b[13] == b'-'
+        && b[18] == b'-'
+        && b[23] == b'-'
+        && s.bytes()
+            .enumerate()
+            .all(|(i, c)| matches!(i, 8 | 13 | 18 | 23) || c.is_ascii_hexdigit())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -508,6 +549,20 @@ const WAKE_MIN_SETTLE: Duration = Duration::from_millis(400);
 /// Issue #9 — poll cadence while waiting for the woken session to become
 /// ready.
 const WAKE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Post-wake quiescence: poll cadence for the "screen stopped changing"
+/// settle that runs AFTER the bracketed-paste ready signal, before the
+/// inject.
+const WAKE_QUIESCE_POLL: Duration = Duration::from_millis(120);
+
+/// Post-wake quiescence: how long the visible grid must stay unchanged
+/// before we treat the woken TUI as settled (resumed-transcript replay
+/// AND composer repaint both done). claude flips `?2004h` while it is
+/// still finalizing a resumed conversation's render, so the ready signal
+/// alone lands the paste in a pre-final frame that the repaint then wipes
+/// — an idle composer's grid is stable, a mid-replay one is not, so a
+/// short stability window distinguishes them.
+const WAKE_QUIESCE_STABLE: Duration = Duration::from_millis(360);
 
 // ─────────────────────────────────────────────────────────────────────
 // Public entry — `deliver_live` (retry-wrapped)
@@ -1098,15 +1153,14 @@ pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgR
 /// composer/`k2 msg` and can never splice keystrokes (D1/D2/D5) or land on an
 /// open grok permission gate.
 ///
-/// `wait_ready > 0` polls the bracketed-paste readiness signal (the same one
-/// [`deliver_post_wake`] uses) up to the deadline before injecting —
-/// best-effort past the ceiling, never dropped. Zero means "the session is
-/// already interactive, inject now" (the message-live route). Returns `true`
-/// iff the payload was delivered into a live PTY.
+/// `wait_ready > 0` uses the same path as `k2 msg` post-wake
+/// ([`deliver_post_wake`] via [`inject_raw_into_session_with_profile`]).
+/// Zero means inject immediately (no settle/quiescence).
 ///
-/// Readiness dialect: the claude-shaped default (poll bracketed paste).
-/// Spawn-path callers that know the spawned agent's profile use
-/// [`inject_raw_into_session_with_profile`] instead.
+/// Default profile = claude-shaped. Prefer
+/// [`inject_raw_into_session_with_profile`] when the workspace agent is known
+/// (host-sessions always does).
+#[allow(dead_code)] // public host-inject API; in-tree callers use with_profile
 pub fn inject_raw_into_session(
     session_id: &SessionId,
     payload: &str,
@@ -1124,19 +1178,17 @@ pub fn inject_raw_into_session(
 /// [`k2_core::workspace::provider_resume::InjectionProfile`], resolved by
 /// the caller through the ONE shared precedence chain
 /// (`provider_resume::resolve_injection_profile`: preset-declared
-/// `readiness` metadata → static provider table → default):
+/// `readiness` metadata → static provider table → default).
 ///
-/// - `ready_via_bracketed_paste == true` — today's behavior exactly: poll
-///   `bracketed_paste_active()` up to `wait_ready`, then inject
-///   best-effort (claude/grok/cursor + every unknown agent).
-/// - `ready_via_bracketed_paste == false` — ?2004h LIES for this agent
-///   (codex/gemini/pi/hermes assert it while their startup dialogs still
-///   EAT injected text): skip the poll and wait the profile's settle
-///   floor instead, CAPPED by the `wait_ready` ceiling (the caller's
-///   env-tunable deadline governs either dialect).
+/// **Same shape as `k2 msg` dormant-wake** ([`deliver_post_wake`]): when
+/// `wait_ready > 0` this is a thin lookup + call into that path —
+/// min settle → readiness dialect → **screen quiescence** → locked
+/// inject. Do not re-implement readiness here; wake-path fixes (e.g.
+/// quiescence for early `?2004h`) must land once.
 ///
-/// `wait_ready == 0` injects immediately regardless of profile (the
-/// session is already interactive — message-live / resume-of-live).
+/// `wait_ready == 0` injects immediately (legacy "already interactive"
+/// shortcut). Prefer a non-zero ceiling for host-session follow-ups so
+/// mid-turn / mid-repaint pastes still go through quiescence.
 pub fn inject_raw_into_session_with_profile(
     session_id: &SessionId,
     payload: &str,
@@ -1146,39 +1198,14 @@ pub fn inject_raw_into_session_with_profile(
     let Some(live) = session_lookup::lookup_by_session_id(session_id) else {
         return false;
     };
-    if !wait_ready.is_zero() {
-        if profile.ready_via_bracketed_paste {
-            let start = std::time::Instant::now();
-            loop {
-                if !live.is_child_alive() {
-                    return false;
-                }
-                if live.bracketed_paste_active() {
-                    break;
-                }
-                if start.elapsed() >= wait_ready {
-                    // Best-effort past the ceiling (bounded, never blocks
-                    // forever) rather than dropping the prompt —
-                    // deliver_post_wake parity.
-                    log_debug!(
-                        "[v1-host/inject] session={} readiness wait hit {}ms ceiling — injecting best-effort",
-                        session_id,
-                        wait_ready.as_millis()
-                    );
-                    break;
-                }
-                std::thread::sleep(WAKE_POLL_INTERVAL);
-            }
-        } else {
-            // Non-polling profile: the settle floor IS the readiness wait
-            // (deliver_post_wake parity), bounded by the caller's ceiling.
-            std::thread::sleep(profile.post_spawn_settle.min(wait_ready));
-            if !live.is_child_alive() {
-                return false;
-            }
-        }
+    if wait_ready.is_zero() {
+        return matches!(inject_and_submit(&live, payload), InjectOutcome::Delivered);
     }
-    matches!(inject_and_submit(&live, payload), InjectOutcome::Delivered)
+    // Single chokepoint with k2 msg post-wake (Issue #9 + d8f80db quiescence).
+    matches!(
+        deliver_post_wake(&live, payload, wait_ready, profile),
+        InjectOutcome::Delivered
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1317,10 +1344,81 @@ fn deliver_post_wake(
         // Non-polling provider: the settle above WAS the readiness wait.
         return InjectOutcome::PtyDied;
     }
+
+    // Quiescence gate. The bracketed-paste ready signal (`?2004h`) is set
+    // by claude WHILE it is still finalizing a resumed transcript's render:
+    // a resume of a large conversation flips it early, then repaints the
+    // composer and discards any text pasted into that pre-final frame — the
+    // message was reported Delivered but silently dropped (dormant-wake
+    // delivery black hole, confirmed via grid capture: 0/45 frames + never
+    // in the recipient's transcript). Before injecting, wait for the woken
+    // TUI's visible grid to stop changing, so the replay + repaint are both
+    // done and the paste lands in the same settled, idle input box that live
+    // delivery injects into successfully. A child that exits while we wait
+    // is a real `pty_died`; a stable screen OR the wake_timeout ceiling both
+    // proceed to inject.
+    if let InjectOutcome::PtyDied = wait_for_screen_quiescence(live, start, wake_timeout) {
+        return InjectOutcome::PtyDied;
+    }
+
     // D7: post-wake delivery funnels through the SAME locked
     // `inject_and_submit` as live sends, so the just-woken session's
     // injection serializes against a concurrent human composer.
     inject_and_submit(live, payload)
+}
+
+/// Block until the just-woken TUI's visible grid stops changing — the
+/// resumed-transcript stream has ended AND the composer has repainted —
+/// so a subsequent inject lands in a stable idle input box rather than a
+/// pre-final frame a repaint will wipe (see [`deliver_post_wake`]).
+///
+/// Returns [`InjectOutcome::PtyDied`] if the child exits while waiting.
+/// Otherwise returns [`InjectOutcome::Delivered`] purely as a "safe to
+/// inject now" signal (screen settled, or the `wake_timeout` ceiling hit) —
+/// the caller performs the real injection next in either case.
+///
+/// An idle claude composer's grid is static (verified: 45 identical frames
+/// across ~14s of idle), so the stability window reliably fires shortly
+/// after the replay ends; a still-streaming screen keeps resetting it.
+fn wait_for_screen_quiescence(
+    live: &session_lookup::LiveSession,
+    start: std::time::Instant,
+    wake_timeout: Duration,
+) -> InjectOutcome {
+    let mut last: Option<Vec<String>> = None;
+    let mut stable_since: Option<std::time::Instant> = None;
+    loop {
+        if !live.is_child_alive() {
+            return InjectOutcome::PtyDied;
+        }
+        let rows = live.visible_text_rows();
+        let now = std::time::Instant::now();
+        match &last {
+            // Unchanged since the last poll — has it been quiet long enough?
+            Some(prev) if *prev == rows => {
+                let quiet_for = stable_since
+                    .map(|s| now.duration_since(s))
+                    .unwrap_or_default();
+                if quiet_for >= WAKE_QUIESCE_STABLE {
+                    return InjectOutcome::Delivered;
+                }
+            }
+            // Changed (still streaming/repainting) — reset the stability clock.
+            _ => {
+                stable_since = Some(now);
+                last = Some(rows);
+            }
+        }
+        if start.elapsed() >= wake_timeout {
+            log_debug!(
+                "[msg/wake] session={} quiescence wait hit {}ms ceiling — injecting best-effort",
+                live.session_id(),
+                wake_timeout.as_millis()
+            );
+            return InjectOutcome::Delivered;
+        }
+        std::thread::sleep(WAKE_QUIESCE_POLL);
+    }
 }
 
 /// Issue #9 wake (branches 2+3), Slice-3b rewired. Spawns the
@@ -1491,6 +1589,19 @@ fn wake_and_fire(
         }
     }
 
+    // The wake IS an activation (#672 invariant: opening/attaching a
+    // workspace chat activates it). Bar membership itself derives from
+    // live-session PRESENCE (the broadcast unions live sessions in),
+    // so the spawn above already re-adds the workspace on the next
+    // broadcast — the interaction bump here is for the REAPER's aging
+    // window, so it doesn't close the freshly-woken session
+    // mid-conversation (pre-fix it armed grace on the next tick), and
+    // the suppression clear lifts a pending dismiss (a wake means the
+    // workspace is wanted back).
+    let _ = k2_core::projects_ops::projects_touch_interaction(project_id);
+    crate::active_reaper::clear_dismiss_suppression(project_id);
+    crate::active_reaper::recompute_and_broadcast_active();
+
     // Self-minting provider (pi/codex/gemini/cursor): adopt the session
     // id the agent creates on disk a beat after spawn, stamping
     // `workspace_sessions.session_id` + `harness` (Slice 3b).
@@ -1613,6 +1724,22 @@ mod tests {
         assert_eq!(
             format_message("sms-bridge", "ping", ""),
             "[from sms-bridge] ping"
+        );
+    }
+
+    #[test]
+    fn format_message_never_emits_raw_passport_uuid() {
+        // Even when callers stamp projects.id as `from`, chat must not
+        // show the UUID. Unresolvable ids fall back to "external".
+        let uuid = "ee29d27a-4240-4f19-9433-6ed98da6f5a5";
+        let out = format_message(uuid, "hello", "");
+        assert!(
+            !out.contains(uuid),
+            "must not put passport uuid in chat prefix: {out}"
+        );
+        assert!(
+            out.starts_with("[from "),
+            "must still frame a from prefix: {out}"
         );
     }
 

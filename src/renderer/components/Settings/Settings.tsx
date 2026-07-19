@@ -22,7 +22,6 @@ import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSecti
 // confused with ProjectsSection above, the LEGACY workspaces section
 // (id 'projects', label "Workspaces").
 import ProjectGroupSettings from '../Projects/ProjectSettings'
-import { WorkspaceStatesSection, WORKSPACE_STATES_MANIFEST } from './sections/WorkspaceStatesSection'
 import { AgentSkillsSection, AGENT_SKILLS_MANIFEST } from './sections/AgentSkillsSection'
 // HeartbeatsPanel is rendered inline inside ProjectsSection now; manifest
 // stays exported from HeartbeatsSection so searches still find it.
@@ -38,7 +37,6 @@ const SECTIONS: { id: SettingsSection; label: string; agenticOnly?: boolean }[] 
   { id: 'general', label: 'General' },
   { id: 'styles', label: 'Styles' },
   { id: 'projects', label: 'Workspaces' },
-  { id: 'workspace-states', label: 'Workspace States', agenticOnly: true },
   { id: 'agent-skills', label: 'Canonical Agent Flow', agenticOnly: true },
   { id: 'project-groups', label: 'Projects' },
   { id: 'k2-connect', label: 'K2 Connect' },
@@ -85,7 +83,6 @@ export default function Settings(): React.JSX.Element {
       ...GENERAL_MANIFEST,
       ...STYLES_MANIFEST,
       ...PROJECTS_MANIFEST,
-      ...WORKSPACE_STATES_MANIFEST,
       ...AGENT_SKILLS_MANIFEST,
       ...HEARTBEATS_MANIFEST,
       ...TERMINAL_MANIFEST,
@@ -105,7 +102,6 @@ export default function Settings(): React.JSX.Element {
     if (agenticEnabled) return combined
     return combined.filter(
       (e) =>
-        e.section !== 'workspace-states' &&
         e.section !== 'agent-skills' &&
         e.section !== 'heartbeats' &&
         e.section !== 'wake-scheduler'
@@ -317,11 +313,6 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'email-link' && (
           <SectionErrorBoundary>
             <EmailLinkSection />
-          </SectionErrorBoundary>
-        )}
-        {activeSection === 'workspace-states' && (
-          <SectionErrorBoundary>
-            <WorkspaceStatesSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'agent-skills' && (

@@ -143,6 +143,66 @@ export function updatePhaseCopy(
   }
 }
 
+/**
+ * Copy for the comeback watcher's RESOLVED state (0.40.48 remote-update
+ * ergonomics). `restarting` used to be a dead end: the status poll stops
+ * (the host is going away) and the row said "Installing & restarting …
+ * it'll reconnect automatically." FOREVER — even long after the reconnect
+ * succeeded. The row now polls the host's public /boot-status after
+ * `restarting`/`done` and lands here when `phase === 'ready'`:
+ *   - back on the EXPECTED version → plain success;
+ *   - back on a DIFFERENT version → says so (the update may have rolled
+ *     back server-side — never claim success we didn't verify);
+ *   - version unreadable (older daemon omits it) → success without a number.
+ */
+export function updateCompleteCopy(
+  hostLabel: string,
+  expected: string | undefined,
+  bootVersion: string | undefined,
+): string {
+  if (bootVersion && expected && bootVersion !== expected) {
+    return `${hostLabel} is back — but on v${bootVersion}, not v${expected}. The update may have rolled back.`
+  }
+  const v = bootVersion ?? expected
+  return v
+    ? `${hostLabel} updated to v${v} and reconnected.`
+    : `${hostLabel} is back and reconnected.`
+}
+
+/** Copy while the comeback watcher has waited past its soft deadline —
+ *  honest "still working on it", not a spinner and not a false failure. */
+export function updateSlowComebackCopy(hostLabel: string): string {
+  return `${hostLabel} is taking longer than expected to come back — it may still be installing. Still watching…`
+}
+
+/**
+ * The comeback watcher's RESOLUTION RULE (pure, unit-tested — the Baden
+ * false-rollback bug): during an update the OLD daemon keeps answering
+ * /boot-status `ready` right up until the process actually swaps
+ * (bundled-app hosts especially — the Tauri updater downloads for a while
+ * before relaunching). Resolving on the FIRST `ready` therefore reads the
+ * PRE-update daemon and mis-reports "rolled back to <old>" for an update
+ * that succeeds seconds later.
+ *
+ * Resolve ONLY when there's evidence the restart actually happened:
+ *   - the reported version EQUALS the expected one (the update took), OR
+ *   - the watcher saw the host go DOWN at least once (`sawDown`) and it's
+ *     now back `ready` — whatever version it reports is then the honest
+ *     post-restart truth (a real rollback surfaces here).
+ * A `ready` probe with neither is the old daemon still running: keep
+ * watching.
+ */
+export function shouldResolveComeback(args: {
+  phase: string | undefined
+  version: string | undefined
+  expected: string | undefined
+  sawDown: boolean
+}): boolean {
+  if (args.phase !== 'ready') return false
+  if (args.version && args.expected && args.version === args.expected) return true
+  return args.sawDown
+}
+
 /** Copy for the "Update available — <current> → <latest>" banner once a
  *  check reports `available`. NAMES the host. */
 export function updateAvailableCopy(

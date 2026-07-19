@@ -19,6 +19,7 @@
 // `components/common/HeartbeatSessionPicker.tsx`.
 
 import { invoke } from '@tauri-apps/api/core'
+import { daemonCliGet } from '@/lib/daemon-cli'
 
 export type HeartbeatDeliveryMode = 'pinned' | 'auto' | 'session'
 
@@ -101,31 +102,62 @@ export function selectableSessions(
     .sort((a, b) => b.timestamp - a.timestamp)
 }
 
-/** Persist a heartbeat's delivery target through the thin Tauri bridge
- *  (`k2so_heartbeat_set_session` → daemon `/cli/heartbeat/set-session`).
- *  The daemon answers `{"success":true,…}` or `{"error":"…"}` — a
- *  non-2xx rejects the invoke, and a 2xx body carrying `error` is
- *  raised too so callers have exactly one failure path to revert on. */
+/** Persist a heartbeat's delivery target.
+ *
+ *  0.40.48 host-aware fix: this used to ride the Tauri bridge
+ *  (`k2so_heartbeat_set_session` → the LOCAL daemon), so with a remote
+ *  host active the write targeted the wrong machine and 400'd with
+ *  "Project not found: <remote path>" — the local daemon has never heard
+ *  of the remote workspace. Default scope is now the ACTIVE host via
+ *  `/cli/heartbeat/set-session` (the exact route the bridge proxied).
+ *
+ *  `scope: 'local'` preserves the old behavior for surfaces whose ROSTER
+ *  is still local-machine-scoped (WakeSchedulerSection reads via local
+ *  list_all invokes) — a host-aware write against local rows would just
+ *  invert the mismatch.
+ *
+ *  The daemon answers `{"success":true,…}` or `{"error":"…"}` — a non-2xx
+ *  rejects, and a 2xx body carrying `error` is raised too so callers have
+ *  exactly one failure path to revert on. */
 export async function setHeartbeatSession(
   projectPath: string,
   name: string,
   target: HeartbeatDeliveryTarget,
+  opts?: { scope?: 'active-host' | 'local' },
 ): Promise<void> {
-  const resp = await invoke<string>('k2so_heartbeat_set_session', {
-    projectPath,
-    name,
-    mode: target.mode,
-    sessionId: target.mode === 'session' ? target.sessionId ?? null : null,
-    provider: target.mode === 'session' ? target.provider ?? null : null,
-  })
-  let parsed: unknown = null
-  try {
-    parsed = JSON.parse(resp)
-  } catch {
-    /* non-JSON success body — nothing to inspect */
+  if (opts?.scope === 'local') {
+    const resp = await invoke<string>('k2so_heartbeat_set_session', {
+      projectPath,
+      name,
+      mode: target.mode,
+      sessionId: target.mode === 'session' ? target.sessionId ?? null : null,
+      provider: target.mode === 'session' ? target.provider ?? null : null,
+    })
+    let parsed: unknown = null
+    try {
+      parsed = JSON.parse(resp)
+    } catch {
+      /* non-JSON success body — nothing to inspect */
+    }
+    if (parsed && typeof parsed === 'object') {
+      const err = (parsed as { error?: unknown }).error
+      if (typeof err === 'string' && err) throw new Error(err)
+    }
+    return
   }
-  if (parsed && typeof parsed === 'object') {
-    const err = (parsed as { error?: unknown }).error
-    if (typeof err === 'string' && err) throw new Error(err)
+  const resp = await daemonCliGet<{ success?: boolean; error?: string }>(
+    'heartbeat/set-session',
+    {
+      project: projectPath,
+      name,
+      mode: target.mode,
+      // getUrl omits null params, matching the route's empty-filtered
+      // `session_id`/`provider` extraction.
+      session_id: target.mode === 'session' ? target.sessionId ?? null : null,
+      provider: target.mode === 'session' ? target.provider ?? null : null,
+    },
+  )
+  if (resp && typeof resp === 'object' && typeof resp.error === 'string' && resp.error) {
+    throw new Error(resp.error)
   }
 }

@@ -973,22 +973,36 @@ async fn wait_capture_contains(capture: &std::path::Path, needle: &str, what: &s
     }
 }
 
-/// The spawn-time INITIAL prompt must arrive wrapped with the FROZEN
-/// [`k2_daemon::v1_host_sessions::API_SPAWN_PREAMBLE`] (preamble, blank
-/// line, caller prompt — exact bytes on the agent's stdin), while a
-/// follow-up message-live delivery arrives RAW: the contract is briefed
-/// once per process, never repeated per turn.
+/// The spawn-time INITIAL prompt must arrive as the Phase 0b stack
+/// (FROZEN [`API_SPAWN_PREAMBLE`] + owner guest policy + caller prompt).
+/// Follow-up message-live re-asserts guest policy but does NOT re-send
+/// the spawn preamble. A body field cannot override the owner policy.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawn_prompt_carries_contract_preamble_and_followups_stay_raw() {
+async fn spawn_prompt_carries_preamble_and_guest_policy_followups_reassert_guest() {
     let _g = lock();
     let env = HostEnv::set(true);
     let capture = env.make_shim_recording();
     let d = test_harness::start(OWNER_TOKEN).await;
-    setup_project("hs-preamble");
+    let ws_path = setup_project("hs-preamble");
     configure_ws_agent("hs-preamble", &env.shim());
 
+    // Owner custom policy — must win over any body field.
+    let owner_policy = "hs-preamble-OWNER-GUEST-POLICY-marker";
+    k2_core::workspace::settings::update_project_setting(
+        ws_path.to_string_lossy().as_ref(),
+        "api_guest_policy",
+        owner_policy,
+    )
+    .expect("set owner guest policy");
+
     let caller_prompt = "hs-preamble-caller-prompt-marker";
-    let body = serde_json::json!({ "prompt": caller_prompt }).to_string();
+    // Attacker tries to override guest policy in the body — must be ignored.
+    let body = serde_json::json!({
+        "prompt": caller_prompt,
+        "api_guest_policy": "hs-preamble-ATTACKER-POLICY",
+        "apiGuestPolicy": "hs-preamble-ATTACKER-POLICY",
+    })
+    .to_string();
     let (status, resp) = http_req(
         d.port,
         "POST",
@@ -1001,38 +1015,65 @@ async fn spawn_prompt_carries_contract_preamble_and_followups_stay_raw() {
     let session_id = v["sessionId"].as_str().expect("sessionId").to_string();
     let agent = v["agentName"].as_str().expect("agentName").to_string();
 
-    // The shim's raw stdin: preamble + blank line + caller prompt, exactly.
     let preamble = k2_daemon::v1_host_sessions::API_SPAWN_PREAMBLE;
     let received = wait_capture_contains(&capture, caller_prompt, "spawn prompt").await;
+    let spawn_stack =
+        k2_daemon::v1_host_sessions::compose_spawn_inject(owner_policy, caller_prompt);
+    assert!(
+        received.contains(&spawn_stack),
+        "spawn must inject preamble + owner guest policy + caller; received:\n{received}"
+    );
     assert!(
         received.contains(preamble),
         "initial injection must carry the FROZEN contract preamble; received:\n{received}"
     );
-    let wrapped = format!("{preamble}\n\n{caller_prompt}");
     assert!(
-        received.contains(&wrapped),
-        "preamble and caller prompt must arrive as one wrapped payload \
-         (preamble, blank line, prompt); received:\n{received}"
+        received.contains(owner_policy),
+        "initial injection must carry owner guest policy; received:\n{received}"
+    );
+    assert!(
+        !received.contains("hs-preamble-ATTACKER-POLICY"),
+        "body guest-policy fields must be ignored; received:\n{received}"
     );
 
-    // Follow-up message-live into the SAME session stays RAW.
+    // Follow-up: guest policy re-asserted, preamble NOT repeated.
     let followup = "hs-preamble-followup-marker";
     let (status, resp) = http_req(
         d.port,
         "POST",
         &format!("/v1/w/hs-preamble/host-sessions/{session_id}?token={OWNER_TOKEN}"),
-        Some(&serde_json::json!({ "prompt": followup }).to_string()),
+        Some(
+            &serde_json::json!({
+                "prompt": followup,
+                "api_guest_policy": "hs-preamble-ATTACKER-FOLLOWUP",
+            })
+            .to_string(),
+        ),
     )
     .await;
     assert_eq!(status, 200, "message-live failed: {resp}");
     assert_eq!(json(&resp)["delivered"], true, "body={resp}");
 
     let received = wait_capture_contains(&capture, followup, "follow-up message").await;
+    let follow_stack =
+        k2_daemon::v1_host_sessions::compose_followup_inject(owner_policy, followup);
+    assert!(
+        received.contains(&follow_stack),
+        "follow-up must re-assert guest policy then caller; received:\n{received}"
+    );
     assert_eq!(
-        received.matches("[K2 API]").count(),
+        received.matches(preamble).count(),
         1,
-        "the contract preamble is delivered EXACTLY ONCE (at spawn) — a \
-         follow-up must arrive without it; received:\n{received}"
+        "the contract preamble is delivered EXACTLY ONCE (at spawn); received:\n{received}"
+    );
+    assert_eq!(
+        received.matches(owner_policy).count(),
+        2,
+        "guest policy must appear on spawn AND follow-up; received:\n{received}"
+    );
+    assert!(
+        !received.contains("hs-preamble-ATTACKER"),
+        "body guest-policy overrides must never reach the agent; received:\n{received}"
     );
 
     close_session(d.port, &agent).await;
@@ -1119,14 +1160,14 @@ async fn settle_profile_spawn_prompt_reaches_the_pty() {
     let v = json(&resp);
     let agent = v["agentName"].as_str().expect("agentName").to_string();
 
-    // FULL prompt (frozen preamble + blank line + caller prompt) on the
-    // shim's stdin — nothing eaten, nothing truncated.
+    // FULL prompt (preamble + guest policy + caller) on the shim's stdin.
     let received = wait_capture_contains(&capture, caller_prompt, "settle-profile prompt").await;
     let elapsed = started.elapsed();
-    let wrapped = format!(
-        "{}\n\n{caller_prompt}",
-        k2_daemon::v1_host_sessions::API_SPAWN_PREAMBLE
+    let guest = k2_core::workspace::settings::get_api_guest_policy(
+        ws_path.to_string_lossy().as_ref(),
     );
+    let wrapped =
+        k2_daemon::v1_host_sessions::compose_spawn_inject(&guest, caller_prompt);
     assert!(
         received.contains(&wrapped),
         "settle-profile spawn must deliver the FULL wrapped prompt; received:\n{received}"

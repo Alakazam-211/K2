@@ -2,20 +2,40 @@
 // shows. The top bar's 3-tab switcher (Agents | Projects | Feedback)
 // selects one of three page views: 'agents' is today's default workspace
 // view (Sidebar + tabs + terminal); 'projects' and 'feedback' render as
-// full-page overlays gated on this store. This is the SSOT for "which
-// page" — `useFeedbackStore.isOpen` mirrors it (feedback.ts subscribes)
-// so every pre-switcher consumer of that flag keeps working.
+// full-page overlays gated on this store. Wiki is a fourth page opened
+// only from the workspace drawer (no permanent PageTabs entry); Esc or
+// selecting a switcher tab returns to agents / that page.
+//
+// This is the SSOT for "which page" — `useFeedbackStore.isOpen` mirrors
+// it (feedback.ts subscribes) so every pre-switcher consumer of that
+// flag keeps working.
 
 import { create } from 'zustand'
 
-export type AppPage = 'agents' | 'projects' | 'feedback'
+export type AppPage = 'agents' | 'projects' | 'feedback' | 'wiki'
 
 interface PageViewState {
   page: AppPage
+  /** Workspace path whose wiki is open when `page === 'wiki'`. */
+  wikiProjectPath: string | null
   setPage: (page: AppPage) => void
+  /** Open the wiki overlay for a workspace path (from WorkspacePanel). */
+  openWiki: (projectPath: string) => void
+  /** Close wiki and return to Agents. */
+  closeWiki: () => void
 }
 
 export const usePageViewStore = create<PageViewState>((set) => ({
   page: 'agents',
-  setPage: (page) => set({ page }),
+  wikiProjectPath: null,
+  setPage: (page) =>
+    set((s) => ({
+      page,
+      // Leaving wiki clears the bound workspace path so a later open
+      // does not flash stale data under a different project.
+      wikiProjectPath: page === 'wiki' ? s.wikiProjectPath : null,
+    })),
+  openWiki: (projectPath) =>
+    set({ page: 'wiki', wikiProjectPath: projectPath }),
+  closeWiki: () => set({ page: 'agents', wikiProjectPath: null }),
 }))

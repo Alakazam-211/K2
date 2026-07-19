@@ -3,6 +3,310 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.52 — Headless Connect CLI + wiki session revive
+
+Provision a Linux box from the shell, and public-wiki chat sessions recover
+cleanly after idle reaping.
+
+### Headless K2 Connect onboarding
+
+- **`k2 users add`.** Create the first owner (or more Connect users) on a
+  headless daemon: hidden password prompt or `--password-stdin`, then
+  `--role owner|admin|member|viewer`. Uses the daemon owner token on the
+  box (external setup works without a session passport); in-cell agents
+  stay on their scoped passport and cannot elevate.
+
+- **`k2 connect login`.** Pair a purchased k2.dev subdomain from the CLI:
+  account email/password (or `--token` access JWT) → pick a subdomain →
+  write tunnel config → start tunnel → print the live URL. Session stored
+  in `~/.k2/connect-account.json` (0600); password is never written.
+  `k2 connect status` / `k2 connect logout` for check and re-auth.
+  Manual `K2_TUNNEL_TOKEN` remains the automation fallback.
+
+### Public wiki session lifecycle
+
+- **Close audit tabs when reaped.** Idle host-session PTYs no longer leave
+  a dead terminal open in the app.
+
+- **Resume opens a new audit tab.** After reaper kill, waking the same
+  session (stored session id) surfaces a fresh tab so the inject is visible
+  again.
+
+- **Cold inject path aligned with `k2 msg --wake`.** Host-session first
+  message uses settle + readiness + screen quiescence so Grok (and peers)
+  don’t lose the paste during first paint.
+
+## 0.40.51 — Public wiki chat + agents control heartbeats
+
+Wiki visitors can talk to a workspace agent in the site itself, and agents
+can manage their own heartbeat schedules without fake “invalid token”
+errors.
+
+### Public wiki chat
+
+- **Ask this wiki.** Workspaces can turn on public chat for a published
+  wiki (default off). Visitors get a third-column chat panel on the live
+  site; messages run through the same host-session API as external keys,
+  with the chat key held only on the daemon (never in HTML or browser
+  responses).
+
+- **Unattended from the first turn.** Enabling public chat opts the
+  workspace into skip-permissions for host sessions so the visitor’s
+  first message isn’t stuck on a human approval prompt. First-message
+  inject also waits for screen quiescence so the paste isn’t wiped by
+  the agent’s startup repaint.
+
+- **Guest policy.** Owner-set guest framing still applies on every turn
+  (read-only preference + `k2 respond`), same as other API host sessions.
+
+### Agents own heartbeat schedules
+
+- **`k2 heartbeat` works from agent sessions.** Agents can list, add,
+  edit, enable/disable, and fire workspace schedules with their session
+  passport (UDS when in-cell, TCP dual-auth otherwise). The daemon stamps
+  the caller’s workspace so one agent can’t schedule into another’s
+  project.
+
+- **Clear owner-only teaching.** OS tick install, fleet-wide lists, and
+  similar owner surfaces no longer say “Invalid or missing auth token”
+  when an agent passport is presented — they return `owner_only` with a
+  hint to ask the human. Agents stop chasing a “broken token” that was
+  really a scope boundary.
+
+## 0.40.50 — CLI stays current on Linux servers
+
+Server updates no longer leave the `k2` command stuck on an old version
+while the daemon moves ahead.
+
+### Server updates
+
+- **The `k2` CLI can no longer fall behind the daemon.** On Linux
+  servers, the daemon refreshes the `k2` command alongside itself on
+  every update. If the system-wide install at `/usr/local/bin/k2` isn't
+  writable by the daemon's user (a common setup/migration artifact), the
+  daemon now stages the current CLI at `~/.local/bin/k2` instead of
+  silently leaving the old version in place. Server provisioning also
+  installs the CLI daemon-writable from the start.
+
+## 0.40.49 — Pair as federated peer
+
+Cross-server agents needed one more obvious step: **trust**. Turning on
+federation and signing into a server was never enough by itself — the two
+daemons still had to pin each other as peers. That step is now a button.
+
+### Federated peer pairing
+
+- **Pair as federated peer.** On Settings → Connections, each signed-in
+  server tile has a **Pair as federated peer** button. One click establishes
+  mutual trust between this Mac and that server (owner on both sides). When
+  it works, the tile shows **Peer: trusted**.
+
+- **No more chicken-and-egg.** Workspace Federated Connections used to ask
+  you to pick a federated server before any peer existed — and there was no
+  UI path to create the first one. Pair from Connections first; then the
+  server shows up in Federated Connections so you can link agents.
+
+- **Clear empty states.** Federated servers and Federated Connections empty
+  lists now point you at the Pair button instead of a vague "pair first"
+  hint.
+
+## 0.40.48 — Resilient reconnect
+
+Server reboots and updates are now a non-event. When a host you're
+connected to restarts, K2 notices, waits politely, and reconnects on its
+own — no more infinite "Reconnecting…", no more restarting your app to
+recover.
+
+### Reconnect that actually recovers
+
+- **Restarts self-heal.** When a remote host reboots or updates, K2
+  detects the fresh server instance and quietly reconnects and resyncs.
+  The recovery pill (now square, matching the rest of K2) tells you
+  what's happening and gets out of the way when it's done.
+
+- **The stuck-connection escape hatch.** Some macOS network sessions can
+  keep reusing a dead connection after a server restart (the "works in
+  curl, broken in the app" wedge). K2 now detects this with an
+  out-of-app probe, clears it automatically where possible, and — in the
+  rare case only a restart cures it — says so plainly with a
+  **Restart K2** button instead of spinning forever.
+
+- **No more retry storms.** While a host is recovering, K2 stops hammering
+  it: requests fail fast, retries are spread out, and reconnection happens
+  the moment the host is genuinely back.
+
+### Remote updates you can trust
+
+- **"Updated and reconnected."** After **Update Host**, the status line no
+  longer freezes on "Installing & restarting…" — K2 watches the host come
+  back and confirms the version it actually returned with. If an update
+  rolled back, it tells you that instead of pretending it worked.
+
+- **Servers release their tunnel cleanly.** Daemons now shut down
+  gracefully on restarts and self-updates (including supervisor stops),
+  releasing their tunnel registration immediately — so the offline window
+  during an update is seconds, not minutes.
+
+### Heartbeats
+
+- **Remote heartbeats show up.** The sidebar Heartbeats panel now shows
+  the heartbeats of the server you're connected to — not your local
+  machine's. Live/resumable/scheduled states come straight from the host.
+
+- **Settings audits the right machine.** The workspace Settings →
+  Heartbeats page (roster, fire history, session picker, delivery
+  target) now manages the connected host's heartbeats too — everything
+  you see and change lands on the server you're looking at.
+
+- **The fleet Heartbeats page follows your connection.** The system-wide
+  Heartbeats page (every workspace's heartbeats + the fires audit log +
+  wake-scheduler apply) now shows and manages the host you're connected
+  to. Requires the host to also run 0.40.48+ for the cross-workspace
+  lists; older hosts show an honest error instead of silently showing
+  the wrong machine.
+
+- **Errors surface instead of hiding.** A failed heartbeat load shows the
+  actual error instead of an eternal "Loading…".
+
+### Layout
+
+- **Column splits stick on remote hosts.** Splitting the tab area into
+  columns now saves immediately and survives connection blips — no more
+  splits quietly reverting when you're connected to a server.
+
+### Agent messaging
+
+- **Messages to sleeping agents actually arrive.** Waking a dormant
+  agent with `k2 msg`/`k2 talk` used to report success while the message
+  silently vanished — the injection raced the resumed session's redraw.
+  Delivery now waits for the woken terminal to settle before typing, so
+  the message lands every time.
+
+- **No more false "Agent launch failed" popups.** The old launch-failure
+  guess fired on healthy agent-to-agent messaging (and could quietly
+  spawn duplicate sessions via its auto-retry). It's gone; the daemon
+  owns spawn health.
+
+### Active area
+
+- **Active means alive.** A workspace now appears in the Active area
+  exactly when it has a live terminal session (or is pinned). An agent
+  woken by a message pops back in the moment its session exists — on
+  every connected client.
+
+- **Dismiss works again.** Right-click → Dismiss removes the workspace
+  from the Active area immediately; its session is put to sleep a few
+  seconds later.
+
+## 0.40.47 — Workspace wiki brain map
+
+Your notes become a living map. Open **View Wiki** on a workspace to explore
+`[[wikilinks]]` as a force graph, read articles side-by-side, and zoom out to
+every brain on the machine.
+
+### Workspace knowledge base
+
+- **View Wiki.** From the workspace panel: a full-page map of
+  `.k2/wiki/` Markdown notes. Click a node to read it; wikilinks in the
+  article jump to other notes. **Hide article** collapses the reader so
+  the graph uses the full width.
+
+- **Search + Articles count.** Filter notes by title, tags, or aliases.
+  **Articles** shows how many real notes match the current scope and
+  search (not phantom missing links).
+
+- **Global / Local.** Global is the whole workspace brain. Local zooms to
+  the neighborhood of the selected note (depth 1–2). Home stays lightly
+  blue when not selected so you can always find it.
+
+- **Seed & Serve.** One click creates Home + Index under `.k2/wiki/`.
+  Serve a read-only localhost site when you want to share or browse in a
+  browser. CLI: `k2 wiki status|index|note|seed|serve`.
+
+### K2 fleet map
+
+- **K2 tab.** See every workspace brain registered on this host
+  (`~/.k2/wiki`). Workspace hubs connect into each brain without polluting
+  per-workspace notes.
+
+- **Projects | Groups.** Two fleet lenses in their own tab strip:
+  - **Projects** — project squares link to member workspace hubs. Filter
+    with the same workspace/project dropdown used on Feedback.
+  - **Groups** — focus-group squares link to hubs when focus groups are
+    on. Filter with a focus-group menu (All / Ungrouped / each group).
+
+- **Membership ≠ wikilinks.** Dashed edges are organizational (project or
+  focus group). Solid edges inside a brain are real `[[wikilinks]]`.
+
+### Cleanup
+
+- **State is gone product-wide.** Workspace States settings and related
+  surface area are removed so the model stays simpler: workspaces,
+  projects, and agents.
+
+## 0.40.46 — Cross-server agents + WebGL terminal you can tune
+
+Two big tracks since 0.40.45: **federated agent messaging that actually
+pairs and talks**, and **Kessel WebGL** spacing, weight, scroll, and
+recovery after workspace switches.
+
+### Cross-server agents
+
+- **Connect a remote agent in one gesture.** On a workspace’s **Federated
+  Connections**, pick a paired server and an agent it exposes. K2
+  auto-pairs both daemons (mutual trust, no codes) and records the link
+  **both ways**, so either side can message the other. **X** removes that
+  agent link (and the reverse when it can). Peer pickers only — no
+  free-typed hostnames.
+
+- **`agent::host`, not mail.** Federated addresses use double-colon
+  (`cortana::rosson.k2.dev`). Inbound chat shows `[from agent::host]`, so
+  agents use **`k2 msg`** instead of **`k2 mail`**. Legacy `agent@host`
+  still works on the way in.
+
+- **Install on both machines — the daemon restarts with the app.** A
+  same-version AirDrop used to leave the *old* launchd daemon running
+  (version matched, binary on disk was new). The app now detects a
+  replaced `k2-daemon` and kickstarts it. Open the app once after install
+  so federation fixes load.
+
+- **Clearer federation CLI.** `k2 fed peers` lists pinned servers and
+  trust. Failed `k2 msg agent::host` names known peers and hints when a
+  reply path isn’t paired yet. Error copy says **k2**, not the old k2so
+  name.
+
+- **Roster only shows contactable agents.** Remote agent lists respect
+  Remote Access / contact permission so you don’t pick agents that won’t
+  accept federated messages.
+
+- **Passport dual-auth on send.** Agents can send across servers under
+  their scoped credential when the connection and trust gates pass —
+  without elevating to disk-owner for every hop.
+
+### Terminal (WebGL painter)
+
+- **Per-style text weight.** Dark styles preset heavier; light styles
+  thinner. Override under **Settings → Styles → Terminal text weight
+  (WebGL)** — saved **per style and scheme**, live on open tabs. Switching
+  styles restores that style’s weight.
+
+- **Line height & character spacing.** Global knobs under
+  **Settings → Terminal** (WebGL only): line height (default 1.2× font
+  size) and character spacing/tracking. Same values across themes; open
+  tabs update live. DOM painter is unchanged.
+
+- **Smoother scroll under pressure.** Prewarm backs off before it can
+  force an atlas clear; wheel paint and scrollbar drag use live geometry;
+  resync after a big backlog no longer yanks the view when you’re
+  scrolled up (content seam-match re-anchoring).
+
+- **WebGL recovers after workspace switches.** Hiding a tab or opening
+  Settings used to lose the GL context for good. The painter remounts when
+  the surface is shown again instead of permanently falling back to DOM.
+
+- **Richer glyph edges.** Default coverage gamma moves so edges keep a
+  little more ink after smoothing.
+
 ## 0.40.45 — Safer agent mail, cleaner terminals, smoother painting
 
 Agents get clearer boundaries on mail and messaging — and the terminal

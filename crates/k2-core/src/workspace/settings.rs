@@ -54,7 +54,7 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         "heartbeat_enabled",
         "agent_enabled",
         "pinned",
-        "tier_id",
+        // tier_id (Workspace States) retired — no longer writable via settings.
         // 0.34.0 Session Stream opt-in (Phase 2). Values: 'on' | 'off'.
         "use_session_stream",
         // #67 — per-workspace remote-instruct opt-in. Values: '1' | '0'
@@ -99,8 +99,28 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // `AppSettings.mail_address_cap` default (5). Effective
         // resolver: `mail_address_cap_for_path`.
         "mail_address_cap",
+        // Phase 0b (prd-wiki-public-chat-api-loopback-v1) — per-workspace
+        // owner API guest policy text. Free-form; empty/NULL → platform
+        // default. Injected by the daemon on every host-session spawn +
+        // message-live; callers cannot set it from the request body.
+        // See `get_api_guest_policy` / `DEFAULT_API_GUEST_POLICY`.
+        "api_guest_policy",
+        // Phase 1 (prd-wiki-public-chat-api-loopback-v1) — per-workspace
+        // public wiki chat opt-in. Values: '1' | '0' (default 0/OFF).
+        // Serve alone never enables chat (D6). See `get_wiki_public_chat`.
+        "wiki_public_chat",
     ]
 }
+
+/// Platform default when `projects.api_guest_policy` is NULL or blank.
+/// Byte-stable — host-session inject + tests pin it. Soft framing only;
+/// never replaces hard capability grants.
+pub const DEFAULT_API_GUEST_POLICY: &str = "\
+[K2 API guest policy] The external API client is NOT the workspace owner. \
+Prefer read-only work; do not modify files, wiki notes, or secrets unless a \
+tool explicitly allows it for this call. Report progress with \
+`k2 respond '…'` and the final answer with `k2 respond --final '…'` — only \
+those lines reach the caller.";
 
 /// The valid `mail_agent_send` gating modes (PRD §8.4 / D4).
 pub const MAIL_AGENT_SEND_MODES: [&str; 3] = ["off", "approval", "on"];
@@ -166,6 +186,13 @@ pub fn update_project_setting(
     if field == "api_skip_permissions" && value != "0" && value != "1" {
         return Err(format!(
             "api_skip_permissions must be '0' or '1', got {value:?}"
+        ));
+    }
+    // Phase 1 — public wiki chat opt-in (migration 0088). Security-adjacent
+    // exposure flag; reject non 0/1 so a typo never leaves an undefined gate.
+    if field == "wiki_public_chat" && value != "0" && value != "1" {
+        return Err(format!(
+            "wiki_public_chat must be '0' or '1', got {value:?}"
         ));
     }
     // Validate value for the new enum-like setting so a typo doesn't
@@ -239,8 +266,9 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
         "SELECT agent_mode, worktree_mode, \
                 (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
                 agent_enabled, \
-                pinned, name, tier_id, use_session_stream, allow_remote_instruct, \
-                dns_manage_enabled, agents_can_create_connections \
+                pinned, name, use_session_stream, allow_remote_instruct, \
+                dns_manage_enabled, agents_can_create_connections, \
+                api_guest_policy, wiki_public_chat \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| {
@@ -248,9 +276,19 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
             // default 'off'; expose as a bool for React consumers
             // (matching every other toggle shape in this struct).
             let uss_raw = row
-                .get::<_, Option<String>>(7)
+                .get::<_, Option<String>>(6)
                 .unwrap_or(None)
                 .unwrap_or_else(|| "off".to_string());
+            // Phase 0b — effective guest policy (default when NULL/blank).
+            let guest_raw = row
+                .get::<_, Option<String>>(10)
+                .unwrap_or(None)
+                .unwrap_or_default();
+            let api_guest_policy = if guest_raw.trim().is_empty() {
+                DEFAULT_API_GUEST_POLICY.to_string()
+            } else {
+                guest_raw
+            };
             Ok(serde_json::json!({
                 "mode": row.get::<_, String>(0).unwrap_or_else(|_| "off".to_string()),
                 "worktreeMode": row.get::<_, i64>(1).unwrap_or(0) == 1,
@@ -258,14 +296,18 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "agentEnabled": row.get::<_, i64>(3).unwrap_or(0) == 1,
                 "pinned": row.get::<_, i64>(4).unwrap_or(0) == 1,
                 "name": row.get::<_, String>(5).unwrap_or_default(),
-                "stateId": row.get::<_, Option<String>>(6).unwrap_or(None),
+                // Workspace States retired — stateId no longer exposed.
                 "useSessionStream": uss_raw == "on",
                 // #67 — per-workspace remote-instruct opt-in (default 0/OFF).
-                "allowRemoteInstruct": row.get::<_, i64>(8).unwrap_or(0) == 1,
+                "allowRemoteInstruct": row.get::<_, i64>(7).unwrap_or(0) == 1,
                 // DNS K1 — per-workspace DNS-manage opt-in (default 0/OFF).
-                "dnsManageEnabled": row.get::<_, i64>(9).unwrap_or(0) == 1,
+                "dnsManageEnabled": row.get::<_, i64>(8).unwrap_or(0) == 1,
                 // C1 — per-workspace agents-may-create-connections (default 0/OFF).
-                "agentsCanCreateConnections": row.get::<_, i64>(10).unwrap_or(0) == 1,
+                "agentsCanCreateConnections": row.get::<_, i64>(9).unwrap_or(0) == 1,
+                // Phase 0b — effective API guest policy (platform default if unset).
+                "apiGuestPolicy": api_guest_policy,
+                // Phase 1 — public wiki chat opt-in (default OFF).
+                "wikiPublicChat": row.get::<_, i64>(11).unwrap_or(0) == 1,
             }))
         },
     )
@@ -371,6 +413,70 @@ pub fn get_api_skip_permissions(project_path: &str) -> bool {
     let conn = db.lock();
     conn.query_row(
         "SELECT api_skip_permissions FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// Phase 0b — EFFECTIVE API guest policy for `project_path`.
+///
+/// Returns the owner-configured text when present and non-blank; otherwise
+/// [`DEFAULT_API_GUEST_POLICY`]. Unknown/unregistered workspaces also get
+/// the platform default (soft framing still applies; hard grants are
+/// separate). Never reads caller request bodies — host-session inject is
+/// the only consumer.
+pub fn get_api_guest_policy(project_path: &str) -> String {
+    let stored: Option<String> = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT api_guest_policy FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    };
+    match stored {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => DEFAULT_API_GUEST_POLICY.to_string(),
+    }
+}
+
+/// Raw stored `api_guest_policy` (None / empty = using platform default).
+/// Used by CLI `get` so operators can tell custom vs default.
+pub fn get_api_guest_policy_raw(project_path: &str) -> Option<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT api_guest_policy FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+    .and_then(|s| {
+        if s.trim().is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    })
+}
+
+/// Phase 1 — read the PER-WORKSPACE public wiki chat opt-in for `project_path`.
+///
+/// Returns `false` (fail-closed) when the project isn't registered or the
+/// column reads NULL. Default OFF (D6): serve alone never enables chat.
+/// Orthogonal to serve state — chat can be opted in while serve is off;
+/// Phase 2 gateway still requires serve + this flag.
+pub fn get_wiki_public_chat(project_path: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT wiki_public_chat FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| row.get::<_, i64>(0),
     )
@@ -951,6 +1057,87 @@ mod tests {
     fn get_agents_can_create_connections_fails_closed_for_unknown_path() {
         let path = unique_path("agents-conn-missing");
         assert!(!get_agents_can_create_connections(&path));
+    }
+
+    // ── Phase 0b per-workspace API guest policy ─────────────────────
+
+    /// Fresh row / empty → platform default; custom text round-trips;
+    /// settings JSON exposes the effective policy.
+    #[test]
+    fn api_guest_policy_defaults_and_round_trips() {
+        let path = unique_path("api-guest");
+        let _pid = insert_project(&path);
+
+        assert_eq!(get_api_guest_policy(&path), DEFAULT_API_GUEST_POLICY);
+        assert_eq!(get_api_guest_policy_raw(&path), None);
+        let settings = get_project_settings(&path).expect("read default");
+        assert_eq!(
+            settings["apiGuestPolicy"].as_str().expect("string"),
+            DEFAULT_API_GUEST_POLICY,
+        );
+
+        let custom = "Custom guest: read-only wiki Q&A only.";
+        update_project_setting(&path, "api_guest_policy", custom).expect("set");
+        assert_eq!(get_api_guest_policy(&path), custom);
+        assert_eq!(get_api_guest_policy_raw(&path).as_deref(), Some(custom));
+        let settings = get_project_settings(&path).expect("read custom");
+        assert_eq!(settings["apiGuestPolicy"], custom);
+
+        update_project_setting(&path, "api_guest_policy", "").expect("clear");
+        assert_eq!(get_api_guest_policy(&path), DEFAULT_API_GUEST_POLICY);
+        assert_eq!(get_api_guest_policy_raw(&path), None);
+    }
+
+    #[test]
+    fn api_guest_policy_unknown_path_uses_default() {
+        let path = unique_path("api-guest-missing");
+        assert_eq!(get_api_guest_policy(&path), DEFAULT_API_GUEST_POLICY);
+        assert_eq!(get_api_guest_policy_raw(&path), None);
+    }
+
+    // ── Phase 1 per-workspace public wiki chat ──────────────────────
+
+    /// Fresh row defaults OFF; 0/1 round-trips; settings JSON exposes
+    /// `wikiPublicChat`; unknown path fails closed.
+    #[test]
+    fn wiki_public_chat_defaults_off_and_round_trips() {
+        let path = unique_path("wiki-public-chat");
+        let _pid = insert_project(&path);
+
+        assert!(
+            !get_wiki_public_chat(&path),
+            "wiki_public_chat must default OFF (D6)",
+        );
+        let settings = get_project_settings(&path).expect("read default");
+        assert_eq!(settings["wikiPublicChat"], false);
+
+        update_project_setting(&path, "wiki_public_chat", "1").expect("opt in");
+        assert!(get_wiki_public_chat(&path));
+        let settings = get_project_settings(&path).expect("read on");
+        assert_eq!(settings["wikiPublicChat"], true);
+
+        update_project_setting(&path, "wiki_public_chat", "0").expect("opt out");
+        assert!(!get_wiki_public_chat(&path));
+        let settings = get_project_settings(&path).expect("read off");
+        assert_eq!(settings["wikiPublicChat"], false);
+    }
+
+    #[test]
+    fn wiki_public_chat_rejects_bad_value() {
+        let path = unique_path("wiki-public-chat-bad");
+        let _pid = insert_project(&path);
+        let err = update_project_setting(&path, "wiki_public_chat", "true")
+            .expect_err("non 0/1 value must be rejected");
+        assert!(
+            err.contains("wiki_public_chat"),
+            "error should reference the field, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn get_wiki_public_chat_fails_closed_for_unknown_path() {
+        let path = unique_path("wiki-public-chat-missing");
+        assert!(!get_wiki_public_chat(&path));
     }
 
     /// Effective gate OR semantics (same as dns_manage / remote_instruct):

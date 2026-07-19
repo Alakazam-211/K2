@@ -457,37 +457,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             Err(r) => r,
         },
 
-        // ── Workspace states ────────────────────────────────────────
-        "/cli/states/list" => {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            match k2_core::db::schema::WorkspaceState::list(&conn) {
-                Ok(rows) => CliResponse::ok_json(
-                    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()),
-                ),
-                Err(e) => CliResponse::bad_request(e.to_string()),
-            }
-        }
-        "/cli/states/set" => match need_project(params) {
-            Ok(p) => {
-                let state_id = str_param(params, "state_id");
-                match k2_core::workspace::settings::update_project_setting(&p, "tier_id", &state_id)
-                {
-                    Ok(()) => {
-                        k2_core::agent_hooks::emit(
-                            k2_core::agent_hooks::HookEvent::SyncProjects,
-                            serde_json::Value::Null,
-                        );
-                        CliResponse::ok_json(
-                            serde_json::json!({"success": true, "stateId": state_id})
-                                .to_string(),
-                        )
-                    }
-                    Err(e) => CliResponse::bad_request(e),
-                }
-            }
-            Err(r) => r,
-        },
+        // Workspace States product surface retired: `/cli/states/*` routes
+        // removed. `workspace_states` table + `projects.tier_id` remain in
+        // the schema for migration/history only (no read/write product path).
 
         // ── Agent channel ops (status / done / reserve / release) ──
         "/cli/status" => match need_project(params) {
@@ -779,6 +751,31 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 })
                 .to_string(),
             )
+        }
+
+        // 0.40.48 host-aware Wake-Scheduler page: cross-project roster +
+        // fires audit, daemon-wide (no project param — must precede the
+        // project-scoped catch-all arm below, like scheduler-status).
+        // These expose the same core functions the Tauri commands
+        // `k2so_heartbeat_list_all` / `k2so_heartbeat_fires_list_all`
+        // call in-process, so a remote client's Settings page can audit
+        // THIS host's heartbeats instead of its own machine's. Read-only.
+        "/cli/heartbeat/list-all" => {
+            match k2_core::heartbeats::k2so_heartbeat_list_all() {
+                Ok(rows) => CliResponse::ok_json(
+                    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()),
+                ),
+                Err(e) => CliResponse::bad_request(e),
+            }
+        }
+        "/cli/heartbeat/fires-list-all" => {
+            let limit = params.get("limit").and_then(|s| s.parse::<i64>().ok());
+            match k2_core::heartbeats::k2so_heartbeat_fires_list_all(limit) {
+                Ok(rows) => CliResponse::ok_json(
+                    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()),
+                ),
+                Err(e) => CliResponse::bad_request(e),
+            }
         }
 
         // ── Heartbeat CRUD + fires ──────────────────────────────────
@@ -1111,11 +1108,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // generic GET dispatch.
         "/cli/claude-auth/status" => crate::claude_auth_host::handle_status(),
 
-        // ── Phase 2 Unit 4: states / workspaces / focus-groups / sections /
+        // ── Phase 2 Unit 4: workspaces / focus-groups / sections /
         //                    layouts / timer / presets / window-state /
         //                    projects / git (GET endpoints) ─────────────
-        // `/cli/states/{list,get,set}` already exist above — Unit 4 only
-        // adds the POST mutations (`create`/`update`/`delete`).
+        // Workspace States routes retired (product feature removed).
         "/cli/workspaces/list" => crate::db_routes::handle_workspaces_list(params),
         "/cli/focus-groups/list" => crate::db_routes::handle_focus_groups_list(),
         "/cli/sections/list" => crate::db_routes::handle_sections_list(params),
@@ -1159,6 +1155,16 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/inbox/read" => crate::inbox_routes::handle_read(params),
         "/cli/inbox/folders" => crate::inbox_routes::handle_folders(params),
         "/cli/inbox/search" => crate::inbox_routes::handle_search(params),
+
+        // ── Workspace knowledge base / brain map (read endpoints) ─
+        // Index + note body + localhost-serve status. Mutations
+        // (seed / serve on|off) are POST — see wiki_routes +
+        // dispatcher post_allowed.
+        "/cli/wiki/index" => crate::wiki_routes::handle_index(params),
+        "/cli/wiki/note" => crate::wiki_routes::handle_note(params),
+        "/cli/wiki/serve/status" | "/cli/wiki/status" => {
+            crate::wiki_routes::handle_serve_status(params)
+        }
 
         // ── Phase 2.1: Glossary ──────────────────────────────────
         "/cli/glossary" | "/cli/glossary/list" => crate::inbox_routes::handle_glossary_list(),
@@ -1420,21 +1426,110 @@ pub fn handle_api_key_create(body: &[u8], actor: &str) -> CliResponse {
         _ => None,
     };
 
+    // Phase 0 — capabilities. Accept either a structured `capabilities`
+    // object (`hostSessions`/`canonicalMessage`/`sandboxes` bools) OR
+    // `allow`/`deny` string arrays (CLI shape). Absent → new-key defaults
+    // (host-sessions ON, canonical + sandboxes OFF — the wiki-chat recipe).
+    let capabilities = match parse_create_capabilities(&v) {
+        Ok(c) => c,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+
     match k2_core::api_keys::create_api_key(
         label,
         anthropic_key,
         workspaces_grant.as_deref(),
         provider_canonical,
         base_url,
+        Some(capabilities),
     ) {
         // The ONLY place the raw key is ever returned. Not logged — the audit
         // line carries the id + label + ACTOR only, never a secret.
         Ok((id, raw)) => {
-            k2_core::log_debug!("[api-keys] created key {id} (label {label:?}) by {actor}");
-            CliResponse::ok_json(serde_json::json!({ "id": id, "key": raw }).to_string())
+            k2_core::log_debug!(
+                "[api-keys] created key {id} (label {label:?}) caps={capabilities:?} by {actor}"
+            );
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "id": id,
+                    "key": raw,
+                    "capabilities": capabilities,
+                })
+                .to_string(),
+            )
         }
         Err(e) => CliResponse::bad_request(e),
     }
+}
+
+/// Phase 0 — normalize create-body capability fields into
+/// [`k2_core::api_keys::ApiCapabilities`].
+///
+/// Precedence:
+/// 1. Structured `capabilities` / `caps` object (bool fields; missing field
+///    inherits from new-key defaults).
+/// 2. Else `allow` / `deny` string arrays over the new-key base
+///    ([`ApiCapabilities::from_allow_deny`]).
+/// 3. Else new-key defaults (host-sessions only).
+fn parse_create_capabilities(
+    v: &serde_json::Value,
+) -> Result<k2_core::api_keys::ApiCapabilities, String> {
+    use k2_core::api_keys::ApiCapabilities;
+    if let Some(obj) = v
+        .get("capabilities")
+        .or_else(|| v.get("caps"))
+        .and_then(|x| x.as_object())
+    {
+        let base = ApiCapabilities::new_key_default();
+        let bool_field = |keys: &[&str], default: bool| -> bool {
+            for k in keys {
+                if let Some(b) = obj.get(*k).and_then(|x| x.as_bool()) {
+                    return b;
+                }
+            }
+            default
+        };
+        return Ok(ApiCapabilities {
+            host_sessions: bool_field(
+                &["hostSessions", "host_sessions", "host-sessions"],
+                base.host_sessions,
+            ),
+            canonical_message: bool_field(
+                &["canonicalMessage", "canonical_message", "canonical-message"],
+                base.canonical_message,
+            ),
+            sandboxes: bool_field(&["sandboxes", "sandbox"], base.sandboxes),
+        });
+    }
+    let to_list = |key: &str| -> Option<Vec<String>> {
+        v.get(key).and_then(|x| x.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+    };
+    // Also accept comma-joined strings for allow/deny (CLI may pass either).
+    let to_list_or_csv = |key: &str| -> Option<Vec<String>> {
+        if let Some(list) = to_list(key) {
+            return Some(list);
+        }
+        v.get(key).and_then(|x| x.as_str()).map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+    };
+    let allow = to_list_or_csv("allow");
+    let deny = to_list_or_csv("deny");
+    if allow.is_none() && deny.is_none() {
+        return Ok(ApiCapabilities::new_key_default());
+    }
+    ApiCapabilities::from_allow_deny(
+        ApiCapabilities::new_key_default(),
+        allow.as_deref(),
+        deny.as_deref(),
+    )
 }
 
 /// OWNER-TIER (owner token OR Owner-role session — F4): revoke an API key by
@@ -1493,6 +1588,8 @@ pub fn handle_api_key_list() -> CliResponse {
                         // credential itself.
                         "provider": m.provider,
                         "baseUrl": m.base_url,
+                        // Phase 0 — capability flags (not a secret).
+                        "capabilities": m.capabilities,
                     })
                 })
                 .collect();
@@ -2100,6 +2197,105 @@ mod api_key_route_tests {
         assert!(
             !list.body.contains("route-w5-badprov"),
             "a rejected create must not mint a row"
+        );
+    }
+
+    /// Phase 0 — create defaults host-sessions only; allow/deny + structured
+    /// capabilities round-trip through list.
+    #[test]
+    fn create_capabilities_defaults_and_allow_deny() {
+        // Default (no flags) → host-sessions only (wiki-chat recipe).
+        let resp = handle_api_key_create(
+            serde_json::json!({ "label": "cap-default" }).to_string().as_bytes(),
+            "owner-token",
+        );
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let created: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(created["capabilities"]["hostSessions"], serde_json::json!(true));
+        assert_eq!(
+            created["capabilities"]["canonicalMessage"],
+            serde_json::json!(false)
+        );
+        assert_eq!(created["capabilities"]["sandboxes"], serde_json::json!(false));
+        let id_default = created["id"].as_str().expect("id").to_string();
+
+        // --allow host-sessions,canonical-message,sandboxes → all on.
+        let resp = handle_api_key_create(
+            serde_json::json!({
+                "label": "cap-all",
+                "allow": ["host-sessions", "canonical-message", "sandboxes"],
+            })
+            .to_string()
+            .as_bytes(),
+            "owner-token",
+        );
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let created: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(created["capabilities"]["hostSessions"], serde_json::json!(true));
+        assert_eq!(
+            created["capabilities"]["canonicalMessage"],
+            serde_json::json!(true)
+        );
+        assert_eq!(created["capabilities"]["sandboxes"], serde_json::json!(true));
+        let id_all = created["id"].as_str().expect("id").to_string();
+
+        // Structured object can pin sandboxes-only (wiki shouldn't, but API can).
+        let resp = handle_api_key_create(
+            serde_json::json!({
+                "label": "cap-struct",
+                "capabilities": {
+                    "hostSessions": false,
+                    "canonicalMessage": false,
+                    "sandboxes": true,
+                },
+            })
+            .to_string()
+            .as_bytes(),
+            "owner-token",
+        );
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let id_struct = serde_json::from_str::<serde_json::Value>(&resp.body).unwrap()["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+
+        // Unknown allow token → 400, nothing minted.
+        let resp = handle_api_key_create(
+            serde_json::json!({
+                "label": "cap-bad",
+                "allow": ["rce"],
+            })
+            .to_string()
+            .as_bytes(),
+            "owner-token",
+        );
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+        assert!(resp.body.contains("unknown capability"), "body={}", resp.body);
+
+        let list = handle_api_key_list();
+        assert_eq!(list.status, "200 OK");
+        let parsed: serde_json::Value = serde_json::from_str(&list.body).expect("json");
+        let keys = parsed["keys"].as_array().expect("keys");
+        let d = keys
+            .iter()
+            .find(|k| k["id"] == serde_json::json!(id_default))
+            .expect("default");
+        assert_eq!(d["capabilities"]["hostSessions"], serde_json::json!(true));
+        assert_eq!(d["capabilities"]["canonicalMessage"], serde_json::json!(false));
+        let a = keys
+            .iter()
+            .find(|k| k["id"] == serde_json::json!(id_all))
+            .expect("all");
+        assert_eq!(a["capabilities"]["sandboxes"], serde_json::json!(true));
+        let s = keys
+            .iter()
+            .find(|k| k["id"] == serde_json::json!(id_struct))
+            .expect("struct");
+        assert_eq!(s["capabilities"]["sandboxes"], serde_json::json!(true));
+        assert_eq!(s["capabilities"]["hostSessions"], serde_json::json!(false));
+        assert!(
+            !list.body.contains("cap-bad"),
+            "rejected create must not mint a row"
         );
     }
 

@@ -38,6 +38,7 @@ import {
   type CheckSummary,
   type FederationState,
 } from '@/lib/host-ops'
+import { autoPairWithHost, isTrustedPeerHost } from '@/lib/federation'
 import { isConnectionLevelError } from '@/lib/remote-retry'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import { recoveryStatusText } from '@/lib/remote-recovery'
@@ -73,6 +74,13 @@ export const CONNECTIONS_MANIFEST: SettingEntry[] = [
   { id: 'connections.add', section: 'connections', label: 'Add a Server', description: 'Save a remote K2 daemon to connect to', keywords: ['server', 'remote', 'connect', 'host', 'add', 'k2 connect', 'address book'] },
   { id: 'connections.remember-password', section: 'connections', label: 'Remember Password', description: 'Store a server token in your OS keychain', keywords: ['token', 'password', 'keychain', 'remember', 'credentials'] },
   { id: 'connections.list', section: 'connections', label: 'Saved Servers', description: 'Edit or remove saved K2 servers', keywords: ['servers', 'hosts', 'edit', 'remove', 'list'] },
+  {
+    id: 'connections.pair-federated-peer',
+    section: 'connections',
+    label: 'Pair as federated peer',
+    description: 'Establish mutual federation trust between this Mac and a saved server so cross-server agents can connect',
+    keywords: ['federation', 'peer', 'pair', 'federated', 'cross-server', 'trust', 'agents'],
+  },
 ]
 
 function statusColor(status: ConnectionStatus): string {
@@ -125,6 +133,9 @@ export function ConnectionsSection(): React.JSX.Element {
   const [draft, setDraft] = useState<DraftHost | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Bumped after a successful "Pair as federated peer" so FederationOverview
+  // reloads peers without a full Settings remount.
+  const [fedRefreshKey, setFedRefreshKey] = useState(0)
 
   // Top-bar "Add a server…" → reveal + scroll-to + focus this form.
   const addServerFocusSeq = useAddServerFocus()
@@ -296,6 +307,7 @@ export function ConnectionsSection(): React.JSX.Element {
               connectionStatus={connectionStatus}
               onEdit={() => beginEdit(h)}
               onRemove={() => removeHost(h.id)}
+              onFederationPeersChanged={() => setFedRefreshKey((n) => n + 1)}
             />
           )
         })}
@@ -375,29 +387,36 @@ export function ConnectionsSection(): React.JSX.Element {
 
       {/* Host-aware federation overview — the ACTIVE daemon's peers + cross-agent
           connections (local or remote). Always shown. */}
-      <FederationOverview />
+      <FederationOverview refreshKey={fedRefreshKey} />
     </div>
   )
 }
 
 /** One saved-server tile. Owns its own per-host operation state (restart /
- *  update-check / update / federation badge) and drives THAT host's daemon
- *  via its OWN `{base, token}` (host-ops `remoteCreds(h)`), never the active
- *  connection — so the owner can operate a connected server straight from its
- *  tile without switching to it. A signed-out host (no token) disables the
- *  owner-gated controls and shows a "sign in" hint. */
+ *  update-check / update / federation badge / pair-as-peer) and drives THAT
+ *  host's daemon via its OWN `{base, token}` (host-ops `remoteCreds(h)`), never
+ *  the active connection — so the owner can operate a connected server
+ *  straight from its tile without switching to it. A signed-out host (no
+ *  token) disables the owner-gated controls and shows a "sign in" hint.
+ *
+ *  "Pair as federated peer" establishes mutual trust between the ACTIVE
+ *  daemon (this Mac, when the address book is shown) and this saved host —
+ *  the missing step between "Federation: on" and the Federated Connections
+ *  server picker. */
 function HostTile({
   host,
   isActive,
   connectionStatus,
   onEdit,
   onRemove,
+  onFederationPeersChanged,
 }: {
   host: ConnectHost
   isActive: boolean
   connectionStatus: ConnectionStatus
   onEdit: () => void
   onRemove: () => void
+  onFederationPeersChanged?: () => void
 }): React.JSX.Element {
   const label = host.label || host.hostname
   const creds = remoteCreds(host)
@@ -422,6 +441,11 @@ function HostTile({
   // True while polling /boot-status back to 'ready' after a restart/update we
   // triggered — drives the "reconnecting…" UX and disables re-triggering.
   const [reconnecting, setReconnecting] = useState(false)
+  // Federation peer pin status relative to the ACTIVE daemon (not this tile's
+  // host settings). 'checking' while listFederationPeers is in flight.
+  const [peerPaired, setPeerPaired] = useState<'checking' | 'yes' | 'no'>('checking')
+  const [pairBusy, setPairBusy] = useState(false)
+  const [pairMsg, setPairMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   // Stays false after unmount so async pollers / fetches don't setState on a
   // gone tile.
@@ -457,6 +481,27 @@ function HostTile({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [creds.base, creds.token])
 
+  // Does the ACTIVE daemon already trust this host as a federated peer?
+  // Re-check when sign-in state changes or after a successful pair.
+  const refreshPeerPaired = async (): Promise<void> => {
+    if (signedOut) {
+      if (aliveRef.current) setPeerPaired('no')
+      return
+    }
+    if (aliveRef.current) setPeerPaired('checking')
+    try {
+      const yes = await isTrustedPeerHost(host.hostname)
+      if (aliveRef.current) setPeerPaired(yes ? 'yes' : 'no')
+    } catch {
+      if (aliveRef.current) setPeerPaired('no')
+    }
+  }
+
+  useEffect(() => {
+    void refreshPeerPaired()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creds.base, creds.token, host.hostname, signedOut])
+
   const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
   // On a 401-class rejection — OR the daemon's token-gate 403 ("Invalid or
@@ -469,6 +514,28 @@ function HostTile({
   // so the token stays intact and the reconnect poll handles it.
   const clearIfAuthError = (m: string): void => {
     if (isAuthError(m) || isForbiddenError(m)) void reviveRemoteSession(host.id)
+  }
+
+  const doPairPeer = async (): Promise<void> => {
+    setPairBusy(true)
+    setPairMsg(null)
+    try {
+      await autoPairWithHost(host.hostname)
+      if (!aliveRef.current) return
+      setPeerPaired('yes')
+      setPairMsg({
+        ok: true,
+        text: `Paired with ${label} — it will show under Federated servers and in workspace Federated Connections.`,
+      })
+      onFederationPeersChanged?.()
+    } catch (e) {
+      if (!aliveRef.current) return
+      const m = errMsg(e)
+      clearIfAuthError(m)
+      setPairMsg({ ok: false, text: m })
+    } finally {
+      if (aliveRef.current) setPairBusy(false)
+    }
   }
 
   // Best-effort re-read of THIS host's federation badge (used by the reconnect
@@ -689,6 +756,14 @@ function HostTile({
           >
             {federationBadgeText(federation)}
           </span>
+          {!signedOut && peerPaired === 'yes' && (
+            <span
+              className="text-[9px] px-1.5 py-0.5 border whitespace-nowrap no-drag border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
+              title="This Mac already has a Trusted federation pin for this server"
+            >
+              Peer: trusted
+            </span>
+          )}
           {/* "Active" badge only — switching to a host happens from the
               server switcher / K2 Connect view, not here. The tile is for
               managing the host in place (Sign in / Restart / updates). */}
@@ -706,8 +781,8 @@ function HostTile({
 
       {/* Per-host actions — orange (matches the General-tab remote Restart/
           Update color). Signed out ⇒ just a Sign in button, hint on the left.
-          Signed in ⇒ Restart + Check for updates (both orange) in one
-          bottom-right row, plus Update when one's available. */}
+          Signed in ⇒ Pair as peer + Restart + Check for updates (both orange)
+          in one bottom-right row, plus Update when one's available. */}
       {signedOut ? (
         <div className="flex items-center justify-between gap-2">
           <span className="text-[10px] text-[var(--color-text-muted)]">Sign in to manage this server</span>
@@ -722,9 +797,38 @@ function HostTile({
               stale). Offer re-sign-in so the user is never stranded with a
               present-but-dead token. A true 401 already cleared the token above
               and flipped the tile to the signed-out branch. */}
-          {(checkError || updateError || (restartMsg ? !restartMsg.ok : false)) && (
+          {(checkError || updateError || (restartMsg ? !restartMsg.ok : false) || (pairMsg ? !pairMsg.ok : false)) && (
             <button onClick={() => signInForManagement(host)} className={BTN_ACCENT}>
               Sign in again
+            </button>
+          )}
+          {/* Chicken-and-egg fix: enable federation on both sides still leaves
+              the peer store empty until mutual trust is pinned. This button
+              runs autoPairWithHost (owner tokens on both daemons). */}
+          {peerPaired === 'yes' ? (
+            <button
+              type="button"
+              onClick={() => void doPairPeer()}
+              disabled={pairBusy || reconnecting}
+              className={BTN_SECONDARY}
+              title="Already paired — click to re-check mutual trust"
+            >
+              {pairBusy ? 'Pairing…' : 'Re-pair peer'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void doPairPeer()}
+              disabled={pairBusy || reconnecting || federation === 'off'}
+              className={BTN_ACCENT}
+              data-settings-id="connections.pair-federated-peer"
+              title={
+                federation === 'off'
+                  ? 'Enable federation on this server (and on this Mac under K2 Connect) first'
+                  : 'Establish mutual federation trust between this Mac and this server'
+              }
+            >
+              {pairBusy ? 'Pairing…' : peerPaired === 'checking' ? 'Checking peer…' : 'Pair as federated peer'}
             </button>
           )}
           <button onClick={() => void doRestart()} disabled={restartBusy || reconnecting} className={BTN_ORANGE}>
@@ -765,6 +869,13 @@ function HostTile({
       {restartMsg && (
         <div className={`text-[10px] text-right ${restartMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-status-error-soft)]'}`}>
           {restartMsg.text}
+        </div>
+      )}
+      {pairMsg && (
+        <div
+          className={`text-[10px] text-right ${pairMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-status-error-soft)]'}`}
+        >
+          {pairMsg.text}
         </div>
       )}
       {checkError && <div className="text-[10px] text-right text-[var(--color-status-error-soft)]">{checkError}</div>}

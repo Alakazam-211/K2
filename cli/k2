@@ -9,7 +9,7 @@
 # either layout (`.k2/` preferred, `.k2so/` fallback) via `_ws_dot_dir()`, so
 # agents should read/write `<workspace>/.k2/...` going forward.
 
-K2_CLI_VERSION="0.40.45"
+K2_CLI_VERSION="0.40.52"
 
 set -euo pipefail
 
@@ -98,6 +98,12 @@ fi
 if [ -r "${K2_HOME}/heartbeat.token" ]; then
     DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
 fi
+# Fresh headless boxes always get daemon.token; heartbeat.token is the
+# same secret written alongside. Prefer heartbeat (CLI convention) but
+# accept daemon.token so external owner ops work when only one is present.
+if [ -z "$DISK_OWNER_TOKEN" ] && [ -r "${K2_HOME}/daemon.token" ]; then
+    DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+fi
 if [ -z "$TOKEN" ] && [ -n "$DISK_OWNER_TOKEN" ]; then
     TOKEN="$DISK_OWNER_TOKEN"
 fi
@@ -120,12 +126,17 @@ _cli_tool_id_for_verb() {
         skills) echo "skills" ;;
         msg|talk) echo "msg" ;;
         inbox) echo "inbox" ;;
+        wiki) echo "wiki" ;;
         respond) echo "respond" ;;
         connections|reserve|release|roster|who) echo "connections" ;;
         heartbeat) echo "heartbeat" ;;
         mail|hostmail) echo "mail" ;;
         dns) echo "dns" ;;
-        publish|connect) echo "publish" ;;
+        publish) echo "publish" ;;
+        # Headless Connect account pairing (login/status/logout). Distinct
+        # from publish (nested-subdomain control plane) so login is not
+        # always attributed as the publish tool.
+        connect) echo "connect-account" ;;
         sessions|terminal) echo "sessions-spawn" ;;
         fs) echo "fs" ;;
         daemon) echo "daemon-admin" ;;
@@ -141,9 +152,9 @@ _cli_tool_id_for_verb() {
 # Locked production tools are always id (cannot be Open in the catalog).
 _cli_tool_default_mode() {
     case "${1:-}" in
-        help|schema|whats-new|checkin|activity|read|skills|tools-policy|"") echo "open" ;;
+        help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat) echo "id" ;;
-        mail|dns|publish|sessions-spawn|fs|daemon-admin|users-admin|api-key) echo "id" ;;
+        mail|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key) echo "id" ;;
         browser-open|settings) echo "id" ;;
         *) echo "open" ;;
     esac
@@ -152,7 +163,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|dns|publish|sessions-spawn|fs|daemon-admin|users-admin|api-key) return 0 ;;
+        mail|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -219,14 +230,16 @@ _skip_conn_gate=0
 # PORT/TOKEN themselves: stamps degrade to a warning, claim/unclaim
 # fail loud.)
 [ "${1:-}" = "publish" ] && _skip_conn_gate=1
-# 0.40.41 BREAKING: `connect` was renamed to `publish`. The router's
-# did-you-mean arm below must fire even with no daemon running (and
-# before any HTTP), so the retired verb skips the gate too.
+# Headless Connect account commands: login talks to Supabase first
+# (no daemon needed for the account step); status/logout can run from
+# disk alone. Daemon-touching steps (tunnel/config + start) check
+# PORT/TOKEN themselves and fail loud with a start-daemon hint.
 [ "${1:-}" = "connect" ] && _skip_conn_gate=1
 # `k2 --schema` (GH#8 #4) prints a STATIC command-surface manifest — it
 # talks to nothing, so it must work even with no daemon running (its whole
 # point is letting an agent load the CLI surface in one call).
 [ "${1:-}" = "--schema" ] && _skip_conn_gate=1
+[ "${1:-}" = "schema" ] && _skip_conn_gate=1
 
 if [ "$_skip_conn_gate" != "1" ] && { [ -z "$PORT" ] || [ -z "$TOKEN" ]; }; then
     echo "Error: Cannot connect to K2SO." >&2
@@ -358,6 +371,14 @@ _uds_eligible() {
         /cli/dns/*) return 0 ;;
         # C1 — connections list/add/remove (mutate toggle-gated server-side).
         /cli/connections) return 0 ;;
+        # PR1 federation dual-auth — peers/peer-roster/send under passport.
+        # pair/confirm stay TCP owner-or-admin only (not here).
+        /cli/federation/peers|/cli/federation/peer-roster|/cli/federation/send) return 0 ;;
+        # Named heartbeat schedule CRUD + fire/status (agent-owned workspace
+        # schedules). OS tick install + fleet-wide list stay TCP owner-only.
+        /cli/heartbeat/install-launchd|/cli/heartbeat/uninstall-launchd|/cli/heartbeat/apply-wake-scheduler) return 1 ;;
+        /cli/heartbeat/list-all|/cli/heartbeat/fires-list-all|/cli/heartbeat/set-show-sessions) return 1 ;;
+        /cli/heartbeat/*|/cli/heartbeat-log) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -456,29 +477,76 @@ cmd_respond() {
 # reachable over the tunnel with the owner token.
 _REMOTE_HOST=""
 _BARE_TARGET=""
-# Split `<target>[@<host>]` into the globals _BARE_TARGET (workspace[/agent],
-# @host stripped) and _REMOTE_HOST (the host, or "" when local). Sets GLOBALS
-# rather than echoing — callers MUST invoke it directly (NOT in a "$(...)"
-# command substitution, which runs in a subshell and would drop the global).
-# Split on the LAST '@' so `ai@ws@host` still peels the host cleanly.
+# PR2 addressing flags (set by _split_remote_target):
+#   _IS_WIRE_FORM=1   → 3-part fp::ws::agent (fed send only)
+#   _USED_LEGACY_AT=1 → peeled via legacy agent@host
+_IS_WIRE_FORM=0
+_USED_LEGACY_AT=0
+# One-shot stderr hint when agents use @ federated form (prefer ::).
+_FED_AT_HINT_SHOWN=0
+# Split a remote user address into globals:
+#   _BARE_TARGET  — agent/workspace token (host stripped)
+#   _REMOTE_HOST  — host, or "" when local
+#   _IS_WIRE_FORM / _USED_LEGACY_AT — see above
+# Callers MUST invoke it directly (NOT in a "$(...)" subshell).
+#
+# Grammar (PR2 / GH #47):
+#   agent::host.k2.dev  → user remote (2-part ::, host looks like host)
+#   agent@host          → legacy user remote
+#   fp::ws::agent       → wire form (3-part; not peeled as user remote)
+#   bare name           → local
 _split_remote_target() {
     local raw="$1"
+    _REMOTE_HOST=""
+    _BARE_TARGET="$raw"
+    _IS_WIRE_FORM=0
+    _USED_LEGACY_AT=0
+
+    # 3+ part wire form: at least two '::' separators.
+    if [[ "$raw" == *::*::* ]]; then
+        _IS_WIRE_FORM=1
+        return
+    fi
+
+    # 2-part user form agent::host (RHS must look like a host).
+    if [[ "$raw" == *::* ]]; then
+        local left="${raw%%::*}"
+        local right="${raw#*::}"
+        if [ -n "$left" ] && [ -n "$right" ] && { [[ "$right" == *.* ]] || [[ "$right" == *.k2.dev ]] || [[ "$right" == *.K2.DEV ]]; }; then
+            _BARE_TARGET="$left"
+            _REMOTE_HOST="$right"
+            return
+        fi
+        # Not host-like → leave as bare local token.
+        return
+    fi
+
+    # Legacy agent@host (split on LAST '@').
     case "$raw" in
-        *@*) _REMOTE_HOST="${raw##*@}"; _BARE_TARGET="${raw%@*}" ;;
-        *)   _REMOTE_HOST="";           _BARE_TARGET="$raw" ;;
+        *@*)
+            _REMOTE_HOST="${raw##*@}"
+            _BARE_TARGET="${raw%@*}"
+            _USED_LEGACY_AT=1
+            ;;
     esac
 }
 
 # ── Cross-server agent msg over FEDERATION ────────────────────────────
-# `k2 msg <agent>@<host> "text"` routes a CONNECTED cross-server peer over
-# federation — the SAME verb agents use for a local peer. This is the
-# federation send-surface (gated on `is_remote_connection`), NOT the
-# owner-remote drive-the-box path that `k2 talk <ws>@<host>` uses.
+# `k2 msg <agent>::<host> "text"` (canonical) or legacy `agent@host` routes a
+# CONNECTED cross-server peer over federation — the SAME verb agents use for
+# a local peer. This is the federation send-surface (gated on
+# `is_remote_connection`), NOT the owner-remote drive-the-box path that
+# `k2 talk <ws>@<host>` uses.
+#
+# PR1: uses scoped passport via cli_send (UDS when eligible, else TCP with
+# TOKEN which for msg/ID is SCOPED_TOKEN — never disk-owner inversion).
+# Daemon forces from_workspace from principal when scoped.
+# PR2: prefer agent::host; wire form fp::ws::agent stays on `k2 fed send`.
 #
 # Args: <agent> <host> <text> <from_project>. Returns:
 #   0  delivered ("sent") or durably queued ("queued")
-#   2  actionable user error (fed off, no peer, not trusted, no agent,
-#      daemon "not a connection" 403/404)
+#   3  not_connected / forbidden (mail/C2 teaching parity)
+#   2  actionable user error (fed off, no peer, not trusted, no agent)
 #   1  unexpected/unparseable daemon response
 #
 # Steps: resolve the peer by matching "<subdomain>.k2.dev" == <host> in
@@ -490,44 +558,96 @@ _send_remote_msg() {
     local agent="$1" host="$2" text="$3" from_project="$4"
 
     if [ -z "$agent" ]; then
-        echo "k2 msg: empty agent name in '<agent>@<host>' target." >&2
+        echo "k2 msg: empty agent name in '<agent>::<host>' target." >&2
         return 2
     fi
     if [ -z "$host" ]; then
-        echo "k2 msg: empty host in '<agent>@<host>' target." >&2
+        echo "k2 msg: empty host in '<agent>::<host>' target." >&2
         return 2
     fi
 
+    # Optional one-shot compat hint when the caller used legacy @ form.
+    if [ "${_USED_LEGACY_AT:-0}" = "1" ] && [ "${_FED_AT_HINT_SHOWN:-0}" = "0" ]; then
+        echo "hint: prefer \`k2 msg ${agent}::${host}\` — '@' federated addresses are legacy compat (not email)." >&2
+        _FED_AT_HINT_SHOWN=1
+    fi
+
     # 1. Resolve the peer by host (subdomain.k2.dev == host) → fingerprint.
+    # cli_send: prefer cell UDS + scoped Bearer when present.
     local peers_json
-    peers_json=$(cli_request "/cli/federation/peers")
+    peers_json=$(cli_send cli_request "/cli/federation/peers")
     local pmatch
     pmatch=$(printf '%s' "$peers_json" | python3 -c '
 import json, sys
-host = sys.argv[1]
+host = (sys.argv[1] or "").strip().lower()
+# Accept bare subdomain or full host.k2.dev (and collapse accidental doubles).
+def bare(h):
+    h = (h or "").strip().lower()
+    while h.endswith(".k2.dev.k2.dev"):
+        h = h[: -len(".k2.dev")]
+    if h.endswith(".k2.dev"):
+        h = h[: -len(".k2.dev")]
+    return h
+want = bare(host)
 try:
     d = json.load(sys.stdin)
 except Exception:
     print("ERR\tparse"); sys.exit(0)
 if not isinstance(d, dict) or not isinstance(d.get("peers"), list):
     # federation off (404 {"error":...}) or unexpected shape
+    err = d.get("error") if isinstance(d, dict) else None
+    if isinstance(err, dict) and err.get("code") in ("forbidden", "not_connected"):
+        print("FORBIDDEN\t%s" % (err.get("hint") or err.get("code") or ""))
+        sys.exit(0)
+    if isinstance(d, dict) and d.get("error"):
+        print("NOFED\t%s" % (d.get("error") if not isinstance(d.get("error"), dict) else d["error"].get("hint") or d["error"]))
+        sys.exit(0)
     print("NOFED"); sys.exit(0)
 for p in d["peers"]:
     sub = p.get("subdomain") or ""
-    if sub and (sub + ".k2.dev") == host:
+    label = p.get("label") or ""
+    if want and bare(sub) == want:
         print("OK\t%s\t%s" % (p.get("fingerprint", ""), p.get("trust", "")))
         sys.exit(0)
-print("NONE")
+    # Also match full host forms stored as subdomain
+    if host and sub and sub.lower() in (host, host + ".k2.dev", want + ".k2.dev"):
+        print("OK\t%s\t%s" % (p.get("fingerprint", ""), p.get("trust", "")))
+        sys.exit(0)
+    if want and bare(label) == want:
+        print("OK\t%s\t%s" % (p.get("fingerprint", ""), p.get("trust", "")))
+        sys.exit(0)
+# List known peer hosts so the NONE error is actionable (GH #48).
+known = []
+for p in d["peers"]:
+    sub = (p.get("subdomain") or "").strip()
+    if sub:
+        known.append(sub if sub.endswith(".k2.dev") else sub + ".k2.dev")
+    elif p.get("label"):
+        known.append(str(p.get("label")))
+print("NONE\t%s" % (", ".join(known) if known else ""))
 ' "$host")
 
     local pkind fp trust
     IFS=$'\t' read -r pkind fp trust <<<"$pmatch"
     case "$pkind" in
+        FORBIDDEN)
+            # Scoped token rejected (should not happen post-PR1) or other gate.
+            printf '%s\n' "${fp:-forbidden}" >&2
+            return 3 ;;
         NOFED|ERR)
             echo "federation is off or unreachable on $host — enable it and pair first (k2 fed enable / k2 fed pair-request)." >&2
+            [ -n "$fp" ] && [ "$pkind" = "NOFED" ] && echo "detail: $fp" >&2
             return 2 ;;
         NONE)
-            echo "no paired peer for $host — pair it first (k2 fed pair-request / confirm), or check the host." >&2
+            # GH #48: inbound may have landed while this side never stored a
+            # return pin, or the host string doesn't match the peer's subdomain.
+            if [ -n "$fp" ]; then
+                echo "no paired peer matching $host — known peers: $fp" >&2
+                echo "hint: run \`k2 fed peers\` to inspect trust; if you received a message from this host but have no pin, complete pairing (k2 fed pair-request / confirm) so replies can go back." >&2
+            else
+                echo "no paired peer for $host — pair it first (k2 fed pair-request / confirm), or check the host." >&2
+                echo "hint: run \`k2 fed peers\` to list trusted servers on this machine." >&2
+            fi
             return 2 ;;
         OK) ;;
         *)
@@ -548,7 +668,7 @@ print("NONE")
 
     # 2. Resolve the agent's workspace_id from that peer's roster.
     local roster_json
-    roster_json=$(cli_request "/cli/federation/peer-roster" "peer=$(urlencode "$fp")")
+    roster_json=$(cli_send cli_request "/cli/federation/peer-roster" "peer=$(urlencode "$fp")")
     local rres
     rres=$(printf '%s' "$roster_json" | python3 -c '
 import json, sys
@@ -560,10 +680,16 @@ except Exception:
 if not isinstance(d, dict):
     print("ERR\t"); sys.exit(0)
 if "error" in d:
-    print("ERR\t%s" % d.get("error", "")); sys.exit(0)
+    err = d.get("error")
+    if isinstance(err, dict) and err.get("code") in ("forbidden", "not_connected"):
+        print("FORBIDDEN\t%s" % (err.get("hint") or err.get("code") or ""))
+        sys.exit(0)
+    print("ERR\t%s" % (err if not isinstance(err, dict) else err.get("hint") or err.get("code") or err))
+    sys.exit(0)
 roster = d.get("roster") or {}
 agents = roster.get("agents") or []
-matches = [a for a in agents if a.get("agent") == agent]
+agent_lc = (agent or "").strip().lower()
+matches = [a for a in agents if (a.get("agent") or "").strip().lower() == agent_lc]
 if not matches:
     names = ", ".join(a.get("agent", "?") for a in agents)
     print("NONE\t%s" % names); sys.exit(0)
@@ -578,6 +704,14 @@ print("OK\t%s" % (matches[0].get("workspace_id", "") or ""))
     rdetail="${rres#*$'\t'}"
     [ "$rdetail" = "$rres" ] && rdetail=""
     case "$rkind" in
+        FORBIDDEN)
+            # Teaching JSON shape parity with local msg/read exit 3.
+            python3 -c 'import json,sys
+hint=sys.argv[1] or "forbidden"
+sys.stderr.write(json.dumps({"error":{"code":"forbidden","hint":hint}},
+                            ensure_ascii=False,separators=(",",":"))+"\n")
+' "$rdetail" 2>/dev/null || echo "${rdetail:-forbidden}" >&2
+            return 3 ;;
         ERR)
             echo "could not reach $host's roster: ${rdetail:-$roster_json}" >&2
             return 2 ;;
@@ -603,12 +737,15 @@ print("OK\t%s" % (matches[0].get("workspace_id", "") or ""))
     fi
 
     # 3. Send. Build the body safely with python3 (mirrors cmd_fed send).
+    # from_workspace is best-effort for owner path; scoped principal forces it
+    # server-side from the passport (body spoof ignored).
     local body resp
     body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' \
         "${fp}::${wsid}::${agent}" "$text" "$from_project")
-    resp=$(cli_post_json "/cli/federation/send" "$body")
+    resp=$(cli_send cli_post_json "/cli/federation/send" "$body")
 
     # 4. Surface the response.
+    # not_connected / forbidden → exit 3 + teaching (mail/C2 parity).
     local sres skind sdetail
     sres=$(printf '%s' "$resp" | python3 -c '
 import json, sys
@@ -618,13 +755,23 @@ except Exception:
     print("RAW"); sys.exit(0)
 if not isinstance(d, dict):
     print("RAW"); sys.exit(0)
-if "error" in d:
-    print("ERROR\t%s" % d.get("error", "")); sys.exit(0)
+err = d.get("error")
+if isinstance(err, dict):
+    code = err.get("code") or ""
+    hint = err.get("hint") or code
+    if code in ("not_connected", "gated", "forbidden"):
+        # Emit teaching JSON on stderr via GATE line; CLI maps to exit 3.
+        print("GATE\t%s\t%s" % (code, hint)); sys.exit(0)
+    print("ERROR\t%s" % (hint or code or err)); sys.exit(0)
+if err is not None and not isinstance(err, dict):
+    print("ERROR\t%s" % err); sys.exit(0)
 st = d.get("status", "")
 if st == "sent":
     print("SENT"); sys.exit(0)
 if st == "queued":
     print("QUEUED\t%s" % (d.get("hint", "") or "")); sys.exit(0)
+if st == "declined":
+    print("ERROR\t%s" % (d.get("reason") or "declined by peer")); sys.exit(0)
 print("OTHER")
 ')
     skind="${sres%%$'\t'*}"
@@ -632,11 +779,23 @@ print("OTHER")
     [ "$sdetail" = "$sres" ] && sdetail=""
     case "$skind" in
         SENT)
-            echo "delivered to ${agent}@${host} (federation)"
+            echo "delivered to ${agent}::${host} (federation)"
             return 0 ;;
         QUEUED)
-            echo "${sdetail:-queued for ${agent}@${host} — peer briefly unreachable, will deliver when it reconnects (federation)}" >&2
+            echo "${sdetail:-queued for ${agent}::${host} — peer briefly unreachable, will deliver when it reconnects (federation)}" >&2
             return 0 ;;
+        GATE)
+            # sdetail is "code\thint" after first tab split above left "code\thint"
+            local gcode ghint
+            gcode="${sdetail%%$'\t'*}"
+            ghint="${sdetail#*$'\t'}"
+            [ "$ghint" = "$sdetail" ] && ghint="$gcode"
+            python3 -c 'import json,sys
+code,hint=sys.argv[1],sys.argv[2]
+sys.stderr.write(json.dumps({"error":{"code":code,"hint":hint}},
+                            ensure_ascii=False,separators=(",",":"))+"\n")
+' "$gcode" "$ghint"
+            return 3 ;;
         ERROR)
             echo "${sdetail:-$resp}" >&2
             return 2 ;;
@@ -773,8 +932,8 @@ cmd_terminal_spawn() {
 # 0.39.0f Phase 2.1b: cmd_agentic / cmd_state / cmd_delegate removed.
 # The dispatch arms for `agentic`, `state`, `delegate` already
 # fail_deprecated; the function bodies were dead code carried over
-# from 2.1a. The settings surface (`k2 settings --agentic`,
-# `k2 settings --state`) owns these knobs now.
+# from 2.1a. `k2 settings --agentic` owns the agentic toggle.
+# Workspace States (`state` / `--state`) retired entirely.
 
 cmd_commit() {
     local message=""
@@ -815,6 +974,38 @@ cmd_commit_merge() {
 # replacements and rejects unknowns with exit 2.
 
 # ── Multi-heartbeat (agent_heartbeats) CRUD ────────────────────────────
+# Shared error formatter for heartbeat daemon responses. Maps structured
+# owner_only / forbidden teaching (exit 3) so agents never treat a valid
+# passport as "invalid token" on owner-only surfaces.
+_hb_print_err() {
+    # stdin: raw JSON body (or empty). Exits 1/2/3.
+    python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw:
+    print("Error: empty response from daemon (is it running?)", file=sys.stderr)
+    sys.exit(1)
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: " + raw[:200], file=sys.stderr)
+    sys.exit(1)
+err = d.get("error", d) if isinstance(d, dict) else raw
+if isinstance(err, dict):
+    code = err.get("code") or "error"
+    hint = err.get("hint") or err.get("message") or code
+    if code in ("owner_only", "forbidden", "gated") and "ask your human" not in hint:
+        hint = (hint + " — " if hint else "") + "requires owner/admin — ask your human"
+    print("Error: " + hint, file=sys.stderr)
+    sys.exit(3 if code in ("owner_only", "forbidden", "gated") else 2 if code == "usage" else 1)
+print("Error: " + str(err), file=sys.stderr)
+# Classic string "Invalid or missing auth token" → treat as auth failure
+if isinstance(err, str) and "token" in err.lower():
+    sys.exit(3)
+sys.exit(1)
+'
+}
+
 # Parse frequency/day/time flags into spec JSON that matches the scheduler
 # logic in should_project_fire.
 #   --daily --time 07:00
@@ -950,17 +1141,17 @@ cmd_heartbeat_add() {
     freq=$(echo "$spec_output" | grep '^FREQ:' | sed 's/^FREQ://')
     local params="name=$(urlencode "$name")&frequency=$freq&spec=$(urlencode "$spec_json")"
     local resp
-    resp=$(cli_request "/cli/heartbeat/add" "$params")
+    resp=$(cli_send cli_request "/cli/heartbeat/add" "$params")
     local wakeup_abs
+    if printf '%s' "$resp" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); sys.exit(0 if isinstance(d,dict) and 'error' in d else 1)" 2>/dev/null; then
+        printf '%s' "$resp" | _hb_print_err
+        return $?
+    fi
     wakeup_abs=$(printf '%s' "$resp" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
-    if 'error' in d:
-        print(f'Error: {d[\"error\"]}', file=sys.stderr); sys.exit(1)
     print(d.get('wakeupAbs') or '')
-except SystemExit:
-    raise
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
 ")
@@ -982,7 +1173,7 @@ except Exception as e:
 # user walk away from a heartbeat that can never fire. Best-effort —
 # never fails the command it follows.
 hb_warn_if_transport_down() {
-    cli_request "/cli/heartbeat/scheduler-status" 2>/dev/null | python3 -c "
+    cli_send cli_request "/cli/heartbeat/scheduler-status" 2>/dev/null | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1022,10 +1213,10 @@ cmd_heartbeat_list() {
         return
     fi
     if [ "$as_json" = "1" ]; then
-        cli_request "/cli/heartbeat/list"
+        cli_send cli_request "/cli/heartbeat/list"
         return
     fi
-    cli_request "/cli/heartbeat/list" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/list" | python3 -c "
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1033,7 +1224,16 @@ try:
         # Daemon error object, not a row list (e.g. unregistered
         # workspace, missing route on an older daemon) — GH#23 asked
         # for a real message here instead of a parser crash.
-        print(f\"Error: {rows.get('error', rows)}\", file=sys.stderr)
+        # owner_only / forbidden → exit 3 teaching (not fake invalid token).
+        err = rows.get('error', rows)
+        if isinstance(err, dict):
+            code = err.get('code') or 'error'
+            hint = err.get('hint') or err.get('message') or code
+            if code in ('owner_only', 'forbidden', 'gated') and 'ask your human' not in hint:
+                hint = (hint + ' — ' if hint else '') + 'requires owner/admin — ask your human'
+            print(f'Error: {hint}', file=sys.stderr)
+            sys.exit(3 if code in ('owner_only', 'forbidden', 'gated') else 1)
+        print(f'Error: {err}', file=sys.stderr)
         sys.exit(1)
     if not rows:
         print('No heartbeats configured for this workspace.'); sys.exit(0)
@@ -1081,7 +1281,7 @@ cmd_heartbeat_remove() {
     [ -z "$name" ] && { echo "Usage: k2 heartbeat remove <name> [--purge]" >&2; exit 1; }
 
     if $purge; then
-        cli_request "/cli/heartbeat/remove" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+        cli_send cli_request "/cli/heartbeat/remove" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1096,7 +1296,7 @@ except Exception as e:
         # Stops firing on schedule, hidden from `heartbeat list`, but
         # the WAKEUP.md and chat history stay readable via
         # `heartbeat list-archived` and the sidebar's Archived section.
-        cli_request "/cli/heartbeat/archive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+        cli_send cli_request "/cli/heartbeat/archive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1112,7 +1312,7 @@ except Exception as e:
 cmd_heartbeat_unarchive() {
     local name="${1:-}"
     [ -z "$name" ] && { echo "Usage: k2 heartbeat unarchive <name>" >&2; exit 1; }
-    cli_request "/cli/heartbeat/unarchive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+    cli_send cli_request "/cli/heartbeat/unarchive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1134,10 +1334,10 @@ cmd_heartbeat_list_archived() {
         esac
     done
     if [ "$as_json" = "1" ]; then
-        cli_request "/cli/heartbeat/list-archived"
+        cli_send cli_request "/cli/heartbeat/list-archived"
         return
     fi
-    cli_request "/cli/heartbeat/list-archived" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/list-archived" | python3 -c "
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1174,7 +1374,7 @@ cmd_heartbeat_fire() {
     [ -z "$name" ] && { echo "Usage: k2 heartbeat signal fire <name> [--force]" >&2; exit 1; }
     local params="name=$(urlencode "$name")"
     [ "$force" = "1" ] && params="${params}&force=1"
-    cli_request "/cli/heartbeat/fire" "$params" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/fire" "$params" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1209,7 +1409,7 @@ cmd_heartbeat_enable_disable() {
     # Enabled/Disabled like a human would.
     local verb="Enabled"
     [ "$enabled" = "false" ] && verb="Disabled"
-    cli_request "/cli/heartbeat/enable" "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/enable" "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1230,7 +1430,7 @@ cmd_heartbeat_use_pinned_session() {
     local enabled="$1"; shift
     local name="${1:-}"
     [ -z "$name" ] && { echo "Usage: k2 heartbeat use-pinned-session [on|off] <name>" >&2; exit 1; }
-    cli_request "/cli/heartbeat/set-use-workspace-session" \
+    cli_send cli_request "/cli/heartbeat/set-use-workspace-session" \
         "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
 import json, sys
 try:
@@ -1275,7 +1475,7 @@ cmd_heartbeat_session() {
 
     if [ -z "$mode" ]; then
         # Read-only: print the current delivery target.
-        cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+        cli_send cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
 import json, sys, os
 name = os.environ['NAME']
 try:
@@ -1304,7 +1504,7 @@ else:
         echo "--provider only applies with --set <session-id>" >&2; exit 1
     fi
 
-    cli_request "/cli/heartbeat/set-session" \
+    cli_send cli_request "/cli/heartbeat/set-session" \
         "name=$(urlencode "$name")&mode=$mode&session_id=$(urlencode "$session_id")&provider=$(urlencode "$provider")" \
         | NAME="$name" python3 -c "
 import json, sys, os
@@ -1332,7 +1532,7 @@ cmd_heartbeat_rename() {
         echo "Usage: k2 heartbeat rename <old-name> <new-name>" >&2
         exit 1
     fi
-    cli_request "/cli/heartbeat/rename" "from=$(urlencode "$from")&to=$(urlencode "$to")" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/rename" "from=$(urlencode "$from")&to=$(urlencode "$to")" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1382,7 +1582,7 @@ cmd_heartbeat_edit() {
         local freq
         freq=$(echo "$spec_output" | grep '^FREQ:' | sed 's/^FREQ://')
         local params="name=$(urlencode "$name")&frequency=$freq&spec=$(urlencode "$spec_json")"
-        cli_request "/cli/heartbeat/edit" "$params" | python3 -c "
+        cli_send cli_request "/cli/heartbeat/edit" "$params" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -1400,7 +1600,7 @@ except Exception as e:
         # workspace base. Written only AFTER a successful schedule edit
         # (a failed edit above already exited non-zero).
         local rel_path
-        rel_path=$(cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+        rel_path=$(cli_send cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1440,7 +1640,7 @@ cmd_heartbeat_show() {
         esac
     done
     [ -z "$name" ] && { echo "Usage: k2 heartbeat show <name> [--json]" >&2; exit 1; }
-    cli_request "/cli/heartbeat/list" | NAME="$name" AS_JSON="$as_json" python3 -c "
+    cli_send cli_request "/cli/heartbeat/list" | NAME="$name" AS_JSON="$as_json" python3 -c "
 import json, os, sys
 name = os.environ['NAME']
 as_json = os.environ['AS_JSON'] == '1'
@@ -1496,7 +1696,7 @@ cmd_heartbeat_wakeup() {
     [ -z "$name" ] && { echo "Usage: k2 heartbeat wakeup <name> [--path-only|--edit]" >&2; exit 1; }
 
     local rel_path
-    rel_path=$(cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+    rel_path=$(cli_send cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1552,7 +1752,7 @@ cmd_heartbeat_status() {
     # GH#27: an unknown name used to print 'No fire history ... yet',
     # implying the heartbeat exists. Check existence first (same message
     # shape as `heartbeat show`).
-    cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
+    cli_send cli_request "/cli/heartbeat/list" | NAME="$name" python3 -c "
 import json, os, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1564,7 +1764,7 @@ if not any(r.get('name') == os.environ['NAME'] for r in rows):
     print(f'No heartbeat named \"{os.environ[\"NAME\"]}\" in this workspace.', file=sys.stderr)
     sys.exit(1)
 " || exit 1
-    cli_request "/cli/heartbeat/status" "name=$(urlencode "$name")&limit=$limit" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/status" "name=$(urlencode "$name")&limit=$limit" | python3 -c "
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -1593,7 +1793,7 @@ cmd_heartbeat_log() {
             *) shift ;;
         esac
     done
-    cli_request "/cli/heartbeat-log" "limit=$limit" | python3 -c "
+    cli_send cli_request "/cli/heartbeat-log" "limit=$limit" | python3 -c "
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -3326,10 +3526,8 @@ except: pass
 }
 
 cmd_agent_complete() {
-    # Sub-agent completion command:
-    # Reads workspace state capability for the work item's source type
-    # Auto mode: commit, merge, clean up, notify manager
-    # Gated mode: commit, move to done, notify manager for review
+    # Sub-agent completion: moves active work to done for human review
+    # (Workspace States / auto-merge-by-source retired).
     local agent="" file=""
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -3470,6 +3668,163 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
 }
 
+# Phase 0b (prd-wiki-public-chat-api-loopback-v1) — per-workspace owner API
+# guest policy. Re-injected by the daemon on every /v1 host-session spawn and
+# message-live so external callers are framed as non-owners. Callers cannot
+# set/override this from the request body.
+#
+#   k2 workspace api-guest-policy get <ws>
+#   k2 workspace api-guest-policy set <ws> <text…>
+#   k2 workspace api-guest-policy set <ws> --file <path>
+#   k2 workspace api-guest-policy set <ws> --default   # clear → platform default
+#
+# Storage: projects.api_guest_policy via POST /cli/workspace/set.
+# Empty/NULL → platform default (settings::DEFAULT_API_GUEST_POLICY).
+cmd_workspace_api_guest_policy() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        get)
+            local target="${1:-}"
+            [[ -z "$target" ]] && {
+                echo "Usage: k2 workspace api-guest-policy get <workspace>" >&2
+                exit 2
+            }
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            cli_request "/cli/settings" "project=$(urlencode "$resolved_path")" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if isinstance(d, dict) and d.get("error"):
+    err = d["error"]
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % err, file=sys.stderr)
+    sys.exit(1)
+policy = d.get("apiGuestPolicy")
+if policy is None:
+    print("Error: settings response missing apiGuestPolicy", file=sys.stderr)
+    sys.exit(1)
+sys.stdout.write(policy if policy.endswith("\n") else policy + "\n")
+'
+            ;;
+        set)
+            local target="${1:-}"
+            [[ -z "$target" ]] && {
+                echo "Usage: k2 workspace api-guest-policy set <workspace> <text|--file PATH|--default>" >&2
+                exit 2
+            }
+            shift
+            local text=""
+            if [[ "${1:-}" == "--default" || "${1:-}" == "--clear" ]]; then
+                text=""
+            elif [[ "${1:-}" == "--file" ]]; then
+                local fpath="${2:-}"
+                [[ -z "$fpath" ]] && {
+                    echo "Usage: k2 workspace api-guest-policy set <workspace> --file <path>" >&2
+                    exit 2
+                }
+                if [[ "$fpath" == "-" ]]; then
+                    text=$(cat)
+                else
+                    [[ -f "$fpath" ]] || {
+                        echo "Error: file not found: $fpath" >&2
+                        exit 1
+                    }
+                    text=$(cat "$fpath")
+                fi
+            elif [[ $# -eq 0 ]]; then
+                echo "Usage: k2 workspace api-guest-policy set <workspace> <text|--file PATH|--default>" >&2
+                echo "  (or pipe text: k2 workspace api-guest-policy set <ws> --file -)" >&2
+                exit 2
+            else
+                # Remaining args joined as the policy text.
+                text="$*"
+            fi
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            local body
+            body=$(K2_AGP_PATH="$resolved_path" K2_AGP_TEXT="$text" python3 -c 'import json,os
+print(json.dumps({
+    "project": os.environ["K2_AGP_PATH"],
+    "fields": {"api_guest_policy": os.environ.get("K2_AGP_TEXT", "")},
+}))')
+            cli_post_json "/cli/workspace/set" "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if d.get("error") or d.get("ok") is False:
+    err = d.get("error")
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % (err or raw[:200]), file=sys.stderr)
+    sys.exit(1)
+val = ""
+for a in d.get("actions") or []:
+    if a.get("field") == "api_guest_policy":
+        val = a.get("value") or ""
+        st = a.get("status")
+        if st == "skipped":
+            print("API guest policy already set (unchanged).")
+            sys.exit(0)
+if not val.strip():
+    print("API guest policy cleared (platform default will be used on inject).")
+else:
+    print("API guest policy set (%d chars)." % len(val))
+'
+            ;;
+        ""|-h|--help|help)
+            cat <<'EOF' >&2
+Usage: k2 workspace api-guest-policy get|set <workspace> [text|--file PATH|--default]
+
+Per-workspace owner policy re-injected on every /v1 host-session turn so
+external API clients are framed as non-owners. Callers cannot set this.
+
+  get <ws>                      Print effective policy (platform default if unset)
+  set <ws> <text…>              Set custom policy text
+  set <ws> --file <path>        Set policy from a file (use - for stdin)
+  set <ws> --default            Clear custom text → platform default
+
+Also writable via: k2 agent set / POST /cli/workspace/set field api_guest_policy
+EOF
+            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
+            exit 2
+            ;;
+        *)
+            echo "Unknown api-guest-policy subcommand: $sub" >&2
+            echo "Usage: k2 workspace api-guest-policy get|set <workspace> …" >&2
+            exit 2
+            ;;
+    esac
+}
+
 # B3a (sandbox) — set/clear the PER-WORKSPACE Anthropic API key (BYO key).
 # Owner-only daemon route (`/cli/workspace/api-key`, POST). The key rides the
 # JSON BODY (never the URL/query) so it isn't logged by intermediaries. An
@@ -3577,7 +3932,9 @@ PY
 # the external /v1/* surface. Subcommands:
 #   k2 api-key create [--label L] [--anthropic-key K | --llm-key K] \
 #                     [--provider anthropic|openai|google|xai] [--base-url U] \
-#                     [--workspaces '*'|ws1,ws2,...]
+#                     [--workspaces '*'|ws1,ws2,...] \
+#                     [--allow host-sessions,canonical-message,sandboxes] \
+#                     [--deny  host-sessions,canonical-message,sandboxes]
 #   k2 api-key list
 #   k2 api-key revoke <id>
 # --workspaces is the per-key WORKSPACE GRANT (PRD §G2 #4): '*' = every
@@ -3587,6 +3944,19 @@ PY
 # this field since 0.40.21; the flag was simply never exposed here, which
 # made every CLI-minted key dead on arrival for /v1 — found on rpmavs
 # 2026-07-07).
+# --allow / --deny (Phase 0, wiki public chat): per-key CAPABILITIES that gate
+# which /v1 doors the key may open (orthogonal to the workspace grant):
+#   host-sessions      (aliases: host)      → /v1/w/<ws>/host-sessions*
+#   canonical-message  (aliases: canonical, message) → POST /v1/w/<ws>/message
+#   sandboxes          (alias: sandbox)     → /v1/sandboxes* + /v1/w/<ws>/sessions*
+# Defaults for NEW keys: host-sessions ON, canonical-message OFF, sandboxes OFF
+# (the wiki-chat recipe). --allow REPLACES the default set with only the listed
+# doors; --deny turns listed doors OFF on top of the result.
+# Wiki public-chat mint recipe:
+#   k2 api on
+#   k2 api-key create --label wiki-public-chat \
+#     --workspaces '<wiki-ws-slug>' \
+#     --allow host-sessions
 # The RAW key is printed exactly ONCE on create ("store it now, not shown
 # again"); it is never re-printed. The associated LLM credential (BYO cred;
 # --llm-key is the provider-neutral alias for --anthropic-key) is never echoed
@@ -3600,7 +3970,7 @@ cmd_api_key() {
     shift || true
     case "$sub" in
         create)
-            local label="" anthropic="" provider="" base_url="" workspaces=""
+            local label="" anthropic="" provider="" base_url="" workspaces="" allow="" deny=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --label)        label="${2:-}"; shift 2 ;;
@@ -3610,13 +3980,15 @@ cmd_api_key() {
                     --provider)     provider="${2:-}"; shift 2 ;;
                     --base-url)     base_url="${2:-}"; shift 2 ;;
                     --workspaces)   workspaces="${2:-}"; shift 2 ;;
+                    --allow)        allow="${2:-}"; shift 2 ;;
+                    --deny)         deny="${2:-}"; shift 2 ;;
                     *)              echo "Unknown flag: $1" >&2; exit 1 ;;
                 esac
             done
             # Build the JSON body via python3 so the (secret) LLM key is
             # escaped correctly and never interpolated into a shell/URL context.
             local body
-            body=$(K2_AK_LABEL="$label" K2_AK_ANTH="$anthropic" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" K2_AK_WORKSPACES="$workspaces" python3 -c 'import json,os
+            body=$(K2_AK_LABEL="$label" K2_AK_ANTH="$anthropic" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" K2_AK_WORKSPACES="$workspaces" K2_AK_ALLOW="$allow" K2_AK_DENY="$deny" python3 -c 'import json,os
 b={"label": os.environ.get("K2_AK_LABEL","")}
 k=os.environ.get("K2_AK_ANTH","")
 if k.strip(): b["anthropicKey"]=k
@@ -3632,6 +4004,13 @@ if w == "*": b["workspaces"]="*"
 elif w:
     slugs=[s.strip() for s in w.split(",") if s.strip()]
     if slugs: b["workspaces"]=slugs
+# Phase 0 capabilities: comma-separated --allow / --deny lists.
+a=os.environ.get("K2_AK_ALLOW","").strip()
+if a:
+    b["allow"]=[s.strip() for s in a.split(",") if s.strip()]
+d=os.environ.get("K2_AK_DENY","").strip()
+if d:
+    b["deny"]=[s.strip() for s in d.split(",") if s.strip()]
 print(json.dumps(b))')
             cli_post_json "/cli/api-keys/create" "$body" \
                 | K2_AK_WORKSPACES="$workspaces" python3 -c 'import json,os,sys
@@ -3640,6 +4019,12 @@ try:
     if "error" in d:
         print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
     print("API key created (id: %s)." % d.get("id",""))
+    caps=d.get("capabilities") or {}
+    if caps:
+        on=[n for n,v in (("host-sessions",caps.get("hostSessions")),
+                          ("canonical-message",caps.get("canonicalMessage")),
+                          ("sandboxes",caps.get("sandboxes"))) if v]
+        print("Capabilities: %s" % (", ".join(on) if on else "(none)"))
     print("")
     print("  %s" % d.get("key",""))
     print("")
@@ -3668,6 +4053,11 @@ try:
         cred=("%s-key" % prov) if k.get("anthropicKeySet") else "no-llm-key"
         line="%s  [%s]  %s  %s  scope=%s" % (k.get("id",""), state, (k.get("label") or "-"), cred, k.get("scope",""))
         if k.get("baseUrl"): line += "  base-url=%s" % k["baseUrl"]
+        caps=k.get("capabilities") or {}
+        on=[n for n,v in (("host-sessions",caps.get("hostSessions")),
+                          ("canonical-message",caps.get("canonicalMessage")),
+                          ("sandboxes",caps.get("sandboxes"))) if v]
+        line += "  caps=%s" % (",".join(on) if on else "none")
         print(line)
 except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
@@ -3688,7 +4078,24 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
             ;;
         *)
-            echo "Usage: k2 api-key <create [--label L] [--anthropic-key K]|list|revoke <id>>" >&2
+            echo "Usage: k2 api-key <create|list|revoke>" >&2
+            echo "" >&2
+            echo "  create  [--label L] [--anthropic-key K | --llm-key K]" >&2
+            echo "          [--provider anthropic|openai|google|xai] [--base-url U]" >&2
+            echo "          [--workspaces '*'|ws1,ws2,...]" >&2
+            echo "          [--allow host-sessions,canonical-message,sandboxes]" >&2
+            echo "          [--deny  host-sessions,canonical-message,sandboxes]" >&2
+            echo "  list" >&2
+            echo "  revoke  <id>" >&2
+            echo "" >&2
+            echo "Capabilities (Phase 0) gate which /v1 doors a key may open:" >&2
+            echo "  host-sessions      → /v1/w/<ws>/host-sessions*   (default ON for new keys)" >&2
+            echo "  canonical-message  → POST /v1/w/<ws>/message     (default OFF)" >&2
+            echo "  sandboxes          → /v1/sandboxes* + sessions*  (default OFF)" >&2
+            echo "" >&2
+            echo "Wiki public-chat recipe:" >&2
+            echo "  k2 api-key create --label wiki-public-chat \\" >&2
+            echo "    --workspaces '<wiki-ws-slug>' --allow host-sessions" >&2
             exit 1 ;;
     esac
 }
@@ -3925,12 +4332,19 @@ cmd_msg() {
         exit 1
     }
 
-    # Cross-server peer: `k2 msg <agent>@<host> "text"` routes a CONNECTED
-    # remote peer over federation (same verb as a local peer). Only the
-    # @host form diverts here; the local-workspace path below is untouched
-    # when _REMOTE_HOST is empty. (cmd_talk's @host is a different,
-    # owner-remote path and is intentionally NOT unified here.)
+    # Cross-server peer: `k2 msg <agent>::<host> "text"` (or legacy @)
+    # routes a CONNECTED remote peer over federation (same verb as a local
+    # peer). Wire form `fp::ws::agent` is for `k2 fed send` only — teach.
+    # Local-workspace path below is untouched when _REMOTE_HOST is empty.
+    # (cmd_talk's @host is a different, owner-remote path and is
+    # intentionally NOT unified here.)
     _split_remote_target "$target"
+    if [ "${_IS_WIRE_FORM:-0}" = "1" ]; then
+        echo "k2 msg: '${target}' looks like federation wire form (<fp>::<workspace>::<agent>)." >&2
+        echo "  For agents use the user form:  k2 msg <agent>::<host> \"text\"" >&2
+        echo "  Wire form is for:              k2 fed send <fp>::<ws>::<agent> \"text\"" >&2
+        return 2
+    fi
     if [ -n "$_REMOTE_HOST" ]; then
         _send_remote_msg "$_BARE_TARGET" "$_REMOTE_HOST" "$text" "$PROJECT"
         return $?
@@ -3947,11 +4361,26 @@ cmd_msg() {
     # empty string, so the recipient PTY always sees a [from ...] prefix.
     local from="$explicit_from"
     if [[ -z "$from" ]]; then
+        # Prefer the agent display name (persona / projects.name) so the
+        # recipient sees [from ProposalWriter], never a passport UUID.
+        # Scoped UDS stamps also rewrite server-side; this covers TCP /
+        # owner-token fallbacks and keeps CLI self-attribution correct.
         local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
         if [[ -n "$sender_path" ]]; then
             local sender_name
-            sender_name=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$sender_path")" 2>/dev/null \
-                | python3 -c 'import json,sys,os
+            sender_name=$(cli_request "/cli/workspace/agent-display-name" \
+                "project=$(urlencode "$sender_path")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    name = (d.get("display_name") or "").strip()
+    if name:
+        print(name)
+except Exception:
+    pass' 2>/dev/null)
+            if [[ -z "$sender_name" ]]; then
+                sender_name=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$sender_path")" 2>/dev/null \
+                    | python3 -c 'import json,sys,os
 try:
     data = json.load(sys.stdin)
     path = data.get("path","")
@@ -3959,6 +4388,7 @@ try:
         print(os.path.basename(path.rstrip("/")))
 except Exception:
     pass' 2>/dev/null)
+            fi
             from="${sender_name:-external}"
         else
             from="external"
@@ -4666,7 +5096,7 @@ if as_json:
     }
     for c in conns:
         if c.get('remote'):
-            addr = c.get('address') or ('%s@%s' % (c.get('agent', '?'), c.get('host', '?')))
+            addr = c.get('address') or ('%s::%s' % (c.get('agent', '?'), c.get('host', '?')))
             out['connections'].append({
                 'name': addr,
                 'kind': 'remote',
@@ -4689,7 +5119,7 @@ if not conns:
     print('  (none)')
 for c in conns:
     if c.get('remote'):
-        addr = c.get('address') or ('%s@%s' % (c.get('agent', '?'), c.get('host', '?')))
+        addr = c.get('address') or ('%s::%s' % (c.get('agent', '?'), c.get('host', '?')))
         print('  - %s   (remote)' % addr)
     else:
         flag = '' if c.get('reachable', True) else '  [UNREACHABLE — project missing or path gone]'
@@ -5776,6 +6206,1769 @@ print("Removed %s" % (d.get("removed") or "(subdomain)"))
     esac
 }
 
+# ── Headless Connect users (local daemon accounts) ────────────────────
+# PRD: prd-headless-connect-onboarding-v1.md R2.
+# These manage /cli/users/* on the LOCAL daemon (owner-token root of
+# trust for the first owner; afterwards Owner/Admin session as gated
+# server-side). Never put a password on argv — interactive getpass or
+# --password-stdin only.
+
+_users_usage() {
+    cat <<'EOF' >&2
+k2 users — local daemon connect-user accounts
+
+USAGE
+  k2 users                      List accounts (username, role, disabled)
+  k2 users list                 Same as above
+  k2 users add <username> [--role owner|admin|member|viewer]
+                                Create an account; prompts for password
+                                (hidden) + confirm. Default role is member;
+                                --role always calls set-role after add.
+
+FLAGS
+  --role <r>                    owner | admin | member | viewer
+  --password-stdin              Read password from stdin (automation; no echo)
+  --help, -h                    This help
+
+SECURITY
+  Password is NEVER accepted on the command line (no --password flag).
+  First owner is bootstrapped via the on-box daemon/owner token.
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage
+EOF
+}
+
+# Read a password without echo. Interactive: getpass + confirm.
+# Automation: --password-stdin (single line from stdin).
+# Echoes the password on stdout (caller captures into a local var);
+# never logs it. Empty password → non-zero.
+_users_read_password() {
+    local from_stdin="${1:-0}"
+    if [ "$from_stdin" = "1" ]; then
+        python3 -c '
+import sys
+pw = sys.stdin.readline()
+if pw.endswith("\n"):
+    pw = pw[:-1]
+if pw.endswith("\r"):
+    pw = pw[:-1]
+if not pw:
+    sys.stderr.write("Error: empty password on stdin.\n")
+    sys.exit(1)
+sys.stdout.write(pw)
+'
+        return $?
+    fi
+    python3 -c '
+import getpass, sys
+try:
+    a = getpass.getpass("Password: ")
+    b = getpass.getpass("Confirm password: ")
+except (EOFError, KeyboardInterrupt):
+    sys.stderr.write("\nError: password prompt cancelled.\n")
+    sys.exit(1)
+if not a:
+    sys.stderr.write("Error: password must not be empty.\n")
+    sys.exit(1)
+if a != b:
+    sys.stderr.write("Error: passwords do not match.\n")
+    sys.exit(1)
+sys.stdout.write(a)
+'
+}
+
+cmd_users() {
+    local sub="${1:-list}"
+    case "$sub" in
+        --help|-h|help)
+            _users_usage
+            return 0
+            ;;
+        list|"")
+            # Accept bare `k2 users` and `k2 users list`.
+            if [ "$sub" = "list" ]; then shift || true; fi
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --help|-h) _users_usage; return 0 ;;
+                    *) echo "Usage: k2 users list" >&2; return 2 ;;
+                esac
+            done
+            local raw
+            raw=$(cli_send cli_request "/cli/users") || raw=""
+            printf '%s' "$raw" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: daemon returned an unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.stderr.write("Error: unexpected response from /cli/users\n"); sys.exit(1)
+err = d.get("error")
+if err is not None:
+    if isinstance(err, dict):
+        sys.stderr.write("Error: %s\n" % (err.get("hint") or err.get("code") or err))
+    else:
+        sys.stderr.write("Error: %s\n" % err)
+    sys.exit(1)
+users = d.get("users") or []
+if not users:
+    print("No connect users yet.")
+    print("Create the first owner: k2 users add <username> --role owner")
+    sys.exit(0)
+# Table: USERNAME  ROLE  DISABLED  CREATED
+rows = []
+for u in users:
+    if not isinstance(u, dict):
+        continue
+    rows.append((
+        str(u.get("username") or "?"),
+        str(u.get("role") or "member"),
+        "yes" if u.get("disabled") else "no",
+        str(u.get("createdAt") or u.get("created_at") or "-"),
+    ))
+if not rows:
+    print("No connect users yet.")
+    sys.exit(0)
+w_user = max([len(r[0]) for r in rows] + [len("USERNAME")])
+w_role = max([len(r[1]) for r in rows] + [len("ROLE")])
+w_dis = max([len(r[2]) for r in rows] + [len("DISABLED")])
+print("%-*s  %-*s  %-*s  %s" % (w_user, "USERNAME", w_role, "ROLE", w_dis, "DISABLED", "CREATED"))
+for u, role, dis, created in rows:
+    print("%-*s  %-*s  %-*s  %s" % (w_user, u, w_role, role, w_dis, dis, created))
+'
+            ;;
+        add)
+            shift || true
+            local username="" role="" password_stdin=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --role)
+                        role="${2:-}"; shift 2 || { echo "Error: --role needs a value" >&2; return 2; } ;;
+                    --role=*)
+                        role="${1#--role=}"; shift ;;
+                    --password-stdin)
+                        password_stdin=1; shift ;;
+                    --password|--pass)
+                        echo "Error: passwords must not be passed on the command line." >&2
+                        echo "Use an interactive prompt or --password-stdin." >&2
+                        return 2
+                        ;;
+                    --help|-h)
+                        _users_usage; return 0 ;;
+                    -*)
+                        echo "Error: unknown flag '$1'" >&2
+                        _users_usage
+                        return 2
+                        ;;
+                    *)
+                        if [ -z "$username" ]; then
+                            username="$1"; shift
+                        else
+                            echo "Error: unexpected argument '$1'" >&2
+                            return 2
+                        fi
+                        ;;
+                esac
+            done
+            if [ -z "$username" ]; then
+                echo "Usage: k2 users add <username> [--role owner|admin|member|viewer] [--password-stdin]" >&2
+                return 2
+            fi
+            if [ -n "$role" ]; then
+                case "$role" in
+                    owner|admin|member|viewer) ;;
+                    *)
+                        echo "Error: invalid role '$role' (expected owner|admin|member|viewer)" >&2
+                        return 2
+                        ;;
+                esac
+            fi
+            local password
+            password="$(_users_read_password "$password_stdin")" || return 1
+            local body resp
+            body=$(USERNAME="$username" PASSWORD="$password" python3 -c '
+import json, os
+print(json.dumps({"username": os.environ["USERNAME"], "password": os.environ["PASSWORD"]}))
+')
+            # Drop password from the environment as soon as the body is built.
+            unset password
+            resp=$(cli_send cli_post_json "/cli/users/add" "$body") || resp=""
+            unset body
+            printf '%s' "$resp" | USERNAME="$username" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+username = os.environ.get("USERNAME", "?")
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: daemon returned an unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None:
+    hint = err.get("hint") if isinstance(err, dict) else err
+    sys.stderr.write("Error: %s\n" % hint)
+    sys.exit(1)
+if not (isinstance(d, dict) and d.get("success")):
+    sys.stderr.write("Error: users/add failed: %s\n" % (raw[:200] or "empty response"))
+    sys.exit(1)
+print("Created user %s." % username)
+'
+            # Always call set-role when --role is given (default after add is
+            # member server-side; owner/admin/viewer need the explicit write).
+            if [ -n "$role" ]; then
+                local role_body role_resp
+                role_body=$(USERNAME="$username" ROLE="$role" python3 -c '
+import json, os
+print(json.dumps({"username": os.environ["USERNAME"], "role": os.environ["ROLE"]}))
+')
+                role_resp=$(cli_send cli_post_json "/cli/users/set-role" "$role_body") || role_resp=""
+                printf '%s' "$role_resp" | USERNAME="$username" ROLE="$role" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: set-role returned unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None:
+    hint = err.get("hint") if isinstance(err, dict) else err
+    sys.stderr.write("Error setting role: %s\n" % hint)
+    sys.exit(1)
+if not (isinstance(d, dict) and d.get("success")):
+    sys.stderr.write("Error: set-role failed: %s\n" % (raw[:200] or "empty response"))
+    sys.exit(1)
+print("Role set to %s for %s." % (os.environ.get("ROLE", "?"), os.environ.get("USERNAME", "?")))
+'
+            fi
+            ;;
+        *)
+            echo "Unknown 'k2 users' subcommand: $sub" >&2
+            _users_usage
+            return 2
+            ;;
+    esac
+}
+
+# ── Headless Connect account pairing — k2 connect login|status|logout ─
+# PRD: prd-headless-connect-onboarding-v1.md R1.
+# Mirrors desktop src/renderer/components/Settings/lib/k2-account.ts:
+# Supabase email/password (or --token JWT) → list purchased subdomains →
+# bind tunnel token via POST /cli/tunnel/config → start tunnel.
+# Account session lives in ~/.k2/connect-account.json (0600); password
+# is never stored. Nested-subdomain Pro verbs stay under `k2 publish`.
+
+# Public Supabase project values (same as the desktop client — anon role
+# only; RLS scopes every row to the signed-in caller).
+_K2_SUPABASE_URL="https://ttgcalfrzzgkxnfepkiu.supabase.co"
+_K2_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z2NhbGZyenpna3huZmVwa2l1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDIyMzksImV4cCI6MjA5NjA3ODIzOX0.L28xgtYkPEj5eCNDGO5Zf5xxhdKQLxKD8c1CJRHNqI8"
+
+_connect_account_file() { echo "${K2_HOME}/connect-account.json"; }
+
+_connect_usage() {
+    cat <<'EOF' >&2
+k2 connect — pair a purchased k2.dev subdomain to this device
+
+USAGE
+  k2 connect login [--email <e>] [--token <jwt>] [--subdomain <label>]
+  k2 connect status
+  k2 connect logout
+
+COMMANDS
+  login     Sign in to k2.dev (email+password or --token JWT), pick a
+            purchased subdomain, write tunnel config, start the tunnel.
+  status    Show paired subdomain + tunnel/account state.
+  logout    Clear the saved account session (~/.k2/connect-account.json).
+            Does not unpair the tunnel (see: k2 tunnel release --confirm).
+
+FLAGS (login)
+  --email <e>         Account email (prompted if omitted with password flow)
+  --token <jwt>       Use an access JWT instead of email/password (scripted)
+  --subdomain <label> Skip the interactive picker
+  --help, -h          This help
+
+Nested Pro subdomains / plan status live under `k2 publish` (not here).
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage
+EOF
+}
+
+# Require a live local daemon for tunnel bind/start. Fail loud with a
+# start-daemon hint — account login may already have succeeded.
+_connect_require_daemon() {
+    if [ -z "${PORT:-}" ] || [ -z "${TOKEN:-}" ]; then
+        # Re-discover in case the gate was skipped and files appeared late.
+        if [ -f "${K2_HOME}/heartbeat.port" ]; then
+            PORT="${PORT:-$(cat "${K2_HOME}/heartbeat.port" 2>/dev/null)}"
+        fi
+        if [ -z "${PORT:-}" ] && [ -f "${K2_HOME}/daemon.port" ]; then
+            PORT="$(cat "${K2_HOME}/daemon.port" 2>/dev/null)"
+        fi
+        if [ -z "${TOKEN:-}" ]; then
+            if [ -n "${DISK_OWNER_TOKEN:-}" ]; then
+                TOKEN="$DISK_OWNER_TOKEN"
+            elif [ -r "${K2_HOME}/heartbeat.token" ]; then
+                TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+            elif [ -r "${K2_HOME}/daemon.token" ]; then
+                TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+            fi
+        fi
+        BASE_URL="http://127.0.0.1:${PORT}"
+    fi
+    if [ -z "${PORT:-}" ] || [ -z "${TOKEN:-}" ]; then
+        echo "Error: local K2 daemon is not reachable (need ~/.k2/heartbeat.port + token)." >&2
+        echo "Start it first, then re-run: k2 connect login" >&2
+        echo "  k2 daemon start     # or: k2 daemon install  (fresh headless box)" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Persist account session as 0600 JSON. Password is never written.
+_connect_account_save() {
+    local access="$1" refresh="$2" email="$3"
+    local path
+    path="$(_connect_account_file)"
+    ACCESS="$access" REFRESH="$refresh" EMAIL="$email" PATH_OUT="$path" python3 -c '
+import json, os, stat
+path = os.environ["PATH_OUT"]
+data = {
+    "access_token": os.environ.get("ACCESS") or "",
+    "refresh_token": os.environ.get("REFRESH") or "",
+    "email": os.environ.get("EMAIL") or "",
+}
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f, separators=(",", ":"))
+os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+os.replace(tmp, path)
+'
+}
+
+_connect_account_load() {
+    # Prints access_token\nrefresh_token\nemail or empty on miss.
+    python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+print((d.get("access_token") or "").strip())
+print((d.get("refresh_token") or "").strip())
+print((d.get("email") or "").strip())
+' "$(_connect_account_file)" 2>/dev/null || true
+}
+
+_connect_account_clear() {
+    local path
+    path="$(_connect_account_file)"
+    [ -f "$path" ] && rm -f "$path"
+    return 0
+}
+
+# Stable per-install device id for subdomain claim/lease. Prefer the
+# value already stored in tunnel.json; else generate a UUID and keep it
+# for the bind step (daemon persists it via /cli/tunnel/config).
+_connect_device_id() {
+    python3 -c '
+import json, os, sys, uuid
+path = os.path.join(os.environ.get("K2_HOME_FOR_DEVICE") or os.path.expanduser("~/.k2"), "tunnel.json")
+try:
+    d = json.load(open(path))
+    did = (d.get("device_id") or d.get("deviceId") or "").strip()
+    if did:
+        print(did); raise SystemExit(0)
+except SystemExit:
+    raise
+except Exception:
+    pass
+print(str(uuid.uuid4()))
+' 2>/dev/null
+}
+
+_connect_device_label() {
+    # Cosmetic holder label — hostname is good enough for headless.
+    hostname 2>/dev/null || echo "k2-cli"
+}
+
+# Supabase password grant → access_token / refresh_token / email.
+# Prints the three fields one-per-line on success; errors on stderr.
+_connect_supabase_sign_in() {
+    local email="$1" password="$2"
+    EMAIL="$email" PASSWORD="$password" \
+    SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+import json, os, sys, urllib.request, urllib.error
+url = os.environ["SUPA_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
+body = json.dumps({"email": os.environ["EMAIL"], "password": os.environ["PASSWORD"]}).encode()
+req = urllib.request.Request(url, data=body, method="POST", headers={
+    "apikey": os.environ["SUPA_KEY"],
+    "Content-Type": "application/json",
+})
+try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read().decode()
+        status = resp.status
+except urllib.error.HTTPError as e:
+    raw = e.read().decode() if e.fp else ""
+    status = e.code
+except Exception as e:
+    sys.stderr.write("Error: could not reach k2.dev account service: %s\n" % e)
+    sys.exit(1)
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    d = {}
+if status < 200 or status >= 300 or not d.get("access_token"):
+    msg = (
+        d.get("error_description") or d.get("msg") or d.get("message")
+        or (d.get("error") if isinstance(d.get("error"), str) else None)
+        or ("Request failed (%s)" % status)
+    )
+    sys.stderr.write("Error: sign-in failed: %s\n" % msg)
+    sys.exit(1)
+user = d.get("user") or {}
+email = (user.get("email") if isinstance(user, dict) else None) or os.environ["EMAIL"]
+print(d["access_token"])
+print(d.get("refresh_token") or "")
+print(email)
+'
+}
+
+# List purchased subdomains for the access token. Prints JSON array.
+_connect_list_subdomains() {
+    local access="$1"
+    ACCESS="$access" SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+import json, os, sys, urllib.request, urllib.error
+url = (
+    os.environ["SUPA_URL"].rstrip("/")
+    + "/rest/v1/subdomains?select=label,status,tunnel_token,claimed_by,claimed_at,claimed_label"
+)
+req = urllib.request.Request(url, method="GET", headers={
+    "apikey": os.environ["SUPA_KEY"],
+    "Authorization": "Bearer " + os.environ["ACCESS"],
+})
+try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read().decode()
+        status = resp.status
+except urllib.error.HTTPError as e:
+    raw = e.read().decode() if e.fp else ""
+    status = e.code
+except Exception as e:
+    sys.stderr.write("Error: could not list subdomains: %s\n" % e)
+    sys.exit(1)
+if status < 200 or status >= 300:
+    try:
+        d = json.loads(raw) if raw.strip() else {}
+    except Exception:
+        d = {}
+    msg = d.get("message") or d.get("msg") or d.get("error_description") or raw[:200] or ("HTTP %s" % status)
+    sys.stderr.write("Error: list subdomains failed: %s\n" % msg)
+    sys.exit(1)
+try:
+    rows = json.loads(raw) if raw.strip() else []
+except Exception:
+    rows = []
+if not isinstance(rows, list):
+    rows = []
+print(json.dumps(rows))
+'
+}
+
+# Best-effort claim_subdomain RPC (desktop parity). Non-zero only on
+# hard "held by another device"; soft failures warn and continue.
+_connect_claim_subdomain() {
+    local access="$1" label="$2" device_id="$3" device_label="$4"
+    ACCESS="$access" LABEL="$label" DID="$device_id" DLBL="$device_label" \
+    SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+import json, os, sys, urllib.request, urllib.error
+url = os.environ["SUPA_URL"].rstrip("/") + "/rest/v1/rpc/claim_subdomain"
+body = json.dumps({
+    "p_label": os.environ["LABEL"],
+    "p_device_id": os.environ["DID"],
+    "p_device_label": os.environ.get("DLBL") or None,
+}).encode()
+req = urllib.request.Request(url, data=body, method="POST", headers={
+    "apikey": os.environ["SUPA_KEY"],
+    "Authorization": "Bearer " + os.environ["ACCESS"],
+    "Content-Type": "application/json",
+})
+try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read().decode()
+        status = resp.status
+except urllib.error.HTTPError as e:
+    raw = e.read().decode() if e.fp else ""
+    status = e.code
+except Exception as e:
+    sys.stderr.write("Warning: claim_subdomain failed (%s) — continuing bind.\n" % e)
+    sys.exit(0)
+if status < 200 or status >= 300:
+    sys.stderr.write("Warning: claim_subdomain HTTP %s — continuing bind.\n" % status)
+    sys.exit(0)
+try:
+    rows = json.loads(raw) if raw.strip() else []
+except Exception:
+    rows = []
+row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else {})
+if not isinstance(row, dict):
+    sys.exit(0)
+if row.get("claimed"):
+    sys.exit(0)
+holder = row.get("holder")
+if holder and holder != os.environ["DID"]:
+    label = os.environ["LABEL"]
+    hl = row.get("holder_label") or holder
+    sys.stderr.write(
+        "Error: %s.k2.dev is in use on another device (%s) — stop it there first.\n" % (label, hl)
+    )
+    sys.exit(1)
+'
+}
+
+cmd_connect_login() {
+    local email="" token="" subdomain="" password=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --email)
+                email="${2:-}"; shift 2 || { echo "Error: --email needs a value" >&2; return 2; } ;;
+            --email=*)
+                email="${1#--email=}"; shift ;;
+            --token)
+                token="${2:-}"; shift 2 || { echo "Error: --token needs a value" >&2; return 2; } ;;
+            --token=*)
+                token="${1#--token=}"; shift ;;
+            --subdomain)
+                subdomain="${2:-}"; shift 2 || { echo "Error: --subdomain needs a value" >&2; return 2; } ;;
+            --subdomain=*)
+                subdomain="${1#--subdomain=}"; shift ;;
+            --password|--pass)
+                echo "Error: passwords must not be passed on the command line." >&2
+                echo "Use the interactive prompt, or --token <access_jwt> for scripting." >&2
+                return 2
+                ;;
+            --help|-h)
+                _connect_usage; return 0 ;;
+            -*)
+                echo "Error: unknown flag '$1'" >&2
+                _connect_usage
+                return 2
+                ;;
+            *)
+                echo "Error: unexpected argument '$1'" >&2
+                _connect_usage
+                return 2
+                ;;
+        esac
+    done
+
+    local access_token="" refresh_token="" account_email=""
+    if [ -n "$token" ]; then
+        access_token="$token"
+        account_email="${email}"
+        refresh_token=""
+        # Optional: if we already have a saved session for display, ignore.
+        if [ -z "$account_email" ]; then
+            local _loaded
+            _loaded="$(_connect_account_load)"
+            account_email="$(printf '%s\n' "$_loaded" | sed -n '3p')"
+        fi
+        [ -z "$account_email" ] && account_email="(token)"
+    else
+        if [ -z "$email" ]; then
+            printf "k2.dev email: " >&2
+            IFS= read -r email || true
+        fi
+        if [ -z "$email" ]; then
+            echo "Error: email is required (or pass --token <access_jwt>)." >&2
+            return 2
+        fi
+        password="$(python3 -c '
+import getpass, sys
+try:
+    pw = getpass.getpass("k2.dev password: ")
+except (EOFError, KeyboardInterrupt):
+    sys.stderr.write("\nError: password prompt cancelled.\n")
+    sys.exit(1)
+if not pw:
+    sys.stderr.write("Error: password must not be empty.\n")
+    sys.exit(1)
+sys.stdout.write(pw)
+')" || return 1
+        local sign_out
+        sign_out="$(_connect_supabase_sign_in "$email" "$password")" || {
+            unset password
+            return 1
+        }
+        unset password
+        access_token="$(printf '%s\n' "$sign_out" | sed -n '1p')"
+        refresh_token="$(printf '%s\n' "$sign_out" | sed -n '2p')"
+        account_email="$(printf '%s\n' "$sign_out" | sed -n '3p')"
+        [ -z "$account_email" ] && account_email="$email"
+    fi
+
+    # Persist account session BEFORE daemon steps so a later re-run can
+    # skip re-typing credentials once the daemon is up.
+    _connect_account_save "$access_token" "$refresh_token" "$account_email"
+    echo "Signed in as ${account_email}." >&2
+
+    local subs_json
+    subs_json="$(_connect_list_subdomains "$access_token")" || return 1
+
+    # Pick subdomain (interactive numbered list, or --subdomain).
+    local pick_json
+    pick_json=$(SUBS_JSON="$subs_json" WANT="$subdomain" python3 -c '
+import json, os, sys
+rows = json.loads(os.environ.get("SUBS_JSON") or "[]")
+want = (os.environ.get("WANT") or "").strip().lower()
+if not rows:
+    sys.stderr.write(
+        "Error: this account has no purchased subdomains.\n"
+        "Buy one at https://k2.dev/dashboard then re-run: k2 connect login\n"
+    )
+    sys.exit(1)
+# Normalize
+norm = []
+for r in rows:
+    if not isinstance(r, dict):
+        continue
+    label = (r.get("label") or "").strip()
+    if not label:
+        continue
+    norm.append(r)
+if not norm:
+    sys.stderr.write(
+        "Error: this account has no purchased subdomains.\n"
+        "Buy one at https://k2.dev/dashboard then re-run: k2 connect login\n"
+    )
+    sys.exit(1)
+chosen = None
+if want:
+    for r in norm:
+        if (r.get("label") or "").strip().lower() == want:
+            chosen = r; break
+    if chosen is None:
+        sys.stderr.write("Error: subdomain %r is not in your account.\n" % want)
+        sys.stderr.write("Available: %s\n" % ", ".join((r.get("label") or "?") for r in norm))
+        sys.exit(1)
+else:
+    if len(norm) == 1:
+        chosen = norm[0]
+        sys.stderr.write("Using only subdomain: %s.k2.dev\n" % (chosen.get("label") or "?"))
+    else:
+        sys.stderr.write("Your subdomains:\n")
+        for i, r in enumerate(norm, 1):
+            st = (r.get("status") or "").strip()
+            extra = (" (%s)" % st) if st and st != "active" else ""
+            sys.stderr.write("  %d) %s.k2.dev%s\n" % (i, r.get("label") or "?", extra))
+        sys.stderr.write("Pick a number [1-%d]: " % len(norm))
+        sys.stderr.flush()
+        try:
+            line = sys.stdin.readline()
+        except Exception:
+            line = ""
+        try:
+            n = int((line or "").strip())
+        except Exception:
+            sys.stderr.write("Error: invalid selection.\n"); sys.exit(1)
+        if n < 1 or n > len(norm):
+            sys.stderr.write("Error: selection out of range.\n"); sys.exit(1)
+        chosen = norm[n - 1]
+label = (chosen.get("label") or "").strip()
+tok = (chosen.get("tunnel_token") or "").strip()
+if not label or not tok:
+    sys.stderr.write("Error: selected subdomain is missing label or tunnel_token.\n")
+    sys.exit(1)
+print(json.dumps({"label": label, "tunnel_token": tok, "status": chosen.get("status") or ""}))
+') || return 1
+
+    local label tunnel_token
+    label=$(printf '%s' "$pick_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["label"])')
+    tunnel_token=$(printf '%s' "$pick_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tunnel_token"])')
+
+    # Daemon required for bind + start.
+    _connect_require_daemon || return 1
+    export K2_HOME_FOR_DEVICE="$K2_HOME"
+    local device_id device_label
+    device_id="$(_connect_device_id)"
+    device_label="$(_connect_device_label)"
+
+    # Best-effort claim (nice-to-have); hard-fail only if held by other device.
+    _connect_claim_subdomain "$access_token" "$label" "$device_id" "$device_label" || return 1
+
+    local cfg_body cfg_resp
+    cfg_body=$(LABEL="$label" TOK="$tunnel_token" DID="$device_id" DLBL="$device_label" python3 -c '
+import json, os
+print(json.dumps({
+    "subdomain": os.environ["LABEL"],
+    "token": os.environ["TOK"],
+    "deviceId": os.environ["DID"],
+    "deviceLabel": os.environ.get("DLBL") or "",
+    "autoStart": True,
+}))
+')
+    # Owner-auth via TOKEN (external: disk owner; in-cell: passport — ID tool).
+    cfg_resp=$(cli_send cli_post_json "/cli/tunnel/config" "$cfg_body") || cfg_resp=""
+    printf '%s' "$cfg_resp" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: tunnel/config returned unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None:
+    hint = err.get("hint") if isinstance(err, dict) else err
+    sys.stderr.write("Error binding tunnel config: %s\n" % hint)
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.stderr.write("Error: tunnel/config failed: %s\n" % (raw[:200] or "empty"))
+    sys.exit(1)
+# success = redacted view with tokenSet / subdomain
+if d.get("tokenSet") is False and not d.get("subdomain"):
+    sys.stderr.write("Error: tunnel/config did not accept the token.\n")
+    sys.exit(1)
+' || return 1
+
+    local start_resp
+    start_resp=$(cli_send cli_post "/cli/tunnel/start" "subdomain=$(urlencode "$label")") || start_resp=""
+    printf '%s' "$start_resp" | LABEL="$label" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+label = os.environ.get("LABEL") or "?"
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: tunnel/start returned unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None:
+    hint = err.get("hint") if isinstance(err, dict) else err
+    sys.stderr.write("Error starting tunnel: %s\n" % hint)
+    sys.exit(1)
+url = (d.get("public_url") if isinstance(d, dict) else None) or ("https://%s.k2.dev" % label)
+print("✓ live at %s" % url)
+' || return 1
+}
+
+cmd_connect_status() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h) _connect_usage; return 0 ;;
+            *) echo "Usage: k2 connect status" >&2; return 2 ;;
+        esac
+    done
+    local acc_email="" acc_present="no"
+    if [ -f "$(_connect_account_file)" ]; then
+        acc_present="yes"
+        acc_email="$(printf '%s\n' "$(_connect_account_load)" | sed -n '3p')"
+    fi
+    local sub="" token_set="no"
+    if [ -f "${K2_HOME}/tunnel.json" ]; then
+        eval "$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+sub = (d.get("subdomain") or "").strip()
+tok = (d.get("token") or "").strip()
+print("sub=%r" % sub)
+print("token_set=%r" % ("yes" if tok else "no"))
+' "${K2_HOME}/tunnel.json" 2>/dev/null)"
+    fi
+    echo "K2 Connect account"
+    echo "  Account session: $acc_present$([ -n "$acc_email" ] && echo "  ($acc_email)")"
+    echo "  Paired subdomain: ${sub:-'(none)'}$([ -n "$sub" ] && echo " → https://${sub}.k2.dev")"
+    echo "  Tunnel token:     $token_set"
+
+    # Tunnel live status when the daemon is up.
+    if _connect_require_daemon 2>/dev/null; then
+        local raw
+        raw=$(cli_send cli_request "/cli/tunnel/status") || raw=""
+        printf '%s' "$raw" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    print("  Tunnel status:   (unparseable daemon response)")
+    raise SystemExit(0)
+if not isinstance(d, dict) or d.get("error"):
+    err = d.get("error") if isinstance(d, dict) else None
+    print("  Tunnel status:   (error: %s)" % (err or "unknown"))
+    raise SystemExit(0)
+running = "yes" if d.get("running") else "no"
+print("  Tunnel running:  %s" % running)
+if d.get("running"):
+    print("  Public URL:      %s" % (d.get("public_url") or "(assigned by server)"))
+elif d.get("released"):
+    print("  State:           RELEASED — re-pair with: k2 connect login")
+elif d.get("enabled") is False:
+    print("  State:           DISABLED — re-enable with: k2 tunnel enable")
+else:
+    print("  State:           stopped")
+' 2>/dev/null || echo "  Tunnel status:   (daemon unreachable)"
+    else
+        echo "  Tunnel status:   (daemon not running — start with: k2 daemon start)"
+    fi
+}
+
+cmd_connect_logout() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h) _connect_usage; return 0 ;;
+            *) echo "Usage: k2 connect logout" >&2; return 2 ;;
+        esac
+    done
+    # Best-effort server-side logout when we still have an access token.
+    local loaded access
+    loaded="$(_connect_account_load)"
+    access="$(printf '%s\n' "$loaded" | sed -n '1p')"
+    if [ -n "$access" ]; then
+        ACCESS="$access" SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+import os, urllib.request
+url = os.environ["SUPA_URL"].rstrip("/") + "/auth/v1/logout"
+req = urllib.request.Request(url, data=b"", method="POST", headers={
+    "apikey": os.environ["SUPA_KEY"],
+    "Authorization": "Bearer " + os.environ["ACCESS"],
+})
+try:
+    urllib.request.urlopen(req, timeout=10)
+except Exception:
+    pass
+' 2>/dev/null || true
+    fi
+    _connect_account_clear
+    echo "Logged out of k2.dev account (cleared ~/.k2/connect-account.json)."
+    echo "Tunnel pairing is unchanged. To unpair this device: k2 tunnel release --confirm"
+}
+
+cmd_connect() {
+    local sub="${1:-}"
+    shift 2>/dev/null || true
+    case "$sub" in
+        login)
+            cmd_connect_login "$@"
+            ;;
+        status)
+            cmd_connect_status "$@"
+            ;;
+        logout)
+            cmd_connect_logout "$@"
+            ;;
+        ""|help|--help|-h)
+            _connect_usage
+            # Bare `k2 connect` without a subcommand is usage, exit 2.
+            [ -n "$sub" ] && [ "$sub" != "" ] && return 0
+            # help/-h exit 0; bare empty exits 2 so scripts detect missing subcommand.
+            if [ -z "$sub" ]; then return 2; fi
+            return 0
+            ;;
+        # Former `k2 connect` → publish surface (0.40.41). Point people over.
+        subdomain|publish)
+            echo "Nested subdomains moved to: k2 publish ${sub}${*:+ $*}" >&2
+            echo "  e.g. k2 publish subdomain list" >&2
+            echo "  e.g. k2 publish status" >&2
+            echo "Account pairing is now: k2 connect login | status | logout" >&2
+            return 2
+            ;;
+        *)
+            # Heuristic: anything that looks like an old publish verb.
+            case "$sub" in
+                create|list|point|rm|claim|unclaim)
+                    echo "Unknown 'k2 connect' subcommand: $sub" >&2
+                    echo "Did you mean: k2 publish subdomain $sub … ?" >&2
+                    echo "Account pairing: k2 connect login | status | logout" >&2
+                    return 2
+                    ;;
+            esac
+            echo "Unknown 'k2 connect' subcommand: $sub" >&2
+            _connect_usage
+            return 2
+            ;;
+    esac
+}
+
+# ── Workspace Knowledge Base (brain map) — k2 wiki ────────────────────
+# Thin wrappers over daemon /cli/wiki/* (indexer + optional localhost serve).
+# Publish reuses k2 publish subdomain create/point/rm (K4 in PRD).
+# See .k2/prds/prd-workspace-kb-brain-map-and-publish.md.
+
+_wiki_usage() {
+    cat <<'EOF' >&2
+k2 wiki — per-workspace knowledge base (brain map)
+
+Vault lives at <workspace>/.k2/wiki/ (Markdown + [[wikilinks]]).
+
+USAGE
+  k2 wiki status [--json] [project]
+  k2 wiki index [--json] [project]
+  k2 wiki note <id> [--json] [project]
+  k2 wiki seed [project]
+  k2 wiki serve on|off [--port N] [project]
+  k2 wiki chat on|off [project]
+  k2 wiki publish [--label LABEL] [project]
+  k2 wiki unpublish [project]
+
+COMMANDS
+  status     Serve + publish + public-chat state (port, url, publicChat*)
+  index      Graph index (nodes + links)
+  note       One note body by id (e.g. Home.md)
+  seed       Create Home.md + _Index.md if missing
+  serve      Start/stop read-only localhost site (127.0.0.1 only)
+  chat       Allow public chat on the served/published wiki (default OFF)
+  publish    Serve on + nest a subdomain (or print create instructions)
+  unpublish  Serve off + hint to remove the nested subdomain
+
+FLAGS
+  --json                 Machine-readable stdout (status/index/note)
+  --port N               Preferred port for serve on (daemon may reassign)
+  --label LABEL          Nested subdomain label for publish (default: workspace basename slug)
+  --workspace|--project  Alias for trailing [project] (path, name, or uuid)
+
+EXIT CODES
+  0 ok
+  1 error (daemon / not found / control plane)
+  2 bad usage
+EOF
+}
+
+_wiki_err() {
+    local code="$1" hint="$2"
+    if [ "${AS_JSON:-false}" = "true" ] || [ "${as_json:-false}" = "true" ]; then
+        python3 -c 'import json,sys; print(json.dumps({"error":{"code":sys.argv[1],"hint":sys.argv[2]}}), file=sys.stderr)' \
+            "$code" "$hint" 2>/dev/null || echo "{\"error\":{\"code\":\"$code\",\"hint\":\"$hint\"}}" >&2
+    else
+        echo "Error: $hint" >&2
+    fi
+}
+
+# Resolve optional workspace selector into global PROJECT (path preferred).
+# Accepts absolute/relative dir, workspace name, or uuid (via daemon resolve).
+_wiki_apply_project() {
+    local sel="${1:-}"
+    [ -z "$sel" ] && return 0
+    if [ -d "$sel" ]; then
+        PROJECT="$(cd "$sel" && pwd)"
+        return 0
+    fi
+    local resolved=""
+    if [ -n "${PORT:-}" ] && [ -n "${TOKEN:-}" ]; then
+        resolved=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$sel")" 2>/dev/null \
+            | python3 -c '
+import json,sys
+try:
+    d=json.loads(sys.stdin.read() or "{}")
+except Exception:
+    d={}
+if isinstance(d, dict):
+    print(d.get("path") or d.get("projectPath") or d.get("project_path") or "")
+else:
+    print("")
+' 2>/dev/null || true)
+    fi
+    if [ -n "$resolved" ]; then
+        PROJECT="$resolved"
+        return 0
+    fi
+    # Pass through; daemon /cli/wiki/* also resolves project= tokens.
+    PROJECT="$sel"
+}
+
+# Default nested label for wiki publish: workspace folder basename, slugified.
+_wiki_default_label() {
+    local base
+    base="$(basename "$PROJECT" 2>/dev/null || echo brain)"
+    printf '%s' "$base" | python3 -c '
+import re,sys
+s=sys.stdin.read().strip().lower()
+s=re.sub(r"[^a-z0-9]+","-",s).strip("-")
+print((s or "brain")[:48])
+' 2>/dev/null || echo "brain"
+}
+
+# Parse shared wiki flags. Sets: as_json, project_sel, port, label.
+# Remaining positionals go into wiki_pos array.
+# Usage: _wiki_parse_args [--need-pos] "$@" then inspect wiki_pos.
+_wiki_parse_args() {
+    as_json=false
+    project_sel=""
+    port=""
+    label=""
+    wiki_pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --port)
+                port="${2:-}"
+                if [ -z "$port" ]; then
+                    _wiki_err "usage" "--port requires a value"
+                    exit 2
+                fi
+                shift 2
+                ;;
+            --port=*) port="${1#--port=}"; shift ;;
+            --label)
+                label="${2:-}"
+                if [ -z "$label" ]; then
+                    _wiki_err "usage" "--label requires a value"
+                    exit 2
+                fi
+                shift 2
+                ;;
+            --label=*) label="${1#--label=}"; shift ;;
+            --workspace|--project)
+                project_sel="${2:-}"
+                if [ -z "$project_sel" ]; then
+                    _wiki_err "usage" "$1 requires a workspace path/name"
+                    exit 2
+                fi
+                shift 2
+                ;;
+            --workspace=*|--project=*)
+                project_sel="${1#*=}"; shift
+                ;;
+            --help|-h)
+                return 99
+                ;;
+            --)
+                shift
+                while [ $# -gt 0 ]; do wiki_pos+=("$1"); shift; done
+                break
+                ;;
+            -*)
+                _wiki_err "usage" "unknown flag '$1'"
+                exit 2
+                ;;
+            *)
+                wiki_pos+=("$1"); shift
+                ;;
+        esac
+    done
+    # Trailing bare project when no --workspace given: last positional that
+    # is not consumed as a required arg is applied by the caller.
+    return 0
+}
+
+cmd_wiki() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        status)     cmd_wiki_status "$@" ;;
+        index)      cmd_wiki_index "$@" ;;
+        note)       cmd_wiki_note "$@" ;;
+        seed)       cmd_wiki_seed "$@" ;;
+        serve)      cmd_wiki_serve "$@" ;;
+        chat)       cmd_wiki_chat "$@" ;;
+        publish)    cmd_wiki_publish "$@" ;;
+        unpublish)  cmd_wiki_unpublish "$@" ;;
+        ""|help|--help|-h)
+            cmd_help_wiki
+            exit 0
+            ;;
+        *)
+            echo "Unknown 'k2 wiki' subcommand: $sub" >&2
+            _wiki_usage
+            exit 1
+            ;;
+    esac
+}
+
+cmd_help_wiki() {
+    cat <<'EOF'
+k2 wiki — per-workspace knowledge base (brain map)
+
+Vault: <workspace>/.k2/wiki/  (Markdown + YAML frontmatter + [[wikilinks]])
+Index + optional localhost site live in the daemon (headless-safe).
+Publish reuses k2 publish subdomain (nested label.user.k2.dev → 127.0.0.1:port).
+
+USAGE
+  k2 wiki status [--json] [project]
+  k2 wiki index [--json] [project]
+  k2 wiki note <id> [--json] [project]
+  k2 wiki seed [project]
+  k2 wiki serve on|off [--port N] [project]
+  k2 wiki chat on|off [project]
+  k2 wiki publish [--label LABEL] [project]
+  k2 wiki unpublish [project]
+
+COMMANDS
+  status     Local serve state + public chat + published label (if any)
+  index      Full graph index (nodes, links, noteCount)
+  note       Fetch one note body by stable id (wiki-relative path, e.g. Home.md)
+  seed       Create seed notes Home.md + _Index.md when missing
+  serve      Toggle read-only localhost SPA (binds 127.0.0.1 only)
+  chat       Allow visitors with the wiki URL to ask this workspace's agent
+             (default OFF; requires API on + daemon-held host_sessions key)
+  publish    Turn serve ON, then create/point a nested subdomain (or print the command)
+  unpublish  Turn serve OFF and print how to remove the nested subdomain
+
+PROJECT
+  Optional [project] / --workspace / --project: workspace path, name, or uuid.
+  Default: current workspace (K2_PROJECT_PATH / walk-up from CWD).
+
+EXAMPLES
+  k2 wiki seed
+  k2 wiki index --json
+  k2 wiki note Home.md
+  k2 wiki serve on --port 7420
+  k2 wiki chat on
+  k2 wiki publish --label brain
+  k2 wiki status --json
+  k2 wiki unpublish
+
+SEE ALSO
+  k2 api on
+  k2 workspace api-guest-policy get|set
+  k2 publish subdomain create <label> --target 127.0.0.1:<port>
+  k2 publish subdomain rm <label>
+  k2 publish --help
+EOF
+}
+
+cmd_wiki_status() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    # Optional trailing project
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local raw
+    raw=$(cli_request "/cli/wiki/serve/status")
+    # Enrich with index noteCount when human or when status alone is thin
+    local idx_raw=""
+    idx_raw=$(cli_request "/cli/wiki/index" 2>/dev/null || true)
+
+    AS_JSON="$as_json" STATUS_RAW="$raw" INDEX_RAW="$idx_raw" PROJECT_PATH="$PROJECT" python3 -c '
+import json, os, sys
+as_json = os.environ.get("AS_JSON") == "true"
+project = os.environ.get("PROJECT_PATH") or ""
+raw = os.environ.get("STATUS_RAW") or ""
+idx_raw = os.environ.get("INDEX_RAW") or ""
+
+def load(s):
+    try:
+        return json.loads(s) if s.strip() else {}
+    except Exception:
+        return {}
+
+d = load(raw)
+if not raw.strip():
+    print("Error: no response from daemon (wiki routes missing?)", file=sys.stderr)
+    sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err = d["error"]
+    if as_json:
+        print(json.dumps({"error": err if isinstance(err, dict) else {"code": "daemon", "hint": str(err)}}, separators=(",", ":")))
+    else:
+        print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+
+idx = load(idx_raw)
+if isinstance(idx, dict) and idx.get("error") is not None:
+    idx = {}
+
+note_count = idx.get("noteCount")
+if note_count is None and isinstance(idx.get("nodes"), list):
+    note_count = sum(1 for n in idx["nodes"] if n.get("exists", True))
+wiki_rel = idx.get("wikiRel") or ".k2/wiki"
+ws_path = idx.get("workspacePath") or project
+enabled = bool(d.get("enabled") or d.get("serving"))
+port = d.get("port")
+url = d.get("url") or (("http://127.0.0.1:%s" % port) if port else None)
+pub = d.get("publishedLabel") or d.get("published_label") or d.get("label")
+generated = idx.get("generatedAt") or d.get("generatedAt")
+
+out = {
+    "workspacePath": ws_path,
+    "wikiRel": wiki_rel,
+    "enabled": enabled,
+    "serving": enabled,
+    "port": port,
+    "url": url,
+    "publishedLabel": pub,
+    "noteCount": note_count,
+    "generatedAt": generated,
+}
+# Preserve extra daemon fields
+for k, v in (d.items() if isinstance(d, dict) else []):
+    if k not in out:
+        out[k] = v
+
+if as_json:
+    print(json.dumps(out, separators=(",", ":")))
+    sys.exit(0)
+
+print("Wiki  %s/%s" % (ws_path or "?", wiki_rel))
+print("  Notes:      %s" % (note_count if note_count is not None else "?"))
+if enabled:
+    print("  Serving:    yes  %s" % (url or ("port %s" % (port or "?"))))
+else:
+    print("  Serving:    no")
+chat_on = bool(d.get("publicChatEnabled"))
+chat_ready = bool(d.get("publicChatReady"))
+chat_err = d.get("publicChatError") or d.get("public_chat_error")
+if chat_on:
+    if chat_ready:
+        print("  Public chat: yes (ready — visitors can ask this workspace agent)")
+    else:
+        print("  Public chat: yes (not ready%s)" % ((" — %s" % chat_err) if chat_err else ""))
+else:
+    print("  Public chat: no  (enable with: k2 wiki chat on)")
+if pub:
+    print("  Published:  %s  (nested subdomain label)" % pub)
+else:
+    print("  Published:  —")
+if generated:
+    print("  Indexed:    %s" % generated)
+'
+}
+
+cmd_wiki_index() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local raw
+    raw=$(cli_request "/cli/wiki/index")
+    if [ "$as_json" = "true" ]; then
+        AS_JSON=true python3 -c '
+import json,sys,os
+raw=sys.stdin.read()
+if not raw.strip():
+    print(json.dumps({"error":{"code":"no_response","hint":"no response from daemon"}}), file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception:
+    print(json.dumps({"error":{"code":"bad_json","hint":raw[:200]}}), file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print(json.dumps({"error": err if isinstance(err, dict) else {"code":"daemon","hint":str(err)}})); sys.exit(1)
+print(json.dumps(d, separators=(",", ":")))
+' <<<"$raw"
+        return 0
+    fi
+    printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+nodes = d.get("nodes") or []
+links = d.get("links") or []
+exists = [n for n in nodes if n.get("exists", True)]
+missing = [n for n in nodes if not n.get("exists", True)]
+print("Wiki index  %s" % (d.get("workspacePath") or d.get("wikiRel") or ""))
+print("  Generated:  %s" % (d.get("generatedAt") or "—"))
+print("  Notes:      %s  (+ %s missing stubs)" % (len(exists), len(missing)))
+print("  Links:      %s" % len(links))
+if not exists:
+    print("")
+    print("  Empty vault. Seed with: k2 wiki seed")
+    print("  Or drop Markdown under .k2/wiki/")
+    sys.exit(0)
+print("")
+print("  %-28s  %s" % ("ID", "TITLE"))
+for n in sorted(exists, key=lambda x: (x.get("title") or x.get("id") or "").lower())[:50]:
+    print("  %-28s  %s" % ((n.get("id") or "")[:28], n.get("title") or ""))
+if len(exists) > 50:
+    print("  … %d more (use --json)" % (len(exists) - 50))
+'
+}
+
+cmd_wiki_note() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    local note_id=""
+    # First positional is note id; optional second is project.
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --workspace|--project)
+                project_sel="${2:-}"; [ -z "$project_sel" ] && { _wiki_err "usage" "$1 requires a value"; exit 2; }
+                shift 2 ;;
+            --workspace=*|--project=*) project_sel="${1#*=}"; shift ;;
+            --help|-h) cmd_help_wiki; exit 0 ;;
+            -*)
+                _wiki_err "usage" "unknown flag '$1' — usage: k2 wiki note <id> [--json] [project]"
+                exit 2 ;;
+            *)
+                if [ -z "$note_id" ]; then note_id="$1"
+                elif [ -z "$project_sel" ]; then project_sel="$1"
+                else
+                    _wiki_err "usage" "unexpected argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$note_id" ]; then
+        _wiki_err "usage" "usage: k2 wiki note <id> [--json] [project]"
+        exit 2
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local raw
+    raw=$(cli_request "/cli/wiki/note" "id=$(urlencode "$note_id")")
+    if [ "$as_json" = "true" ]; then
+        printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print(json.dumps({"error":{"code":"no_response","hint":"no response from daemon"}}), file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception:
+    print(json.dumps({"error":{"code":"bad_json","hint":raw[:200]}}), file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print(json.dumps({"error": err if isinstance(err, dict) else {"code":"daemon","hint":str(err)}})); sys.exit(1)
+print(json.dumps(d, separators=(",", ":")))
+'
+        return 0
+    fi
+    printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+title = d.get("title") or d.get("id") or "?"
+print("# %s" % title)
+tags = d.get("tags") or []
+if tags:
+    print("tags: %s" % ", ".join(tags))
+print("")
+body = d.get("body")
+if body is None:
+    body = d.get("content") or d.get("markdown") or ""
+sys.stdout.write(body if body.endswith("\n") else body + "\n")
+'
+}
+
+cmd_wiki_seed() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    # POST form (daemon: project on query via cli_post_form; body optional).
+    local raw=""
+    raw=$(cli_post_form "/cli/wiki/seed")
+    printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+created = d.get("created") or d.get("files") or []
+if isinstance(created, str):
+    created = [created]
+if created:
+    print("Seeded wiki:")
+    for f in created:
+        print("  + %s" % f)
+else:
+    print("Wiki already seeded (Home.md / _Index.md present).")
+wiki = d.get("wikiRel") or d.get("path") or ".k2/wiki"
+print("  Vault: %s" % wiki)
+print("  View:  k2 wiki index   or open View Wiki in the app")
+'
+}
+
+cmd_wiki_serve() {
+    local mode="${1:-}"
+    shift || true
+    case "$mode" in
+        on|off|start|stop|true|false|1|0) ;;
+        --help|-h|help|"")
+            cat <<'EOF'
+Usage: k2 wiki serve on|off [--port N] [project]
+
+  on|start    Bind read-only localhost site (127.0.0.1)
+  off|stop    Drop the listener (in-app wiki still works)
+
+  --port N    Preferred port when turning on (optional)
+EOF
+            [ -z "$mode" ] && exit 2 || exit 0
+            ;;
+        *)
+            _wiki_err "usage" "usage: k2 wiki serve on|off [--port N] [project]"
+            exit 2
+            ;;
+    esac
+
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local enabled="false"
+    case "$mode" in
+        on|start|true|1) enabled="true" ;;
+        off|stop|false|0) enabled="false" ;;
+    esac
+
+    # Daemon accepts form: enabled=true|false&port=N (project on query).
+    local raw
+    if [ -n "$port" ]; then
+        raw=$(cli_post_form "/cli/wiki/serve" "enabled=${enabled}" "port=$(urlencode "$port")")
+    else
+        raw=$(cli_post_form "/cli/wiki/serve" "enabled=${enabled}")
+    fi
+    printf '%s' "$raw" | ENABLED="$enabled" python3 -c '
+import json,sys,os
+raw=sys.stdin.read()
+want = os.environ.get("ENABLED") == "true"
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+enabled = bool(d.get("enabled") if "enabled" in d else d.get("serving", want))
+port = d.get("port")
+url = d.get("url") or (("http://127.0.0.1:%s" % port) if port else None)
+if enabled:
+    print("Wiki serve ON  %s" % (url or ("port %s" % (port or "?"))))
+    print("  Bind is 127.0.0.1 only (read-only). Publish with: k2 wiki publish [--label LABEL]")
+    if d.get("publicChatEnabled"):
+        if d.get("publicChatReady"):
+            print("  Public chat: ON (ready)")
+        else:
+            err = d.get("publicChatError") or "not ready"
+            print("  Public chat: ON (%s)" % err)
+    else:
+        print("  Public chat: OFF (visitors cannot ask the agent; k2 wiki chat on)")
+else:
+    print("Wiki serve OFF")
+    if d.get("publishedLabel") or d.get("published_label"):
+        print("  Note: nested subdomain may still point here — run k2 wiki unpublish or")
+        print("  k2 publish subdomain rm %s" % (d.get("publishedLabel") or d.get("published_label")))
+'
+}
+
+# Phase 1 (prd-wiki-public-chat-api-loopback-v1) — opt-in public wiki chat.
+# Default OFF. When ON, daemon mints/stores a host_sessions-only API key
+# under ~/.k2/wiki-public-chat/ (never printed). Visitors need serve/publish
+# + API on for the chat gateway to answer.
+cmd_wiki_chat() {
+    local mode="${1:-}"
+    shift || true
+    case "$mode" in
+        on|off|enable|disable|true|false|1|0) ;;
+        --help|-h|help|"")
+            cat <<'EOF'
+Usage: k2 wiki chat on|off [project]
+
+  on|enable   Allow visitors with the wiki URL to ask this workspace's agent
+  off|disable Turn public chat off (serve can stay on; notes still public)
+
+Default is OFF — serve alone never enables chat.
+Requires the public API (`k2 api on`) for chat to be ready.
+The daemon auto-mints a host_sessions-only key; the secret is never printed.
+EOF
+            [ -z "$mode" ] && exit 2 || exit 0
+            ;;
+        *)
+            _wiki_err "usage" "usage: k2 wiki chat on|off [project]"
+            exit 2
+            ;;
+    esac
+
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local enabled="false"
+    case "$mode" in
+        on|enable|true|1) enabled="true" ;;
+        off|disable|false|0) enabled="false" ;;
+    esac
+
+    local raw
+    raw=$(cli_post_form "/cli/wiki/chat" "enabled=${enabled}")
+    printf '%s' "$raw" | ENABLED="$enabled" python3 -c '
+import json,sys,os
+raw=sys.stdin.read()
+want = os.environ.get("ENABLED") == "true"
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+on = bool(d.get("publicChatEnabled") if "publicChatEnabled" in d else want)
+ready = bool(d.get("publicChatReady"))
+err = d.get("publicChatError")
+if on:
+    print("Wiki public chat ON")
+    print("  Visitors with the served/published wiki URL can ask this workspace agent.")
+    if ready:
+        print("  Status: ready (API on + daemon chat key available)")
+    else:
+        print("  Status: not ready — %s" % (err or "check `k2 api on` and `k2 wiki status`"))
+    print("  Secret key is daemon-held only (never shown). Guest policy: k2 workspace api-guest-policy")
+else:
+    print("Wiki public chat OFF")
+    print("  Serve/publish can stay on; only the Ask-this-wiki path is closed.")
+'
+}
+
+cmd_wiki_publish() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    _wiki_apply_project "$project_sel"
+
+    if [ -z "$label" ]; then
+        label="$(_wiki_default_label)"
+    fi
+
+    # 1) Ensure local serve is on (and capture port/url).
+    local serve_raw status_raw
+    if [ -n "$port" ]; then
+        serve_raw=$(cli_post_form "/cli/wiki/serve" "enabled=true" "port=$(urlencode "$port")" 2>/dev/null || true)
+    else
+        serve_raw=$(cli_post_form "/cli/wiki/serve" "enabled=true" 2>/dev/null || true)
+    fi
+    # No dedicated /cli/wiki/publish on daemon V1 — serve + subdomain is enough.
+    local pub_raw=""
+
+    status_raw=$(cli_request "/cli/wiki/serve/status" 2>/dev/null || true)
+    # Prefer serve response, then publish convenience, then status.
+    local port_num url
+    port_num=$(STATUS="$status_raw" SERVE="$serve_raw" PUB="$pub_raw" python3 -c '
+import json,os,sys
+def load(s):
+    try: return json.loads(s) if (s or "").strip() else {}
+    except Exception: return {}
+for s in (os.environ.get("PUB"), os.environ.get("SERVE"), os.environ.get("STATUS")):
+    d=load(s)
+    if isinstance(d, dict) and d.get("error"): continue
+    p=d.get("port")
+    if p is not None:
+        print(p); sys.exit(0)
+print("")
+')
+    url=$(STATUS="$status_raw" SERVE="$serve_raw" PUB="$pub_raw" python3 -c '
+import json,os,sys
+def load(s):
+    try: return json.loads(s) if (s or "").strip() else {}
+    except Exception: return {}
+for s in (os.environ.get("PUB"), os.environ.get("SERVE"), os.environ.get("STATUS")):
+    d=load(s)
+    if isinstance(d, dict) and d.get("error"): continue
+    u=d.get("url")
+    if u:
+        print(u); sys.exit(0)
+    p=d.get("port")
+    if p is not None:
+        print("http://127.0.0.1:%s" % p); sys.exit(0)
+print("")
+')
+
+    if [ -z "$port_num" ]; then
+        _wiki_err "serve_failed" "could not start wiki serve or read port from daemon status"
+        echo "  Check: k2 wiki serve on && k2 wiki status" >&2
+        exit 1
+    fi
+
+    local target="127.0.0.1:${port_num}"
+    echo "Wiki local site: ${url:-http://127.0.0.1:${port_num}}"
+    echo "  target for publish: $target"
+    echo "  label:              $label"
+    echo ""
+
+    # 2) Try automated subdomain create when Connect token is present.
+    local created=0
+    if [ -n "$(_connect_bearer_token 2>/dev/null || true)" ]; then
+        local cp_body cp_raw
+        cp_body="$(python3 -c 'import json,sys; print(json.dumps({"label": sys.argv[1], "target": sys.argv[2]}))' "$label" "$target")"
+        # Prefer create; on "already exists" style errors, try point.
+        if cp_raw=$(_connect_curl POST "/subdomains" "$cp_body" 2>/dev/null); then
+            local http_code
+            http_code=$(printf '%s' "$cp_raw" | head -1 | tr -d '[:space:]')
+            if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+                printf '%s' "$cp_raw" | _connect_subdomain_render '
+host = d.get("host") or (str(d.get("label","?")) + ".k2.dev")
+print("Published %s" % host)
+print("  target:    %s" % d.get("target","?"))
+print("  status:    %s" % d.get("status","?"))
+print("  effective: %s" % d.get("effective","?"))
+' 2>/dev/null && created=1 || true
+                if [ "$created" = "1" ]; then
+                    _stamp_subdomain_attrib claim "$label" || true
+                    _nudge_subdomain_refresh || true
+                fi
+            fi
+        fi
+        if [ "$created" != "1" ]; then
+            # Point (repoint existing label).
+            local point_body
+            point_body="$(python3 -c 'import json,sys; print(json.dumps({"target": sys.argv[1]}))' "$target")"
+            if cp_raw=$(_connect_curl PUT "/subdomains/$(urlencode "$label")" "$point_body" 2>/dev/null); then
+                http_code=$(printf '%s' "$cp_raw" | head -1 | tr -d '[:space:]')
+                if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+                    printf '%s' "$cp_raw" | _connect_subdomain_render '
+host = d.get("host") or (str(d.get("label","?")) + ".k2.dev")
+print("Repointed %s -> %s" % (host, d.get("target","?")))
+' 2>/dev/null && created=1 || true
+                    if [ "$created" = "1" ]; then
+                        _stamp_subdomain_attrib claim "$label" || true
+                        _nudge_subdomain_refresh || true
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+    if [ "$created" != "1" ]; then
+        echo "To expose this brain on your K2 Connect host (Pro nested subdomain):"
+        echo ""
+        echo "  k2 publish subdomain create $label --target $target"
+        echo ""
+        echo "If the label already exists:"
+        echo "  k2 publish subdomain point $label --target $target"
+        echo ""
+        echo "Requires: tunnel up (k2 tunnel start) + Pro plan for nested subdomains."
+        echo "Unpublish later: k2 wiki unpublish"
+    else
+        echo ""
+        echo "Live map is on the tunnel target above. Unpublish: k2 wiki unpublish"
+    fi
+
+    if [ "$as_json" = "true" ]; then
+        python3 -c '
+import json,sys
+print(json.dumps({
+  "ok": True,
+  "label": sys.argv[1],
+  "target": sys.argv[2],
+  "url": sys.argv[3] or None,
+  "port": int(sys.argv[4]) if sys.argv[4].isdigit() else sys.argv[4],
+  "subdomainCreated": sys.argv[5] == "1",
+}, separators=(",", ":")))
+' "$label" "$target" "${url:-}" "$port_num" "$created"
+    fi
+}
+
+cmd_wiki_unpublish() {
+    local as_json=false project_sel="" port="" label=""
+    local -a wiki_pos=()
+    _wiki_parse_args "$@" || { cmd_help_wiki; exit 0; }
+    if [ -z "$project_sel" ] && [ ${#wiki_pos[@]} -ge 1 ]; then
+        project_sel="${wiki_pos[0]}"
+    fi
+    # Optional bare label? Spec is unpublish [project] only — if user
+    # passed --label, use it for the rm hint.
+    _wiki_apply_project "$project_sel"
+
+    local status_raw pub_label
+    status_raw=$(cli_request "/cli/wiki/serve/status" 2>/dev/null || true)
+    pub_label=$(printf '%s' "$status_raw" | python3 -c '
+import json,sys
+try: d=json.loads(sys.stdin.read() or "{}")
+except Exception: d={}
+print(d.get("publishedLabel") or d.get("published_label") or d.get("label") or "")
+' 2>/dev/null || true)
+    if [ -n "$label" ]; then
+        pub_label="$label"
+    fi
+
+    local raw
+    raw=$(cli_post_form "/cli/wiki/serve" "enabled=false")
+    printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print("Wiki serve: (no daemon response — continuing)")
+    sys.exit(0)
+try: d=json.loads(raw)
+except Exception:
+    print("Wiki serve: (unparseable daemon response — continuing)")
+    sys.exit(0)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Warning: serve off failed: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err)), file=sys.stderr)
+    sys.exit(0)
+print("Wiki serve OFF")
+' || true
+
+    echo ""
+    if [ -n "$pub_label" ]; then
+        echo "To remove the nested subdomain advertisement:"
+        echo "  k2 publish subdomain rm $pub_label"
+        echo "  k2 publish subdomain unclaim $pub_label   # drop workspace attribution"
+    else
+        echo "If you created a nested subdomain for this brain, remove it with:"
+        echo "  k2 publish subdomain list"
+        echo "  k2 publish subdomain rm <label>"
+    fi
+    echo ""
+    echo "Notes under .k2/wiki/ are kept (unpublish does not delete the vault)."
+
+    if [ "$as_json" = "true" ]; then
+        python3 -c '
+import json,sys
+print(json.dumps({
+  "ok": True,
+  "serving": False,
+  "publishedLabel": sys.argv[1] or None,
+  "hint": ("k2 publish subdomain rm %s" % sys.argv[1]) if sys.argv[1] else "k2 publish subdomain list",
+}, separators=(",", ":")))
+' "${pub_label:-}"
+    fi
+}
+
 cmd_skills() {
     local subcmd="${1:-list}"
     shift || true
@@ -6185,7 +8378,6 @@ print('Workspace Settings:')
 print(f\"  Name:      {d.get('name', '?')}\")
 print(f\"  Mode:      {d.get('mode', 'off')}\")
 print(f\"  Heartbeat: {'on' if d.get('heartbeatEnabled') else 'off'}\")
-print(f\"  State:     {d.get('stateId', '(none)')}\")
 print(f\"  Pinned:    {'yes' if d.get('pinned') else 'no'}\")
 " 2>/dev/null || cli_request "/cli/settings"
 }
@@ -6213,6 +8405,10 @@ cmd_help() {
         skills)                   cmd_help_skills ;;
         settings)                 cmd_help_settings ;;
         heartbeat)                cmd_help_heartbeat ;;
+        wiki)                     cmd_help_wiki ;;
+        publish)                  _publish_usage ;;
+        connect)                  _connect_usage ;;
+        users)                    _users_usage ;;
         deprecated|--deprecated)  cmd_help_deprecated ;;
         '')                       cmd_help_v2_daily ;;
         *)                        cmd_help_v2_daily ;;
@@ -6221,7 +8417,7 @@ cmd_help() {
 
 cmd_help_msg() {
     cat <<'EOF'
-k2 msg <workspace> "text" [--from <name>] [--command "<text>"] [--no-wake]
+k2 msg <workspace|agent::host> "text" [--from <name>] [--command "<text>"] [--no-wake]
 
 Deliver a message to a workspace's agent, live. By DEFAULT msg AUTO-WAKES
 a dormant canonical session: if the agent's session is asleep, msg
@@ -6232,8 +8428,12 @@ configured agent returns `no_agent_mode` and is never spawned. Returns
 success only when the message has landed in the agent's session.
 
 ARGUMENTS
-  <workspace>    Workspace name (preferred — see `k2 connections list`).
-                 Absolute path or project UUID also accepted.
+  <workspace>    Local workspace name (preferred — see `k2 connections
+                 list`), absolute path, or project UUID.
+  <agent>::<host>
+                 Federated peer (GH #47). Example: ProposalWriter::box.k2.dev
+                 Legacy agent@host still works temporarily (not email).
+                 Wire form fp::ws::agent is for `k2 fed send` only.
   "text"         The message body. Wrap in quotes if it has spaces.
 
 OPTIONS
@@ -6311,6 +8511,7 @@ EXAMPLES
   k2 msg scout_v3 "keep going" --command "/loop"
   k2 msg scout_v3 "wake up and check in" --wake
   k2 msg /Users/me/work/MyApp "deploy completed"
+  k2 msg peer::other.k2.dev "ping from federation"
 EOF
 }
 
@@ -6522,9 +8723,9 @@ cmd_schema() {
   "commands": [
     {
       "name": "msg",
-      "usage": "k2 msg <workspace> \"text\" [--from <name>] [--command \"<text>\"]",
-      "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; use --inbox for long content.",
-      "args": [{"name": "workspace", "required": true}, {"name": "text", "required": true}],
+      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"]",
+      "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; use --inbox for long content. Federated peers: agent::host (prefer) or legacy agent@host — never mail. Wire form fp::ws::agent is k2 fed send only.",
+      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or federated agent::host"}, {"name": "text", "required": true}],
       "flags": [
         {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
         {"name": "--command", "arg": "text", "description": "Prepend text (e.g. a slash-command) at the very front of the delivered line."},
@@ -7316,6 +9517,127 @@ cmd_schema() {
       "flags": []
     },
     {
+      "name": "connect",
+      "usage": "k2 connect <login|status|logout> ...",
+      "description": "Pair a purchased k2.dev subdomain to this device: account login (Supabase email/password or --token JWT), pick subdomain, write tunnel config, start tunnel. Nested Pro subdomains stay under k2 publish.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "connect login",
+      "usage": "k2 connect login [--email <e>] [--token <jwt>] [--subdomain <label>]",
+      "description": "Sign in to k2.dev, list purchased subdomains, bind tunnel token via POST /cli/tunnel/config, start tunnel. Password is never stored (only ~/.k2/connect-account.json access/refresh tokens, 0600).",
+      "args": [],
+      "flags": [
+        {"name": "--email", "arg": "e", "description": "Account email (prompted if omitted)."},
+        {"name": "--token", "arg": "jwt", "description": "Access JWT instead of email/password (scripted)."},
+        {"name": "--subdomain", "arg": "label", "description": "Skip the interactive picker."}
+      ]
+    },
+    {
+      "name": "connect status",
+      "usage": "k2 connect status",
+      "description": "Show account session + paired subdomain + live tunnel status when the daemon is up.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "connect logout",
+      "usage": "k2 connect logout",
+      "description": "Clear ~/.k2/connect-account.json. Does not unpair the tunnel (use k2 tunnel release --confirm).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "users",
+      "usage": "k2 users [list|add] ...",
+      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin, then optional --role set-role.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "users add",
+      "usage": "k2 users add <username> [--role owner|admin|member|viewer] [--password-stdin]",
+      "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. --role calls set-role after add (default member server-side).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--role", "arg": "role", "description": "owner | admin | member | viewer"},
+        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."}
+      ]
+    },
+    {
+      "name": "wiki",
+      "usage": "k2 wiki <status|index|note|seed|serve|chat|publish|unpublish> ...",
+      "description": "Per-workspace knowledge base (brain map) under .k2/wiki/: index graph, read notes, seed Home/_Index, localhost serve, public chat opt-in, publish via nested subdomain.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output where supported (status/index/note/publish/unpublish)."},
+        {"name": "--port", "arg": "N", "description": "Preferred localhost port for serve on / publish."},
+        {"name": "--label", "arg": "LABEL", "description": "Nested subdomain label for publish (default: workspace basename slug)."},
+        {"name": "--workspace", "arg": "project", "description": "Workspace path/name/uuid (alias: --project or trailing [project])."}
+      ]
+    },
+    {
+      "name": "wiki status",
+      "usage": "k2 wiki status [--json] [project]",
+      "description": "Local serve state (enabled/port/url) + publicChatEnabled/Ready/Error + published label + note count.",
+      "args": [{"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable object."}]
+    },
+    {
+      "name": "wiki index",
+      "usage": "k2 wiki index [--json] [project]",
+      "description": "Full wiki graph index (nodes + wikilinks) from the daemon indexer.",
+      "args": [{"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw WikiIndex JSON."}]
+    },
+    {
+      "name": "wiki note",
+      "usage": "k2 wiki note <id> [--json] [project]",
+      "description": "Fetch one note body by stable id (wiki-relative path, e.g. Home.md).",
+      "args": [{"name": "id", "required": true}, {"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "Full note object including body."}]
+    },
+    {
+      "name": "wiki seed",
+      "usage": "k2 wiki seed [project]",
+      "description": "Create seed Home.md + _Index.md under .k2/wiki/ when missing.",
+      "args": [{"name": "project", "required": false}],
+      "flags": []
+    },
+    {
+      "name": "wiki serve",
+      "usage": "k2 wiki serve on|off [--port N] [project]",
+      "description": "Start/stop the read-only localhost wiki site (binds 127.0.0.1 only).",
+      "args": [{"name": "on|off", "required": true}, {"name": "project", "required": false}],
+      "flags": [{"name": "--port", "arg": "N", "description": "Preferred port when turning on."}]
+    },
+    {
+      "name": "wiki chat",
+      "usage": "k2 wiki chat on|off [project]",
+      "description": "Allow public chat on the served/published wiki (default OFF). Visitors can ask this workspace's agent; daemon holds a host_sessions-only API key (never printed).",
+      "args": [{"name": "on|off", "required": true}, {"name": "project", "required": false}],
+      "flags": []
+    },
+    {
+      "name": "wiki publish",
+      "usage": "k2 wiki publish [--label LABEL] [project]",
+      "description": "Turn serve ON and create/point a nested subdomain to 127.0.0.1:port (or print the k2 publish subdomain command).",
+      "args": [{"name": "project", "required": false}],
+      "flags": [
+        {"name": "--label", "arg": "LABEL", "description": "Nested subdomain label (default: workspace basename slug)."},
+        {"name": "--port", "arg": "N", "description": "Preferred local port before publish."},
+        {"name": "--json", "arg": null, "description": "JSON summary of label/target/port."}
+      ]
+    },
+    {
+      "name": "wiki unpublish",
+      "usage": "k2 wiki unpublish [project]",
+      "description": "Turn serve OFF and print how to remove the nested subdomain (notes are kept).",
+      "args": [{"name": "project", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON summary with rm hint."}]
+    },
+    {
       "name": "skills",
       "usage": "k2 skills <list|create|remove|profile|...> [...]",
       "description": "Manage skill profiles (SKILL.md) for workspaces/agents.",
@@ -7324,7 +9646,7 @@ cmd_schema() {
     },
     {
       "name": "settings",
-      "usage": "k2 settings [--agentic <on|off>] [--state <id>] [...]",
+      "usage": "k2 settings [--mode <off|agent|manager>] [...]",
       "description": "Read/update daemon + workspace settings.",
       "args": [],
       "flags": []
@@ -7442,9 +9764,11 @@ cmd_update() {
         exit 1
     fi
 
-    # Extract the version from the remote script
+    # Extract the version from the remote script.
+    # Use cut/tr — never a sed that matches K2_CLI_VERSION="0.40.52" (release.sh
+    # rewrites every occurrence of that form when bumping the version).
     local remote_version
-    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | sed 's/K2_CLI_VERSION="0.40.45"//')
+    remote_version=$(echo "$remote_script" | grep -m1 '^K2_CLI_VERSION=' | cut -d'"' -f2)
     if [ -z "$remote_version" ]; then
         echo "Error: Could not parse remote version." >&2
         exit 1
@@ -7906,6 +10230,12 @@ LIFECYCLE (less common)
   remove <path>                     Deregister (files stay)
   triage                            Plain-text summary of pending work
 
+API / HOST-SESSIONS
+  api-guest-policy get <ws>         Show owner guest policy (default if unset)
+  api-guest-policy set <ws> <text>  Set policy re-injected every /v1 turn
+  api-guest-policy set <ws> --file <path>
+  api-guest-policy set <ws> --default   Clear → platform default
+
 `<path>` defaults to K2SO_PROJECT_PATH or PWD.
 
 EXAMPLES
@@ -7914,6 +10244,8 @@ EXAMPLES
   k2 workspace launch /Users/me/Projects/k2so
   k2 workspace profile
   k2 workspace update --field role --value "frontend lead"
+  k2 workspace api-guest-policy get my-wiki
+  k2 workspace api-guest-policy set my-wiki "Read-only; use k2 respond --final"
 EOF
 }
 
@@ -7924,7 +10256,8 @@ k2 connections [list|add|remove] [workspace-name] [--json]
 Manage this workspace's connections to other workspaces (agents).
 
   list [--json]     List connections for this workspace (exit 0)
-  add <name>        Connect to another workspace (name, path, or <agent>@<host>)
+  add <name>        Connect to another workspace (name, path, or <agent>::<host>)
+                    Legacy <agent>@<host> still accepted.
   remove <name>     Disconnect from a workspace
 
 AGENT GATE (create / remove)
@@ -7944,6 +10277,7 @@ EXAMPLES
   k2 connections list
   k2 connections list --json
   k2 connections add "QA Bot"
+  k2 connections add peer::other.k2.dev
   k2 connections remove scout
 EOF
 }
@@ -9859,11 +12193,6 @@ WORKSPACE MODE
                             agent: workspace has a primary agent
                             manager: workspace coordinates other workspaces
 
-WORKSPACE STATE (capability tier)
-  --state <build|managed|maintenance|locked>
-                            Drives which actions the agent can take
-                            autonomously. See `k2 glossary state`.
-
 GLOBAL TOGGLES
   --agentic <on|off>        Enable/disable all background agent systems
 
@@ -9874,7 +12203,6 @@ COMPANION (mobile + remote-desktop access)
 EXAMPLES
   k2 settings                              # show current
   k2 settings --mode manager
-  k2 settings --state managed
   k2 settings --agentic off
   k2 settings --companion on
 EOF
@@ -9951,7 +12279,7 @@ K2SO retired verbs → new equivalents
 HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
 
   agentic on|off                  → settings --agentic <on|off>
-  state list|get|set              → settings --state <id>
+  state list|get|set              → (removed — Workspace States retired)
   mode off|agent|manager          → settings --mode <value>
   app-update                      → update --app
   commit-merge                    → commit --merge
@@ -10224,11 +12552,12 @@ with one shared chat + one PoC agent (see PROJECTS below).
 
 TALK TO OTHERS
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
+  msg <agent>::<host> "text"            Federated peer (prefer ::; legacy agent@host ok; not email)
   msg <workspace> "text" --inbox        Drop in their inbox (email — async, no length limit)
   msg <workspace> --signal <kind> ...   Emit a typed signal (advanced)
   read <workspace> [--lines N]          Read their live terminal (peek before you inject)
   connections list [--json]             Connected workspaces (bidirectional)
-  connections add <path>                Connect (agent: gated; exit 3 when disabled)
+  connections add <path|agent::host>    Connect (agent: gated; exit 3 when disabled)
   connections remove <name>             Disconnect (same agent create/remove gate)
 
 YOUR INBOX
@@ -10377,11 +12706,31 @@ PUBLISH (nested label.user.k2.dev; control plane — not zone DNS)
   publish --help                                OUTPUT CONTRACT + product boundary
   (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)
 
+CONNECT (pair purchased k2.dev subdomain — headless account login)
+  connect login [--email e] [--token jwt] [--subdomain label]
+                                                Sign in → pick subdomain → start tunnel
+  connect status                                Paired subdomain + tunnel/account state
+  connect logout                                Clear ~/.k2/connect-account.json (not tunnel)
+
+USERS (local daemon connect-user accounts)
+  users | users list                            List accounts (username, role, disabled)
+  users add <username> [--role owner|admin|member|viewer] [--password-stdin]
+                                                Create account (password via prompt or stdin)
+
+WIKI (per-workspace brain map under .k2/wiki/)
+  wiki status [--json] [project]                Serve + public chat + publish state
+  wiki index [--json] [project]                 Graph index (nodes + links)
+  wiki note <id> [--json] [project]             One note body (e.g. Home.md)
+  wiki seed [project]                           Create Home.md + _Index.md if missing
+  wiki serve on|off [--port N] [project]        Localhost read-only site (127.0.0.1)
+  wiki chat on|off [project]                    Allow public chat (visitors ask agent; default OFF)
+  wiki publish [--label L] [project]            Serve on + subdomain create/point (or print cmd)
+  wiki unpublish [project]                      Serve off + hint to rm subdomain
+  wiki --help                                   Full wiki help
+
 SETTINGS
   settings                                      Show current settings
   settings --mode <off|agent|manager>           Workspace mode
-  settings --state <build|managed|maintenance|locked>
-                                                Workspace capability tier
   settings --agentic <on|off>                   Global agentic systems toggle
   settings --companion <on|off>                 Enable/disable companion tunnel
   settings --companion-password "<pw>"          Rotate companion password
@@ -10648,7 +12997,7 @@ cmd_fed() {
             # GAP #3: carry the SOURCE workspace ($PROJECT, resolved at the
             # top of this script from K2_PROJECT_PATH/CWD — same source
             # cmd_connections uses). The daemon GATES the cross-daemon send
-            # on `is_remote_connection(from_workspace, <agent>@<host>)`:
+            # on `is_remote_connection(from_workspace, <agent>::<host>)`:
             # an agent may only message a peer its workspace is connected
             # to. (Owner-remote `k2 talk` is a different, ungated path.)
             local body
@@ -10755,6 +13104,39 @@ try:
 except Exception:
     sys.stderr.write('k2 fed status: unexpected response from /cli/settings/get\n'); sys.exit(1)"
             ;;
+        peers)
+            # GH #48 — list pinned federation peers so asymmetric trust is
+            # visible (and k2 msg can name hosts that match). Dual-auth:
+            # owner token or agent passport via cli_send.
+            cli_send cli_request "/cli/federation/peers" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.stderr.write('k2 fed peers: could not parse response\n'); sys.exit(1)
+if isinstance(d, dict) and d.get('error'):
+    err = d['error']
+    if isinstance(err, dict):
+        sys.stderr.write('k2 fed peers: %s\n' % (err.get('hint') or err.get('code') or err))
+    else:
+        sys.stderr.write('k2 fed peers: %s\n' % err)
+    sys.exit(1)
+peers = d.get('peers', []) if isinstance(d, dict) else []
+if not peers:
+    print('No federation peers pinned on this server.')
+    print('Pair with: k2 fed pair-request / k2 fed confirm (or Settings → Connections auto-pair).')
+    sys.exit(0)
+print('Peers (%d):' % len(peers))
+for p in peers:
+    sub = (p.get('subdomain') or '').strip()
+    host = (sub + '.k2.dev') if sub and not sub.endswith('.k2.dev') else (sub or '—')
+    label = p.get('label') or ''
+    trust = p.get('trust') or '?'
+    fp = (p.get('fingerprint') or '')[:16]
+    extra = ('  label=%s' % label) if label else ''
+    print('  %s  trust=%s  fp=%s…%s' % (host, trust, fp, extra))
+"
+            ;;
         outbox)
             # The truthful surface for the outbox drain: per peer, how many
             # cross-server messages are still QUEUED (waiting for the peer to
@@ -10790,8 +13172,9 @@ for p in peers:
 print(f\"total queued: {d.get('total_queued',0)}\")"
             ;;
         *)
-            echo "usage: k2 fed <enable|disable|status|pubkey|send|outbox|pair-request|confirm> ..." >&2
+            echo "usage: k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-request|confirm> ..." >&2
             echo "  enable/disable/status: flip the persisted federation switch (headless-friendly)" >&2
+            echo "  peers: list pinned servers (use their host with k2 msg agent::host)" >&2
             echo "  send/outbox/pair-request/confirm need federation ON; pubkey works anytime" >&2
             echo "  outbox: queued + dead-lettered cross-server messages per peer" >&2
             exit 2
@@ -16688,8 +19071,8 @@ case "${1:-help}" in
         fail_deprecated "agentic" "k2 settings --agentic <on|off>"
         ;;
     state)
-        # Phase 2.1: hard-deprecated. Forward users to settings --state.
-        fail_deprecated "state" "k2 settings --state <id>"
+        # Workspace States product feature retired entirely.
+        fail_deprecated "state" "(removed — Workspace States no longer exist)"
         ;;
     delegate)
         # Phase 2.1 A23: hard-deprecated. Modern harnesses (Claude Code,
@@ -16756,7 +19139,9 @@ EOF
             resume-chat-args)  shift 2; cmd_workspace_resume_chat_args "$@" ;;
             # B3a (sandbox) — set/clear the per-workspace Anthropic API key.
             api-key)           shift 2; cmd_workspace_set_api_key "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|...> [args]" >&2; exit 1 ;;
+            # Phase 0b — owner API guest policy (host-session inject every turn).
+            api-guest-policy)  shift 2; cmd_workspace_api_guest_policy "$@" ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|api-guest-policy|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)
@@ -17030,17 +19415,37 @@ EOF
         shift; cmd_api_key "$@"
         ;;
     publish)
-        # K2 Connect account/Pro-subdomain management (calls the hosted
+        # K2 Connect Pro nested-subdomain management (calls the hosted
         # control plane directly, not the local daemon).
         shift; cmd_publish "$@"
         ;;
+    users)
+        # Local daemon connect-user accounts (list / add). Owner-token
+        # bootstrap for the first owner; gated thereafter server-side.
+        if _wants_help "${@:2}"; then
+            _users_usage
+            exit 0
+        fi
+        shift; cmd_users "$@"
+        ;;
+    wiki)
+        # Workspace knowledge base (brain map): index / note / seed /
+        # localhost serve / publish via nested subdomain. Daemon
+        # /cli/wiki/*; publish reuses k2 publish subdomain.
+        if _wants_help "${@:2}"; then
+            cmd_help_wiki
+            exit 0
+        fi
+        shift; cmd_wiki "$@"
+        ;;
     connect)
-        # 0.40.41 BREAKING: `k2 connect` was renamed to `k2 publish`
-        # (the CLI verb only — the K2 Connect product/Settings branding
-        # is unchanged). No alias, no forwarding: fail loud with a
-        # one-line pointer, before any HTTP.
-        echo "Unknown command: connect — did you mean 'k2 publish'?" >&2
-        exit 1
+        # Headless Connect account pairing (login → pick subdomain →
+        # tunnel bind/start). Nested Pro verbs live under `k2 publish`.
+        if _wants_help "${@:2}"; then
+            _connect_usage
+            exit 0
+        fi
+        shift; cmd_connect "$@"
         ;;
     companion)
         # Phase 2.1: hard-deprecated. Companion is daemon-owned.

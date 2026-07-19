@@ -15,6 +15,9 @@ import {
   classifyWhoamiStatus,
   shouldRefreshCredsOnAccept,
   shouldShowReloadButton,
+  isWedgePatternEstablished,
+  arbiterProvesHostReady,
+  WEDGE_PATTERN_MS,
 } from './ConnectionGate'
 
 const status = (over: Partial<{ version: string; protocol: number; phase: string; detail: string }> = {}) => ({
@@ -181,5 +184,66 @@ describe('shouldShowReloadButton (overlay escape hatch)', () => {
   it('migrating waits longer (~60s, attempts >= 120) before nagging', () => {
     expect(shouldShowReloadButton({ migrating: true, attempts: 119, importFailed: false })).toBe(false)
     expect(shouldShowReloadButton({ migrating: true, attempts: 120, importFailed: false })).toBe(true)
+  })
+})
+
+// 0.40.48 — the wedge detector's pure rules. The incident signature is a
+// SUSTAINED run of transport-healthy-but-HTTP-failing boot probes (WKWebView
+// reusing a poisoned pooled connection that 404s at the tunnel edge); a
+// genuine reboot produces network-level errors or resolves quickly. These
+// two rules decide (a) when the run is long enough to consult the
+// out-of-webview arbiter and (b) whether the arbiter's answer PROVES the
+// host healthy (⇒ the webview pool is poisoned).
+describe('isWedgePatternEstablished (consecutive-http-failure clock)', () => {
+  const t0 = 1_750_000_000_000
+
+  it('no http-failure run in progress → never established', () => {
+    expect(isWedgePatternEstablished({ httpFailingSince: null, now: t0 })).toBe(false)
+  })
+
+  it('a run younger than the threshold is not yet a wedge', () => {
+    expect(
+      isWedgePatternEstablished({ httpFailingSince: t0, now: t0 + WEDGE_PATTERN_MS - 1 }),
+    ).toBe(false)
+  })
+
+  it('a run at/past the threshold is established', () => {
+    expect(
+      isWedgePatternEstablished({ httpFailingSince: t0, now: t0 + WEDGE_PATTERN_MS }),
+    ).toBe(true)
+    expect(
+      isWedgePatternEstablished({ httpFailingSince: t0, now: t0 + WEDGE_PATTERN_MS * 5 }),
+    ).toBe(true)
+  })
+})
+
+describe('arbiterProvesHostReady (out-of-webview second opinion)', () => {
+  const ready = JSON.stringify({ version: '0.40.48', protocol: 1, phase: 'ready', detail: '' })
+
+  it('2xx + phase ready → proven (the poisoned-pool verdict)', () => {
+    expect(arbiterProvesHostReady({ status: 200, body: ready })).toBe(true)
+  })
+
+  it('the arbiter failing at the network level (null) is a genuine outage, NOT a wedge', () => {
+    expect(arbiterProvesHostReady(null)).toBe(false)
+  })
+
+  it('a non-2xx from the arbiter (edge 404 for everyone) is not proof', () => {
+    expect(arbiterProvesHostReady({ status: 404, body: 'no route found' })).toBe(false)
+    expect(arbiterProvesHostReady({ status: 502, body: '' })).toBe(false)
+  })
+
+  it("a pre-'ready' phase means the host is genuinely still booting", () => {
+    expect(
+      arbiterProvesHostReady({
+        status: 200,
+        body: JSON.stringify({ version: 'x', protocol: 1, phase: 'migrating', detail: 'db' }),
+      }),
+    ).toBe(false)
+  })
+
+  it('an unparseable / non-boot-status body is not proof', () => {
+    expect(arbiterProvesHostReady({ status: 200, body: 'not json' })).toBe(false)
+    expect(arbiterProvesHostReady({ status: 200, body: JSON.stringify({ nope: 1 }) })).toBe(false)
   })
 })

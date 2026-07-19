@@ -13,7 +13,7 @@
 //!    text could be consumed as the prompt's answer. Busy → `409 agent_busy`.
 
 use crate::cli_response::CliResponse;
-use crate::routes::http::V1Principal;
+use crate::routes::http::{V1Capability, V1Principal};
 
 /// Percent-decode + validate a `<ws>` URL segment (reject empty/slash/traversal).
 /// Mirrors `v1_sandboxes::decode_and_validate_segment` (private there).
@@ -66,6 +66,11 @@ fn canonical_status_for_path(project_path: &str) -> Option<String> {
 }
 
 pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
+    // Phase 0 — canonical-message capability (owner always has it). Missing
+    // cap → uniform 404 (same as ungranted workspace; no existence oracle).
+    if !principal.has_capability(V1Capability::CanonicalMessage) {
+        return crate::v1_sandboxes::uniform_ws_404();
+    }
     let Some(slug) = decode_ws_segment(ws_raw) else {
         return CliResponse::not_found();
     };
@@ -144,4 +149,46 @@ pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: 
         })
         .to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::routes::http::V1Principal;
+
+    /// Phase 0 — missing `canonical_message` capability → uniform 404.
+    #[test]
+    fn canonical_message_requires_capability() {
+        k2_core::db::init_for_tests();
+        // Register a workspace so a full-cap key would get past the grant.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    "v1msg-cap-deny",
+                    "/tmp/k2-v1msg-cap-deny",
+                ],
+            )
+            .expect("insert project");
+        }
+        let no_canon = V1Principal::Api(k2_core::api_keys::ApiPrincipal {
+            id: "k-msg-no-cap".to_string(),
+            anthropic_key: None,
+            provider: None,
+            base_url: None,
+            scope: "owner".to_string(),
+            allowed_workspaces: Some("*".to_string()),
+            capabilities: k2_core::api_keys::ApiCapabilities::new_key_default(), // canon OFF
+        });
+        let r = handle_v1_ws_message(
+            &no_canon,
+            "v1msg-cap-deny",
+            br#"{"text":"hello"}"#,
+        );
+        assert_eq!(r.status, "404 Not Found", "body={}", r.body);
+        assert!(r.body.contains("no such workspace"), "uniform body: {}", r.body);
+    }
 }

@@ -23,17 +23,30 @@
 pub mod policy;
 
 use crate::cli_response::CliResponse;
-use crate::routes::http::V1Principal;
+use crate::routes::http::{V1Capability, V1Principal};
 use crate::{sandbox_quota, stream_token, v2_spawn};
 
 use policy::{resolve_spawn, resolve_workspace_session, ApiSandboxRequest};
 
 use k2_core::session::SessionId;
 
+/// Phase 0 — sandbox capability gate. Missing cap → uniform 404 (same as
+/// the K2_SANDBOX_API-off surface-absent response; no existence oracle).
+pub(crate) fn require_sandboxes(principal: &V1Principal) -> Result<(), CliResponse> {
+    if principal.has_capability(V1Capability::Sandboxes) {
+        Ok(())
+    } else {
+        Err(CliResponse::not_found())
+    }
+}
+
 /// Handle `POST /v1/sandboxes`. The caller is ALREADY authenticated to a
 /// [`V1Principal`] by the dispatcher's `/v1/*` gate; this never re-checks creds,
 /// it resolves them into a host-trusted spawn.
 pub(crate) fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliResponse {
+    if let Err(resp) = require_sandboxes(principal) {
+        return resp;
+    }
     // (1) REFUSE if this daemon cannot deliver a real microVM. A public sandbox
     // API must NEVER degrade to an unsandboxed passthrough cell — the inverse of
     // v2/spawn's degrade-loud behavior. On Mac / feature-off this ALWAYS 409s.
@@ -420,6 +433,9 @@ pub fn session_is_canonical(session_id: &str) -> bool {
 /// validates + canonical-guards any fork source, then (SLICE 1) delegates to
 /// the ephemeral spawn.
 pub(crate) fn handle_v1_ws_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
+    if let Err(resp) = require_sandboxes(principal) {
+        return resp;
+    }
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -458,6 +474,9 @@ pub(crate) fn handle_v1_ws_address(
     sid_raw: &str,
     body: &[u8],
 ) -> CliResponse {
+    if let Err(resp) = require_sandboxes(principal) {
+        return resp;
+    }
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -509,6 +528,9 @@ pub(crate) fn handle_v1_ws_address(
 /// session's id + created/last-active timestamps (never the host filesystem
 /// paths — those are daemon-internal audit-resume state, not caller data).
 pub(crate) fn handle_v1_ws_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
+    if let Err(resp) = require_sandboxes(principal) {
+        return resp;
+    }
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -547,6 +569,9 @@ pub(crate) fn handle_v1_ws_messages(
     sid_raw: &str,
     since: u64,
 ) -> CliResponse {
+    if let Err(resp) = require_sandboxes(principal) {
+        return resp;
+    }
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
@@ -869,9 +894,30 @@ mod tests {
             base_url: None,
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
+            capabilities: k2_core::api_keys::ApiCapabilities::all(),
         });
         let resp = handle_v1_sandboxes(&principal, b"");
         assert_eq!(resp.status, "409 Conflict");
+    }
+
+    /// Phase 0 — missing `sandboxes` capability → uniform 404 (surface-absent),
+    /// never the 409 "can't sandbox" which would leak that the door exists.
+    #[test]
+    fn sandboxes_require_capability() {
+        let principal = V1Principal::Api(k2_core::api_keys::ApiPrincipal {
+            id: "key-no-sbx".to_string(),
+            anthropic_key: None,
+            provider: None,
+            base_url: None,
+            scope: "owner".to_string(),
+            allowed_workspaces: Some("*".to_string()),
+            capabilities: k2_core::api_keys::ApiCapabilities::new_key_default(), // sandboxes OFF
+        });
+        let resp = handle_v1_sandboxes(&principal, b"");
+        assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+        // Workspace sandbox doors too.
+        let r = handle_v1_ws_list(&principal, "any-ws");
+        assert_eq!(r.status, "404 Not Found", "body={}", r.body);
     }
 
     fn api(id: &str) -> V1Principal {
@@ -882,6 +928,7 @@ mod tests {
             base_url: None,
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
+            capabilities: k2_core::api_keys::ApiCapabilities::all(),
         })
     }
 
@@ -953,6 +1000,7 @@ mod tests {
             base_url: None,
             scope: "owner".to_string(),
             allowed_workspaces: grant.map(str::to_string),
+            capabilities: k2_core::api_keys::ApiCapabilities::all(),
         })
     }
 

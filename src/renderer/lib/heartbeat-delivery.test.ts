@@ -9,6 +9,10 @@ const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invoke(...args),
 }))
+const daemonCliGet = vi.fn()
+vi.mock('@/lib/daemon-cli', () => ({
+  daemonCliGet: (...args: unknown[]) => daemonCliGet(...args),
+}))
 
 import {
   applyDeliveryTarget,
@@ -97,12 +101,55 @@ describe('applyDeliveryTarget — optimistic row mirror', () => {
   })
 })
 
-describe('setHeartbeatSession — thin bridge contract', () => {
-  beforeEach(() => invoke.mockReset())
+describe('setHeartbeatSession — host-aware default (0.40.48)', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    daemonCliGet.mockReset()
+  })
 
-  it('sends mode-only for pinned/auto and rides session_id+provider for session', async () => {
+  it('targets the ACTIVE host route, never the local Tauri bridge', async () => {
+    daemonCliGet.mockResolvedValue({ success: true })
+    await setHeartbeatSession('/home/k2/ai/rpmavs-sb-migration', 'daily', { mode: 'pinned' })
+    expect(invoke).not.toHaveBeenCalled()
+    expect(daemonCliGet).toHaveBeenCalledWith('heartbeat/set-session', {
+      project: '/home/k2/ai/rpmavs-sb-migration',
+      name: 'daily',
+      mode: 'pinned',
+      session_id: null,
+      provider: null,
+    })
+  })
+
+  it('rides session_id+provider for session mode', async () => {
+    daemonCliGet.mockResolvedValue({ success: true })
+    await setHeartbeatSession('/w', 'daily', { mode: 'session', sessionId: 's1', provider: 'pi' })
+    expect(daemonCliGet).toHaveBeenLastCalledWith('heartbeat/set-session', {
+      project: '/w',
+      name: 'daily',
+      mode: 'session',
+      session_id: 's1',
+      provider: 'pi',
+    })
+  })
+
+  it('raises a 2xx {"error":…} body so callers can revert', async () => {
+    daemonCliGet.mockResolvedValue({ error: 'heartbeat not found' })
+    await expect(setHeartbeatSession('/w', 'daily', { mode: 'auto' })).rejects.toThrow(
+      'heartbeat not found',
+    )
+  })
+})
+
+describe('setHeartbeatSession — explicit local scope (WakeScheduler contract)', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    daemonCliGet.mockReset()
+  })
+
+  it('sends mode-only for pinned/auto and rides sessionId+provider for session', async () => {
     invoke.mockResolvedValue('{"success":true}')
-    await setHeartbeatSession('/w', 'daily', { mode: 'pinned' })
+    await setHeartbeatSession('/w', 'daily', { mode: 'pinned' }, { scope: 'local' })
+    expect(daemonCliGet).not.toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith('k2so_heartbeat_set_session', {
       projectPath: '/w',
       name: 'daily',
@@ -110,7 +157,12 @@ describe('setHeartbeatSession — thin bridge contract', () => {
       sessionId: null,
       provider: null,
     })
-    await setHeartbeatSession('/w', 'daily', { mode: 'session', sessionId: 's1', provider: 'pi' })
+    await setHeartbeatSession(
+      '/w',
+      'daily',
+      { mode: 'session', sessionId: 's1', provider: 'pi' },
+      { scope: 'local' },
+    )
     expect(invoke).toHaveBeenLastCalledWith('k2so_heartbeat_set_session', {
       projectPath: '/w',
       name: 'daily',
@@ -122,8 +174,8 @@ describe('setHeartbeatSession — thin bridge contract', () => {
 
   it('raises the daemon {"error":…} body so callers can revert', async () => {
     invoke.mockResolvedValue('{"error":"heartbeat not found"}')
-    await expect(setHeartbeatSession('/w', 'daily', { mode: 'auto' })).rejects.toThrow(
-      'heartbeat not found',
-    )
+    await expect(
+      setHeartbeatSession('/w', 'daily', { mode: 'auto' }, { scope: 'local' }),
+    ).rejects.toThrow('heartbeat not found')
   })
 })

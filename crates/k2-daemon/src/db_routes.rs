@@ -282,81 +282,13 @@ pub fn handle_projects_get_all_editors() -> CliResponse {
 // POST handlers (dispatched by `dispatch_unit4_post` in main.rs)
 // ══════════════════════════════════════════════════════════════════════
 
-// ── States ────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StatesCreateBody {
-    name: String,
-    description: Option<String>,
-    cap_features: String,
-    cap_issues: String,
-    cap_crashes: String,
-    cap_security: String,
-    cap_audits: String,
-    heartbeat: bool,
-}
-
-pub fn handle_states_create(body: &[u8]) -> CliResponse {
-    let b: StatesCreateBody = match parse_body(body) {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    serialized(dops::states_create(
-        &b.name,
-        b.description.as_deref(),
-        &b.cap_features,
-        &b.cap_issues,
-        &b.cap_crashes,
-        &b.cap_security,
-        &b.cap_audits,
-        b.heartbeat,
-    ))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StatesUpdateBody {
-    id: String,
-    name: Option<String>,
-    description: Option<String>,
-    cap_features: Option<String>,
-    cap_issues: Option<String>,
-    cap_crashes: Option<String>,
-    cap_security: Option<String>,
-    cap_audits: Option<String>,
-    heartbeat: Option<bool>,
-}
-
-pub fn handle_states_update(body: &[u8]) -> CliResponse {
-    let b: StatesUpdateBody = match parse_body(body) {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    serialized(dops::states_update(
-        &b.id,
-        b.name.as_deref(),
-        b.description.as_deref(),
-        b.cap_features.as_deref(),
-        b.cap_issues.as_deref(),
-        b.cap_crashes.as_deref(),
-        b.cap_security.as_deref(),
-        b.cap_audits.as_deref(),
-        b.heartbeat,
-    ))
-}
+// Workspace States handlers retired with the product feature. Schema
+// (`workspace_states` + `projects.tier_id`) intentionally kept for
+// migration history; no HTTP surface remains.
 
 #[derive(Deserialize)]
 struct IdBody {
     id: String,
-}
-
-pub fn handle_states_delete(body: &[u8]) -> CliResponse {
-    let b: IdBody = match parse_body(body) {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    unit_ok(dops::states_delete(&b.id))
 }
 
 // ── Workspaces ────────────────────────────────────────────────────────
@@ -871,13 +803,16 @@ struct ProjectsUpdateBody {
     agent_enabled: Option<i64>,
     heartbeat_enabled: Option<i64>,
     agent_mode: Option<String>,
+    /// Accepted for wire-compat with old clients; Workspace States retired —
+    /// value is ignored (never written).
+    #[allow(dead_code)]
     state_id: Option<String>,
     heartbeat_mode: Option<String>,
     heartbeat_schedule: Option<String>,
     /// 0063 — per-workspace default agent (agent_presets preset id, or a
     /// legacy command token like "claude"; stored as given).
     /// Some("...") sets it, Some("") clears to NULL (= inherit the global
-    /// default), None leaves unchanged — same convention as `state_id`.
+    /// default), None leaves unchanged.
     default_agent: Option<String>,
 }
 
@@ -891,13 +826,6 @@ pub fn handle_projects_update(body: &[u8]) -> CliResponse {
             None
         } else {
             Some(u.as_str())
-        }
-    });
-    let state_param = b.state_id.as_ref().map(|t| {
-        if t.is_empty() {
-            None
-        } else {
-            Some(t.as_str())
         }
     });
     let hb_schedule_param = b.heartbeat_schedule.as_ref().map(|s| {
@@ -914,6 +842,7 @@ pub fn handle_projects_update(body: &[u8]) -> CliResponse {
             Some(a.as_str())
         }
     });
+    // Workspace States retired: never write projects.tier_id.
     serialized(pops::projects_update(
         &b.id,
         b.name.as_deref(),
@@ -926,7 +855,7 @@ pub fn handle_projects_update(body: &[u8]) -> CliResponse {
         b.agent_enabled,
         b.heartbeat_enabled,
         b.agent_mode,
-        state_param,
+        None,
         b.heartbeat_mode,
         hb_schedule_param,
         default_agent_param,
@@ -1057,6 +986,16 @@ pub fn handle_projects_dismiss(body: &[u8]) -> CliResponse {
         Err(r) => return r,
     };
     if let Err(e) = pops::projects_set_manually_active(&b.project_id, false) {
+        return CliResponse::bad_request(e);
+    }
+    // Dismiss = "remove from Active NOW". Clearing the pin alone is not
+    // enough: the Active set is pin OR interacted-within-window, and a
+    // workspace being dismissed from the bar always has fresh interaction
+    // — so without this clear the recompute below re-adds it immediately
+    // and the tile never leaves (the legacy renderer path called
+    // touch-interaction-clear for exactly this reason; the canonical
+    // handler must too).
+    if let Err(e) = pops::projects_touch_interaction_clear(&b.project_id) {
         return CliResponse::bad_request(e);
     }
     // Arm the daemon reaper's grace immediately (PRD §4.2) — the chat is
@@ -1234,11 +1173,6 @@ pub fn handle_projects_open_in_terminal(body: &[u8]) -> CliResponse {
 /// Phase 2 Unit 4 POST dispatch. Unknown paths return 404.
 pub fn dispatch_unit4_post(path: &str, body: &[u8]) -> CliResponse {
     match path {
-        // States
-        "/cli/states/create" => handle_states_create(body),
-        "/cli/states/update" => handle_states_update(body),
-        "/cli/states/delete" => handle_states_delete(body),
-
         // Workspaces
         "/cli/workspaces/create" => handle_workspaces_create(body),
         "/cli/workspaces/delete" => handle_workspaces_delete(body),

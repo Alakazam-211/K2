@@ -66,6 +66,7 @@ mod heartbeat_launch;
 mod heartbeat_monitor;
 mod heartbeat_routes;
 mod inbox_routes;
+mod wiki_routes;
 mod llm_host;
 mod llm_routes;
 // K2 Mail foundation (prd-email-server-v1) — Stalwart-sidecar mail
@@ -614,9 +615,46 @@ async fn async_main() {
     {
         let shutdown_tx_for_signal = shutdown_tx.clone();
         tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                log_debug!("[daemon] Ctrl+C received, shutting down");
-                let _ = shutdown_tx_for_signal.send(());
+            // 0.40.48: SIGTERM is now actually handled. The comment above
+            // always said launchd/systemd SIGTERM lands on this broadcast,
+            // but only ctrl_c (SIGINT) was ever registered — so supervisor
+            // stops took the default disposition (immediate kill), skipped
+            // graceful teardown, and ORPHANED the frpc child, which kept
+            // the frps subdomain registration pointed at a dead daemon
+            // until the next boot's reap (PRD 0.40.48-connection-resilience
+            // §13.4). Both signals now feed the same shutdown broadcast.
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                match signal(SignalKind::terminate()) {
+                    Ok(mut sigterm) => {
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
+                                log_debug!("[daemon] Ctrl+C received, shutting down");
+                            }
+                            _ = sigterm.recv() => {
+                                log_debug!("[daemon] SIGTERM received, shutting down");
+                            }
+                        }
+                        let _ = shutdown_tx_for_signal.send(());
+                    }
+                    Err(e) => {
+                        // Registration failing is unheard-of; degrade to the
+                        // old SIGINT-only behavior rather than dying here.
+                        log_debug!("[daemon] SIGTERM handler unavailable ({e}); SIGINT only");
+                        if tokio::signal::ctrl_c().await.is_ok() {
+                            log_debug!("[daemon] Ctrl+C received, shutting down");
+                            let _ = shutdown_tx_for_signal.send(());
+                        }
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    log_debug!("[daemon] Ctrl+C received, shutting down");
+                    let _ = shutdown_tx_for_signal.send(());
+                }
             }
         });
     }
@@ -983,6 +1021,25 @@ async fn async_main() {
     // own task (spawned above). A Ctrl+C during the migration sweep was
     // buffered on `main_shutdown_rx`, so this returns promptly then too.
     let _ = main_shutdown_rx.recv().await;
+
+    // 0.40.48: release the tunnel BEFORE exiting. frpc is our child; if we
+    // exit without stopping it, it is orphaned and keeps the frps
+    // subdomain registration alive — forwarding to THIS process's (dead,
+    // ephemeral) port — until the NEXT boot's reap_stray_frpc(). During
+    // that window remote clients are routed to nothing. A clean stop
+    // closes frpc's control connection so frps reaps the registration
+    // immediately and a restarting daemon (SIGTERM, `/cli/daemon/restart`,
+    // self-update swap — all of which feed this same broadcast) can
+    // re-register without colliding with a stale holder (PRD
+    // 0.40.48-connection-resilience §13.4). `stop_tunnel` kills+waits the
+    // child synchronously, so run it on the blocking pool; "not running"
+    // is a normal outcome, logged and ignored.
+    match tokio::task::spawn_blocking(k2_core::tunnel::stop_tunnel).await {
+        Ok(Ok(())) => log_debug!("[daemon] tunnel released for shutdown"),
+        Ok(Err(e)) => log_debug!("[daemon] tunnel stop on shutdown: {e}"),
+        Err(e) => log_debug!("[daemon] tunnel stop join error: {e}"),
+    }
+
     log_debug!("[daemon] async_main exiting");
 }
 

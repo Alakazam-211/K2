@@ -4,7 +4,7 @@
 // targets (active "local" vs a saved remote host), the auto-pair SEQUENCE
 // (mutual trust, SAS read back programmatically), the subdomain each side
 // gets pinned with (so the daemon send-gate's reconstructed
-// `<agent>@<subdomain>.k2.dev` matches the recorded `<agent>@<host>`),
+// `<agent>::<subdomain>.k2.dev` matches the recorded `<agent>::<host>`),
 // idempotency (skip when already mutually trusted), and fail-loud on an
 // unknown/signed-out remote host.
 
@@ -36,6 +36,8 @@ import {
   removeRemoteConnection,
   listRemoteConnections,
   getPubkey,
+  peerMatchesHostname,
+  type FederationPeer,
 } from '@/lib/federation'
 
 const REMOTE_BASE = 'https://rpm.k2.dev' // secure + port 443 → no :port
@@ -142,11 +144,46 @@ describe('parseAgentAtHost', () => {
     expect(parseAgentAtHost('ai@rpm.k2.dev')).toEqual({ agent: 'ai', host: 'rpm.k2.dev' })
     expect(parseAgentAtHost('a@b@host.example')).toEqual({ agent: 'a@b', host: 'host.example' })
   })
-  it('rejects non-addresses (no @, empty side, whitespace-only)', () => {
+  it('splits a valid agent::host user form', () => {
+    expect(parseAgentAtHost('ai::rpm.k2.dev')).toEqual({ agent: 'ai', host: 'rpm.k2.dev' })
+    expect(parseAgentAtHost('bob::127.0.0.1:1')).toEqual({ agent: 'bob', host: '127.0.0.1:1' })
+  })
+  it('rejects non-addresses and wire form', () => {
     expect(parseAgentAtHost('local-workspace')).toBeNull()
     expect(parseAgentAtHost('@host')).toBeNull()
     expect(parseAgentAtHost('agent@')).toBeNull()
     expect(parseAgentAtHost('   ')).toBeNull()
+    expect(parseAgentAtHost('agent::localname')).toBeNull()
+    expect(parseAgentAtHost('fp::ws-uuid::agent')).toBeNull()
+  })
+})
+
+describe('peerMatchesHostname', () => {
+  const peer = (partial: Partial<FederationPeer>): FederationPeer => ({
+    fingerprint: 'abc',
+    label: '',
+    subdomain: '',
+    trust: 'trusted',
+    capabilities: [],
+    ...partial,
+  })
+
+  it('matches subdomain.k2.dev and bare subdomain', () => {
+    const p = peer({ subdomain: 'rpm' })
+    expect(peerMatchesHostname(p, 'rpm.k2.dev')).toBe(true)
+    expect(peerMatchesHostname(p, 'rpm')).toBe(true)
+    expect(peerMatchesHostname(p, 'RPM.K2.DEV')).toBe(true)
+  })
+
+  it('ignores unrelated hosts', () => {
+    const p = peer({ subdomain: 'rpm' })
+    expect(peerMatchesHostname(p, 'other.k2.dev')).toBe(false)
+    expect(peerMatchesHostname(p, '')).toBe(false)
+  })
+
+  it('matches label when subdomain is empty', () => {
+    const p = peer({ label: 'my-box.example.com', subdomain: '' })
+    expect(peerMatchesHostname(p, 'my-box.example.com')).toBe(true)
   })
 })
 
@@ -212,7 +249,16 @@ describe('addRemoteConnection', () => {
     const u = new URL(conn!.url)
     expect(u.searchParams.get('project')).toBe('/Users/me/ws')
     expect(u.searchParams.get('action')).toBe('add')
-    expect(u.searchParams.get('target')).toBe('ai@rpm.k2.dev')
+    // Canonical write form is agent::host even when input used @.
+    expect(u.searchParams.get('target')).toBe('ai::rpm.k2.dev')
+  })
+
+  it('accepts agent::host and writes the same canonical form', async () => {
+    const rec = installFetch({ localPeers: [], remotePeers: [] })
+    await addRemoteConnection('/Users/me/ws', 'ai::rpm.k2.dev')
+    const conn = rec.find((r) => r.url.includes('/cli/connections'))
+    const u = new URL(conn!.url)
+    expect(u.searchParams.get('target')).toBe('ai::rpm.k2.dev')
   })
 
   it('rejects a malformed target before touching the network', async () => {
@@ -233,12 +279,12 @@ describe('addRemoteConnection reverse row', () => {
   const reverseConns = (rec: Recorded[]) =>
     rec.filter((r) => r.url.startsWith(REMOTE_BASE) && r.url.includes('/cli/connections'))
 
-  it('records the reverse row on the REMOTE base (project=/srv/ai, target=cortana@mybox.k2.dev)', async () => {
+  it('records the reverse row on the REMOTE base (project=/srv/ai, target=cortana::mybox.k2.dev)', async () => {
     const rec = installFetch({ localPeers: [], remotePeers: [] })
     const res = await addRemoteConnection('/Users/me/cortana', 'ai@rpm.k2.dev')
     expect(res.reverseWarning).toBeNull()
 
-    // Forward call unchanged: LOCAL base, action=add, target=ai@rpm.k2.dev.
+    // Forward: LOCAL base, action=add, canonical target=ai::rpm.k2.dev.
     const forward = rec.find(
       (r) => r.url.startsWith(LOCAL_BASE) && r.url.includes('/cli/connections'),
     )
@@ -246,15 +292,15 @@ describe('addRemoteConnection reverse row', () => {
     const fu = new URL(forward!.url)
     expect(fu.searchParams.get('project')).toBe('/Users/me/cortana')
     expect(fu.searchParams.get('action')).toBe('add')
-    expect(fu.searchParams.get('target')).toBe('ai@rpm.k2.dev')
+    expect(fu.searchParams.get('target')).toBe('ai::rpm.k2.dev')
 
-    // Reverse call on REMOTE base: project=/srv/ai, action=add, target=cortana@mybox.k2.dev.
+    // Reverse call on REMOTE base: project=/srv/ai, action=add, target=cortana::mybox.k2.dev.
     const reverse = reverseConns(rec)
     expect(reverse).toHaveLength(1)
     const ru = new URL(reverse[0].url)
     expect(ru.searchParams.get('project')).toBe('/srv/ai')
     expect(ru.searchParams.get('action')).toBe('add')
-    expect(ru.searchParams.get('target')).toBe('cortana@mybox.k2.dev')
+    expect(ru.searchParams.get('target')).toBe('cortana::mybox.k2.dev')
   })
 
   it('skips the reverse (with a warning) when this server has no tunnel subdomain', async () => {
@@ -318,7 +364,7 @@ describe('removeRemoteConnection reverse row', () => {
     const ru = new URL(reverse[0].url)
     expect(ru.searchParams.get('project')).toBe('/srv/ai')
     expect(ru.searchParams.get('action')).toBe('remove')
-    expect(ru.searchParams.get('target')).toBe('cortana@mybox.k2.dev')
+    expect(ru.searchParams.get('target')).toBe('cortana::mybox.k2.dev')
   })
 
   it('does not reject when the reverse cleanup fails on the remote', async () => {
@@ -345,14 +391,14 @@ describe('listRemoteConnections', () => {
           JSON.stringify({
             connections: [
               { projectName: 'LocalWs', remote: false },
-              { remote: true, address: 'ai@rpm.k2.dev', host: 'rpm.k2.dev', agent: 'ai' },
+              { remote: true, address: 'ai::rpm.k2.dev', host: 'rpm.k2.dev', agent: 'ai' },
             ],
           }),
       })),
     )
     const out = await listRemoteConnections('/Users/me/ws')
     expect(out).toEqual([
-      { remote: true, address: 'ai@rpm.k2.dev', host: 'rpm.k2.dev', agent: 'ai' },
+      { remote: true, address: 'ai::rpm.k2.dev', host: 'rpm.k2.dev', agent: 'ai' },
     ])
   })
 

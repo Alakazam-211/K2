@@ -1,6 +1,6 @@
 {
   "name": "k2",
-  "version": "0.40.45",
+  "version": "0.40.52",
   "description": "Developer workspace with terminal panes, git worktrees, and agent presets",
   "author": "Alakazam Labs",
   "license": "FSL-1.1-Apache-2.0",
@@ -67,6 +67,7 @@
     "pdfjs-dist": "^5.5.207",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-force-graph-2d": "^1.29.1",
     "react-markdown": "^10.1.0",
     "react-mosaic-component": "^5.3.0",
     "remark-gfm": "^4.0.1",

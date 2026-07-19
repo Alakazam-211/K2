@@ -129,16 +129,22 @@ fn prime_hook_config_from_daemon() {
     });
 }
 
-/// Detect daemon/Tauri version mismatch on app startup and bounce the
-/// running daemon when they disagree.
+/// Detect a stale launchd-managed daemon on app startup and bounce it.
 ///
 /// Background: the daemon is launchd-managed (`KeepAlive=true`), so a
-/// drag-replace install of K2SO.app overwrites the binary on disk while
-/// launchd keeps the OLD daemon process running with the deleted inode
-/// — meaning a freshly-installed K2SO talks to last-version's daemon
-/// until the user reboots or manually clicks Settings → Restart Daemon.
-/// `daemon_restart()` exists for that manual path; this function is
-/// the automatic version of the same idea.
+/// drag-replace / AirDrop install of K2.app overwrites the binary on disk
+/// while launchd keeps the OLD daemon process running with the deleted
+/// inode — meaning a freshly-installed app talks to last-install's daemon
+/// until reboot or Settings → Restart Daemon.
+///
+/// Two independent staleness signals (either is enough to kickstart):
+/// 1. **Version string** mismatch (`daemon.version` ≠ app `CARGO_PKG_VERSION`).
+/// 2. **On-disk binary newer than the running process** — same marketing
+///    version (common for AirDrop test builds / hotfixes that keep
+///    `0.40.x`) but the app bundle was replaced after the daemon started.
+///    Without (2), `0.40.46`→`0.40.46` with new code never restarts and
+///    you keep shipping `@` attribution / old federation bugs from the
+///    live process.
 ///
 /// Runs on a background thread (mirrors `prime_hook_config_from_daemon`)
 /// because we must wait for the daemon to be reachable + we don't want
@@ -146,12 +152,8 @@ fn prime_hook_config_from_daemon() {
 /// up to 10× at 500ms intervals; if the daemon stays unreachable we
 /// log and bow out — bigger problem than version skew at that point.
 ///
-/// 0.39.2: on detected version mismatch, kickstarts the daemon and
-/// returns. The renderer-side [`ConnectionGate`] handles waiting +
-/// rendering — keeps the Rust shell simple (just signals "restart
-/// needed") and centralizes the user-facing "Connecting..." UX +
-/// retry logic in React. Same gate pattern is reusable for K2
-/// Connect where remote daemons may be transiently unreachable.
+/// On kickstart, the renderer-side ConnectionGate handles waiting +
+/// "Connecting..." UX.
 fn check_daemon_version_and_restart() {
     use std::time::Duration;
     std::thread::spawn(|| {
@@ -166,15 +168,22 @@ fn check_daemon_version_and_restart() {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            if status.version == app_version {
+            let version_match = status.version == app_version;
+            // Same-version drag-replace: disk binary mtime after process start.
+            // Skip in debug — dev launches must not bounce the live daemon.
+            let stale_binary = !cfg!(debug_assertions)
+                && bundled_daemon_newer_than_running(status.uptime_secs);
+
+            if version_match && !stale_binary {
                 log_debug!(
-                    "[version-check] daemon v{} matches app v{} (attempt={})",
+                    "[version-check] daemon v{} matches app v{} and on-disk binary is not newer (attempt={})",
                     status.version,
                     app_version,
                     attempt
                 );
                 return;
             }
+
             // Dev builds (`tauri dev`) are always version-ahead of the
             // installed /Applications daemon, and the plist doesn't point
             // at the dev tree — a kickstart can never converge the
@@ -196,21 +205,32 @@ fn check_daemon_version_and_restart() {
             #[cfg(not(target_os = "macos"))]
             {
                 log_debug!(
-                    "[version-check] MISMATCH daemon=v{} app=v{} (attempt={}); launchd unavailable on this platform — restart the k2-daemon service manually (e.g. systemctl --user restart k2-daemon)",
+                    "[version-check] STALE daemon=v{} app=v{} version_match={} stale_binary={} (attempt={}); launchd unavailable on this platform — restart the k2-daemon service manually (e.g. systemctl --user restart k2-daemon)",
                     status.version,
                     app_version,
+                    version_match,
+                    stale_binary,
                     attempt
                 );
                 return;
             }
             #[cfg(target_os = "macos")]
             {
-                log_debug!(
-                    "[version-check] MISMATCH daemon=v{} app=v{} (attempt={}); restarting daemon via launchctl kickstart",
-                    status.version,
-                    app_version,
-                    attempt
-                );
+                if !version_match {
+                    log_debug!(
+                        "[version-check] MISMATCH daemon=v{} app=v{} (attempt={}); restarting daemon via launchctl kickstart",
+                        status.version,
+                        app_version,
+                        attempt
+                    );
+                } else {
+                    log_debug!(
+                        "[version-check] STALE BINARY same version v{} but on-disk k2-daemon is newer than the running process (uptime={}s, attempt={}); restarting via launchctl kickstart",
+                        status.version,
+                        status.uptime_secs,
+                        attempt
+                    );
+                }
                 // #14: BEFORE kickstart, self-heal a plist whose baked-in
                 // ProgramArguments[0] is stale/transient. Otherwise the
                 // kickstart just respawns the SAME bad path and we never
@@ -229,6 +249,82 @@ fn check_daemon_version_and_restart() {
             "[version-check] daemon unreachable after 10 attempts; skipping version check"
         );
     });
+}
+
+/// True when the bundled `k2-daemon` on disk was written **after** the
+/// currently running daemon process started (plus a small clock skew).
+///
+/// That's the drag-replace / AirDrop case: same version string, new
+/// bytes on disk, old process still holding the previous inode.
+fn bundled_daemon_newer_than_running(uptime_secs: u64) -> bool {
+    use std::time::SystemTime;
+
+    let Some(daemon_bin) = std::env::current_exe()
+        .ok()
+        .and_then(|p| k2_core::daemon_lifecycle::bundled_daemon_path(&p))
+        .filter(|p| p.exists())
+    else {
+        return false;
+    };
+    // Never treat a DMG / AppTranslocation path as authoritative — same
+    // guard as the plist install path (#14).
+    if k2_core::daemon_lifecycle::is_transient_exe_location(&daemon_bin) {
+        return false;
+    }
+    let Ok(mtime) = std::fs::metadata(&daemon_bin).and_then(|m| m.modified()) else {
+        return false;
+    };
+    is_running_daemon_stale_vs_disk(mtime, uptime_secs, SystemTime::now())
+}
+
+/// Pure clock compare used by [`bundled_daemon_newer_than_running`].
+/// `binary_mtime` after `now - uptime` by more than 2s ⇒ process predates
+/// the on-disk binary ⇒ restart.
+fn is_running_daemon_stale_vs_disk(
+    binary_mtime: std::time::SystemTime,
+    uptime_secs: u64,
+    now: std::time::SystemTime,
+) -> bool {
+    use std::time::{Duration, SystemTime};
+    let process_started = now
+        .checked_sub(Duration::from_secs(uptime_secs))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    match binary_mtime.duration_since(process_started) {
+        Ok(d) if d > Duration::from_secs(2) => true,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod daemon_stale_binary_tests {
+    use super::is_running_daemon_stale_vs_disk;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn same_version_disk_newer_than_process_is_stale() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        // Process has been up 1 hour; binary replaced 10 minutes ago.
+        let mtime = now - Duration::from_secs(600);
+        assert!(is_running_daemon_stale_vs_disk(mtime, 3600, now));
+    }
+
+    #[test]
+    fn process_started_after_install_is_fresh() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        // Binary written, then process started 30s later (uptime 30).
+        let mtime = now - Duration::from_secs(60);
+        assert!(!is_running_daemon_stale_vs_disk(mtime, 30, now));
+    }
+
+    #[test]
+    fn two_second_skew_is_not_stale() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let mtime = now - Duration::from_secs(10);
+        // uptime 9s ⇒ process_started = now-9; mtime is 1s before start → fresh
+        assert!(!is_running_daemon_stale_vs_disk(mtime, 9, now));
+        // uptime 15s ⇒ process_started = now-15; mtime is 5s after start → stale
+        assert!(is_running_daemon_stale_vs_disk(mtime, 15, now));
+    }
 }
 
 /// #14 self-heal: if the on-disk daemon LaunchAgent plist records a
@@ -1342,6 +1438,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // 0.39.x (Issue #6): webview liveness watchdog heartbeat.
             renderer_heartbeat,
+            // 0.40.48 connection resilience — out-of-webview boot-status
+            // arbiter (poisoned-pool tiebreaker) + user-initiated restart.
+            commands::connection::remote_boot_probe,
+            commands::connection::restart_app,
             // Style System — traffic lights follow the style's window inset.
             commands::traffic_lights::set_traffic_light_inset,
             // Embedded Browser Tab (S1 spike) — child-webview lifecycle.

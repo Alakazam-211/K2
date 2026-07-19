@@ -394,7 +394,10 @@ pub struct InjectionProfile {
     /// inject as soon as it flips:
     ///   - claude: ?2004h genuinely follows input-box mount (original
     ///     activity study) — the shipping poll works; DO NOT regress.
-    ///   - grok: ?2004h at ~1.1s, trustworthy for "UI mounted".
+    ///   - grok: ?2004h at ~1.1s, trustworthy for "UI mounted" — but
+    ///     the settle floor must still clear that mount window (see
+    ///     [`injection_profile_for_provider`]); paste alone is not enough
+    ///     without quiescence (dormant-wake / host-session first inject).
     ///   - cursor-agent: ?2004h is set only once the composer exists
     ///     (a TRUSTED dir; in an untrusted dir it never flips — the
     ///     poll correctly waits, then times out to best-effort).
@@ -414,7 +417,8 @@ pub struct InjectionProfile {
     /// non-polling ones). Study-derived: hermes needs ~7s before its
     /// first message lands (prompt ~3.6s + ~3s agent init); codex/
     /// gemini get 2s headroom past their dialog storms; claude keeps
-    /// the shipping 400ms floor exactly.
+    /// the shipping 400ms floor exactly; grok uses ~1.5s (≥ ~1.1s
+    /// ?2004h mount + first-frame headroom).
     pub post_spawn_settle: Duration,
 }
 
@@ -434,7 +438,14 @@ pub fn injection_profile_for_provider(provider: &str) -> InjectionProfile {
     match provider {
         // Poll-trustworthy providers (see field doc for evidence).
         "claude" => DEFAULT_INJECTION_PROFILE,
-        "grok" => DEFAULT_INJECTION_PROFILE,
+        // Grok: ?2004h is trustworthy (~1.1s study) but NOT at Claude's
+        // 400ms floor — under-settling lands host-session / wake injects
+        // in a still-painting first frame. Keep paste poll; raise settle
+        // past mount + a little headroom, then shared quiescence finishes.
+        "grok" => InjectionProfile {
+            ready_via_bracketed_paste: true,
+            post_spawn_settle: Duration::from_millis(1500),
+        },
         "cursor" => InjectionProfile {
             ready_via_bracketed_paste: true,
             post_spawn_settle: Duration::from_millis(1000),
@@ -1195,6 +1206,15 @@ mod tests {
         assert_eq!(
             injection_profile_for_provider("cursor").post_spawn_settle,
             Duration::from_millis(1000)
+        );
+        // grok: ≥ study's ~1.1s ?2004h mount (not Claude's 400ms floor).
+        assert_eq!(
+            injection_profile_for_provider("grok").post_spawn_settle,
+            Duration::from_millis(1500)
+        );
+        assert!(
+            injection_profile_for_provider("grok").ready_via_bracketed_paste,
+            "grok still polls ?2004h after the longer settle"
         );
     }
 

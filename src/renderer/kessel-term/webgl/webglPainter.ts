@@ -21,6 +21,10 @@ import {
 import { FrameBuffers, packFrame, prewarmRows, RowCache } from './packFrame'
 import { GlyphAtlas } from './glyphAtlas'
 import { createContextLossTracker } from './contextLoss'
+import {
+  TEXT_GAMMA_LIGHT,
+  clampTextGamma,
+} from '@/lib/text-gamma'
 
 /** Known clear color for the mount-time pixel-readback sanity probe
  *  (brief §7.7: WKWebView's WebGL history demands a rendered-pixels
@@ -35,22 +39,27 @@ const SANITY_COLOR = 0x3a7b19
 const PREWARM_BAND = 24
 const PREWARM_BUDGET_MS = 2
 
-/** Text-weight tuning ("chonky text" fix): coverage-gamma exponent
- *  for tinted glyphs. macOS dilates Canvas2D text stems relative to
- *  the DOM's -webkit-font-smoothing:antialiased rendering; >1 thins
- *  AA edges back toward DOM weight. Feel-tunable live without a
- *  rebuild: localStorage.K2SO_WEBGL_TEXT_GAMMA = '1.4' (re-open the
- *  tab to apply); clamped to a sane band. */
-const TEXT_GAMMA_DEFAULT = 1.3
-function textGammaSetting(): number {
+/** Text-weight ("chonky") gamma resolution. Precedence (highest first):
+ *    1. localStorage.K2SO_WEBGL_TEXT_GAMMA — dev escape hatch
+ *    2. frame.theme.textGamma — style-store effective value
+ *       (per-style/scheme override or polarity preset; live from
+ *       Settings → Styles so open tabs update without remount)
+ *  Clamp [0.5, 3] applied once here. Default when both missing is
+ *  the light-theme preset (1.05). */
+function resolveFrameTextGamma(frameGamma: number | undefined): number {
   try {
     const raw = localStorage.getItem('K2SO_WEBGL_TEXT_GAMMA')
-    const v = raw === null ? NaN : parseFloat(raw)
-    if (Number.isFinite(v)) return Math.min(3, Math.max(0.5, v))
+    if (raw !== null) {
+      const v = parseFloat(raw)
+      if (Number.isFinite(v)) return clampTextGamma(v)
+    }
   } catch {
-    // localStorage unavailable (tests) — fall through to default.
+    // localStorage unavailable (tests) — fall through.
   }
-  return TEXT_GAMMA_DEFAULT
+  if (typeof frameGamma === 'number' && Number.isFinite(frameGamma)) {
+    return clampTextGamma(frameGamma)
+  }
+  return TEXT_GAMMA_LIGHT
 }
 
 export interface WebglPainterDeps {
@@ -82,7 +91,6 @@ export function createWebglPainter(
 
   const cache = new RowCache()
   const buffers = new FrameBuffers()
-  const textGamma = textGammaSetting()
 
   // Diagnostics (owner feel-test aid): localStorage.K2SO_WEBGL_DIAG='1'
   // → one console line per 60 rendered frames with timing + volume.
@@ -138,6 +146,8 @@ export function createWebglPainter(
       backend.uploadAtlas(atlas.canvas)
       uploadedAtlasVersion = atlas.version
     }
+
+    const textGamma = resolveFrameTextGamma(frame.theme.textGamma)
 
     backend.beginFrame(frame.theme.bg)
     backend.drawRects(packed.bg.data, packed.bg.count)

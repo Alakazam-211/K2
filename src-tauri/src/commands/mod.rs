@@ -68,3 +68,9 @@ pub mod browser_webviews;
 
 // Style System — macOS traffic-light inset for floating-chrome styles.
 pub mod traffic_lights;
+
+// 0.40.48 connection resilience — out-of-webview boot-status arbiter
+// (`remote_boot_probe`, a fresh never-pooled socket that tiebreaks
+// "host down" vs "webview pool poisoned") + the user-initiated
+// `restart_app` escape hatch.
+pub mod connection;

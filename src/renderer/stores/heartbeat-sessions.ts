@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { terminalListRunning } from '@/lib/terminal-daemon'
 import { serverSupports } from '@/lib/server-capabilities'
+import { daemonCliGet, RecoveringError } from '@/lib/daemon-cli'
+import { useConnectHostStore } from '@/stores/connect-host'
 import {
   subscribeToWorkspaceTabEvents,
   type HeartbeatRosterChangedEvent,
@@ -152,6 +154,29 @@ function deriveState(
 }
 
 /**
+ * Display state for a heartbeat row loaded from a REMOTE daemon
+ * (0.40.48 — the sidebar previously ALWAYS read the LOCAL machine, see
+ * `refresh`). Remote rows don't get the local wake-PTY liveness proxy
+ * (`terminalListRunning` lists THIS Mac's PTYs, not the host's); instead
+ * we trust the row's own `activeTerminalId` — the daemon stamps it at
+ * spawn and clears it on PTY exit (migration 0036), so it IS the
+ * daemon-authoritative "a live PTY is attached" signal. Older remote
+ * daemons that predate the column simply omit it → rows derive to
+ * resumable/scheduled, never falsely live.
+ */
+function deriveRemoteState(
+  row: HeartbeatRow,
+): { state: HeartbeatSessionState; liveTerminalId: string | null } {
+  if (row.archivedAt) {
+    return { state: 'archived', liveTerminalId: null }
+  }
+  if (row.activeTerminalId) {
+    return { state: 'live', liveTerminalId: row.activeTerminalId }
+  }
+  return { state: idleStateForRow(row), liveTerminalId: null }
+}
+
+/**
  * Pick the workspace's primary agent. Same resolution the
  * WorkspacePanel header uses so the live-state liveness check
  * keys on the right agent. Without this, a `custom` workspace
@@ -203,6 +228,36 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
     set({ loading: true, lastError: null })
 
     try {
+      // 0.40.48 host-aware fix: the Tauri commands go IN-PROCESS to the
+      // LOCAL machine's k2_core (not even the local daemon), so with a
+      // remote host active the sidebar showed THIS Mac's heartbeats —
+      // usually none, rendered as a perpetually-empty/"Loading…" panel —
+      // instead of the host's. When the active host is remote, load from
+      // ITS `/cli/heartbeat/*` routes (host-aware daemonCliGet; same
+      // routes the `k2` CLI uses, present on every supported daemon) and
+      // derive liveness from the rows' own daemon-stamped
+      // `activeTerminalId` instead of local PTY telemetry.
+      const isRemote = useConnectHostStore.getState().activeHost !== 'local'
+      if (isRemote) {
+        const [activeRows, archivedRows] = await Promise.all([
+          daemonCliGet<HeartbeatRow[]>('heartbeat/list', { project: projectPath }),
+          daemonCliGet<HeartbeatRow[]>('heartbeat/list-archived', {
+            project: projectPath,
+          }),
+        ])
+        const active: HeartbeatEntry[] = activeRows.map((row) => ({
+          row,
+          ...deriveRemoteState(row),
+        }))
+        const archived: HeartbeatEntry[] = archivedRows.map((row) => ({
+          row,
+          state: 'archived' as const,
+          liveTerminalId: null,
+        }))
+        set({ active, archived, loadedFor: projectPath, loading: false })
+        return
+      }
+
       const [activeRows, archivedRows, running, agentName] = await Promise.all([
         invoke<HeartbeatRow[]>('k2so_heartbeat_list', { projectPath }),
         invoke<HeartbeatRow[]>('k2so_heartbeat_list_archived', { projectPath }),
@@ -222,9 +277,33 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
 
       set({ active, archived, loadedFor: projectPath, loading: false })
     } catch (err) {
+      // A recovering remote host is not an error state for THIS panel —
+      // cliFetch failed fast by design (0.40.48 storm killer). Keep
+      // whatever is on screen; the next roster event / refresh after
+      // recovery re-fetches. Surfacing it as lastError would flash scary
+      // red text during every brief reconnect.
+      if (err instanceof RecoveringError) {
+        set({ loading: false })
+        return
+      }
       const msg = String(err)
       console.error('[heartbeat-sessions] refresh failed:', msg)
-      set({ loading: false, lastError: msg })
+      // 0.40.48: record WHICH project this (failed) load was for. Leaving
+      // `loadedFor` stale meant HeartbeatsPanel's `showingForLoadedProject`
+      // gate never opened after a failure — the panel sat on "Loading…"
+      // forever and `lastError`'s branch was unreachable (the error was
+      // silently masked). With `loadedFor` set, the panel renders the
+      // error state instead. Rows from a previously-shown project are
+      // cleared so an error can never sit above another workspace's
+      // heartbeats; same-project rows are kept (a transient re-refresh
+      // failure shouldn't wipe good data).
+      set((state) => ({
+        loading: false,
+        lastError: msg,
+        loadedFor: projectPath,
+        active: state.loadedFor === projectPath ? state.active : [],
+        archived: state.loadedFor === projectPath ? state.archived : [],
+      }))
     }
   },
 

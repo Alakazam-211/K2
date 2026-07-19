@@ -468,6 +468,15 @@ pub fn is_agent_verb(path: &str) -> bool {
         // `/cli/dns/` below; these exact owner surfaces stay denied.
         "/cli/dns/zones/create",
         "/cli/dns/zones/delete",
+        // Heartbeat schedule is agent-owned per workspace, but OS tick
+        // install + fleet-wide list stay owner/dashboard-only.
+        "/cli/heartbeat/install-launchd",
+        "/cli/heartbeat/uninstall-launchd",
+        "/cli/heartbeat/apply-wake-scheduler",
+        "/cli/heartbeat/list-all",
+        "/cli/heartbeat/fires-list-all",
+        "/cli/heartbeat/set-show-sessions",
+        "/cli/heartbeat/active-projects",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;
@@ -505,6 +514,13 @@ pub fn is_agent_verb(path: &str) -> bool {
         // always bypasses; agents need the effective toggle ON). List is
         // free for any authenticated agent principal.
         "/cli/connections",
+        // PR1 federation dual-auth under passports: agents may list peers,
+        // pull a paired peer's roster, and send. pair/confirm/outbox/pubkey
+        // stay owner-or-admin only (not on this allowlist). send forces
+        // from_workspace from HookPrincipal (Wave 0 PR-C).
+        "/cli/federation/peers",
+        "/cli/federation/peer-roster",
+        "/cli/federation/send",
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
@@ -517,6 +533,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         // Zone create/delete are DENY_PREFIXES above. Identity is forced
         // from HookPrincipal; handlers also gate on dns_manage_allowed_for_path.
         "/cli/dns/",
+        // Named heartbeat schedule CRUD + fire/status (agents own their
+        // workspace schedules). OS tick install + fleet list are DENY above.
+        // Identity forced from HookPrincipal → only the caller's workspace.
+        "/cli/heartbeat/",
         // Sandbox P1 (Finding-1 follow-on): `/cli/review-checklist/` was
         // DROPPED from the scoped allowlist. Its handlers take the raw `body`
         // (not the params map) and so are NOT reached by the principal-pin in
@@ -528,7 +548,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         // not auto-allowed for writes (memory.write is owner/owner-gated).
         // Reads can be added here once the route exists.
     ];
-    ALLOW_EXACT.contains(&path) || ALLOW_PREFIXES.iter().any(|p| path.starts_with(p))
+    // `/cli/heartbeat-log` is a sibling path (no trailing slash under /heartbeat/).
+    ALLOW_EXACT.contains(&path)
+        || path == "/cli/heartbeat-log"
+        || ALLOW_PREFIXES.iter().any(|p| path.starts_with(p))
 }
 
 /// The `require_hook` guard: a presented bearer authorizes `path` iff the
@@ -1135,6 +1158,41 @@ mod tests {
         assert!(is_agent_verb("/cli/dns/verify"));
         // C1 (0.40.45): connections list/add/remove (mutate toggle-gated).
         assert!(is_agent_verb("/cli/connections"));
+        // Heartbeat schedule family (agent-owned workspace schedules).
+        assert!(is_agent_verb("/cli/heartbeat/list"));
+        assert!(is_agent_verb("/cli/heartbeat/add"));
+        assert!(is_agent_verb("/cli/heartbeat/edit"));
+        assert!(is_agent_verb("/cli/heartbeat/fire"));
+        assert!(is_agent_verb("/cli/heartbeat/status"));
+        assert!(is_agent_verb("/cli/heartbeat-log"));
+        // OS install + fleet-wide list stay owner-only (teaching owner_only).
+        assert!(!is_agent_verb("/cli/heartbeat/install-launchd"));
+        assert!(!is_agent_verb("/cli/heartbeat/uninstall-launchd"));
+        assert!(!is_agent_verb("/cli/heartbeat/apply-wake-scheduler"));
+        assert!(!is_agent_verb("/cli/heartbeat/list-all"));
+        assert!(!is_agent_verb("/cli/heartbeat/fires-list-all"));
+        assert!(!is_agent_verb("/cli/heartbeat/set-show-sessions"));
+        assert!(!is_agent_verb("/cli/heartbeat/active-projects"));
+        // PR1: federation agent send surface under passports.
+        assert!(is_agent_verb("/cli/federation/peers"));
+        assert!(is_agent_verb("/cli/federation/peer-roster"));
+        assert!(is_agent_verb("/cli/federation/send"));
+    }
+
+    #[test]
+    fn is_agent_verb_denies_federation_owner_surfaces() {
+        // pair/confirm stay owner-or-admin; outbox/pubkey stay owner-gated.
+        // inbound is envelope-auth (not a scoped verb either).
+        for p in [
+            "/cli/federation/pair/request",
+            "/cli/federation/pair/confirm",
+            "/cli/federation/outbox",
+            "/cli/federation/pubkey",
+            "/cli/federation/inbound",
+            "/cli/federation/roster",
+        ] {
+            assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
+        }
     }
 
     #[test]

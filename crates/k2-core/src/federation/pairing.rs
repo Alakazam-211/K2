@@ -124,8 +124,33 @@ pub fn apply_pair_request(
     // Re-derive the fingerprint from the presented key — the id can't
     // disagree with the bytes it names. Store the TRIMMED subdomain so a
     // padded value can't desync the routing-hint compare.
-    let fresh = FederationPeer::pin(&req.label, subdomain, &req.public_key_pem)?;
+    //
+    // PR3 host normalize: collapse accidental double zone, then prefer bare
+    // subdomain so dial (`https://{sub}.k2.dev`) appends the zone once.
+    let subdomain = {
+        let mut n = subdomain.to_lowercase();
+        while n.ends_with(".k2.dev.k2.dev") {
+            n.truncate(n.len() - ".k2.dev".len());
+        }
+        n.strip_suffix(".k2.dev").unwrap_or(&n).to_string()
+    };
+    if subdomain.is_empty() {
+        return Err(
+            "pair request is missing the peer subdomain — refusing to pin an \
+             unroutable peer (fail-closed); supply the peer's <subdomain>.k2.dev"
+                .to_string(),
+        );
+    }
+    let fresh = FederationPeer::pin(&req.label, &subdomain, &req.public_key_pem)?;
     let fp = fresh.fingerprint.clone();
+    // PR3: never pin this daemon as a remote peer (self-fingerprint).
+    if !local_fp.is_empty() && fp == local_fp {
+        return Err(
+            "refusing to pair with self — presented fingerprint matches this \
+             server's local fingerprint"
+                .to_string(),
+        );
+    }
     let sas = sas_code(local_fp, &fp);
 
     let (trust, created) = match store.get(&fp) {
@@ -323,5 +348,46 @@ mod tests {
             .expect_err("blocked must fail");
         assert!(err.contains("Blocked"), "got: {err}");
         assert_eq!(store.get(&out.fingerprint).unwrap().trust, PeerTrust::Blocked);
+    }
+
+    #[test]
+    fn pair_request_rejects_self_fingerprint() {
+        // PR3: presenting THIS daemon's key as a peer must fail closed.
+        let pem = fresh_peer_pem();
+        let fp = FederationPeer::pin("self", "self", &pem)
+            .unwrap()
+            .fingerprint;
+        let mut store = PeerStore::default();
+        let req = PairRequest {
+            label: "myself".into(),
+            subdomain: "self".into(),
+            public_key_pem: pem,
+        };
+        let err = apply_pair_request(&mut store, &req, &fp)
+            .expect_err("self-fingerprint pair must be rejected");
+        assert!(
+            err.contains("self") || err.contains("local fingerprint"),
+            "error must name self/local; got: {err}"
+        );
+        assert!(
+            store.list().is_empty(),
+            "rejected self-pair must not pin a peer row"
+        );
+    }
+
+    #[test]
+    fn pair_request_normalizes_double_zone_subdomain_to_bare() {
+        let mut store = PeerStore::default();
+        let req = PairRequest {
+            label: "p".into(),
+            subdomain: "rpm.k2.dev.k2.dev".into(),
+            public_key_pem: fresh_peer_pem(),
+        };
+        let out = apply_pair_request(&mut store, &req, "local-fp").expect("request");
+        assert_eq!(
+            store.get(&out.fingerprint).unwrap().subdomain,
+            "rpm",
+            "double-zone subdomain must collapse to bare routing label"
+        );
     }
 }

@@ -58,7 +58,15 @@ fn shared() -> AgentMap {
 /// Worktree chats and ad-hoc Cmd+T tabs register under their own
 /// terminal-id-shaped keys; nothing depends on a bare-name slot.
 pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
-    let key = agent_name.into();
+    register_inner(agent_name.into(), session);
+    // Active membership derives from live-session PRESENCE — a session
+    // appearing changes the canonical Active set, so broadcast. Must run
+    // AFTER register_inner: the inner body holds the shared DB lock and
+    // the recompute re-takes it.
+    crate::active_reaper::recompute_and_broadcast_active();
+}
+
+fn register_inner(key: String, session: Arc<DaemonPtySession>) {
     let map_arc = shared();
     let displaced = {
         let mut map = map_arc.lock().unwrap();
@@ -351,6 +359,13 @@ pub fn unregister(agent_name: &str) -> Option<Arc<DaemonPtySession>> {
         // `removed` (the returned Arc) so the session object outlives
         // this call — Drop will call kill() again later as a no-op.
         session.kill();
+    }
+    if removed.is_some() {
+        // Presence-based Active membership: a session going away can
+        // drop its workspace from the canonical Active set (once no
+        // other live session resolves to it). The db lock is released
+        // above (drop(conn)); the recompute re-takes it safely.
+        crate::active_reaper::recompute_and_broadcast_active();
     }
     removed
 }

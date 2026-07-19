@@ -94,6 +94,11 @@ describe('recoveryPollMs — the retry schedule', () => {
     expect(recoveryPollMs({ kind: 'reauthenticating' }, 3)).toBe(RECOVERY_HEALTH_POLL_MS)
     expect(recoveryPollMs({ kind: 'signin-required' }, 3)).toBe(RECOVERY_HEALTH_POLL_MS)
   })
+
+  it("wedged holds the slowest cadence regardless of attempt (webview polls can't succeed)", () => {
+    expect(recoveryPollMs({ kind: 'wedged' }, 0)).toBe(RECOVERY_RECONNECT_MAX_MS)
+    expect(recoveryPollMs({ kind: 'wedged' }, 50)).toBe(RECOVERY_RECONNECT_MAX_MS)
+  })
 })
 
 describe('recoveryStatusText — the shared user-facing copy', () => {
@@ -114,5 +119,11 @@ describe('recoveryStatusText — the shared user-facing copy', () => {
       'rpm needs you to sign in again.',
     )
     expect(recoveryStatusText('rpm', { kind: 'connected' })).toBe('')
+  })
+
+  it('wedged says the connection is stuck and asks for an app restart (0.40.48)', () => {
+    expect(recoveryStatusText('rpm', { kind: 'wedged' })).toBe(
+      'Connection to rpm is stuck at the system network layer. Restart K2 to clear it.',
+    )
   })
 })

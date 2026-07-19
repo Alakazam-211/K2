@@ -53,8 +53,19 @@ export function HeartbeatSessionPicker({
   const [open, setOpen] = useState(false)
   // null = not fetched yet (distinct from an empty workspace).
   const [sessions, setSessions] = useState<HeartbeatSessionCandidate[] | null>(null)
-  const [pinnedSessionId, setPinnedSessionId] = useState<string | null>(null)
+  // 0.40.48 host-aware fix: pinned-session ids now come from the ACTIVE
+  // host's `chat/pinned` (global-scoped, same route ChatHistory uses) —
+  // the old `workspace_session_get` invoke read THIS Mac's DB, so against
+  // a remote host the exclusion keyed on the wrong machine. The single
+  // excluded id is derived by intersecting with this project's candidates
+  // (only this workspace's own pinned session can appear among them), so
+  // `selectableSessions`' tested contract is unchanged.
+  const [pinnedIds, setPinnedIds] = useState<string[] | null>(null)
   const [pinnedResolved, setPinnedResolved] = useState(false)
+  const pinnedSessionId = useMemo<string | null>(() => {
+    if (!pinnedIds || !sessions) return null
+    return sessions.find((s) => pinnedIds.includes(s.sessionId))?.sessionId ?? null
+  }, [pinnedIds, sessions])
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   // The closed trigger shows the explicit session's TITLE, which only
@@ -87,24 +98,24 @@ export function HeartbeatSessionPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, needTitle, projectPath])
 
-  // Pinned-chat session id (`workspace_sessions.session_id`) — the row
-  // that must never be offered as a normal option. Resolved when the
-  // popover opens; session rows hold until it lands so the pinned
-  // session can't flash into the list.
+  // Pinned-chat session ids — rows that must never be offered as normal
+  // options. Resolved when the popover opens; session rows hold until it
+  // lands so the pinned session can't flash into the list. Host-aware
+  // (0.40.48): `chat/pinned` answers from the ACTIVE host, local or remote.
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    void invoke<{ sessionId: string | null } | null>('workspace_session_get', { projectId })
-      .then((ws) => {
+    void daemonCliGet<string[]>('chat/pinned')
+      .then((ids) => {
         if (cancelled) return
-        setPinnedSessionId(ws?.sessionId ?? null)
+        setPinnedIds(ids)
         setPinnedResolved(true)
       })
       .catch((err) => {
         if (cancelled) return
-        // No daemon row (or read failure) = no pinned session to hide.
-        console.warn('[HeartbeatSessionPicker] workspace_session_get failed:', err)
-        setPinnedSessionId(null)
+        // No pinned rows (or read failure) = no pinned session to hide.
+        console.warn('[HeartbeatSessionPicker] chat/pinned failed:', err)
+        setPinnedIds([])
         setPinnedResolved(true)
       })
     return () => { cancelled = true }

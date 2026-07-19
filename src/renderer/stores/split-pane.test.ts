@@ -73,6 +73,7 @@ vi.mock('@/stores/session-events', () => ({
     return () => void (ev.tabSubs = ev.tabSubs.filter((e) => e !== entry))
   }),
   onSessionAddedApp: vi.fn(() => () => undefined),
+  onSessionRemovedApp: vi.fn(() => () => undefined),
 }))
 vi.mock('@/kessel/daemon-ws', () => ({
   getDaemonWs: vi.fn(async () => ({ port: 0, token: 't', secure: false, host: '127.0.0.1' })),

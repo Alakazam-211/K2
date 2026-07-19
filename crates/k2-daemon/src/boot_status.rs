@@ -25,7 +25,7 @@
 //! `release-notes-0.39.5.md`.
 
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{LazyLock, RwLock};
+use std::sync::{LazyLock, OnceLock, RwLock};
 
 /// daemon↔client API compatibility version. Bump this ONLY when a
 /// change breaks the routes/contract clients depend on — NOT on every
@@ -34,6 +34,29 @@ use std::sync::{LazyLock, RwLock};
 /// auto-update path keys off the exact `version` string instead. The
 /// two are intentionally decoupled. Starts at 1.
 pub const PROTOCOL: u32 = 1;
+
+/// Per-process daemon instance id — 16 lowercase hex chars minted from the
+/// OS CSPRNG the first time it's read, then stable for the life of the
+/// process. NEVER persisted: a new id on every daemon start is the whole
+/// point. Clients (0.40.48 connection resilience) compare the id across a
+/// reconnect — `/boot-status` polls and the session-events `hello` frame
+/// both carry it — to detect that the daemon RESTARTED underneath them
+/// (h2-coalesced connections can look "alive" across a restart) and force
+/// a full re-reconcile instead of trusting stale subscriptions.
+pub fn instance_id() -> &'static str {
+    static INSTANCE_ID: OnceLock<String> = OnceLock::new();
+    INSTANCE_ID.get_or_init(|| {
+        let mut bytes = [0u8; 8];
+        // Same CSPRNG the hook-token secret uses (session_token.rs);
+        // an unusable OS RNG is unrecoverable, so fail loudly like it does.
+        getrandom::getrandom(&mut bytes).expect("getrandom for daemon instance id");
+        let mut s = String::with_capacity(16);
+        for b in bytes {
+            s.push_str(&format!("{b:02x}"));
+        }
+        s
+    })
+}
 
 const STARTING: u8 = 0;
 const MIGRATING: u8 = 1;
@@ -180,6 +203,31 @@ mod tests {
         // Guards against an accidental bump — protocol changes are a
         // deliberate, breaking-contract decision.
         assert_eq!(PROTOCOL, 1);
+    }
+
+    #[test]
+    fn instance_id_is_16_lowercase_hex_and_stable_within_process() {
+        let first = instance_id();
+        // Shape contract (0.40.48): exactly 16 lowercase hex chars.
+        // Clients compare it opaquely, but the shape is asserted so a
+        // future format drift is a deliberate decision, not an accident.
+        assert_eq!(
+            first.len(),
+            16,
+            "instance id must be exactly 16 chars; got {first:?}"
+        );
+        assert!(
+            first.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "instance id must be lowercase hex only; got {first:?}"
+        );
+        // Stable for the life of the process — repeated reads return the
+        // SAME id (same pointer, even: it's a OnceLock'd &'static str).
+        let second = instance_id();
+        assert_eq!(first, second, "instance id must not change within a process");
+        assert!(
+            std::ptr::eq(first, second),
+            "instance id must be minted exactly once per process"
+        );
     }
 
     #[test]

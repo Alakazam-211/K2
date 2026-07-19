@@ -645,6 +645,31 @@ impl V1Principal {
             V1Principal::Api(p) => p.id.clone(),
         }
     }
+
+    /// Phase 0 capability gate. Owner principal always has every capability;
+    /// API keys carry their stored flags. Used by host-sessions / canonical
+    /// message / sandbox route families (missing cap → uniform 404).
+    pub(crate) fn has_capability(&self, cap: V1Capability) -> bool {
+        match self {
+            V1Principal::Owner => true,
+            V1Principal::Api(p) => match cap {
+                V1Capability::HostSessions => p.capabilities.host_sessions,
+                V1Capability::CanonicalMessage => p.capabilities.canonical_message,
+                V1Capability::Sandboxes => p.capabilities.sandboxes,
+            },
+        }
+    }
+}
+
+/// Phase 0 — the three `/v1` door families gated by API-key capabilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum V1Capability {
+    /// `/v1/w/<ws>/host-sessions*`
+    HostSessions,
+    /// `POST /v1/w/<ws>/message`
+    CanonicalMessage,
+    /// `/v1/sandboxes*` and `/v1/w/<ws>/sessions*`
+    Sandboxes,
 }
 
 /// Pick the credential a `/v1/*` request presents: the Bearer header (preferred)
@@ -1525,7 +1550,15 @@ mod tests {
     fn v1_principal_accepts_valid_api_key() {
         let owner = "owner-token-xyz";
         let (id, raw) =
-            k2_core::api_keys::create_api_key("v1-gate-test", Some("sk-ant-gate"), None, None, None).expect("mint key");
+            k2_core::api_keys::create_api_key(
+                "v1-gate-test",
+                Some("sk-ant-gate"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("mint key");
 
         // Via Bearer header (the preferred transport).
         let p = v1_principal("", Some(&raw), owner).expect("valid key authorizes");
@@ -1556,7 +1589,9 @@ mod tests {
         assert_eq!(v1_principal("token=", Some(""), owner), None);
 
         // A revoked key no longer authorizes (immediate revocation).
-        let (id, raw) = k2_core::api_keys::create_api_key("v1-revoke", None, None, None, None).expect("mint");
+        let (id, raw) =
+            k2_core::api_keys::create_api_key("v1-revoke", None, None, None, None, None)
+                .expect("mint");
         assert!(v1_principal("", Some(&raw), owner).is_some(), "valid before revoke");
         k2_core::api_keys::revoke_api_key(&id).expect("revoke");
         assert_eq!(

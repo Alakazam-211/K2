@@ -19,8 +19,14 @@
 #   K2_OWNER_USER=alice \
 #   ./provision-k2-server.sh
 #
+#   # self-host interactive path (after install, no K2_TUNNEL_TOKEN):
+#   k2 users add alice --role owner    # prompts for password
+#   k2 connect login                   # k2.dev account → pick subdomain → live
+#
 # Environment:
-#   K2_TUNNEL_TOKEN    K2 Connect tunnel token (from the subdomains row)
+#   K2_TUNNEL_TOKEN    K2 Connect tunnel token (automation fallback; from
+#                      the subdomains row — prefer `k2 connect login` for
+#                      interactive self-host pairing)
 #   K2_SUBDOMAIN       subdomain label (alice → alice.k2.dev)
 #   K2_OWNER_USER      first owner login to create
 #   K2_OWNER_PASSWORD  its password (omit → generated, printed/callback'd)
@@ -119,6 +125,11 @@ else
 	curl -fsSL "$RAW_BASE/cli/k2" -o /usr/local/bin/k2
 	chmod 0755 /usr/local/bin/k2
 fi
+# The daemon self-stages the CLI at every boot (cli_stage, 0.40.41+) so
+# updates carry it forward — that only works if the DAEMON USER can write
+# this file. Root-owned k2 = CLI silently frozen at provision-day version
+# (bit nsi + rpmavs, 2026-07-15).
+chown "$K2_RUN_USER:$K2_RUN_USER" /usr/local/bin/k2
 
 # ── 6. tunnel.json (before first daemon start, so boot auto-dials) ───
 if [ -n "${K2_TUNNEL_TOKEN:-}" ] && [ -n "${K2_SUBDOMAIN:-}" ]; then
@@ -306,3 +317,10 @@ if [ -n "${K2_OWNER_USER:-}" ]; then
 	fi
 fi
 echo "  sandboxes: OFF (Standard-tier host — the Dedicated bootstrap adds them)"
+if [ -z "${K2_TUNNEL_TOKEN:-}" ] || [ -z "${K2_OWNER_USER:-}" ]; then
+echo ""
+echo "  Next (interactive self-host):"
+[ -z "${K2_OWNER_USER:-}" ] && echo "    k2 users add <you> --role owner   # prompts for password"
+[ -z "${K2_TUNNEL_TOKEN:-}" ] && echo "    k2 connect login                 # pair purchased *.k2.dev subdomain"
+echo "  Automation fallback still works: K2_TUNNEL_TOKEN + K2_SUBDOMAIN env."
+fi

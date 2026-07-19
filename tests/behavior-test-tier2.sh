@@ -54,98 +54,22 @@ echo ""
 echo -e "${GREEN}Workspace registered and writable${NC}"
 
 # ═══════════════════════════════════════════════════════════════════════
-section "2.1: Source Gating by Workspace State"
+section "2.1: Workspace States retired"
 # ═══════════════════════════════════════════════════════════════════════
 
-# Set to Maintenance (features=off, issues=gated, crashes=auto, security=auto)
-run state set state-maintenance > /dev/null
-run mode custom > /dev/null 2>&1 || run mode manager > /dev/null 2>&1 || true
-
-# Create agent and work items with different sources
-run agent create gating-test --role "Source gating test" > /dev/null
-run work create --title "New feature X" --body "feature work" --agent gating-test --source feature > /dev/null
-run work create --title "Bug fix Y" --body "issue work" --agent gating-test --source issue > /dev/null
-run work create --title "Crash fix Z" --body "crash work" --agent gating-test --source crash > /dev/null
-
-# Check triage summary
-TRIAGE=$(run agents triage)
-
-if ! echo "$TRIAGE" | grep -q "New feature X"; then
-    pass "gating: feature item filtered out (cap_features=off)"
+# Product feature removed: source gating / Locked / state assignment no
+# longer exist. `k2 state` hard-deprecates; triage lists all items.
+OUTPUT=$(run state list 2>&1 || true)
+if echo "$OUTPUT" | grep -qi "deprecated\|removed\|no longer"; then
+    pass "state verb: hard-deprecated"
 else
-    fail "gating: feature filter" "Feature item should be hidden in Maintenance state"
-fi
-
-if echo "$TRIAGE" | grep -q "Bug fix Y.*NEEDS APPROVAL\|NEEDS APPROVAL.*Bug fix Y"; then
-    pass "gating: issue item shows [NEEDS APPROVAL] (cap_issues=gated)"
-else
-    # Check if it at least appears (the NEEDS APPROVAL tag might be on a different line)
-    if echo "$TRIAGE" | grep -q "Bug fix Y"; then
-        if echo "$TRIAGE" | grep -q "NEEDS APPROVAL"; then
-            pass "gating: issue item shows with NEEDS APPROVAL tag"
-        else
-            fail "gating: issue approval" "Expected NEEDS APPROVAL for issue item"
-        fi
+    # fail_deprecated may use a different phrasing; any non-zero exit with
+    # error text is fine as long as it does not successfully list states.
+    if echo "$OUTPUT" | grep -qE 'Build|Maintenance|Locked'; then
+        fail "state verb retired" "Expected deprecation, got live state list: $OUTPUT"
     else
-        fail "gating: issue visibility" "Issue item not found in triage"
+        pass "state verb: not listing states ($OUTPUT)"
     fi
-fi
-
-if echo "$TRIAGE" | grep -q "Crash fix Z"; then
-    if ! echo "$TRIAGE" | grep "Crash fix Z" | grep -q "NEEDS APPROVAL"; then
-        pass "gating: crash item appears without approval gate (cap_crashes=auto)"
-    else
-        pass "gating: crash item visible (approval check inconclusive in text)"
-    fi
-else
-    fail "gating: crash visibility" "Crash item not found in triage"
-fi
-
-# ═══════════════════════════════════════════════════════════════════════
-section "2.4: Locked State Blocks All Activity"
-# ═══════════════════════════════════════════════════════════════════════
-
-# Set to Locked state
-run state set state-locked > /dev/null
-
-# Scheduler tick should return empty (locked = heartbeat off)
-TICK=$(http_get "/cli/scheduler-tick")
-if echo "$TICK" | grep -q '"count":0\|triage_started\|\[\]'; then
-    pass "locked: scheduler-tick returns empty/started (locked state)"
-else
-    fail "locked: scheduler-tick" "Expected empty result, got: $TICK"
-fi
-
-# Set back to Build
-run state set state-build > /dev/null
-
-# ═══════════════════════════════════════════════════════════════════════
-section "2.5: State Assignment Persists"
-# ═══════════════════════════════════════════════════════════════════════
-
-run state set state-managed > /dev/null
-SETTINGS=$(run settings)
-if echo "$SETTINGS" | grep -q "state-managed"; then
-    pass "state persist: state-managed shows in settings"
-else
-    fail "state persist: managed" "Expected state-managed in: $SETTINGS"
-fi
-
-run state set state-build > /dev/null
-SETTINGS=$(run settings)
-if echo "$SETTINGS" | grep -q "state-build"; then
-    pass "state persist: state-build shows in settings"
-else
-    fail "state persist: build" "Expected state-build in: $SETTINGS"
-fi
-
-# Clear state
-run state set "" > /dev/null
-SETTINGS=$(run settings)
-if echo "$SETTINGS" | grep -q "none\|null\|State:.*$"; then
-    pass "state persist: cleared state shows none"
-else
-    pass "state persist: state cleared (output: $(echo "$SETTINGS" | grep -i state))"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════

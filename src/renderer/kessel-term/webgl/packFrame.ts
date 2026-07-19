@@ -270,6 +270,11 @@ export function prewarmRows(
   now: () => number = () => performance.now(),
 ): number {
   const { frame, cache, glyphs } = input
+  // Speculative work must never wipe live state: at the atlas page
+  // cap the next glyph overflow CLEARS the page (epoch bump → every
+  // visible slab rebuilt next paint). Prewarming off-screen rows is
+  // not worth that cliff — bail and let visible-path demand decide.
+  if (glyphs.nearCapacity) return 0
   const cols = frame.snapshot.cols
   const start = now()
   let warmed = 0

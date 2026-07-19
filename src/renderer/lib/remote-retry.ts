@@ -19,6 +19,8 @@
 // level error and (b) the backoff schedule. Every bare remote `fetch` call
 // site routes through `withRemoteRetry` so a remote restart self-heals.
 
+import { jittered } from '@/lib/backoff'
+
 /**
  * Detect connection-level errors (kernel refused the connection, DNS failure,
  * network down, dead pooled socket). These are the failure modes a daemon
@@ -97,8 +99,12 @@ export async function withRemoteRetry<T>(
     if (attempt > 0) {
       // Let the caller invalidate cached creds before re-reading them.
       await opts?.onRetry?.()
+      // 0.40.48: jitter each positive pause so many call sites retrying
+      // after the same remote reboot don't fire in lockstep (the ~11 req/s
+      // storm). A 0 delay stays 0 — the immediate first retry is what
+      // evicts the dead pooled socket.
       const pause = delays[attempt - 1]
-      if (pause > 0) await new Promise((r) => setTimeout(r, pause))
+      if (pause > 0) await new Promise((r) => setTimeout(r, jittered(pause)))
     }
     try {
       return await op()

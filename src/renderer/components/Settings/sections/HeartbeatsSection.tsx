@@ -686,8 +686,11 @@ export function HistoryPanel({ projectPath, onEmptyChange }: HistoryPanelProps):
 
   const refresh = useCallback(async () => {
     try {
-      const list = await invoke<HeartbeatFire[]>('k2so_heartbeat_fires_list', {
-        projectPath,
+      // 0.40.48 host-aware fix: same story as the roster — the fires audit
+      // log must come from the ACTIVE host, not this Mac's in-process
+      // k2_core. Same route the k2 CLI uses.
+      const list = await daemonCliGet<HeartbeatFire[]>('heartbeat/fires-list', {
+        project: projectPath,
         limit: 50,
       })
       setFires(list)
@@ -864,7 +867,14 @@ export function HeartbeatsPanel({
 
   const refresh = useCallback(async () => {
     try {
-      const list = await invoke<HeartbeatRow[]>('k2so_heartbeat_list', { projectPath: project.path })
+      // 0.40.48 host-aware fix: the Tauri command reads THIS Mac's k2_core
+      // in-process, so connected to a remote host the page audited the
+      // wrong machine's heartbeats. Load from the ACTIVE host's route
+      // instead — the same one this section's mutations (add/edit/archive/
+      // enable/rename) already use.
+      const list = await daemonCliGet<HeartbeatRow[]>('heartbeat/list', {
+        project: project.path,
+      })
       setRows(list)
     } catch (e) {
       console.error('[heartbeats] list failed', e)

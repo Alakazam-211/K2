@@ -11,7 +11,7 @@
 //!
 //! `/cli/*` POST routes use `super::http::require_post` to enforce
 //! method gating per [[feedback_post_only_route_guards]] memory; the
-//! starts_with arms (`/cli/git/`, `/cli/states/`, `/cli/workspaces/`,
+//! starts_with arms (`/cli/git/`, `/cli/workspaces/`,
 //! `/cli/focus-groups/`, `/cli/sections/`, `/cli/workspace-layouts/`,
 //! `/cli/timer/`, `/cli/presets/`, `/cli/window-state/`,
 //! `/cli/projects/`, `/cli/fs/`, `/cli/chat/`, `/cli/themes/`,
@@ -495,14 +495,14 @@ async fn handle_one_request(
             | "/cli/heartbeat/uninstall-launchd"
             | "/cli/heartbeat/apply-wake-scheduler"
             | "/cli/agents/archive-orphans"
-            // Phase 2 Unit 4 — DB-writing routes (states / workspaces /
+            // Phase 2 Unit 4 — DB-writing routes (workspaces /
             // focus-groups / sections / workspace-layouts / timer /
             // presets / window-state / projects / git). JSON-bodied
             // writes — implicit method gate via the `starts_with`
             // dispatch arm in handle_connection that runs Unit 4's
             // POST dispatch. Listed explicitly here so the top-level
             // 405 guard never short-circuits them.
-            | "/cli/states/create" | "/cli/states/update" | "/cli/states/delete"
+            // Workspace States POST routes retired with the product feature.
             | "/cli/workspaces/create" | "/cli/workspaces/delete" | "/cli/workspaces/set-nav-visible"
             | "/cli/focus-groups/create" | "/cli/focus-groups/update" | "/cli/focus-groups/delete"
             | "/cli/focus-groups/assign" | "/cli/focus-groups/reconcile"
@@ -674,6 +674,16 @@ async fn handle_one_request(
             | "/cli/inbox/delete"
             | "/cli/inbox/respond"
             | "/cli/inbox/migrate"
+            // Workspace knowledge base (brain map) — seed notes +
+            // localhost serve on/off. Query/form POSTs; token_ok.
+            // Reads (index/note/status) are GETs via crate::cli::dispatch.
+            | "/cli/wiki/seed"
+            | "/cli/wiki/serve"
+            | "/cli/wiki/serve/on"
+            | "/cli/wiki/serve/off"
+            | "/cli/wiki/chat"
+            | "/cli/wiki/chat/on"
+            | "/cli/wiki/chat/off"
             // K2 Connect host-awareness GAP — workspace skill / agent /
             // session / relations / heartbeat-flag / onboarding writes.
             // The renderer previously fired these via LOCAL Tauri
@@ -772,8 +782,9 @@ async fn handle_one_request(
             // arm below 404s every `/cli/federation/*` path unless
             // K2_FEDERATION is on, so listing them here is inert in a shipped
             // build. `pair/request` is UNAUTH (creates only Pending);
-            // `pair/confirm`/`send` are owner-gated; `inbound` is authenticated
-            // by the signed envelope itself (require_peer), NOT a token. Method-
+            // `pair/confirm` is owner-or-admin; `send` is dual-auth
+            // (owner-or-admin OR scoped passport, PR1); `inbound` is
+            // envelope-authenticated (require_peer), NOT a token. Method-
             // gated per-handler below (require_post). The `roster` read is a GET.
             | "/cli/federation/pair/request"
             | "/cli/federation/pair/confirm"
@@ -896,6 +907,19 @@ async fn handle_one_request(
                 "protocol": crate::boot_status::PROTOCOL,
                 "phase": crate::boot_status::phase_str(),
                 "detail": crate::boot_status::detail(),
+                // 0.40.48 connection resilience: per-PROCESS instance id.
+                // The renderer already health-polls this route; comparing
+                // `instanceId` across polls is how it detects a silent
+                // daemon restart (same subdomain, fresh process — e.g. a
+                // self-update) and forces a cold resync instead of
+                // trusting connection continuity. Additive + forward-
+                // compatible (PROTOCOL not bumped); older clients ignore
+                // it, older daemons omit it and clients fall back to the
+                // pre-0.40.48 heuristics. Safe on this UNAUTHENTICATED
+                // route: a random per-boot UUID carries no identity or
+                // fingerprintable state beyond "the process restarted",
+                // which /boot-status already implies via `phase`.
+                "instanceId": crate::boot_status::instance_id(),
                 // 0.39.35: update SHAPE selector. "bundled-app" hosts update
                 // via the co-located Tauri app (Shape A); "standalone" hosts
                 // via the in-daemon binary swap (Shape B). The renderer reads
@@ -973,12 +997,15 @@ async fn handle_one_request(
             }
             let uptime_secs = state.started_at.elapsed().as_secs();
             let pid = std::process::id();
+            // `instanceId` (0.40.48): same per-process id `/boot-status`
+            // reports, for token-holding callers that already poll /status.
             let body = format!(
-                r#"{{"version":"{}","uptime_secs":{},"pid":{},"port":{}}}"#,
+                r#"{{"version":"{}","uptime_secs":{},"pid":{},"port":{},"instanceId":"{}"}}"#,
                 env!("CARGO_PKG_VERSION"),
                 uptime_secs,
                 pid,
                 state.port,
+                crate::boot_status::instance_id(),
             );
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
         }
@@ -3151,8 +3178,7 @@ async fn handle_one_request(
         // (`/cli/presets/*` mutations moved to the owner/admin arm
         // above — W6.)
         p if is_post && post_allowed && (
-            p.starts_with("/cli/states/")
-                || p.starts_with("/cli/workspaces/")
+            p.starts_with("/cli/workspaces/")
                 || p.starts_with("/cli/focus-groups/")
                 || p.starts_with("/cli/sections/")
                 || p.starts_with("/cli/workspace-layouts/")
@@ -3698,6 +3724,61 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body).await;
         }
+        // Workspace knowledge base — seed + localhost serve on/off.
+        // token_ok (owner OR connect-user), same tier as fs/inbox reads.
+        // spawn_blocking so serve start can Handle::block_on bind without
+        // pinning an async worker; the accept loop is then tokio::spawn'd.
+        p if is_post && post_allowed && p.starts_with("/cli/wiki/") => {
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let mut params = super::http::parse_params(&path, &query);
+            for (k, v) in super::http::parse_form_body(&body_bytes) {
+                params.insert(k, v);
+            }
+            // JSON body optional: { "enabled": true, "port": 0, "project": "..." }
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                if let Some(obj) = v.as_object() {
+                    for (k, val) in obj {
+                        let s = match val {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Bool(b) => b.to_string(),
+                            serde_json::Value::Number(n) => n.to_string(),
+                            _ => continue,
+                        };
+                        if !s.is_empty() {
+                            params.insert(k.clone(), s);
+                        }
+                    }
+                }
+            }
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::wiki_routes::dispatch_post(&p_owned, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(
+                &mut *stream,
+                result.status,
+                result.content_type,
+                &result.body,
+            )
+            .await;
+        }
         // 0.39.45 (#35/#37/#29) — live-msg POST form. Same handler as
         // the GET form (crate::cli::dispatch → workspace_routes), but
         // the message `text` (and any other param) may arrive in the
@@ -4090,20 +4171,26 @@ async fn handle_one_request(
                 // arm matches the prefix+suffix and parses the id + `since`.
                 _ if p.starts_with("/v1/sandboxes/") && p.ends_with("/messages") => {
                     let _ = stream.read(&mut buf).await;
-                    let id = p
-                        .strip_prefix("/v1/sandboxes/")
-                        .and_then(|s| s.strip_suffix("/messages"))
-                        .unwrap_or("");
-                    let since = super::http::parse_params(&path, &query)
-                        .get("since")
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0);
-                    // A multi-segment / empty id is never a real session id —
-                    // 404 without an ownership probe.
-                    if id.is_empty() || id.contains('/') {
-                        crate::cli_response::CliResponse::not_found()
+                    // Phase 0: sandboxes capability (shared drain is also used
+                    // by host-sessions; only THIS entry point is sandbox-gated).
+                    if let Err(resp) = crate::v1_sandboxes::require_sandboxes(&principal) {
+                        resp
                     } else {
-                        crate::v1_sandboxes::handle_messages(&principal, id, since)
+                        let id = p
+                            .strip_prefix("/v1/sandboxes/")
+                            .and_then(|s| s.strip_suffix("/messages"))
+                            .unwrap_or("");
+                        let since = super::http::parse_params(&path, &query)
+                            .get("since")
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        // A multi-segment / empty id is never a real session id —
+                        // 404 without an ownership probe.
+                        if id.is_empty() || id.contains('/') {
+                            crate::cli_response::CliResponse::not_found()
+                        } else {
+                            crate::v1_sandboxes::handle_messages(&principal, id, since)
+                        }
                     }
                 }
                 // ── Sandbox v2 (PRD §A) — WORKSPACE-SCOPED session front door:
@@ -4244,13 +4331,11 @@ async fn handle_one_request(
         // path here 404s exactly as if the routes didn't exist — zero behavior
         // change. Routes: pair/request (UNAUTH → creates only Pending),
         // pair/confirm (owner SAS confirm → Trusted), inbound (envelope-
-        // authenticated ingress → deliver to INBOX ONLY), send (owner-gated
-        // outbound seal+dial), roster (GET stub). Each mutating route starts
-        // with `if !is_post { 405 }` via require_post (the top-level dispatch
-        // lets a GET through on POST-allowlisted routes; see
-        // feedback_post_only_route_guards). Auth model is DECISION-2: inbound is
-        // authenticated by the SIGNED ENVELOPE (require_peer inside the
-        // handler), never a token; confirm/send take the owner token.
+        // authenticated ingress), send / peers / peer-roster (PR1 dual-auth:
+        // owner-or-admin OR scoped passport), roster (peer signed challenge).
+        // Auth model is DECISION-2: inbound is authenticated by the SIGNED
+        // ENVELOPE (require_peer inside the handler), never a token.
+        // pair/confirm/outbox/pubkey stay owner-or-admin only.
         p if p.starts_with("/cli/federation/") => {
             if !k2_core::federation::enabled() {
                 let _ = stream.read(&mut buf).await;
@@ -4281,6 +4366,7 @@ async fn handle_one_request(
                     }
                     // Owner-or-admin gated: a remote owner/admin connect-user
                     // session may confirm peers; a Member session must NOT.
+                    // Scoped passports are NOT admitted (R5 / PR1 non-goal).
                     if !super::http::require_owner_or_admin(
                         &mut *stream,
                         &mut buf,
@@ -4317,23 +4403,33 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    // Local actor initiates outbound → owner-or-admin required
-                    // (a remote owner/admin connect-user may send; a Member may
-                    // not).
-                    if !super::http::require_owner_or_admin(
-                        &mut *stream,
-                        &mut buf,
+                    // PR1 dual-auth: owner-or-admin OR scoped passport (agent
+                    // verbs allowlist). Member connect-users stay barred.
+                    // Principal is installed so handle_send forces
+                    // from_workspace (Wave 0 PR-C binding).
+                    let (auth_ok, scoped_principal) = owner_or_admin_or_scoped_hook_auth(
+                        p,
                         &query,
+                        bearer_token.as_deref(),
                         state.token.as_str(),
-                    )
-                    .await
-                    {
+                    );
+                    if !auth_ok {
+                        let _ = stream.read(&mut buf).await;
+                        super::http::send_response(
+                            &mut *stream,
+                            "403 Forbidden",
+                            "application/json",
+                            r#"{"error":"invalid or missing token"}"#,
+                        )
+                        .await;
                         return DispatchOutcome::Done;
                     }
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     // Blocking: seal + durable enqueue + network dial.
                     tokio::task::spawn_blocking(move || {
-                        crate::federation_routes::handle_send(&body)
+                        crate::caller_workspace::with_request_principal(scoped_principal, || {
+                            crate::federation_routes::handle_send(&body)
+                        })
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
@@ -4374,11 +4470,17 @@ async fn handle_one_request(
                     }
                 }
                 "/cli/federation/peers" => {
-                    // GET, OWNER-or-ADMIN-gated (local convenience for the
-                    // renderer's cross-server picker). A Member connect-user
-                    // session must NOT see the pinned-peer list.
+                    // GET, dual-auth (PR1): owner-or-admin OR scoped passport
+                    // so agents can resolve peers for k2 msg <agent>@host.
+                    // Member connect-users stay barred (not token_ok).
                     let _ = stream.read(&mut buf).await;
-                    if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                    let (auth_ok, _) = owner_or_admin_or_scoped_hook_auth(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    );
+                    if !auth_ok {
                         crate::cli_response::CliResponse::forbidden()
                     } else {
                         tokio::task::spawn_blocking(crate::federation_routes::handle_peers)
@@ -4401,12 +4503,17 @@ async fn handle_one_request(
                     }
                 }
                 "/cli/federation/peer-roster" => {
-                    // GET, OWNER-gated. The LOCAL daemon dials a PAIRED peer's
-                    // signed roster GET and returns its agent projection so the
-                    // renderer can populate the dropdown. Blocking (network).
-                    // OWNER-or-ADMIN-gated; a Member session must NOT.
+                    // GET, dual-auth (PR1): owner-or-admin OR scoped passport
+                    // so agents can resolve workspace_id for federation send.
+                    // Member connect-users stay barred.
                     let _ = stream.read(&mut buf).await;
-                    if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                    let (auth_ok, _) = owner_or_admin_or_scoped_hook_auth(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    );
+                    if !auth_ok {
                         crate::cli_response::CliResponse::forbidden()
                     } else {
                         let params = super::http::parse_params(&path, &query);
@@ -4718,6 +4825,57 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // Heartbeat schedule family — dual-auth for agent-owned verbs
+        // (add/list/edit/fire/…); OS tick install + fleet-wide list stay
+        // owner-only and teach `owner_only` (never opaque "invalid token")
+        // when a valid scoped passport hits them. Scoped callers are
+        // stamped to their own workspace so they cannot schedule into
+        // another project's heartbeats.
+        p if p.starts_with("/cli/heartbeat/") || p == "/cli/heartbeat-log" => {
+            let _ = stream.read(&mut buf).await;
+            if crate::session_token::is_agent_verb(p) {
+                let (auth_ok, scoped_principal) = token_or_scoped_hook_auth(
+                    p,
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                );
+                if !auth_ok {
+                    let r = crate::cli::CliResponse::forbidden();
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                        .await;
+                    return DispatchOutcome::Done;
+                }
+                let mut params = super::http::parse_params(&path, &query);
+                if let Some(ref principal) = scoped_principal {
+                    crate::caller_workspace::stamp_principal(&mut params, principal);
+                }
+                let p_owned = p.to_string();
+                let resp = tokio::task::spawn_blocking(move || {
+                    crate::caller_workspace::with_request_principal(scoped_principal, || {
+                        crate::cli::dispatch(&p_owned, &params)
+                    })
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+                });
+                super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                    .await;
+            } else {
+                // Owner-only heartbeat surfaces (install-launchd, list-all, …).
+                if !super::http::token_ok(&query, state.token.as_str()) {
+                    let r = auth_scope_failure(p, &query, bearer_token.as_deref());
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                        .await;
+                    return DispatchOutcome::Done;
+                }
+                let params = super::http::parse_params(&path, &query);
+                let resp = crate::cli::dispatch(p, &params);
+                super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                    .await;
+            }
+        }
         // C1 (0.40.45) — `/cli/connections` dual-auth (owner/connect-user
         // OR scoped agent hook). Mutate (add/remove) is further gated:
         // owner-or-admin always; agents need agents_can_create_connections.
@@ -4978,6 +5136,32 @@ fn token_or_scoped_hook_auth(
     if super::http::token_ok(query, owner_token) {
         return (true, None);
     }
+    scoped_hook_auth(path, query, bearer)
+}
+
+/// PR1 federation dual-auth: **owner-or-admin** OR a scoped passport on an
+/// agent-verb path. Stricter than [`token_or_scoped_hook_auth`] — Member
+/// connect-user sessions do NOT pass (pair/peers/send historically barred
+/// Members; passport path is the agent restoration, not a Member widen).
+fn owner_or_admin_or_scoped_hook_auth(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+    owner_token: &str,
+) -> (bool, Option<crate::session_token::HookPrincipal>) {
+    if super::http::token_is_owner_or_admin(query, owner_token) {
+        return (true, None);
+    }
+    scoped_hook_auth(path, query, bearer)
+}
+
+/// Shared scoped-passport arm of dual-auth helpers: Bearer header or
+/// `?token=` must pass [`session_token::require_hook`] for `path`.
+fn scoped_hook_auth(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+) -> (bool, Option<crate::session_token::HookPrincipal>) {
     let presented = bearer
         .filter(|s| !s.is_empty())
         .or_else(|| super::http::extract_token(query))
@@ -5018,12 +5202,83 @@ fn mail_dual_auth_failure(
     crate::cli_response::CliResponse::forbidden()
 }
 
+/// When auth fails on a dual-auth family (heartbeat, …): if the caller
+/// presented a **valid scoped agent passport** on an owner-only path,
+/// teach `owner_only` (exit 3) instead of the opaque
+/// "Invalid or missing auth token" that made agents think their
+/// passport was broken. Missing/garbage credentials still get classic
+/// forbidden.
+fn auth_scope_failure(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+) -> crate::cli_response::CliResponse {
+    let presented = presented_bearer(query, bearer);
+    if !presented.is_empty() && crate::session_token::validate_hook(presented).is_some() {
+        // Valid passport, wrong surface — never pretend the token is invalid.
+        if path.starts_with("/cli/heartbeat/") || path == "/cli/heartbeat-log" {
+            return crate::cli_response::CliResponse {
+                status: "403 Forbidden",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "ok": false,
+                    "error": {
+                        "code": "owner_only",
+                        "hint": "requires owner/admin — ask your human (OS schedule install, fleet-wide heartbeat list, and set-show-sessions are owner surfaces; use k2 heartbeat schedule/list/fire for workspace schedules)",
+                    },
+                })
+                .to_string(),
+            };
+        }
+        return crate::cli_response::CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "owner_only",
+                    "hint": "requires owner/admin — ask your human",
+                },
+            })
+            .to_string(),
+        };
+    }
+    crate::cli_response::CliResponse::forbidden()
+}
+
 // Inline unit tests — dispatch sub-helpers
 // ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_scope_failure_missing_token_is_classic_forbidden() {
+        let r = auth_scope_failure("/cli/heartbeat/install-launchd", "", None);
+        assert_eq!(r.status, "403 Forbidden");
+        assert!(
+            r.body.contains("Invalid or missing auth token"),
+            "missing credential must stay classic forbidden: {}",
+            r.body
+        );
+        assert!(!r.body.contains("owner_only"));
+    }
+
+    #[test]
+    fn auth_scope_failure_garbage_token_is_classic_forbidden() {
+        let r = auth_scope_failure(
+            "/cli/heartbeat/list-all",
+            "token=not-a-real-passport",
+            None,
+        );
+        assert_eq!(r.status, "403 Forbidden");
+        assert!(
+            r.body.contains("Invalid or missing auth token"),
+            "garbage credential must stay classic forbidden: {}",
+            r.body
+        );
+    }
 
     #[test]
     fn dispatch_unit6_post_unknown_path_returns_404() {

@@ -53,6 +53,8 @@ import {
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, daemonWsBase, type DaemonWsAvailable } from '../kessel/daemon-ws'
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
+import { useStyleStore } from '@/stores/style'
+import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore } from '@/stores/tabs'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import {
@@ -83,6 +85,7 @@ import {
   scrollPxFromThumbTopFrac,
 } from './scrollMath'
 import { decodeGridFrame, type WireFrame } from './gridWire'
+import { computeResyncScrollPx } from './resyncAnchor'
 import { colToTextIndex, runColSpan } from './runCols'
 import { hexToCss, TerminalRow } from './rowRender'
 import { createWebglPainter } from './webgl/webglPainter'
@@ -473,6 +476,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const storeFontSize = useTerminalSettingsStore((s) => s.fontSize)
   const fontSize = props.fontSize ?? storeFontSize
   const linkClickMode = useTerminalSettingsStore((s) => s.linkClickMode)
+  // WebGL-only cell spacing (Terminal settings — not per-style, not
+  // applied to the DOM painter). Live: open WebGL panes re-measure
+  // when these change. DOM always uses the measured advance + the
+  // Kessel font lineHeightMultiplier default so side-by-side compare
+  // stays stable.
+  const lineHeightMultiplier = useTerminalSettingsStore((s) => s.lineHeightMultiplier)
+  const charTracking = useTerminalSettingsStore((s) => s.charTracking)
 
   // ── WebGL painter flag ────────────────────────────────────────
   // Read ONCE at mount (the same affects-new-panes contract as
@@ -484,6 +494,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const storePainter = useTerminalSettingsStore((s) => s.painter)
   const [painterKind] = useState(storePainter)
   const [painterFatal, setPainterFatal] = useState<string | null>(null)
+  // Prefer WebGL when the user opted in and this pane hasn't permanently
+  // demoted. Actual GL surface lifetime is gated separately on visibility
+  // (see webglSurfaceActive) so hidden tabs / workspace parks don't leave
+  // contexts for WKWebView to reclaim → unrestored → permanent DOM.
   const useWebgl = painterKind === 'webgl' && painterFatal === null
   // Canvas-selection model (webgl only). ALWAYS null in DOM mode, so
   // the shared copy/key handlers can gate on it with zero DOM-path
@@ -688,6 +702,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // immune to cap-trim); a full snapshot (including the k1 resync
     // the daemon sends when our acks lag, i.e. exactly during fast
     // scrolling) contributes its total-row growth.
+    const prevSnap = next
     const prevTotal =
       (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
     let appendedRows = 0
@@ -705,6 +720,25 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const nextTotal =
         (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
       appendedRows = Math.max(appendedRows, nextTotal - prevTotal)
+      // Content seam-match (audit fix): once the daemon's scrollback
+      // ring is at cap, resync totals stop growing while content
+      // shifts — the growth heuristic above reads 0 and the view
+      // yanks. Re-derive scrollPx by finding the VIEWED rows in the
+      // new snapshot; exact whenever a confident match exists, with
+      // the growth heuristic as fallback (appendedRows path below).
+      if (scrollPxRef.current > 0 && prevSnap && next) {
+        const ch = cellMetricsRef.current.height || 20
+        const re = computeResyncScrollPx(
+          prevSnap,
+          next,
+          scrollPxRef.current,
+          ch,
+        )
+        if (re !== null) {
+          commitScrollPx(clampScrollPx(re, next.scrollback.length, ch))
+          appendedRows = 0
+        }
+      }
     }
     liveGridRef.current = next
     // SCROLL ANCHORING: pin the viewed content while scrolled up.
@@ -2268,13 +2302,32 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // painter must floor to integer device px; quantizing the shared
     // metric keeps the DOM overlays pixel-aligned with the canvas
     // instead of drifting sub-pixel-per-column). DOM path keeps the
-    // fractional measurement byte-identically.
-    const width = useWebgl ? Math.floor(rect.width * dpr) / dpr : rect.width
+    // fractional measurement byte-identically and ignores the WebGL
+    // spacing knobs (line height + tracking) so DOM stays the stable
+    // reference while tuning WebGL.
+    if (!useWebgl) {
+      setCellMetrics({
+        width: rect.width,
+        height: Math.max(1, Math.ceil(fontSize * config.font.lineHeightMultiplier)),
+      })
+      return
+    }
+    const measured = Math.floor(rect.width * dpr) / dpr
+    const tracked = Math.max(0.5, measured * charTracking)
+    const width = Math.max(1 / dpr, Math.floor(tracked * dpr) / dpr)
     setCellMetrics({
       width,
-      height: Math.ceil(fontSize * config.font.lineHeightMultiplier),
+      height: Math.max(1, Math.ceil(fontSize * lineHeightMultiplier)),
     })
-  }, [fontSize, config.font.family, config.font.lineHeightMultiplier, useWebgl, dpr])
+  }, [
+    fontSize,
+    config.font.family,
+    config.font.lineHeightMultiplier,
+    lineHeightMultiplier,
+    charTracking,
+    useWebgl,
+    dpr,
+  ])
 
   // ── WebGL painter lifecycle (useWebgl only) ───────────────────
   // The painter is a pure consumer downstream of the rAF coalescer:
@@ -2286,16 +2339,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // canvas.
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const painterRef = useRef<TerminalPainter | null>(null)
+  // Live WebGL text-weight: per-style value from the style store
+  // (Settings → Styles). Must participate in the theme object so
+  // lastPaintedRef / layout-effect deps repaint when the slider moves
+  // (no remount required).
+  const textGamma = useStyleStore((s) => s.textGamma)
   const painterTheme = useMemo(
     () => ({
       fg: config.colors.foreground,
       bg: config.colors.background,
       selection: config.colors.selection.background,
+      textGamma,
     }),
     [
       config.colors.foreground,
       config.colors.background,
       config.colors.selection.background,
+      textGamma,
     ],
   )
   // ── Vsync scroll pump (LEARNINGS-webgl-scroll.md) ─────────────
@@ -2353,14 +2413,38 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       theme,
     })
   }
+  // GL surface is only alive while the pane is user-visible. Hidden tabs,
+  // workspace parks, and Settings (display:none shell) make WKWebView
+  // reclaim contexts; the 3s restore window then expires → permanent
+  // `webgl-context-lost-unrestored` demotion. Dispose cleanly when hidden
+  // and remount on show instead.
+  const settingsOpen = useSettingsStore((s) => s.settingsOpen)
+  const webglSurfaceActive = useWebgl && isTabVisible && !settingsOpen
+
+  // Coming back visible after a demotion from unrestored context loss:
+  // give WebGL another chance (common after workspace switch / Settings).
+  const surfaceWanted = isTabVisible && !settingsOpen
+  const wasSurfaceWantedRef = useRef(surfaceWanted)
+  useEffect(() => {
+    const becameWanted = surfaceWanted && !wasSurfaceWantedRef.current
+    wasSurfaceWantedRef.current = surfaceWanted
+    if (
+      becameWanted &&
+      painterFatal === 'webgl-context-lost-unrestored' &&
+      painterKind === 'webgl'
+    ) {
+      setPainterFatal(null)
+    }
+  }, [surfaceWanted, painterFatal, painterKind])
+
   useLayoutEffect(() => {
-    if (!useWebgl) return
+    if (!webglSurfaceActive) return
     const canvas = webglCanvasRef.current
     if (!canvas) return
     const painter = createWebglPainter()
     painter.onFatal((reason) => {
-      // Permanent per-pane demotion. The canvas unmounts and the DOM
-      // strip (the proven path) takes over on the next render.
+      // Demote THIS pane to the DOM strip. Context-lost-unrestored can
+      // recover on the next show (see effect above); other fatals stick.
       setPainterFatal(reason)
     })
     painter.mount(canvas)
@@ -2370,9 +2454,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       painterRef.current = null
       painter.dispose()
     }
-  }, [useWebgl])
+  }, [webglSurfaceActive])
   useLayoutEffect(() => {
-    if (!useWebgl) return
+    if (!webglSurfaceActive) return
     const painter = painterRef.current
     if (!painter) return
     if (!cellMetrics.width || !cellMetrics.height) return
@@ -2385,9 +2469,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     })
     // New atlas/device grid ⇒ the same frame inputs must repaint.
     lastPaintedRef.current.snapshot = null
-  }, [useWebgl, cellMetrics, config.font.family, fontSize, dpr])
+  }, [webglSurfaceActive, cellMetrics, config.font.family, fontSize, dpr])
   useLayoutEffect(() => {
-    if (!useWebgl) return
+    if (!webglSurfaceActive) return
     if (!snapshot) return
     // Paint the REF position, not the committed `scrollPx` value:
     // during a fast scroll this commit can lag the wheel rAF by a
@@ -2395,7 +2479,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // canvas backwards ("jump back then catch up"). scrollPx stays
     // in the dep array as the trigger; the ref supplies the truth.
     paintWebglRef.current(scrollPxRef.current, snapshot)
-  }, [useWebgl, snapshot, scrollPx, painterTheme, cellMetrics, selectionVersion])
+  }, [webglSurfaceActive, snapshot, scrollPx, painterTheme, cellMetrics, selectionVersion])
+
+  // Text-weight (gamma) is a pure shader uniform — no atlas rebuild —
+  // but force the paint dedupe to treat the frame as dirty so a Settings
+  // slider tick always reaches drawGlyphs even when snapshot/scroll are
+  // unchanged (the common case while parked in Settings).
+  useLayoutEffect(() => {
+    if (!webglSurfaceActive) return
+    lastPaintedRef.current.snapshot = null
+    lastPaintedRef.current.theme = null
+    if (snapshotRef.current) {
+      paintWebglRef.current(scrollPxRef.current, snapshotRef.current)
+    }
+  }, [webglSurfaceActive, textGamma])
 
   // S5 — subtle read-only hint. Latched when the daemon reports this
   // connection can't drive the terminal (an `input_denied` frame, or a
@@ -4212,7 +4309,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           scrollAccumRef.current = 0
           if (accum === 0) return
           const deltaPx = accum * config.scrolling.multiplier
-          const scrollbackLen = snapshotRef.current?.scrollback.length ?? 0
+          // Paint + clamp against the LIVE grid, not the passively-
+          // synced snapshotRef (audit finding): when a WS flush lands
+          // earlier in this same frame, scrollPxRef is already
+          // anchored for the NEW snapshot while snapshotRef still
+          // holds the old one — that mismatched pair painted a
+          // one-frame content jog. The one divergence where liveGrid
+          // must NOT be shown is the resize hold (it deliberately
+          // keeps the last non-blank frame), so use the rendered
+          // snapshot there. Clamp length comes from the SAME grid
+          // that gets painted, so position and content always agree.
+          const snapForPaint = resizeHoldActiveRef.current
+            ? snapshotRef.current
+            : (liveGridRef.current ?? snapshotRef.current)
+          const scrollbackLen = snapForPaint?.scrollback.length ?? 0
           if (import.meta.env.DEV) scrollFlushCountRef.current++
           // deltaY > 0 scrolls toward the bottom (scrollPx → 0).
           // Vsync scroll pump: compute the new position HERE (this
@@ -4225,7 +4335,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           const nextPx = commitScrollPx((px) =>
             clampScrollPx(px - deltaPx, scrollbackLen, cellH),
           )
-          if (useWebglRef.current) paintWebglRef.current(nextPx)
+          if (useWebglRef.current) {
+            paintWebglRef.current(nextPx, snapForPaint)
+          }
         })
       }
     }
@@ -4338,8 +4450,28 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       const grabFrac = onThumb ? yFrac - thumb.topFrac : thumb.heightFrac / 2
       const apply = (clientY: number) => {
         const topFrac = (clientY - rect.top) / rect.height - grabFrac
+        // Recompute buffer geometry LIVE each move (audit finding):
+        // scrollback grows while an agent streams mid-drag, and
+        // mapping against the mousedown-captured length made the
+        // thumb position drift from the content and kept the true
+        // top of history unreachable. `grabFrac` stays captured —
+        // the grip point on the thumb is a gesture-time fact.
+        const liveSnap = snapshotRef.current ?? snap
+        const liveLen = liveSnap.scrollback.length
+        const liveThumb = computeScrollbarThumb(
+          scrollPxRef.current,
+          liveLen,
+          liveLen + liveSnap.grid.length,
+          liveSnap.rows,
+          ch,
+        )
         commitScrollPx(
-          scrollPxFromThumbTopFrac(topFrac, thumb.heightFrac, scrollbackLen, ch),
+          scrollPxFromThumbTopFrac(
+            topFrac,
+            (liveThumb ?? thumb).heightFrac,
+            liveLen,
+            ch,
+          ),
         )
       }
       apply(e.clientY)
@@ -4358,31 +4490,38 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
   // ── Styles ────────────────────────────────────────────────────
   const containerStyle: React.CSSProperties = useMemo(
-    () => ({
-      fontFamily: config.font.family,
-      fontSize: `${fontSize}px`,
-      lineHeight: `${Math.ceil(fontSize * config.font.lineHeightMultiplier)}px`,
-      color: `rgb(${(config.colors.foreground >> 16) & 0xff},${(config.colors.foreground >> 8) & 0xff},${config.colors.foreground & 0xff})`,
-      // Seam fill (see `seamBg`): a fullscreen TUI's own bg extends
-      // into the cell-quantization remainder at the right/bottom
-      // edges instead of exposing the theme background as a seam.
-      backgroundColor: hexToCss(seamBg ?? config.colors.background),
-      whiteSpace: 'pre',
-      // Right and bottom edges are padding-free: their space goes to the
-      // column/row math; visual breathing room there comes from the
-      // centered remainder (same treatment the right edge got in 0.40.25).
-      padding: '4px 0 0 4px',
-      position: 'relative',
-      overflow: 'hidden',
-      flex: 1,
-      width: '100%',
-      height: '100%',
-      outline: 'none',
-    }),
+    () => {
+      // DOM uses the fixed Kessel default; WebGL uses the Terminal
+      // settings multiplier (cellMetrics.height already matches).
+      const lhMult = useWebgl ? lineHeightMultiplier : config.font.lineHeightMultiplier
+      return {
+        fontFamily: config.font.family,
+        fontSize: `${fontSize}px`,
+        lineHeight: `${Math.max(1, Math.ceil(fontSize * lhMult))}px`,
+        color: `rgb(${(config.colors.foreground >> 16) & 0xff},${(config.colors.foreground >> 8) & 0xff},${config.colors.foreground & 0xff})`,
+        // Seam fill (see `seamBg`): a fullscreen TUI's own bg extends
+        // into the cell-quantization remainder at the right/bottom
+        // edges instead of exposing the theme background as a seam.
+        backgroundColor: hexToCss(seamBg ?? config.colors.background),
+        whiteSpace: 'pre',
+        // Right and bottom edges are padding-free: their space goes to the
+        // column/row math; visual breathing room there comes from the
+        // centered remainder (same treatment the right edge got in 0.40.25).
+        padding: '4px 0 0 4px',
+        position: 'relative',
+        overflow: 'hidden',
+        flex: 1,
+        width: '100%',
+        height: '100%',
+        outline: 'none',
+      }
+    },
     [
       fontSize,
       config.font.family,
       config.font.lineHeightMultiplier,
+      lineHeightMultiplier,
+      useWebgl,
       config.colors.foreground,
       config.colors.background,
       seamBg,

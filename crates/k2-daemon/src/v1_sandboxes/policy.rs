@@ -816,6 +816,7 @@ mod tests {
             base_url: None,
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
+            capabilities: k2_core::api_keys::ApiCapabilities::all(),
         });
         let req = ApiSandboxRequest {
             prompt: Some("ignored prompt".to_string()),
@@ -935,6 +936,7 @@ mod tests {
             base_url: None,
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
+            capabilities: k2_core::api_keys::ApiCapabilities::all(),
         });
         let spawn = resolve_spawn(&principal, &ApiSandboxRequest::default())
             .expect("resolve must succeed");
@@ -959,6 +961,7 @@ mod tests {
             base_url: Some("https://oai-proxy.example/v1".to_string()),
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
+            capabilities: k2_core::api_keys::ApiCapabilities::all(),
         });
         let spawn = resolve_spawn(&principal, &ApiSandboxRequest::default())
             .expect("resolve must succeed");
@@ -985,6 +988,7 @@ mod tests {
             base_url: None,
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
+            capabilities: k2_core::api_keys::ApiCapabilities::all(),
         });
         let spawn = resolve_spawn(&principal, &ApiSandboxRequest::default())
             .expect("resolve must succeed");

@@ -1,15 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { emit } from '@tauri-apps/api/event'
-// Plan B — projects_update / workspaces_delete AND the daemon-data git +
-// states reads/mutations (states_list, git_remove_worktree) are host-aware:
-// route through the `/cli/*` HTTP layer (local OR remote). open_in_finder +
-// the k2so_agents_*/inbox/workspace_relations host calls stay on Tauri
+// Plan B — projects_update / workspaces_delete AND the daemon-data git
+// reads/mutations (git_remove_worktree) are host-aware: route through
+// the `/cli/*` HTTP layer (local OR remote). open_in_finder + the
+// k2so_agents_*/inbox/workspace_relations host calls stay on Tauri
 // invoke (host-only, out of scope).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
-import { useSettingsStore } from '@/stores/settings'
+import { usePageViewStore } from '@/stores/page-view'
 import { showContextMenu } from '@/lib/context-menu'
 import WorktreeDialog from '@/components/Sidebar/WorktreeDialog'
 import { HeartbeatsPanel } from '@/components/HeartbeatsPanel/HeartbeatsPanel'
@@ -17,26 +16,9 @@ import { UrlsPortsSection } from './UrlsPortsSection'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-interface StateData {
-  id: string
-  name: string
-  description: string | null
-  isBuiltIn: number
-  capFeatures: string
-  capIssues: string
-  capCrashes: string
-  capSecurity: string
-  capAudits: string
-  heartbeat: number
-  sortOrder: number
-}
-
 interface K2soAgentInfo {
   name: string
   role: string
-  inboxCount: number
-  activeCount: number
-  doneCount: number
   isCoordinator: boolean
   agentType: string
 }
@@ -62,19 +44,12 @@ export default function WorkspacePanel(): React.JSX.Element {
   const [agents, setAgents] = useState<K2soAgentInfo[]>([])
   const [wsInboxCount, setWsInboxCount] = useState(0)
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
-  const [states, setStates] = useState<StateData[]>([])
-
-  // Fetch workspace states once
-  useEffect(() => {
-    daemonCliGet<StateData[]>('states/list').then(setStates).catch(() => {})
-  }, [])
 
   // Use stable selectors — avoid creating new references on every store change
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const activeProject = useProjectsStore(useCallback((s) => {
     return s.activeProjectId ? s.projects.find((p) => p.id === s.activeProjectId) ?? null : null
   }, []))
-  const agenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
   const openAgentPane = useTabsStore((s) => s.openAgentPane)
 
   // Worktrees section collapse state, persisted per-workspace.
@@ -197,31 +172,8 @@ export default function WorkspacePanel(): React.JSX.Element {
           </div>
         )}
 
-        {/* Work summary — inbox / delegated / review */}
-        {agentMode !== 'off' && (() => {
-          const totalInbox = wsInboxCount + agents.reduce((sum, a) => sum + a.inboxCount, 0)
-          const totalActive = agents.reduce((sum, a) => sum + a.activeCount, 0)
-          const totalDone = agents.reduce((sum, a) => sum + a.doneCount, 0)
-          if (totalInbox === 0 && totalActive === 0 && totalDone === 0) return null
-          return (
-            <div className="flex items-center justify-evenly mt-4">
-              <div className="text-center">
-                <div className={`text-sm font-semibold tabular-nums ${totalInbox > 0 ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'}`}>{totalInbox}</div>
-                <div className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">Inbox</div>
-              </div>
-              <div className="text-center">
-                <div className={`text-sm font-semibold tabular-nums ${totalActive > 0 ? 'text-[var(--color-status-warn-text)]' : 'text-[var(--color-text-muted)]'}`}>{totalActive}</div>
-                <div className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">Active</div>
-              </div>
-              <div className="text-center">
-                <div className={`text-sm font-semibold tabular-nums ${totalDone > 0 ? 'text-[var(--color-status-ok-soft)]' : 'text-[var(--color-text-muted)]'}`}>{totalDone}</div>
-                <div className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">Review</div>
-              </div>
-            </div>
-          )
-        })()}
-
-        {/* Off mode inbox shortcut */}
+        {/* Off mode inbox shortcut — navigation affordance when the
+            workspace has undelegated inbox items. */}
         {agentMode === 'off' && wsInboxCount > 0 && (
           <div
             className="mt-2.5 px-2 py-1.5 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer -mx-1"
@@ -237,50 +189,22 @@ export default function WorkspacePanel(): React.JSX.Element {
           </div>
         )}
 
-        {/* State → Heartbeats — the new order (was Heartbeat then State).
-            State comes first because it's workspace-wide policy, and
-            heartbeats are the concrete scheduled actions underneath it. */}
-        {agentMode !== 'off' && (
-          <>
-            <div className="border-t border-[var(--color-border)] mt-3" />
-
-            {states.length > 0 && (
-              <div className="flex items-center justify-between mt-3">
-                <span className="text-[11px] text-[var(--color-text-secondary)]">State</span>
-                <button
-                  onClick={async () => {
-                    const menuItems = [
-                      { id: '__none__', label: 'No state' },
-                      { id: '__sep__', label: '', type: 'separator' as const },
-                      ...states.map((s) => ({ id: s.id, label: s.name })),
-                    ]
-                    const clickedId = await showContextMenu(menuItems)
-                    if (clickedId === null) return
-                    const stateId = clickedId === '__none__' ? '' : clickedId
-                    try {
-                      await daemonCliPost('projects/update', { id: activeProject.id, stateId: stateId || '' })
-                      void emit('sync:projects').catch(() => {})
-                      const store = useProjectsStore.getState()
-                      const updated = store.projects.map((p) =>
-                        p.id === activeProject.id ? { ...p, stateId: stateId || null } : p
-                      )
-                      useProjectsStore.setState({ projects: updated })
-                    } catch (err) {
-                      console.error('[workspace-panel] State update failed:', err)
-                    }
-                  }}
-                  className="text-[11px] text-[var(--color-text-primary)] hover:text-[var(--color-accent)] transition-colors cursor-pointer no-drag flex items-center gap-1 border border-[var(--color-border)] px-2 py-0.5"
-                >
-                  <span>{states.find((s) => s.id === activeProject.stateId)?.name || 'No state'}</span>
-                  <svg className="w-2.5 h-2.5 text-[var(--color-text-muted)]" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M2.5 4L5 6.5L7.5 4" />
-                  </svg>
-                </button>
-              </div>
-            )}
-
-          </>
-        )}
+        {/* Workspace knowledge base / brain map (prd-workspace-kb). */}
+        <div
+          className="mt-2.5 px-2 py-1.5 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer -mx-1"
+          onClick={() => usePageViewStore.getState().openWiki(activeProject.path)}
+          title="Open the workspace knowledge base graph"
+        >
+          <div className="flex items-center gap-2">
+            <svg className="w-3 h-3 text-[var(--color-accent)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="6" cy="6" r="2.5" />
+              <circle cx="18" cy="8" r="2.5" />
+              <circle cx="10" cy="18" r="2.5" />
+              <path d="M8 7.5l7 0.5M8 16.5l8-7" />
+            </svg>
+            <span className="text-[11px] text-[var(--color-text-primary)]">View Wiki</span>
+          </div>
+        </div>
       </div>
 
       {/* ── Heartbeats ── HeartbeatsPanel renders its own full-width

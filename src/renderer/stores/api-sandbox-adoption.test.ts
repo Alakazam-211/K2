@@ -1,20 +1,26 @@
-// P3c (D2) — generic API-spawned-sandbox tab adoption.
+// P3c (D2) — generic API-spawned tab adoption + reaper close.
 //
-// An API-spawned sandbox cell (POST /v1/sandboxes) registers daemon-side under
-// a host-minted `api-<principal>-<uuid>` agent_name with an EPHEMERAL cwd, so it
-// reaches the renderer only on the APP-LEVEL session-events socket (the
-// `onSessionAddedApp` registry). `adoptApiSandboxSession` surfaces it as a NEW
+// An API-spawned sandbox cell (POST /v1/sandboxes) or host-session
+// (POST /v1/w/.../host-sessions) registers daemon-side under a host-minted
+// `api-<principal>-<uuid>` agent_name, so it reaches the renderer only on
+// the APP-LEVEL session-events socket (`onSessionAddedApp` /
+// `onSessionRemovedApp`). `adoptApiSandboxSession` surfaces it as a NEW
 // terminal tab carrying `attachAgentName` (so TerminalPane ATTACHES to the
-// existing cell, never re-spawns) + `sandboxBackend` (so TabBar.tsx lights the
-// D9 orange marker immediately). This suite pins:
+// existing cell, never re-spawns) + `sandboxBackend` (so TabBar.tsx can
+// light the D9 orange marker for microvm). `dropApiSpawnedSession` closes
+// that audit tab when the idle reaper (or any path) unregisters the PTY —
+// which is what lets a post-reap resume open a *new* tab (de-dupe keys on
+// sessionId; a leftover zombie would swallow the revived SessionAdded).
+//
+// This suite pins:
 //   - the sandboxBackend-from-event mapping (orange marker source),
 //   - the attach mechanism (attachAgentName === the event's agent_name, v2),
+//   - host-session adoption (`sandbox_backend: "host"`, no jail request),
 //   - the de-dupe (a second event for the same cell adds NO second tab),
-//   - default-OFF parity (a non-sandbox SessionAdded is IGNORED here).
-//
-// vitest env is `node` (no Tauri). We mock the daemon/Tauri boundaries the tabs
-// module graph touches so importing it is inert, then call the pure adoption fn
-// against the real in-memory tabs store.
+//   - default-OFF parity (a non-sandbox SessionAdded is IGNORED here),
+//   - reaper close drops the audit tab by attachAgentName,
+//   - post-reap resume (same sessionId, fresh agent) opens a new tab,
+//   - init wires both add + remove consumers.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -63,11 +69,11 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonHttpBase: vi.fn(() => 'http://127.0.0.1:9999'),
   daemonWsBase: vi.fn(() => 'ws://127.0.0.1:9999'),
 }))
-// The app-level session-added registry this consumer rides — record the
-// handler so a test can fire a SessionAdded through `initApiSandboxTabAdoption`.
+// The app-level session registries this consumer rides — record handlers so
+// tests can fire SessionAdded / SessionRemoved through init.
 const ev = vi.hoisted(() => {
   type Fn = (...a: unknown[]) => void
-  return { added: [] as Fn[] }
+  return { added: [] as Fn[], removed: [] as Fn[] }
 })
 vi.mock('./session-events', () => ({
   subscribeToWorkspaceSessionEvents: vi.fn(() => () => undefined),
@@ -76,16 +82,21 @@ vi.mock('./session-events', () => ({
     ev.added.push(fn)
     return () => void (ev.added = ev.added.filter((f) => f !== fn))
   }),
+  onSessionRemovedApp: vi.fn((fn: (...a: unknown[]) => void) => {
+    ev.removed.push(fn)
+    return () => void (ev.removed = ev.removed.filter((f) => f !== fn))
+  }),
 }))
 
 import {
   useTabsStore,
   adoptApiSandboxSession,
+  dropApiSpawnedSession,
   initApiSandboxTabAdoption,
   type Tab,
   type TerminalItemData,
 } from './tabs'
-import type { SessionAddedEvent } from './session-events'
+import type { SessionAddedEvent, SessionRemovedEvent } from './session-events'
 
 function apiSandboxEvent(over: Partial<SessionAddedEvent> = {}): SessionAddedEvent {
   return {
@@ -98,6 +109,28 @@ function apiSandboxEvent(over: Partial<SessionAddedEvent> = {}): SessionAddedEve
     session_id: 'sess-aaaa',
     isV2: true,
     sandbox_backend: 'microvm',
+    ...over,
+  }
+}
+
+function apiHostEvent(over: Partial<SessionAddedEvent> = {}): SessionAddedEvent {
+  return apiSandboxEvent({
+    workspace_path: '/Users/u/projects/wiki-site',
+    sandbox_backend: 'host',
+    agent_name: 'api-owner-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    session_id: '11111111-2222-3333-4444-555555555555',
+    command: 'grok',
+    args: [],
+    ...over,
+  })
+}
+
+function apiRemovedEvent(over: Partial<SessionRemovedEvent> = {}): SessionRemovedEvent {
+  return {
+    kind: 'session_removed',
+    workspace_path: '/Users/u/projects/wiki-site',
+    pane_group_id: null,
+    agent_name: 'api-owner-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
     ...over,
   }
 }
@@ -128,6 +161,7 @@ function resetStore(): void {
     backgroundWorkspaces: {},
   })
   ev.added = []
+  ev.removed = []
   mem.clear()
 }
 
@@ -154,6 +188,19 @@ describe('adoptApiSandboxSession', () => {
     expect(data.sessionId).toBe(e.session_id)
     // Exactly one tab surfaced.
     expect(useTabsStore.getState().tabs).toHaveLength(1)
+  })
+
+  it('adopts a host-session (sandbox_backend=host) without requesting a jail', () => {
+    const e = apiHostEvent()
+    expect(adoptApiSandboxSession(e)).toBe(true)
+    const found = onlyTerminalItem()
+    expect(found).not.toBeNull()
+    expect(found!.data.attachAgentName).toBe(e.agent_name)
+    expect(found!.data.sandboxBackend).toBe('host')
+    // Host sessions are passthrough — never ask the daemon for a microvm.
+    expect(found!.data.sandbox).toBeFalsy()
+    expect(found!.data.sessionId).toBe(e.session_id)
+    expect(found!.data.renderer).toBe('kessel')
   })
 
   it('de-dupes: a second event for the same cell (by agent_name) adds no second tab', () => {
@@ -189,10 +236,105 @@ describe('adoptApiSandboxSession', () => {
   it('initApiSandboxTabAdoption wires the consumer onto the app-level registry', () => {
     const unsub = initApiSandboxTabAdoption()
     expect(ev.added).toHaveLength(1)
+    expect(ev.removed).toHaveLength(1)
     // Firing a real-sandbox event through the registered handler adopts a tab.
     ev.added[0](apiSandboxEvent())
     expect(useTabsStore.getState().tabs).toHaveLength(1)
     unsub()
     expect(ev.added).toHaveLength(0)
+    expect(ev.removed).toHaveLength(0)
+  })
+})
+
+describe('dropApiSpawnedSession', () => {
+  it('closes the audit tab when the api agent is reaped', () => {
+    const spawn = apiHostEvent()
+    expect(adoptApiSandboxSession(spawn)).toBe(true)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+
+    const dropped = dropApiSpawnedSession(
+      apiRemovedEvent({ agent_name: spawn.agent_name }),
+    )
+    expect(dropped).toBe(true)
+    expect(useTabsStore.getState().tabs).toHaveLength(0)
+  })
+
+  it('ignores non-api agent removals (workspace tab- path owns those)', () => {
+    expect(adoptApiSandboxSession(apiHostEvent())).toBe(true)
+    expect(
+      dropApiSpawnedSession(
+        apiRemovedEvent({
+          agent_name: 'tab-some-pane-group',
+          pane_group_id: 'some-pane-group',
+        }),
+      ),
+    ).toBe(false)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+  })
+
+  it('ignores removals for a different api agent', () => {
+    expect(adoptApiSandboxSession(apiHostEvent())).toBe(true)
+    expect(
+      dropApiSpawnedSession(
+        apiRemovedEvent({ agent_name: 'api-owner-other-other-other-other' }),
+      ),
+    ).toBe(false)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+  })
+
+  it('post-reap resume: same sessionId + fresh agent opens a new audit tab', () => {
+    // 1) Original host session surfaces.
+    const original = apiHostEvent({
+      agent_name: 'api-owner-old-old-old-old-old',
+      session_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    })
+    expect(adoptApiSandboxSession(original)).toBe(true)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+
+    // 2) Idle reaper kills the PTY → SessionRemoved closes the zombie tab.
+    expect(
+      dropApiSpawnedSession(apiRemovedEvent({ agent_name: original.agent_name })),
+    ).toBe(true)
+    expect(useTabsStore.getState().tabs).toHaveLength(0)
+
+    // 3) Caller wakes the same session (stored session id) → fresh agent,
+    // same sessionId. Without the reaper close, sessionId de-dupe would
+    // swallow this and leave the user watching nothing / a dead pane.
+    const revived = apiHostEvent({
+      agent_name: 'api-owner-new-new-new-new-new',
+      session_id: original.session_id,
+    })
+    expect(adoptApiSandboxSession(revived)).toBe(true)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+    const found = onlyTerminalItem()
+    expect(found!.data.attachAgentName).toBe(revived.agent_name)
+    expect(found!.data.sessionId).toBe(original.session_id)
+  })
+
+  it('without reaper close, same sessionId de-dupes and blocks the new tab (documents the bug)', () => {
+    const original = apiHostEvent({
+      agent_name: 'api-owner-old-old-old-old-old',
+      session_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    })
+    expect(adoptApiSandboxSession(original)).toBe(true)
+    // Zombie tab still present — resume with fresh agent + same sessionId.
+    const revived = apiHostEvent({
+      agent_name: 'api-owner-new-new-new-new-new',
+      session_id: original.session_id,
+    })
+    expect(adoptApiSandboxSession(revived)).toBe(false)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+    // Still attached to the DEAD agent — the bug users hit post-reap.
+    expect(onlyTerminalItem()!.data.attachAgentName).toBe(original.agent_name)
+  })
+
+  it('init wires SessionRemoved through to drop', () => {
+    const unsub = initApiSandboxTabAdoption()
+    const spawn = apiHostEvent()
+    ev.added[0](spawn)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+    ev.removed[0](apiRemovedEvent({ agent_name: spawn.agent_name }))
+    expect(useTabsStore.getState().tabs).toHaveLength(0)
+    unsub()
   })
 })

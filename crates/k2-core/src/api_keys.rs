@@ -10,7 +10,7 @@
 //! input). An API key can ONLY authorize `/v1/*`; it can NEVER mint/list/revoke
 //! keys (that is owner-token-only at the route layer).
 //!
-//! ## Storage (table `api_keys`, migration 0058)
+//! ## Storage (table `api_keys`, migration 0058 + 0059/0071/0086)
 //! - `key_hash` = hex `SHA-256(raw key)`. We hash with SHA-256, **not argon2**:
 //!   argon2 is deliberately slow to blunt brute force of LOW-entropy human
 //!   passwords. An API key is 256+ bits of CSPRNG output — there is no
@@ -28,6 +28,12 @@
 //!   migration.
 //! - `revoked_at` (nullable) = immediate, durable revocation. Once set,
 //!   [`resolve_api_key`] never returns the row again.
+//! - `allowed_workspaces` (0059) = per-key workspace grant (`NULL` = none,
+//!   `"*"` = all, JSON array = explicit slugs).
+//! - `cap_host_sessions` / `cap_canonical_message` / `cap_sandboxes` (0086) =
+//!   which `/v1` door families the key may open. Migration DEFAULT 1 keeps
+//!   EXISTING keys all-doors-on; NEW mints write host-sessions-only unless
+//!   the owner overrides via `--allow`/`--deny`.
 //!
 //! ## Secret hygiene
 //! The raw key is returned to the owner exactly ONCE (from [`create_api_key`]).
@@ -125,6 +131,128 @@ impl LlmProvider {
     pub const ACCEPTED: &'static str = "anthropic, openai, google (alias: gemini), xai (alias: grok)";
 }
 
+/// Per-key capability flags (Phase 0, prd-wiki-public-chat-api-loopback-v1).
+/// Orthogonal to the workspace grant: a key must BOTH authorize the
+/// workspace AND carry the door's capability. Owner-token principals
+/// always have every capability (route layer).
+///
+/// - [`Self::new_key_default`]: mint defaults for NEW keys — host-sessions
+///   only (wiki-chat recipe). Canonical message + sandboxes stay OFF.
+/// - [`Self::all`]: every door ON — the migration DEFAULT for EXISTING
+///   rows (back-compat with pre-capability keys) and the owner principal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiCapabilities {
+    /// `/v1/w/<ws>/host-sessions*` (spawn, list, message-live, drain).
+    pub host_sessions: bool,
+    /// `POST /v1/w/<ws>/message` (canonical pinned-agent inject).
+    pub canonical_message: bool,
+    /// `/v1/sandboxes*` and `/v1/w/<ws>/sessions*` (sandbox cells).
+    pub sandboxes: bool,
+}
+
+impl ApiCapabilities {
+    /// New-mint defaults: host-sessions ON, everything else OFF.
+    pub const fn new_key_default() -> Self {
+        Self {
+            host_sessions: true,
+            canonical_message: false,
+            sandboxes: false,
+        }
+    }
+
+    /// All doors ON (existing-row backfill + owner principal).
+    pub const fn all() -> Self {
+        Self {
+            host_sessions: true,
+            canonical_message: true,
+            sandboxes: true,
+        }
+    }
+
+    /// All doors OFF (starting point when `--allow` replaces the base).
+    pub const fn none() -> Self {
+        Self {
+            host_sessions: false,
+            canonical_message: false,
+            sandboxes: false,
+        }
+    }
+
+    /// Canonical capability names accepted by CLI / create body
+    /// (`allow`/`deny` arrays). Aliases fold through [`Self::parse_name`].
+    pub const ACCEPTED: &'static str =
+        "host-sessions (alias: host), canonical-message (aliases: canonical, message), sandboxes (alias: sandbox)";
+
+    /// Parse one capability name (case-insensitive, trims; accepts aliases).
+    pub fn parse_name(raw: &str) -> Option<&'static str> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "host-sessions" | "host_sessions" | "hostsessions" | "host" => {
+                Some("host-sessions")
+            }
+            "canonical-message" | "canonical_message" | "canonicalmessage" | "canonical"
+            | "message" => Some("canonical-message"),
+            "sandboxes" | "sandbox" => Some("sandboxes"),
+            _ => None,
+        }
+    }
+
+    /// Enable a canonical capability name (`host-sessions` / …).
+    pub fn set(&mut self, name: &str, on: bool) {
+        match name {
+            "host-sessions" => self.host_sessions = on,
+            "canonical-message" => self.canonical_message = on,
+            "sandboxes" => self.sandboxes = on,
+            _ => {}
+        }
+    }
+
+    /// Build capabilities from optional allow/deny lists over a base.
+    ///
+    /// - `allow` present → start from [`Self::none`], then enable each
+    ///   allowed name (replaces the base).
+    /// - `allow` absent → start from `base` (typically
+    ///   [`Self::new_key_default`]).
+    /// - `deny` then turns named capabilities OFF on the result.
+    ///
+    /// Returns `Err` naming the first unknown token (caller maps to 400).
+    pub fn from_allow_deny(
+        base: Self,
+        allow: Option<&[String]>,
+        deny: Option<&[String]>,
+    ) -> Result<Self, String> {
+        let mut caps = if let Some(allow_list) = allow {
+            let mut c = Self::none();
+            for raw in allow_list {
+                let Some(name) = Self::parse_name(raw) else {
+                    return Err(format!(
+                        "unknown capability {:?}; accepted: {}",
+                        raw.trim(),
+                        Self::ACCEPTED,
+                    ));
+                };
+                c.set(name, true);
+            }
+            c
+        } else {
+            base
+        };
+        if let Some(deny_list) = deny {
+            for raw in deny_list {
+                let Some(name) = Self::parse_name(raw) else {
+                    return Err(format!(
+                        "unknown capability {:?}; accepted: {}",
+                        raw.trim(),
+                        Self::ACCEPTED,
+                    ));
+                };
+                caps.set(name, false);
+            }
+        }
+        Ok(caps)
+    }
+}
+
 /// A resolved API-key principal — the host-side identity a presented key maps
 /// to. This is the input the P3b policy-resolver consumes (never any
 /// caller-supplied hint).
@@ -162,6 +290,9 @@ pub struct ApiPrincipal {
     /// workspaces, `Some(json_array)` = the explicit set of authorized slugs.
     /// NOT a secret (slugs are non-sensitive); safe to keep on the principal.
     pub allowed_workspaces: Option<String>,
+    /// Phase 0 — which `/v1` doors this key may open (orthogonal to the
+    /// workspace grant). NOT a secret; surfaced on list for owner audit.
+    pub capabilities: ApiCapabilities,
 }
 
 impl ApiPrincipal {
@@ -276,6 +407,8 @@ pub struct ApiKeyMeta {
     /// non-sensitive), so unlike the anthropic key its VALUE is surfaced here
     /// so the owner can audit which workspaces a key can address.
     pub allowed_workspaces: Option<String>,
+    /// Phase 0 — capability flags (NOT a secret; owner audit).
+    pub capabilities: ApiCapabilities,
 }
 
 /// Hex `SHA-256` of `s`. Used for both the stored `key_hash` and the lookup of
@@ -350,12 +483,17 @@ fn now_secs() -> i64 {
 /// validates + normalizes); blank/absent stores NULL = anthropic (the
 /// pre-0071 default). `base_url` is the optional endpoint override
 /// (`OPENAI_BASE_URL` pass-through for openai); blank stores NULL.
+///
+/// `capabilities` (Phase 0): `None` → [`ApiCapabilities::new_key_default`]
+/// (host-sessions only). Pass [`ApiCapabilities::all`] to mint a full-
+/// access key. Existing pre-migration rows keep all-ON via the SQL DEFAULT.
 pub fn create_api_key(
     label: &str,
     anthropic_key: Option<&str>,
     allowed_workspaces: Option<&str>,
     provider: Option<&str>,
     base_url: Option<&str>,
+    capabilities: Option<ApiCapabilities>,
 ) -> Result<(String, String), String> {
     let id = uuid::Uuid::new_v4().to_string();
     let raw = generate_raw_key();
@@ -384,12 +522,18 @@ pub fn create_api_key(
         Some(u) if !u.trim().is_empty() => Some(u.trim()),
         _ => None,
     };
+    let caps = capabilities.unwrap_or_else(ApiCapabilities::new_key_default);
+    let cap_host = if caps.host_sessions { 1i64 } else { 0 };
+    let cap_canon = if caps.canonical_message { 1i64 } else { 0 };
+    let cap_sbx = if caps.sandboxes { 1i64 } else { 0 };
 
     let db = crate::db::shared();
     let conn = db.lock();
     conn.execute(
-        "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at, allowed_workspaces, provider, base_url) \
-         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6, ?7, ?8)",
+        "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at, \
+         allowed_workspaces, provider, base_url, \
+         cap_host_sessions, cap_canonical_message, cap_sandboxes) \
+         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11)",
         // Deliberately keep the raw key + LLM credential OUT of any error string.
         rusqlite::params![
             id,
@@ -399,7 +543,10 @@ pub fn create_api_key(
             now_secs(),
             workspaces_stored,
             provider_stored,
-            base_url_stored
+            base_url_stored,
+            cap_host,
+            cap_canon,
+            cap_sbx,
         ],
     )
     .map_err(|e| format!("DB insert failed: {e}"))?;
@@ -432,7 +579,8 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
         .prepare(
             "SELECT id, label, scope, created_at, revoked_at, \
                     (anthropic_api_key IS NOT NULL AND TRIM(anthropic_api_key) <> ''), \
-                    allowed_workspaces, provider, base_url \
+                    allowed_workspaces, provider, base_url, \
+                    cap_host_sessions, cap_canonical_message, cap_sandboxes \
              FROM api_keys ORDER BY created_at DESC, id DESC",
         )
         .map_err(|e| format!("DB prepare failed: {e}"))?;
@@ -452,6 +600,11 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
                 // W5 (0071) — non-secret provider metadata for owner audit.
                 provider: row.get::<_, Option<String>>(7)?,
                 base_url: row.get::<_, Option<String>>(8)?,
+                capabilities: ApiCapabilities {
+                    host_sessions: row.get::<_, i64>(9)? != 0,
+                    canonical_message: row.get::<_, i64>(10)? != 0,
+                    sandboxes: row.get::<_, i64>(11)? != 0,
+                },
             })
         })
         .map_err(|e| format!("DB query failed: {e}"))?;
@@ -482,7 +635,9 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
     let db = crate::db::shared();
     let conn = db.lock();
     conn.query_row(
-        "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url FROM api_keys \
+        "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url, \
+                cap_host_sessions, cap_canonical_message, cap_sandboxes \
+         FROM api_keys \
          WHERE key_hash = ?1 AND revoked_at IS NULL",
         rusqlite::params![key_hash],
         |row| {
@@ -492,6 +647,9 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
             let allowed_workspaces: Option<String> = row.get(3)?;
             let provider: Option<String> = row.get(4)?;
             let base_url: Option<String> = row.get(5)?;
+            let cap_host: i64 = row.get(6)?;
+            let cap_canon: i64 = row.get(7)?;
+            let cap_sbx: i64 = row.get(8)?;
             Ok(ApiPrincipal {
                 id,
                 // Treat a blank stored value as absent (parity with B3a).
@@ -504,6 +662,11 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
                 // Raw grant verbatim; interpreted by `authorizes_workspace`
                 // (NULL = fail-closed no grant).
                 allowed_workspaces,
+                capabilities: ApiCapabilities {
+                    host_sessions: cap_host != 0,
+                    canonical_message: cap_canon != 0,
+                    sandboxes: cap_sbx != 0,
+                },
             })
         },
     )
@@ -519,8 +682,15 @@ mod tests {
     /// (b) the anthropic key flows through to the principal.
     #[test]
     fn create_then_resolve_round_trips() {
-        let (id, raw) =
-            create_api_key("ci-roundtrip", Some("sk-ant-roundtrip-1"), Some("[\"ai\"]"), None, None).expect("create");
+        let (id, raw) = create_api_key(
+            "ci-roundtrip",
+            Some("sk-ant-roundtrip-1"),
+            Some("[\"ai\"]"),
+            None,
+            None,
+            None,
+        )
+        .expect("create");
         assert!(raw.starts_with(API_KEY_PREFIX), "raw key must carry the k2sk_ prefix");
         assert_eq!(
             raw.len(),
@@ -541,12 +711,15 @@ mod tests {
         assert_eq!(principal.allowed_workspaces.as_deref(), Some("[\"ai\"]"));
         assert!(principal.authorizes_workspace("ai"), "granted slug authorized");
         assert!(!principal.authorizes_workspace("other"), "non-granted slug denied");
+        // Phase 0: new keys default to host-sessions only.
+        assert_eq!(principal.capabilities, ApiCapabilities::new_key_default());
     }
 
     /// A key minted with no anthropic key resolves to a principal with `None`.
     #[test]
     fn create_without_anthropic_key_resolves_none_cred() {
-        let (_id, raw) = create_api_key("ci-no-cred", None, None, None, None).expect("create");
+        let (_id, raw) =
+            create_api_key("ci-no-cred", None, None, None, None, None).expect("create");
         let principal = resolve_api_key(&raw).expect("resolves");
         assert_eq!(principal.anthropic_key, None);
         // No grant → fail-closed: authorizes NO workspace.
@@ -554,14 +727,16 @@ mod tests {
         assert!(!principal.authorizes_workspace("ai"), "ungranted key reaches no workspace");
 
         // A blank anthropic key is also stored as absent.
-        let (_id2, raw2) = create_api_key("ci-blank-cred", Some("   "), None, None, None).expect("create blank");
+        let (_id2, raw2) =
+            create_api_key("ci-blank-cred", Some("   "), None, None, None, None).expect("create blank");
         assert_eq!(resolve_api_key(&raw2).expect("resolves").anthropic_key, None);
     }
 
     /// Revocation is immediate: after revoke, the SAME raw key resolves to None.
     #[test]
     fn revoke_then_resolve_is_none() {
-        let (id, raw) = create_api_key("ci-revoke", None, None, None, None).expect("create");
+        let (id, raw) =
+            create_api_key("ci-revoke", None, None, None, None, None).expect("create");
         assert!(resolve_api_key(&raw).is_some(), "valid before revoke");
 
         assert!(revoke_api_key(&id).expect("revoke"), "first revoke flips the row");
@@ -587,7 +762,9 @@ mod tests {
     #[test]
     fn list_never_contains_raw_or_anthropic_key() {
         let secret_anthropic = "sk-ant-list-secret-zzz";
-        let (id, raw) = create_api_key("ci-list", Some(secret_anthropic), Some("*"), None, None).expect("create");
+        let (id, raw) =
+            create_api_key("ci-list", Some(secret_anthropic), Some("*"), None, None, None)
+                .expect("create");
 
         let metas = list_api_keys().expect("list");
         let mine = metas.iter().find(|m| m.id == id).expect("our key is listed");
@@ -598,6 +775,8 @@ mod tests {
         assert!(mine.revoked_at.is_none(), "fresh key is not revoked");
         // The (non-secret) workspace grant is surfaced for owner audit.
         assert_eq!(mine.allowed_workspaces.as_deref(), Some("*"));
+        // Phase 0: list surfaces capabilities (new-mint defaults).
+        assert_eq!(mine.capabilities, ApiCapabilities::new_key_default());
 
         // Serialize the whole list and assert NEITHER secret appears anywhere.
         let json = serde_json::to_string(&metas).expect("serialize metas");
@@ -627,6 +806,7 @@ mod tests {
                 base_url: None,
                 scope: "owner".to_string(),
                 allowed_workspaces: grant.map(str::to_string),
+                capabilities: ApiCapabilities::all(),
             }
         }
         // NULL / blank grant → NO workspace (the existing-row backfill case).
@@ -665,6 +845,7 @@ mod tests {
             base_url: base_url.map(str::to_string),
             scope: "owner".to_string(),
             allowed_workspaces: Some("*".to_string()),
+            capabilities: ApiCapabilities::all(),
         }
     }
 
@@ -803,6 +984,7 @@ mod tests {
             Some("*"),
             Some("openai"),
             Some("https://oai-proxy.example/v1"),
+            None,
         )
         .expect("create");
 
@@ -825,9 +1007,15 @@ mod tests {
         assert!(!json.contains(secret), "list must never contain the credential");
 
         // Blank provider/base_url store NULL (the anthropic-default row).
-        let (id2, raw2) =
-            create_api_key("w5-null-provider", Some("sk-a2"), None, Some("  "), Some(""))
-                .expect("create 2");
+        let (id2, raw2) = create_api_key(
+            "w5-null-provider",
+            Some("sk-a2"),
+            None,
+            Some("  "),
+            Some(""),
+            None,
+        )
+        .expect("create 2");
         let p2 = resolve_api_key(&raw2).expect("resolves 2");
         assert_eq!(p2.provider, None);
         assert_eq!(p2.base_url, None);
@@ -845,11 +1033,116 @@ mod tests {
     /// Two minted keys are distinct (CSPRNG) and resolve to distinct principals.
     #[test]
     fn minted_keys_are_unique() {
-        let (id1, raw1) = create_api_key("u1", None, None, None, None).expect("create 1");
-        let (id2, raw2) = create_api_key("u2", None, None, None, None).expect("create 2");
+        let (id1, raw1) =
+            create_api_key("u1", None, None, None, None, None).expect("create 1");
+        let (id2, raw2) =
+            create_api_key("u2", None, None, None, None, None).expect("create 2");
         assert_ne!(raw1, raw2, "two CSPRNG keys must differ");
         assert_ne!(id1, id2, "ids differ");
         assert_eq!(resolve_api_key(&raw1).unwrap().id, id1);
         assert_eq!(resolve_api_key(&raw2).unwrap().id, id2);
+    }
+
+    /// Phase 0 — create defaults (host only) vs explicit all vs explicit deny.
+    #[test]
+    fn create_capabilities_defaults_and_overrides() {
+        // None → new-key default (host-sessions only).
+        let (_id, raw) =
+            create_api_key("cap-default", None, Some("*"), None, None, None).expect("create");
+        let p = resolve_api_key(&raw).expect("resolves");
+        assert!(p.capabilities.host_sessions);
+        assert!(!p.capabilities.canonical_message);
+        assert!(!p.capabilities.sandboxes);
+
+        // Explicit all → every door.
+        let (_id, raw) = create_api_key(
+            "cap-all",
+            None,
+            Some("*"),
+            None,
+            None,
+            Some(ApiCapabilities::all()),
+        )
+        .expect("create all");
+        assert_eq!(
+            resolve_api_key(&raw).expect("resolves").capabilities,
+            ApiCapabilities::all(),
+        );
+
+        // Host + sandboxes only.
+        let caps = ApiCapabilities {
+            host_sessions: true,
+            canonical_message: false,
+            sandboxes: true,
+        };
+        let (id, raw) =
+            create_api_key("cap-hs-sbx", None, Some("*"), None, None, Some(caps)).expect("create");
+        assert_eq!(resolve_api_key(&raw).expect("resolves").capabilities, caps);
+        let mine = list_api_keys()
+            .expect("list")
+            .into_iter()
+            .find(|m| m.id == id)
+            .expect("listed");
+        assert_eq!(mine.capabilities, caps);
+    }
+
+    /// Phase 0 — back-compat: a row written with all-ON columns (the
+    /// migration DEFAULT for pre-capability keys) resolves to all caps.
+    #[test]
+    fn existing_row_all_on_capabilities_resolve() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let raw = format!("{API_KEY_PREFIX}{}", "A".repeat(API_KEY_BODY_LEN));
+        let key_hash = sha256_hex(&raw);
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, \
+                 revoked_at, allowed_workspaces, provider, base_url, \
+                 cap_host_sessions, cap_canonical_message, cap_sandboxes) \
+                 VALUES (?1, ?2, 'legacy-all', NULL, 'owner', ?3, NULL, '*', NULL, NULL, 1, 1, 1)",
+                rusqlite::params![id, key_hash, now_secs()],
+            )
+            .expect("insert legacy-shaped row");
+        }
+        let p = resolve_api_key(&raw).expect("legacy-shaped row resolves");
+        assert_eq!(p.capabilities, ApiCapabilities::all());
+    }
+
+    /// Phase 0 — allow/deny parser: wiki-chat recipe, full allow, deny subtract.
+    #[test]
+    fn capabilities_from_allow_deny() {
+        let base = ApiCapabilities::new_key_default();
+        // No flags → base.
+        assert_eq!(
+            ApiCapabilities::from_allow_deny(base, None, None).unwrap(),
+            base,
+        );
+        // --allow host-sessions (wiki recipe) → host only.
+        let allow = vec!["host-sessions".to_string()];
+        assert_eq!(
+            ApiCapabilities::from_allow_deny(base, Some(&allow), None).unwrap(),
+            ApiCapabilities::new_key_default(),
+        );
+        // --allow host,canonical,sandboxes → all (aliases).
+        let allow = vec![
+            "host".to_string(),
+            "canonical".to_string(),
+            "sandbox".to_string(),
+        ];
+        assert_eq!(
+            ApiCapabilities::from_allow_deny(base, Some(&allow), None).unwrap(),
+            ApiCapabilities::all(),
+        );
+        // Defaults minus canonical (already off) + deny host → nothing.
+        let deny = vec!["host-sessions".to_string()];
+        assert_eq!(
+            ApiCapabilities::from_allow_deny(base, None, Some(&deny)).unwrap(),
+            ApiCapabilities::none(),
+        );
+        // Unknown name → Err.
+        let bad = vec!["rce".to_string()];
+        let err = ApiCapabilities::from_allow_deny(base, Some(&bad), None).unwrap_err();
+        assert!(err.contains("unknown capability") && err.contains("host-sessions"), "{err}");
     }
 }

@@ -790,12 +790,15 @@ async fn handle_one_request(
             | "/cli/federation/pair/confirm"
             | "/cli/federation/inbound"
             | "/cli/federation/send"
-            // Remote Session Layer 0 — master switch + shell spawn stub.
-            // enable/disable: owner-or-admin; shell/spawn: token_ok then
-            // Layer 0 gate (REMOTE_SESSIONS_DISABLED / NO_GRANT). Method-
-            // gated per-handler below (require_post). status is GET.
+            // Remote Session Layer 0+2 — master switch, grants, shell spawn.
+            // enable/disable/grant/revoke: owner-or-admin; shell/spawn:
+            // token_ok OR k2rs_ grant token, then Layer 0 + grant gate.
+            // Method-gated per-handler below (require_post).
+            // status + grants are GET.
             | "/cli/remote-session/enable"
             | "/cli/remote-session/disable"
+            | "/cli/remote-session/grant"
+            | "/cli/remote-session/revoke"
             | "/cli/remote-session/shell/spawn"
             // NOTE: "/v1/sandboxes" already appears earlier in this list (the
             // P3b external spawn route) — do not re-add it here (unreachable
@@ -4331,12 +4334,13 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
-        // ── Remote Session Layer 0 — status / enable / disable / shell spawn.
-        // Always-on route surface (the master switch is a *behavior* gate
-        // inside handlers, not a surface-absent flag like federation):
-        // - status / enable / disable: owner-or-admin
-        // - shell/spawn: token_ok, then Layer 0 gate (OFF →
-        //   REMOTE_SESSIONS_DISABLED + denial audit; ON → NO_GRANT stub)
+        // ── Remote Session Layer 0+2 — status / enable / disable / grants /
+        // revoke / shell spawn. Always-on route surface (the master switch
+        // is a *behavior* gate inside handlers, not a surface-absent flag):
+        // - status / enable / disable / grant / grants / revoke: owner-or-admin
+        //   (grant tokens must NOT enable/disable or mint/revoke)
+        // - shell/spawn: token_ok OR k2rs_ grant token pre-check, then
+        //   Layer 0 gate + grant validation (Stage 2: ready:false, no PTY)
         p if p.starts_with("/cli/remote-session/") => {
             let r = match p {
                 "/cli/remote-session/status" => {
@@ -4352,6 +4356,21 @@ async fn handle_one_request(
                             .unwrap_or_else(|e| {
                                 crate::cli_response::CliResponse::internal_error(e)
                             })
+                    }
+                }
+                "/cli/remote-session/grants" => {
+                    // GET, owner-or-admin. List never returns token/hash.
+                    let _ = stream.read(&mut buf).await;
+                    if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        tokio::task::spawn_blocking(
+                            crate::remote_session_routes::handle_grants_list,
+                        )
+                        .await
+                        .unwrap_or_else(|e| {
+                            crate::cli_response::CliResponse::internal_error(e)
+                        })
                     }
                 }
                 "/cli/remote-session/enable" => {
@@ -4392,11 +4411,66 @@ async fn handle_one_request(
                         .await
                         .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
+                "/cli/remote-session/grant" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    if !super::http::require_owner_or_admin(
+                        &mut *stream,
+                        &mut buf,
+                        &query,
+                        state.token.as_str(),
+                    )
+                    .await
+                    {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let issued_by = crate::remote_session_routes::principal_label_from_query(
+                        &query,
+                        state.token.as_str(),
+                    );
+                    tokio::task::spawn_blocking(move || {
+                        crate::remote_session_routes::handle_grant_create(&body, &issued_by)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/remote-session/revoke" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    if !super::http::require_owner_or_admin(
+                        &mut *stream,
+                        &mut buf,
+                        &query,
+                        state.token.as_str(),
+                    )
+                    .await
+                    {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::remote_session_routes::handle_revoke(&body)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
                 "/cli/remote-session/shell/spawn" => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    if !super::http::token_ok(&query, state.token.as_str()) {
+                    // Prefer A: if token starts with k2rs_, accept into the
+                    // handler without token_ok (grant tokens are not owner/
+                    // connect sessions). Otherwise require token_ok.
+                    let presented = super::http::extract_token(&query)
+                        .filter(|t| !t.is_empty())
+                        .map(|s| s.to_string());
+                    let is_grant = presented
+                        .as_deref()
+                        .is_some_and(k2_core::remote_sessions::is_grant_token);
+                    if !is_grant && !super::http::token_ok(&query, state.token.as_str()) {
                         let _ = stream.read(&mut buf).await;
                         super::http::send_response(
                             &mut *stream,
@@ -4408,12 +4482,18 @@ async fn handle_one_request(
                         return DispatchOutcome::Done;
                     }
                     let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-                    let label = crate::remote_session_routes::principal_label_from_query(
-                        &query,
-                        state.token.as_str(),
-                    );
+                    let label = match presented.as_deref() {
+                        Some(tok) => crate::remote_session_routes::principal_label_from_token(
+                            tok,
+                            state.token.as_str(),
+                        ),
+                        None => "unknown".to_string(),
+                    };
                     tokio::task::spawn_blocking(move || {
-                        crate::remote_session_routes::handle_shell_spawn(&label)
+                        crate::remote_session_routes::handle_shell_spawn(
+                            &label,
+                            presented.as_deref(),
+                        )
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))

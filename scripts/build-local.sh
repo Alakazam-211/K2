@@ -37,12 +37,17 @@ fi
 SIGNING_IDENTITY="Developer ID Application: LZTEK, LLC (36B8R93HXV)"
 KEYCHAIN_PROFILE="K2SO-notarize"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ENTITLEMENTS="$PROJECT_DIR/src-tauri/entitlements.plist"
 MAC_ARCH="$("$PROJECT_DIR/scripts/macos-native-arch.sh")"
 DMG_NAME="K2_${VERSION}_${MAC_ARCH}.dmg"
 DMG_PATH="target/release/bundle/dmg/$DMG_NAME"
 PROVENANCE_PATH="target/release/bundle/dmg/K2_${VERSION}_${MAC_ARCH}.provenance.json"
 SOURCE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
 SOURCE_DIRTY=false
+[ -f "$ENTITLEMENTS" ] || {
+    echo "FATAL: entitlements not found at $ENTITLEMENTS" >&2
+    exit 1
+}
 if [ -n "$(git -C "$PROJECT_DIR" status --porcelain)" ]; then
     SOURCE_DIRTY=true
 fi
@@ -194,9 +199,11 @@ echo "  Build + architecture + version checks passed."
 echo ""
 echo "Step 3: Signing with hardened runtime..."
 codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2"
 codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
 codesign --force --options runtime --timestamp \
@@ -204,6 +211,7 @@ codesign --force --options runtime --timestamp \
     "target/release/bundle/macos/K2.app/Contents/MacOS/frpc"
 "$PROJECT_DIR/scripts/write-daemon-probe-marker.sh" "$APP"
 codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app"
 codesign --verify --deep --strict --verbose=2 "$APP"

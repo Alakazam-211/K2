@@ -28,6 +28,8 @@ pub const KIND_DENIAL: &str = "denial";
 pub const KIND_GRANT_CREATED: &str = "grant-created";
 /// Event kind when a grant is revoked.
 pub const KIND_REVOKE: &str = "revoke";
+/// Event kind when a remote shell PTY is spawned under a grant.
+pub const KIND_SPAWN: &str = "spawn";
 
 /// Principal kind for token-bearing shell grants (Stage 2 v1).
 pub const PRINCIPAL_KIND_GRANT_TOKEN: &str = "grant_token";

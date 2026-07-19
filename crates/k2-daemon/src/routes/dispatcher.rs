@@ -4481,7 +4481,7 @@ async fn handle_one_request(
                         .await;
                         return DispatchOutcome::Done;
                     }
-                    let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     let label = match presented.as_deref() {
                         Some(tok) => crate::remote_session_routes::principal_label_from_token(
                             tok,
@@ -4493,6 +4493,7 @@ async fn handle_one_request(
                         crate::remote_session_routes::handle_shell_spawn(
                             &label,
                             presented.as_deref(),
+                            &body,
                         )
                     })
                     .await
@@ -4962,13 +4963,23 @@ async fn handle_one_request(
         // (`k2 read <ws>`), and `/cli/inbox/*` reads. Owner/connect-user
         // via token_ok (no principal → peer bypass); scoped via
         // require_hook (principal stamped → peer gate).
+        //
+        // Stage 3 remote-session: `/cli/terminal/read` ALSO accepts a
+        // `k2rs_` grant token (handler enforces bind + Layer 0). Workspace
+        // msg / inbox stay token_ok / scoped only.
         p if p == "/cli/workspace/msg"
             || p == "/cli/terminal/read"
             || p.starts_with("/cli/inbox/") =>
         {
             let _ = stream.read(&mut buf).await;
-            let (auth_ok, scoped_principal) =
-                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            let is_grant = super::http::extract_token(&query)
+                .is_some_and(k2_core::remote_sessions::is_grant_token);
+            let (auth_ok, scoped_principal) = if p == "/cli/terminal/read" && is_grant {
+                // Grant token: enter handler; gate_remote_session_io enforces.
+                (true, None)
+            } else {
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str())
+            };
             if !auth_ok {
                 let r = crate::cli::CliResponse::forbidden();
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
@@ -4998,6 +5009,31 @@ async fn handle_one_request(
                 crate::caller_workspace::with_request_principal(scoped_principal, || {
                     crate::cli::dispatch(&p_owned, &params)
                 })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // Stage 3: `/cli/terminal/write` accepts owner/connect (token_ok)
+        // OR a `k2rs_` grant token. Handler enforces grant binding for
+        // remote-session PTYs; non-remote sessions stay owner/connect-only
+        // (grant token on a non-remote id → handler 403 NO_GRANT).
+        p if p == "/cli/terminal/write" => {
+            let _ = stream.read(&mut buf).await;
+            let is_grant = super::http::extract_token(&query)
+                .is_some_and(k2_core::remote_sessions::is_grant_token);
+            if !is_grant && !super::http::token_ok(&query, state.token.as_str()) {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::cli::dispatch(&p_owned, &params)
             })
             .await
             .unwrap_or_else(|e| {

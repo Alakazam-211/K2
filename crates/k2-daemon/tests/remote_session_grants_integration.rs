@@ -4,7 +4,7 @@
 //!
 //!   1. Mint grant while Layer 0 OFF is allowed; shell/spawn with that
 //!      token still 403 REMOTE_SESSIONS_DISABLED (Layer 0 first).
-//!   2. Enable + shell/spawn with k2rs_ token → 200 ready:false.
+//!   2. Enable + shell/spawn with k2rs_ token → 200 ready:true + sessionId.
 //!   3. Spawn with wrong token → NO_GRANT (or invalid token at gate).
 //!   4. Revoke → spawn → GRANT_REVOKED.
 //!   5. Expired grant (force_expire) → GRANT_EXPIRED.
@@ -222,7 +222,7 @@ async fn grant_lifecycle_mint_use_revoke_expire_list() {
         spawn_off.body
     );
 
-    // ── 2) Enable + spawn with k2rs_ → 200 ready:false ──────────────
+    // ── 2) Enable + spawn with k2rs_ → 200 ready:true + sessionId ───
     let en = http(d.port, "POST", &q_owner("/cli/remote-session/enable"), Some("{}"));
     assert_eq!(en.status, 200, "body={}", en.body);
 
@@ -239,12 +239,14 @@ async fn grant_lifecycle_mint_use_revoke_expire_list() {
     );
     let ok_v = json(&spawn_ok.body);
     assert_eq!(ok_v["ok"], true, "body={}", spawn_ok.body);
-    assert_eq!(ok_v["ready"], false, "no PTY yet; body={}", spawn_ok.body);
+    assert_eq!(ok_v["ready"], true, "Stage 3 real PTY; body={}", spawn_ok.body);
     assert_eq!(ok_v["grantId"], grant_id, "body={}", spawn_ok.body);
-    let hint = ok_v["hint"].as_str().unwrap_or("");
+    let session_id = ok_v["sessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("sessionId UUID required; body={}", spawn_ok.body));
     assert!(
-        hint.to_ascii_lowercase().contains("stage 3"),
-        "hint must mention Stage 3; hint={hint}"
+        uuid::Uuid::parse_str(session_id).is_ok(),
+        "sessionId must be UUID; got {session_id}"
     );
 
     // ── 3) Wrong token → NO_GRANT (owner token while ON) ────────────

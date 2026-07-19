@@ -126,6 +126,7 @@ mod sessions_grid_ws;
 mod sessions_ws;
 mod settings_routes;
 mod remote_session_routes;
+mod remote_session_sessions;
 mod signal_format;
 mod skill_layers_routes;
 mod skills_routes;

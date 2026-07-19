@@ -132,6 +132,7 @@ pub mod sessions_grid_ws;
 pub mod sessions_ws;
 pub mod settings_routes;
 pub mod remote_session_routes;
+pub mod remote_session_sessions;
 pub mod signal_format;
 pub mod skill_layers_routes;
 pub mod skills_routes;

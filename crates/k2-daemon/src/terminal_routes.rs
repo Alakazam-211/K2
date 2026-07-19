@@ -50,6 +50,17 @@ use crate::session_lookup;
 /// All three forms produce the same response shape:
 /// `{"lines":["row1","row2",...]}`.
 pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
+    // Stage 3: grant-bound remote shells require matching grant (or owner).
+    // Gate when `id=` is a UUID that is remote-bound; non-remote is passthrough.
+    if let Some(id_str) = params
+        .get("id")
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        if let Some(resp) = gate_remote_io_if_bound(id_str, params) {
+            return resp;
+        }
+    }
     let requested_lines: usize = params
         .get("lines")
         .and_then(|s| s.parse().ok())
@@ -58,6 +69,40 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
         Ok(tail) => CliResponse::ok_json(serde_json::json!({ "lines": tail }).to_string()),
         Err(resp) => resp,
     }
+}
+
+/// Shared write/read gate for remote-session-bound PTYs.
+/// Returns Some(403) to deny, None to allow (or when session is not remote-bound).
+fn gate_remote_io_if_bound(
+    session_id: &str,
+    params: &HashMap<String, String>,
+) -> Option<CliResponse> {
+    let presented = params.get("token").map(String::as_str);
+    // Owner identity for the gate:
+    // 1. Production: hook_config token set at daemon boot.
+    // 2. Tests / fallback: if the presented token is neither a grant nor
+    //    a connect-user session, it is the owner credential (dispatcher
+    //    already required token_ok for non-grant paths).
+    let hook = k2_core::hook_config::get_token();
+    let owner_buf: String = if !hook.is_empty() {
+        hook.to_string()
+    } else {
+        match presented {
+            Some(t)
+                if !t.is_empty()
+                    && !k2_core::remote_sessions::is_grant_token(t)
+                    && k2_core::connect_users::validate_session(t).is_none() =>
+            {
+                t.to_string()
+            }
+            _ => String::new(),
+        }
+    };
+    crate::remote_session_routes::gate_remote_session_io(
+        session_id,
+        presented,
+        &owner_buf,
+    )
 }
 
 /// Resolve a session-addressing param set (`workspace`[+`agent`] /
@@ -569,6 +614,10 @@ pub fn handle_write(params: &HashMap<String, String>) -> CliResponse {
         Some(id) => id,
         None => return CliResponse::bad_request("invalid session id (expected UUID)"),
     };
+    // Stage 3: grant-bound remote shells require matching grant (or owner).
+    if let Some(resp) = gate_remote_io_if_bound(id_str, params) {
+        return resp;
+    }
     let message = match params.get("message") {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => return CliResponse::bad_request("missing message param"),

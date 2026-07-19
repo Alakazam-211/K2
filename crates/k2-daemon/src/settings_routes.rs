@@ -40,6 +40,8 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     "dnsManageEnabled",
     // C1 (0.40.45) — agents-may-create-connections app master.
     "agentsCanCreateConnections",
+    // Remote Session Layer 0 — master switch for remote shell sessions.
+    "remoteSessionsEnabled",
 ];
 
 /// Handler for `GET /cli/settings/get`.

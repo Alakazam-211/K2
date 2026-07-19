@@ -88,6 +88,8 @@ pub mod federation;
 // Feedback F1 (prd-agent-feedback-notifications) — durable agent→human
 // asks (`k2 feedback ask`) + per-item comment threads.
 pub mod feedback;
+// Remote Session Layer 0 — master switch + denial audit (default OFF).
+pub mod remote_sessions;
 pub mod fs_abstract;
 pub mod fs_atomic;
 pub mod fs_commands;

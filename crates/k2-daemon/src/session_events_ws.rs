@@ -363,6 +363,10 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         // remote Settings→Email page refetches live.
         SessionEvent::MailChanged { .. } => return true,
 
+        // Remote Session Layer 0 — APP-LEVEL: denial audit is
+        // daemon-global owner visibility (no workspace scope).
+        SessionEvent::RemoteSessionAccessDenied { .. } => return true,
+
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter below routes them to
         // the matching subscriber exactly like SessionAdded/Removed.
@@ -503,9 +507,25 @@ mod tests {
         let mail = SessionEvent::MailChanged {
             reason: "send-decided".into(),
         };
-        for ev in
-            [&llm, &tunnel, &tunnel_subs, &agent, &presence, &open_url, &project_groups, &feedback, &mail]
-        {
+        // Remote Session Layer 0 — denial audit is daemon-global.
+        let remote_denied = SessionEvent::RemoteSessionAccessDenied {
+            principal_label: "owner".into(),
+            reason: "off".into(),
+            code: "REMOTE_SESSIONS_DISABLED".into(),
+            ts: 0,
+        };
+        for ev in [
+            &llm,
+            &tunnel,
+            &tunnel_subs,
+            &agent,
+            &presence,
+            &open_url,
+            &project_groups,
+            &feedback,
+            &mail,
+            &remote_denied,
+        ] {
             assert!(event_matches_workspace(ev, "/x/foo"));
             assert!(event_matches_workspace(ev, "/totally/unrelated"));
             assert!(event_matches_workspace(ev, ""));

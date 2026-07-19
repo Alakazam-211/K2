@@ -698,6 +698,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0088_project_wiki_public_chat",
             include_str!("../../drizzle_sql/0088_project_wiki_public_chat.sql"),
         ),
+        // 0089 — Remote Session Layer 0: grants shell + events audit log
+        // (denials always recorded). Master switch is app_settings
+        // remote_sessions_enabled (default OFF), independent of grants.
+        (
+            "0089_remote_sessions",
+            include_str!("../../drizzle_sql/0089_remote_sessions.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

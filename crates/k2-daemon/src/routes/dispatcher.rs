@@ -790,6 +790,13 @@ async fn handle_one_request(
             | "/cli/federation/pair/confirm"
             | "/cli/federation/inbound"
             | "/cli/federation/send"
+            // Remote Session Layer 0 — master switch + shell spawn stub.
+            // enable/disable: owner-or-admin; shell/spawn: token_ok then
+            // Layer 0 gate (REMOTE_SESSIONS_DISABLED / NO_GRANT). Method-
+            // gated per-handler below (require_post). status is GET.
+            | "/cli/remote-session/enable"
+            | "/cli/remote-session/disable"
+            | "/cli/remote-session/shell/spawn"
             // NOTE: "/v1/sandboxes" already appears earlier in this list (the
             // P3b external spawn route) — do not re-add it here (unreachable
             // duplicate pattern).
@@ -4316,6 +4323,100 @@ async fn handle_one_request(
                             crate::cli_response::CliResponse::not_found()
                         }
                     }
+                }
+                _ => {
+                    let _ = stream.read(&mut buf).await;
+                    crate::cli_response::CliResponse::not_found()
+                }
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // ── Remote Session Layer 0 — status / enable / disable / shell spawn.
+        // Always-on route surface (the master switch is a *behavior* gate
+        // inside handlers, not a surface-absent flag like federation):
+        // - status / enable / disable: owner-or-admin
+        // - shell/spawn: token_ok, then Layer 0 gate (OFF →
+        //   REMOTE_SESSIONS_DISABLED + denial audit; ON → NO_GRANT stub)
+        p if p.starts_with("/cli/remote-session/") => {
+            let r = match p {
+                "/cli/remote-session/status" => {
+                    // GET, owner-or-admin. Drain then gate (same shape as
+                    // /cli/api-keys/list — do not use require_owner_or_admin
+                    // after a drain; it would re-drain and double-write).
+                    let _ = stream.read(&mut buf).await;
+                    if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        tokio::task::spawn_blocking(crate::remote_session_routes::handle_status)
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                    }
+                }
+                "/cli/remote-session/enable" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    if !super::http::require_owner_or_admin(
+                        &mut *stream,
+                        &mut buf,
+                        &query,
+                        state.token.as_str(),
+                    )
+                    .await
+                    {
+                        return DispatchOutcome::Done;
+                    }
+                    let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(crate::remote_session_routes::handle_enable)
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/remote-session/disable" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    if !super::http::require_owner_or_admin(
+                        &mut *stream,
+                        &mut buf,
+                        &query,
+                        state.token.as_str(),
+                    )
+                    .await
+                    {
+                        return DispatchOutcome::Done;
+                    }
+                    let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(crate::remote_session_routes::handle_disable)
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/remote-session/shell/spawn" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    if !super::http::token_ok(&query, state.token.as_str()) {
+                        let _ = stream.read(&mut buf).await;
+                        super::http::send_response(
+                            &mut *stream,
+                            "403 Forbidden",
+                            "application/json",
+                            r#"{"error":"invalid or missing token"}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let label = crate::remote_session_routes::principal_label_from_query(
+                        &query,
+                        state.token.as_str(),
+                    );
+                    tokio::task::spawn_blocking(move || {
+                        crate::remote_session_routes::handle_shell_spawn(&label)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
                 _ => {
                     let _ = stream.read(&mut buf).await;

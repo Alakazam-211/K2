@@ -483,6 +483,18 @@ pub enum SessionEvent {
     /// `send-approval-requested` | `send-decided`. Refetch signal
     /// only, no payload (never message content on the bus).
     MailChanged { reason: String },
+
+    /// Remote Session Layer 0 — a drive attempt was denied (master switch
+    /// OFF → `REMOTE_SESSIONS_DISABLED`, or ON without grant → `NO_GRANT`).
+    /// APP-LEVEL: owner visibility across every connected client. Wire:
+    /// `{ "kind": "remote_session_access_denied", "principal_label",
+    /// "reason", "code", "ts" }` (serde snake_case fields).
+    RemoteSessionAccessDenied {
+        principal_label: String,
+        reason: String,
+        code: String,
+        ts: i64,
+    },
 }
 
 /// One nested-subdomain target on the wire (0074): the internal endpoint

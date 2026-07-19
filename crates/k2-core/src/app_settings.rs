@@ -302,6 +302,17 @@ pub struct AppSettings {
     /// silently drops keys with no matching field.
     #[serde(default)]
     pub api_enabled: bool,
+    /// Remote Session Layer 0 — master switch for remote shell/PTY sessions
+    /// driven over Connect / API. **Defaults OFF** (fail-closed): independent
+    /// of grants; when this is off, every remote-session drive attempt is
+    /// denied with `REMOTE_SESSIONS_DISABLED` and audited. A typed `bool` is
+    /// required: `AppSettings` round-trips through `serde_json::from_value`
+    /// on every `load`/`update`, which silently drops keys with no matching
+    /// field — an untyped key would never persist.
+    ///
+    /// Wire name `remoteSessionsEnabled` (serde camelCase).
+    #[serde(default)]
+    pub remote_sessions_enabled: bool,
     /// GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
     /// Gates whether the `talk` CLI tool's `/cli/terminal/classify`
     /// detection step is allowed to run the bundled 1.5B model.
@@ -626,6 +637,7 @@ impl Default for AppSettings {
             agents_can_create_connections: false,
             federation_enabled: false,
             api_enabled: false,
+            remote_sessions_enabled: false,
             use_llm_hitl_detection: false,
             push_gateway_url: None,
             push_gateway_token: None,
@@ -1016,6 +1028,39 @@ mod tests {
         // reset() returns to the OFF default.
         let after = reset().expect("reset");
         assert!(!after.allow_remote_instruct);
+    }
+
+    /// Remote Session Layer 0 — the remote-sessions master switch must
+    /// default OFF on a fresh settings file, persist through save→load,
+    /// and ingest the camelCase `remoteSessionsEnabled` key via the
+    /// generic `update()` deep-merge (the /cli/settings/update path the
+    /// toggle hits). Default MUST be OFF: fail-closed independent of grants.
+    #[test]
+    fn remote_sessions_enabled_defaults_off_and_round_trips() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        // Fresh file: the security default is OFF.
+        assert!(!load().remote_sessions_enabled);
+        assert!(!AppSettings::default().remote_sessions_enabled);
+
+        // save → load preserves an explicit opt-in.
+        let mut s = AppSettings::default();
+        s.remote_sessions_enabled = true;
+        save(&s).expect("save");
+        assert!(load().remote_sessions_enabled);
+
+        // update() deep-merge ingests the camelCase key like any other field.
+        let merged = update(serde_json::json!({
+            "remoteSessionsEnabled": false
+        }))
+        .expect("update");
+        assert!(!merged.remote_sessions_enabled);
+        assert!(!load().remote_sessions_enabled);
+
+        // reset() returns to the OFF default.
+        let after = reset().expect("reset");
+        assert!(!after.remote_sessions_enabled);
     }
 
     /// DNS K1 — the dns-manage opt-in must default OFF on a fresh settings

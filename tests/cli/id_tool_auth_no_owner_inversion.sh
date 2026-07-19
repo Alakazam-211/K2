@@ -57,6 +57,7 @@ assert_eq "hostmail → mail" "$(_cli_tool_id_for_verb hostmail)" "mail"
 assert_eq "sessions → sessions-spawn" "$(_cli_tool_id_for_verb sessions)" "sessions-spawn"
 assert_eq "daemon → daemon-admin" "$(_cli_tool_id_for_verb daemon)" "daemon-admin"
 assert_eq "api-key → api-key" "$(_cli_tool_id_for_verb api-key)" "api-key"
+assert_eq "remote-session → remote-session" "$(_cli_tool_id_for_verb remote-session)" "remote-session"
 assert_eq "activity → activity" "$(_cli_tool_id_for_verb activity)" "activity"
 assert_eq "skills → skills" "$(_cli_tool_id_for_verb skills)" "skills"
 assert_eq "unknown → empty" "$(_cli_tool_id_for_verb totally-unknown)" ""
@@ -64,6 +65,7 @@ assert_eq "unknown → empty" "$(_cli_tool_id_for_verb totally-unknown)" ""
 assert_eq "msg mode id" "$(_cli_tool_default_mode msg)" "id"
 assert_eq "mail mode id" "$(_cli_tool_default_mode mail)" "id"
 assert_eq "dns mode id" "$(_cli_tool_default_mode dns)" "id"
+assert_eq "remote-session mode id" "$(_cli_tool_default_mode remote-session)" "id"
 assert_eq "activity mode open" "$(_cli_tool_default_mode activity)" "open"
 assert_eq "skills mode open" "$(_cli_tool_default_mode skills)" "open"
 assert_eq "ungoverned mode open" "$(_cli_tool_default_mode "")" "open"
@@ -71,6 +73,7 @@ assert_eq "ungoverned mode open" "$(_cli_tool_default_mode "")" "open"
 assert_ok "mail is locked" _cli_tool_is_locked mail
 assert_ok "dns is locked" _cli_tool_is_locked dns
 assert_ok "sessions-spawn is locked" _cli_tool_is_locked sessions-spawn
+assert_ok "remote-session is locked" _cli_tool_is_locked remote-session
 if _cli_tool_is_locked msg; then
     echo "  FAIL: msg must not be locked" >&2
     fail=$((fail + 1))

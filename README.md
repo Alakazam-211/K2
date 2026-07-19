@@ -26,6 +26,7 @@ Reach your machine from anywhere. **K2 Connect** exposes your local K2 daemon ov
 - **Remote workspaces** — open and operate a folder on your home or work machine from across the network
 - **Remote files & Clone-to** — browse, upload, and one-click migrate an entire workspace to another K2 machine
 - **Multi-user access** — owner-managed connect users with roles (Owner / Admin / Member), a configurable password policy, and session controls
+- **Remote Session (thin v1)** — optional, default-OFF, time-boxed grant tokens for an audited daemon-user shell over the tunnel (not OpenSSH); see [docs/remote-session.md](docs/remote-session.md)
 
 K2 Connect's hosting backbone (tunnel control plane + relay) runs on dedicated infrastructure and lives in a **separate, private repository** — this open-core repo is the K2 app and daemon; the hosted relay is the closed half.
 

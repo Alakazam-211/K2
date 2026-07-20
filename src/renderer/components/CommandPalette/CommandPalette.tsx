@@ -5,6 +5,7 @@ import { useProjectsStore } from '../../stores/projects'
 import { useFocusGroupsStore } from '../../stores/focus-groups'
 import { useSidebarStore } from '../../stores/sidebar'
 import { useTabsStore } from '../../stores/tabs'
+import { webFeatures } from '@/web/features'
 import ProjectAvatar from '../Sidebar/ProjectAvatar'
 
 interface FocusGroupResult {
@@ -115,8 +116,11 @@ export default function CommandPalette(): React.JSX.Element | null {
 
     // URL-shaped query → "open in browser tab" result FIRST (Enter with
     // no arrowing opens it). Workspace/group matches still list below.
-    const url = queryAsUrl(q)
-    if (url) items.push({ type: 'url', url })
+    // Hosted web: native browser pane is amputated — skip URL results.
+    if (webFeatures.browserPane) {
+      const url = queryAsUrl(q)
+      if (url) items.push({ type: 'url', url })
+    }
 
     // Focus groups (only if enabled)
     if (focusGroupsEnabled) {
@@ -290,7 +294,11 @@ export default function CommandPalette(): React.JSX.Element | null {
               setQuery(e.target.value)
               setSelectedIndex(0)
             }}
-            placeholder="Search workspaces, or type a URL to open a browser tab..."
+            placeholder={
+              webFeatures.browserPane
+                ? 'Search workspaces, or type a URL to open a browser tab...'
+                : 'Search workspaces...'
+            }
             spellCheck={false}
             autoComplete="off"
             className="flex-1 bg-transparent text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none"

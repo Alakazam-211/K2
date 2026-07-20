@@ -31,6 +31,7 @@ import { PermissionsSection, PERMISSIONS_MANIFEST } from './sections/Permissions
 import { DictationLabSection, DICTATION_LAB_MANIFEST } from './sections/DictationLabSection'
 import ServerSwitcher from '../TopBar/ServerSwitcher'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
+import { webFeatures } from '@/web/features'
 
 // ── Section nav items ────────────────────────────────────────────────
 const SECTIONS: { id: SettingsSection; label: string; agenticOnly?: boolean }[] = [
@@ -49,7 +50,10 @@ const SECTIONS: { id: SettingsSection; label: string; agenticOnly?: boolean }[] 
   { id: 'wake-scheduler', label: 'Heartbeats', agenticOnly: true },
   { id: 'keybindings', label: 'Keybindings' },
   { id: 'timer', label: 'Timer' },
-  { id: 'permissions', label: 'Permissions' },
+  // Hosted web: macOS FDA / Accessibility etc. do not apply — omit nav entry.
+  ...(webFeatures.permissions
+    ? ([{ id: 'permissions' as const, label: 'Permissions' }] as const)
+    : []),
   // 0.37.9 — DEV-only Dictation Lab. Filtered out at render time
   // when `import.meta.env.DEV` is false so production users never
   // see it. Lets us isolate which input config makes Apple
@@ -96,7 +100,7 @@ export default function Settings(): React.JSX.Element {
       ...EMAIL_HOSTING_MANIFEST,
       ...EMAIL_LINK_MANIFEST,
       ...WAKE_SCHEDULER_MANIFEST,
-      ...PERMISSIONS_MANIFEST,
+      ...(webFeatures.permissions ? PERMISSIONS_MANIFEST : []),
       ...DICTATION_LAB_MANIFEST,
     ]
     if (agenticEnabled) return combined
@@ -107,6 +111,14 @@ export default function Settings(): React.JSX.Element {
         e.section !== 'wake-scheduler'
     )
   }, [agenticEnabled])
+
+  // Hosted web: if a prior session left activeSection on amputated
+  // Permissions, bounce to General so the content pane isn't blank.
+  useEffect(() => {
+    if (!webFeatures.permissions && activeSection === 'permissions') {
+      setSection('general')
+    }
+  }, [activeSection, setSection])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -325,7 +337,7 @@ export default function Settings(): React.JSX.Element {
             <WakeSchedulerSection />
           </SectionErrorBoundary>
         )}
-        {activeSection === 'permissions' && (
+        {webFeatures.permissions && activeSection === 'permissions' && (
           <SectionErrorBoundary>
             <PermissionsSection />
           </SectionErrorBoundary>

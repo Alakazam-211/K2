@@ -11,6 +11,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useTerminalSettingsStore, type TerminalRenderer } from '@/stores/terminal-settings'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
+import { webFeatures } from '@/web/features'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 // Phase 2.5 fix (finding #547) — retry the workspace-layouts load
 // when the daemon comes online after a slow boot.
@@ -5327,6 +5328,10 @@ export function initApiSandboxTabAdoption(): UnsubscribeFn {
  *  URLs are ignored defensively. One tab per event by design (no dedupe
  *  — repeated opens of the same URL intentionally mint repeated tabs). */
 export function initOpenUrlBrowserTabs(): UnsubscribeFn {
+  // Hosted web: native Browser pane amputated — ignore open_url surface.
+  if (!webFeatures.browserPane) {
+    return () => {}
+  }
   return onOpenUrl((url) => {
     const trimmed = typeof url === 'string' ? url.trim() : ''
     if (!trimmed) return

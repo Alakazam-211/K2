@@ -14,9 +14,12 @@ import {
   APP_UPDATE_TRIGGER_EVENT,
   handleAppUpdateTrigger,
 } from '@/lib/app-update-driver'
+import { webFeatures } from '@/web/features'
 
 export function useAppUpdateTrigger(): void {
   useEffect(() => {
+    // Hosted web: no Tauri app updater / app:update-trigger path.
+    if (!webFeatures.appUpdater) return
     const unlistenPromise = listen(APP_UPDATE_TRIGGER_EVENT, (event) => {
       void handleAppUpdateTrigger(event.payload)
     })

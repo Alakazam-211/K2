@@ -4,6 +4,7 @@ import { useToastStore } from '@/stores/toast'
 import { useUpdateStore } from '@/stores/update'
 import { useSettingsStore } from '@/stores/settings'
 import { UPDATE_CHECK_INTERVAL } from '@shared/constants'
+import { webFeatures } from '@/web/features'
 
 interface UpdateInfo {
   current_version: string
@@ -16,6 +17,18 @@ interface UpdateInfo {
 let lastNotifiedVersion: string | null = null
 
 async function checkForUpdate(showToastIfNone = false): Promise<void> {
+  // Hosted web: no Tauri app updater — versioned SPA is edge-delivered.
+  if (!webFeatures.appUpdater) {
+    if (showToastIfNone) {
+      useToastStore.getState().addToast(
+        'Updates are managed by the edge-delivered web client',
+        'info',
+        4000,
+      )
+    }
+    return
+  }
+
   const updateStore = useUpdateStore.getState()
 
   // Try the Tauri updater plugin first (supports in-app download)
@@ -88,6 +101,7 @@ export type { UpdateInfo }
  */
 export function useUpdateChecker(): void {
   useEffect(() => {
+    if (!webFeatures.appUpdater) return
     const startupTimeout = setTimeout(() => checkForUpdate(), 5000)
     const interval = setInterval(() => checkForUpdate(), UPDATE_CHECK_INTERVAL)
     return () => {

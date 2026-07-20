@@ -47,6 +47,7 @@ import { AgenticSystemsToggle } from '../shared/AgenticSystemsToggle'
 import { ClaudeAuthRefreshRow } from '../shared/ClaudeAuthRefreshRow'
 import { LocalLLMSettings } from '../shared/LocalLLMSettings'
 import type { SettingEntry } from '../searchManifest'
+import { webFeatures } from '@/web/features'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', label: 'App Version', description: 'K2 version and auto-updater', keywords: ['update', 'version', 'check', 'release'] },
@@ -134,7 +135,8 @@ export function GeneralSection(): React.JSX.Element {
                 v{currentVersion || '...'}
               </span>
             </div>
-            {updateStatus === 'idle' && (
+            {/* Hosted web: edge delivers versioned SPA — no in-app Tauri updater. */}
+            {webFeatures.appUpdater && updateStatus === 'idle' && (
               <button
                 onClick={handleCheckUpdate}
                 className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
@@ -142,14 +144,14 @@ export function GeneralSection(): React.JSX.Element {
                 Check for Updates
               </button>
             )}
-            {updateStatus === 'checking' && (
+            {webFeatures.appUpdater && updateStatus === 'checking' && (
               <span className="text-[10px] text-[var(--color-text-muted)]">Checking...</span>
             )}
           </div>
         </div>
 
-        {/* Update available */}
-        {updateStatus === 'available' && updateVersion && (
+        {/* Update available — desktop Tauri updater only */}
+        {webFeatures.appUpdater && updateStatus === 'available' && updateVersion && (
           <div className="flex items-center justify-between p-3 bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30">
             <div>
               <p className="text-xs text-[var(--color-text-primary)]">K2 v{updateVersion} is available</p>
@@ -165,7 +167,7 @@ export function GeneralSection(): React.JSX.Element {
         )}
 
         {/* Downloading */}
-        {updateStatus === 'downloading' && (
+        {webFeatures.appUpdater && updateStatus === 'downloading' && (
           <div className="p-3 border border-[var(--color-border)]">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-[var(--color-text-primary)]">Downloading v{updateVersion}...</span>
@@ -181,7 +183,7 @@ export function GeneralSection(): React.JSX.Element {
         )}
 
         {/* Ready to install */}
-        {updateStatus === 'ready' && (
+        {webFeatures.appUpdater && updateStatus === 'ready' && (
           <div className="flex items-center justify-between p-3 bg-[color-mix(in_srgb,var(--color-status-ok)_10%,transparent)] border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)]">
             <div>
               <p className="text-xs text-[var(--color-text-primary)]">v{updateVersion} is ready to install</p>
@@ -197,7 +199,7 @@ export function GeneralSection(): React.JSX.Element {
         )}
 
         {/* Error */}
-        {updateStatus === 'error' && (
+        {webFeatures.appUpdater && updateStatus === 'error' && (
           <div className="p-3 border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)]">
             <p className="text-[10px] text-[var(--color-status-error-soft)]">{updateError}</p>
             <div className="flex items-center gap-2 mt-2">

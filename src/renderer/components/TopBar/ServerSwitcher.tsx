@@ -29,7 +29,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useAddServerFocusStore } from '@/stores/add-server-focus'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
-import { isWebClient } from '@/lib/is-web'
+import { webFeatures } from '@/web/features'
 
 function statusColor(status: ConnectionStatus): string {
   switch (status) {
@@ -174,7 +174,7 @@ export default function ServerSwitcher(): React.JSX.Element {
 
   // Hosted web: lock to the single same-origin host — no multi-host
   // switcher, no "Local", no "Add a server…". (After all hooks.)
-  if (isWebClient()) {
+  if (!webFeatures.multiHost) {
     const ind = hostIndicator(connectionStatus, recovery, activeHost !== 'local')
     return (
       <div

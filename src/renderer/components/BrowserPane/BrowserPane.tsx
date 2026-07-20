@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { useTabsStore } from '@/stores/tabs'
+import { webFeatures } from '@/web/features'
 
 /**
  * Embedded Browser Tab pane (PRD .k2/prds/prd-browser-pane-v1.md).
@@ -64,8 +65,8 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
 
   const [created, setCreated] = useState(false)
   const createdRef = useRef(false)
-  /** Feature-off stub build → render the graceful-degradation message. */
-  const [unavailable, setUnavailable] = useState(false)
+  /** Feature-off stub build / hosted web → render the graceful-degradation message. */
+  const [unavailable, setUnavailable] = useState(!webFeatures.browserPane)
   const [error, setError] = useState<string | null>(null)
 
   // Address bar. Mirrors the polled current URL unless focused (don't
@@ -135,6 +136,11 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
 
   // ── Create / navigate ───────────────────────────────────────────────
   const createView = useCallback(async (targetUrl: string): Promise<void> => {
+    // Hosted web: no native child webview — stay on the unavailable stub.
+    if (!webFeatures.browserPane) {
+      setUnavailable(true)
+      return
+    }
     const rect = measureRect()
     if (!rect) return // hidden — the visibility effect retries on show
     setError(null)
@@ -258,7 +264,9 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
   // happen mid-session surface in the strip under the chrome bar instead.
   let placeholder: React.ReactNode = null
   if (unavailable) {
-    placeholder = 'Browser pane not available in this build'
+    placeholder = webFeatures.browserPane
+      ? 'Browser pane not available in this build'
+      : 'Embedded browser is not available in the web client'
   } else if (!created) {
     placeholder = error ?? 'Enter a URL to browse'
   }

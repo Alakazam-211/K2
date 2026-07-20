@@ -27,6 +27,7 @@ import {
   type ConnectHost,
 } from '@/stores/connect-host'
 import { IconLock } from '@/components/icons/IconLock'
+import { isWebClient } from '@/lib/is-web'
 
 export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element {
   const selectHost = useConnectHostStore((s) => s.selectHost)
@@ -36,12 +37,20 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
   // active daemon (the overlay just closes, staying on the current view).
   const activate = useConnectHostStore((s) => s.signInActivate)
 
+  // Hosted web / first-time same-origin hosts often have no saved username
+  // (boot seeds hostname only). Always allow editing; pre-fill when known.
+  const [username, setUsername] = useState(host.username ?? '')
   const [password, setPassword] = useState('')
   // Default the remember toggle to the host's saved intent.
   const [remember, setRemember] = useState(host.remember)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const usernameRef = useRef<HTMLInputElement | null>(null)
   const passwordRef = useRef<HTMLInputElement | null>(null)
+  const web = isWebClient()
+  // Username is locked only when a non-empty value was already configured
+  // on a desktop saved host (classic flow). Web / empty always editable.
+  const usernameLocked = !web && Boolean(host.username?.trim())
 
   const address = host.secure && host.port === 443
     ? host.hostname
@@ -50,8 +59,18 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
   // Shared login path used by both the auto-login effect and the submit
   // handler. On success commits + switches; on failure surfaces the
   // reason and (for auto-login) leaves the form for manual entry.
-  const doLogin = async (pw: string, rememberPw: boolean): Promise<boolean> => {
-    const result = await loginToHost(host, pw)
+  const doLogin = async (
+    pw: string,
+    rememberPw: boolean,
+    user = username,
+  ): Promise<boolean> => {
+    const uname = user.trim()
+    if (!uname) {
+      setError('Enter your username.')
+      return false
+    }
+    const hostWithUser: ConnectHost = { ...host, username: uname }
+    const result = await loginToHost(hostWithUser, pw)
     if (!result.ok) {
       setError(result.reason)
       return false
@@ -60,7 +79,8 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
     // store. Persist remember intent + the keychain side.
     const refreshed = useConnectHostStore.getState().hosts.find((h) => h.id === host.id)
     const updated: ConnectHost = {
-      ...(refreshed ?? host),
+      ...(refreshed ?? hostWithUser),
+      username: uname,
       token: result.token,
       remember: rememberPw,
       lastConnectedAt: Date.now(),
@@ -82,18 +102,19 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
     return true
   }
 
-  // Auto-login if the password was remembered; otherwise focus the field
-  // for manual entry. (connect-users #617: "If the password was
-  // remembered, auto-login without prompting.")
+  // Auto-login if the password was remembered AND we have a username;
+  // otherwise focus username (if empty) or password for manual entry.
+  // (connect-users #617: "If the password was remembered, auto-login
+  // without prompting.")
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      if (host.remember) {
+      if (host.remember && host.username?.trim()) {
         const pw = await resolvePassword(host.id)
         if (cancelled) return
         if (pw) {
           setBusy(true)
-          const ok = await doLogin(pw, true)
+          const ok = await doLogin(pw, true, host.username)
           if (cancelled) return
           if (ok) return // switched away — overlay will unmount
           // Remembered password was rejected/expired → fall through to
@@ -101,7 +122,11 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
           setBusy(false)
         }
       }
-      passwordRef.current?.focus()
+      if (!username.trim()) {
+        usernameRef.current?.focus()
+      } else {
+        passwordRef.current?.focus()
+      }
     })()
     return () => { cancelled = true }
     // host id is the stable identity; doLogin closes over `host` which is
@@ -110,6 +135,11 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
   }, [host.id])
 
   const submit = async (): Promise<void> => {
+    if (!username.trim()) {
+      setError('Enter your username.')
+      usernameRef.current?.focus()
+      return
+    }
     if (!password) {
       setError('Enter the server password.')
       return
@@ -142,18 +172,23 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
           </div>
         </div>
 
-        {host.username && (
-          <label className="flex flex-col gap-1.5 text-[12px] text-[var(--color-text-secondary)]">
-            Username
-            <input
-              type="text"
-              value={host.username}
-              readOnly
-              autoComplete="username"
-              className={`${inputCls} opacity-70`}
-            />
-          </label>
-        )}
+        <label className="flex flex-col gap-1.5 text-[12px] text-[var(--color-text-secondary)]">
+          Username
+          <input
+            ref={usernameRef}
+            type="text"
+            value={username}
+            readOnly={usernameLocked}
+            disabled={busy}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="e.g. z3thon"
+            autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className={`${inputCls} ${usernameLocked ? 'opacity-70' : ''} disabled:opacity-60`}
+          />
+        </label>
 
         <label className="flex flex-col gap-1.5 text-[12px] text-[var(--color-text-secondary)]">
           Password
@@ -164,7 +199,7 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
             disabled={busy}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Server password"
-            autoComplete="off"
+            autoComplete="current-password"
             className={`${inputCls} disabled:opacity-60`}
           />
         </label>
@@ -187,7 +222,9 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
               </svg>
             )}
           </span>
-          Remember password (stored in your OS keychain)
+          {web
+            ? 'Remember password (this browser)'
+            : 'Remember password (stored in your OS keychain)'}
         </label>
 
         {error && (

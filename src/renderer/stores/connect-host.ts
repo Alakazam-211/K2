@@ -39,6 +39,12 @@ import { withRemoteRetry } from '@/lib/remote-retry'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import { isWebClient } from '@/lib/is-web'
 import {
+  CONNECT_HOSTS_STORAGE_KEY,
+  clearConnectHostsStorage,
+  readConnectHostsStorage,
+  writeConnectHostsStorage,
+} from '@/lib/connect-hosts-storage'
+import {
   logoutWebSession,
   persistWebSessionToken,
   withDaemonFetch,
@@ -341,8 +347,6 @@ export interface ConnectHostState {
   pickHost: (hostOrLocal: ActiveHost) => void
 }
 
-const STORAGE_KEY = 'k2so.connect-hosts.v1'
-
 /** Best-effort access to localStorage. Returns null in non-browser
  *  (vitest node) contexts so the store still works headless. */
 function getStorage(): Storage | null {
@@ -355,11 +359,13 @@ function getStorage(): Storage | null {
 }
 
 /** Load the persisted (token-less) host list. Tokens are NOT persisted,
- *  so loaded hosts start with an empty token + remember preserved. */
+ *  so loaded hosts start with an empty token + remember preserved.
+ *  Dual-reads `k2.connect-hosts.v1` first, falls back to legacy
+ *  `k2so.connect-hosts.v1`. */
 function loadHosts(): ConnectHost[] {
   const storage = getStorage()
   if (!storage) return []
-  const raw = storage.getItem(STORAGE_KEY)
+  const raw = readConnectHostsStorage(storage)
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw) as unknown
@@ -410,7 +416,8 @@ function persistHosts(hosts: ConnectHost[]): void {
   const storage = getStorage()
   if (storage) {
     try {
-      storage.setItem(STORAGE_KEY, json)
+      // Canonical `k2.*` write + drop legacy `k2so.*` (migrate-on-write).
+      writeConnectHostsStorage(storage, json)
     } catch {
       /* quota / disabled storage — non-fatal, hosts stay in memory + file */
     }
@@ -914,9 +921,9 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
  *  Mirrors the `__reset*ForTests` hooks other stores expose. */
 export function __resetConnectHostStoreForTests(): void {
   const storage = getStorage()
-  storage?.removeItem(STORAGE_KEY)
+  if (storage) clearConnectHostsStorage(storage)
   useConnectHostStore.setState({ activeHost: 'local', hosts: [], connectionStatus: 'connecting', recovery: { kind: 'connected' }, pendingSignIn: null, serverVersion: null, serverProtocol: null })
 }
 
-/** The localStorage key, exported for tests. */
-export const CONNECT_HOSTS_STORAGE_KEY = STORAGE_KEY
+/** The localStorage key, re-exported for tests / callers. */
+export { CONNECT_HOSTS_STORAGE_KEY }

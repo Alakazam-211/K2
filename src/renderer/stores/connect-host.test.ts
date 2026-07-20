@@ -85,6 +85,7 @@ import {
   isLocalHostname,
   type ConnectHost,
 } from './connect-host'
+import { LEGACY_CONNECT_HOSTS_STORAGE_KEY } from '@/lib/connect-hosts-storage'
 
 function makeHost(overrides: Partial<ConnectHost> = {}): ConnectHost {
   return {
@@ -164,6 +165,18 @@ describe('connect-host store', () => {
     expect(parsed[0]).not.toHaveProperty('token')
     expect(parsed[0].label).toBe('Test box')
     expect(parsed[0].hostname).toBe('192.168.1.50')
+  })
+
+  it('writes k2.connect-hosts.v1 and drops legacy k2so key on migrate', () => {
+    expect(CONNECT_HOSTS_STORAGE_KEY).toBe('k2.connect-hosts.v1')
+    storage.setItem(LEGACY_CONNECT_HOSTS_STORAGE_KEY, JSON.stringify([
+      { id: 'old', label: 'Legacy', hostname: '10.0.0.1', port: 47800, remember: false, lastConnectedAt: null },
+    ]))
+    useConnectHostStore.getState().addHost(makeHost({ id: 'new' }))
+    expect(storage.__raw(CONNECT_HOSTS_STORAGE_KEY)).not.toBeNull()
+    expect(storage.__raw(LEGACY_CONNECT_HOSTS_STORAGE_KEY)).toBeNull()
+    const parsed = JSON.parse(storage.__raw(CONNECT_HOSTS_STORAGE_KEY)!) as Array<{ id: string }>
+    expect(parsed.some((h) => h.id === 'new')).toBe(true)
   })
 
   it('removeHost drops the entry and updates localStorage', () => {

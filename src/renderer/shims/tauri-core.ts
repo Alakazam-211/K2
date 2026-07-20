@@ -4,6 +4,10 @@
  * unknown commands warn and resolve null softly.
  */
 
+import {
+  readConnectHostsStorage,
+  writeConnectHostsStorage,
+} from '../lib/connect-hosts-storage'
 import { webSecretStorageKey } from '../web/session-token'
 
 const KNOWN_NOOPS = new Set([
@@ -17,8 +21,6 @@ const KNOWN_NOOPS = new Set([
   'relaunch_via_open',
   'restart_app',
 ])
-
-const CONNECT_HOSTS_LS_KEY = 'k2so.connect-hosts.v1'
 
 function storageGet(key: string): string | null {
   try {
@@ -44,6 +46,26 @@ function storageRemove(key: string): void {
     localStorage.removeItem(key)
   } catch {
     /* ignore */
+  }
+}
+
+/** Dual-read connect-hosts JSON from localStorage (`k2.*` → `k2so.*`). */
+function storageGetConnectHosts(): string | null {
+  try {
+    if (typeof localStorage === 'undefined') return null
+    return readConnectHostsStorage(localStorage)
+  } catch {
+    return null
+  }
+}
+
+/** Write canonical `k2.connect-hosts.v1` and drop legacy `k2so.*`. */
+function storageSetConnectHosts(json: string): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    writeConnectHostsStorage(localStorage, json)
+  } catch {
+    /* quota / private mode */
   }
 }
 
@@ -74,7 +96,8 @@ function defaultFor(cmd: string): unknown {
     case 'connect_hosts_read':
       // Prefer the same localStorage key the connect-host store uses so a
       // non-web-aware hydrate path (if re-enabled) sees the SPA book.
-      return storageGet(CONNECT_HOSTS_LS_KEY) ?? '[]'
+      // Dual-read: k2.connect-hosts.v1 → legacy k2so.connect-hosts.v1.
+      return storageGetConnectHosts() ?? '[]'
     default:
       return null
   }
@@ -110,7 +133,7 @@ export async function invoke<T = unknown>(
   }
   if (cmd === 'connect_hosts_write') {
     const json = String(args?.json ?? '[]')
-    storageSet(CONNECT_HOSTS_LS_KEY, json)
+    storageSetConnectHosts(json)
     return undefined as T
   }
   if (cmd === 'connect_hosts_read') {

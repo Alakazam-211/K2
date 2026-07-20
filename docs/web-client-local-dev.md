@@ -186,3 +186,13 @@ Optional env:
 - Scripts: `scripts/web-serve.sh`, `web/Caddyfile`, `web/loader/`
 - Vite web config: `vite.config.web.ts`
 - Boot host force: `src/renderer/web/boot-host.ts`
+
+## Phase 2 notes (daemon + SPA)
+
+- **Cookie auth:** login with `web: true` / `X-K2-Client: web` sets `k2_session`
+  (HttpOnly). SPA HTTP uses `credentials: include` and omits `?token=` on
+  `/cli/*`. WebSockets still pass an in-memory token query pragmatically.
+- **Owner wall:** `webClientEnabled` defaults **ON**. Disable with settings
+  update `{"webClientEnabled":false}` (owner/admin). Web requests then get
+  `WEB_CLIENT_DISABLED`; `/boot-status` still returns `webClient.enabled`.
+

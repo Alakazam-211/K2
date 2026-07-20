@@ -246,6 +246,13 @@ pub fn handle_set_policy(body: &[u8]) -> CliResponse {
 struct LoginReq {
     username: String,
     password: String,
+    /// Hosted web client (PRD §2.3): when `true`, the dispatcher also
+    /// emits `Set-Cookie: k2_session=<token>; …` on success. Equivalent
+    /// signal: request header `X-K2-Client: web`. Optional; default false
+    /// so CLI/desktop login JSON is unchanged.
+    #[serde(default)]
+    #[allow(dead_code)] // read by the dispatcher from the raw body JSON
+    web: bool,
 }
 
 /// Generic 401 for a failed login. Deliberately does NOT distinguish
@@ -258,7 +265,7 @@ fn login_failed() -> CliResponse {
     }
 }
 
-/// `POST /cli/auth/login` `{username,password}` (PUBLIC — no token gate).
+/// `POST /cli/auth/login` `{username,password[,web]}` (PUBLIC — no token gate).
 ///
 /// On success: `200 {token, username, expiresAt, mustChangePassword}`.
 /// `mustChangePassword` (K2 Cloud S1) is an ALWAYS-PRESENT boolean —
@@ -266,6 +273,11 @@ fn login_failed() -> CliResponse {
 /// change-password / logout until the password is rotated. On any
 /// failure (bad body, unknown user, wrong password, disabled account):
 /// a generic `401 {"error":"invalid username or password"}`.
+///
+/// Optional body field `web: true` (or header `X-K2-Client: web`) asks
+/// the dispatcher to also set the HttpOnly `k2_session` cookie — same
+/// connect-users session token as the JSON `token` field; never the
+/// owner daemon token. See PRD hosted-web-client §2.3 / §9.2.
 ///
 /// The dispatcher adds a small fixed delay before returning THIS response
 /// when it's a 401, to blunt online brute force (richer rate-limiting is
@@ -625,14 +637,17 @@ pub fn handle_change_password(username: Option<String>, body: &[u8]) -> CliRespo
 /// `POST /cli/auth/logout` (authorized by the caller's OWN session token).
 ///
 /// Deletes the caller's persisted session record — a per-device logout.
-/// The token is the caller's `?token=` (passed in as `token`); the OWNER
-/// token has no session record so logout is a no-op `{"success":true}` for
-/// it (idempotent). "Log out EVERYWHERE" is a different gesture (an epoch
-/// bump via change-password / disable), not this route.
+/// The token is the caller's credential (passed in as `token` — from
+/// `?token=`, Bearer, or `k2_session` cookie after effective_auth_query);
+/// the OWNER token has no session record so logout is a no-op
+/// `{"success":true}` for it (idempotent). "Log out EVERYWHERE" is a
+/// different gesture (an epoch bump via change-password / disable), not
+/// this route.
 ///
 /// Always returns `{"success":true}` — whether or not a record was found —
 /// so a logged-out/expired token can't be probed for existence. (K2 Connect
-/// #4.)
+/// #4.) The dispatcher additionally clears the `k2_session` cookie
+/// (`Max-Age=0`) on every logout response for the hosted web path.
 pub fn handle_logout(token: &str) -> CliResponse {
     // Deleting an unknown/expired token returns None; we still report
     // success so the route is idempotent + non-enumerable.

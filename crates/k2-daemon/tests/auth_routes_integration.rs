@@ -45,10 +45,13 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
     TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// A minimal parsed HTTP response: the numeric status + the body.
+/// A minimal parsed HTTP response: the numeric status + the body +
+/// optional Set-Cookie header value (hosted web cookie auth tests).
 struct Resp {
     status: u16,
     body: String,
+    /// Raw `Set-Cookie` header value (first one), if any.
+    set_cookie: Option<String>,
 }
 
 /// Fire one raw HTTP request at `127.0.0.1:<port>` and return the parsed
@@ -56,6 +59,19 @@ struct Resp {
 /// services it on its own spawned task. `body` is `None` for GET (no
 /// Content-Length / body sent), `Some(json)` for POST.
 fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Resp {
+    http_with_headers(port, method, path_and_query, body, &[])
+}
+
+/// Like [`http`] but appends extra request header lines (each `"Name: value"`,
+/// no trailing CRLF). Used by the hosted-web cookie auth tests for
+/// `Cookie:` / `X-K2-Client:` / `X-Forwarded-Proto:`.
+fn http_with_headers(
+    port: u16,
+    method: &str,
+    path_and_query: &str,
+    body: Option<&str>,
+    extra_headers: &[&str],
+) -> Resp {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(10)))
@@ -69,17 +85,25 @@ fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Re
     // letting the server keep the socket alive and reading exactly
     // Content-Length bytes, we read the full response then drop the socket
     // ourselves — robust regardless of whether a given arm drains the body.
+    let mut extra = String::new();
+    for h in extra_headers {
+        extra.push_str(h);
+        extra.push_str("\r\n");
+    }
     let req = match body {
         Some(b) => format!(
             "{method} {path_and_query} HTTP/1.1\r\n\
              Host: 127.0.0.1\r\n\
              Content-Type: application/json\r\n\
+             {extra}\
              Content-Length: {}\r\n\r\n{b}",
             b.len()
         ),
         None => format!(
             "{method} {path_and_query} HTTP/1.1\r\n\
-             Host: 127.0.0.1\r\n\r\n"
+             Host: 127.0.0.1\r\n\
+             {extra}\
+             \r\n"
         ),
     };
     stream.write_all(req.as_bytes()).expect("write request");
@@ -91,9 +115,13 @@ fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Re
     let mut raw: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
-        if let Some((status, body, complete)) = try_parse(&raw) {
+        if let Some((status, body, set_cookie, complete)) = try_parse(&raw) {
             if complete {
-                return Resp { status, body };
+                return Resp {
+                    status,
+                    body,
+                    set_cookie,
+                };
             }
         }
         match stream.read(&mut chunk) {
@@ -120,18 +148,28 @@ fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Re
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or_else(|| panic!("could not parse status from response: {text:?}"));
 
-    let body = match text.split_once("\r\n\r\n") {
-        Some((_headers, b)) => b.to_string(),
-        None => String::new(),
+    let (headers, body) = match text.split_once("\r\n\r\n") {
+        Some((h, b)) => (h, b.to_string()),
+        None => ("", String::new()),
     };
-    Resp { status, body }
+    let set_cookie = headers.lines().find_map(|l| {
+        let lower = l.to_ascii_lowercase();
+        lower
+            .strip_prefix("set-cookie:")
+            .map(|_| l.split_once(':').map(|(_, v)| v.trim().to_string()).unwrap())
+    });
+    Resp {
+        status,
+        body,
+        set_cookie,
+    }
 }
 
 /// Try to parse a (possibly partial) HTTP/1.1 response out of `raw`.
-/// Returns `(status, body, complete)` once the status line + full headers
-/// are present; `complete` is true when the body has reached the
-/// advertised Content-Length (or no Content-Length header is present).
-fn try_parse(raw: &[u8]) -> Option<(u16, String, bool)> {
+/// Returns `(status, body, set_cookie, complete)` once the status line +
+/// full headers are present; `complete` is true when the body has reached
+/// the advertised Content-Length (or no Content-Length header is present).
+fn try_parse(raw: &[u8]) -> Option<(u16, String, Option<String>, bool)> {
     let text = String::from_utf8_lossy(raw);
     let (headers, body) = text.split_once("\r\n\r\n")?;
     let status = headers
@@ -145,11 +183,18 @@ fn try_parse(raw: &[u8]) -> Option<(u16, String, bool)> {
             .strip_prefix("content-length:")
             .and_then(|v| v.trim().parse::<usize>().ok())
     });
+    let set_cookie = headers.lines().find_map(|l| {
+        if l.to_ascii_lowercase().starts_with("set-cookie:") {
+            l.split_once(':').map(|(_, v)| v.trim().to_string())
+        } else {
+            None
+        }
+    });
     let complete = match content_len {
         Some(clen) => body.len() >= clen,
         None => true,
     };
-    Some((status, body.to_string(), complete))
+    Some((status, body.to_string(), set_cookie, complete))
 }
 
 /// Redirect `$HOME` to a fresh tempdir (so connect-users.json writes are
@@ -1546,5 +1591,266 @@ async fn update_status_unknown_job_is_404_for_owner() {
             None,
         );
         assert_eq!(r.status, 404, "owner status for unknown job → 404; body={}", r.body);
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Group — Hosted web cookie auth transport (PRD §2.3 / §9.2, phase 2a)
+//
+// 1. login with web flag → Set-Cookie: k2_session=…
+// 2. Cookie-only + X-K2-Client → gated route (whoami) succeeds
+// 3. Cookie-only POST without CSRF header → 403
+// 4. Query token still works without cookie
+// 5. Secure omitted on plain HTTP; present with X-Forwarded-Proto: https
+// 6. Logout clears cookie + revokes session
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn web_login_sets_k2_session_cookie() {
+    let _g = lock();
+    with_temp_home(|| {
+        connect_users::add_user("webuser", "password123").expect("add_user");
+        connect_users::set_role("webuser", Role::Member).expect("set_role");
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        // Body flag web: true.
+        let body = r#"{"username":"webuser","password":"password123","web":true}"#;
+        let r = http(d.port, "POST", "/cli/auth/login", Some(body));
+        assert_eq!(r.status, 200, "web login must 200; body={}", r.body);
+        let cookie = r
+            .set_cookie
+            .as_deref()
+            .expect("web login must Set-Cookie k2_session");
+        assert!(
+            cookie.starts_with("k2_session="),
+            "cookie name: {cookie}"
+        );
+        assert!(cookie.contains("HttpOnly"), "HttpOnly required: {cookie}");
+        assert!(
+            cookie.contains("SameSite=Strict"),
+            "SameSite=Strict required: {cookie}"
+        );
+        assert!(cookie.contains("Path=/"), "Path=/ required: {cookie}");
+        assert!(
+            cookie.contains("Max-Age="),
+            "Max-Age required: {cookie}"
+        );
+        // Local HTTP test harness: Secure must be OMITTED.
+        assert!(
+            !cookie.contains("Secure"),
+            "Secure must be omitted without X-Forwarded-Proto: https: {cookie}"
+        );
+
+        // Cookie value must equal the JSON token (connect-users session).
+        let json: serde_json::Value =
+            serde_json::from_str(&r.body).expect("login body JSON");
+        let token = json["token"].as_str().expect("token field");
+        assert!(
+            cookie.contains(&format!("k2_session={token}")),
+            "cookie value must be the session token; cookie={cookie} token={token}"
+        );
+        // Never the owner daemon token.
+        assert!(
+            !cookie.contains(OWNER_TOKEN),
+            "owner daemon token must NEVER be in the cookie"
+        );
+
+        // Non-web login (no flag, no header) must NOT set the cookie.
+        let r2 = http(
+            d.port,
+            "POST",
+            "/cli/auth/login",
+            Some(r#"{"username":"webuser","password":"password123"}"#),
+        );
+        assert_eq!(r2.status, 200, "plain login still 200; body={}", r2.body);
+        assert!(
+            r2.set_cookie.is_none(),
+            "non-web login must not Set-Cookie; got {:?}",
+            r2.set_cookie
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn web_login_via_header_sets_cookie_and_secure_with_forwarded_proto() {
+    let _g = lock();
+    with_temp_home(|| {
+        connect_users::add_user("webhdr", "password123").expect("add_user");
+        connect_users::set_role("webhdr", Role::Member).expect("set_role");
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        let body = r#"{"username":"webhdr","password":"password123"}"#;
+        let r = http_with_headers(
+            d.port,
+            "POST",
+            "/cli/auth/login",
+            Some(body),
+            &["X-K2-Client: web", "X-Forwarded-Proto: https"],
+        );
+        assert_eq!(r.status, 200, "header web login must 200; body={}", r.body);
+        let cookie = r
+            .set_cookie
+            .as_deref()
+            .expect("X-K2-Client: web login must Set-Cookie");
+        assert!(
+            cookie.contains("Secure"),
+            "Secure required when X-Forwarded-Proto: https: {cookie}"
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cookie_only_whoami_succeeds_with_web_client_header() {
+    let _g = lock();
+    with_temp_home(|| {
+        let session = seed_user_session("cookiewho", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        // Cookie only + X-K2-Client on GET whoami (CSRF not required on GET).
+        let r = http_with_headers(
+            d.port,
+            "GET",
+            "/cli/auth/whoami",
+            None,
+            &[
+                &format!("Cookie: k2_session={session}"),
+                "X-K2-Client: web",
+            ],
+        );
+        assert_eq!(
+            r.status, 200,
+            "cookie-only whoami must 200; body={}",
+            r.body
+        );
+        assert!(
+            r.body.contains("cookiewho"),
+            "whoami should report the connect-user; body={}",
+            r.body
+        );
+
+        // Cookie only WITHOUT web header on GET still works (CSRF is
+        // mutating-only). Confirms cookie is accepted as an auth source.
+        let r2 = http_with_headers(
+            d.port,
+            "GET",
+            "/cli/auth/whoami",
+            None,
+            &[&format!("Cookie: k2_session={session}")],
+        );
+        assert_eq!(
+            r2.status, 200,
+            "cookie-only GET whoami without X-K2-Client still 200; body={}",
+            r2.body
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cookie_only_post_without_csrf_header_is_403() {
+    let _g = lock();
+    with_temp_home(|| {
+        let session = seed_user_session("csrfuser", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        // Cookie only, no X-K2-Client → 403 csrf_required on POST logout.
+        let r = http_with_headers(
+            d.port,
+            "POST",
+            "/cli/auth/logout",
+            Some(""),
+            &[&format!("Cookie: k2_session={session}")],
+        );
+        assert_eq!(
+            r.status, 403,
+            "cookie-only POST without CSRF header → 403; body={}",
+            r.body
+        );
+        assert!(
+            r.body.contains("csrf_required") || r.body.contains("csrf"),
+            "403 body should name CSRF; body={}",
+            r.body
+        );
+
+        // Session still live (CSRF rejected before handler).
+        assert_eq!(
+            connect_users::validate_session(&session),
+            Some("csrfuser".to_string()),
+            "CSRF rejection must not revoke the session"
+        );
+
+        // Same POST with X-K2-Client: web → 200 + clear cookie.
+        let r2 = http_with_headers(
+            d.port,
+            "POST",
+            "/cli/auth/logout",
+            Some(""),
+            &[
+                &format!("Cookie: k2_session={session}"),
+                "X-K2-Client: web",
+            ],
+        );
+        assert_eq!(
+            r2.status, 200,
+            "cookie-only POST with X-K2-Client → 200; body={}",
+            r2.body
+        );
+        let clear = r2
+            .set_cookie
+            .as_deref()
+            .expect("logout must clear Set-Cookie");
+        assert!(
+            clear.contains("Max-Age=0"),
+            "logout cookie must Max-Age=0: {clear}"
+        );
+        assert_eq!(
+            connect_users::validate_session(&session),
+            None,
+            "logout must revoke the connect-user session server-side"
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_token_still_works_without_cookie() {
+    let _g = lock();
+    with_temp_home(|| {
+        let session = seed_user_session("qtokuser", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        // Classic CLI path: ?token= only, no Cookie, no X-K2-Client.
+        let r = http(
+            d.port,
+            "GET",
+            &format!("/cli/auth/whoami?token={session}"),
+            None,
+        );
+        assert_eq!(
+            r.status, 200,
+            "query token whoami must still 200; body={}",
+            r.body
+        );
+        assert!(
+            r.body.contains("qtokuser"),
+            "whoami body: {}",
+            r.body
+        );
+
+        // Mutating POST with query token (no cookie) must NOT require CSRF.
+        let r2 = http(
+            d.port,
+            "POST",
+            &format!("/cli/auth/logout?token={session}"),
+            Some(""),
+        );
+        assert_eq!(
+            r2.status, 200,
+            "query-token POST logout must 200 without CSRF header; body={}",
+            r2.body
+        );
+        assert_eq!(
+            connect_users::validate_session(&session),
+            None,
+            "query-token logout must still revoke the session"
+        );
     });
 }

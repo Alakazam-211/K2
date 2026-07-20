@@ -86,6 +86,243 @@ pub(crate) fn extract_bearer(headers_blob: &str) -> Option<&str> {
     None
 }
 
+// ── Hosted web client cookie auth (PRD hosted-web-client §2.3 / §9.2) ──
+//
+// Browser-safe third credential source alongside `?token=` and Bearer.
+// Preference order (first non-empty wins):
+//   1. Authorization: Bearer <token>
+//   2. ?token=<token>          (CLI / desktop — stays primary for non-browser)
+//   3. Cookie: k2_session=…    (web SPA only; never the owner daemon token)
+//
+// Cookie value is the raw connect-users session token (same store as login).
+// CSRF: when the request authenticates ONLY via cookie, mutating methods
+// under /cli/* require `X-K2-Client: web` (or `X-K2-CSRF: web`). WebSocket
+// upgrades are GET and are exempt. Secure attribute is set only when the
+// request is HTTPS / X-Forwarded-Proto: https — omitted for local HTTP
+// Caddy (http://127.0.0.1) so phase 1–2 laptop dev can set the cookie.
+
+/// Cookie name for the connect-user web session. Value is the raw session
+/// token from `connect_users::create_session` — never the owner daemon token.
+pub(crate) const SESSION_COOKIE_NAME: &str = "k2_session";
+
+/// Custom header the web SPA sends on every request (and the CSRF signal
+/// on cookie-only mutating POSTs). Value must be the literal `web`.
+pub(crate) const CLIENT_WEB_HEADER: &str = "x-k2-client";
+
+/// Alternate CSRF header name (same value contract as [`CLIENT_WEB_HEADER`]).
+pub(crate) const CSRF_WEB_HEADER: &str = "x-k2-csrf";
+
+/// Required value for the web-client / CSRF headers.
+pub(crate) const WEB_CLIENT_VALUE: &str = "web";
+
+/// Extract a single cookie value from a `Cookie:` header blob.
+/// Matches `name=value` case-sensitively on the name (cookie names are
+/// case-sensitive per RFC 6265). Returns the first match across all
+/// Cookie header lines. Value is trimmed; empty values are ignored.
+pub(crate) fn extract_cookie<'a>(headers_blob: &'a str, name: &str) -> Option<&'a str> {
+    for line in headers_blob.lines() {
+        let Some(colon) = line.find(':') else { continue };
+        let (hdr_name, rest) = line.split_at(colon);
+        if !hdr_name.eq_ignore_ascii_case("cookie") {
+            continue;
+        }
+        let value = rest[1..].trim();
+        for part in value.split(';') {
+            let part = part.trim();
+            let Some((k, v)) = part.split_once('=') else { continue };
+            if k.trim() == name {
+                let v = v.trim();
+                if !v.is_empty() {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `Cookie: k2_session=<session_token>` — the web SPA auth transport.
+pub(crate) fn extract_session_cookie(headers_blob: &str) -> Option<&str> {
+    extract_cookie(headers_blob, SESSION_COOKIE_NAME)
+}
+
+/// True when `X-K2-Client: web` or `X-K2-CSRF: web` is present (case-
+/// insensitive header name; value compared case-insensitively after trim).
+pub(crate) fn has_web_client_header(headers_blob: &str) -> bool {
+    header_value_eq(headers_blob, CLIENT_WEB_HEADER, WEB_CLIENT_VALUE)
+        || header_value_eq(headers_blob, CSRF_WEB_HEADER, WEB_CLIENT_VALUE)
+}
+
+/// Case-insensitive header-name match; value compared case-insensitively.
+fn header_value_eq(headers_blob: &str, want_name: &str, want_value: &str) -> bool {
+    for line in headers_blob.lines() {
+        let Some(colon) = line.find(':') else { continue };
+        let (name, rest) = line.split_at(colon);
+        if !name.eq_ignore_ascii_case(want_name) {
+            continue;
+        }
+        let value = rest[1..].trim();
+        if value.eq_ignore_ascii_case(want_value) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when the request arrived over HTTPS as seen by the daemon —
+/// either `X-Forwarded-Proto: https` (Caddy / Cloudflare / relay) or a
+/// direct `Forwarded: proto=https` token. The daemon itself is plain
+/// HTTP behind the proxy, so there is no TLS socket to inspect.
+///
+/// **Dev / laptop Caddy:** when this returns false (local `http://127.0.0.1`),
+/// [`session_cookie_header`] omits the `Secure` attribute so the browser
+/// will store the cookie over plain HTTP. Production `<sub>.app.k2.dev`
+/// always terminates TLS and sets the header → Secure is on.
+pub(crate) fn request_is_secure(headers_blob: &str) -> bool {
+    for line in headers_blob.lines() {
+        let Some(colon) = line.find(':') else { continue };
+        let (name, rest) = line.split_at(colon);
+        let value = rest[1..].trim();
+        if name.eq_ignore_ascii_case("x-forwarded-proto") {
+            // May be a comma-separated chain; leftmost is the client proto.
+            let first = value.split(',').next().unwrap_or(value).trim();
+            if first.eq_ignore_ascii_case("https") {
+                return true;
+            }
+        }
+        if name.eq_ignore_ascii_case("forwarded") {
+            // RFC 7239: Forwarded: for=…;proto=https;…
+            for directive in value.split(';') {
+                let d = directive.trim();
+                if let Some(proto) = d.strip_prefix("proto=") {
+                    let proto = proto.trim().trim_matches('"');
+                    if proto.eq_ignore_ascii_case("https") {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Build the `Set-Cookie` header **value** (no `Set-Cookie:` prefix) for a
+/// successful web login. `token` is the connect-user session token.
+/// `secure` should be [`request_is_secure`]; when false, `Secure` is
+/// omitted for loopback HTTP dev. Max-Age aligns with the connect-users
+/// session TTL so the cookie and server record expire together.
+pub(crate) fn session_cookie_set_value(token: &str, secure: bool, max_age_secs: i64) -> String {
+    // Token is hex from create_session — no special cookie-octet chars.
+    let mut v = format!(
+        "{SESSION_COOKIE_NAME}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age_secs}"
+    );
+    if secure {
+        v.push_str("; Secure");
+    }
+    v
+}
+
+/// Build the clear-cookie `Set-Cookie` value for logout (Max-Age=0).
+pub(crate) fn session_cookie_clear_value(secure: bool) -> String {
+    let mut v =
+        format!("{SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+    if secure {
+        v.push_str("; Secure");
+    }
+    v
+}
+
+/// Resolve the effective request credential and whether it is cookie-only.
+///
+/// Preference: Bearer → `?token=` → `k2_session` cookie. Returns
+/// `(effective_query, cookie_only)` where `effective_query` always carries
+/// `token=<winner>` when any source presented a non-empty credential so
+/// existing [`token_ok`] / [`extract_token`] call sites keep working
+/// without a signature change. `cookie_only` is true only when the
+/// winner came from the cookie and neither Bearer nor query token was
+/// present — the CSRF gate key.
+pub(crate) fn effective_auth_query(query: &str, headers_blob: &str) -> (String, bool) {
+    let bearer = extract_bearer(headers_blob).filter(|s| !s.is_empty());
+    let qtok = extract_token(query).filter(|s| !s.is_empty());
+    let cookie = extract_session_cookie(headers_blob).filter(|s| !s.is_empty());
+
+    let cookie_only = cookie.is_some() && bearer.is_none() && qtok.is_none();
+
+    let Some(winner) = bearer.or(qtok).or(cookie) else {
+        return (query.to_string(), false);
+    };
+
+    // Already the query token and nothing higher-priority → leave query alone.
+    if bearer.is_none() && qtok == Some(winner) {
+        return (query.to_string(), false);
+    }
+
+    // Inject / replace so token_ok + extract_token see the winner.
+    let rest = strip_token_params(query);
+    let effective = if rest.is_empty() {
+        format!("token={winner}")
+    } else {
+        format!("token={winner}&{rest}")
+    };
+    (effective, cookie_only)
+}
+
+/// Drop every `token=` pair from a query string, preserving other params
+/// (and their order). Used when re-injecting a higher-priority credential.
+fn strip_token_params(query: &str) -> String {
+    let mut out = String::new();
+    for pair in query.split('&') {
+        if pair.is_empty() || pair.starts_with("token=") {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('&');
+        }
+        out.push_str(pair);
+    }
+    out
+}
+
+/// CSRF gate for cookie-only credentials on mutating `/cli/*` methods.
+///
+/// Returns `Some(403 response)` when the request must be rejected, else
+/// `None` (proceed). Exempt: non-mutating methods (GET/HEAD/OPTIONS),
+/// non-`/cli/*` paths, public `/cli/auth/login` (password-authed), and any
+/// request that also presents Bearer or `?token=` (CLI/desktop path).
+pub(crate) fn cookie_csrf_gate(
+    method: &str,
+    path: &str,
+    cookie_only: bool,
+    headers_blob: &str,
+) -> Option<crate::cli_response::CliResponse> {
+    if !cookie_only {
+        return None;
+    }
+    let mutating = matches!(
+        method,
+        "POST" | "PUT" | "PATCH" | "DELETE"
+    );
+    if !mutating {
+        return None;
+    }
+    if !path.starts_with("/cli/") {
+        return None;
+    }
+    // Public login is password-authed, not session-authed — don't require
+    // CSRF for a leftover stale cookie on a fresh login form POST.
+    if path == "/cli/auth/login" {
+        return None;
+    }
+    if has_web_client_header(headers_blob) {
+        return None;
+    }
+    Some(crate::cli_response::CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: r#"{"error":"csrf_required","message":"cookie auth requires X-K2-Client: web (or X-K2-CSRF: web) on mutating requests"}"#.to_string(),
+    })
+}
+
 /// True iff the request's `?token=` is the OWNER token (the local daemon
 /// token, `state.token`). This is the STRICT gate — owner-only routes
 /// (user management + tunnel control) MUST use this, NOT [`token_ok`],
@@ -400,16 +637,37 @@ pub(crate) fn project_param(
 /// progressively filled the table and locked up the UI after ~50min
 /// of normal use. See issue #2 + `release-notes-0.39.7.md`.
 pub(crate) async fn send_response(stream: &mut TcpStream, status: &str, ct: &str, body: &str) {
+    send_response_with_cookie(stream, status, ct, body, None).await;
+}
+
+/// Like [`send_response`] but optionally emits a `Set-Cookie` header
+/// (hosted web client login/logout). `set_cookie` is the header **value**
+/// only (no `Set-Cookie:` prefix) — see [`session_cookie_set_value`] /
+/// [`session_cookie_clear_value`].
+pub(crate) async fn send_response_with_cookie(
+    stream: &mut TcpStream,
+    status: &str,
+    ct: &str,
+    body: &str,
+    set_cookie: Option<&str>,
+) {
     // CORS headers on every response so the Tauri WebView (cross-
     // origin from tauri://localhost or http://localhost:5173 to
     // http://127.0.0.1:<port>) can read the body. Token auth
     // gates every real request so permissive origin adds no risk.
+    // Note: hosted web SPA is same-origin via Caddy/edge proxy, so
+    // cookie auth does not rely on CORS credentials mode.
+    let cookie_line = match set_cookie {
+        Some(v) if !v.is_empty() => format!("Set-Cookie: {v}\r\n"),
+        _ => String::new(),
+    };
     let resp = format!(
         "HTTP/1.1 {status}\r\n\
          Content-Type: {ct}\r\n\
          Content-Length: {}\r\n\
          Access-Control-Allow-Origin: *\r\n\
-         Access-Control-Expose-Headers: *\r\n\r\n{}",
+         Access-Control-Expose-Headers: *\r\n\
+         {cookie_line}\r\n{}",
         body.len(),
         body,
     );
@@ -425,10 +683,13 @@ pub(crate) async fn send_response(stream: &mut TcpStream, status: &str, ct: &str
 /// the actual GET/POST that the preflight authorized — saves a
 /// socket per write-side operation.
 pub(crate) async fn send_cors_preflight(stream: &mut TcpStream) {
+    // X-K2-Client / X-K2-CSRF listed so a future cross-origin web SPA
+    // preflight accepts the CSRF header (same-origin hosted path does
+    // not need preflight for simple same-origin POSTs).
     let resp = "HTTP/1.1 204 No Content\r\n\
         Access-Control-Allow-Origin: *\r\n\
         Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-        Access-Control-Allow-Headers: Content-Type, Authorization\r\n\
+        Access-Control-Allow-Headers: Content-Type, Authorization, X-K2-Client, X-K2-CSRF\r\n\
         Access-Control-Max-Age: 600\r\n\
         Content-Length: 0\r\n\r\n";
     let _ = stream.write_all(resp.as_bytes()).await;
@@ -989,6 +1250,152 @@ mod tests {
         assert_eq!(extract_bearer("GET / HTTP/1.1\r\nHost: x\r\n"), None);
         // Bearer with no credential → None (don't authorize an empty token).
         assert_eq!(extract_bearer("GET / HTTP/1.1\r\nAuthorization: Bearer \r\n"), None);
+    }
+
+    // ── Hosted web cookie auth helpers (PRD §2.3 / §9.2) ────────────
+
+    #[test]
+    fn extract_session_cookie_reads_k2_session() {
+        let head = "GET /cli/auth/whoami HTTP/1.1\r\n\
+                    Host: x\r\n\
+                    Cookie: theme=dark; k2_session=sessdeadbeef; other=1\r\n\r\n";
+        assert_eq!(extract_session_cookie(head), Some("sessdeadbeef"));
+    }
+
+    #[test]
+    fn extract_session_cookie_absent_or_empty() {
+        assert_eq!(
+            extract_session_cookie("GET / HTTP/1.1\r\nCookie: theme=dark\r\n"),
+            None
+        );
+        assert_eq!(
+            extract_session_cookie("GET / HTTP/1.1\r\nCookie: k2_session=\r\n"),
+            None
+        );
+        assert_eq!(extract_session_cookie("GET / HTTP/1.1\r\nHost: x\r\n"), None);
+    }
+
+    #[test]
+    fn effective_auth_query_prefers_bearer_then_query_then_cookie() {
+        // Bearer wins over query + cookie.
+        let (q, cookie_only) = effective_auth_query(
+            "token=QVAL&foo=1",
+            "GET / HTTP/1.1\r\nAuthorization: Bearer BVAL\r\nCookie: k2_session=CVAL\r\n",
+        );
+        assert_eq!(q, "token=BVAL&foo=1");
+        assert!(!cookie_only);
+
+        // Query wins over cookie when no Bearer.
+        let (q, cookie_only) = effective_auth_query(
+            "token=QVAL",
+            "GET / HTTP/1.1\r\nCookie: k2_session=CVAL\r\n",
+        );
+        assert_eq!(q, "token=QVAL");
+        assert!(!cookie_only);
+
+        // Cookie alone → inject token= + cookie_only.
+        let (q, cookie_only) = effective_auth_query(
+            "foo=1",
+            "GET / HTTP/1.1\r\nCookie: k2_session=CVAL\r\n",
+        );
+        assert_eq!(q, "token=CVAL&foo=1");
+        assert!(cookie_only);
+
+        // Nothing → empty query, not cookie_only.
+        let (q, cookie_only) = effective_auth_query("", "GET / HTTP/1.1\r\nHost: x\r\n");
+        assert_eq!(q, "");
+        assert!(!cookie_only);
+    }
+
+    #[test]
+    fn session_cookie_set_omits_secure_on_plain_http_includes_on_https() {
+        let plain = session_cookie_set_value("tok123", false, 3600);
+        assert!(plain.contains("k2_session=tok123"));
+        assert!(plain.contains("HttpOnly"));
+        assert!(plain.contains("SameSite=Strict"));
+        assert!(plain.contains("Path=/"));
+        assert!(plain.contains("Max-Age=3600"));
+        assert!(
+            !plain.contains("Secure"),
+            "Secure must be omitted for loopback HTTP dev: {plain}"
+        );
+
+        let https = session_cookie_set_value("tok123", true, 3600);
+        assert!(
+            https.contains("Secure"),
+            "Secure required when request is HTTPS: {https}"
+        );
+    }
+
+    #[test]
+    fn request_is_secure_reads_x_forwarded_proto() {
+        assert!(request_is_secure(
+            "GET / HTTP/1.1\r\nX-Forwarded-Proto: https\r\nHost: x\r\n"
+        ));
+        assert!(request_is_secure(
+            "GET / HTTP/1.1\r\nX-Forwarded-Proto: https, http\r\n"
+        ));
+        assert!(!request_is_secure(
+            "GET / HTTP/1.1\r\nX-Forwarded-Proto: http\r\n"
+        ));
+        assert!(!request_is_secure("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n"));
+    }
+
+    #[test]
+    fn cookie_csrf_gate_blocks_cookie_only_post_without_web_header() {
+        let r = cookie_csrf_gate(
+            "POST",
+            "/cli/auth/logout",
+            true,
+            "POST /cli/auth/logout HTTP/1.1\r\nHost: x\r\n",
+        );
+        assert!(r.is_some(), "cookie-only POST without CSRF header → 403");
+        assert_eq!(r.unwrap().status, "403 Forbidden");
+
+        // With X-K2-Client: web → allow.
+        assert!(cookie_csrf_gate(
+            "POST",
+            "/cli/auth/logout",
+            true,
+            "POST /cli/auth/logout HTTP/1.1\r\nX-K2-Client: web\r\n",
+        )
+        .is_none());
+
+        // X-K2-CSRF alternate also works.
+        assert!(cookie_csrf_gate(
+            "POST",
+            "/cli/auth/logout",
+            true,
+            "POST /cli/auth/logout HTTP/1.1\r\nX-K2-CSRF: web\r\n",
+        )
+        .is_none());
+
+        // GET (WS upgrade path) never CSRF-gated.
+        assert!(cookie_csrf_gate(
+            "GET",
+            "/cli/sessions/events",
+            true,
+            "GET /cli/sessions/events HTTP/1.1\r\n",
+        )
+        .is_none());
+
+        // Query-token auth (cookie_only=false) never CSRF-gated.
+        assert!(cookie_csrf_gate(
+            "POST",
+            "/cli/auth/logout",
+            false,
+            "POST /cli/auth/logout HTTP/1.1\r\n",
+        )
+        .is_none());
+
+        // Public login exempt even if cookie_only.
+        assert!(cookie_csrf_gate(
+            "POST",
+            "/cli/auth/login",
+            true,
+            "POST /cli/auth/login HTTP/1.1\r\n",
+        )
+        .is_none());
     }
 
     #[test]

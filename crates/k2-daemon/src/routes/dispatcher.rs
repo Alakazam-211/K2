@@ -241,6 +241,11 @@ async fn handle_one_request(
     // unchanged. Cheap, side-effect-free parse → no behavior change.
     let bearer_token = super::http::extract_bearer(&req).map(str::to_string);
 
+    // Hosted web cookie auth (PRD §2.3): Secure flag decision + web-client
+    // header detection must run while the request head is still borrowed.
+    let request_secure = super::http::request_is_secure(&req);
+    let web_client_header = super::http::has_web_client_header(&req);
+
     let first_line = req.lines().next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
     let (method, path_and_query) = match parts.as_slice() {
@@ -831,9 +836,19 @@ async fn handle_one_request(
         None => (path_and_query, ""),
     };
     // Copy out of the lossy Cow so we can consume the read buffer below
-    // without extending the immutable borrow.
+    // without extending the immutable borrow. Method must be owned too —
+    // the CSRF gate below needs it after `req` is dropped.
     let path = path.to_string();
-    let query = query.to_string();
+    let method = method.to_string();
+    // Hosted web cookie auth (§2.3 / §9.2): fold Bearer / query / cookie
+    // into a single effective `token=` query so every existing
+    // `token_ok` / `extract_token` call site accepts the cookie without
+    // a signature change. Preference: Bearer > ?token= > k2_session cookie.
+    // `cookie_only` drives the CSRF gate below.
+    let (query, cookie_only) = super::http::effective_auth_query(query, &req);
+    // Own the header blob for the CSRF gate (needs header re-check after
+    // path is known) and for login web-mode detection.
+    let headers_blob = req.to_string();
     drop(req);
 
     // 0.39.5 readiness gate. While the daemon is still completing
@@ -855,6 +870,18 @@ async fn handle_one_request(
             r#"{"state":"migrating","error":"daemon is completing first-boot migrations"}"#,
         )
         .await;
+        return DispatchOutcome::Done;
+    }
+
+    // Hosted web CSRF: cookie-only credential on mutating /cli/* requires
+    // X-K2-Client: web (or X-K2-CSRF: web). WebSocket upgrades are GET and
+    // skip this gate. Query-token / Bearer callers (CLI, desktop) are
+    // unaffected. See `super::http::cookie_csrf_gate`.
+    if let Some(r) =
+        super::http::cookie_csrf_gate(&method, &path, cookie_only, &headers_blob)
+    {
+        let _ = stream.read(&mut buf).await;
+        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         return DispatchOutcome::Done;
     }
 
@@ -2269,9 +2296,24 @@ async fn handle_one_request(
         // token over the tunnel. On failure it returns a generic 401 and
         // we add a fixed delay (below) to blunt online brute force.
         // POST-gated so a stray GET can't probe credentials.
+        //
+        // Hosted web path (PRD §2.3): when the client signals web mode
+        // (`X-K2-Client: web` header OR body `"web": true`), a successful
+        // login ALSO sets `Set-Cookie: k2_session=<session_token>; HttpOnly;
+        // SameSite=Strict; Path=/; Max-Age=<session TTL>` (+ `Secure` when
+        // the request is HTTPS / X-Forwarded-Proto: https). Cookie value is
+        // the same connect-users session token returned in the JSON body —
+        // NEVER the owner daemon token.
         "/cli/auth/login" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // Peek the optional body `web: true` flag before the body is
+            // moved into spawn_blocking (header already captured above).
+            let web_from_body = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+                .ok()
+                .and_then(|v| v.get("web").and_then(|w| w.as_bool()))
+                .unwrap_or(false);
+            let web_mode = web_client_header || web_from_body;
             // argon2 verify is slow + happens regardless of outcome
             // (anti-enumeration) — spawn_blocking off the accept loop.
             let r = tokio::task::spawn_blocking(move || {
@@ -2286,7 +2328,36 @@ async fn handle_one_request(
             if r.status.starts_with("401") {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
-            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+            // Set-Cookie on successful web login. Token is the same
+            // connect-users session token already in the JSON body.
+            let set_cookie = if web_mode && r.status.starts_with("200") {
+                serde_json::from_str::<serde_json::Value>(&r.body)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("token")
+                            .and_then(|t| t.as_str())
+                            .filter(|t| !t.is_empty())
+                            .map(|t| {
+                                let max_age = k2_core::connect_users::session_ttl_days()
+                                    .saturating_mul(86_400);
+                                super::http::session_cookie_set_value(
+                                    t,
+                                    request_secure,
+                                    max_age,
+                                )
+                            })
+                    })
+            } else {
+                None
+            };
+            super::http::send_response_with_cookie(
+                &mut *stream,
+                r.status,
+                r.content_type,
+                &r.body,
+                set_cookie.as_deref(),
+            )
+            .await;
         }
         // GET /cli/presence/roster — S1 (presence/multiplayer arc).
         // AUTHORIZED (owner OR connect-user session) — same gate as
@@ -2422,9 +2493,13 @@ async fn handle_one_request(
         }
         // POST /cli/auth/logout — K2 Connect #4. Deletes the CALLER's own
         // persisted session record (per-device logout). Authorized by the
-        // caller's own session token in `?token=`; the OWNER token has no
-        // session so it's a harmless idempotent no-op. POST-gated (mutating
-        // /cli/* route → the `if !is_post { 405 }` guard, per the contract).
+        // caller's own session token in `?token=` / Bearer / k2_session
+        // cookie (effective_auth_query folded them into `query`); the OWNER
+        // token has no session so it's a harmless idempotent no-op.
+        // POST-gated (mutating /cli/* route → the `if !is_post { 405 }`
+        // guard, per the contract). Hosted web: always clears the
+        // k2_session cookie (Max-Age=0) so the browser drops it even when
+        // the session was already expired server-side.
         "/cli/auth/logout" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
             // Drain the (ignored) body so a half-read socket isn't left.
@@ -2435,7 +2510,15 @@ async fn handle_one_request(
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
-            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+            let clear = super::http::session_cookie_clear_value(request_secure);
+            super::http::send_response_with_cookie(
+                &mut *stream,
+                r.status,
+                r.content_type,
+                &r.body,
+                Some(&clear),
+            )
+            .await;
         }
         // POST /cli/claude-auth/refresh-now — Phase 2 Unit 5.
         // No body required (the refresh token comes from the local

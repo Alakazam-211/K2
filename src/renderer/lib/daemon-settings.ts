@@ -23,10 +23,11 @@
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { AppSettingsResponse } from '@shared/types'
+import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 
 async function daemonUrl(path: string): Promise<string> {
   const creds = await getDaemonWs()
-  return `${daemonHttpBase(creds)}${path}?token=${creds.token}`
+  return withCliTokenQuery(`${daemonHttpBase(creds)}${path}`, creds.token)
 }
 
 /** GET `/cli/settings/get` — full settings snapshot.
@@ -43,7 +44,7 @@ async function daemonUrl(path: string): Promise<string> {
 export async function settingsGet(): Promise<AppSettingsResponse> {
   return withConnRetry(async () => {
     const url = await daemonUrl('/cli/settings/get')
-    const res = await fetch(url, { method: 'GET' })
+    const res = await fetch(url, withDaemonFetch({ method: 'GET' }))
     if (!res.ok) {
       const body = await res.text().catch(() => '')
       throw new Error(`settings_get ${res.status}: ${body}`)
@@ -61,11 +62,14 @@ export async function settingsUpdate(
 ): Promise<AppSettingsResponse> {
   return withConnRetry(async () => {
     const url = await daemonUrl('/cli/settings/update')
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    })
+    const res = await fetch(
+      url,
+      withDaemonFetch({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      }),
+    )
     if (!res.ok) {
       const body = await res.text().catch(() => '')
       throw new Error(`settings_update ${res.status}: ${body}`)
@@ -79,11 +83,14 @@ export async function settingsUpdate(
 export async function settingsReset(): Promise<AppSettingsResponse> {
   return withConnRetry(async () => {
     const url = await daemonUrl('/cli/settings/reset')
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    })
+    const res = await fetch(
+      url,
+      withDaemonFetch({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      }),
+    )
     if (!res.ok) {
       const body = await res.text().catch(() => '')
       throw new Error(`settings_reset ${res.status}: ${body}`)

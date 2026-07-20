@@ -10,6 +10,7 @@ import { resolveAgentCommand, type AgentPresetLike } from '@/lib/agent-resolve'
 import { useSettingsStore } from '@/stores/settings'
 import { useTerminalSettingsStore, type TerminalRenderer } from '@/stores/terminal-settings'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
+import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 // Phase 2.5 fix (finding #547) — retry the workspace-layouts load
 // when the daemon comes online after a slow boot.
@@ -461,9 +462,13 @@ async function liveSubscriberCountForProject(projectId: string): Promise<number>
 async function closeV2Session(agentName: string): Promise<void> {
   try {
     const creds = await getDaemonWs()
+    const url = withCliTokenQuery(
+      `${daemonHttpBase(creds)}/cli/sessions/v2/close`,
+      creds.token,
+    )
     const res = await fetch(
-      `${daemonHttpBase(creds)}/cli/sessions/v2/close?token=${creds.token}`,
-      {
+      url,
+      withDaemonFetch({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // force: deliberate user tab-close — bypass the daemon's attached-
@@ -471,7 +476,7 @@ async function closeV2Session(agentName: string): Promise<void> {
         // IS the attached client; the guard only exists to stop the daemon
         // reaper, which never routes through here.
         body: JSON.stringify({ agent_name: agentName, force: true }),
-      },
+      }),
     )
     if (!res.ok) {
       const body = await res.text()

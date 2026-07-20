@@ -18,6 +18,7 @@
 // without parsing HTTP status codes themselves.
 
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
+import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 
 export interface LlmStatus {
   loaded: boolean
@@ -45,10 +46,11 @@ export interface ChatResponse {
 
 async function daemonGet(pathSuffix: string): Promise<Response> {
   const creds = await getDaemonWs()
-  return fetch(
-    `${daemonHttpBase(creds)}/cli/llm/${pathSuffix}?token=${creds.token}`,
-    { method: 'GET' },
+  const url = withCliTokenQuery(
+    `${daemonHttpBase(creds)}/cli/llm/${pathSuffix}`,
+    creds.token,
   )
+  return fetch(url, withDaemonFetch({ method: 'GET' }))
 }
 
 async function daemonPostJson(
@@ -56,13 +58,17 @@ async function daemonPostJson(
   body: unknown,
 ): Promise<Response> {
   const creds = await getDaemonWs()
+  const url = withCliTokenQuery(
+    `${daemonHttpBase(creds)}/cli/llm/${pathSuffix}`,
+    creds.token,
+  )
   return fetch(
-    `${daemonHttpBase(creds)}/cli/llm/${pathSuffix}?token=${creds.token}`,
-    {
+    url,
+    withDaemonFetch({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    },
+    }),
   )
 }
 

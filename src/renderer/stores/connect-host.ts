@@ -38,7 +38,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import { isWebClient } from '@/lib/is-web'
-import { persistWebSessionToken } from '@/web/session-token'
+import {
+  logoutWebSession,
+  persistWebSessionToken,
+  withDaemonFetch,
+} from '@/web/session-token'
 
 /**
  * Keychain service name for remembered remote-host tokens. Each token is
@@ -560,6 +564,11 @@ interface LoginResponse {
  * rememberToken so daemon-ws.ts / a fresh boot can reuse it. A 401 (or
  * any non-2xx) surfaces a friendly reason WITHOUT mutating state.
  *
+ * Hosted web (`VITE_WEB`): also sends `web: true` + `X-K2-Client: web` +
+ * `credentials: 'include'` so the daemon sets the HttpOnly `k2_session`
+ * cookie (PRD §2.3). The JSON `token` is still stored in memory for
+ * pragmatic WebSocket query auth.
+ *
  * The PASSWORD is NOT persisted here — the caller (Add-server /
  * RemoteSignIn) decides whether to rememberPassword based on the
  * "remember" toggle. This helper only deals in the session token.
@@ -585,15 +594,23 @@ export async function loginToHost(
   // rides out the restart window; only surface an error if every attempt fails
   // (then it's likely a real connectivity/server problem). The per-attempt
   // AbortSignal.timeout stays inside the op so each attempt is freshly bounded.
+  const web = isWebClient()
+  // Daemon sets Set-Cookie: k2_session=… when web:true OR X-K2-Client: web.
+  const loginBody: Record<string, unknown> = web
+    ? { username, password, web: true }
+    : { username, password }
   let resp: Response | undefined
   try {
     resp = await withRemoteRetry(() =>
-      fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-        signal: AbortSignal.timeout(timeoutMs),
-      }),
+      fetch(
+        url,
+        withDaemonFetch({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(loginBody),
+          signal: AbortSignal.timeout(timeoutMs),
+        }),
+      ),
     )
   } catch {
     /* every attempt threw a connection-level error — handled below */
@@ -695,8 +712,13 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     const cleared = hosts.map((h) => (h.id === hostId ? { ...h, token: '' } : h))
     const clearedActive: ActiveHost = { ...activeHost, token: '' }
     void forgetToken(hostId)
-    // Web: also drop the tab-session bearer so reload re-prompts login.
-    persistWebSessionToken('')
+    // Web: revoke server-side session + clear k2_session cookie, and drop
+    // the tab-session bearer so reload re-prompts login.
+    if (isWebClient()) {
+      void logoutWebSession(hostBaseUrl(activeHost))
+    } else {
+      persistWebSessionToken('')
+    }
     // Reflect the dropped token in the host list, raise the sign-in
     // overlay, and flip `activeHost` to the tokenless host — all
     // synchronously. Host-aware `daemonCli*` calls read `activeHost.token`
@@ -836,8 +858,9 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
         ? { ...activeHost, token }
         : activeHost
     set({ hosts: hosts2, activeHost: active2 })
-    // Web: mirror the bearer into sessionStorage so a reload restores it
-    // (token auth; cookie transport is Phase 2).
+    // Web: mirror the bearer into sessionStorage so a reload can still
+    // open WebSockets with ?token= (pragmatic; HTTP uses the k2_session
+    // cookie). Cookie is set by login's Set-Cookie — not writable from JS.
     if (
       isWebClient() &&
       activeHost !== 'local' &&

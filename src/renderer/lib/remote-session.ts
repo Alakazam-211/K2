@@ -38,6 +38,7 @@ import {
 } from '@/stores/connect-host'
 import { invalidateDaemonWs } from '@/kessel/daemon-ws'
 import { deriveRecovery, authSignalFromRevive, type RemoteRecoveryState } from '@/lib/remote-recovery'
+import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import { jittered } from '@/lib/backoff'
 
 /**
@@ -108,15 +109,23 @@ function hostBase(host: Pick<ConnectHost, 'hostname' | 'port' | 'secure'>): stri
   return `${scheme}://${authority}`
 }
 
-/** Probe a SPECIFIC host's session via `GET /cli/auth/whoami?token=…`.
+/** Probe a SPECIFIC host's session via `GET /cli/auth/whoami` (desktop
+ *  appends `?token=`; hosted web uses the k2_session cookie).
  *  Same verdict rule as ConnectionGate's first-connect probe: 401/403 is an
  *  authoritative 'dead'; 2xx 'alive'; anything else (timeout, 5xx) is a
  *  blip — 'unknown', never grounds to drop a token. */
 async function probeSession(host: ConnectHost): Promise<'alive' | 'dead' | 'unknown'> {
   try {
+    const url = withCliTokenQuery(
+      `${hostBase(host)}/cli/auth/whoami`,
+      host.token,
+    )
     const res = await fetch(
-      `${hostBase(host)}/cli/auth/whoami?token=${encodeURIComponent(host.token)}`,
-      { method: 'GET', signal: AbortSignal.timeout(WHOAMI_TIMEOUT_MS) },
+      url,
+      withDaemonFetch({
+        method: 'GET',
+        signal: AbortSignal.timeout(WHOAMI_TIMEOUT_MS),
+      }),
     )
     if (res.status === 401 || res.status === 403) return 'dead'
     if (res.ok) return 'alive'

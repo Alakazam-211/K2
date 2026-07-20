@@ -101,10 +101,11 @@ export function getDaemonWs(): Promise<DaemonWsAvailable> {
     // invoke, no shared cache (a switch back to local must not return
     // stale remote creds and vice-versa).
     //
-    // step #3 (token): the remote host's OWN token rides on every
-    // request — call sites read `creds.token` (this value), so a remote
-    // never reuses the local daemon's token. The tunnel terminates TLS
-    // at Caddy, so the `?token=` query param is encrypted on the wire.
+    // step #3 (token): the remote host's OWN token. Desktop call sites
+    // put it on `?token=`; hosted web HTTP omits the query credential
+    // (cookie + X-K2-Client) and keeps the token in memory for
+    // pragmatic WebSocket query auth. Never reuses the local daemon's
+    // token. Tunnel TLS at Caddy encrypts any remaining query token.
     return Promise.resolve({
       port: active.port,
       token: active.token,

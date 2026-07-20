@@ -18,6 +18,7 @@ import { getDaemonWs, getLocalDaemonWs, invalidateDaemonWs, daemonHttpBase, type
 import { useConnectHostStore } from '@/stores/connect-host'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
+import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
 
 /** A response plus its (already-consumed) body text. The body is read
  *  exactly once, up front, because BOTH the auth-failure classifier and the
@@ -99,7 +100,9 @@ async function cliFetch(
     const attempt = async (): Promise<CliHttpResult> => {
       const creds = await getDaemonWs()
       const { url, init } = build(creds)
-      const res = await fetch(url, init)
+      // Hosted web: credentials:include (send/store k2_session) + X-K2-Client.
+      // Desktop: withDaemonFetch is a no-op — init is unchanged.
+      const res = await fetch(url, withDaemonFetch(init ?? {}))
       return { res, text: await res.text() }
     }
     let out = await attempt()
@@ -119,9 +122,13 @@ async function cliFetch(
 }
 
 /**
- * GET /cli/<route>?<params>&token=<token>.
+ * GET /cli/<route>?<params>[&token=<token>].
  * `route` should be the part AFTER `/cli/`, e.g. `fs/read-dir`.
  * Returns the parsed JSON body. Throws on non-2xx.
+ *
+ * Desktop always appends `?token=`. Hosted web (`VITE_WEB`) omits the
+ * query token and authenticates via the `k2_session` cookie
+ * (`credentials: 'include'` + `X-K2-Client: web` from `withDaemonFetch`).
  *
  * Phase 2.5 fix (finding #547): on a network-level failure
  * (`fetch` throws — ECONNREFUSED, ENOTFOUND, …) we invalidate the
@@ -142,22 +149,17 @@ export async function daemonCliGet<T = unknown>(
   return parseDaemonResponse<T>(res, text)
 }
 
-/** Build `GET /cli/<route>?<params>&token=` for resolved creds — shared by
- *  daemonCliGet/daemonCliGetText so both rebuild the URL with FRESH creds on
- *  the post-revival replay. */
+/** Build `GET/POST /cli/<route>?<params>[&token=]` for resolved creds —
+ *  shared by daemonCliGet/Post/GetText so all rebuild the URL with FRESH
+ *  creds on the post-revival replay. Hosted web omits `token`. */
 function getUrl(
   creds: DaemonWsAvailable,
   route: string,
   params?: Record<string, string | number | boolean | undefined | null>,
 ): string {
-  const search = new URLSearchParams()
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) search.set(k, String(v))
-    }
-  }
-  search.set('token', creds.token)
-  return `${daemonHttpBase(creds)}/cli/${route}?${search.toString()}`
+  const search = cliSearchParams(creds.token, params)
+  const q = search.toString()
+  return `${daemonHttpBase(creds)}/cli/${route}${q ? `?${q}` : ''}`
 }
 
 /**
@@ -184,9 +186,12 @@ export async function daemonCliGetText(
 }
 
 /**
- * POST /cli/<route>?token=<token> with `body` JSON-encoded. `body`
+ * POST /cli/<route>[?token=<token>] with `body` JSON-encoded. `body`
  * fields go in the body, NOT the query string — passwords and large
  * payloads (file contents) belong out of URL-logging path.
+ *
+ * Desktop: `?token=` as always. Hosted web: cookie auth (no query token)
+ * + CSRF header via `withDaemonFetch`.
  *
  * Same connection-retry semantics as `daemonCliGet`.
  */
@@ -195,7 +200,7 @@ export async function daemonCliPost<T = unknown>(
   body?: unknown,
 ): Promise<T> {
   const { res, text } = await cliFetch((creds) => ({
-    url: `${daemonHttpBase(creds)}/cli/${route}?token=${creds.token}`,
+    url: getUrl(creds, route),
     init: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -219,6 +224,9 @@ export async function localDaemonCliPost<T = unknown>(
   route: string,
   body?: unknown,
 ): Promise<T> {
+  // Always the LOCAL loopback daemon (desktop clone-to pull). Keep the
+  // classic `?token=` path — this is never the hosted-web same-origin
+  // surface (web never activates the local Tauri daemon).
   const { res, text } = await withConnRetry(async () => {
     const creds = await getLocalDaemonWs()
     const res = await fetch(`${daemonHttpBase(creds)}/cli/${route}?token=${creds.token}`, {

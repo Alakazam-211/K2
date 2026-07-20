@@ -506,6 +506,9 @@ export function subscribeToWorkspaceSessionEvents(
 
     if (stopped) return
 
+    // Pragmatic WS auth: in-memory session token on the query (desktop +
+    // web). Hosted-web HTTP uses cookie-only; browsers also send the
+    // k2_session cookie on same-origin WS upgrades as a second factor.
     const url = `${daemonWsBase(creds)}/cli/sessions/events?path=${encodeURIComponent(projectPath)}&token=${encodeURIComponent(creds.token)}`
     let ws: WebSocket
     try {

@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from 'react'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
+import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import { serverSupports } from '@/lib/server-capabilities'
 import {
   onAppHello,
@@ -40,8 +41,8 @@ export interface SubdomainsMap {
 async function fetchTunnelStatus(): Promise<TunnelStatus> {
   const creds = await getDaemonWs()
   const res = await fetch(
-    `${daemonHttpBase(creds)}/cli/tunnel/status?token=${creds.token}`,
-    { method: 'GET' },
+    withCliTokenQuery(`${daemonHttpBase(creds)}/cli/tunnel/status`, creds.token),
+    withDaemonFetch({ method: 'GET' }),
   )
   if (!res.ok) throw new Error(`tunnel status ${res.status}`)
   return (await res.json()) as TunnelStatus
@@ -50,8 +51,8 @@ async function fetchTunnelStatus(): Promise<TunnelStatus> {
 async function fetchSubdomains(): Promise<SubdomainsMap> {
   const creds = await getDaemonWs()
   const res = await fetch(
-    `${daemonHttpBase(creds)}/cli/tunnel/subdomains?token=${creds.token}`,
-    { method: 'GET' },
+    withCliTokenQuery(`${daemonHttpBase(creds)}/cli/tunnel/subdomains`, creds.token),
+    withDaemonFetch({ method: 'GET' }),
   )
   // 404 = an older daemon without the route — surfaced as `null` state
   // ("unavailable"), distinct from an EMPTY map.

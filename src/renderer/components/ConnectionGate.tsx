@@ -45,6 +45,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore, activeHostKey, type ConnectHost } from '@/stores/connect-host'
 import { reviveRemoteSession } from '@/lib/remote-session'
+import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import {
   deriveRecovery,
   recoveryPollMs,
@@ -462,9 +463,18 @@ export function classifyWhoamiStatus(httpStatus: number | null): SessionProbe {
 async function probeRemoteSession(): Promise<SessionProbe> {
   try {
     const creds = await getDaemonWs()
+    // Desktop: ?token=. Hosted web: cookie (credentials include) — omit query
+    // credential so it never lands in URL logs; X-K2-Client still sent.
+    const url = withCliTokenQuery(
+      `${daemonHttpBase(creds)}/cli/auth/whoami`,
+      creds.token,
+    )
     const resp = await fetch(
-      `${daemonHttpBase(creds)}/cli/auth/whoami?token=${creds.token}`,
-      { method: 'GET', signal: AbortSignal.timeout(REMOTE_WHOAMI_TIMEOUT_MS) },
+      url,
+      withDaemonFetch({
+        method: 'GET',
+        signal: AbortSignal.timeout(REMOTE_WHOAMI_TIMEOUT_MS),
+      }),
     )
     return classifyWhoamiStatus(resp.status)
   } catch {

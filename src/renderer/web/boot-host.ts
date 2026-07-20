@@ -6,7 +6,9 @@
  * never be `'local'`. Seed the connect-host store from `window.location`
  * (+ any session/local token) before ConnectionGate polls /boot-status.
  *
- * Token auth only for Stage B (cookie auth is Phase 2).
+ * Phase 2b: HTTP uses cookie auth (`k2_session` + X-K2-Client); the
+ * optional sessionStorage token is kept for pragmatic WS `?token=` and
+ * boot restore.
  */
 
 import {

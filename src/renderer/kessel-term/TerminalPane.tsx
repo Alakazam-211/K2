@@ -52,6 +52,7 @@ import {
 } from './frameCoalescer'
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, daemonWsBase, type DaemonWsAvailable } from '../kessel/daemon-ws'
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
+import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useStyleStore } from '@/stores/style'
 import { useSettingsStore } from '@/stores/settings'
@@ -1273,13 +1274,17 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           }
           perfLog('spawn_fetch_start', { attempt: String(attempt) })
           const __t_spawn_fetch = performance.now()
+          // Desktop: ?token=. Hosted web: cookie + X-K2-Client (no query token).
           const spawnRes = await fetch(
-            `${daemonHttpBase(creds)}/cli/sessions/v2/spawn?token=${creds.token}`,
-            {
+            withCliTokenQuery(
+              `${daemonHttpBase(creds)}/cli/sessions/v2/spawn`,
+              creds.token,
+            ),
+            withDaemonFetch({
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(spawnBody),
-            },
+            }),
           )
           if (spawnRes.status >= 500) {
             // Daemon answered but failed — likely mid-init right
@@ -1504,6 +1509,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // `proto=k1` opts into the binary grid wire (gridWire.ts).
         // An older daemon ignores the param and keeps sending JSON
         // text frames — both message paths below stay live.
+        // WS: keep in-memory ?token= for both desktop and web (pragmatic —
+        // login response token; cookie also rides same-origin upgrade).
+        // HTTP data plane on web never puts the credential in the URL.
         const candidate = new WebSocket(
           `${daemonWsBase(creds)}/cli/sessions/grid?session=${sessionId}&token=${creds.token}&proto=k1`,
         )

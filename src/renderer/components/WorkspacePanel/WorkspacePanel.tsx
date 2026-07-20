@@ -84,7 +84,8 @@ export default function WorkspacePanel(): React.JSX.Element {
     const load = async (): Promise<void> => {
       try {
         const result = await invoke<K2soAgentInfo[]>('k2so_agents_list', { projectPath: activeProjectPath })
-        if (!cancelled) setAgents(result)
+        // Web shim may soft-resolve null; never store a non-array.
+        if (!cancelled) setAgents(Array.isArray(result) ? result : [])
       } catch { if (!cancelled) setAgents([]) }
       // Phase 2.1c Item 2 — workspace inbox primitive count endpoint
       // (replaces the legacy `k2so_agents_workspace_inbox_list` whose

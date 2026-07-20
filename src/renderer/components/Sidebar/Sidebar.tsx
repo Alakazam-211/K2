@@ -198,7 +198,7 @@ function SingleProjectItem({
 
   // Worktrees visible in the nav for this project (DB-backed via navVisible field)
   const visibleWorktrees = useMemo(() =>
-    project.workspaces.filter((ws) => ws.type === 'worktree' && ws.navVisible === 1),
+    (project.workspaces ?? []).filter((ws) => ws.type === 'worktree' && ws.navVisible === 1),
     [project.workspaces]
   )
 
@@ -386,7 +386,7 @@ function ProjectItem({
       e.preventDefault()
       e.stopPropagation()
 
-      const ws = project.workspaces.find((w) => w.id === workspaceId)
+      const ws = (project.workspaces ?? []).find((w) => w.id === workspaceId)
       if (!ws) return
 
       const sections = project.sections || []
@@ -396,7 +396,8 @@ function ProjectItem({
       // Fetch installed editors for the submenu
       let editors: Array<{ id: string; label: string }> = []
       try {
-        editors = await invoke<Array<{ id: string; label: string }>>('projects_get_editors')
+        const raw = await invoke<Array<{ id: string; label: string }>>('projects_get_editors')
+        editors = Array.isArray(raw) ? raw : []
       } catch {
         // ignore
       }
@@ -448,7 +449,7 @@ function ProjectItem({
         await assignWorkspaceToSection(workspaceId, sectionId)
       } else if (clickedId === 'ws-close') {
         // Prevent closing the last worktree
-        if (project.workspaces.length <= 1) {
+        if ((project.workspaces ?? []).length <= 1) {
           await showContextMenu([
             { id: 'error', label: 'Cannot close the last worktree' }
           ])
@@ -460,7 +461,7 @@ function ProjectItem({
         await fetchProjects()
       } else if (clickedId === 'ws-recycle') {
         // Prevent recycling the last worktree
-        if (project.workspaces.length <= 1) {
+        if ((project.workspaces ?? []).length <= 1) {
           await showContextMenu([
             { id: 'error', label: 'Cannot recycle the last worktree' }
           ])
@@ -491,7 +492,7 @@ function ProjectItem({
   )
 
   // Split worktrees into ungrouped and grouped by section
-  const ungroupedWorkspaces = project.workspaces.filter((ws) => !ws.sectionId)
+  const ungroupedWorkspaces = (project.workspaces ?? []).filter((ws) => !ws.sectionId)
   const sections = project.sections || []
 
   // Only poll git info for the active project to avoid hammering git on all repos
@@ -525,7 +526,7 @@ function ProjectItem({
           <div className="flex items-center gap-2 w-full">
             <span className="truncate">{project.name}</span>
             <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0 px-1.5 py-0.5 bg-white/[0.06] font-mono">
-              {project.workspaces.length}
+              {(project.workspaces ?? []).length}
             </span>
           </div>
           {gitInfo?.isRepo && gitInfo.currentBranch && (
@@ -583,7 +584,7 @@ function ProjectItem({
 
           {/* Sections with their worktrees */}
           {sections.map((section) => {
-            const sectionWorkspaces = project.workspaces.filter(
+            const sectionWorkspaces = (project.workspaces ?? []).filter(
               (ws) => ws.sectionId === section.id
             )
 
@@ -848,7 +849,8 @@ export default function Sidebar(): React.JSX.Element {
       // Fetch installed editors for the submenu
       let editors: Array<{ id: string; label: string }> = []
       try {
-        editors = await invoke<Array<{ id: string; label: string }>>('projects_get_editors')
+        const raw = await invoke<Array<{ id: string; label: string }>>('projects_get_editors')
+        editors = Array.isArray(raw) ? raw : []
       } catch {
         // ignore
       }

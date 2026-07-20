@@ -133,14 +133,14 @@ export default function SectionItem({
         </svg>
         <span className="truncate flex-1">{section.name}</span>
         <span className="text-[9px] tabular-nums opacity-60 flex-shrink-0">
-          {workspaces.length}
+          {(workspaces ?? []).length}
         </span>
       </button>
 
       {/* Child worktrees */}
       {!isCollapsed && (
         <div className="ml-1">
-          {workspaces.map((workspace) => {
+          {(workspaces ?? []).map((workspace) => {
             const workspacePath = workspace.worktreePath ?? projectPath
             const isWorktree = workspace.type === 'worktree'
 
@@ -204,7 +204,7 @@ export default function SectionItem({
             )
           })}
 
-          {workspaces.length === 0 && (
+          {(workspaces ?? []).length === 0 && (
             <div className="px-4 py-1.5 text-[10px] text-[var(--color-text-muted)] opacity-50 italic">
               No worktrees
             </div>

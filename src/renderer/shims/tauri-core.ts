@@ -69,7 +69,11 @@ function storageSetConnectHosts(json: string): void {
   }
 }
 
-/** Soft defaults for boot-path / parity-style invokes that must not throw. */
+/**
+ * Soft defaults for invokes that must not throw. Prefer empty arrays /
+ * zeros over `null` so call sites that do `result.length` after
+ * `setState(await invoke(...))` do not crash the SPA (AppErrorBoundary).
+ */
 function defaultFor(cmd: string): unknown {
   switch (cmd) {
     case 'plugin:app|name':
@@ -98,7 +102,42 @@ function defaultFor(cmd: string): unknown {
       // non-web-aware hydrate path (if re-enabled) sees the SPA book.
       // Dual-read: k2.connect-hosts.v1 → legacy k2so.connect-hosts.v1.
       return storageGetConnectHosts() ?? '[]'
+    // ── list-shaped desktop commands → empty array ─────────────────
+    case 'projects_get_editors':
+    case 'projects_get_all_editors':
+    case 'k2so_agents_list':
+    case 'k2so_agents_preview_schedule':
+    case 'k2so_agents_teardown_workspace':
+    case 'k2so_heartbeat_list_all':
+    case 'k2so_heartbeat_fires_list_all':
+    case 'fs_search_tree':
+    case 'fs_list_dir':
+    case 'fs_list':
+      return []
+    // ── count-shaped ───────────────────────────────────────────────
+    case 'k2so_inbox_count':
+    case 'renderer_memory_status':
+      return 0
+    // ── object-shaped ──────────────────────────────────────────────
+    case 'k2so_agents_get_editor_context':
+    case 'k2so_agents_build_launch':
+    case 'permissions_get_status':
+      return {}
+    case 'fs_watch_dir':
+    case 'fs_unwatch_dir':
+    case 'k2so_agents_update_heartbeat_projects':
+    case 'k2so_agents_install_heartbeat':
+      return undefined
     default:
+      // Prefer [] over null when the command name looks list-like.
+      if (
+        cmd.includes('_list') ||
+        cmd.endsWith('_list') ||
+        cmd.includes('get_editors') ||
+        cmd.includes('search')
+      ) {
+        return []
+      }
       return null
   }
 }

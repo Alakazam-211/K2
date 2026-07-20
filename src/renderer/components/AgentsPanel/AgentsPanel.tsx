@@ -42,7 +42,8 @@ export default function AgentsPanel(): React.JSX.Element {
       const result = await invoke<K2soAgentInfo[]>('k2so_agents_list', {
         projectPath: activeProject.path,
       })
-      setAgents(result)
+      // Web shim may soft-resolve null; never store a non-array (renders crash on .length).
+      setAgents(Array.isArray(result) ? result : [])
     } catch {
       setAgents([])
     } finally {

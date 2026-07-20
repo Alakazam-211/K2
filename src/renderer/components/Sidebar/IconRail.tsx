@@ -205,7 +205,8 @@ export default function IconRail(): React.JSX.Element {
       // Fetch installed editors
       let editors: Array<{ id: string; label: string }> = []
       try {
-        editors = await invoke<Array<{ id: string; label: string }>>('projects_get_editors')
+        const raw = await invoke<Array<{ id: string; label: string }>>('projects_get_editors')
+        editors = Array.isArray(raw) ? raw : []
       } catch {
         // ignore
       }

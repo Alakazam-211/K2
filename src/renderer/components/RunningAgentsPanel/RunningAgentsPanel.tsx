@@ -119,7 +119,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
             }
           }
         }
-        setAgents(result)
+        setAgents(Array.isArray(result) ? result : [])
       } catch {
         setAgents([])
       }

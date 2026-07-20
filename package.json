@@ -13,6 +13,7 @@
     "vite:build:web": "vite build --config vite.config.web.ts",
     "web:serve": "bash scripts/web-serve.sh",
     "web:build": "bun run vite:build:web",
+    "web:publish": "bash scripts/publish-web-bundles.sh",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "bun run typecheck:web",
     "styles:build": "node scripts/build-styles.mjs",

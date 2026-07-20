@@ -1,6 +1,7 @@
 #!/bin/bash
 # K2 Release Script
 # Builds, signs, notarizes, and releases K2 with both DMG and update bundle.
+# Also publishes the hosted-web SPA bundle to Cloudflare R2 (phase 3).
 #
 # RELEASE_REPO selects the GitHub repo for `gh release create` + all
 # manifest/download URLs. Defaults to the new K2 home; override with
@@ -11,6 +12,17 @@
 #   - TAURI_SIGNING_PRIVATE_KEY_PASSWORD env var
 #   - Apple signing identity in keychain
 #   - gh CLI authenticated
+#
+# Web-bundle publish (R2) — best-effort by default so desktop release is not
+# blocked by R2 TLS warmup / missing laptop creds (Ops caveat on brand-new R2):
+#   - Creds: ~/.config/cloudflare/r2.env or env R2_ACCESS_KEY_ID /
+#     R2_SECRET_ACCESS_KEY / R2_ACCOUNT_ID (see scripts/publish-web-bundles.sh)
+#   - Without creds: WARN + continue (publish uses --skip-if-no-creds)
+#   - With creds but upload fails (TLS etc.): WARN + continue unless
+#     K2_REQUIRE_WEB_PUBLISH=1, in which case the release FAILS
+#   - Optional prune after publish: K2_WEB_BUNDLE_PRUNE=1
+#   - GitHub Actions secrets (same names): R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
+#     R2_SECRET_ACCESS_KEY (optional R2_ENDPOINT, R2_BUCKET)
 #
 # Usage:
 #   ./scripts/release.sh <version>
@@ -502,6 +514,34 @@ ${ARTIFACTS_JSON}
 }
 MANIFEST
 echo "  daemon-latest.json generated at $DIST_DIR/daemon-latest.json"
+
+# ── Step 8.6: Publish hosted-web SPA to Cloudflare R2 ──
+#
+# Additive, versioned layout: app/<ver>/index.html + content-hashed assets.
+# Separate artifact from the DMG — desktop release must not die on R2 TLS
+# warmup (brand-new endpoint) or missing laptop creds. Fail only when
+# K2_REQUIRE_WEB_PUBLISH=1. See scripts/publish-web-bundles.sh header.
+echo ""
+echo "Step 8.6: Publishing web SPA bundle to R2 (app/${VERSION}/)..."
+WEB_PUBLISH_ARGS=("$VERSION" --skip-if-no-creds)
+if [ "${K2_WEB_BUNDLE_PRUNE:-0}" = "1" ]; then
+    WEB_PUBLISH_ARGS+=(--prune)
+fi
+set +e
+"$PROJECT_DIR/scripts/publish-web-bundles.sh" "${WEB_PUBLISH_ARGS[@]}"
+WEB_PUBLISH_RC=$?
+set -e
+if [ "$WEB_PUBLISH_RC" -eq 0 ]; then
+    echo "  Web-bundle publish step finished (see messages above)."
+else
+    if [ "${K2_REQUIRE_WEB_PUBLISH:-0}" = "1" ]; then
+        echo "  FATAL: web-bundle publish failed (rc=$WEB_PUBLISH_RC) and K2_REQUIRE_WEB_PUBLISH=1." >&2
+        exit 1
+    fi
+    echo "  WARNING: web-bundle publish failed (rc=$WEB_PUBLISH_RC) — continuing desktop release." >&2
+    echo "  WARNING: re-run: bash scripts/publish-web-bundles.sh ${VERSION}" >&2
+    echo "  WARNING: set K2_REQUIRE_WEB_PUBLISH=1 to make this a hard gate." >&2
+fi
 
 # ── Step 9: Create GitHub Release ──
 echo ""

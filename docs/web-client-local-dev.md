@@ -152,6 +152,49 @@ daemon + build + Caddy (or `vite:dev:web`).
 
 ---
 
+## Publish to R2 (CI / release)
+
+Phase 3 publishes the production-shaped SPA to the Cloudflare R2 bucket so the
+edge can serve immutable `app/<ver>/` bundles (PRD §3 / §7.0). Local try still
+does not need this.
+
+```sh
+# Creds (never commit): ~/.config/cloudflare/r2.env (chmod 600) or env
+#   R2_ACCOUNT_ID
+#   R2_ACCESS_KEY_ID
+#   R2_SECRET_ACCESS_KEY
+# Optional: R2_ENDPOINT, R2_BUCKET (default k2-web-bundles)
+
+set -a; source ~/.config/cloudflare/r2.env; set +a   # load without printing
+bun run vite:build:web
+bun run web:publish                  # or: bash scripts/publish-web-bundles.sh
+# bash scripts/publish-web-bundles.sh --dry-run
+# bash scripts/publish-web-bundles.sh 0.40.53 --prune
+```
+
+| Piece | Value |
+|---|---|
+| Script | `scripts/publish-web-bundles.sh` (`bun run web:publish`) |
+| Layout | `app/<ver>/index.html` + content-hashed assets under `app/<ver>/` |
+| Cache-Control | `public, max-age=31536000, immutable` (set at upload) |
+| Bucket | `k2-web-bundles` |
+| Prune floor | `K2_WEB_BUNDLE_MIN_VERSION` (default `0.40.0` = loader `MIN_SUPPORT_VERSION`) |
+
+**GitHub Actions secrets** (same names as env — do not put secrets in the repo):
+`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, optional
+`R2_ENDPOINT` / `R2_BUCKET`.
+
+`scripts/release.sh` calls the publish script after the desktop/daemon artifacts
+are ready (Step 8.6). Without creds it **warns and continues** so a laptop
+release is not blocked by R2; set `K2_REQUIRE_WEB_PUBLISH=1` to make upload
+failure a hard gate. Optional prune on release: `K2_WEB_BUNDLE_PRUNE=1`.
+
+If the first upload hits a TLS handshake error against
+`*.r2.cloudflarestorage.com`, retry a few times (brand-new R2 endpoints can
+warm slowly). That is not a credential problem.
+
+---
+
 ## Quick checklist
 
 ```sh

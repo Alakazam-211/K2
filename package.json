@@ -9,6 +9,8 @@
     "build": "tauri build",
     "vite:dev": "vite --config vite.config.ts",
     "vite:build": "vite build --config vite.config.ts",
+    "vite:dev:web": "vite --config vite.config.web.ts",
+    "vite:build:web": "vite build --config vite.config.web.ts",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "bun run typecheck:web",
     "styles:build": "node scripts/build-styles.mjs",

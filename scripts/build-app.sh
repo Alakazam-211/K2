@@ -19,6 +19,18 @@ export PATH="$HOME/.cargo/bin:$PATH"
 SIGNING_IDENTITY="Developer ID Application: LZTEK, LLC (36B8R93HXV)"
 ENTITLEMENTS="${PROJECT_DIR}/src-tauri/entitlements.plist"
 APP="target/release/bundle/macos/K2.app"
+SKIP_SIGNING="${K2_SKIP_SIGNING:-0}"
+TAURI_BUILD_ARGS=()
+BUILD_STATUS="Built + signed"
+
+if [ "$SKIP_SIGNING" = "1" ]; then
+    echo "K2_SKIP_SIGNING=1: building an unsigned local artifact."
+    TAURI_BUILD_ARGS+=(--no-sign --bundles app)
+    BUILD_STATUS="Built unsigned"
+else
+    export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
+    export APPLE_TEAM_ID="36B8R93HXV"
+fi
 
 [ -f "$ENTITLEMENTS" ] || { echo "FATAL: entitlements not found at $ENTITLEMENTS" >&2; exit 1; }
 VER="$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed 's/.*: *"\([^"]*\)".*/\1/')"
@@ -37,9 +49,7 @@ echo ""; echo "Step 0: Linux build gate..."
 
 # ── Step 1: Build the Tauri app ──
 echo ""; echo "Step 1: tauri build..."
-export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
-export APPLE_TEAM_ID="36B8R93HXV"
-bun run tauri build || { echo "FATAL: tauri build failed" >&2; exit 1; }
+bun run tauri build "${TAURI_BUILD_ARGS[@]}" || { echo "FATAL: tauri build failed" >&2; exit 1; }
 echo "  Build complete."
 
 # ── Step 2: Build + bundle the k2-daemon sidecar ──
@@ -47,45 +57,44 @@ echo ""; echo "Step 2: bundling k2-daemon sidecar..."
 cargo build --release -p k2-daemon || { echo "FATAL: k2-daemon build failed" >&2; exit 1; }
 [ -x "target/release/k2-daemon" ] || { echo "FATAL: k2-daemon missing after build" >&2; exit 1; }
 cp "target/release/k2-daemon" "$APP/Contents/MacOS/k2-daemon"
+"$PROJECT_DIR/scripts/write-daemon-probe-marker.sh" "$APP"
 echo "  k2-daemon copied into the bundle."
 
 # ── Step 3: Sign (inner binaries first, then the bundle) ──
-echo ""; echo "Step 3: signing with hardened runtime + entitlements..."
-codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2"
-codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-daemon"
-FRPC_BIN="$APP/Contents/MacOS/frpc"
-if [ -x "$FRPC_BIN" ]; then
-    codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$FRPC_BIN"
-    echo "  Signed frpc sidecar."
+if [ "$SKIP_SIGNING" = "1" ]; then
+    echo ""; echo "Step 3: signing skipped for unsigned local artifact."
+else
+    echo ""; echo "Step 3: signing with hardened runtime + entitlements..."
+    codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2"
+    codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-daemon"
+    FRPC_BIN="$APP/Contents/MacOS/frpc"
+    if [ -x "$FRPC_BIN" ]; then
+        codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$FRPC_BIN"
+        echo "  Signed frpc sidecar."
+    fi
+    "$PROJECT_DIR/scripts/write-daemon-probe-marker.sh" "$APP"
+    codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP"
+    echo "  Signed (main + daemon + frpc + bundle)."
 fi
-codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP"
-echo "  Signed (main + daemon + frpc + bundle)."
 
 # ── Step 4: Launch smoke-test (AMFI exec check) ──
-# A GUI app ignores SIGTERM and runs an event loop, so SIGKILL it + children and
-# do NOT `wait` (waiting on a SIGTERM-ignoring GUI hangs the script).
-echo ""; echo "Step 4: launch smoke-test (AMFI exec check)..."
-"$APP/Contents/MacOS/k2" --version >/tmp/k2-smoke.out 2>&1 &
-SMOKE_PID=$!
-sleep 2
-if kill -0 "$SMOKE_PID" 2>/dev/null; then
-    pkill -9 -P "$SMOKE_PID" 2>/dev/null || true
-    kill -9 "$SMOKE_PID" 2>/dev/null || true
-    echo "  ✓ App survived exec (not AMFI-killed) — launchable."
+if [ "$SKIP_SIGNING" = "1" ]; then
+    # An unsigned verification build must not initialize a daemon in the
+    # user's real K2 home. Artifact architecture checks cover this mode.
+    echo ""; echo "Step 4: launch smoke-test skipped for unsigned local artifact."
 else
-    SMOKE_RC=0; wait "$SMOKE_PID" 2>/dev/null || SMOKE_RC=$?
-    if [ "$SMOKE_RC" -eq 137 ]; then
-        echo "  FATAL: signed app SIGKILL'd at launch (137 = AMFI restricted entitlement)." >&2
-        echo "  Check src-tauri/entitlements.plist. smoke output:" >&2
-        head -c 400 /tmp/k2-smoke.out >&2; echo "" >&2
-        exit 1
-    fi
-    echo "  ✓ App exec exited rc=${SMOKE_RC} (not SIGKILL) — launchable past AMFI."
+    echo ""; echo "Step 4: launch smoke-test (AMFI exec check)..."
+    "$PROJECT_DIR/scripts/verify-macos-bundle.sh" "$APP"
+    echo "  ✓ App + daemon executed version probes without starting either runtime."
 fi
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
-echo "  Built + signed (NOT notarized): ${PROJECT_DIR}/${APP}"
-echo "  Launch + watch it run:   open \"${APP}\""
-echo "  When it runs cleanly:    ./scripts/release.sh ${VER}"
+echo "  ${BUILD_STATUS} (NOT notarized): ${PROJECT_DIR}/${APP}"
+if [ "$SKIP_SIGNING" = "1" ]; then
+    echo "  Verification-only artifact — DO NOT LAUNCH OR RELEASE."
+else
+    echo "  Launch + watch it run:   open \"${APP}\""
+    echo "  When it runs cleanly:    ./scripts/release.sh ${VER}"
+fi
 echo "════════════════════════════════════════════════════════════"

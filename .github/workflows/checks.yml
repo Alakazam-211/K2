@@ -28,6 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: macOS release architecture helpers
+        run: |
+          bash tests/macos-release-tools-test.sh
+          bash tests/fetch-frpc-arch-test.sh
+
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies

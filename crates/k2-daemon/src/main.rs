@@ -169,6 +169,13 @@ pub(crate) const BANNER: &str = concat!(
     " (tokio)",
 );
 
+const ARTIFACT_VERSION_ARG: &str = "--k2-artifact-version-v1";
+
+fn is_version_arg(args: &[String]) -> bool {
+    args.len() == 2
+        && (args[1] == "--version" || args[1] == ARTIFACT_VERSION_ARG)
+}
+
 /// Shared per-process state pulled into every connection task. Cheap to
 /// clone: all fields are either `Copy`, `&'static`, or `Arc`-wrapped.
 #[derive(Clone)]
@@ -190,6 +197,14 @@ pub(crate) struct DaemonState {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    // Artifact verification must exit before the Tokio runtime or any
+    // filesystem, database, listener, migration, or launchd work begins.
+    if is_version_arg(&args) {
+        println!("{BANNER}");
+        return;
+    }
+
     // Phase 2 Unit 2 — LLM worker subprocess fork. Daemon spawns
     // itself as `k2so-daemon --llm-worker <payload_path>` to run one
     // inference pass in an isolated child process. Worker exits via
@@ -198,7 +213,6 @@ fn main() {
     // rustls provider install, before anything that allocates GPU
     // resources we'd rather the parent daemon own. See
     // `llm_host::worker_main` for the protocol contract.
-    let args: Vec<String> = std::env::args().collect();
     if args.len() == 3 && args[1] == "--llm-worker" {
         llm_host::worker_main(&args[2]);
         // unreachable — worker_main calls libc::_exit. The `!`
@@ -212,6 +226,27 @@ fn main() {
         .build()
         .expect("failed to build tokio runtime");
     rt.block_on(async_main());
+}
+
+#[cfg(test)]
+mod entrypoint_tests {
+    use super::is_version_arg;
+
+    #[test]
+    fn version_flag_is_exact() {
+        assert!(is_version_arg(&["k2-daemon".into(), "--version".into()]));
+        assert!(is_version_arg(&[
+            "k2-daemon".into(),
+            "--k2-artifact-version-v1".into(),
+        ]));
+        assert!(!is_version_arg(&["k2-daemon".into(), "version".into()]));
+        assert!(!is_version_arg(&[
+            "k2-daemon".into(),
+            "--version".into(),
+            "extra".into(),
+        ]));
+        assert!(!is_version_arg(&["k2-daemon".into()]));
+    }
 }
 
 async fn async_main() {

@@ -4,7 +4,7 @@
 **One-liner:** Run the existing K2 thin client **in a browser** against any client's own daemon — served from a CDN edge (Cloudflare), versioned to match each daemon, reaching the box over the existing secure tunnel — so a user can drive their 24/7 server from any browser with **no install**.
 
 > [!note] Placement: **public app-layer design** (secret-free: boxes by nickname,
-> no IPs/keys). Lives under `docs/` in the K2 repo. Demo VM lifecycle /
+> no IPs/keys). Lives under `prd/` in the K2 repo (public product PRDs). Demo VM lifecycle /
 > control-plane detail stays in the sibling private PRD — not this document.
 
 > [!info] Supersedes the "Try-Now Demo" framing of

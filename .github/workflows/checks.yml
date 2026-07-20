@@ -23,7 +23,7 @@ on:
 
 jobs:
   web:
-    name: typecheck:web + vitest
+    name: typecheck:web + vitest + vite:build:web
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +44,11 @@ jobs:
 
       - name: Vitest
         run: bunx vitest run --reporter=dot
+
+      # Hosted SPA production build (vite.config.web.ts). Build-only — no R2
+      # publish. Catches Vite graph / asset / CSS regressions typecheck misses.
+      - name: Vite build hosted web
+        run: bun run vite:build:web
 
   rust:
     name: cargo check -D warnings (k2-core, k2-daemon)

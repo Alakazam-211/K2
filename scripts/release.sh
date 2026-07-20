@@ -134,11 +134,15 @@ cd "$PROJECT_DIR"
 # Fail the release BEFORE any version bump or build if regressions slipped in.
 # NOTE: bare `tsc --noEmit` is vacuous here (root tsconfig has files:[] +
 # references) — typecheck:web (tsconfig.web.json) is the real renderer check.
+# vite:build:web is the hosted-SPA production build (vite.config.web.ts) —
+# typecheck alone does not prove the Vite graph / CSS / assets still bundle.
+# R2 publish is Step 8.6 and stays best-effort; this gate is build-only.
 echo ""
-echo "Step 0.5: Pre-flight gates (cargo -D warnings, typecheck:web, vitest)..."
+echo "Step 0.5: Pre-flight gates (cargo -D warnings, typecheck:web, vitest, vite:build:web)..."
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets
 bun run typecheck:web
 bunx vitest run --reporter=dot
+bun run vite:build:web
 echo "  Pre-flight gates passed."
 
 # ── Step 0.6: Linux build gate (k2-sandbox-01) ──

@@ -338,6 +338,7 @@ they cut over. Sequence:
 1. **[Grok] Prove the client build** — web Vite variant + shim + loader, pointed
    at a dev daemon over its tunnel, **served from a laptop Caddy** (no Cloudflare
    yet). Kills the "does the SPA actually run remote-only" risk cheapest.
+   **Local try:** [`docs/web-client-local-dev.md`](../docs/web-client-local-dev.md).
 2. **[Grok] Daemon auth transport** — cookie login + cookie-accepted `/cli/*` +
    the `web_client_enabled` wall (§2.3, §6). The real new daemon surface; land +
    test it headless before edge work.

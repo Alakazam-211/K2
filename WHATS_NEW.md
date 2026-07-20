@@ -3,6 +3,37 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.53 — Remote Session (safer-than-SSH help over Connect)
+
+Consent-gated, time-boxed shell drive on a K2 device — for migrations and
+remote help **without** handing out root SSH or permanent keys.
+
+### Turn it on (owner)
+
+- **Default OFF.** Nothing remote can open a shell until you enable it.
+- **`k2 remote-session enable` / `disable`.** Master wall; disable kills every
+  remote shell immediately.
+- **`k2 remote-session grant --ttl 45m --label "…"`.** Mints a one-time
+  `k2rs_…` drive token (shown once). Revoke with
+  `k2 remote-session revoke <id>`.
+
+### Drive (helper / agent)
+
+- **`k2 remote-session shell --token k2rs_…`** opens a daemon-user login
+  shell (never root). Works locally or via Connect with `--host`.
+- **`write` / `read`** drive that session. Wrong token, expired grant, or
+  wall OFF → clear teaching errors (not a silent failure).
+- **Audited denials.** Attempts while OFF (or without a grant) show on
+  `k2 remote-session status` so you always know someone tried.
+
+### What this is for
+
+- Laptop → server growth / soul-transplant work as the K2 user, without
+  root SSH. Full automated runbooks come later; this release is the safe
+  hands + grant layer so real migrations can teach the runbook.
+
+See `docs/remote-session.md` for the full cookbook.
+
 ## 0.40.52 — Headless Connect CLI + wiki session revive
 
 Provision a Linux box from the shell, and public-wiki chat sessions recover

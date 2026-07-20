@@ -873,6 +873,21 @@ async fn handle_one_request(
         return DispatchOutcome::Done;
     }
 
+
+    // Hosted web client Layer 0 (PRD §6.7 / §9.4): when the owner has shut
+    // the browser door (`webClientEnabled=false`), reject data-plane
+    // requests that look like the web SPA. `/boot-status` stays open so
+    // the loader does not look dead. Distinct from REMOTE_SESSIONS_DISABLED.
+    if !k2_core::app_settings::load().web_client_enabled
+        && (path.starts_with("/cli/") || path == "/events")
+        && super::http::is_web_client_request(&headers_blob)
+    {
+        let _ = stream.read(&mut buf).await;
+        let r = super::http::web_client_disabled_response();
+        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        return DispatchOutcome::Done;
+    }
+
     // Hosted web CSRF: cookie-only credential on mutating /cli/* requires
     // X-K2-Client: web (or X-K2-CSRF: web). WebSocket upgrades are GET and
     // skip this gate. Query-token / Bearer callers (CLI, desktop) are
@@ -962,6 +977,12 @@ async fn handle_one_request(
                 // via the in-daemon binary swap (Shape B). The renderer reads
                 // this to vary copy; update/start routes on it server-side.
                 "installKind": crate::boot_status::install_kind(),
+                // Hosted web client Layer 0 (PRD §6.7 / §9.4): loader reads
+                // this unauthenticated field so a wall-OFF device still
+                // answers /boot-status (not "server dead") and can teach.
+                "webClient": {
+                    "enabled": k2_core::app_settings::load().web_client_enabled,
+                },
                 // COMPAT-58 (#58 Phase 1 / PR-A): advertise the scoped-hook
                 // capability so clients can FEATURE-DETECT it without an app
                 // version bump. `supported` = this daemon understands the

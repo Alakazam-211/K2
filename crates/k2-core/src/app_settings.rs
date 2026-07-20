@@ -313,6 +313,25 @@ pub struct AppSettings {
     /// Wire name `remoteSessionsEnabled` (serde camelCase).
     #[serde(default)]
     pub remote_sessions_enabled: bool,
+    /// Hosted web client Layer 0 — master switch for browser access via
+    /// the edge-served SPA (`<sub>.app.k2.dev` / local Caddy). **Defaults
+    /// ON** (product default — PRD §6.7 / §9.4): the web client is a
+    /// headline feature and the tunnel already exposes token-gated
+    /// `/cli/*`; this toggle lets an owner shut the browser door without
+    /// disabling CLI/desktop query-token clients. When OFF, the daemon
+    /// rejects data-plane requests that look like the web client
+    /// (`X-K2-Client: web`, `k2_session` cookie, or Host contains
+    /// `.app.k2.dev`) with teaching code `WEB_CLIENT_DISABLED` — distinct
+    /// from `REMOTE_SESSIONS_DISABLED`. Unauthenticated `/boot-status`
+    /// stays up and advertises `webClient.enabled` so the loader does not
+    /// look dead. A typed `bool` is required: `AppSettings` round-trips
+    /// through `serde_json::from_value` on every `load`/`update`, which
+    /// silently drops keys with no matching field — an untyped key would
+    /// never persist.
+    ///
+    /// Wire name `webClientEnabled` (serde camelCase).
+    #[serde(default = "default_true")]
+    pub web_client_enabled: bool,
     /// GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
     /// Gates whether the `talk` CLI tool's `/cli/terminal/classify`
     /// detection step is allowed to run the bundled 1.5B model.
@@ -638,6 +657,7 @@ impl Default for AppSettings {
             federation_enabled: false,
             api_enabled: false,
             remote_sessions_enabled: false,
+            web_client_enabled: true,
             use_llm_hitl_detection: false,
             push_gateway_url: None,
             push_gateway_token: None,
@@ -1061,6 +1081,42 @@ mod tests {
         // reset() returns to the OFF default.
         let after = reset().expect("reset");
         assert!(!after.remote_sessions_enabled);
+    }
+
+    /// Hosted web client Layer 0 — the web-client master switch must
+    /// **default ON** on a fresh settings file (product default, PRD §6.7),
+    /// persist through save→load, and ingest the camelCase
+    /// `webClientEnabled` key via the generic `update()` deep-merge.
+    /// Unlike remote-sessions (default OFF), the web client is a headline
+    /// feature; the toggle is for owners who want the browser door shut.
+    #[test]
+    fn web_client_enabled_defaults_on_and_round_trips() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        // Fresh file: the product default is ON.
+        assert!(load().web_client_enabled);
+        assert!(AppSettings::default().web_client_enabled);
+
+        // save → load preserves an explicit opt-out.
+        let mut s = AppSettings::default();
+        s.web_client_enabled = false;
+        save(&s).expect("save");
+        assert!(!load().web_client_enabled);
+
+        // update() deep-merge ingests the camelCase key like any other field.
+        let merged = update(serde_json::json!({
+            "webClientEnabled": true
+        }))
+        .expect("update");
+        assert!(merged.web_client_enabled);
+        assert!(load().web_client_enabled);
+
+        // reset() returns to the ON default.
+        let _ = update(serde_json::json!({ "webClientEnabled": false })).expect("off");
+        let after = reset().expect("reset");
+        assert!(after.web_client_enabled);
+        assert!(load().web_client_enabled);
     }
 
     /// DNS K1 — the dns-manage opt-in must default OFF on a fresh settings

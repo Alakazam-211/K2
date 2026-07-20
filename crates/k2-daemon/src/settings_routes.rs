@@ -42,6 +42,10 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     "agentsCanCreateConnections",
     // Remote Session Layer 0 — master switch for remote shell sessions.
     "remoteSessionsEnabled",
+    // Hosted web client Layer 0 — master switch for browser data-plane
+    // access (PRD §6.7). Owner/admin only: a Member must not flip the
+    // browser door on/off for the whole daemon.
+    "webClientEnabled",
 ];
 
 /// Handler for `GET /cli/settings/get`.
@@ -265,6 +269,8 @@ mod tests {
                 br#"{"apiEnabled":false}"#.as_slice(),
                 br#"{"dnsManageEnabled":true}"#.as_slice(),
                 br#"{"agentsCanCreateConnections":true}"#.as_slice(),
+                br#"{"remoteSessionsEnabled":true}"#.as_slice(),
+                br#"{"webClientEnabled":false}"#.as_slice(),
             ] {
                 let r = handle_settings_update(body, cm);
                 assert_eq!(r.status, "403 Forbidden", "got: {}", r.body);
@@ -286,6 +292,12 @@ mod tests {
             assert!(
                 !s.agents_can_create_connections,
                 "403 must leave the value unchanged"
+            );
+            assert!(!s.remote_sessions_enabled, "403 must leave the value unchanged");
+            // Product default ON — Member force-off must not land.
+            assert!(
+                s.web_client_enabled,
+                "403 must leave webClientEnabled at its ON default"
             );
         });
     }

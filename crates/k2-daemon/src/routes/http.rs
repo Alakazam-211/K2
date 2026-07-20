@@ -115,6 +115,80 @@ pub(crate) const CSRF_WEB_HEADER: &str = "x-k2-csrf";
 /// Required value for the web-client / CSRF headers.
 pub(crate) const WEB_CLIENT_VALUE: &str = "web";
 
+// ── Hosted web client Layer 0 wall (PRD §6.7 / §9.4) ───────────────────
+// When `web_client_enabled` is OFF, reject data-plane requests that look
+// like the browser SPA. Distinct teaching code from remote sessions.
+// CLI/desktop query-token callers without web signals pass through.
+
+/// Wire / teaching code when the owner has shut the browser door.
+pub(crate) const CODE_WEB_CLIENT_DISABLED: &str = "WEB_CLIENT_DISABLED";
+
+/// Host suffix for the edge-terminated web path (`<sub>.app.k2.dev`).
+/// Desktop E2E stays on `<sub>.k2.dev` (no `.app.` segment).
+const WEB_APP_HOST_MARKER: &str = ".app.k2.dev";
+
+/// Teaching hint when the web-client wall is OFF.
+pub(crate) const HINT_WEB_CLIENT_DISABLED: &str =
+    "Hosted web access is OFF on this device. Ask the owner to enable Settings → webClientEnabled (or: k2 settings update '{\"webClientEnabled\":true}').";
+
+/// First `Host:` header value (trim; may include port).
+fn extract_host(headers_blob: &str) -> Option<&str> {
+    for line in headers_blob.lines() {
+        let Some(colon) = line.find(':') else { continue };
+        let (name, rest) = line.split_at(colon);
+        if name.eq_ignore_ascii_case("host") {
+            let value = rest[1..].trim();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+/// True when `Cookie:` contains `k2_session=<non-empty>`.
+fn has_session_cookie(headers_blob: &str) -> bool {
+    extract_session_cookie(headers_blob).is_some()
+}
+
+/// True when Host is (or is under) the hosted web path — contains
+/// `.app.k2.dev` (case-insensitive; port stripped for match).
+pub(crate) fn host_is_web_app(headers_blob: &str) -> bool {
+    let Some(host) = extract_host(headers_blob) else {
+        return false;
+    };
+    let host_no_port = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    host_no_port
+        .to_ascii_lowercase()
+        .contains(WEB_APP_HOST_MARKER)
+}
+
+/// True when this request should be treated as the hosted web client for
+/// the Layer-0 wall. Rule: web client header, OR session cookie, OR
+/// Host contains `.app.k2.dev`.
+pub(crate) fn is_web_client_request(headers_blob: &str) -> bool {
+    has_web_client_header(headers_blob)
+        || has_session_cookie(headers_blob)
+        || host_is_web_app(headers_blob)
+}
+
+/// Layer-0 wall response when web access is OFF.
+pub(crate) fn web_client_disabled_response() -> crate::cli_response::CliResponse {
+    crate::cli_response::CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": CODE_WEB_CLIENT_DISABLED,
+                "hint": HINT_WEB_CLIENT_DISABLED,
+            },
+        })
+        .to_string(),
+    }
+}
+
+
 /// Extract a single cookie value from a `Cookie:` header blob.
 /// Matches `name=value` case-sensitively on the name (cookie names are
 /// case-sensitive per RFC 6265). Returns the first match across all

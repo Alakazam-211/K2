@@ -5,7 +5,7 @@
 # same-origin proxy /cli + /events without CORS hacks).
 #
 # Env (set by scripts/web-serve.sh):
-#   K2_DAEMON_PORT   — daemon listen port (from ~/.k2so/heartbeat.port)
+#   K2_DAEMON_PORT   — daemon listen port (from ~/.k2/heartbeat.port)
 #   K2_WEB_VERSION   — package.json version; app bundle at /app/<ver>/
 #   K2_WEB_PORT      — listen port for this edge (default 8080)
 #

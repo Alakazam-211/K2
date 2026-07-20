@@ -58,6 +58,8 @@ Default listen: **http://127.0.0.1:8080/** (`K2_WEB_PORT` to change).
 If Caddy is missing, the script exits with install hints — do not open the
 static files on a different origin; CORS will block `/cli` and `/events`.
 
+Smoke (no GUI): `bash scripts/web-client-smoke.sh` — requires daemon heartbeat; builds SPA if missing; asserts `/boot-status`, loader `/`, and `/app/<ver>/index.html` via a short-lived proxy (or direct checks). Optional login: `K2_WEB_SMOKE_USER` / `K2_WEB_SMOKE_PASS`.
+
 ---
 
 ## What you should see

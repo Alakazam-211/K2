@@ -39,9 +39,14 @@ describe('session-token web auth helpers', () => {
     expect(s.get('path')).toBe('/x')
   })
 
-  it('web: withCliTokenQuery omits token; withDaemonFetch adds CSRF + credentials', () => {
+  it('web: dual-auth — token query + cookie credentials/CSRF header', () => {
     isWebMock.mockReturnValue(true)
-    expect(withCliTokenQuery('https://h/cli/x', 'tok')).toBe('https://h/cli/x')
+    // Pre-cookie daemons (e.g. 0.40.52) still need ?token=; cookie-capable
+    // daemons accept either. Keep both.
+    expect(withCliTokenQuery('https://h/cli/x', 'tok')).toBe('https://h/cli/x?token=tok')
+    expect(withCliTokenQuery('https://h/cli/x?token=tok', 'tok')).toBe(
+      'https://h/cli/x?token=tok',
+    )
     const init = withDaemonFetch({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -53,10 +58,10 @@ describe('session-token web auth helpers', () => {
     expect(headers.get('Content-Type')).toBe('application/json')
   })
 
-  it('web: cliSearchParams never includes token', () => {
+  it('web: cliSearchParams includes token when provided (dual-auth)', () => {
     isWebMock.mockReturnValue(true)
     const s = cliSearchParams('secret', { path: '/x' })
-    expect(s.get('token')).toBeNull()
+    expect(s.get('token')).toBe('secret')
     expect(s.get('path')).toBe('/x')
   })
 

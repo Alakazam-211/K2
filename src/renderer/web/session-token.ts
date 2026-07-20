@@ -65,8 +65,14 @@ export function readWebSessionToken(): string {
 }
 
 /**
- * True when HTTP data-plane auth should ride the `k2_session` cookie
- * (no `?token=` on `/cli/*` GET/POST). Desktop always uses query token.
+ * True when the SPA also sends cookie credentials (`credentials: include`
+ * + `X-K2-Client: web`). Desktop is false.
+ *
+ * Note: we still attach `?token=` from memory on web when a token is known.
+ * That dual-auth path keeps the portal working against daemons that predate
+ * cookie Set-Cookie (e.g. installed 0.40.52) while cookie-capable daemons
+ * accept either source. Production edge still prefers cookies once the
+ * daemon is current; query token is the transition fallback.
  */
 export function useWebCookieAuth(): boolean {
   return isWebClient()
@@ -89,20 +95,21 @@ export function withDaemonFetch(init: RequestInit = {}): RequestInit {
 }
 
 /**
- * Append `token=<token>` to a URL only on the desktop path. Hosted web
- * omits the query credential so it never lands in history / logs / Referer;
- * the browser sends `Cookie: k2_session=…` instead (via credentials include).
+ * Append `token=<token>` when a bearer is available (desktop always;
+ * hosted web as dual-auth fallback for pre-cookie daemons). Cookie is
+ * still sent separately via {@link withDaemonFetch}.
  */
 export function withCliTokenQuery(url: string, token: string): string {
-  if (isWebClient()) return url
   if (!token) return url
+  // Avoid double-append if a caller already put token in the URL.
+  if (/[?&]token=/.test(url)) return url
   const sep = url.includes('?') ? '&' : '?'
   return `${url}${sep}token=${encodeURIComponent(token)}`
 }
 
 /**
- * Build `/cli/<route>?…` query params. On web, never includes `token`.
- * On desktop, always appends `token` when non-empty.
+ * Build `/cli/<route>?…` query params. Includes `token` whenever a
+ * non-empty bearer is provided (desktop + web dual-auth).
  */
 export function cliSearchParams(
   token: string,
@@ -114,7 +121,7 @@ export function cliSearchParams(
       if (v !== undefined && v !== null) search.set(k, String(v))
     }
   }
-  if (!isWebClient() && token) {
+  if (token) {
     search.set('token', token)
   }
   return search

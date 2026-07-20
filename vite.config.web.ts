@@ -52,6 +52,26 @@ export default defineConfig({
   server: {
     port: 5174,
     strictPort: false,
+    // Same-origin data plane during `vite:dev:web` — point at a local
+    // daemon (K2_DAEMON_PORT or default 0 so proxy is inert until set).
+    proxy: process.env.K2_DAEMON_PORT
+      ? {
+          '/boot-status': {
+            target: `http://127.0.0.1:${process.env.K2_DAEMON_PORT}`,
+            changeOrigin: true,
+          },
+          '/cli': {
+            target: `http://127.0.0.1:${process.env.K2_DAEMON_PORT}`,
+            changeOrigin: true,
+            ws: true,
+          },
+          '/events': {
+            target: `http://127.0.0.1:${process.env.K2_DAEMON_PORT}`,
+            changeOrigin: true,
+            ws: true,
+          },
+        }
+      : undefined,
   },
   clearScreen: false,
   envPrefix: ['VITE_', 'TAURI_'],

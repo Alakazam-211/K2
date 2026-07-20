@@ -4,6 +4,7 @@ import ReactDOM from 'react-dom/client'
 import { invoke } from '@tauri-apps/api/core'
 import { ConnectionGate } from './components/ConnectionGate'
 import { installExternalLinkHandler } from './lib/external-link-handler'
+import { bootWebHostIfNeeded } from './web/boot-host'
 
 // 0.39.x (Issue #6): webview liveness HEARTBEAT.
 // Beat once synchronously the instant the bundle executes (so the
@@ -32,6 +33,10 @@ setInterval(beat, 3000)
 const root = document.getElementById('root')!
 
 installExternalLinkHandler()
+
+// Hosted web (VITE_WEB): force a single same-origin ConnectHost BEFORE
+// ConnectionGate runs so the gate never polls the Tauri local path.
+bootWebHostIfNeeded()
 
 // ConnectionGate (0.39.3): polls daemon's /ping until reachable,
 // THEN dynamically imports + mounts App. The dynamic import is the

@@ -11,6 +11,8 @@
     "vite:build": "vite build --config vite.config.ts",
     "vite:dev:web": "vite --config vite.config.web.ts",
     "vite:build:web": "vite build --config vite.config.web.ts",
+    "web:serve": "bash scripts/web-serve.sh",
+    "web:build": "bun run vite:build:web",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "bun run typecheck:web",
     "styles:build": "node scripts/build-styles.mjs",

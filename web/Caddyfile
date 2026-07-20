@@ -1,0 +1,56 @@
+# Local same-origin reverse proxy for the hosted web client (Stage B).
+#
+# Serves the Vite web build from out/web and proxies the data plane to a
+# local K2 daemon. Prefer this over python -m http.server (which cannot
+# same-origin proxy /cli + /events without CORS hacks).
+#
+# Env (set by scripts/web-serve.sh):
+#   K2_DAEMON_PORT   — daemon listen port (from ~/.k2so/heartbeat.port)
+#   K2_WEB_VERSION   — package.json version; app bundle at /app/<ver>/
+#   K2_WEB_PORT      — listen port for this edge (default 8080)
+#
+# Usage:
+#   bun run vite:build:web
+#   bun run web:serve
+#   open http://127.0.0.1:8080/
+#
+# Install Caddy: brew install caddy
+
+{
+	# Quiet local admin API; this is a laptop throwaway edge.
+	admin off
+}
+
+:{$K2_WEB_PORT:8080} {
+	encode gzip
+
+	# ── Data plane → local daemon ─────────────────────────────────────
+	# /boot-status is public (loader + ConnectionGate).
+	handle /boot-status* {
+		reverse_proxy 127.0.0.1:{$K2_DAEMON_PORT}
+	}
+
+	# REST + WebSocket routes under /cli/* (grid WS, session events, auth).
+	handle /cli/* {
+		reverse_proxy 127.0.0.1:{$K2_DAEMON_PORT}
+	}
+
+	# Legacy /events bus (WS); keep for parity with desktop event bridge.
+	handle /events* {
+		reverse_proxy 127.0.0.1:{$K2_DAEMON_PORT}
+	}
+
+	# ── Versioned SPA (vite base = /app/<version>/) ────────────────────
+	handle /app/* {
+		root * ./out/web
+		# SPA fallback inside the versioned tree (deep-link refresh).
+		try_files {path} {path}/ /app/{$K2_WEB_VERSION}/index.html
+		file_server
+	}
+
+	# Root → current versioned bundle. (Production uses a tiny loader that
+	# reads /boot-status.webClientVersion; local serve pins to this build.)
+	handle {
+		redir * /app/{$K2_WEB_VERSION}/ 302
+	}
+}

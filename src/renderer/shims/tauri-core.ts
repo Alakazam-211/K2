@@ -1,7 +1,10 @@
 /**
  * Web shim for `@tauri-apps/api/core`.
- * Known no-ops resolve; unknown commands warn and resolve null softly.
+ * Known no-ops resolve; secret / host-list commands use localStorage stubs;
+ * unknown commands warn and resolve null softly.
  */
+
+import { webSecretStorageKey } from '../web/session-token'
 
 const KNOWN_NOOPS = new Set([
   'renderer_heartbeat',
@@ -14,6 +17,35 @@ const KNOWN_NOOPS = new Set([
   'relaunch_via_open',
   'restart_app',
 ])
+
+const CONNECT_HOSTS_LS_KEY = 'k2so.connect-hosts.v1'
+
+function storageGet(key: string): string | null {
+  try {
+    if (typeof localStorage === 'undefined') return null
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function storageSet(key: string, value: string): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(key, value)
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function storageRemove(key: string): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.removeItem(key)
+  } catch {
+    /* ignore */
+  }
+}
 
 /** Soft defaults for boot-path / parity-style invokes that must not throw. */
 function defaultFor(cmd: string): unknown {
@@ -30,6 +62,7 @@ function defaultFor(cmd: string): unknown {
       return 1
     case 'daemon_status':
     case 'daemon_ws_url':
+      // Web never uses the local daemon path (boot-host forces remote).
       return { state: 'not_installed', reason: 'web client' }
     case 'cli_install_status':
       return {
@@ -39,7 +72,9 @@ function defaultFor(cmd: string): unknown {
         updateAvailable: false,
       }
     case 'connect_hosts_read':
-      return '[]'
+      // Prefer the same localStorage key the connect-host store uses so a
+      // non-web-aware hydrate path (if re-enabled) sees the SPA book.
+      return storageGet(CONNECT_HOSTS_LS_KEY) ?? '[]'
     default:
       return null
   }
@@ -47,8 +82,41 @@ function defaultFor(cmd: string): unknown {
 
 export async function invoke<T = unknown>(
   cmd: string,
-  _args?: Record<string, unknown>,
+  args?: Record<string, unknown>,
 ): Promise<T> {
+  // Web storage stubs for keychain + durable host list (Stage B token auth).
+  if (cmd === 'k2_secret_set') {
+    const service = String(args?.service ?? '')
+    const account = String(args?.account ?? '')
+    const secret = String(args?.secret ?? args?.value ?? '')
+    if (service && account) {
+      storageSet(webSecretStorageKey(service, account), secret)
+    }
+    return undefined as T
+  }
+  if (cmd === 'k2_secret_get') {
+    const service = String(args?.service ?? '')
+    const account = String(args?.account ?? '')
+    if (!service || !account) return null as T
+    return (storageGet(webSecretStorageKey(service, account)) ?? null) as T
+  }
+  if (cmd === 'k2_secret_delete') {
+    const service = String(args?.service ?? '')
+    const account = String(args?.account ?? '')
+    if (service && account) {
+      storageRemove(webSecretStorageKey(service, account))
+    }
+    return undefined as T
+  }
+  if (cmd === 'connect_hosts_write') {
+    const json = String(args?.json ?? '[]')
+    storageSet(CONNECT_HOSTS_LS_KEY, json)
+    return undefined as T
+  }
+  if (cmd === 'connect_hosts_read') {
+    return defaultFor(cmd) as T
+  }
+
   if (KNOWN_NOOPS.has(cmd) || cmd.startsWith('plugin:')) {
     return defaultFor(cmd) as T
   }

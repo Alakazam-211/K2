@@ -29,6 +29,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useAddServerFocusStore } from '@/stores/add-server-focus'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
+import { isWebClient } from '@/lib/is-web'
 
 function statusColor(status: ConnectionStatus): string {
   switch (status) {
@@ -170,6 +171,37 @@ export default function ServerSwitcher(): React.JSX.Element {
     openSettings('connections')
     requestAddServerFocus()
   }, [openSettings, requestAddServerFocus])
+
+  // Hosted web: lock to the single same-origin host — no multi-host
+  // switcher, no "Local", no "Add a server…". (After all hooks.)
+  if (isWebClient()) {
+    const ind = hostIndicator(connectionStatus, recovery, activeHost !== 'local')
+    return (
+      <div
+        className="relative no-drag"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
+        <div
+          className="flex items-center gap-1.5 h-6 px-2 text-[11px] text-[var(--color-text-secondary)]"
+          title={ind.title}
+          aria-label={`Connected host: ${activeLabel}`}
+        >
+          <span
+            aria-label={ind.title}
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: 1,
+              background: ind.color,
+              flexShrink: 0,
+              display: 'inline-block',
+            }}
+          />
+          <span className="max-w-[160px] truncate">{activeLabel}</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div

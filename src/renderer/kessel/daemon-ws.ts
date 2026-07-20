@@ -20,6 +20,8 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { isWebClient } from '@/lib/is-web'
+import { forceSameOriginHost } from '@/web/boot-host'
 
 /** Loopback host the local bundled daemon always binds. When the active
  *  host is 'local' the resolved creds carry exactly this — so every URL
@@ -79,6 +81,20 @@ export function invalidateDaemonWs(): void {
  * Rejects with a message when the local daemon isn't reachable — the
  * reject invalidates the local cache so recovery is just a retry. */
 export function getDaemonWs(): Promise<DaemonWsAvailable> {
+  // Hosted web: never call Tauri `daemon_ws_url`. Force same-origin
+  // remote creds if the store somehow still says 'local'.
+  if (isWebClient()) {
+    let active = useConnectHostStore.getState().activeHost
+    if (active === 'local') {
+      active = forceSameOriginHost()
+    }
+    return Promise.resolve({
+      port: active.port,
+      token: active.token,
+      host: active.hostname,
+      secure: active.secure,
+    })
+  }
   const active = useConnectHostStore.getState().activeHost
   if (active !== 'local') {
     // Remote host: derive creds directly from the store. No Tauri

@@ -37,6 +37,8 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
+import { isWebClient } from '@/lib/is-web'
+import { persistWebSessionToken } from '@/web/session-token'
 
 /**
  * Keychain service name for remembered remote-host tokens. Each token is
@@ -642,6 +644,12 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
   serverProtocol: null,
 
   selectHost: (hostOrLocal) => {
+    // Hosted web client: never activate the Tauri local-daemon path
+    // (`daemon_ws_url`). Boot seeds a same-origin ConnectHost; ignore
+    // any attempt to switch to 'local'.
+    if (isWebClient() && hostOrLocal === 'local') {
+      return
+    }
     // Enter 'connecting' + clear any pending sign-in, then flip
     // `activeHost`. The gate flips to 'connected' once the new host
     // accepts. Daemon-data flows through host-aware `daemonCli*` calls
@@ -687,6 +695,8 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     const cleared = hosts.map((h) => (h.id === hostId ? { ...h, token: '' } : h))
     const clearedActive: ActiveHost = { ...activeHost, token: '' }
     void forgetToken(hostId)
+    // Web: also drop the tab-session bearer so reload re-prompts login.
+    persistWebSessionToken('')
     // Reflect the dropped token in the host list, raise the sign-in
     // overlay, and flip `activeHost` to the tokenless host — all
     // synchronously. Host-aware `daemonCli*` calls read `activeHost.token`
@@ -722,6 +732,8 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
 
   pickHost: (hostOrLocal) => {
     if (hostOrLocal === 'local') {
+      // Web never has a local daemon — selectHost no-ops; keep current.
+      if (isWebClient()) return
       get().selectHost('local')
       return
     }
@@ -797,12 +809,16 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     void forgetToken(id)
     void forgetPassword(id)
     // If we removed the currently-active host, fall back to local.
+    // Web: never fall back to 'local' (no Tauri daemon_ws_url). Keep the
+    // current active host object even if it was removed from the book —
+    // boot-host re-seeds same-origin on next load.
     const removedActive = activeHost !== 'local' && activeHost.id === id
-    const nextActive: ActiveHost = removedActive ? 'local' : activeHost
+    const nextActive: ActiveHost =
+      removedActive && !isWebClient() ? 'local' : activeHost
     // #638: if the removed host was active, we fell back to 'local' — drop
     // the removed host's cached capability info.
     set(
-      removedActive
+      removedActive && !isWebClient()
         ? { hosts: next, activeHost: nextActive, serverVersion: null, serverProtocol: null }
         : { hosts: next, activeHost: nextActive },
     )
@@ -820,9 +836,24 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
         ? { ...activeHost, token }
         : activeHost
     set({ hosts: hosts2, activeHost: active2 })
+    // Web: mirror the bearer into sessionStorage so a reload restores it
+    // (token auth; cookie transport is Phase 2).
+    if (
+      isWebClient() &&
+      activeHost !== 'local' &&
+      activeHost.id === id
+    ) {
+      persistWebSessionToken(token)
+    }
   },
 
   hydrateFromDisk: async () => {
+    // Hosted web: address book + active host are seeded by boot-host.ts
+    // from window.location + session/local storage. The Tauri
+    // connect_hosts_read shim returns `[]`, which would wipe that seed —
+    // so skip disk/keychain hydration entirely on web.
+    if (isWebClient()) return
+
     // 1. Load the durable host list. Falls back to whatever the
     //    constructor already loaded from localStorage on failure.
     let fileHosts: ConnectHost[] | null = null

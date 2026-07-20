@@ -1,12 +1,13 @@
-# Local same-origin reverse proxy for the hosted web client (Stage B).
+# Local same-origin reverse proxy for the hosted web client (Stage B+C).
 #
-# Serves the Vite web build from out/web and proxies the data plane to a
-# local K2 daemon. Prefer this over python -m http.server (which cannot
-# same-origin proxy /cli + /events without CORS hacks).
+# Serves:
+#   /              → tiny short-cached loader (web/loader)
+#   /app/<ver>/*   → versioned Vite SPA (out/web/app/<ver>)
+#   /boot-status, /cli/*, /events → local K2 daemon
 #
 # Env (set by scripts/web-serve.sh):
 #   K2_DAEMON_PORT   — daemon listen port (from ~/.k2/heartbeat.port)
-#   K2_WEB_VERSION   — package.json version; app bundle at /app/<ver>/
+#   K2_WEB_VERSION   — package.json version; SPA fallback inside /app/*
 #   K2_WEB_PORT      — listen port for this edge (default 8080)
 #
 # Usage:
@@ -41,16 +42,23 @@
 	}
 
 	# ── Versioned SPA (vite base = /app/<version>/) ────────────────────
+	# Bundles are immutable content-hashed assets; long-cache is safe.
 	handle /app/* {
 		root * ./out/web
 		# SPA fallback inside the versioned tree (deep-link refresh).
+		# Falls back to the locally built version when a path is missing.
 		try_files {path} {path}/ /app/{$K2_WEB_VERSION}/index.html
+		header Cache-Control "public, max-age=31536000, immutable"
 		file_server
 	}
 
-	# Root → current versioned bundle. (Production uses a tiny loader that
-	# reads /boot-status.webClientVersion; local serve pins to this build.)
+	# ── Edge loader (mutable; never immutable) ────────────────────────
+	# Serves web/loader at / and unknown non-API paths so refresh on a
+	# deep link still hits the loader (which then picks /app/<ver>/).
 	handle {
-		redir * /app/{$K2_WEB_VERSION}/ 302
+		root * ./web/loader
+		try_files {path} /index.html
+		header Cache-Control "no-cache"
+		file_server
 	}
 }

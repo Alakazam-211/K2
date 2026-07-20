@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <!-- Loader is deliberately short-cache; Caddy also sets Cache-Control. -->
+  <meta http-equiv="Cache-Control" content="no-cache" />
+  <title>K2</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c0d10;
+      --fg: #e8e9ed;
+      --muted: #8b90a0;
+      --err: #f07178;
+      --accent: #7aa2f7;
+      --card: #14161c;
+      --border: #262a36;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+    }
+    body {
+      display: grid;
+      place-items: center;
+      padding: 2rem 1.25rem;
+    }
+    .card {
+      width: min(28rem, 100%);
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem 1.35rem;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+    }
+    h1 {
+      margin: 0 0 0.5rem;
+      font-size: 1.125rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 0.95rem;
+    }
+    .status { margin-top: 0.85rem; }
+    .status.error h1 { color: var(--err); }
+    .status.loading h1 { color: var(--fg); }
+    .hint {
+      margin-top: 1rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      opacity: 0.9;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.85em;
+      color: var(--accent);
+    }
+    .spinner {
+      display: inline-block;
+      width: 0.85rem;
+      height: 0.85rem;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      margin-right: 0.5rem;
+      vertical-align: -0.1rem;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <main class="card" role="main">
+    <div id="status" class="status loading" aria-live="polite">
+      <h1><span class="spinner" id="spin" aria-hidden="true"></span><span id="title">Connecting…</span></h1>
+      <p id="detail">Looking up your server version.</p>
+      <p id="hint" class="hint hidden"></p>
+    </div>
+  </main>
+  <script src="/loader.js" defer></script>
+</body>
+</html>

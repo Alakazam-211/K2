@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Start the local Caddy edge for the hosted web client.
-# Proxies /boot-status, /cli/*, /events → daemon; serves out/web SPA.
+# Serves the tiny loader at /; proxies /boot-status, /cli/*, /events → daemon;
+# serves versioned SPA under out/web/app/<ver>/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -53,13 +54,20 @@ export K2_DAEMON_PORT
 export K2_WEB_VERSION
 export K2_WEB_PORT="${K2_WEB_PORT:-8080}"
 
+LOADER_DIR="web/loader"
+if [[ ! -f "$LOADER_DIR/index.html" || ! -f "$LOADER_DIR/loader.js" ]]; then
+  echo "Missing $LOADER_DIR/{index.html,loader.js}" >&2
+  exit 1
+fi
+
 APP_DIR="out/web/app/${K2_WEB_VERSION}"
 if [[ ! -d "$APP_DIR" ]]; then
   echo "Missing $APP_DIR — run: bun run vite:build:web" >&2
   exit 1
 fi
 
-echo "web-serve: daemon=127.0.0.1:${K2_DAEMON_PORT}  app=/app/${K2_WEB_VERSION}/  listen=:${K2_WEB_PORT}"
+echo "web-serve: daemon=127.0.0.1:${K2_DAEMON_PORT}  loader=/  app=/app/${K2_WEB_VERSION}/  listen=:${K2_WEB_PORT}"
 echo "open http://127.0.0.1:${K2_WEB_PORT}/"
+echo "  (loader reads /boot-status → /app/<ver>/; override with ?v=${K2_WEB_VERSION})"
 
 exec caddy run --config "$ROOT/web/Caddyfile" --adapter caddyfile

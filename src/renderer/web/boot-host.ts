@@ -21,6 +21,7 @@ import {
   readWebSessionToken,
   webSecretStorageKey,
 } from '@/web/session-token'
+import { applyWebPageTitle } from '@/web/page-title'
 
 /** Stable id for the forced same-origin host (not user-editable). */
 export const WEB_ORIGIN_HOST_ID = 'web-same-origin'
@@ -110,5 +111,6 @@ export function forceSameOriginHost(): ConnectHost {
  */
 export function bootWebHostIfNeeded(): void {
   if (!isWebClient()) return
+  applyWebPageTitle()
   forceSameOriginHost()
 }

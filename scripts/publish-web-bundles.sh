@@ -3,15 +3,20 @@
 # ---------------------------------------------------------------------------
 # Publish the versioned hosted-web SPA to Cloudflare R2 (PRD phase 3).
 #
-# Contract (Ops handoff + PRD §3 / §7.0):
+# Contract (Ops handoff + PRD §3 / §7.0 + edge Worker k2-app-edge):
 #   endpoint : https://bd46c5a3e2afd37fa4fb22064c6fd3b6.r2.cloudflarestorage.com
 #              (or https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com)
 #   bucket   : k2-web-bundles
-#   layout   : app/<ver>/index.html + content-hashed assets under app/<ver>/
-#   cache    : public, max-age=31536000, immutable  (object metadata at upload)
+#   layout   :
+#     app/<ver>/index.html + content-hashed assets under app/<ver>/
+#     loader/index.html   (edge serves this at / ; short-cached)
+#   cache    : app/*  → public, max-age=31536000, immutable
+#              loader → public, max-age=60
 #
 # The edge loader (web/loader/loader.js) HEADs /app/<ver>/index.html then
-# navigates to /app/<ver>/ same-origin. CI must write exactly that prefix.
+# navigates to /app/<ver>/ same-origin. CI must write exactly those keys.
+# R2 loader is self-contained (JS inlined) because the Worker only maps
+# / → loader/index.html — a separate /loader.js would miss R2.
 #
 # Credentials (never commit secrets):
 #   Prefer ~/.config/cloudflare/r2.env (chmod 600), else process env:
@@ -58,6 +63,7 @@ DEFAULT_ENDPOINT_HOST="bd46c5a3e2afd37fa4fb22064c6fd3b6.r2.cloudflarestorage.com
 # Keep in lockstep with web/loader/loader.js MIN_SUPPORT_VERSION
 DEFAULT_MIN_VERSION="0.40.0"
 CACHE_CONTROL="public, max-age=31536000, immutable"
+LOADER_CACHE_CONTROL="public, max-age=60"
 R2_ENV_FILE="${R2_ENV_FILE:-$HOME/.config/cloudflare/r2.env}"
 
 # ── args ──────────────────────────────────────────────────────────────────
@@ -159,7 +165,12 @@ export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-auto}"
 export AWS_EC2_METADATA_DISABLED=true
 
 LOCAL_DIR="$ROOT/out/web/app/${VERSION}"
+LOADER_SRC_HTML="$ROOT/web/loader/index.html"
+LOADER_SRC_JS="$ROOT/web/loader/loader.js"
+LOADER_OUT_DIR="$ROOT/out/web/loader"
+LOADER_OUT_HTML="${LOADER_OUT_DIR}/index.html"
 S3_URI="s3://${BUCKET}/app/${VERSION}/"
+S3_LOADER_URI="s3://${BUCKET}/loader/index.html"
 PUBLIC_PATH="app/${VERSION}/index.html"
 
 echo "═══════════════════════════════════════════════════"
@@ -167,8 +178,10 @@ echo "  K2 web-bundle publish → R2"
 echo "  version : ${VERSION}"
 echo "  local   : ${LOCAL_DIR}"
 echo "  remote  : ${S3_URI}"
+echo "  loader  : ${S3_LOADER_URI}"
 echo "  endpoint: ${ENDPOINT}"
-echo "  cache   : ${CACHE_CONTROL}"
+echo "  cache   : app=${CACHE_CONTROL}"
+echo "            loader=${LOADER_CACHE_CONTROL}"
 [ "$DRY_RUN" -eq 1 ] && echo "  mode    : DRY-RUN"
 [ "$DO_PRUNE" -eq 1 ] && echo "  prune   : below ${MIN_VERSION} (keep ${VERSION})"
 echo "═══════════════════════════════════════════════════"
@@ -190,6 +203,176 @@ ensure_build() {
     echo "  Check vite.config.web.ts outDir / package.json version match (${VERSION})." >&2
     exit 1
   fi
+}
+
+# Edge Worker serves only R2 key loader/index.html at /. Local index.html loads
+# /loader.js separately (web-serve / Caddy). For R2 we inline the JS so a single
+# object is enough and /loader.js is not required on the app origin.
+prepare_loader() {
+  if [ ! -f "$LOADER_SRC_HTML" ] || [ ! -f "$LOADER_SRC_JS" ]; then
+    echo "ERROR: missing web/loader/{index.html,loader.js}" >&2
+    exit 1
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "  [dry-run] would prepare self-contained ${LOADER_OUT_HTML} + favicons"
+    return 0
+  fi
+  mkdir -p "$LOADER_OUT_DIR"
+  ROOT="$ROOT" LOADER_OUT_HTML="$LOADER_OUT_HTML" LOADER_OUT_DIR="$LOADER_OUT_DIR" python3 - <<'PY'
+import os, pathlib, re, shutil
+root = pathlib.Path(os.environ["ROOT"])
+out_path = pathlib.Path(os.environ["LOADER_OUT_HTML"])
+out_dir = pathlib.Path(os.environ["LOADER_OUT_DIR"])
+html = (root / "web/loader/index.html").read_text(encoding="utf-8")
+js = (root / "web/loader/loader.js").read_text(encoding="utf-8")
+# Avoid </script> in JS breaking the HTML parse (loader source has none today).
+if "</script>" in js.lower():
+    raise SystemExit("ERROR: loader.js contains </script> — cannot inline safely")
+replacement = f"<script>\n{js}\n</script>"
+tag = '<script src="/loader.js" defer></script>'
+if tag in html:
+    html = html.replace(tag, replacement, 1)
+else:
+    m = re.search(r'<script\s+src=["\']/loader\.js["\'][^>]*>\s*</script>', html)
+    if not m:
+        raise SystemExit('ERROR: could not find <script src="/loader.js"> in web/loader/index.html')
+    html = html[: m.start()] + replacement + html[m.end() :]
+out_path.parent.mkdir(parents=True, exist_ok=True)
+out_path.write_text(html, encoding="utf-8")
+print(f"  prepared {out_path} ({out_path.stat().st_size} bytes, JS inlined)")
+# Edge statics: favicon (real ICO from app icon) + optional PNG
+src_loader = root / "web/loader"
+for name in ("favicon.ico", "favicon-32.png"):
+    src = src_loader / name
+    if src.is_file():
+        shutil.copy2(src, out_dir / name)
+        print(f"  prepared {out_dir / name} ({(out_dir / name).stat().st_size} bytes)")
+    elif name == "favicon.ico":
+        raise SystemExit("ERROR: missing web/loader/favicon.ico (copy from src-tauri/icons/icon.ico)")
+PY
+}
+
+# Content-type map for loader/ static keys uploaded beside index.html
+loader_content_type() {
+  case "$1" in
+    *.html) echo "text/html; charset=utf-8" ;;
+    *.ico)  echo "image/x-icon" ;;
+    *.png)  echo "image/png" ;;
+    *.js)   echo "application/javascript" ;;
+    *.svg)  echo "image/svg+xml" ;;
+    *)      echo "application/octet-stream" ;;
+  esac
+}
+
+upload_loader_with_aws() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "  [dry-run] aws s3 cp loader files → s3://${BUCKET}/loader/"
+    return 0
+  fi
+  if [ ! -f "$LOADER_OUT_HTML" ]; then
+    echo "ERROR: ${LOADER_OUT_HTML} missing after prepare_loader" >&2
+    return 1
+  fi
+  echo "  Uploading loader assets → s3://${BUCKET}/loader/ ..."
+  local regions=("auto" "us-east-1") region f base ctype key ok=0
+  for region in "${regions[@]}"; do
+    ok=1
+    for f in "$LOADER_OUT_DIR"/*; do
+      [ -f "$f" ] || continue
+      base="$(basename "$f")"
+      ctype="$(loader_content_type "$base")"
+      key="loader/${base}"
+      if ! run_with_tls_retry aws s3 cp "$f" "s3://${BUCKET}/${key}" \
+        --endpoint-url "$ENDPOINT" \
+        --region "$region" \
+        --cache-control "$LOADER_CACHE_CONTROL" \
+        --content-type "$ctype" \
+        --only-show-errors; then
+        ok=0
+        break
+      fi
+      echo "    ok ${key} (${ctype})"
+    done
+    if [ "$ok" -eq 1 ]; then
+      echo "  loader upload ok (region=${region})"
+      return 0
+    fi
+  done
+  echo "ERROR: loader upload failed for all regions." >&2
+  return 1
+}
+
+upload_loader_with_boto() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "  [dry-run] boto3 put_object loader/*"
+    return 0
+  fi
+  if [ ! -f "$LOADER_OUT_HTML" ]; then
+    echo "ERROR: ${LOADER_OUT_HTML} missing after prepare_loader" >&2
+    return 1
+  fi
+  echo "  Uploading loader assets via boto3 ..."
+  R2_ENDPOINT="$ENDPOINT" R2_BUCKET="$BUCKET" \
+  R2_LOADER_DIR="$LOADER_OUT_DIR" R2_LOADER_CACHE="$LOADER_CACHE_CONTROL" \
+  R2_UPLOAD_RETRIES="$UPLOAD_RETRIES" \
+  python3 - <<'PY'
+import mimetypes, os, sys, time
+from pathlib import Path
+import boto3
+from botocore.config import Config
+
+endpoint = os.environ["R2_ENDPOINT"]
+bucket = os.environ["R2_BUCKET"]
+local_dir = Path(os.environ["R2_LOADER_DIR"])
+cache = os.environ["R2_LOADER_CACHE"]
+retries = int(os.environ.get("R2_UPLOAD_RETRIES", "3"))
+
+def ctype(path: Path) -> str:
+    if path.suffix.lower() == ".ico":
+        return "image/x-icon"
+    if path.suffix.lower() == ".html":
+        return "text/html; charset=utf-8"
+    guess, _ = mimetypes.guess_type(path.name)
+    return guess or "application/octet-stream"
+
+files = [p for p in local_dir.iterdir() if p.is_file()]
+if not files:
+    print("ERROR: no loader files to upload", file=sys.stderr)
+    sys.exit(1)
+
+last = None
+for region in ("auto", "us-east-1"):
+    for attempt in range(1, retries + 1):
+        try:
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=endpoint,
+                region_name=region,
+                aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+                aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+                config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+            )
+            for p in files:
+                key = f"loader/{p.name}"
+                body = p.read_bytes()
+                s3.put_object(
+                    Bucket=bucket,
+                    Key=key,
+                    Body=body,
+                    CacheControl=cache,
+                    ContentType=ctype(p),
+                )
+                print(f"    ok {key} ({ctype(p)}, {len(body)} bytes)")
+            print(f"  loader uploaded (region={region})")
+            sys.exit(0)
+        except Exception as e:  # noqa: BLE001
+            last = e
+            print(f"  ⚠ loader upload error (region={region} attempt {attempt}): {e}", file=sys.stderr)
+            if attempt < retries:
+                time.sleep(attempt * 3)
+print(f"ERROR: loader boto3 upload failed: {last}", file=sys.stderr)
+sys.exit(1)
+PY
 }
 
 # ── semver helpers (core x.y.z only; pre-release < release numerically equal) ─
@@ -556,6 +739,7 @@ PY
 
 # ── main ──────────────────────────────────────────────────────────────────
 ensure_build
+prepare_loader
 
 if [ "$DRY_RUN" -eq 0 ] && [ ! -f "${LOCAL_DIR}/index.html" ]; then
   echo "ERROR: ${LOCAL_DIR}/index.html not found after build." >&2
@@ -564,8 +748,10 @@ fi
 
 if [ "$have_aws" -eq 1 ]; then
   upload_with_aws
+  upload_loader_with_aws
 else
   upload_with_boto
+  upload_loader_with_boto
 fi
 
 if [ "$DO_PRUNE" -eq 1 ]; then
@@ -579,9 +765,10 @@ if [ "$DO_PRUNE" -eq 1 ]; then
 fi
 
 echo ""
-echo "✓ Published web bundle"
-echo "  public path expectation: ${PUBLIC_PATH}"
-echo "  (loader HEADs /${PUBLIC_PATH} then navigates to /app/${VERSION}/)"
+echo "✓ Published web bundle + edge loader"
+echo "  app    : ${PUBLIC_PATH}"
+echo "  loader : loader/index.html  (self-contained; Worker serves at /)"
+echo "  (loader HEADs /${PUBLIC_PATH} then navigates to /app/${VERSION}/index.html)"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "  (dry-run — no objects written)"
 fi

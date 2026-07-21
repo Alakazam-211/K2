@@ -38,6 +38,7 @@ import { useConnectHostStore } from './stores/connect-host'
 // index-based reconciliation preserves the instance (and its retained
 // panes) across default/focus/settings switches.
 import { PinnedChatRetainer } from './components/AgentPane/PinnedChatRetainer'
+import { k2PageTitle } from './web/page-title'
 import { executeRemoteDrop } from './lib/handle-remote-drop'
 import { usePanelsStore } from './stores/panels'
 import { useSettingsStore } from './stores/settings'
@@ -244,14 +245,15 @@ declare global {
 }
 
 function applyK2SOZoom(): void {
+  // Hosted web: `z3thon | K2` (subdomain from location); desktop: `K2`.
+  // Zoom suffix shared: `… — 125%`.
   const z = window.__k2soZoom ?? 1
   if (z === 1) {
     document.documentElement.style.zoom = ''
-    document.title = 'K2'
   } else {
     document.documentElement.style.zoom = String(z)
-    document.title = `K2 — ${Math.round(z * 100)}%`
   }
+  document.title = k2PageTitle(z)
 }
 
 /** Style System P3 — the terminal color bridge. Derives the active

@@ -389,6 +389,17 @@ xcrun notarytool submit "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \
 staple_with_retry "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
 echo "  DMG notarized and stapled."
 
+# ── Step 7.5: Clean-VM new-user pairing smoke (0.40.33/34 regression class) ──
+# Fresh Sequoia guest, empty ~/.k2*, install this DMG, start bundled daemon,
+# assert ~/.k2so → ~/.k2 symlink + /boot-status via the thin-client path.
+# Hard gate before latest.json / GitHub publish. Escape: K2_SKIP_VM_PAIRING_SMOKE=1
+# (loud; do not skip on the machine that cuts real releases).
+echo ""
+echo "Step 7.5: Clean-VM new-user pairing smoke..."
+"$PROJECT_DIR/scripts/vm-newuser-pair-smoke.sh" \
+  "$PROJECT_DIR/target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \
+  "$VERSION"
+
 # ── Step 8: Generate latest.json ──
 echo ""
 echo "Step 8: Generating latest.json..."

@@ -6,7 +6,20 @@
   <meta name="robots" content="noindex" />
   <!-- Loader is deliberately short-cache; Caddy also sets Cache-Control. -->
   <meta http-equiv="Cache-Control" content="no-cache" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" href="/favicon-32.png" sizes="32x32" />
   <title>K2</title>
+  <script>
+    // `<subdomain> | K2` as soon as the loader HTML paints (e.g. z3thon | K2).
+    (function () {
+      try {
+        var h = (location.hostname || '').toLowerCase();
+        if (!h || /^\d+\.\d+\.\d+\.\d+$/.test(h)) return;
+        var sub = h.split('.')[0];
+        if (sub) document.title = sub + ' | K2';
+      } catch (e) { /* ignore */ }
+    })();
+  </script>
   <style>
     :root {
       color-scheme: dark;

@@ -15,7 +15,11 @@ const SUPABASE_ANON_KEY =
 
 /** A subdomain the signed-in user owns under k2.dev. */
 export interface K2Subdomain {
-  /** The bare label, e.g. `rosson` → exposes `rosson.k2.dev`. */
+  /**
+   * The bare **apex** label, e.g. `rosson` → exposes `rosson.k2.dev`.
+   * Must not contain `.` — nested DNS (`staging.z3thon`) is routing under an
+   * apex tunnel, not a separate frpc tunnel root.
+   */
   label: string
   /** Provisioning state, e.g. `active` | `pending`. */
   status: string
@@ -27,6 +31,19 @@ export interface K2Subdomain {
   claimed_at?: string | null
   /** Human-readable label of the holding device, if any. */
   claimed_label?: string | null
+}
+
+/**
+ * True when `label` is a tunnelable apex purchase (single DNS label under
+ * `k2.dev`). Nested names (`api.z3thon`, `rosson.rpmavs`) are **not**
+ * tunnel roots — they are routes under an apex tunnel.
+ */
+export function isApexTunnelLabel(label: string): boolean {
+  const t = label.trim()
+  if (!t) return false
+  // No dots, no spaces; keep DNS-label-ish characters only.
+  if (t.includes('.') || /\s/.test(t)) return false
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i.test(t)
 }
 
 /** Result of a `claim_subdomain` RPC. */
@@ -113,7 +130,9 @@ export async function refreshSession(refreshToken: string): Promise<K2Session> {
 }
 
 /** List the subdomains the signed-in user owns. RLS scopes the rows to
- *  the caller, so no user filter is needed client-side. */
+ *  the caller. Client filters to **apex tunnel labels only** (no dots) so
+ *  nested routing names never appear as tunnel-bind options even if the
+ *  control plane returns them in the same table. */
 export async function listSubdomains(accessToken: string): Promise<K2Subdomain[]> {
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/subdomains?select=label,status,tunnel_token,claimed_by,claimed_at,claimed_label`,
@@ -131,7 +150,7 @@ export async function listSubdomains(accessToken: string): Promise<K2Subdomain[]
   }
   const rows = (await res.json()) as unknown
   if (!Array.isArray(rows)) return []
-  return rows as K2Subdomain[]
+  return (rows as K2Subdomain[]).filter((row) => isApexTunnelLabel(row?.label ?? ''))
 }
 
 /** Claim (or heartbeat) a subdomain lease for this device. A successful
@@ -145,6 +164,11 @@ export async function claimSubdomain(
   deviceId: string,
   deviceLabel?: string,
 ): Promise<K2ClaimResult> {
+  if (!isApexTunnelLabel(label)) {
+    throw new Error(
+      'Only apex subdomains can be claimed as tunnels (e.g. rosson → rosson.k2.dev). Nested names are not tunnel roots.',
+    )
+  }
   const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/claim_subdomain`, {
     method: 'POST',
     headers: {

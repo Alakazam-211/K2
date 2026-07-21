@@ -3,7 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Absolute origin path: edge Worker serves /favicon.ico from R2 loader/. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" href="/favicon-32.png" sizes="32x32" />
     <title>K2</title>
+    <script>
+      // Hosted web tab title before React boots: `<sub> | K2` on *.app.k2.dev.
+      (function () {
+        try {
+          var h = (location.hostname || '').toLowerCase();
+          if (!h || h === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(h)) {
+            if (h === 'localhost') document.title = 'localhost | K2';
+            return;
+          }
+          var sub = h.split('.')[0];
+          if (sub) document.title = sub + ' | K2';
+        } catch (e) { /* ignore */ }
+      })();
+    </script>
     <style>
       /* Prevent white flash while loading */
       html, body { background: #0a0a0a; margin: 0; padding: 0; }

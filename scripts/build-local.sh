@@ -152,19 +152,75 @@ cp "$DAEMON_SRC" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
 echo "  k2-daemon copied into K2.app/Contents/MacOS/"
 
-# ── Step 3: Sign with hardened runtime ──
+# Staple with retry: after notarytool --wait, the ticket can lag CloudKit
+# (same helper as release.sh — premature staple → Error 65).
+staple_with_retry() {
+    local target="$1"
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if xcrun stapler staple "$target"; then
+            return 0
+        fi
+        echo "  staple attempt ${attempt} failed (ticket not propagated yet?) — retrying in 30s..."
+        sleep 30
+    done
+    echo "FATAL: stapling $target failed after 5 attempts" >&2
+    return 1
+}
+
+# ── Step 3: Sign with hardened runtime (mirrors release.sh) ──
 echo ""
 echo "Step 3: Signing with hardened runtime..."
+ENTITLEMENTS="${PROJECT_DIR}/src-tauri/entitlements.plist"
+if [ ! -f "$ENTITLEMENTS" ]; then
+    echo "  FATAL: entitlements file not found at $ENTITLEMENTS" >&2
+    exit 1
+fi
+# Inner binaries first (Apple requires sub-binaries signed before the outer bundle).
 codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2"
 codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
+# frpc tunnel sidecar — re-sign so notarization covers it.
+FRPC_BIN="target/release/bundle/macos/K2.app/Contents/MacOS/frpc"
+if [ -x "$FRPC_BIN" ]; then
+    codesign --force --options runtime --timestamp \
+        --sign "$SIGNING_IDENTITY" \
+        "$FRPC_BIN"
+    echo "  Signed frpc sidecar."
+else
+    echo "  WARNING: frpc sidecar not found at $FRPC_BIN" >&2
+fi
 codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app"
-echo "  Signed (main + daemon + bundle)."
+echo "  Signed (main + daemon + frpc + bundle) with entitlements."
+
+# ── Step 3.5: Launch smoke-test (AMFI exec check) ──
+echo ""
+echo "Step 3.5: Launch smoke-test (AMFI exec check)..."
+SMOKE_BIN="target/release/bundle/macos/K2.app/Contents/MacOS/k2"
+"$SMOKE_BIN" --version >/tmp/k2-smoke.out 2>&1 &
+SMOKE_PID=$!
+sleep 2
+if kill -0 "$SMOKE_PID" 2>/dev/null; then
+    pkill -9 -P "$SMOKE_PID" 2>/dev/null || true
+    kill -9 "$SMOKE_PID" 2>/dev/null || true
+    echo "  ✓ App survived exec (not AMFI-killed) — launchable."
+else
+    SMOKE_RC=0; wait "$SMOKE_PID" 2>/dev/null || SMOKE_RC=$?
+    if [ "$SMOKE_RC" -eq 137 ]; then
+        echo "  FATAL: signed app was SIGKILL'd at launch (137 = AMFI)." >&2
+        head -c 400 /tmp/k2-smoke.out >&2; echo "" >&2
+        exit 1
+    fi
+    echo "  ✓ App exec exited rc=$SMOKE_RC (not SIGKILL) — launchable past AMFI."
+fi
 
 # ── Step 4: Notarize app via ZIP ──
 echo ""
@@ -173,7 +229,7 @@ cd target/release/bundle/macos
 ditto -c -k --keepParent "K2.app" "/tmp/K2_${VERSION}.zip"
 xcrun notarytool submit "/tmp/K2_${VERSION}.zip" \
     --keychain-profile "$KEYCHAIN_PROFILE" --wait
-xcrun stapler staple "K2.app"
+staple_with_retry "K2.app"
 echo "  App notarized and stapled."
 
 # ── Step 5: Create DMG from notarized app ──
@@ -181,10 +237,15 @@ echo ""
 echo "Step 5: Creating DMG..."
 cd "$PROJECT_DIR"
 rm -f "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
+# ditto preserves signature + stapled ticket (same as release.sh stage).
+DMG_STAGE="$(mktemp -d)"
+ditto "target/release/bundle/macos/K2.app" "$DMG_STAGE/K2.app"
+ln -s /Applications "$DMG_STAGE/Applications"
 hdiutil create -volname "K2" \
-    -srcfolder "target/release/bundle/macos/K2.app" \
+    -srcfolder "$DMG_STAGE" \
     -ov -format UDZO \
     "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
+rm -rf "$DMG_STAGE"
 codesign --force --timestamp \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
@@ -194,24 +255,55 @@ echo ""
 echo "Step 6: Notarizing DMG..."
 xcrun notarytool submit "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \
     --keychain-profile "$KEYCHAIN_PROFILE" --wait
-xcrun stapler staple "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
+staple_with_retry "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
 echo "  DMG notarized and stapled."
 
+# ── Step 7: Gatekeeper verify (same checks a clean Mac should pass) ──
+echo ""
+echo "Step 7: Verifying DMG + app Gatekeeper status..."
 DMG_PATH="target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
+codesign --verify --verbose=2 "$DMG_PATH"
+xcrun stapler validate "$DMG_PATH"
+spctl -a -t open --context context:primary-signature -vv "$DMG_PATH"
+VERIFY_MNT="$(mktemp -d)"
+hdiutil attach -nobrowse -readonly "$DMG_PATH" -mountpoint "$VERIFY_MNT"
+codesign --verify --deep --strict --verbose=2 "$VERIFY_MNT/K2.app"
+xcrun stapler validate "$VERIFY_MNT/K2.app"
+spctl -a -vv -t exec "$VERIFY_MNT/K2.app"
+hdiutil detach "$VERIFY_MNT" -quiet
+rmdir "$VERIFY_MNT" 2>/dev/null || true
+echo "  ✓ codesign + staple + spctl all green."
+
+# ── Step 8: Clean-VM new-user pairing smoke (0.40.33/34 regression class) ──
+# Fresh Sequoia guest, empty ~/.k2*, install this DMG, start bundled daemon,
+# assert ~/.k2so → ~/.k2 symlink + /boot-status via the thin-client path.
+# Fails the build on FAIL. Escape: K2_SKIP_VM_PAIRING_SMOKE=1 (loud).
+echo ""
+echo "Step 8: Clean-VM new-user pairing smoke..."
+"$PROJECT_DIR/scripts/vm-newuser-pair-smoke.sh" \
+  "$PROJECT_DIR/$DMG_PATH" \
+  "$VERSION"
+
+# Copy a stable path for handoff (Desktop) so you don't dig under target/
+DESKTOP_DMG="$HOME/Desktop/K2_${VERSION}_aarch64.dmg"
+cp -f "$PROJECT_DIR/$DMG_PATH" "$DESKTOP_DMG"
+DMG_SHA="$(shasum -a 256 "$DESKTOP_DMG" | awk '{print $1}')"
 
 echo ""
 echo "═══════════════════════════════════════════════════"
 echo "  Local build complete — v${VERSION}"
 echo "═══════════════════════════════════════════════════"
 echo ""
-echo "DMG: $PROJECT_DIR/$DMG_PATH"
+echo "DMG (repo):     $PROJECT_DIR/$DMG_PATH"
+echo "DMG (Desktop):  $DESKTOP_DMG"
+echo "SHA-256:        $DMG_SHA"
 echo ""
-echo "Next steps:"
-echo "  1. open $(dirname "$DMG_PATH")"
-echo "  2. Double-click the DMG and drag K2.app into /Applications"
-echo "  3. Launch K2 from /Applications (not the dev tree)"
-echo "  4. Run the P4 acceptance checklist against the installed app"
+echo "On the other Mac:"
+echo "  1. Copy the Desktop DMG over (AirDrop / USB)."
+echo "  2. Double-click → drag K2.app to Applications."
+echo "  3. Launch from /Applications (first launch may need right-click → Open)."
+echo "  4. If 'damaged':  xattr -cr /Applications/K2.app"
+echo "     then: spctl -a -vv /Applications/K2.app"
 echo ""
-echo "If you decide to cut a real release from this version:"
-echo "  ./scripts/release.sh ${VERSION} [notes-file]"
-echo "  (it rebuilds from scratch and adds the GitHub upload steps)"
+echo "This did NOT publish to GitHub. Official release still uses:"
+echo "  ./scripts/release.sh <version>"

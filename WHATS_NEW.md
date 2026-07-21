@@ -3,6 +3,73 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.54 — Tunnel resilience + hosted web (beta)
+
+Two Connect upgrades: tunnels that actually stop, and a **beta** browser
+client for your machine at `https://<you>.app.k2.dev`.
+
+### Hosted web client — beta, available now
+
+Open your K2 server in a normal browser while the desktop app (or headless
+daemon) is online with Connect running:
+
+- **URL:** `https://<your-subdomain>.app.k2.dev` (example: `https://z3thon.app.k2.dev`).
+- **Same workspace UI** you know from the app — sign in with your K2 Connect
+  user, sessions and terminals over the tunnel.
+- **Owner wall:** hosted web can be turned off with the daemon
+  `web_client_enabled` / owner settings if you do not want browser access.
+- **Beta means:** real and usable for day-to-day poking and remote access;
+  expect rough edges, rapid fixes, and desktop remaining the primary client.
+- **Security note:** the browser path is standard secure-web (TLS at the
+  edge, cookie session on your daemon). Desktop Connect to
+  `<you>.k2.dev` stays the true end-to-end tunnel path.
+
+Bookmark your `.app.k2.dev` URL once the tunnel is up. If the machine is
+asleep or the tunnel is down, the page will say so until it comes back.
+
+### Tunnel resilience (Stop means stopped)
+
+Connect tunnels that used to leave a live `frpc` behind after **Stop**,
+daemon restart, or self-update — and that could desync from the live
+listener on older builds — now tear down cleanly and keep serving after a
+transient frpc drop without a full daemon restart.
+
+#### Stop actually kills the tunnel
+
+- **Stop / disable / SIGTERM** always reaps the supervised `frpc` for this
+  daemon's config, including the default single-relay (solo) path.
+- No more "UI says stopped, subdomain still registered" from an orphaned
+  local frpc after update or restart.
+- Tunnel stop status is taken from the real connector state after the kill.
+
+#### Self-heal on frpc drop (no agent kill)
+
+- When frpc exits and the daemon stays up, reconnect reuses the **live**
+  E2E listener port — it does not invent a new `localPort` while sockets
+  are still bound.
+- Full daemon restart still produces consistent ports (the path that always
+  worked). Prefer this build on any box that saw silent external outages
+  while `systemctl` still showed active (fleet boxes on pre-fix builds
+  should upgrade).
+
+#### Identity for multi-device tunnels
+
+- frpc login metadata now carries **`device_id`** when the daemon has one,
+  so the relay can tell same-token machines apart (groundwork for
+  cross-machine eviction on the control plane).
+
+#### Connect tunnel picker — apex only
+
+- After signing in to your k2.dev account, the subdomain list for **Start
+  tunnel** only shows purchased **apex** names (`you.k2.dev`). Nested
+  routes (`api.you.k2.dev`, `staging.you.k2.dev`, …) no longer appear as
+  tunnel targets — those are routing under an apex tunnel, not separate
+  tunnels.
+
+Upgrade any Connect server that flapped after tunnel restart or left
+orphan frpc after `systemctl stop` / self-update — and try the beta web
+client at `https://<you>.app.k2.dev` once the tunnel is up.
+
 ## 0.40.53 — Remote Session (safer-than-SSH help over Connect)
 
 Consent-gated, time-boxed shell drive on a K2 device — for migrations and

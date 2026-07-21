@@ -198,8 +198,11 @@
   }
 
   function navigateToApp(version) {
-    // Trailing slash so Vite base resolves assets correctly.
-    var target = '/app/' + encodeURIComponent(version) + '/';
+    // Land on index.html explicitly. Edge R2 is exact-key (no directory
+    // index): `/app/<ver>/` 404s even when `/app/<ver>/index.html` exists.
+    // Built assets use absolute `/app/<ver>/assets/...` paths (Vite base),
+    // so index.html is safe and correct.
+    var target = '/app/' + encodeURIComponent(version) + '/index.html';
     if (typeof location !== 'undefined') {
       location.replace(target);
     }
@@ -297,8 +300,21 @@
   /**
    * Full boot path for the browser.
    */
+  function applyPageTitle() {
+    try {
+      if (typeof document === 'undefined' || typeof location === 'undefined') return;
+      var h = String(location.hostname || '').toLowerCase();
+      if (!h || /^\d+\.\d+\.\d+\.\d+$/.test(h)) return;
+      var sub = h.split('.')[0];
+      if (sub) document.title = sub + ' | K2';
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+
   function boot(opts) {
     opts = opts || {};
+    applyPageTitle();
     setStatus('loading', 'Connecting…', 'Looking up your server version.');
 
     return resolveVersion(opts)

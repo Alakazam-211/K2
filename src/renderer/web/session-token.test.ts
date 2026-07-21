@@ -79,7 +79,8 @@ describe('session-token web auth helpers', () => {
     // sessionStorage may be missing in node — logout still fires fetch
     await logoutWebSession('https://rosson.app.k2.dev')
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    const [url, init] = call
     expect(url).toBe('https://rosson.app.k2.dev/cli/auth/logout')
     expect(init.method).toBe('POST')
     expect(init.credentials).toBe('include')

@@ -3,6 +3,32 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.56 — Agent passports no longer die overnight
+
+Long-running agents were losing the ability to use the **K2 CLI**
+(`k2 msg`, inbox, peers, and other in-cell tools) after about a day, with
+errors that looked like an **expired auth token** — even though the agent
+session itself was still alive.
+
+### What was wrong
+
+Each agent cell gets a **scoped passport** (`K2_HOOK_TOKEN`) at spawn so it
+can call the daemon without holding the full owner secret. That passport
+had a hard **24-hour wall-clock expiry**, and there was no way to refresh
+it while the process was running. After 24 hours the daemon rejected the
+token; messaging and other CLI verbs failed until you restarted the cell.
+
+### What we fixed
+
+Passports now last for the **life of the agent cell**. They still stop
+when the session is torn down (or on a global revoke) — that is intentional
+security. They no longer suddenly expire just because the clock advanced.
+
+If an agent already hit the old expiry, **restart that session once** after
+updating so it mints a fresh passport under the new rules.
+
+---
+
 ## 0.40.55 — Clone To: full chat history + your pin comes with you
 
 **Clone To** is a real workspace migration again — not “files only, then
